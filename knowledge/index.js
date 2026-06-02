@@ -1297,7 +1297,9 @@ function wireStateTrackerEvents(el) {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `state-trackers-${Date.now()}.json`;
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
     });
 
@@ -1351,7 +1353,9 @@ function exportNpcs() {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `knowledge-tracker-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
     ktSetStatus('NPC registry exported.', 'success');
 }
@@ -1699,17 +1703,19 @@ export function onChatChanged() {
 
 export function getTotalTokens() {
     let total = 0;
-    // NPC entries
+    // NPC entries — content lives in the lorebook, not the registry
     const reg = getRegistry();
     for (const [name, entry] of Object.entries(reg)) {
-        const text = (entry.content || '').trim();
-        if (text) total += estimateTokens(text);
+        if (entry.uid == null) continue;
+        const content = loadEntryContent(entry.uid);
+        if (content) total += estimateTokens(content);
     }
-    // State tracker entries
+    // State tracker entries — content also lives in the lorebook
     const stateReg = getStateRegistry();
     for (const [name, entry] of Object.entries(stateReg)) {
-        const text = (entry.content || '').trim();
-        if (text) total += estimateTokens(text);
+        if (entry.uid == null) continue;
+        const loaded = loadStateTrackerEntry(entry.uid);
+        if (loaded?.content) total += estimateTokens(loaded.content);
     }
     return total;
 }

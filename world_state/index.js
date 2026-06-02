@@ -194,7 +194,7 @@ function applyWorldStateInjection() {
     const globalSettings = (typeof window !== 'undefined' && window.__mwt_shared?.getSettings)
         ? window.__mwt_shared.getSettings()
         : {};
-    const depth = Number.isFinite(globalSettings.worldStateDepth) ? globalSettings.worldStateDepth : (getSettings().injectionDepth || 1);
+    const depth = Number.isFinite(globalSettings.worldStateDepth) ? globalSettings.worldStateDepth : (getSettings().injectionDepth ?? 1);
     const role = roleToNumber(globalSettings.worldStateRole);
 
     try {

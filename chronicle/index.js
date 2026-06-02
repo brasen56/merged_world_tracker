@@ -485,7 +485,7 @@ async function generateSnapshot() {
     const chat = getChat();
     const { index } = resolveAnchor(getChronicleData().lastAnchor);
     const actualFrom = Math.max(0, index);
-    if (actualFrom >= chat.length - 1) { scSetStatus('No new messages to chronicle.', 'error'); return null; }
+    if (actualFrom >= chat.length) { scSetStatus('No new messages to chronicle.', 'error'); return null; }
     const { text, lastMsg, toIndex } = buildMessageWindow(actualFrom, undefined);
     if (!text.trim()) { scSetStatus('No filterable messages to chronicle.', 'error'); return null; }
 
@@ -765,7 +765,9 @@ function exportChronicle() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `chronicle-${Date.now()}.json`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
     scSetStatus('Exported.', 'success');
 }
@@ -781,7 +783,9 @@ function exportMarkdown() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `chronicle-${new Date().toISOString().slice(0, 10)}.md`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
     scSetStatus('Exported as Markdown.', 'success');
 }
@@ -1268,6 +1272,8 @@ export function onChatChanged() {
     bulkDeleteMode = false;
     checkedForMerge.clear();
     pendingSearch = '';
+    _lastStatusMsg = '';
+    _lastStatusLevel = '';
     applyInjection();
 }
 
