@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+
+# Logs & temp
+*.log
+tmp/
+logs/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.stackdump
