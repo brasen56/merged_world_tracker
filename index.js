@@ -246,6 +246,25 @@ function renderModal() {
             content,
             onClose: () => { console.log('[MWT] Modal closed.'); },
         });
+
+        // Add unsaved-changes warning for World State tab
+        const closeBtn = modal.querySelector('.mwt-modal-close');
+        const backdrop = modal.querySelector('.mwt-modal-backdrop');
+        const safeClose = () => {
+            if (WorldState.isWorldStateDirty?.()) {
+                if (!confirm('You have unsaved changes to the World State. Close anyway?')) return;
+            }
+            hideModal('mwt-modal');
+        };
+        // Replace existing close handlers (createModal binds them inline)
+        closeBtn?.addEventListener('click', safeClose);
+        backdrop?.addEventListener('click', safeClose);
+        // Also handle Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal?.style.display === 'flex') {
+                safeClose();
+            }
+        });
     } else {
         const body = modal.querySelector('.mwt-modal-body');
         if (body) body.innerHTML = content;
@@ -324,10 +343,29 @@ const FLOAT_BUTTONS = [
     { id: 'mwt-float-settings', label: '⚙️', title: 'All Settings', tab: 'settings' },
 ];
 
+const FLOAT_POSITIONS_KEY = 'mwt_float_positions';
+
+function loadFloatPositions() {
+    try {
+        const raw = localStorage.getItem(FLOAT_POSITIONS_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+}
+
+function saveFloatPosition(btnId, left, top) {
+    try {
+        const positions = loadFloatPositions();
+        positions[btnId] = { left, top };
+        localStorage.setItem(FLOAT_POSITIONS_KEY, JSON.stringify(positions));
+    } catch { /* ignore */ }
+}
+
 function setupButtonBar() {
     // Remove old button bar if it exists
     const old = document.getElementById('mwt-button-bar');
     if (old) old.remove();
+
+    const savedPositions = loadFloatPositions();
 
     FLOAT_BUTTONS.forEach((cfg, idx) => {
         let btn = document.getElementById(cfg.id);
@@ -338,8 +376,18 @@ function setupButtonBar() {
         btn.className = 'mwt-float-btn';
         btn.title = cfg.title;
         btn.innerHTML = `<span class="mwt-float-btn-icon">${cfg.label}</span><span class="mwt-float-btn-tokens" id="${cfg.id}-tokens"></span><span class="mwt-float-btn-countdown" id="${cfg.id}-countdown"></span>`;
-        btn.style.right = '16px';
-        btn.style.bottom = `${70 + idx * 48}px`;
+
+        // Restore saved position or use default
+        const saved = savedPositions[cfg.id];
+        if (saved && typeof saved.left === 'number' && typeof saved.top === 'number') {
+            btn.style.left = saved.left + 'px';
+            btn.style.top = saved.top + 'px';
+            btn.style.right = 'auto';
+            btn.style.bottom = 'auto';
+        } else {
+            btn.style.right = '16px';
+            btn.style.bottom = `${70 + idx * 48}px`;
+        }
         document.body.appendChild(btn);
 
         // Click to open modal on that tab
@@ -373,7 +421,13 @@ function setupButtonBar() {
             btn.style.bottom = 'auto';
         });
         document.addEventListener('mouseup', () => {
-            if (dragging) { dragging = false; btn.style.transition = 'left 0.1s, top 0.1s'; }
+            if (dragging) {
+                dragging = false;
+                btn.style.transition = 'left 0.1s, top 0.1s';
+                // Persist the final position
+                const rect = btn.getBoundingClientRect();
+                saveFloatPosition(cfg.id, rect.left, rect.top);
+            }
         });
     });
 }
