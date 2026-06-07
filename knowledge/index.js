@@ -1046,7 +1046,20 @@ function wireStagingEvents(el) {
     el.querySelector('#kt-accept')?.addEventListener('click', async () => {
         const item = stagingItems.find(i => i.id === activeItemId);
         if (!item) return;
-        const text = el.querySelector('#kt-proposal-editor')?.value || item.proposedContent;
+        const editorVal = el.querySelector('#kt-proposal-editor')?.value;
+        let text;
+        if (editorVal) {
+            text = editorVal;
+        } else if (item.mergedContent && item.mergedContent !== '(promoting)' && item.mergedContent !== '(demoting)') {
+            text = item.mergedContent;
+        } else {
+            text = item.proposedContent;
+        }
+        // Refuse to write placeholder text from promote/demote flow
+        if (text === '(promoting)' || text === '(demoting)') {
+            ktSetStatus('Click the staging item first to load full content before accepting.', 'error');
+            return;
+        }
         const keywordsRaw = el.querySelector('#kt-keyword-input')?.value || item.name;
         const keywords = item.type === 'state' ? [item.name] : keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
         await handleAccept(item, text, keywords, el);
@@ -1113,13 +1126,15 @@ function wireNpcListEvents(el, type) {
             const reg = getRegistry()[name];
             if (!reg?.uid) return;
             const existing = await loadEntryContent(reg.uid);
-            stagingItems.push({
+            const item = {
                 id: Date.now() + Math.random(), type: 'promote', action: 'update', name, data: {},
                 proposedContent: '(promoting)', existingContent: existing,
                 mergedContent: existing ? buildPromotedContent(existing) : '',
                 keywords: reg.keywords || [name], uid: reg.uid, fromType: 'minor', toType: 'major',
-            });
-            activeItemId = stagingItems[stagingItems.length - 1].id;
+            };
+            stagingItems.push(item);
+            addNotificationEntry(item);
+            activeItemId = item.id;
             activeSubTab = 'staging';
             renderNpcsSubTab();
         });
@@ -1131,13 +1146,15 @@ function wireNpcListEvents(el, type) {
             const reg = getRegistry()[name];
             if (!reg?.uid) return;
             const existing = await loadEntryContent(reg.uid);
-            stagingItems.push({
+            const item = {
                 id: Date.now() + Math.random(), type: 'demote', action: 'update', name, data: {},
                 proposedContent: '(demoting)', existingContent: existing,
                 mergedContent: existing ? buildDemotedContent(existing) : '',
                 keywords: reg.keywords || [name], uid: reg.uid, fromType: 'major', toType: 'minor',
-            });
-            activeItemId = stagingItems[stagingItems.length - 1].id;
+            };
+            stagingItems.push(item);
+            addNotificationEntry(item);
+            activeItemId = item.id;
             activeSubTab = 'staging';
             renderNpcsSubTab();
         });
@@ -1531,7 +1548,6 @@ async function importFromLorebooks() {
 
     // ── Report ──────────────────────────────────────────────────────────
     renderNpcsSubTab();
-    renderStateContent();
 
     const parts = [];
     if (imported.npcs)   parts.push(`${imported.npcs} NPC(s)`);
@@ -1661,8 +1677,8 @@ export function onMessageReceived() {
             let staged = 0;
             for (const [name, info] of Object.entries(reg)) {
                 if (info.enabled === false) continue;
-                if (currentMsgIdx - (info.lastUpdatedMsg || 0) < cooldownMsgs) continue;
                 if (!info.alwaysUpdate) {
+                    if (currentMsgIdx - (info.lastUpdatedMsg || 0) < cooldownMsgs) continue;
                     const nameRe = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
                     if (!nameRe.test(recent || '')) continue;
                 }
@@ -1702,22 +1718,12 @@ export function onChatChanged() {
 }
 
 export function getTotalTokens() {
-    let total = 0;
-    // NPC entries — content lives in the lorebook, not the registry
-    const reg = getRegistry();
-    for (const [name, entry] of Object.entries(reg)) {
-        if (entry.uid == null) continue;
-        const content = loadEntryContent(entry.uid);
-        if (content) total += estimateTokens(content);
-    }
-    // State tracker entries — content also lives in the lorebook
-    const stateReg = getStateRegistry();
-    for (const [name, entry] of Object.entries(stateReg)) {
-        if (entry.uid == null) continue;
-        const loaded = loadStateTrackerEntry(entry.uid);
-        if (loaded?.content) total += estimateTokens(loaded.content);
-    }
-    return total;
+    // NPC and State Tracker content lives in lorebook entries that require
+    // async API calls (loadEntryContent / loadStateTrackerEntry).  Since
+    // getTotalTokens is invoked synchronously from the floating button
+    // refresh loop, we cannot await them here.  Return 0 — the World State
+    // and Chronicle modules provide accurate synchronous counts instead.
+    return 0;
 }
 
 export function syncGlobalSettings(patch) {

@@ -35,6 +35,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         injectionDepth: 1,
         maxScanMessages: 20,
         hookMode: 'passive',
+        messageFilter: '',
     },
     logPrefix: '[MWT:WorldState]',
 });
@@ -327,6 +328,26 @@ function stopAutoSaveTimer() {
 
 // ─── Refresh (generate via LLM) ─────────────────────────────────────────────
 
+/**
+ * Apply user-defined regex filters to strip unwanted content from a message.
+ * Each line in the `messageFilter` setting is treated as a separate regex pattern.
+ * Matching content is removed from the text before it reaches the World State scanner.
+ */
+function applyMessageFilter(text) {
+    const filterRaw = getSettings().messageFilter?.trim();
+    if (!filterRaw) return text;
+    const patterns = filterRaw.split('\n').map(p => p.trim()).filter(Boolean);
+    for (const p of patterns) {
+        try {
+            const regex = new RegExp(p, 'gi');
+            text = text.replace(regex, '');
+        } catch (err) {
+            console.warn(`[MWT:WorldState] Invalid regex filter skipped: "${p}" — ${err.message}`);
+        }
+    }
+    return text.trim();
+}
+
 function getMaxScanMessages() {
     const raw = getSettings().maxScanMessages;
     if (!raw || isNaN(raw)) return 20;
@@ -344,7 +365,8 @@ function getRecentMessagesForScan() {
     for (let i = slice.length - 1; i >= 0; i--) {
         const msg = slice[i];
         const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
-        const text = String(msg?.mes || '').trim();
+        let text = String(msg?.mes || '').trim();
+        text = applyMessageFilter(text);
         if (!text) continue;
         const line = `${name}: ${text}`;
         if (total + line.length > maxChars) break;
@@ -580,11 +602,11 @@ async function refreshWorldState(isAuto = false) {
         wstIsRefreshing = false;
         if (autoRefreshQueued) {
             autoRefreshQueued = false;
-            try {
-                await refreshWorldState(true);
-            } catch (err) {
-                console.warn('[MWT:WorldState] Follow-up refresh failed:', err);
-            }
+            // Use setTimeout instead of direct recursive call to avoid
+            // deep call-stack chaining if the queued refresh also fails.
+            setTimeout(() => {
+                scheduleAutoRefresh('follow-up-from-finally');
+            }, 500);
         }
     }
 }
@@ -1071,6 +1093,12 @@ function render() {
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Off:</b> Plot Seeds are not injected into the prompt. <b>Passive:</b> Model is encouraged to use a hook if the scene allows. <b>Proactive:</b> Model should introduce a hook unless the scene is at a climax — player pre-approval is stated. <b>Assertive:</b> Model must introduce at least one hook — the world moves without player permission.</p>
                 </div>
 
+                <label class="mwt-label">Message Filter</label>
+                <div>
+                    <textarea id="ws-message-filter" class="mwt-input" rows="3" placeholder="One regex per line. Matching text is stripped from messages before scanning.&#10;Example: [NPC thoughts][\\s\\S]*?[/NPC thoughts]">${escapeHtml(s.messageFilter || '')}</textarea>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Each line is a separate regex pattern (case-insensitive). Matching content is removed from chat messages <i>before</i> the World State scanner sees them. Use this to strip out NPC thought blocks, OOC notes, or other content that shouldn't influence the world state.</p>
+                </div>
+
                 <div></div>
                 <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                     <button id="ws-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
@@ -1202,6 +1230,7 @@ function wireEvents() {
         const depth = parseInt(modal.querySelector('#ws-injection-depth')?.value, 10);
         const maxScan = parseInt(modal.querySelector('#ws-max-scan-messages')?.value, 10);
         const hookMode = modal.querySelector('#ws-hook-mode')?.value || 'passive';
+        const messageFilter = modal.querySelector('#ws-message-filter')?.value || '';
 
         if (!url || !key || !model) {
             setStatus(modal, 'API URL, Key, and Model are required.', 'error');
@@ -1217,6 +1246,7 @@ function wireEvents() {
             injectionDepth: isNaN(depth) ? 1 : depth,
             maxScanMessages: Math.min(Math.max(1, isNaN(maxScan) ? 20 : maxScan), 30),
             hookMode,
+            messageFilter,
         });
         applyWorldStateInjection();
         startAutoSaveTimer();
@@ -1266,9 +1296,9 @@ function wireEvents() {
             const n = parseInt(raw, 10);
             if (isNaN(n) || n < 1) { setStatus(modal, 'Invalid interval.', 'error'); return; }
             const maxScan = getMaxScanMessages();
-            const clamped = Math.min(n, 30);
-            if (n > 30) {
-                setStatus(modal, `Auto-refresh interval clamped to 30 (max scan messages).`, 'warning', 5000);
+            const clamped = Math.min(n, maxScan);
+            if (n > maxScan) {
+                setStatus(modal, `Auto-refresh interval clamped to ${maxScan} (max scan messages).`, 'warning', 5000);
             }
             setWorldStateData({ autoRefresh: true, autoRefreshInterval: clamped });
             autoRefreshCounter = 0;

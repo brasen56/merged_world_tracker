@@ -692,13 +692,12 @@ function deleteEntry(id) {
     const data = getChronicleData();
     const selectedIds = (data.selectedForInjection || []).filter(sid => sid !== id);
     const updatedBin = [...deletedBin, removed].slice(-MAX_TRASH_SIZE);
-    setChronicleData({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false });
-    if (remaining.length > 0) {
-        const sorted = [...remaining].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-        setChronicleData({ lastAnchor: sorted[sorted.length - 1].anchor || null });
-    } else {
-        setChronicleData({ lastAnchor: null });
-    }
+    // Compute lastAnchor from remaining snapshots in the same call to avoid
+    // two debounced saves racing against each other.
+    const lastAnchor = remaining.length > 0
+        ? [...remaining].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).pop()?.anchor || null
+        : null;
+    setChronicleData({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false, lastAnchor });
     applyInjection();
     selectedSnapshotId = null;
     renderContent();
@@ -715,13 +714,12 @@ function bulkDeleteEntries(ids) {
     const data = getChronicleData();
     const idSet = new Set(ids);
     const selectedIds = (data.selectedForInjection || []).filter(sid => !idSet.has(sid));
-    setChronicleData({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false });
-    if (remaining.length > 0) {
-        const sorted = [...remaining].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-        setChronicleData({ lastAnchor: sorted[sorted.length - 1].anchor || null });
-    } else {
-        setChronicleData({ lastAnchor: null });
-    }
+    // Merge into a single setChronicleData call to avoid two debounced saves
+    // racing against each other.
+    const lastAnchor = remaining.length > 0
+        ? [...remaining].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).pop()?.anchor || null
+        : null;
+    setChronicleData({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false, lastAnchor });
     applyInjection();
     bulkDeleteMode = false;
     consolidateMode = false;
@@ -786,7 +784,8 @@ function exportMarkdown() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Delay revocation so the browser has time to start the download.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     scSetStatus('Exported as Markdown.', 'success');
 }
 
