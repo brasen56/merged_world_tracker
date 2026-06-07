@@ -86,7 +86,16 @@ const VARIETY_LABELS = {
 // ─── Internal state ──────────────────────────────────────────────────────────
 
 let wstIsRefreshing = false;
-let autoRefreshCounter = 0;
+let autoRefreshCounter = (() => {
+    try {
+        const saved = getWorldStateData()?.autoRefreshCounter;
+        return (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
+    } catch { return 0; }
+})();
+
+function persistAutoRefreshCounter() {
+    setWorldStateData({ autoRefreshCounter });
+}
 let autoRefreshQueued = false;
 let autoSaveLastText = '';
 let autoSaveTimer = null;
@@ -243,6 +252,7 @@ function getAutoRefreshInterval() {
 
 function resetAutoRefreshCounter() {
     autoRefreshCounter = 0;
+    persistAutoRefreshCounter();
 }
 
 /**
@@ -303,9 +313,10 @@ function onMessageReceived() {
 
     console.log(`[MWT:WorldState] MESSAGE_RECEIVED — counter ${autoRefreshCounter}/${interval}`);
 
-    if (autoRefreshCounter < interval) return;
+    if (autoRefreshCounter < interval) { persistAutoRefreshCounter(); return; }
 
     autoRefreshCounter = 0;
+    persistAutoRefreshCounter();
 
     // Never refresh directly inside MESSAGE_RECEIVED — queue a delayed refresh.
     scheduleAutoRefresh('message-interval');
@@ -1106,6 +1117,7 @@ function render() {
                     <button id="ws-toggle-inject" class="mwt-btn">${isInjectionEnabled() ? '🔌 Injection: ON' : '🔌 Injection: OFF'}</button>
                     <button id="ws-toggle-auto" class="mwt-btn">${isAutoRefreshEnabled() ? `🔄 Auto: ON (${getAutoRefreshInterval()})` : '🔄 Auto: OFF'}</button>
                     <button id="ws-reset-prompt" class="mwt-btn">Reset Prompt</button>
+                    <button id="ws-preview-injection" class="mwt-btn">📄 Preview Injection</button>
                 </div>
             </div>
         </details>
@@ -1316,6 +1328,61 @@ function wireEvents() {
         if (ta) ta.value = '';
         setStatus(modal, 'Custom prompt cleared.', 'info', 3000);
     });
+
+    // Preview injection
+    modal.querySelector('#ws-preview-injection')?.addEventListener('click', () => {
+        const text = getWorldStateText();
+        if (!text?.trim()) {
+            setStatus(modal, 'No world state text to preview.', 'warning');
+            return;
+        }
+
+        const seedsPattern = new RegExp(`## Plot Seeds\\b[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
+        const seedsMatch = text.match(seedsPattern);
+        const seedsBlock = seedsMatch ? seedsMatch[0] : '';
+        const seedsText = seedsBlock.replace(/^## Plot Seeds[^\n]*\n?/, '').trim();
+        const worldStateBody = seedsMatch
+            ? text.replace(seedsBlock, '').replace(/\n{3,}/g, '\n\n').trim()
+            : text;
+
+        let injected = `${WORLD_STATE_INJECTION_HEADER}\n\n${worldStateBody}`;
+
+        const seedsHeader = getPlotSeedsHeader();
+        if (seedsText && seedsHeader) {
+            injected += `\n\n---\n\n${seedsHeader}\n\n${seedsText}`;
+        }
+
+        const tokens = estimateTokens(injected);
+        const previewModal = createModal({
+            id: 'mwt-ws-injection-preview',
+            title: 'Injection Preview',
+            content: `
+                <p class="mwt-text-dim mwt-text-sm mwt-mb-8">
+                    This is exactly what gets injected into the prompt (${injected.length} chars, ~${tokens} tokens).
+                    Hook mode: <strong>${getHookMode()}</strong>.
+                </p>
+                <pre style="white-space:pre-wrap;font-family:var(--mwt-font-mono);font-size:12px;line-height:1.5;background:var(--mwt-bg-light);padding:12px;border-radius:var(--mwt-radius);border:1px solid var(--mwt-border);max-height:60vh;overflow-y:auto">${escapeHtml(injected)}</pre>
+                <div class="mwt-flex mwt-gap-8 mwt-mt-8">
+                    <button id="mwt-ws-preview-copy" class="mwt-btn mwt-btn-primary">📋 Copy to Clipboard</button>
+                    <button id="mwt-ws-preview-close" class="mwt-btn">Close</button>
+                </div>
+            `,
+        });
+
+        previewModal.querySelector('#mwt-ws-preview-copy')?.addEventListener('click', () => {
+            navigator.clipboard.writeText(injected).then(() => {
+                setStatus(previewModal, 'Copied to clipboard.', 'success', 2000);
+            }).catch(() => {
+                setStatus(previewModal, 'Failed to copy.', 'error');
+            });
+        });
+
+        previewModal.querySelector('#mwt-ws-preview-close')?.addEventListener('click', () => {
+            hideModal('mwt-ws-injection-preview');
+        });
+
+        showModal('mwt-ws-injection-preview');
+    });
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -1350,6 +1417,11 @@ export function getTotalTokens() {
     // Include injection headers in count
     const fullInjected = `${WORLD_STATE_INJECTION_HEADER}\n\n${text}`;
     return estimateTokens(fullInjected);
+}
+
+/** Returns true if the world state editor has unsaved changes */
+export function isWorldStateDirty() {
+    return isDirty;
 }
 
 /** Returns auto-refresh status for external display (floating button countdown) */

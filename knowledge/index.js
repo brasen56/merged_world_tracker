@@ -801,7 +801,13 @@ function formatHistoryAge(ts) {
 // ─── Handle accept ───────────────────────────────────────────────────────────
 
 async function handleAccept(item, proposedText, keywords, detailEl) {
-    const acceptBtn = detailEl.querySelector('#kt-accept');
+    if (!proposedText || (typeof proposedText === 'string' && !proposedText.trim())) {
+        ktSetStatus(`Cannot write "${item.name}": no content to save.`, 'error');
+        const acceptBtn = detailEl?.querySelector?.('#kt-accept');
+        if (acceptBtn) { acceptBtn.disabled = false; acceptBtn.textContent = '✓ Accept & Write'; }
+        return;
+    }
+    const acceptBtn = detailEl?.querySelector?.('#kt-accept');
     if (acceptBtn) { acceptBtn.disabled = true; acceptBtn.textContent = '⏳ Writing…'; }
     ktSetStatus(`Writing "${item.name}"…`, 'info');
     try {
@@ -1715,6 +1721,8 @@ export function onChatChanged() {
     stagingItems = [];
     activeItemId = null;
     activeSubTab = 'staging';
+    notificationEntries = {};
+    hideNotificationPanel();
 }
 
 export function getTotalTokens() {

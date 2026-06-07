@@ -11,7 +11,7 @@
 import {
     getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt,
     fetchFromApi, normaliseOutput, normalizeApiBase,
-    escapeHtml, computeLcsDiff, buildInlineDiff,
+    escapeHtml, computeLcsDiff, buildInlineDiff, estimateTokens,
     createSettingsManager,
     createModal, showModal, hideModal, setStatus,
 } from '../core/index.js';
@@ -273,9 +273,7 @@ function getCharactersInRange(fromIndex, toIndex) {
 }
 
 // ─── Token estimation ────────────────────────────────────────────────────────
-
-function estimateTokenCount(text) { return Math.ceil(text.length / 4); }
-
+// (uses shared estimateTokens from core)
 function getInjectionStats() {
     const snapshots = getSnapshots();
     const data = getChronicleData();
@@ -287,7 +285,7 @@ function getInjectionStats() {
     const totalWords = snapshots.reduce((sum, s) => sum + (s.text?.split(/\s+/).length || 0), 0);
     const entriesToInject = getEntriesForInjection();
     const injectionText = entriesToInject.map(s => s.text || '').join('\n\n---\n\n');
-    const tokenEstimate = estimateTokenCount(injectionText);
+    const tokenEstimate = estimateTokens(injectionText);
     const allCharacters = new Set();
     snapshots.forEach(s => { if (s.characters) s.characters.forEach(c => allCharacters.add(c)); });
     return { totalEntries, manualCount, consolidatedCount, generatedCount: totalEntries - manualCount, totalWords, entriesToInject: entriesToInject.length, tokenEstimate, characterCount: allCharacters.size, characters: Array.from(allCharacters), injectMode, injectCount };
@@ -750,8 +748,11 @@ function showConfirm(message, detail, onConfirm) {
     overlay.innerHTML = `<div class="sc-confirm-box"><p>${escapeHtml(message)}</p>${detail ? `<p class="sc-confirm-detail">${escapeHtml(detail)}</p>` : ''}<div class="sc-confirm-actions"><button class="sc-confirm-yes sc-btn sc-btn--danger">Yes</button><button class="sc-confirm-no sc-btn">Cancel</button></div></div>`;
     el.style.position = 'relative';
     el.appendChild(overlay);
-    overlay.querySelector('.sc-confirm-yes').addEventListener('click', () => { overlay.remove(); onConfirm(); });
-    overlay.querySelector('.sc-confirm-no').addEventListener('click', () => overlay.remove());
+    const cleanup = () => { overlay.remove(); document.removeEventListener('keydown', handleKey); };
+    const handleKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); cleanup(); } };
+    document.addEventListener('keydown', handleKey);
+    overlay.querySelector('.sc-confirm-yes').addEventListener('click', () => { cleanup(); onConfirm(); });
+    overlay.querySelector('.sc-confirm-no').addEventListener('click', () => cleanup());
 }
 
 // ─── Export / Import ─────────────────────────────────────────────────────────
@@ -1297,7 +1298,7 @@ export function getTotalTokens() {
     if (entries.length === 0) return 0;
     const text = entries.map(s => s.text || '').join('\n\n---\n\n');
     const fullInjected = `${CHRONICLE_INJECTION_HEADER}\n\n${text}`;
-    return estimateTokenCount(fullInjected);
+    return estimateTokens(fullInjected);
 }
 
 export function syncGlobalSettings(patch) {
