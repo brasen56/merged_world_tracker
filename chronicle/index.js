@@ -9,11 +9,10 @@
  */
 
 import {
-    getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt,
-    fetchFromApi, normaliseOutput, normalizeApiBase,
-    escapeHtml, computeLcsDiff, buildInlineDiff, estimateTokens,
+    getContextSafe, getChat, getChatMeta, getSetExtensionPrompt,
+    fetchFromApi, normaliseOutput,
+    escapeHtml, estimateTokens,
     createSettingsManager,
-    createModal, showModal, hideModal, setStatus,
 } from '../core/index.js';
 
 import { applyWorldStateInjection } from '../world_state/index.js';
@@ -222,7 +221,11 @@ function resolveAnchor(anchor) {
 
 function getChronicleData() {
     const meta = getChatMeta();
-    return meta?.[CHRONICLE_KEY] || { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false };
+    if (!meta) return { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false };
+    if (!meta[CHRONICLE_KEY]) {
+        meta[CHRONICLE_KEY] = { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false };
+    }
+    return meta[CHRONICLE_KEY];
 }
 
 function setChronicleData(patch) {
@@ -322,23 +325,24 @@ function applyInjection() {
     const setEP = getSetExtensionPrompt();
     if (!setEP) return;
     const enabled = isInjectionEnabled();
+    
+    // Resolve depth/role before early return so we can clear the prompt with consistent settings
+    const globalSettings = (typeof window !== 'undefined' && window.__mwt_shared?.getSettings)
+        ? window.__mwt_shared.getSettings()
+        : {};
+    const depth = Number.isFinite(globalSettings.chronicleDepth) ? globalSettings.chronicleDepth : (getChronicleData().injectDepth ?? 2);
+    const role = roleToNumber(globalSettings.chronicleRole);
+    
     const snapshots = getSnapshots();
-    if (!enabled || snapshots.length === 0) { setEP(EXTENSION_PROMPT_KEY, '', 1); return; }
+    if (!enabled || snapshots.length === 0) { setEP(EXTENSION_PROMPT_KEY, '', 1, depth, undefined, role); return; }
     const entries = getEntriesForInjection();
-    if (entries.length === 0) { setEP(EXTENSION_PROMPT_KEY, '', 1); return; }
+    if (entries.length === 0) { setEP(EXTENSION_PROMPT_KEY, '', 1, depth, undefined, role); return; }
     entries.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     const text = entries.map(s => {
         const num = snapshots.indexOf(s) + 1;
         const charInfo = s.characters?.length ? ` [${s.characters.join(', ')}]` : '';
         return `### Chronicle Entry ${num} — ${s.worldDate || s.createdAt}${charInfo}\n${s.text}`;
     }).join('\n\n---\n\n');
-
-    // Read per-module depth/role from global settings
-    const globalSettings = (typeof window !== 'undefined' && window.__mwt_shared?.getSettings)
-        ? window.__mwt_shared.getSettings()
-        : {};
-    const depth = Number.isFinite(globalSettings.chronicleDepth) ? globalSettings.chronicleDepth : (getChronicleData().injectDepth ?? 2);
-    const role = roleToNumber(globalSettings.chronicleRole);
 
     setEP(EXTENSION_PROMPT_KEY, `${CHRONICLE_INJECTION_HEADER}\n\n${text}`, 1, depth, undefined, role);
 }
@@ -767,7 +771,8 @@ function exportChronicle() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Delay revocation so the browser has time to start the download
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     scSetStatus('Exported.', 'success');
 }
 
@@ -803,12 +808,18 @@ function importChronicle(jsonString) {
         }
         merged.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-        // Also restore lastAnchor, injection settings if present in export
+        // Restore lastAnchor (data), but skip injection settings (session config)
+        // to avoid silently overwriting the user's current injection preferences
         const patch = { snapshots: merged, suggestSent: false };
         if (parsed.lastAnchor) patch.lastAnchor = parsed.lastAnchor;
-        if (parsed.injectEnabled !== undefined) patch.injectEnabled = parsed.injectEnabled;
-        if (parsed.injectCount !== undefined) patch.injectCount = parsed.injectCount;
-        if (parsed.injectDepth !== undefined) patch.injectDepth = parsed.injectDepth;
+        if (parsed.injectEnabled !== undefined || parsed.injectCount !== undefined || parsed.injectDepth !== undefined) {
+            const restoreInjection = confirm('Import contains injection settings (enabled/count/depth). Restore those too?');
+            if (restoreInjection) {
+                if (parsed.injectEnabled !== undefined) patch.injectEnabled = parsed.injectEnabled;
+                if (parsed.injectCount !== undefined) patch.injectCount = parsed.injectCount;
+                if (parsed.injectDepth !== undefined) patch.injectDepth = parsed.injectDepth;
+            }
+        }
 
         setChronicleData(patch);
         applyInjection();
@@ -956,6 +967,61 @@ function showStatsModal() {
     el.querySelector('#sc-stats-close')?.addEventListener('click', () => renderContent());
 }
 
+function showPreviewInjection() {
+    const entries = getEntriesForInjection();
+    if (entries.length === 0) {
+        scSetStatus('No chronicle entries to preview — generate or enable injection first.', 'warning');
+        return;
+    }
+    const snapshots = getSnapshots();
+    entries.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const text = entries.map(s => {
+        const num = snapshots.indexOf(s) + 1;
+        const charInfo = s.characters?.length ? ` [${s.characters.join(', ')}]` : '';
+        return `### Chronicle Entry ${num} — ${s.worldDate || s.createdAt}${charInfo}\n${s.text}`;
+    }).join('\n\n---\n\n');
+
+    const injected = `${CHRONICLE_INJECTION_HEADER}\n\n${text}`;
+    const tokens = estimateTokens(injected);
+
+    // Resolve depth/role for display
+    const globalSettings = (typeof window !== 'undefined' && window.__mwt_shared?.getSettings)
+        ? window.__mwt_shared.getSettings()
+        : {};
+    const depth = Number.isFinite(globalSettings.chronicleDepth) ? globalSettings.chronicleDepth : (getChronicleData().injectDepth ?? 2);
+    const roleName = globalSettings.chronicleRole || 'system';
+
+    const previewModal = createModal({
+        id: 'mwt-sc-injection-preview',
+        title: 'Chronicle Injection Preview',
+        content: `
+            <p class="mwt-text-dim mwt-text-sm mwt-mb-8">
+                This is exactly what gets injected into the prompt (${injected.length} chars, ~${tokens} tokens).
+                Depth: <strong>${depth}</strong> · Role: <strong>${roleName}</strong>.
+            </p>
+            <pre style="white-space:pre-wrap;font-family:var(--mwt-font-mono);font-size:12px;line-height:1.5;background:var(--mwt-bg-light);padding:12px;border-radius:var(--mwt-radius);border:1px solid var(--mwt-border);max-height:60vh;overflow-y:auto">${escapeHtml(injected)}</pre>
+            <div class="mwt-flex mwt-gap-8 mwt-mt-8">
+                <button id="mwt-sc-preview-copy" class="mwt-btn mwt-btn-primary">📋 Copy to Clipboard</button>
+                <button id="mwt-sc-preview-close" class="mwt-btn">Close</button>
+            </div>
+        `,
+    });
+
+    previewModal.querySelector('#mwt-sc-preview-copy')?.addEventListener('click', () => {
+        navigator.clipboard.writeText(injected).then(() => {
+            setStatus(previewModal, 'Copied to clipboard.', 'success', 2000);
+        }).catch(() => {
+            setStatus(previewModal, 'Failed to copy.', 'error');
+        });
+    });
+
+    previewModal.querySelector('#mwt-sc-preview-close')?.addEventListener('click', () => {
+        hideModal('mwt-sc-injection-preview');
+    });
+
+    showModal('mwt-sc-injection-preview');
+}
+
 function showInjectionSelector() {
     const el = getContentEl();
     if (!el) return;
@@ -1073,7 +1139,8 @@ function renderContent() {
         if (s.id === selectedSnapshotId) classes.push('sc-entry--selected');
         if (s.manual) classes.push('sc-entry--manual');
         if (s.consolidated) classes.push('sc-entry--consolidated');
-        if ((consolidateMode || bulkDeleteMode) && checkedForMerge.has(s.id)) classes.push('sc-entry--checked');
+        if (consolidateMode && checkedForMerge.has(s.id)) classes.push('sc-entry--merge-checked');
+        if (bulkDeleteMode && checkedForMerge.has(s.id)) classes.push('sc-entry--delete-checked');
         return classes.join(' ');
     };
 
@@ -1110,6 +1177,7 @@ function renderContent() {
             <div class="sc-status"><span class="sc-status"></span></div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                 <button id="sc-inject-toggle" class="mwt-btn" style="font-size:12px">${isInjectionEnabled() ? '📥 Injection ON' : '📤 Injection OFF'}</button>
+                <button id="sc-preview-injection" class="mwt-btn" style="font-size:12px">📄 Preview</button>
                 <span class="mwt-token-info${_injStats.tokenEstimate > 4000 ? ' mwt-token-info--danger' : _injStats.tokenEstimate > 2000 ? ' mwt-token-info--warn' : ''}" style="font-size:11px">~${_injStats.tokenEstimate} tokens (${_injStats.entriesToInject} entries)</span>
                 <button id="sc-inject-settings" class="mwt-btn" style="font-size:12px">⚙</button>
                 <button id="sc-stats-btn" class="mwt-btn" style="font-size:12px">📊 Stats</button>
@@ -1184,6 +1252,7 @@ function bindMainEvents() {
         renderContent();
         scSetStatus(`Injection ${next ? 'enabled' : 'disabled'}.`, 'success');
     });
+    el.querySelector('#sc-preview-injection')?.addEventListener('click', () => showPreviewInjection());
     el.querySelector('#sc-inject-settings')?.addEventListener('click', () => showInjectionSelector());
     el.querySelector('#sc-export-json')?.addEventListener('click', () => exportChronicle());
     el.querySelector('#sc-export-md')?.addEventListener('click', () => exportMarkdown());
@@ -1266,6 +1335,7 @@ export async function onMessageReceived() {
 }
 
 export function onChatChanged() {
+    isGenerating = false;
     isMainGenerating = false;
     selectedSnapshotId = null;
     consolidateMode = false;

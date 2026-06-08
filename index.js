@@ -224,6 +224,7 @@ function buildTabContent(tab) {
 
 let modal = null;
 const _initedModules = new Set();
+let _modalEscapeHandler = null;
 
 function renderModal() {
     const tabBarHtml = TABS.map((t, i) =>
@@ -259,20 +260,26 @@ function renderModal() {
         // Replace existing close handlers (createModal binds them inline)
         closeBtn?.addEventListener('click', safeClose);
         backdrop?.addEventListener('click', safeClose);
-        // Also handle Escape key
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && modal?.style.display === 'flex') {
-                safeClose();
-            }
-        });
+        // Also handle Escape key — attach once only
+        if (!_modalEscapeHandler) {
+            _modalEscapeHandler = (e) => {
+                if (e.key === 'Escape' && modal?.style.display === 'flex') {
+                    safeClose();
+                }
+            };
+            document.addEventListener('keydown', _modalEscapeHandler);
+        }
     } else {
         const body = modal.querySelector('.mwt-modal-body');
         if (body) body.innerHTML = content;
     }
 
-    // Wire tab clicks
-    modal.querySelectorAll('.mwt-tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+    // Wire tab clicks via event delegation
+    const tabBar = modal.querySelector('.mwt-tab-bar');
+    if (tabBar) {
+        tabBar.addEventListener('click', (e) => {
+            const btn = e.target.closest('.mwt-tab-btn');
+            if (!btn) return;
             const tabId = btn.dataset.tab;
             modal.querySelectorAll('.mwt-tab-btn').forEach(b => b.classList.remove('active'));
             modal.querySelectorAll('.mwt-tab-content').forEach(c => c.classList.remove('active'));
@@ -280,7 +287,7 @@ function renderModal() {
             const content = modal.querySelector(`.mwt-tab-content[data-tab="${tabId}"]`);
             if (content) content.classList.add('active');
         });
-    });
+    }
 
     // Init feature modules with modal reference and wire their events
     // (deduplicate — same module may back multiple tabs)
@@ -498,6 +505,11 @@ function updateFloatTokenCounts() {
                     el.style.display = 'none';
                 }
             }
+        }
+
+        // Async token refresh for Knowledge (cached)
+        if (typeof Knowledge.refreshTotalTokens === 'function') {
+            Knowledge.refreshTotalTokens().catch(() => {});
         }
 
         // Update auto-refresh countdown on World State floating button

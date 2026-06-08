@@ -15,9 +15,8 @@
 import {
     getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex,
     fetchFromApi, normaliseOutput,
-    escapeHtml, computeLcsDiff, buildInlineDiff, renderLineDiff,
+    escapeHtml, renderLineDiff,
     createSettingsManager,
-    createModal, showModal, hideModal, setStatus, formatDate, estimateTokens,
 } from '../core/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -71,6 +70,7 @@ let notifResizing = false, notifResizeX = 0, notifResizeY = 0, notifStartW = 0, 
 let messageCounter = 0;
 let isRunning = false;
 let trackerQueue = Promise.resolve();
+let _cachedTokenCount = 0;
 
 // ─── Notification Panel ────────────────────────────────────────────────────
 
@@ -757,7 +757,7 @@ function buildStagingItems(scanResult) {
     const registry = getRegistry();
     const items = [];
     let idCounter = 0;
-    const makeId = () => ++idCounter;
+    const makeId = () => `kt-${++idCounter}`;
     let misclassifiedCount = 0;
 
     scanResult.new_minor.forEach(data => {
@@ -1033,7 +1033,7 @@ function wireStagingEvents(el) {
     // Click staging items
     el.querySelectorAll('.kt-staging-item').forEach(item => {
         item.addEventListener('click', async () => {
-            activeItemId = Number(item.dataset.id);
+            activeItemId = item.dataset.id;
             const stagingItem = stagingItems.find(i => i.id === activeItemId);
             if (stagingItem && stagingItem.action === 'update' && stagingItem.existingContent === null && stagingItem.uid) {
                 const existing = await loadEntryContent(stagingItem.uid);
@@ -1110,7 +1110,7 @@ function wireNpcListEvents(el, type) {
                     ? buildUpdatedMinorContent(result.currentContent, result.fields || {})
                     : buildUpdatedMajorContent(result.currentContent, result.fields || {}, result.newKnowledge || []);
                 stagingItems.push({
-                    id: Date.now() + Math.random(), type: npcType, action: 'update', name, data: {},
+                    id: `npc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: npcType, action: 'update', name, data: {},
                     proposedContent: mergedContent, existingContent: result.currentContent,
                     mergedContent, keywords: reg.keywords || [name], uid: reg.uid,
                     fields: result.fields, newKnowledge: npcType === 'major' ? (result.newKnowledge || []) : [],
@@ -1133,7 +1133,7 @@ function wireNpcListEvents(el, type) {
             if (!reg?.uid) return;
             const existing = await loadEntryContent(reg.uid);
             const item = {
-                id: Date.now() + Math.random(), type: 'promote', action: 'update', name, data: {},
+                id: `promote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'promote', action: 'update', name, data: {},
                 proposedContent: '(promoting)', existingContent: existing,
                 mergedContent: existing ? buildPromotedContent(existing) : '',
                 keywords: reg.keywords || [name], uid: reg.uid, fromType: 'minor', toType: 'major',
@@ -1153,7 +1153,7 @@ function wireNpcListEvents(el, type) {
             if (!reg?.uid) return;
             const existing = await loadEntryContent(reg.uid);
             const item = {
-                id: Date.now() + Math.random(), type: 'demote', action: 'update', name, data: {},
+                id: `demote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'demote', action: 'update', name, data: {},
                 proposedContent: '(demoting)', existingContent: existing,
                 mergedContent: existing ? buildDemotedContent(existing) : '',
                 keywords: reg.keywords || [name], uid: reg.uid, fromType: 'major', toType: 'minor',
@@ -1187,6 +1187,12 @@ function wireNpcListEvents(el, type) {
         btn.addEventListener('click', () => {
             const name = btn.dataset.name;
             if (!confirm(`Remove "${name}" from registry? (Lorebook entry stays.)`)) return;
+            // Clean up any staging items and notifications for this NPC
+            stagingItems = stagingItems.filter(i => i.name !== name);
+            if (activeItemId && !stagingItems.find(i => i.id === activeItemId)) activeItemId = null;
+            for (const id of Object.keys(notificationEntries)) {
+                if (notificationEntries[id]?.item?.name === name) removeNotificationEntry(id);
+            }
             const reg = getRegistry();
             delete reg[name];
             saveRegistry(reg);
@@ -1268,12 +1274,15 @@ function wireStateTrackerEvents(el) {
                 const result = await runStateUpdate(name, info.uid);
                 if (result.unchanged) { bumpStateTrackerTimestamp(name); renderNpcsSubTab(); ktSetStatus(`No change for "${name}".`, 'info'); return; }
                 const stagingItem = {
-                    id: Date.now() + Math.random(), type: 'state', action: 'update', name, data: {},
+                    id: `state-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'state', action: 'update', name, data: {},
                     proposedContent: result.merged, existingContent: result.currentContent,
                     mergedContent: result.merged, keywords: [name], uid: info.uid,
                 };
                 const existingIdx = stagingItems.findIndex(it => it.type === 'state' && it.uid === info.uid);
-                if (existingIdx >= 0) stagingItems[existingIdx] = stagingItem;
+                if (existingIdx >= 0) {
+                    removeNotificationEntry(stagingItems[existingIdx].id);
+                    stagingItems[existingIdx] = stagingItem;
+                }
                 else stagingItems.push(stagingItem);
                 activeItemId = stagingItem.id;
                 activeSubTab = 'staging';
@@ -1323,7 +1332,7 @@ function wireStateTrackerEvents(el) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     });
 
     el.querySelector('#kt-state-import')?.addEventListener('click', () => el.querySelector('#kt-state-import-file')?.click());
@@ -1364,12 +1373,14 @@ function exportNpcs() {
             history: [],
         };
     }
+    // Strip API key from export to avoid leaking credentials in plain text
+    const { apiKey, ...safeSettings } = getSettings();
     const data = {
         version: 1,
         type: 'knowledge_tracker',
         exportedAt: new Date().toISOString(),
         lorebook: LOREBOOK_NAME,
-        settings: getSettings(),
+        settings: safeSettings,
         entries,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1379,8 +1390,8 @@ function exportNpcs() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
-    ktSetStatus('NPC registry exported.', 'success');
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    ktSetStatus('NPC registry exported (API key excluded for security).', 'success');
 }
 
 async function importNpcs() {
@@ -1667,6 +1678,7 @@ export function getModuleRefreshContent() { return renderNpcsSubTab; }
 export function onMessageReceived() {
     const settings = getSettings();
     if (!settings.autoTriggerEnabled) return;
+    if (!hasValidSettings()) return; // Don't auto-trigger without API config
     const everyN = Math.max(1, Number(settings.autoTriggerEveryN) || 5);
     const cooldownMsgs = Math.max(0, Number(settings.trackerCooldownMsgs) || 3);
     messageCounter++;
@@ -1692,7 +1704,7 @@ export function onMessageReceived() {
                     const result = await runStateUpdate(name, info.uid);
                     if (result.unchanged) { bumpStateTrackerTimestamp(name); continue; }
                     const stagingItem = {
-                        id: Date.now() + Math.random(), type: 'state', action: 'update', name, data: {},
+                        id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'state', action: 'update', name, data: {},
                         proposedContent: result.merged, existingContent: result.currentContent,
                         mergedContent: result.merged, keywords: [name], uid: info.uid,
                     };
@@ -1718,20 +1730,53 @@ export function onMessageReceived() {
 
 export function onChatChanged() {
     messageCounter = 0;
+    isRunning = false;
     stagingItems = [];
     activeItemId = null;
     activeSubTab = 'staging';
     notificationEntries = {};
     hideNotificationPanel();
+    // Clean up any orphaned view modals
+    document.querySelectorAll('#kt-view-modal').forEach(m => m.remove());
 }
 
 export function getTotalTokens() {
-    // NPC and State Tracker content lives in lorebook entries that require
-    // async API calls (loadEntryContent / loadStateTrackerEntry).  Since
-    // getTotalTokens is invoked synchronously from the floating button
-    // refresh loop, we cannot await them here.  Return 0 — the World State
-    // and Chronicle modules provide accurate synchronous counts instead.
-    return 0;
+    // Return the last cached token count (updated asynchronously).
+    // Lorebook content requires async API calls that can't be awaited here.
+    return _cachedTokenCount;
+}
+
+/**
+ * Recomputes the total token count for all tracked NPC and State Tracker entries.
+ * This is async because it needs to load lorebook entries from disk.
+ */
+export async function refreshTotalTokens() {
+    try {
+        const registry = getRegistry();
+        let total = 0;
+        // Count NPC entries
+        for (const [name, info] of Object.entries(registry)) {
+            if (info.uid === null || info.uid === undefined) continue;
+            try {
+                const content = await loadEntryContent(info.uid);
+                if (content) total += estimateTokens(content);
+            } catch { /* skip */ }
+        }
+        // Count State Tracker entries
+        const stateReg = getStateRegistry();
+        for (const [name, info] of Object.entries(stateReg)) {
+            if (info.uid === null || info.uid === undefined) continue;
+            try {
+                const loaded = await loadStateTrackerEntry(info.uid);
+                if (loaded?.content) total += estimateTokens(loaded.content);
+            } catch { /* skip */ }
+        }
+        _cachedTokenCount = total;
+        return total;
+    } catch (err) {
+        console.warn('[MWT:Knowledge] Token refresh failed:', err);
+        return _cachedTokenCount;
+    }
 }
 
 export function syncGlobalSettings(patch) {
