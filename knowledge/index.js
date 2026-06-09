@@ -390,6 +390,7 @@ function updateRelationship(from, to, type, notes) {
 }
 
 function rekeyRelationships(oldName, newName) {
+    if (oldName === newName) return;
     const rels = getRelationships();
     if (!rels) return;
     // 1) Re-point outgoing edges: oldName -> * becomes newName -> *
@@ -408,11 +409,19 @@ function rekeyRelationships(oldName, newName) {
     }
     // 2) Re-point incoming edges: * -> oldName becomes * -> newName
     for (const [from, targets] of Object.entries(rels)) {
-        for (const edge of targets) {
-            if (edge.target === oldName) {
-                edge.target = newName;
+        for (let i = targets.length - 1; i >= 0; i--) {
+            if (targets[i].target === oldName) {
+                const existing = targets.find((r, idx) => idx !== i && r.target === newName);
+                if (existing) {
+                    existing.type = targets[i].type;
+                    if (targets[i].notes) existing.notes = targets[i].notes;
+                    targets.splice(i, 1);
+                } else {
+                    targets[i].target = newName;
+                }
             }
         }
+        if (targets.length === 0) delete rels[from];
     }
     saveRelationships(rels);
 }
@@ -1950,6 +1959,7 @@ export function onChatChanged() {
     stagingItems = [];
     activeItemId = null;
     activeSubTab = 'staging';
+    _cachedTokenCount = 0;
     notificationEntries = {};
     hideNotificationPanel();
     // Clean up any orphaned view modals
