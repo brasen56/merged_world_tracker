@@ -15,7 +15,7 @@
 import {
     getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex,
     fetchFromApi, normaliseOutput,
-    escapeHtml, renderLineDiff,
+    escapeHtml, renderLineDiff, estimateTokens, // estimateTokens: used by refreshTotalTokens() — do not remove
     createSettingsManager,
 } from '../core/index.js';
 
@@ -31,6 +31,9 @@ const RELATIONSHIP_KEY = 'knowledge_tracker_relationships';
 const HISTORY_KEY_PREFIX = 'kt_history_';
 const KT_VERSION = '0.7.4-mwt';
 const RELATIONSHIP_TYPES = ['ally', 'enemy', 'neutral', 'friend', 'rival', 'family', 'lover', 'subordinate', 'superior', 'acquaintance', 'mentor', 'student', 'employer', 'employee'];
+
+const RELATIONSHIP_BLOCK_START = '<!-- mwt:relationships:start -->';
+const RELATIONSHIP_BLOCK_END = '<!-- mwt:relationships:end -->';
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -71,6 +74,7 @@ let messageCounter = 0;
 let isRunning = false;
 let trackerQueue = Promise.resolve();
 let _cachedTokenCount = 0;
+let _refreshingTokens = false;
 
 // ─── Notification Panel ────────────────────────────────────────────────────
 
@@ -370,6 +374,74 @@ function removeRelationship(from, to) {
         if (rels[from].length === 0) delete rels[from];
         saveRelationships(rels);
     }
+}
+
+function updateRelationship(from, to, type, notes) {
+    const rels = getRelationships();
+    if (!rels[from]) rels[from] = [];
+    const existing = rels[from].find(r => r.target === to);
+    if (existing) {
+        existing.type = type;
+        existing.notes = notes || '';
+    } else {
+        rels[from].push({ target: to, type, notes: notes || '' });
+    }
+    saveRelationships(rels);
+}
+
+// ─── Managed block helpers ───────────────────────────────────────────────────
+
+function stripRelationshipBlock(content) {
+    if (!content) return content;
+    const startIdx = content.indexOf(RELATIONSHIP_BLOCK_START);
+    if (startIdx === -1) return content;
+    const endIdx = content.indexOf(RELATIONSHIP_BLOCK_END, startIdx);
+    if (endIdx === -1) return content;
+    const before = content.slice(0, startIdx);
+    const after = content.slice(endIdx + RELATIONSHIP_BLOCK_END.length);
+    return (before + after).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function injectRelationshipBlock(content, blockText) {
+    const stripped = stripRelationshipBlock(content || '');
+    const block = `${RELATIONSHIP_BLOCK_START}\n${blockText}\n${RELATIONSHIP_BLOCK_END}`;
+    if (!stripped) return block;
+    return `${stripped}\n\n${block}`;
+}
+
+function formatRelationshipBlock(name) {
+    const rels = getNpcRelationships(name);
+    if (!rels.length) return '';
+    const lines = rels.map(r => {
+        const note = r.notes ? ` (${r.notes})` : '';
+        return `${r.type} of ${r.target}${note}`;
+    });
+    return `Relationships: ${lines.join('; ')}.`;
+}
+
+async function syncRelationshipsToLorebook(name) {
+    const reg = getRegistry()[name];
+    if (!reg || reg.uid === null || reg.uid === undefined) return { success: false, error: 'No lorebook entry' };
+    const currentContent = await loadEntryContent(reg.uid);
+    if (currentContent === null) return { success: false, error: 'Could not load entry' };
+    const blockText = formatRelationshipBlock(name);
+    const newContent = blockText ? injectRelationshipBlock(currentContent, blockText) : stripRelationshipBlock(currentContent);
+    if (newContent === currentContent) return { success: true, unchanged: true };
+    return writeToLorebook(name, newContent, reg.keywords || [name], reg.uid);
+}
+
+async function syncAllRelationshipsToLorebooks() {
+    const registry = getRegistry();
+    let synced = 0, failed = 0;
+    for (const [name, info] of Object.entries(registry)) {
+        if (info.uid === null || info.uid === undefined) continue;
+        try {
+            const result = await syncRelationshipsToLorebook(name);
+            if (result.success && !result.unchanged) synced++;
+            else if (!result.success) failed++;
+        } catch (err) { console.warn(`[MWT:Knowledge] Sync relationships for "${name}" failed:`, err); failed++; }
+    }
+    return { synced, failed };
 }
 
 // ─── History ─────────────────────────────────────────────────────────────────
@@ -886,8 +958,10 @@ function renderNpcsSubTab() {
     const stagingCount = stagingItems.length;
     const stateReg = getStateRegistry();
     const stateCount = Object.keys(stateReg).length;
-    const subTabBtns = ['staging', 'minor', 'major', 'state'].map(t =>
-        `<button class="kt-subtab-btn ${activeSubTab === t ? 'kt-subtab-btn--active' : ''}" data-subtab="${t}">${t === 'staging' ? `Staging ${stagingCount > 0 ? `(${stagingCount})` : ''}` : t === 'minor' ? `Minor (${minor.length})` : t === 'major' ? `Major (${major.length})` : `State (${stateCount})`}</button>`
+    const rels = getRelationships();
+    const relCount = Object.values(rels).reduce((sum, arr) => sum + arr.length,0);
+    const subTabBtns = ['staging', 'minor', 'major', 'state', 'relationships'].map(t =>
+        `<button class="kt-subtab-btn ${activeSubTab === t ? 'kt-subtab-btn--active' : ''}" data-subtab="${t}">${t === 'staging' ? `Staging ${stagingCount >0 ? `(${stagingCount})` : ''}` : t === 'minor' ? `Minor (${minor.length})` : t === 'major' ? `Major (${major.length})` : t === 'state' ? `State (${stateCount})` : `Relationships (${relCount})`}</button>`
     ).join('');
 
     let content = '';
@@ -895,6 +969,7 @@ function renderNpcsSubTab() {
     else if (activeSubTab === 'minor') content = renderNpcListContent('minor', minor);
     else if (activeSubTab === 'major') content = renderNpcListContent('major', major);
     else if (activeSubTab === 'state') content = renderStateTrackerContent();
+    else if (activeSubTab === 'relationships') content = renderRelationshipContent();
 
     el.innerHTML = `
         <div class="kt-npcs-container">
@@ -960,6 +1035,7 @@ function renderNpcsSubTab() {
     if (activeSubTab === 'staging') wireStagingEvents(el);
     else if (activeSubTab === 'minor' || activeSubTab === 'major') wireNpcListEvents(el, activeSubTab);
     else if (activeSubTab === 'state') wireStateTrackerEvents(el);
+    else if (activeSubTab === 'relationships') wireRelationshipEvents(el);
 }
 
 function renderStagingContent(count) {
@@ -1640,6 +1716,108 @@ function showKnowledgeSettings() {
     });
 }
 
+// ─── Relationship sub-tab ────────────────────────────────────────────────────
+
+function renderRelationshipContent() {
+    const rels = getRelationships();
+    const npcNames = getAllNpcNames();
+    const allEdges = [];
+    for (const [from, targets] of Object.entries(rels)) {
+        for (const r of targets) {
+            allEdges.push({ from, to: r.target, type: r.type, notes: r.notes || '' });
+        }
+    }
+
+    const npcOptions = npcNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+    const typeOptions = RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join('');
+
+    return `
+       <div class="kt-rel-container">
+           <div class="kt-rel-toolbar">
+               <button id="kt-rel-sync-all" class="mwt-btn mwt-btn-primary" title="Write relationship blocks to all NPC lorebook entries">💾 Sync to Lorebooks</button>
+               <span style="font-size:12px;color:var(--mwt-text-dim)">${allEdges.length} relationship(s)</span>
+            </div>
+           <div class="kt-rel-add-row">
+               <select id="kt-rel-from" class="mwt-input" style="min-width:120px"><option value="">From…</option>${npcOptions}</select>
+               <select id="kt-rel-type" class="mwt-input" style="min-width:100px">${typeOptions}</select>
+               <select id="kt-rel-to" class="mwt-input" style="min-width:120px"><option value="">To…</option>${npcOptions}</select>
+               <input id="kt-rel-notes" class="mwt-input" type="text" placeholder="Notes (optional)" style="flex:1;min-width:120px" />
+               <button id="kt-rel-add" class="mwt-btn mwt-btn-primary">+ Add</button>
+            </div>
+            ${allEdges.length === 0 ? '<div class="kt-empty">No relationships tracked yet.</div>' : `
+           <div class="kt-rel-list">
+                ${allEdges.map(e => {
+                    const reverse = (rels[e.to] || []).find(r => r.target === e.from);
+                    const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${reverse.type}">↩ ${reverse.type}</span>` : '';
+                    return `<div class="kt-rel-row" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}">
+                       <span class="kt-rel-from">${escapeHtml(e.from)}</span>
+                       <span class="kt-rel-type">${e.type}</span>
+                       <span class="kt-rel-to">${escapeHtml(e.to)}</span>
+                        ${e.notes ? `<span class="kt-rel-notes">${escapeHtml(e.notes)}</span>` : ''}
+                        ${reverseLabel}
+                       <button class="kt-rel-remove" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="Remove">✕</button>
+                    </div>`;
+                }).join('')}
+            </div>`}
+        </div>`;
+}
+
+function wireRelationshipEvents(el) {
+    el.querySelector('#kt-rel-add')?.addEventListener('click', async () => {
+        const from = el.querySelector('#kt-rel-from')?.value;
+        const to = el.querySelector('#kt-rel-to')?.value;
+        const type = el.querySelector('#kt-rel-type')?.value;
+        const notes = el.querySelector('#kt-rel-notes')?.value?.trim() || '';
+        if (!from || !to || !type) { ktSetStatus('Select From, Type, and To.', 'error'); return; }
+        if (from === to) { ktSetStatus('An NPC cannot have a relationship with themselves.', 'error'); return; }
+        const npcNames = getAllNpcNames();
+        if (!npcNames.includes(from)) { ktSetStatus(`"${from}" is not a known NPC.`, 'error'); return; }
+        if (!npcNames.includes(to)) { ktSetStatus(`"${to}" is not a known NPC.`, 'error'); return; }
+        updateRelationship(from, to, type, notes);
+        // Sync to lorebook for the "from" NPC
+        try {
+            const result = await syncRelationshipsToLorebook(from);
+            if (result.success && !result.unchanged) {
+                ktSetStatus(`Relationship added and synced to "${from}" lorebook.`, 'success');
+            } else if (result.success) {
+                ktSetStatus(`Relationship added (lorebook unchanged).`, 'success');
+            } else {
+                ktSetStatus(`Relationship added but lorebook sync failed: ${result.error}`, 'warning');
+            }
+        } catch (err) {
+            ktSetStatus(`Relationship added but sync failed: ${err.message}`, 'warning');
+        }
+        renderNpcsSubTab();
+    });
+
+    el.querySelectorAll('.kt-rel-remove').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const from = btn.dataset.from;
+            const to = btn.dataset.to;
+            if (!confirm(`Remove relationship: ${from} → ${to}?`)) return;
+            removeRelationship(from, to);
+            // Also strip the block from the lorebook entry
+            try {
+                await syncRelationshipsToLorebook(from);
+            } catch (err) { /* ignore */ }
+            renderNpcsSubTab();
+        });
+    });
+
+    el.querySelector('#kt-rel-sync-all')?.addEventListener('click', async () => {
+        const btn = el.querySelector('#kt-rel-sync-all');
+        try {
+            btn.disabled = true; btn.textContent = '⏳ Syncing…';
+            const result = await syncAllRelationshipsToLorebooks();
+            ktSetStatus(`Synced ${result.synced} lorebook(s). ${result.failed > 0 ? result.failed + ' failed.' : ''}`, result.failed > 0 ? 'warning' : 'success');
+        } catch (err) {
+            ktSetStatus(`Sync failed: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false; btn.textContent = '💾 Sync to Lorebooks';
+        }
+    });
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export function init(parentModal) {
@@ -1751,6 +1929,10 @@ export function getTotalTokens() {
  * This is async because it needs to load lorebook entries from disk.
  */
 export async function refreshTotalTokens() {
+    // Guard against overlapping refreshes: a slow run can otherwise finish
+    // after a newer one and write a stale count, causing the badge to flicker.
+    if (_refreshingTokens) return _cachedTokenCount;
+    _refreshingTokens = true;
     try {
         const registry = getRegistry();
         let total = 0;
@@ -1774,8 +1956,12 @@ export async function refreshTotalTokens() {
         _cachedTokenCount = total;
         return total;
     } catch (err) {
-        console.warn('[MWT:Knowledge] Token refresh failed:', err);
+        // Logged loudly on purpose: a silent failure here previously masked a
+        // missing estimateTokens import for a long time. Keep it visible.
+        console.error('[MWT:Knowledge] Token refresh failed:', err);
         return _cachedTokenCount;
+    } finally {
+        _refreshingTokens = false;
     }
 }
 

@@ -2537,52 +2537,84 @@ input[type="number"].mwt-input {
     border-color: var(--sc-border-focus);
 }
 
-/* ── Relationship modal ─────────────────────────────────────────────────── */
+/* ── Relationship editor ─────────────────────────────────────────────────── */
+
+.kt-rel-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+.kt-rel-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 0 4px;
+}
 
 .kt-rel-add-row {
     display: flex;
     gap: 6px;
     align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--sc-border-dim);
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--mwt-border);
     flex-wrap: wrap;
+}
+
+.kt-rel-add-row .mwt-input {
+    font-size: 12px;
+    padding: 5px 8px;
 }
 
 .kt-rel-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 8px 0;
+    gap: 6px;
+    padding: 8px 4px;
 }
 
 .kt-rel-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 8px;
-    background: var(--sc-bg-diff);
-    border: 1px solid var(--sc-border-dim);
+    padding: 6px 10px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
     border-radius: 6px;
     font-size: 12px;
 }
 
+.kt-rel-from {
+    font-weight: 600;
+    color: var(--mwt-accent);
+    min-width: 100px;
+}
+
 .kt-rel-target {
     font-weight: 600;
-    color: var(--sc-text);
+    color: var(--mwt-text);
     min-width: 100px;
 }
 
 .kt-rel-type {
-    color: var(--sc-accent-light);
+    color: var(--mwt-accent);
     font-size: 11px;
     padding: 1px 6px;
-    background: rgba(99, 102, 241, 0.15);
+    background: rgba(74, 158, 255, 0.15);
     border-radius: 4px;
     text-transform: capitalize;
+    white-space: nowrap;
+}
+
+.kt-rel-to {
+    font-weight: 600;
+    color: var(--mwt-text);
+    min-width: 100px;
 }
 
 .kt-rel-notes {
-    color: var(--sc-text-dim);
+    color: var(--mwt-text-dim);
     font-size: 11px;
     flex: 1;
     overflow: hidden;
@@ -2590,9 +2622,18 @@ input[type="number"].mwt-input {
     white-space: nowrap;
 }
 
+.kt-rel-reverse {
+    color: #60a5fa;
+    font-size: 11px;
+    padding: 1px 6px;
+    background: rgba(96, 165, 250, 0.12);
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
 .kt-rel-remove {
     background: transparent;
-    color: #6b7280;
+    color: #9ca3af;
     border: none;
     cursor: pointer;
     font-size: 12px;
@@ -2602,6 +2643,6 @@ input[type="number"].mwt-input {
 }
 
 .kt-rel-remove:hover {
-    color: var(--sc-danger);
+    color: #f87171;
     background: rgba(248, 113, 113, 0.1);
 }
