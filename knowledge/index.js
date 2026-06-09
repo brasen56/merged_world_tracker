@@ -732,6 +732,18 @@ function synthesizeMajorFromUpdate(name, fields, newKnowledge) {
     return lines.join('\n');
 }
 
+async function enrichStagingItem(item) {
+    if (!item || item.action !== 'update' || item.existingContent !== null || !item.uid) return;
+    const existing = await loadEntryContent(item.uid);
+    if (existing !== null) {
+        item.existingContent = existing;
+        if (item.type === 'minor') item.mergedContent = buildUpdatedMinorContent(existing, item.fields || {});
+        else if (item.type === 'major') item.mergedContent = buildUpdatedMajorContent(existing, item.fields || {}, item.newKnowledge || []);
+        else item.mergedContent = existing;
+        item.proposedContent = item.mergedContent || item.proposedContent;
+    }
+}
+
 function buildPromotedContent(currentContent) {
     const lines = currentContent.split('\n');
     if (lines.some(l => l.trim().toLowerCase().startsWith('knowledge ledger:'))) return currentContent;
@@ -1021,7 +1033,7 @@ function renderNpcsSubTab() {
     el.innerHTML = `
         <div class="kt-npcs-container">
             <div class="kt-npcs-toolbar">
-                <button id="kt-scan" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>🔍 Scan</button>
+                ${isRunning ? '<button id="kt-scan" class="mwt-btn mwt-btn-primary" disabled>⏳ Scanning…</button>' : `<button id="kt-scan" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>🔍 Scan</button>`}
                 <div class="kt-subtabs">${subTabBtns}</div>
                 <button id="kt-npc-settings" class="mwt-btn" style="font-size:11px" title="Knowledge Tracker Settings">⚙ Settings</button>
                 <button id="kt-npc-export" class="mwt-btn" style="font-size:11px">⬇ Export</button>
@@ -1056,10 +1068,11 @@ function renderNpcsSubTab() {
 
     // Wire scan button
     el.querySelector('#kt-scan')?.addEventListener('click', async () => {
-        const btn = el.querySelector('#kt-scan');
+        if (isRunning) return;
+        isRunning = true;
         try {
-            btn.disabled = true; btn.textContent = '⏳ Scanning…';
             ktSetStatus('Scanning…', 'info');
+            renderNpcsSubTab(); // Re-render to show "⏳ Scanning…" state
             activeSubTab = 'staging';
             const result = await runScan();
             const newItems = buildStagingItems(result);
@@ -1067,15 +1080,15 @@ function renderNpcsSubTab() {
             const added = newItems.filter(it => !existingKeys.has(`${it.name}|${it.action}|${it.type}`));
             stagingItems.push(...added);
             activeItemId = null;
+            await Promise.all(added.filter(it => it.action === 'update').map(it => enrichStagingItem(it)));
             added.forEach(item => addNotificationEntry(item));
-            renderNpcsSubTab();
             ktSetStatus(`Scan complete — ${added.length} proposal(s).`, 'success');
             try { if (typeof toastr !== 'undefined' && toastr?.[added.length ? 'info' : 'success']) toastr[added.length ? 'info' : 'success'](`Scan found ${added.length} proposal(s).`, 'Knowledge Tracker'); } catch { /* */ }
         } catch (err) {
             ktSetStatus(`Scan failed: ${err.message}`, 'error');
             try { if (typeof toastr !== 'undefined' && toastr?.error) toastr.error(`Scan failed: ${err.message}`, 'Knowledge Tracker'); } catch { /* */ }
         }
-        finally { if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan'; } }
+        finally { isRunning = false; renderNpcsSubTab(); }
     });
 
     // Wire sub-tab specific events
@@ -1776,7 +1789,7 @@ function renderRelationshipContent() {
     }
 
     const npcOptions = npcNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
-    const typeOptions = RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join('');
+    const typeOptions = RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join('') + '<option value="__other__">Other…</option>';
 
     return `
        <div class="kt-rel-container">
@@ -1787,6 +1800,7 @@ function renderRelationshipContent() {
            <div class="kt-rel-add-row">
                <select id="kt-rel-from" class="mwt-input" style="min-width:120px"><option value="">From…</option>${npcOptions}</select>
                <select id="kt-rel-type" class="mwt-input" style="min-width:100px">${typeOptions}</select>
+               <input id="kt-rel-type-custom" class="mwt-input" type="text" placeholder="Custom type…" style="display:none;min-width:100px" />
                <select id="kt-rel-to" class="mwt-input" style="min-width:120px"><option value="">To…</option>${npcOptions}</select>
                <input id="kt-rel-notes" class="mwt-input" type="text" placeholder="Notes (optional)" style="flex:1;min-width:120px" />
                <button id="kt-rel-add" class="mwt-btn mwt-btn-primary">+ Add</button>
@@ -1810,10 +1824,23 @@ function renderRelationshipContent() {
 }
 
 function wireRelationshipEvents(el) {
+    // Show/hide custom type input when "Other…" is selected
+    const typeSelect = el.querySelector('#kt-rel-type');
+    const customInput = el.querySelector('#kt-rel-type-custom');
+    if (typeSelect && customInput) {
+        typeSelect.addEventListener('change', () => {
+            customInput.style.display = typeSelect.value === '__other__' ? '' : 'none';
+            if (typeSelect.value === '__other__') customInput.focus();
+        });
+    }
+
     el.querySelector('#kt-rel-add')?.addEventListener('click', async () => {
         const from = el.querySelector('#kt-rel-from')?.value;
         const to = el.querySelector('#kt-rel-to')?.value;
-        const type = el.querySelector('#kt-rel-type')?.value;
+        let type = el.querySelector('#kt-rel-type')?.value;
+        if (type === '__other__') {
+            type = customInput?.value?.trim() || '';
+        }
         const notes = el.querySelector('#kt-rel-notes')?.value?.trim() || '';
         if (!from || !to || !type) { ktSetStatus('Select From, Type, and To.', 'error'); return; }
         if (from === to) { ktSetStatus('An NPC cannot have a relationship with themselves.', 'error'); return; }
