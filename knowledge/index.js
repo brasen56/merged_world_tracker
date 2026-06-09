@@ -389,6 +389,34 @@ function updateRelationship(from, to, type, notes) {
     saveRelationships(rels);
 }
 
+function rekeyRelationships(oldName, newName) {
+    const rels = getRelationships();
+    if (!rels) return;
+    // 1) Re-point outgoing edges: oldName -> * becomes newName -> *
+    if (rels[oldName]) {
+        if (!rels[newName]) rels[newName] = [];
+        for (const edge of rels[oldName]) {
+            const existing = rels[newName].find(r => r.target === edge.target);
+            if (existing) {
+                existing.type = edge.type;
+                if (edge.notes) existing.notes = edge.notes;
+            } else {
+                rels[newName].push({ ...edge });
+            }
+        }
+        delete rels[oldName];
+    }
+    // 2) Re-point incoming edges: * -> oldName becomes * -> newName
+    for (const [from, targets] of Object.entries(rels)) {
+        for (const edge of targets) {
+            if (edge.target === oldName) {
+                edge.target = newName;
+            }
+        }
+    }
+    saveRelationships(rels);
+}
+
 // ─── Managed block helpers ───────────────────────────────────────────────────
 
 function stripRelationshipBlock(content) {
@@ -807,8 +835,9 @@ async function runStateUpdate(name, uid) {
 
 async function runNpcUpdate(name, uid) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
-    const currentContent = await loadEntryContent(uid);
-    if (!currentContent) throw new Error(`Could not load entry for "${name}".`);
+    const rawContent = await loadEntryContent(uid);
+    if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
+    const currentContent = stripRelationshipBlock(rawContent);
     const recentMessages = getRecentMessages();
     const worldState = getCurrentWorldState();
     if (!recentMessages) throw new Error('No recent messages.');
@@ -909,7 +938,16 @@ async function handleAccept(item, proposedText, keywords, detailEl) {
         const result = await writeToLorebook(lookupName, proposedText, keywords, uid);
         if (result.success) {
             registerEntry(lookupName, result.uid, targetType, keywords);
-            if (item.mergeSource) { const reg2 = getRegistry(); delete reg2[item.mergeSource]; saveRegistry(reg2); }
+            if (item.mergeSource) {
+                const reg2 = getRegistry();
+                delete reg2[item.mergeSource];
+                saveRegistry(reg2);
+                rekeyRelationships(item.mergeSource, lookupName);
+            }
+            // proposedText replaced the entire entry, wiping any managed relationship
+            // block. Re-inject it so knowledge updates don't silently drop relationships.
+            try { await syncRelationshipsToLorebook(lookupName); }
+            catch (err) { console.warn('[MWT:Knowledge] Re-sync relationships after write failed:', err); }
             stagingItems = stagingItems.filter(i => i.id !== item.id);
             activeItemId = null;
             renderStagingList();
