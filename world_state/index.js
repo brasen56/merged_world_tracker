@@ -560,7 +560,12 @@ async function refreshWorldState(isAuto = false) {
         return null;
     }
 
-    const chatIdBefore = getChat()?.length;
+    const ctxBefore = getContextSafe();
+    // Identity (not length) of the chat we're generating for. Length detects "the
+    // user continued the RP"; this composite key detects "the user switched chat
+    // or character" — two cases the old length-only guard couldn't tell apart.
+    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
+    const chatLenBefore = getChat()?.length;
     wstIsRefreshing = true;
 
     try {
@@ -591,9 +596,20 @@ async function refreshWorldState(isAuto = false) {
             }
         }
 
-        // Note if chat grew during generation; result is still valid for the messages it scanned.
-        if (getChat()?.length !== chatIdBefore) {
-            console.log('[MWT:WorldState] Chat changed during generation — saving result anyway.');
+        // If the user switched chat/character mid-generation, the result belongs to
+        // the *previous* chat — saving now would write it into the wrong chat's
+        // metadata (and inject it there). Discard in that case only.
+        const ctxAfter = getContextSafe();
+        const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
+        if (chatKeyAfter !== chatKeyBefore) {
+            console.warn('[MWT:WorldState] Chat/character switched during generation — discarding result to avoid cross-chat contamination.');
+            return null;
+        }
+
+        // Same chat, but it may have grown (user continued the RP). The result is
+        // still valid for the messages it scanned, so save it anyway.
+        if (getChat()?.length !== chatLenBefore) {
+            console.log('[MWT:WorldState] Chat grew during generation — saving result anyway.');
         }
 
         const oldText = getWorldStateText();
