@@ -294,7 +294,13 @@ function renderModal() {
     for (const tab of TABS) {
         const mod = tab.module;
         if (!mod) continue;
-        if (mod.init) mod.init(modal);
+        if (!_initedModules.has(mod)) {
+            _initedModules.add(mod);
+            if (mod.init) mod.init(modal);
+        }
+        // Always re-wire events on open — innerHTML is rebuilt so content
+        // needs a fresh render, but init() (which sets up one-time state)
+        // only runs once per module.
         if (mod.getModuleWireEvents) mod.getModuleWireEvents()();
     }
 

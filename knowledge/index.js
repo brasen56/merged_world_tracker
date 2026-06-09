@@ -29,7 +29,6 @@ const REGISTRY_KEY = 'knowledge_tracker_registry';
 const STATE_REGISTRY_KEY = 'state_tracker_registry';
 const RELATIONSHIP_KEY = 'knowledge_tracker_relationships';
 const HISTORY_KEY_PREFIX = 'kt_history_';
-const KT_VERSION = '0.7.4-mwt';
 const RELATIONSHIP_TYPES = ['ally', 'enemy', 'neutral', 'friend', 'rival', 'family', 'lover', 'subordinate', 'superior', 'acquaintance', 'mentor', 'student', 'employer', 'employee'];
 
 const RELATIONSHIP_BLOCK_START = '<!-- mwt:relationships:start -->';
@@ -699,9 +698,9 @@ function buildUpdatedMinorContent(existingContent, fields) {
     const lines = existingContent.split('\n');
     const headerIdx = findHeaderLineIdx(lines);
     return lines.map((line, idx) => {
-        if (fields.tone && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
-        if (fields.perceived_as && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
-        if (fields.descriptor && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = fields.descriptor; return parts.join(' | '); }
+        if (fields.tone != null && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
+        if (fields.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
+        if (fields.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = fields.descriptor; return parts.join(' | '); }
         return line;
     }).join('\n');
 }
@@ -710,9 +709,9 @@ function buildUpdatedMajorContent(existingContent, fields, newKnowledge) {
     let lines = existingContent.split('\n');
     const headerIdx = findHeaderLineIdx(lines);
     lines = lines.map((line, idx) => {
-        if (fields?.tone && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
-        if (fields?.perceived_as && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
-        if (fields?.descriptor && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = fields.descriptor; return parts.join(' | '); }
+        if (fields?.tone != null && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
+        if (fields?.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
+        if (fields?.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = fields.descriptor; return parts.join(' | '); }
         return line;
     });
     if (newKnowledge?.length > 0) newKnowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
@@ -1076,9 +1075,22 @@ function renderNpcsSubTab() {
             activeSubTab = 'staging';
             const result = await runScan();
             const newItems = buildStagingItems(result);
-            const existingKeys = new Set(stagingItems.map(it => `${it.name}|${it.action}|${it.type}`));
-            const added = newItems.filter(it => !existingKeys.has(`${it.name}|${it.action}|${it.type}`));
-            stagingItems.push(...added);
+            // Replace existing staging items with the same key instead of
+            // silently dropping newer proposals from repeated scans.
+            const added = [];
+            for (const item of newItems) {
+                const key = `${item.name}|${item.action}|${item.type}`;
+                const existingIdx = stagingItems.findIndex(it => `${it.name}|${it.action}|${it.type}` === key);
+                if (existingIdx >= 0) {
+                    // Preserve the existing notification so the user isn't
+                    // spammed with duplicate toasts for the same NPC.
+                    removeNotificationEntry(stagingItems[existingIdx].id);
+                    stagingItems[existingIdx] = item;
+                } else {
+                    stagingItems.push(item);
+                }
+                added.push(item);
+            }
             activeItemId = null;
             await Promise.all(added.filter(it => it.action === 'update').map(it => enrichStagingItem(it)));
             added.forEach(item => addNotificationEntry(item));
@@ -1809,10 +1821,10 @@ function renderRelationshipContent() {
            <div class="kt-rel-list">
                 ${allEdges.map(e => {
                     const reverse = (rels[e.to] || []).find(r => r.target === e.from);
-                    const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${reverse.type}">↩ ${reverse.type}</span>` : '';
+                    const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${escapeHtml(reverse.type)}">↩ ${escapeHtml(reverse.type)}</span>` : '';
                     return `<div class="kt-rel-row" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}">
                        <span class="kt-rel-from">${escapeHtml(e.from)}</span>
-                       <span class="kt-rel-type">${e.type}</span>
+                       <span class="kt-rel-type">${escapeHtml(e.type)}</span>
                        <span class="kt-rel-to">${escapeHtml(e.to)}</span>
                         ${e.notes ? `<span class="kt-rel-notes">${escapeHtml(e.notes)}</span>` : ''}
                         ${reverseLabel}
