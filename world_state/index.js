@@ -591,8 +591,10 @@ async function refreshWorldState(isAuto = false) {
             }
         }
 
-        // Verify chat hasn't changed during generation
-        if (getChat()?.length !== chatIdBefore) return null;
+        // Note if chat grew during generation; result is still valid for the messages it scanned.
+        if (getChat()?.length !== chatIdBefore) {
+            console.log('[MWT:WorldState] Chat changed during generation — saving result anyway.');
+        }
 
         const oldText = getWorldStateText();
 
