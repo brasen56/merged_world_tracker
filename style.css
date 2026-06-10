@@ -2646,3 +2646,305 @@ input[type="number"].mwt-input {
     color: #f87171;
     background: rgba(248, 113, 113, 0.1);
 }
+
+/* ─── Settings Drawer ──────────────────────────────────────────────────────── */
+
+.mwt-settings-drawer {
+    position: fixed;
+    top: 0;
+    right: -420px;
+    width: 400px;
+    max-width: 90vw;
+    height: 100vh;
+    z-index: var(--z-kt-modal, 100000);
+    background: var(--mwt-bg);
+    border-left: 1px solid var(--mwt-border);
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    transition: right 0.3s ease;
+    font-family: var(--mwt-font);
+    color: var(--mwt-text);
+}
+
+.mwt-settings-drawer.mwt-drawer--open {
+    right: 0;
+}
+
+.mwt-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-kt-modal, 100000) - 1);
+    background: rgba(0, 0, 0, 0.4);
+    display: none;
+}
+
+.mwt-drawer-backdrop.mwt-drawer--open {
+    display: block;
+}
+
+.mwt-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--mwt-border);
+    flex-shrink: 0;
+}
+
+.mwt-drawer-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.mwt-drawer-close {
+    background: none;
+    border: none;
+    color: var(--mwt-text-dim);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+
+.mwt-drawer-close:hover {
+    color: var(--mwt-error);
+    background: rgba(239, 83, 80, 0.1);
+}
+
+.mwt-drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px;
+}
+
+.mwt-drawer-section {
+    margin-bottom: 20px;
+}
+
+.mwt-drawer-section h4 {
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mwt-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.mwt-drawer-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.mwt-drawer-row label {
+    flex: 1;
+    font-size: 13px;
+    color: var(--mwt-text);
+}
+
+.mwt-drawer-row input[type="checkbox"] {
+    accent-color: var(--mwt-accent);
+    width: 16px;
+    height: 16px;
+}
+
+.mwt-drawer-row input[type="number"] {
+    width: 80px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    color: var(--mwt-text);
+    padding: 4px 8px;
+    border-radius: var(--mwt-radius);
+    font-size: 13px;
+    text-align: center;
+}
+
+.mwt-drawer-row input[type="number"]:focus {
+    outline: none;
+    border-color: var(--mwt-accent);
+}
+
+.mwt-drawer-footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--mwt-border);
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* ─── Wand Menu Button ─────────────────────────────────────────────────────── */
+
+.mwt-wand-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+    padding: 2px;
+}
+
+.mwt-wand-btn:hover {
+    opacity: 1;
+}
+
+.mwt-wand-btn--active {
+    opacity: 1;
+    color: var(--mwt-accent);
+}
+
+/* ─── Button Visibility Toggles ────────────────────────────────────────────── */
+
+.mwt-float-btn.mwt-hidden-btn {
+    display: none !important;
+}
+
+/* ─── Mobile / Touch Responsive ─────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .mwt-modal-panel {
+        width: 98vw;
+        max-width: 100%;
+        max-height: 95vh;
+        border-radius: 8px 8px 0 0;
+    }
+
+    .mwt-modal-header {
+        padding: 10px 12px;
+    }
+
+    .mwt-modal-header h3 {
+        font-size: 14px;
+    }
+
+    .mwt-modal-body {
+        padding: 10px;
+    }
+
+    .mwt-tab-bar {
+        padding: 0 8px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .mwt-tab-btn {
+        padding: 8px 10px;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+
+    .mwt-float-btn {
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
+    }
+
+    .mwt-button-bar {
+        bottom: 10px;
+        right: 10px;
+        gap: 8px;
+    }
+
+    /* Staging layout stacks vertically on mobile */
+    .kt-staging-layout {
+        flex-direction: column !important;
+    }
+
+    .kt-staging-list {
+        max-height: 150px !important;
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    .kt-staging-detail {
+        width: 100% !important;
+    }
+
+    /* Toolbar wraps on small screens */
+    .kt-npcs-toolbar {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .kt-npcs-toolbar .kt-subtabs {
+        order: 10;
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .kt-subtab-btn {
+        padding: 6px 8px;
+        font-size: 11px;
+        white-space: nowrap;
+    }
+
+    /* NPC cards stack actions */
+    .kt-npc-card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    .kt-npc-actions {
+        flex-wrap: wrap;
+    }
+
+    /* Settings drawer full-width on mobile */
+    .mwt-settings-drawer {
+        width: 100vw;
+        max-width: 100vw;
+    }
+
+    /* Relationship add row wraps */
+    .kt-rel-add-row {
+        flex-wrap: wrap;
+    }
+
+    .kt-rel-add-row select,
+    .kt-rel-add-row input {
+        min-width: 0 !important;
+        flex: 1 1 120px;
+    }
+
+    /* Notification panel responsive */
+    #kt-notification-panel {
+        width: calc(100vw - 20px) !important;
+        left: 10px !important;
+        right: 10px !important;
+        bottom: 10px !important;
+        max-height: 50vh;
+    }
+
+    /* World State modal responsive */
+    .ws-panel {
+        width: 98vw;
+        height: 90vh;
+    }
+
+    /* Chronicle modal responsive */
+    .sc-modal {
+        width: 98vw;
+        height: 90vh;
+    }
+}
+
+@media (max-width: 480px) {
+    .mwt-settings-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mwt-settings-grid .mwt-label {
+        text-align: left;
+    }
+
+    .mwt-bar-btn {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+}

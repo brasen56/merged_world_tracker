@@ -10,7 +10,7 @@
 
 import {
     getContextSafe, getChat, getChatMeta, getSetExtensionPrompt,
-    fetchFromApi, normaliseOutput,
+    resolveApiCall, normaliseOutput,
     escapeHtml, buildInlineDiff, estimateTokens,
     createSettingsManager,
     createModal, showModal, hideModal, setStatus,
@@ -273,7 +273,8 @@ function extractCharacters(chatSlice) {
 }
 
 function getCharactersInRange(fromIndex, toIndex) {
-    return extractCharacters(getChat().slice(fromIndex, toIndex));
+    // slice end is exclusive but toIndex is inclusive, so add 1
+    return extractCharacters(getChat().slice(fromIndex, toIndex + 1));
 }
 
 // ─── Token estimation ────────────────────────────────────────────────────────
@@ -476,7 +477,7 @@ async function generateSnapshot() {
     if (isMainGenerating) {
         // Verify against actual ST state — the event-tracked flag can get stale
         const ctx = getContextSafe();
-        const actuallyBusy = ctx?.processingRequest || ctx?.inApiCall;
+        const actuallyBusy = ctx?.streamingProcessor && !ctx.streamingProcessor.isFinished;
         if (actuallyBusy) {
             scSetStatus('Wait for the current chat response to finish.', 'error');
             return null;
@@ -506,10 +507,12 @@ async function generateSnapshot() {
     const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
 
     try {
-        let raw = await fetchFromApi({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: getSettings(), retries: 3 });
+        const _scApi1 = resolveApiCall({ moduleSettings: getSettings() });
+        let raw = await _scApi1.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi1.settings, retries: 3 });
         raw = normaliseOutput(raw);
         if (!raw.trim()) {
-            raw = await fetchFromApi({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]', settings: getSettings(), retries: 3 });
+            const _scApi1b = resolveApiCall({ moduleSettings: getSettings() });
+            raw = await _scApi1b.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]', settings: _scApi1b.settings, retries: 3 });
             raw = normaliseOutput(raw);
         }
         if (!raw.trim()) throw new Error('Chronicle output was empty.');
@@ -567,7 +570,8 @@ async function regenerateSnapshot(snapshotId) {
     const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
 
     try {
-        let raw = await fetchFromApi({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: getSettings(), retries: 3 });
+        const _scApi2 = resolveApiCall({ moduleSettings: getSettings() });
+        let raw = await _scApi2.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi2.settings, retries: 3 });
         raw = normaliseOutput(raw);
         if (!raw.trim()) throw new Error('Empty output.');
         const timeMatch = raw.match(/## Time Anchor[\s\S]*?In-world date and time[:\s]*([^\n]+)/i);
@@ -620,7 +624,8 @@ async function consolidateEntries(ids) {
         isGenerating = true;
         scSetStatus('Consolidating…', 'info');
         try {
-            let raw = await fetchFromApi({ systemPrompt: CONSOLIDATE_SYSTEM_PROMPT, userContent: editedResult || userContent, settings: getSettings(), retries: 3 });
+            const _scApi3 = resolveApiCall({ moduleSettings: getSettings() });
+            let raw = await _scApi3.fetchFn({ systemPrompt: CONSOLIDATE_SYSTEM_PROMPT, userContent: editedResult || userContent, settings: _scApi3.settings, retries: 3 });
             raw = normaliseOutput(raw);
             if (!raw.trim()) throw new Error('Empty output.');
             const validation = validateConsolidationOutput(raw, base, deltas);
@@ -736,7 +741,11 @@ function restoreDeletedEntry(entry) {
     const snapshots = [...(getChronicleData().snapshots || []), entry];
     snapshots.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     const updatedBin = (getChronicleData()._deletedBin || []).filter(e => e.id !== entry.id);
-    setChronicleData({ snapshots, _deletedBin: updatedBin, suggestSent: false });
+    // Recompute lastAnchor from all snapshots (including the restored one)
+    const lastAnchor = snapshots.length > 0
+        ? snapshots[snapshots.length - 1]?.anchor || null
+        : null;
+    setChronicleData({ snapshots, _deletedBin: updatedBin, suggestSent: false, lastAnchor });
     applyInjection();
     selectedSnapshotId = entry.id;
     renderContent();
@@ -1220,11 +1229,11 @@ function bindMainEvents() {
         entry.addEventListener('click', (e) => {
             if (e.target.closest('.sc-checkbox')) return;
             const id = entry.dataset.id;
-            selectedSnapshotId = id;
             if (consolidateMode || bulkDeleteMode) {
                 if (checkedForMerge.has(id)) checkedForMerge.delete(id); else checkedForMerge.add(id);
                 renderContent();
             } else {
+                selectedSnapshotId = id;
                 renderContent();
             }
         });
@@ -1387,7 +1396,35 @@ export function syncGlobalSettings(patch) {
             apiUrl: patch.apiUrl ?? getSettings().apiUrl,
             apiKey: patch.apiKey ?? getSettings().apiKey,
             modelName: patch.modelName ?? getSettings().modelName,
+            useSTConnection: patch.useSTConnection ?? getSettings().useSTConnection,
         });
         console.log('[MWT:Chronicle] Synced global API settings');
     }
+}
+
+/** Slash command: trigger a chronicle snapshot */
+export async function triggerSnapshot() {
+    return generateSnapshot();
+}
+
+/** Slash command / macro: set injection enabled/disabled */
+export function setInjectionEnabled(enabled) {
+    setChronicleData({ injectEnabled: !!enabled });
+    applyInjection();
+}
+
+/** Macro: return the full chronicle injection text */
+export function getChronicleText() {
+    if (!isInjectionEnabled()) return '';
+    const entries = getEntriesForInjection();
+    if (!entries.length) return '';
+    return entries.map(s => s.text || '').join('\n\n---\n\n');
+}
+
+/** Macro: return only the most recent chronicle entry */
+export function getLastEntryText() {
+    const snapshots = getSnapshots();
+    if (!snapshots.length) return '';
+    const sorted = [...snapshots].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return sorted[0]?.text || '';
 }

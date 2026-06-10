@@ -14,7 +14,7 @@
 // ─── Core imports ────────────────────────────────────────────────────────────
 
 import { getContextSafe, getChat, estimateTokens } from './core/context.js';
-import { normalizeApiBase, fetchFromApi, normaliseOutput } from './core/api.js';
+import { normalizeApiBase, fetchFromApi, fetchViaSTConnection, resolveApiCall, normaliseOutput } from './core/api.js';
 import { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from './core/diff.js';
 import { createSettingsManager } from './core/settings.js';
 import { createModal, showModal, hideModal, setStatus, formatDate } from './core/modal.js';
@@ -36,15 +36,43 @@ const METADATA_KEY = 'merged_world_tracker';   // chat metadata key (future use)
 let setExtensionPrompt = null;
 let eventSource = null;
 let event_types = null;
+let registerSlashCommand = null;
+let registerMacro = null;
 
 try {
     const stScript = await import('../../../../script.js');
     setExtensionPrompt = stScript.setExtensionPrompt;
     eventSource = stScript.eventSource;
     event_types = stScript.event_types;
+    // Slash command registration
+    if (typeof stScript.registerSlashCommand === 'function') {
+        registerSlashCommand = stScript.registerSlashCommand;
+    }
     console.log('[MWT] SillyTavern script.js imports loaded.');
 } catch (err) {
     console.warn('[MWT] Could not import from script.js:', err);
+}
+
+// Try to get registerSlashCommand from context as fallback
+if (!registerSlashCommand) {
+    const ctx = getContextSafe();
+    if (ctx && typeof ctx.registerSlashCommand === 'function') {
+        registerSlashCommand = ctx.registerSlashCommand.bind(ctx);
+    }
+}
+
+// Try to load macro registration
+try {
+    const macroModule = await import('../../../../macros.js');
+    if (typeof macroModule.registerMacro === 'function') {
+        registerMacro = macroModule.registerMacro;
+    }
+} catch {
+    // macros.js may not exist in all ST versions; try context
+    const ctx = getContextSafe();
+    if (ctx && typeof ctx.registerMacro === 'function') {
+        registerMacro = ctx.registerMacro.bind(ctx);
+    }
 }
 
 // ─── Shared settings ────────────────────────────────────────────────────────
@@ -61,11 +89,18 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         frequencyPenalty: 0,
         presencePenalty: 0,
         customHeaders: '',
+        useSTConnection: false,
         // Per-module injection settings
         worldStateDepth: 4,
         worldStateRole: 'system',
         chronicleDepth: 4,
         chronicleRole: 'system',
+        // Floating button visibility
+        showFloatWorld: true,
+        showFloatChronicle: true,
+        showFloatKnowledge: true,
+        showFloatSettings: true,
+        collapseFloatButtons: false,
     },
     logPrefix: '[MWT]',
 });
@@ -80,6 +115,8 @@ const shared = {
     getChat,
     estimateTokens,
     fetchFromApi,
+    fetchViaSTConnection,
+    resolveApiCall,
     normaliseOutput,
     normalizeApiBase,
     escapeHtml,
@@ -115,49 +152,63 @@ const TABS = [
 
 function renderSettingsTab() {
     const s = getSettings();
+    const useST = s.useSTConnection ?? false;
+    const apiFieldsStyle = useST ? 'display:none' : '';
+
     return `
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             These global API settings serve as defaults for all modules. Each module can override them in its own Settings panel.
         </p>
         <div class="mwt-settings-grid">
-            <label class="mwt-label">API URL</label>
-            <input id="mwt-s-api-url" class="mwt-input" type="text"
-                   value="${escapeHtml(s.apiUrl)}"
-                   placeholder="https://api.openai.com/v1">
+            <label class="mwt-label" style="display:flex;align-items:center;gap:6px;grid-column:1/3;cursor:pointer">
+                <input type="checkbox" id="mwt-s-use-st-connection" ${useST ? 'checked' : ''}>
+                <span>Use SillyTavern Connection</span>
+            </label>
+            <div></div>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
+                When enabled, all modules use SillyTavern's active API connection (supports every backend). No need to configure API URL/Key below. You can still override per-module.
+            </p>
 
-            <label class="mwt-label">API Key</label>
-            <input id="mwt-s-api-key" class="mwt-input" type="password"
-                   value="${escapeHtml(s.apiKey)}"
-                   placeholder="sk-...">
+            <div id="mwt-s-api-fields" style="${apiFieldsStyle}" class="mwt-settings-grid" >
+                <label class="mwt-label">API URL</label>
+                <input id="mwt-s-api-url" class="mwt-input" type="text"
+                       value="${escapeHtml(s.apiUrl)}"
+                       placeholder="https://api.openai.com/v1">
 
-            <label class="mwt-label">Model</label>
-            <input id="mwt-s-model" class="mwt-input" type="text"
-                   value="${escapeHtml(s.modelName)}"
-                   placeholder="gpt-4o-mini">
+                <label class="mwt-label">API Key</label>
+                <input id="mwt-s-api-key" class="mwt-input" type="password"
+                       value="${escapeHtml(s.apiKey)}"
+                       placeholder="sk-...">
 
-            <label class="mwt-label">Max Tokens</label>
-            <input id="mwt-s-max-tokens" class="mwt-input" type="number"
-                   value="${s.maxTokens || 2000}" min="100" max="32000">
+                <label class="mwt-label">Model</label>
+                <input id="mwt-s-model" class="mwt-input" type="text"
+                       value="${escapeHtml(s.modelName)}"
+                       placeholder="gpt-4o-mini">
 
-            <label class="mwt-label">Temperature</label>
-            <input id="mwt-s-temp" class="mwt-input" type="number"
-                   value="${s.temperature ?? 0.3}" min="0" max="2" step="0.05">
+                <label class="mwt-label">Max Tokens</label>
+                <input id="mwt-s-max-tokens" class="mwt-input" type="number"
+                       value="${s.maxTokens || 2000}" min="100" max="32000">
 
-            <label class="mwt-label">Top P</label>
-            <input id="mwt-s-top-p" class="mwt-input" type="number"
-                   value="${s.topP ?? 1.0}" min="0" max="1" step="0.05">
+                <label class="mwt-label">Temperature</label>
+                <input id="mwt-s-temp" class="mwt-input" type="number"
+                       value="${s.temperature ?? 0.3}" min="0" max="2" step="0.05">
 
-            <label class="mwt-label">Freq Penalty</label>
-            <input id="mwt-s-freq-pen" class="mwt-input" type="number"
-                   value="${s.frequencyPenalty ?? 0}" min="-2" max="2" step="0.1">
+                <label class="mwt-label">Top P</label>
+                <input id="mwt-s-top-p" class="mwt-input" type="number"
+                       value="${s.topP ?? 1.0}" min="0" max="1" step="0.05">
 
-            <label class="mwt-label">Pres Penalty</label>
-            <input id="mwt-s-pres-pen" class="mwt-input" type="number"
-                   value="${s.presencePenalty ?? 0}" min="-2" max="2" step="0.1">
+                <label class="mwt-label">Freq Penalty</label>
+                <input id="mwt-s-freq-pen" class="mwt-input" type="number"
+                       value="${s.frequencyPenalty ?? 0}" min="-2" max="2" step="0.1">
 
-            <label class="mwt-label">Custom Headers</label>
-            <textarea id="mwt-s-headers" class="mwt-input" rows="2"
-                      placeholder='{"X-Custom": "value"}'>${escapeHtml(s.customHeaders || '')}</textarea>
+                <label class="mwt-label">Pres Penalty</label>
+                <input id="mwt-s-pres-pen" class="mwt-input" type="number"
+                       value="${s.presencePenalty ?? 0}" min="-2" max="2" step="0.1">
+
+                <label class="mwt-label">Custom Headers</label>
+                <textarea id="mwt-s-headers" class="mwt-input" rows="2"
+                          placeholder='{"X-Custom": "value"}'>${escapeHtml(s.customHeaders || '')}</textarea>
+            </div>
 
             <div></div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
@@ -191,6 +242,31 @@ function renderSettingsTab() {
                 <option value="user" ${s.chronicleRole === 'user' ? 'selected' : ''}>user</option>
                 <option value="assistant" ${s.chronicleRole === 'assistant' ? 'selected' : ''}>assistant</option>
             </select>
+        </div>
+
+        <hr style="border-color:var(--mwt-border);margin:16px 0">
+        <h3 style="margin-bottom:8px">🔘 Floating Buttons</h3>
+        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
+            Show or hide individual floating buttons. You can also access the MWT modal from the Extensions panel drawer or the wand menu.
+        </p>
+        <div class="mwt-settings-grid">
+            <label class="mwt-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="mwt-s-collapse-float" ${s.collapseFloatButtons ? 'checked' : ''}>
+                <span>Collapse into single button</span>
+            </label>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Replace the 4 floating buttons with one that expands on tap/click.</p>
+
+            <label class="mwt-label">🌍 World State</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-world" ${s.showFloatWorld !== false ? 'checked' : ''}> Visible</label>
+
+            <label class="mwt-label">📜 Chronicle</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-chronicle" ${s.showFloatChronicle !== false ? 'checked' : ''}> Visible</label>
+
+            <label class="mwt-label">🧠 Knowledge</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-knowledge" ${s.showFloatKnowledge !== false ? 'checked' : ''}> Visible</label>
+
+            <label class="mwt-label">⚙️ Settings</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-settings" ${s.showFloatSettings !== false ? 'checked' : ''}> Visible</label>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -244,9 +320,6 @@ function renderModal() {
             id: 'mwt-modal',
             title: 'Merged World Tracker',
             content,
-            // Returning false cancels the close — createModal's own close
-            // button / backdrop / Escape handlers all route through this,
-            // so the unsaved-changes guard actually blocks the close.
             onClose: () => {
                 if (WorldState.isWorldStateDirty?.()
                     && !confirm('You have unsaved changes to the World State. Close anyway?')) {
@@ -270,13 +343,12 @@ function renderModal() {
             modal.querySelectorAll('.mwt-tab-btn').forEach(b => b.classList.remove('active'));
             modal.querySelectorAll('.mwt-tab-content').forEach(c => c.classList.remove('active'));
             btn.classList.add('active');
-            const content = modal.querySelector(`.mwt-tab-content[data-tab="${tabId}"]`);
-            if (content) content.classList.add('active');
+            const tabContent = modal.querySelector(`.mwt-tab-content[data-tab="${tabId}"]`);
+            if (tabContent) tabContent.classList.add('active');
         });
     }
 
     // Init feature modules with modal reference and wire their events
-    // (deduplicate — same module may back multiple tabs)
     for (const tab of TABS) {
         const mod = tab.module;
         if (!mod) continue;
@@ -284,10 +356,16 @@ function renderModal() {
             _initedModules.add(mod);
             if (mod.init) mod.init(modal);
         }
-        // Always re-wire events on open — innerHTML is rebuilt so content
-        // needs a fresh render, but init() (which sets up one-time state)
-        // only runs once per module.
         if (mod.getModuleWireEvents) mod.getModuleWireEvents()();
+    }
+
+    // Wire ST connection toggle
+    const stConnCheckbox = modal.querySelector('#mwt-s-use-st-connection');
+    if (stConnCheckbox) {
+        stConnCheckbox.addEventListener('change', () => {
+            const apiFields = modal.querySelector('#mwt-s-api-fields');
+            if (apiFields) apiFields.style.display = stConnCheckbox.checked ? 'none' : '';
+        });
     }
 
     // Wire settings save
@@ -295,6 +373,7 @@ function renderModal() {
     if (saveBtn) {
         saveBtn.addEventListener('click', () => {
             const patch = {
+                useSTConnection: modal.querySelector('#mwt-s-use-st-connection')?.checked ?? false,
                 apiUrl: modal.querySelector('#mwt-s-api-url')?.value || '',
                 apiKey: modal.querySelector('#mwt-s-api-key')?.value || '',
                 modelName: modal.querySelector('#mwt-s-model')?.value || '',
@@ -309,8 +388,15 @@ function renderModal() {
                 worldStateRole: modal.querySelector('#mwt-s-ws-role')?.value || 'system',
                 chronicleDepth: Number(modal.querySelector('#mwt-s-ch-depth')?.value) || 4,
                 chronicleRole: modal.querySelector('#mwt-s-ch-role')?.value || 'system',
+                // Button visibility
+                showFloatWorld: modal.querySelector('#mwt-s-show-world')?.checked ?? true,
+                showFloatChronicle: modal.querySelector('#mwt-s-show-chronicle')?.checked ?? true,
+                showFloatKnowledge: modal.querySelector('#mwt-s-show-knowledge')?.checked ?? true,
+                showFloatSettings: modal.querySelector('#mwt-s-show-settings')?.checked ?? true,
+                collapseFloatButtons: modal.querySelector('#mwt-s-collapse-float')?.checked ?? false,
             };
             saveSettings(patch);
+            applyButtonVisibility();
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });
     }
@@ -320,11 +406,11 @@ function renderModal() {
     if (syncBtn) {
         syncBtn.addEventListener('click', () => {
             const patch = {
+                useSTConnection: modal.querySelector('#mwt-s-use-st-connection')?.checked ?? false,
                 apiUrl: modal.querySelector('#mwt-s-api-url')?.value || '',
                 apiKey: modal.querySelector('#mwt-s-api-key')?.value || '',
                 modelName: modal.querySelector('#mwt-s-model')?.value || '',
             };
-            // Push to each module's settings
             if (WorldState.syncGlobalSettings) WorldState.syncGlobalSettings(patch);
             if (Chronicle.syncGlobalSettings) Chronicle.syncGlobalSettings(patch);
             if (Knowledge.syncGlobalSettings) Knowledge.syncGlobalSettings(patch);
@@ -333,13 +419,27 @@ function renderModal() {
     }
 }
 
+// ─── Open modal helper (shared by button bar, wand menu, drawer) ────────────
+
+function openMwtModal(tabId) {
+    const isOpen = modal && modal.style.display === 'flex';
+    if (!isOpen) {
+        renderModal();
+        showModal('mwt-modal');
+    }
+    if (tabId) {
+        const tabBtn = modal?.querySelector(`.mwt-tab-btn[data-tab="${tabId}"]`);
+        if (tabBtn) tabBtn.click();
+    }
+}
+
 // ─── Individual floating draggable buttons ──────────────────────────────────
 
 const FLOAT_BUTTONS = [
-    { id: 'mwt-float-world', label: '🌍', title: 'World State', tab: 'world-state' },
-    { id: 'mwt-float-chronicle', label: '📜', title: 'Chronicle', tab: 'chronicle' },
-    { id: 'mwt-float-knowledge', label: '🧠', title: 'Knowledge', tab: 'knowledge' },
-    { id: 'mwt-float-settings', label: '⚙️', title: 'All Settings', tab: 'settings' },
+    { id: 'mwt-float-world', label: '🌍', title: 'World State', tab: 'world-state', visibilityKey: 'showFloatWorld' },
+    { id: 'mwt-float-chronicle', label: '📜', title: 'Chronicle', tab: 'chronicle', visibilityKey: 'showFloatChronicle' },
+    { id: 'mwt-float-knowledge', label: '🧠', title: 'Knowledge', tab: 'knowledge', visibilityKey: 'showFloatKnowledge' },
+    { id: 'mwt-float-settings', label: '⚙️', title: 'All Settings', tab: 'settings', visibilityKey: 'showFloatSettings' },
 ];
 
 const FLOAT_POSITIONS_KEY = 'mwt_float_positions';
@@ -359,6 +459,42 @@ function saveFloatPosition(btnId, left, top) {
     } catch { /* ignore */ }
 }
 
+/**
+ * Apply per-button visibility from settings.
+ * Also handles the "collapse into one" mode.
+ */
+function applyButtonVisibility() {
+    const s = getSettings();
+    const collapsed = s.collapseFloatButtons ?? false;
+
+    // Handle collapsed hub button
+    let hub = document.getElementById('mwt-float-hub');
+    if (collapsed) {
+        if (!hub) {
+            hub = document.createElement('div');
+            hub.id = 'mwt-float-hub';
+            hub.className = 'mwt-float-btn';
+            hub.title = 'Merged World Tracker';
+            hub.style.right = '16px';
+            hub.style.bottom = '70px';
+            hub.innerHTML = '<span class="mwt-float-btn-icon">🌐</span>';
+            hub.addEventListener('click', () => openMwtModal(null));
+            document.body.appendChild(hub);
+        }
+        hub.style.display = 'flex';
+    } else if (hub) {
+        hub.style.display = 'none';
+    }
+
+    // Individual button visibility
+    for (const cfg of FLOAT_BUTTONS) {
+        const btn = document.getElementById(cfg.id);
+        if (!btn) continue;
+        const visible = s[cfg.visibilityKey] !== false;
+        btn.style.display = (collapsed || !visible) ? 'none' : 'flex';
+    }
+}
+
 function setupButtonBar() {
     // Remove old button bar if it exists
     const old = document.getElementById('mwt-button-bar');
@@ -374,6 +510,7 @@ function setupButtonBar() {
         btn.id = cfg.id;
         btn.className = 'mwt-float-btn';
         btn.title = cfg.title;
+        btn.style.touchAction = 'none'; // Enable pointer events for touch
         btn.innerHTML = `<span class="mwt-float-btn-icon">${cfg.label}</span><span class="mwt-float-btn-tokens" id="${cfg.id}-tokens"></span><span class="mwt-float-btn-countdown" id="${cfg.id}-countdown"></span>`;
 
         // Restore saved position or use default
@@ -392,31 +529,22 @@ function setupButtonBar() {
         // Click to open modal on that tab
         btn.addEventListener('click', (e) => {
             if (btn._dragged) { btn._dragged = false; return; }
-            // Only rebuild when the modal isn't already open — rebuilding
-            // replaces the body innerHTML and would silently wipe unsaved
-            // edits (e.g. the World State editor). If it's open, just switch tab.
-            const isOpen = modal && modal.style.display === 'flex';
-            if (!isOpen) {
-                renderModal();
-                showModal('mwt-modal');
-            }
-            // Activate the correct tab
-            const tabBtn = modal?.querySelector(`.mwt-tab-btn[data-tab="${cfg.tab}"]`);
-            if (tabBtn) tabBtn.click();
+            openMwtModal(cfg.tab);
         });
 
-        // Drag support
+        // Pointer-event-based drag (covers mouse + touch + pen)
         let dragging = false, startX = 0, startY = 0, origX = 0, origY = 0;
-        btn.addEventListener('mousedown', (e) => {
+        btn.addEventListener('pointerdown', (e) => {
             dragging = true;
             btn._dragged = false;
+            btn.setPointerCapture(e.pointerId);
             startX = e.clientX; startY = e.clientY;
             const rect = btn.getBoundingClientRect();
             origX = rect.left; origY = rect.top;
             btn.style.transition = 'none';
             e.preventDefault();
         });
-        document.addEventListener('mousemove', (e) => {
+        btn.addEventListener('pointermove', (e) => {
             if (!dragging) return;
             const dx = e.clientX - startX, dy = e.clientY - startY;
             if (Math.abs(dx) > 3 || Math.abs(dy) > 3) btn._dragged = true;
@@ -425,16 +553,203 @@ function setupButtonBar() {
             btn.style.right = 'auto';
             btn.style.bottom = 'auto';
         });
-        document.addEventListener('mouseup', () => {
+        btn.addEventListener('pointerup', (e) => {
             if (dragging) {
                 dragging = false;
+                btn.releasePointerCapture(e.pointerId);
                 btn.style.transition = 'left 0.1s, top 0.1s';
-                // Persist the final position
                 const rect = btn.getBoundingClientRect();
                 saveFloatPosition(cfg.id, rect.left, rect.top);
             }
         });
+        btn.addEventListener('pointercancel', () => {
+            dragging = false;
+        });
     });
+
+    applyButtonVisibility();
+}
+
+// ─── Extensions panel drawer ─────────────────────────────────────────────────
+
+function setupExtensionsDrawer() {
+    const drawer = document.getElementById('mwt-extensions-drawer');
+    if (drawer) return; // already created
+
+    const container = document.createElement('div');
+    container.id = 'mwt-extensions-drawer';
+    container.className = 'mwt-extensions-drawer';
+    container.innerHTML = `
+        <div class="mwt-drawer-title">Merged World Tracker</div>
+        <div class="mwt-drawer-buttons">
+            <button class="mwt-btn mwt-btn-primary" id="mwt-drawer-open" title="Open the MWT modal">🌐 Open MWT</button>
+            <button class="mwt-btn" id="mwt-drawer-world" title="Open World State tab">🌍</button>
+            <button class="mwt-btn" id="mwt-drawer-chronicle" title="Open Chronicle tab">📜</button>
+            <button class="mwt-btn" id="mwt-drawer-knowledge" title="Open Knowledge tab">🧠</button>
+        </div>
+    `;
+
+    // Append to the Extensions panel
+    const extPanel = document.getElementById('extensions_settings');
+    if (extPanel) {
+        extPanel.appendChild(container);
+    } else {
+        // Fallback: append after the settings drawer
+        document.body.appendChild(container);
+    }
+
+    // Wire buttons
+    container.querySelector('#mwt-drawer-open')?.addEventListener('click', () => openMwtModal(null));
+    container.querySelector('#mwt-drawer-world')?.addEventListener('click', () => openMwtModal('world-state'));
+    container.querySelector('#mwt-drawer-chronicle')?.addEventListener('click', () => openMwtModal('chronicle'));
+    container.querySelector('#mwt-drawer-knowledge')?.addEventListener('click', () => openMwtModal('knowledge'));
+}
+
+// ─── Wand menu entry ─────────────────────────────────────────────────────────
+
+function setupWandMenu() {
+    const existing = document.getElementById('mwt-wand-entry');
+    if (existing) return;
+
+    // The wand menu is #extensionsMenu inside the input area
+    const wandMenu = document.getElementById('extensionsMenu');
+    if (!wandMenu) return;
+
+    const entry = document.createElement('div');
+    entry.id = 'mwt-wand-entry';
+    entry.className = 'list-group-item';
+    entry.innerHTML = `<a href="#" id="mwt-wand-link" title="Open Merged World Tracker"><span class="note-link-span fa-solid fa-globe"></span> MWT</a>`;
+
+    wandMenu.appendChild(entry);
+
+    entry.querySelector('#mwt-wand-link')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        openMwtModal(null);
+        // Close the wand menu
+        if (typeof $ !== 'undefined') {
+            try { $('#extensionsMenu').dropdown('toggle'); } catch { /* not a bootstrap dropdown */ }
+        }
+    });
+}
+
+// ─── Slash Commands ──────────────────────────────────────────────────────────
+
+function setupSlashCommands() {
+    if (!registerSlashCommand) {
+        console.warn('[MWT] registerSlashCommand not available — slash commands disabled.');
+        return;
+    }
+
+    try {
+        // /wt-refresh — Trigger world state refresh
+        registerSlashCommand('wt-refresh', async (_args, _command) => {
+            try {
+                if (typeof WorldState.triggerRefresh === 'function') {
+                    await WorldState.triggerRefresh();
+                    return 'World state refreshed.';
+                }
+                return 'World state refresh not available.';
+            } catch (err) {
+                return `Error: ${err.message}`;
+            }
+        }, 'mwt-refresh', 'Refresh the MWT world state', 0);
+
+        // /wt-snapshot — Generate chronicle snapshot
+        registerSlashCommand('wt-snapshot', async (_args, _command) => {
+            try {
+                if (typeof Chronicle.triggerSnapshot === 'function') {
+                    await Chronicle.triggerSnapshot();
+                    return 'Chronicle snapshot generated.';
+                }
+                return 'Chronicle snapshot not available.';
+            } catch (err) {
+                return `Error: ${err.message}`;
+            }
+        }, 'mwt-snapshot', 'Generate a chronicle snapshot', 0);
+
+        // /wt-scan — Run knowledge NPC scan
+        registerSlashCommand('wt-scan', async (_args, _command) => {
+            try {
+                if (typeof Knowledge.triggerScan === 'function') {
+                    await Knowledge.triggerScan();
+                    return 'NPC scan complete.';
+                }
+                return 'NPC scan not available.';
+            } catch (err) {
+                return `Error: ${err.message}`;
+            }
+        }, 'mwt-scan', 'Run an NPC scan via Knowledge Tracker', 0);
+
+        // /wt-inject on|off — Toggle injection for all modules
+        registerSlashCommand('wt-inject', async (args, _command) => {
+            const mode = (args || '').trim().toLowerCase();
+            if (mode !== 'on' && mode !== 'off') {
+                return 'Usage: /wt-inject on|off';
+            }
+            const enabled = mode === 'on';
+            if (typeof WorldState.setInjectionEnabled === 'function') {
+                WorldState.setInjectionEnabled(enabled);
+            }
+            if (typeof Chronicle.setInjectionEnabled === 'function') {
+                Chronicle.setInjectionEnabled(enabled);
+            }
+            return `Injection ${mode} for all modules.`;
+        }, 'mwt-inject', 'Toggle injection for all MWT modules (on/off)', 0);
+
+        // /wt-state — Return world state text (pipeable)
+        registerSlashCommand('wt-state', async (_args, _command) => {
+            const text = typeof WorldState.getWorldStateText === 'function'
+                ? WorldState.getWorldStateText()
+                : '';
+            return text || '(no world state)';
+        }, 'mwt-state', 'Output the current world state text (pipeable)', 0);
+
+        console.log('[MWT] Slash commands registered.');
+    } catch (err) {
+        console.warn('[MWT] Failed to register slash commands:', err);
+    }
+}
+
+// ─── Macros ──────────────────────────────────────────────────────────────────
+
+function setupMacros() {
+    // Try multiple approaches to register macros
+    const ctx = getContextSafe();
+
+    const registerFn = registerMacro
+        || ctx?.registerMacro
+        || ctx?.macroApi?.registerMacro;
+
+    if (!registerFn) {
+        // Fallback: try the substitution API
+        try {
+            if (ctx?.substituteParams && typeof ctx.registerMacro !== 'function') {
+                // Use setExtensionPrompt-based macro workaround:
+                // Register macros via the global macro engine if available
+                const macroEngine = window.MacroEngine || ctx.macroEngine;
+                if (macroEngine?.register) {
+                    console.log('[MWT] Using MacroEngine fallback for macro registration.');
+                    macroEngine.register('worldstate', () => WorldState.getWorldStateText?.() || '');
+                    macroEngine.register('chronicle', () => Chronicle.getChronicleText?.() || '');
+                    macroEngine.register('lastchronicle', () => Chronicle.getLastEntryText?.() || '');
+                    console.log('[MWT] Macros registered via MacroEngine.');
+                    return;
+                }
+            }
+        } catch { /* fallback failed */ }
+
+        console.warn('[MWT] No macro registration API available — macros disabled.');
+        return;
+    }
+
+    try {
+        registerFn('worldstate', () => WorldState.getWorldStateText?.() || '');
+        registerFn('chronicle', () => Chronicle.getChronicleText?.() || '');
+        registerFn('lastchronicle', () => Chronicle.getLastEntryText?.() || '');
+        console.log('[MWT] Macros registered: {{worldstate}}, {{chronicle}}, {{lastchronicle}}');
+    } catch (err) {
+        console.warn('[MWT] Failed to register macros:', err);
+    }
 }
 
 // ─── Event hooks ─────────────────────────────────────────────────────────────
@@ -478,6 +793,11 @@ if (eventSource && event_types?.GENERATION_ENDED) {
 // ─── Initialize ──────────────────────────────────────────────────────────────
 
 setupButtonBar();
+setupExtensionsDrawer();
+setupWandMenu();
+setupSlashCommands();
+setupMacros();
+
 WorldState.init(null);  // Will be re-initialized with modal reference on first open
 Chronicle.init(null);
 Knowledge.init(null);

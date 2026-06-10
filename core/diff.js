@@ -77,12 +77,22 @@ export function computeLcsDiff(oldText, newText, maxLines = 500) {
  * @param {string} newText
  * @returns {{ originalHtml: string, newHtml: string }}
  */
-export function buildInlineDiff(originalText, newText) {
+export function buildInlineDiff(originalText, newText, maxWords = 2000) {
     const origWords = (originalText || '').split(/(\s+)/);
     const newWords = (newText || '').split(/(\s+)/);
 
     const m = origWords.length;
     const n = newWords.length;
+
+    // Word-level LCS is O(n²); cap to avoid freezing the tab on huge entries.
+    // Fall back to simple side-by-side (no markup) when the input is too large.
+    if (m + n > maxWords * 2) {
+        return {
+            originalHtml: '<pre style="white-space:pre-wrap">' + escapeHtml(originalText || '') + '</pre>',
+            newHtml: '<pre style="white-space:pre-wrap">' + escapeHtml(newText || '') + '</pre>',
+        };
+    }
+
     const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
     for (let i = 1; i <= m; i++) {
         for (let j = 1; j <= n; j++) {

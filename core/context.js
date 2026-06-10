@@ -69,10 +69,16 @@ export function getRecentMessages({
  */
 export function getPlayerNames() {
     const ctx = getContextSafe();
-    const names = [];
-    if (ctx?.name1) names.push(String(ctx.name1));
-    if (ctx?.name2) names.push(String(ctx.name2));
-    return names.filter(Boolean);
+    const names = new Set();
+    if (ctx?.name1) names.add(String(ctx.name1).toLowerCase());
+    if (ctx?.name2) names.add(String(ctx.name2).toLowerCase());
+    // Group-chat member names
+    if (Array.isArray(ctx?.characters)) {
+        for (const ch of ctx.characters) {
+            if (ch?.name) names.add(String(ch.name).toLowerCase());
+        }
+    }
+    return names;
 }
 
 /**

@@ -74,15 +74,6 @@ export async function fetchFromApi({
                 const errText = await response.text().catch(() => response.statusText);
                 const err = new Error(`API error ${response.status}: ${errText}`);
 
-                // Detect HTML responses (wrong URL)
-                if (/^\s*<!DOCTYPE/i.test(errText) || /^\s*<html/i.test(errText)) {
-                    throw new Error(
-                        `API URL returned HTML instead of JSON (${response.status}). ` +
-                        `Check the API URL — resolved to: "${endpoint}". ` +
-                        `For OpenAI-compatible APIs, use a base URL like https://api.openai.com/v1`
-                    );
-                }
-
                 // Retry on 5xx / 429; fatal on 4xx
                 if (response.status >= 500 || response.status === 429) {
                     lastErr = err;
@@ -91,8 +82,19 @@ export async function fetchFromApi({
                         await new Promise(r => setTimeout(r, delay));
                         continue;
                     }
-                    throw err;
+                    // Retry exhausted — fall through to HTML detection below
                 }
+
+                // Detect HTML responses (wrong URL) — checked AFTER 5xx retry
+                // so that a proxy returning 502 HTML retries instead of failing.
+                if (/^\s*<!DOCTYPE/i.test(errText) || /^\s*<html/i.test(errText)) {
+                    throw new Error(
+                        `API URL returned HTML instead of JSON (${response.status}). ` +
+                        `Check the API URL — resolved to: "${endpoint}". ` +
+                        `For OpenAI-compatible APIs, use a base URL like https://api.openai.com/v1`
+                    );
+                }
+
                 throw err;
             }
 
@@ -137,6 +139,61 @@ export async function fetchFromApi({
         }
     }
     throw lastErr || new Error('API request failed');
+}
+
+/**
+ * Send a prompt through SillyTavern's active connection (generateQuietPrompt).
+ * Supports every backend ST supports (Claude, Gemini, KoboldCPP, etc.)
+ * Falls back to manual API if ST connection is unavailable.
+ *
+ * @param {object} opts
+ * @param {string} opts.systemPrompt
+ * @param {string} opts.userContent
+ * @returns {Promise<string>} the raw content string
+ */
+export async function fetchViaSTConnection({ systemPrompt, userContent }) {
+    let generateQuietPrompt = null;
+    try {
+        const stScript = await import('../../../../script.js');
+        generateQuietPrompt = stScript.generateQuietPrompt;
+    } catch { /* not available */ }
+
+    // Also try via context
+    if (!generateQuietPrompt) {
+        const ctx = getContextSafe();
+        if (ctx && typeof ctx.generateQuietPrompt === 'function') {
+            generateQuietPrompt = ctx.generateQuietPrompt.bind(ctx);
+        }
+    }
+
+    if (!generateQuietPrompt) {
+        throw new Error(
+            'SillyTavern connection not available. ' +
+            'Disable "Use ST Connection" in Settings and configure a custom API URL/Key.'
+        );
+    }
+
+    // generateQuietPrompt takes a single prompt string.
+    // Prepend the system prompt as a directive block.
+    const fullPrompt = systemPrompt
+        ? `${systemPrompt}\n\n${userContent}`
+        : userContent;
+
+    console.log('[MWT API] Using SillyTavern active connection');
+    const result = await generateQuietPrompt(fullPrompt, false);
+    return result;
+}
+
+/**
+ * Resolve API settings, falling back to ST connection when configured.
+ * Returns { mode: 'st' | 'custom', fetchFn, settings }
+ */
+export function resolveApiCall({ moduleSettings, globalSettings = {} }) {
+    const useST = moduleSettings.useSTConnection ?? globalSettings.useSTConnection ?? false;
+    if (useST) {
+        return { mode: 'st', fetchFn: fetchViaSTConnection, settings: {} };
+    }
+    return { mode: 'custom', fetchFn: fetchFromApi, settings: moduleSettings };
 }
 
 /**

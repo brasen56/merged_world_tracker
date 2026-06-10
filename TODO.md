@@ -14,46 +14,40 @@ Line numbers are approximate (search for the quoted code/function names).
 
 ## Medium
 
-- [ ] **Consolidate/bulk-delete click opens the editor instead of toggling selection**
-  `chronicle/index.js` → `bindMainEvents()`, the `.sc-entry` click handler sets `selectedSnapshotId = id` unconditionally; `renderContent()` then shows the entry editor before the checkbox toggle is ever visible.
-  Fix: only set `selectedSnapshotId` in the `else` (non-selection-mode) branch.
+- [x] **Consolidate/bulk-delete click opens the editor instead of toggling selection**
+  `chronicle/index.js` → `bindMainEvents()`: `selectedSnapshotId` now only set in the `else` (non-selection-mode) branch.
 
-- [ ] **Main-generation busy check reads properties that don't exist**
-  `chronicle/index.js` → `generateSnapshot()`: `ctx?.processingRequest || ctx?.inApiCall` — neither exists on SillyTavern's context, so the check always concludes the flag is stale and proceeds.
-  Fix: use `ctx.streamingProcessor` (exists on context, e.g. `ctx.streamingProcessor && !ctx.streamingProcessor.isFinished`) or drop the double-check and trust the GENERATION_STARTED/ENDED events.
+- [x] **Main-generation busy check reads properties that don't exist**
+  `chronicle/index.js` → `generateSnapshot()`: now uses `ctx?.streamingProcessor && !ctx.streamingProcessor.isFinished` instead of non-existent `processingRequest`/`inApiCall`.
 
-- [ ] **Knowledge scan status is wiped immediately after being set**
-  `knowledge/index.js` → scan click handler in `renderNpcsSubTab()`: success/error `ktSetStatus(...)` is followed by `finally { renderNpcsSubTab(); }`, which rebuilds `#kt-status` empty. Only the toastr survives.
-  Fix: set the status *after* the final re-render, or persist the last status message and re-apply it on render (like chronicle's `_lastStatusMsg`).
+- [x] **Knowledge scan status is wiped immediately after being set**
+  `knowledge/index.js`: status message persisted in `_lastKtStatusMsg`/`_lastKtStatusLevel` and re-applied after `renderNpcsSubTab()` rebuilds the DOM.
 
-- [ ] **Player persona is never excluded from NPC scans**
-  `knowledge/index.js` → `getPlayerNames()`: reads `ctx.character` and `ctx.user`, which don't exist on ST's context (it exposes `name1`/`name2`/`characters`). Only `chat[0]?.name` (usually the AI character's greeting) works, so your persona can be proposed as an NPC.
-  Fix: add `ctx.name1`; consider group member names too. Also: `core/context.js` has an unused `getPlayerNames()` whose JSDoc claims "a Set ... lower-cased" but returns a plain array — fix or delete it.
+- [x] **Player persona is never excluded from NPC scans**
+  `knowledge/index.js` → `getPlayerNames()`: now reads `ctx.name1`, `ctx.name2`, and group member names from `ctx.characters`. `core/context.js` `getPlayerNames()` now returns a lower-cased `Set` as its JSDoc always claimed.
 
-- [ ] **"Knowledge Tracker" / "State Tracker" lorebooks must already exist**
-  `knowledge/index.js` → `writeToLorebook()` throws `Lorebook "Knowledge Tracker" not found` and nothing ever creates it.
-  Fix: auto-create via `createNewWorldInfo(LOREBOOK_NAME)` (exported from `world-info.js`) on first write, or document the manual setup step in the README.
+- [x] **"Knowledge Tracker" / "State Tracker" lorebooks must already exist**
+  `knowledge/index.js` → `writeToLorebook()`: auto-creates the lorebook via `createNewWorldInfo()` (or fallback) on first write if it doesn't exist.
 
-- [ ] **`hasValidSettings()` requires an API key**
-  `core/settings.js`: blocks keyless local backends (Ollama, LM Studio, llama.cpp) that the README advertises support for.
-  Fix: require only `apiUrl` + `modelName`.
+- [x] **`hasValidSettings()` requires an API key**
+  `core/settings.js`: now requires only `apiUrl` + `modelName`, allowing keyless local backends (Ollama, LM Studio, llama.cpp).
 
 ## Minor / polish
 
-- [ ] **`setStatus` auto-clear timers race** — `core/modal.js`: each call with `clearAfterMs` sets a new timeout without cancelling the previous one, so an old timer can fade out a newer message. Store and clear the timeout handle.
+- [x] **`setStatus` auto-clear timers race** — `core/modal.js`: each call with `clearAfterMs` now stores and clears the previous timeout handle on the status element (`_clearTimer`), so an old timer can't fade out a newer message.
 
-- [ ] **Character extraction off-by-one** — `chronicle/index.js` → `generateSnapshot()`: `getCharactersInRange(actualFrom, toIndex)` — `slice` end is exclusive while `toIndex` is inclusive, so the last message's speaker is dropped. Use `toIndex + 1`.
+- [x] **Character extraction off-by-one** — `chronicle/index.js` → `getCharactersInRange()`: `slice` end is now `toIndex + 1` since `slice` end is exclusive but `toIndex` is inclusive.
 
-- [ ] **Auto-refresh counter never survives reload/switch** — `world_state/index.js`: the counter is persisted to chat metadata, but `onChatChanged()` always calls `resetAutoRefreshCounter()` (CHAT_CHANGED also fires on initial chat load), clobbering the saved value. Restore from the incoming chat's metadata instead of zeroing.
+- [x] **Auto-refresh counter never survives reload/switch** — `world_state/index.js`: `onChatChanged()` now restores the counter from the incoming chat's metadata (`autoRefreshCounter`) instead of calling `resetAutoRefreshCounter()`.
 
-- [ ] **Escape closes stacked modals at once** — every `createModal` adds its own document-level keydown; pressing Esc with a sub-modal open (revert diff, history, preview) also closes the parent. Only close the topmost visible modal.
+- [x] **Escape closes stacked modals at once** — `core/modal.js` → escape handler now queries all visible `.mwt-modal` elements and only closes the topmost (last in DOM order) one.
 
-- [ ] **`buildInlineDiff` has no size guard** — `core/diff.js`: word-level LCS is O(n²); a max-size (~2000-word) chronicle entry means a ~16M-cell DP table and can freeze the tab during Regenerate preview. Add a word-count cap with a plain side-by-side fallback (mirror `computeLcsDiff`'s `maxLines`).
+- [x] **`buildInlineDiff` has no size guard** — `core/diff.js`: added `maxWords` parameter (default 2000); falls back to plain escaped `<pre>` side-by-side when word count exceeds the cap.
 
-- [ ] **Keywords input not HTML-escaped** — `knowledge/index.js` → `renderDetailForItem()`: `value="${(item.keywords || [item.name]).join(', ')}"` — a keyword containing `"` breaks the attribute. Wrap in `escapeHtml(...)`.
+- [x] **Keywords input not HTML-escaped** — `knowledge/index.js` → `renderDetailForItem()`: keyword values now wrapped in `escapeHtml(...)` before being inserted into the `value="..."` attribute.
 
-- [ ] **HTML error pages skip the 5xx retry** — `core/api.js` → `fetchFromApi()`: the HTML-detection throw happens before the 5xx/429 retry branch, so a proxy returning a 502 HTML page fails immediately instead of retrying.
+- [x] **HTML error pages skip the 5xx retry** — `core/api.js` → `fetchFromApi()`: moved HTML detection to after the 5xx/429 retry branch so a proxy returning 502 HTML retries before failing.
 
-- [ ] **`restoreDeletedEntry` doesn't recompute `lastAnchor`** — `chronicle/index.js`: `deleteEntry`/`bulkDeleteEntries` recompute `lastAnchor` from the remaining snapshots, but restoring from trash doesn't — restoring the newest entry leaves the anchor stale, so the next snapshot re-covers the same messages.
+- [x] **`restoreDeletedEntry` doesn't recompute `lastAnchor`** — `chronicle/index.js`: `restoreDeletedEntry` now recomputes `lastAnchor` from the full snapshot list (including the restored entry).
 
-- [ ] **API keys mirrored to localStorage in plaintext** — `core/settings.js` → `saveSettings()` always writes a localStorage copy even when `extension_settings` succeeded; that copy outlives an uninstall. Consider skipping the mirror when `extRef` is available.
+- [x] **API keys mirrored to localStorage in plaintext** — `core/settings.js` → `saveSettings()`: localStorage write is now inside the `else` branch (fallback only), so API keys aren't mirrored when `extension_settings` is available.

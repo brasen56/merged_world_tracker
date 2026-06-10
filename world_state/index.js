@@ -9,7 +9,7 @@
 
 import {
     getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt,
-    fetchFromApi, normaliseOutput, normalizeApiBase,
+    resolveApiCall, normaliseOutput, normalizeApiBase,
     escapeHtml, escapeRegex, computeLcsDiff, renderDiffHtml, estimateTokens,
     createSettingsManager,
     createModal, showModal, hideModal, setStatus,
@@ -576,10 +576,11 @@ async function refreshWorldState(isAuto = false) {
         if (!chat || chat.length === 0) return null;
 
         const systemPrompt = buildSystemPrompt();
-        let result = await fetchFromApi({
+        const _wsApi1 = resolveApiCall({ moduleSettings: getSettings() });
+        let result = await _wsApi1.fetchFn({
             systemPrompt,
             userContent: buildUserMessage(),
-            settings: getSettings(),
+            settings: _wsApi1.settings,
         });
         let text = normaliseOutput(result);
         let validation = validateOutput(text);
@@ -587,10 +588,11 @@ async function refreshWorldState(isAuto = false) {
         // One-shot retry with explicit reminder if the model drifted
         if (!validation.ok) {
             console.warn(`[MWT:WorldState] First attempt rejected: ${validation.reason} — retrying once`);
-            result = await fetchFromApi({
+            const _wsApi2 = resolveApiCall({ moduleSettings: getSettings() });
+            result = await _wsApi2.fetchFn({
                 systemPrompt,
                 userContent: buildUserMessage(validation.reason),
-                settings: getSettings(),
+                settings: _wsApi2.settings,
             });
             text = normaliseOutput(result);
             validation = validateOutput(text);
@@ -773,10 +775,11 @@ async function regenerateSection(sectionName, variety = 2) {
 
         const sectionSettings = { ...s, temperature };
 
-        const raw = await fetchFromApi({
+        const _wsApi3 = resolveApiCall({ moduleSettings: sectionSettings });
+        const raw = await _wsApi3.fetchFn({
             systemPrompt: buildSectionSystemPrompt(sectionName, variety),
             userContent: buildSectionUserMessage(sectionName),
-            settings: sectionSettings,
+            settings: _wsApi3.settings,
             retries: 1,
         });
 
@@ -1426,7 +1429,11 @@ export function onChatChanged() {
     autoRefreshQueued = false;
     if (autoRefreshDeferTimer) { clearTimeout(autoRefreshDeferTimer); autoRefreshDeferTimer = null; }
     // Don't reset wstIsRefreshing — an in-flight API call should finish naturally
-    resetAutoRefreshCounter();
+    // Restore counter from the incoming chat's metadata instead of zeroing,
+    // so the counter survives chat switches and reloads.
+    const saved = getWorldStateData()?.autoRefreshCounter;
+    autoRefreshCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
+    persistAutoRefreshCounter();
     applyWorldStateInjection();
     console.log('[MWT:WorldState] Chat changed — state reset.');
 }
@@ -1461,7 +1468,20 @@ export function syncGlobalSettings(patch) {
             apiUrl: patch.apiUrl ?? getSettings().apiUrl,
             apiKey: patch.apiKey ?? getSettings().apiKey,
             modelName: patch.modelName ?? getSettings().modelName,
+            useSTConnection: patch.useSTConnection ?? getSettings().useSTConnection,
         });
         console.log('[MWT:WorldState] Synced global API settings');
     }
+}
+
+/** Slash command: trigger a world state refresh */
+export async function triggerRefresh() {
+    const text = await refreshWorldState();
+    return text;
+}
+
+/** Slash command / macro: set injection enabled/disabled */
+export function setInjectionEnabled(enabled) {
+    setWorldStateData({ injectEnabled: !!enabled });
+    applyWorldStateInjection();
 }

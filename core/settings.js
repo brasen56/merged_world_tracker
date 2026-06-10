@@ -76,8 +76,12 @@ export function createSettingsManager({ settingsKey, legacyKey, defaults, logPre
                 for (const key of Object.keys(extRef)) delete extRef[key];
                 Object.assign(extRef, next);
                 getContextSafe()?.saveSettingsDebounced?.();
+            } else {
+                // Only write to localStorage as a fallback when extension_settings
+                // is unavailable — avoids persisting API keys in plaintext beyond
+                // the extension's own storage scope (they survive uninstall otherwise).
+                localStorage.setItem(settingsKey, JSON.stringify(next));
             }
-            localStorage.setItem(settingsKey, JSON.stringify(next));
             console.log(`${logPrefix} Settings saved`);
             return true;
         } catch (err) {
@@ -88,7 +92,11 @@ export function createSettingsManager({ settingsKey, legacyKey, defaults, logPre
 
     function hasValidSettings() {
         const s = getSettings();
-        return !!(s.apiUrl && s.apiKey && s.modelName);
+        // ST connection bypasses custom API settings entirely.
+        if (s.useSTConnection) return true;
+        // Only apiUrl + modelName are required; apiKey is optional for
+        // keyless local backends (Ollama, LM Studio, llama.cpp, etc.)
+        return !!(s.apiUrl && s.modelName);
     }
 
     return { getSettings, saveSettings, hasValidSettings, getExtSettingsRef };

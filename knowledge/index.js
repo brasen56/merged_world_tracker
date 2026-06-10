@@ -14,7 +14,7 @@
 
 import {
     getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex,
-    fetchFromApi, normaliseOutput,
+    resolveApiCall, normaliseOutput,
     escapeHtml, renderLineDiff, estimateTokens, // estimateTokens: used by refreshTotalTokens() — do not remove
     createSettingsManager,
 } from '../core/index.js';
@@ -74,6 +74,8 @@ let isRunning = false;
 let trackerQueue = Promise.resolve();
 let _cachedTokenCount = 0;
 let _refreshingTokens = false;
+let _lastKtStatusMsg = '';
+let _lastKtStatusLevel = '';
 
 // ─── Notification Panel ────────────────────────────────────────────────────
 
@@ -242,12 +244,14 @@ function getStateContentEl() {
 }
 
 function ktSetStatus(text, type = 'info') {
+    _lastKtStatusMsg = text || '';
+    _lastKtStatusLevel = type || 'info';
     const el = getNpcsContentEl();
     if (!el) return;
     const statusEl = el.querySelector('#kt-status');
     if (statusEl) {
-        statusEl.textContent = text || '';
-        statusEl.className = `kt-status kt-status--${type}`;
+        statusEl.textContent = _lastKtStatusMsg;
+        statusEl.className = `kt-status kt-status--${_lastKtStatusLevel}`;
     }
 }
 
@@ -511,8 +515,17 @@ function getRecentMessages(count = 30) {
 function getPlayerNames() {
     const ctx = getContextSafe();
     const names = new Set();
-    if (ctx?.character?.name) names.add(ctx.character.name.trim());
-    if (ctx?.user) names.add(typeof ctx.user === 'string' ? ctx.user : '');
+    // ctx.name1 is the player's persona name in SillyTavern
+    if (ctx?.name1) names.add(String(ctx.name1).trim());
+    // ctx.name2 is the AI character name — include so it's excluded from NPC scans
+    if (ctx?.name2) names.add(String(ctx.name2).trim());
+    // Group-chat member names (array of character objects)
+    if (Array.isArray(ctx?.characters)) {
+        for (const ch of ctx.characters) {
+            if (ch?.name) names.add(String(ch.name).trim());
+        }
+    }
+    // Fallback: first message in chat (usually the AI character's greeting)
     const chat = getChat();
     if (chat) {
         const first = chat[0];
@@ -603,7 +616,8 @@ OUTPUT FORMAT:
 // ─── API fetch (delegates to shared core) ────────────────────────────────────
 
 async function ktFetchFromApi(systemPrompt, userContent, { retries = 1 } = {}) {
-    return fetchFromApi({ systemPrompt, userContent, settings: getSettings(), retries });
+    const resolved = resolveApiCall({ moduleSettings: getSettings() });
+    return resolved.fetchFn({ systemPrompt, userContent, settings: resolved.settings, retries });
 }
 
 // ─── Lorebook operations ────────────────────────────────────────────────────
@@ -636,9 +650,17 @@ async function writeStateTracker(uid, name, content) {
 async function writeToLorebook(name, content, keywords, existingUid) {
     if (!wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
     try {
-        const wi = await wiScript.loadWorldInfo(LOREBOOK_NAME);
-        const entries = wi?.entries;
-        if (!entries) throw new Error(`Lorebook "${LOREBOOK_NAME}" not found.`);
+        let wi = await wiScript.loadWorldInfo(LOREBOOK_NAME);
+        // Auto-create the lorebook if it doesn't exist yet
+        if (!wi || !wi.entries) {
+            if (typeof wiScript.createNewWorldInfo === 'function') {
+                wi = await wiScript.createNewWorldInfo(LOREBOOK_NAME);
+            } else {
+                // Fallback: construct a minimal world-info object and save it
+                wi = { name: LOREBOOK_NAME, entries: {} };
+            }
+        }
+        const entries = wi.entries;
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
             pushHistory(existingUid, previousContent);
@@ -1118,6 +1140,16 @@ function renderNpcsSubTab() {
     else if (activeSubTab === 'minor' || activeSubTab === 'major') wireNpcListEvents(el, activeSubTab);
     else if (activeSubTab === 'state') wireStateTrackerEvents(el);
     else if (activeSubTab === 'relationships') wireRelationshipEvents(el);
+
+    // Re-apply persisted status message — renderNpcsSubTab rebuilds #kt-status
+    // as empty via innerHTML, so any status set before this call is lost.
+    if (_lastKtStatusMsg) {
+        const statusEl = el.querySelector('#kt-status');
+        if (statusEl) {
+            statusEl.textContent = _lastKtStatusMsg;
+            statusEl.className = `kt-status kt-status--${_lastKtStatusLevel}`;
+        }
+    }
 }
 
 function renderStagingContent(count) {
@@ -1163,7 +1195,7 @@ function renderDetailForItem(item) {
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
         <div class="kt-detail-section"><div class="kt-detail-label">Proposed</div><textarea class="kt-detail-editor" id="kt-proposal-editor">${escapeHtml(editorContent)}</textarea></div>
-        ${item.type !== 'state' ? `<div class="kt-detail-section"><div class="kt-detail-label">Keywords</div><input class="kt-keyword-input" id="kt-keyword-input" type="text" value="${(item.keywords || [item.name]).join(', ')}" /></div>` : ''}
+        ${item.type !== 'state' ? `<div class="kt-detail-section"><div class="kt-detail-label">Keywords</div><input class="kt-keyword-input" id="kt-keyword-input" type="text" value="${escapeHtml((item.keywords || [item.name]).join(', '))}" /></div>` : ''}
         <div class="kt-detail-actions"><button class="mwt-btn mwt-btn-primary" id="kt-accept">✓ Accept & Write</button><button class="mwt-btn" id="kt-dismiss">✗ Dismiss</button></div>
     </div>`;
 }
@@ -2066,13 +2098,44 @@ export async function refreshTotalTokens() {
 }
 
 export function syncGlobalSettings(patch) {
-    if (patch?.apiUrl !== undefined || patch?.apiKey !== undefined || patch?.modelName !== undefined) {
+    if (patch?.apiUrl !== undefined || patch?.apiKey !== undefined || patch?.modelName !== undefined || patch?.useSTConnection !== undefined) {
         saveSettings({
             ...getSettings(),
             apiUrl: patch.apiUrl ?? getSettings().apiUrl,
             apiKey: patch.apiKey ?? getSettings().apiKey,
             modelName: patch.modelName ?? getSettings().modelName,
+            useSTConnection: patch.useSTConnection ?? getSettings().useSTConnection,
         });
         console.log('[MWT:Knowledge] Synced global API settings');
     }
+}
+
+/** Slash command: trigger an NPC scan */
+export async function triggerScan() {
+    return runScan();
+}
+
+/** Slash command / macro: scan and auto-accept all */
+export async function scanAndAccept() {
+    const scanResult = await runScan();
+    const items = buildStagingItems(scanResult);
+    for (const item of items) {
+        await enrichStagingItem(item);
+        const merged = item.mergedContent || item.proposedContent;
+        const keywords = item.keywords || [item.name];
+        await handleAccept(item, merged, keywords, { querySelector: () => ({ disabled: false, textContent: '' }) });
+    }
+    return items;
+}
+
+/** Macro: return all tracked NPC names */
+export function getTrackedNpcNames() {
+    return getAllNpcNames();
+}
+
+/** Macro: return a specific NPC's lorebook content */
+export async function getNpcContent(name) {
+    const reg = getRegistry()[name];
+    if (!reg || reg.uid == null) return '';
+    return loadEntryContent(reg.uid) || '';
 }

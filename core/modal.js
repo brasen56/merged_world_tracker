@@ -58,11 +58,19 @@ export function createModal({ id, title, content, cssClass = '', onClose = null 
     closeBtn?.addEventListener('click', doClose);
     backdrop?.addEventListener('click', doClose);
 
-    // Escape key
+    // Escape key — only close the topmost (last-shown) visible modal
     const onKey = (e) => {
-        if (e.key === 'Escape' && modal.style.display !== 'none') {
-            doClose();
-        }
+        if (e.key !== 'Escape') return;
+        if (modal.style.display === 'none') return;
+        // Find all visible mwt-modal elements
+        const visibleModals = [...document.querySelectorAll('.mwt-modal')].filter(
+            m => m.style.display !== 'none'
+        );
+        // Only act if THIS modal is the topmost one (last in DOM order)
+        if (visibleModals.length === 0) return;
+        const topmost = visibleModals[visibleModals.length - 1];
+        if (topmost !== modal) return;
+        doClose();
     };
     document.addEventListener('keydown', onKey);
     modal._cleanupKeyHandler = () => document.removeEventListener('keydown', onKey);
@@ -108,8 +116,11 @@ export function setStatus(modalIdOrEl, message, type = 'info', clearAfterMs = 0)
     statusEl.style.opacity = '1';
 
     if (clearAfterMs > 0) {
-        setTimeout(() => {
+        // Cancel any previous auto-clear timer so it can't fade out a newer message
+        if (statusEl._clearTimer) clearTimeout(statusEl._clearTimer);
+        statusEl._clearTimer = setTimeout(() => {
             statusEl.style.opacity = '0';
+            statusEl._clearTimer = null;
         }, clearAfterMs);
     }
 }
