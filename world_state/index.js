@@ -209,7 +209,10 @@ function applyWorldStateInjection() {
 
     try {
         // Remove existing injection — ST signature: (key, value, position, depth, scan, role)
-        setEP(EXTENSION_PROMPT_KEY, '', 0, depth, undefined, role);
+        // Position 1 = IN_CHAT: injected into chat history `depth` messages from
+        // the bottom, honouring the role setting on every API type. (Position 0
+        // = IN_PROMPT anchors below the main prompt and ignores depth entirely.)
+        setEP(EXTENSION_PROMPT_KEY, '', 1, depth, undefined, role);
 
         if (enabled && text?.trim()) {
             // Split out Plot Seeds section (matching original WorldState behavior).
@@ -232,7 +235,7 @@ function applyWorldStateInjection() {
             }
 
             // ST signature: setExtensionPrompt(key, value, position, depth, scan, role)
-            setEP(EXTENSION_PROMPT_KEY, injected, 0, depth, undefined, role);
+            setEP(EXTENSION_PROMPT_KEY, injected, 1, depth, undefined, role);
             console.log(`[MWT:WorldState] Injected ${text.length} chars at depth ${depth} role ${role}`);
         }
     } catch (err) {

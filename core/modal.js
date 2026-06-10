@@ -14,7 +14,7 @@
  * @param {string} opts.title      — header text
  * @param {string} opts.content    — innerHTML for the modal body
  * @param {string} [opts.cssClass] — additional CSS class on the root
- * @param {Function} [opts.onClose] — called when modal is closed
+ * @param {Function} [opts.onClose] — called when modal is closed; return false to cancel the close
  * @returns {HTMLElement}
  */
 export function createModal({ id, title, content, cssClass = '', onClose = null }) {
@@ -49,7 +49,9 @@ export function createModal({ id, title, content, cssClass = '', onClose = null 
     const backdrop = modal.querySelector('.mwt-modal-backdrop');
 
     const doClose = () => {
-        if (typeof onClose === 'function') onClose();
+        // An onClose returning exactly false cancels the close
+        // (used for unsaved-changes guards).
+        if (typeof onClose === 'function' && onClose() === false) return;
         modal.style.display = 'none';
     };
 

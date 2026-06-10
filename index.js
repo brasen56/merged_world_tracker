@@ -224,7 +224,6 @@ function buildTabContent(tab) {
 
 let modal = null;
 const _initedModules = new Set();
-let _modalEscapeHandler = null;
 
 function renderModal() {
     const tabBarHtml = TABS.map((t, i) =>
@@ -245,30 +244,17 @@ function renderModal() {
             id: 'mwt-modal',
             title: 'Merged World Tracker',
             content,
-            onClose: () => { console.log('[MWT] Modal closed.'); },
-        });
-
-        // Add unsaved-changes warning for World State tab
-        const closeBtn = modal.querySelector('.mwt-modal-close');
-        const backdrop = modal.querySelector('.mwt-modal-backdrop');
-        const safeClose = () => {
-            if (WorldState.isWorldStateDirty?.()) {
-                if (!confirm('You have unsaved changes to the World State. Close anyway?')) return;
-            }
-            hideModal('mwt-modal');
-        };
-        // Replace existing close handlers (createModal binds them inline)
-        closeBtn?.addEventListener('click', safeClose);
-        backdrop?.addEventListener('click', safeClose);
-        // Also handle Escape key — attach once only
-        if (!_modalEscapeHandler) {
-            _modalEscapeHandler = (e) => {
-                if (e.key === 'Escape' && modal?.style.display === 'flex') {
-                    safeClose();
+            // Returning false cancels the close — createModal's own close
+            // button / backdrop / Escape handlers all route through this,
+            // so the unsaved-changes guard actually blocks the close.
+            onClose: () => {
+                if (WorldState.isWorldStateDirty?.()
+                    && !confirm('You have unsaved changes to the World State. Close anyway?')) {
+                    return false;
                 }
-            };
-            document.addEventListener('keydown', _modalEscapeHandler);
-        }
+                console.log('[MWT] Modal closed.');
+            },
+        });
     } else {
         const body = modal.querySelector('.mwt-modal-body');
         if (body) body.innerHTML = content;
@@ -406,8 +392,14 @@ function setupButtonBar() {
         // Click to open modal on that tab
         btn.addEventListener('click', (e) => {
             if (btn._dragged) { btn._dragged = false; return; }
-            renderModal();
-            showModal('mwt-modal');
+            // Only rebuild when the modal isn't already open — rebuilding
+            // replaces the body innerHTML and would silently wipe unsaved
+            // edits (e.g. the World State editor). If it's open, just switch tab.
+            const isOpen = modal && modal.style.display === 'flex';
+            if (!isOpen) {
+                renderModal();
+                showModal('mwt-modal');
+            }
             // Activate the correct tab
             const tabBtn = modal?.querySelector(`.mwt-tab-btn[data-tab="${cfg.tab}"]`);
             if (tabBtn) tabBtn.click();

@@ -732,7 +732,8 @@ function synthesizeMajorFromUpdate(name, fields, newKnowledge) {
 }
 
 async function enrichStagingItem(item) {
-    if (!item || item.action !== 'update' || item.existingContent !== null || !item.uid) return;
+    // uid == null (not falsy!) — uid 0 is the first entry in a fresh lorebook
+    if (!item || item.action !== 'update' || item.existingContent !== null || item.uid == null) return;
     const existing = await loadEntryContent(item.uid);
     if (existing !== null) {
         item.existingContent = existing;
@@ -877,8 +878,10 @@ function queueTrackerWork(fn) { trackerQueue = trackerQueue.then(fn).catch(err =
 function buildStagingItems(scanResult) {
     const registry = getRegistry();
     const items = [];
-    let idCounter = 0;
-    const makeId = () => `kt-${++idCounter}`;
+    // Ids must be unique across scans — a plain per-scan counter collided with
+    // items still staged from a previous scan (wrong detail shown, dismiss
+    // removing two items, notification entries overwriting each other).
+    const makeId = () => `kt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let misclassifiedCount = 0;
 
     scanResult.new_minor.forEach(data => {
@@ -921,9 +924,16 @@ function formatHistoryAge(ts) {
 
 // ─── Handle accept ───────────────────────────────────────────────────────────
 
+const STAGING_PLACEHOLDERS = ['(Fetch to see changes)', '(promoting)', '(demoting)'];
+
 async function handleAccept(item, proposedText, keywords, detailEl) {
-    if (!proposedText || (typeof proposedText === 'string' && !proposedText.trim())) {
-        ktSetStatus(`Cannot write "${item.name}": no content to save.`, 'error');
+    const trimmed = typeof proposedText === 'string' ? proposedText.trim() : '';
+    // Never write placeholder text — it would overwrite the real lorebook entry.
+    const isPlaceholder = STAGING_PLACEHOLDERS.includes(trimmed);
+    if (!trimmed || isPlaceholder) {
+        ktSetStatus(isPlaceholder
+            ? `Cannot write "${item.name}": content not loaded yet — open the proposal in Staging first.`
+            : `Cannot write "${item.name}": no content to save.`, 'error');
         const acceptBtn = detailEl?.querySelector?.('#kt-accept');
         if (acceptBtn) { acceptBtn.disabled = false; acceptBtn.textContent = '✓ Accept & Write'; }
         return;
@@ -1183,7 +1193,7 @@ function wireStagingEvents(el) {
         item.addEventListener('click', async () => {
             activeItemId = item.dataset.id;
             const stagingItem = stagingItems.find(i => i.id === activeItemId);
-            if (stagingItem && stagingItem.action === 'update' && stagingItem.existingContent === null && stagingItem.uid) {
+            if (stagingItem && stagingItem.action === 'update' && stagingItem.existingContent === null && stagingItem.uid != null) {
                 const existing = await loadEntryContent(stagingItem.uid);
                 if (existing !== null) {
                     stagingItem.existingContent = existing;
@@ -1278,7 +1288,7 @@ function wireNpcListEvents(el, type) {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
             const reg = getRegistry()[name];
-            if (!reg?.uid) return;
+            if (reg?.uid == null) return; // uid 0 is valid — first entry in a fresh lorebook
             const existing = await loadEntryContent(reg.uid);
             const item = {
                 id: `promote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'promote', action: 'update', name, data: {},
@@ -1298,7 +1308,7 @@ function wireNpcListEvents(el, type) {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
             const reg = getRegistry()[name];
-            if (!reg?.uid) return;
+            if (reg?.uid == null) return; // uid 0 is valid — first entry in a fresh lorebook
             const existing = await loadEntryContent(reg.uid);
             const item = {
                 id: `demote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'demote', action: 'update', name, data: {},
@@ -1932,9 +1942,12 @@ export function renderStateTrackers() {
 export function getModuleRender() { return render; }
 export function getModuleWireEvents() {
     return () => {
-        // Called after modal is shown and tabs are rendered
+        // The modal body is rebuilt (innerHTML) on every open, so the cached
+        // content element goes stale and init() only runs once. Re-query and
+        // re-render here or the tab renders into detached DOM (appears blank).
+        npcsContentEl = null;
+        stateContentEl = null;
         renderNpcsSubTab();
-        renderStateContent();
     };
 }
 export function getModuleRefreshContent() { return renderNpcsSubTab; }

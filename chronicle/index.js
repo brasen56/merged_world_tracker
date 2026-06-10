@@ -11,8 +11,9 @@
 import {
     getContextSafe, getChat, getChatMeta, getSetExtensionPrompt,
     fetchFromApi, normaliseOutput,
-    escapeHtml, estimateTokens,
+    escapeHtml, buildInlineDiff, estimateTokens,
     createSettingsManager,
+    createModal, showModal, hideModal, setStatus,
 } from '../core/index.js';
 
 import { applyWorldStateInjection } from '../world_state/index.js';
@@ -1314,7 +1315,15 @@ export function render() {
 }
 
 export function getModuleRender() { return render; }
-export function getModuleWireEvents() { return () => {}; }  // Events bound in renderContent
+export function getModuleWireEvents() {
+    return () => {
+        // The modal body is rebuilt (innerHTML) on every open, so the cached
+        // content element goes stale and init() only runs once. Re-query and
+        // re-render here or the tab stays stuck on the "Loading…" placeholder.
+        contentEl = null;
+        renderContent();
+    };
+}
 export function getModuleRefreshContent() { return renderContent; }
 
 export async function onMessageReceived() {
