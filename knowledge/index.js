@@ -40,6 +40,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
     legacyKey: 'knowledge_tracker_settings',
     defaults: {
+        connectionProfileId: '',
         apiUrl: '',
         apiKey: '',
         modelName: '',
@@ -2098,13 +2099,13 @@ export async function refreshTotalTokens() {
 }
 
 export function syncGlobalSettings(patch) {
-    if (patch?.apiUrl !== undefined || patch?.apiKey !== undefined || patch?.modelName !== undefined || patch?.useSTConnection !== undefined) {
+    if (patch?.apiUrl !== undefined || patch?.apiKey !== undefined || patch?.modelName !== undefined) {
         saveSettings({
             ...getSettings(),
+            connectionProfileId: patch.connectionProfileId ?? getSettings().connectionProfileId,
             apiUrl: patch.apiUrl ?? getSettings().apiUrl,
             apiKey: patch.apiKey ?? getSettings().apiKey,
             modelName: patch.modelName ?? getSettings().modelName,
-            useSTConnection: patch.useSTConnection ?? getSettings().useSTConnection,
         });
         console.log('[MWT:Knowledge] Synced global API settings');
     }

@@ -92,8 +92,8 @@ export function createSettingsManager({ settingsKey, legacyKey, defaults, logPre
 
     function hasValidSettings() {
         const s = getSettings();
-        // ST connection bypasses custom API settings entirely.
-        if (s.useSTConnection) return true;
+        // Connection profile bypasses custom API settings entirely.
+        if (s.connectionProfileId) return true;
         // Only apiUrl + modelName are required; apiKey is optional for
         // keyless local backends (Ollama, LM Studio, llama.cpp, etc.)
         return !!(s.apiUrl && s.modelName);

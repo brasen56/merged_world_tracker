@@ -139,6 +139,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
     legacyKey: 'session_chronicle_settings',
     defaults: {
+        connectionProfileId: '',
         apiUrl: '',
         apiKey: '',
         modelName: '',
@@ -1393,10 +1394,10 @@ export function syncGlobalSettings(patch) {
     if (patch?.apiUrl !== undefined || patch?.apiKey !== undefined || patch?.modelName !== undefined) {
         saveSettings({
             ...getSettings(),
+            connectionProfileId: patch.connectionProfileId ?? getSettings().connectionProfileId,
             apiUrl: patch.apiUrl ?? getSettings().apiUrl,
             apiKey: patch.apiKey ?? getSettings().apiKey,
             modelName: patch.modelName ?? getSettings().modelName,
-            useSTConnection: patch.useSTConnection ?? getSettings().useSTConnection,
         });
         console.log('[MWT:Chronicle] Synced global API settings');
     }

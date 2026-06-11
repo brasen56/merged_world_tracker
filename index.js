@@ -14,7 +14,7 @@
 // ─── Core imports ────────────────────────────────────────────────────────────
 
 import { getContextSafe, getChat, estimateTokens } from './core/context.js';
-import { normalizeApiBase, fetchFromApi, fetchViaSTConnection, resolveApiCall, normaliseOutput } from './core/api.js';
+import { normalizeApiBase, fetchFromApi, fetchViaSTConnection, fetchViaConnectionProfile, resolveApiCall, normaliseOutput } from './core/api.js';
 import { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from './core/diff.js';
 import { createSettingsManager } from './core/settings.js';
 import { createModal, showModal, hideModal, setStatus, formatDate } from './core/modal.js';
@@ -89,7 +89,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         frequencyPenalty: 0,
         presencePenalty: 0,
         customHeaders: '',
-        useSTConnection: false,
+        connectionProfileId: '',
         // Per-module injection settings
         worldStateDepth: 4,
         worldStateRole: 'system',
@@ -116,6 +116,7 @@ const shared = {
     estimateTokens,
     fetchFromApi,
     fetchViaSTConnection,
+    fetchViaConnectionProfile,
     resolveApiCall,
     normaliseOutput,
     normalizeApiBase,
@@ -152,24 +153,37 @@ const TABS = [
 
 function renderSettingsTab() {
     const s = getSettings();
-    const useST = s.useSTConnection ?? false;
-    const apiFieldsStyle = useST ? 'display:none' : '';
+    const hasProfile = !!s.connectionProfileId;
+    const apiFieldsStyle = hasProfile ? 'display:none' : '';
+
+    // Build connection profile dropdown options from ST's Connection Manager
+    let profileOptionsHtml = '<option value="">— None (use custom API below) —</option>';
+    try {
+        const ctx = getContextSafe();
+        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || {};
+        const selectedId = ctx?.extensionSettings?.connectionManager?.selectedProfile || '';
+        for (const [id, profile] of Object.entries(profiles)) {
+            const name = profile.name || id;
+            const selected = id === s.connectionProfileId ? ' selected' : '';
+            const isActive = id === selectedId ? ' (active)' : '';
+            profileOptionsHtml += `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(name)}${isActive}</option>`;
+        }
+    } catch { /* ignore */ }
 
     return `
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             These global API settings serve as defaults for all modules. Each module can override them in its own Settings panel.
         </p>
         <div class="mwt-settings-grid">
-            <label class="mwt-label" style="display:flex;align-items:center;gap:6px;grid-column:1/3;cursor:pointer">
-                <input type="checkbox" id="mwt-s-use-st-connection" ${useST ? 'checked' : ''}>
-                <span>Use SillyTavern Connection</span>
-            </label>
-            <div></div>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
-                When enabled, all modules use SillyTavern's active API connection (supports every backend). No need to configure API URL/Key below. You can still override per-module.
+            <label class="mwt-label" style="grid-column:1/2">Connection Profile</label>
+            <select id="mwt-s-connection-profile" class="mwt-input" style="grid-column:2/3">
+                ${profileOptionsHtml}
+            </select>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0;grid-column:1/3">
+                Select a Connection Manager profile to use with all backends (OpenAI, TextGen, etc.) with full preset/instruct support. Leave empty to configure a custom API URL/Key below. Profiles marked (active) are ST's currently selected profile.
             </p>
 
-            <div id="mwt-s-api-fields" style="${apiFieldsStyle}" class="mwt-settings-grid" >
+            <div id="mwt-s-api-fields" style="grid-column:1/3;${apiFieldsStyle}" class="mwt-settings-grid" >
                 <label class="mwt-label">API URL</label>
                 <input id="mwt-s-api-url" class="mwt-input" type="text"
                        value="${escapeHtml(s.apiUrl)}"
@@ -359,12 +373,12 @@ function renderModal() {
         if (mod.getModuleWireEvents) mod.getModuleWireEvents()();
     }
 
-    // Wire ST connection toggle
-    const stConnCheckbox = modal.querySelector('#mwt-s-use-st-connection');
-    if (stConnCheckbox) {
-        stConnCheckbox.addEventListener('change', () => {
+    // Wire connection profile toggle (hide API fields when a profile is selected)
+    const profileSelect = modal.querySelector('#mwt-s-connection-profile');
+    if (profileSelect) {
+        profileSelect.addEventListener('change', () => {
             const apiFields = modal.querySelector('#mwt-s-api-fields');
-            if (apiFields) apiFields.style.display = stConnCheckbox.checked ? 'none' : '';
+            if (apiFields) apiFields.style.display = profileSelect.value ? 'none' : '';
         });
     }
 
@@ -373,7 +387,7 @@ function renderModal() {
     if (saveBtn) {
         saveBtn.addEventListener('click', () => {
             const patch = {
-                useSTConnection: modal.querySelector('#mwt-s-use-st-connection')?.checked ?? false,
+                connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
                 apiUrl: modal.querySelector('#mwt-s-api-url')?.value || '',
                 apiKey: modal.querySelector('#mwt-s-api-key')?.value || '',
                 modelName: modal.querySelector('#mwt-s-model')?.value || '',
@@ -406,7 +420,7 @@ function renderModal() {
     if (syncBtn) {
         syncBtn.addEventListener('click', () => {
             const patch = {
-                useSTConnection: modal.querySelector('#mwt-s-use-st-connection')?.checked ?? false,
+                connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
                 apiUrl: modal.querySelector('#mwt-s-api-url')?.value || '',
                 apiKey: modal.querySelector('#mwt-s-api-key')?.value || '',
                 modelName: modal.querySelector('#mwt-s-model')?.value || '',

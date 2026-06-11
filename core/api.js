@@ -142,9 +142,106 @@ export async function fetchFromApi({
 }
 
 /**
+ * Send a prompt through a SillyTavern Connection Manager profile.
+ * Uses ConnectionManagerRequestService from shared.js to support every
+ * backend ST supports (OpenAI, TextGen, etc.) with full preset/instruct support.
+ *
+ * @param {object} opts
+ * @param {string} opts.systemPrompt
+ * @param {string} opts.userContent
+ * @param {object} opts.settings — { connectionProfileId, maxTokens }
+ * @param {number} [opts.retries=2]
+ * @returns {Promise<string>} the raw content string
+ */
+export async function fetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2 }) {
+    // Lazy-load ConnectionManagerRequestService from ST's shared.js
+    const sharedModule = await import('../../../shared.js');
+    const ConnectionManagerRequestService = sharedModule.ConnectionManagerRequestService;
+
+    if (!ConnectionManagerRequestService) {
+        throw new Error(
+            'ConnectionManagerRequestService not available. ' +
+            'Your SillyTavern version may not support connection profiles. ' +
+            'Configure a custom API URL/Key in Settings instead.'
+        );
+    }
+
+    // Resolve profile ID: explicit setting > ST's currently selected profile
+    let profileId = settings.connectionProfileId || null;
+    const ctx = getContextSafe();
+    if (!profileId) {
+        profileId = ctx?.extensionSettings?.connectionManager?.selectedProfile || null;
+    }
+    if (!profileId) {
+        throw new Error(
+            'No connection profile selected. ' +
+            'Select a profile in Settings or in ST\'s Connection Manager.'
+        );
+    }
+
+    // Build messages array — constructPrompt handles text vs. chat completion formatting
+    const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+    ];
+    const prompt = ConnectionManagerRequestService.constructPrompt(messages, profileId);
+    const maxTokens = Number(settings.maxTokens) || 2000;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            console.log(`[MWT API] Using Connection Profile: ${profileId}, attempt=${attempt}`);
+            const result = await ConnectionManagerRequestService.sendRequest(
+                profileId,
+                prompt,
+                maxTokens,
+                {
+                    extractData: true,
+                    includePreset: true,
+                    includeInstruct: true,
+                },
+            );
+
+            // Extract text from result — handle multiple possible shapes
+            let text = '';
+            if (typeof result === 'string') {
+                text = result;
+            } else if (result?.text) {
+                text = result.text;
+            } else if (result?.choices?.[0]?.message?.content) {
+                text = result.choices[0].message.content;
+            } else if (result?.choices?.[0]?.text) {
+                text = result.choices[0].text;
+            } else {
+                throw new Error('Unable to extract text from API response: ' + JSON.stringify(result).slice(0, 300));
+            }
+
+            // Log token usage if available
+            if (result?.usage) {
+                console.log(`[MWT API] Token usage — prompt: ${result.usage.prompt_tokens || 0}, completion: ${result.usage.completion_tokens || 0}, total: ${result.usage.total_tokens || 0}`);
+            }
+
+            return text;
+        } catch (err) {
+            lastErr = err;
+            // Retry on transient failures
+            if (attempt < retries) {
+                const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+                console.warn(`[MWT API] Connection profile request failed (attempt ${attempt}): ${err.message}. Retrying in ${delay}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            throw err;
+        }
+    }
+    throw lastErr || new Error('Connection profile request failed');
+}
+
+/**
  * Send a prompt through SillyTavern's active connection (generateQuietPrompt).
- * Supports every backend ST supports (Claude, Gemini, KoboldCPP, etc.)
- * Falls back to manual API if ST connection is unavailable.
+ * @deprecated Use fetchViaConnectionProfile instead — Connection Manager profiles
+ *   support all backends with full preset/instruct support.
+ *   Kept for backward compatibility only.
  *
  * @param {object} opts
  * @param {string} opts.systemPrompt
@@ -153,45 +250,36 @@ export async function fetchFromApi({
  */
 export async function fetchViaSTConnection({ systemPrompt, userContent }) {
     let generateQuietPrompt = null;
-    try {
-        const stScript = await import('../../../../script.js');
-        generateQuietPrompt = stScript.generateQuietPrompt;
-    } catch { /* not available */ }
-
-    // Also try via context
-    if (!generateQuietPrompt) {
-        const ctx = getContextSafe();
-        if (ctx && typeof ctx.generateQuietPrompt === 'function') {
-            generateQuietPrompt = ctx.generateQuietPrompt.bind(ctx);
-        }
+    const ctx = getContextSafe();
+    if (ctx && typeof ctx.generateQuietPrompt === 'function') {
+        generateQuietPrompt = ctx.generateQuietPrompt.bind(ctx);
     }
 
     if (!generateQuietPrompt) {
         throw new Error(
             'SillyTavern connection not available. ' +
-            'Disable "Use ST Connection" in Settings and configure a custom API URL/Key.'
+            'Use a Connection Profile or configure a custom API URL/Key in Settings.'
         );
     }
 
-    // generateQuietPrompt takes a single prompt string.
-    // Prepend the system prompt as a directive block.
     const fullPrompt = systemPrompt
         ? `${systemPrompt}\n\n${userContent}`
         : userContent;
 
-    console.log('[MWT API] Using SillyTavern active connection');
+    console.log('[MWT API] Using SillyTavern active connection (generateQuietPrompt) — consider switching to Connection Profiles');
     const result = await generateQuietPrompt(fullPrompt, false);
     return result;
 }
 
 /**
- * Resolve API settings, falling back to ST connection when configured.
- * Returns { mode: 'st' | 'custom', fetchFn, settings }
+ * Resolve API settings, preferring Connection Profile then falling back
+ * to custom API config.
+ * Returns { mode: 'cm' | 'custom', fetchFn, settings }
  */
 export function resolveApiCall({ moduleSettings, globalSettings = {} }) {
-    const useST = moduleSettings.useSTConnection ?? globalSettings.useSTConnection ?? false;
-    if (useST) {
-        return { mode: 'st', fetchFn: fetchViaSTConnection, settings: {} };
+    const profileId = moduleSettings.connectionProfileId ?? globalSettings.connectionProfileId ?? null;
+    if (profileId) {
+        return { mode: 'cm', fetchFn: fetchViaConnectionProfile, settings: moduleSettings };
     }
     return { mode: 'custom', fetchFn: fetchFromApi, settings: moduleSettings };
 }
