@@ -160,9 +160,14 @@ function renderSettingsTab() {
     let profileOptionsHtml = '<option value="">— None (use custom API below) —</option>';
     try {
         const ctx = getContextSafe();
-        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || {};
+        // connectionManager.profiles is an ARRAY of profile objects (each with a
+        // real .id); iterate it directly — Object.entries() would yield array
+        // indices as the "id" and store the wrong value.
+        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
         const selectedId = ctx?.extensionSettings?.connectionManager?.selectedProfile || '';
-        for (const [id, profile] of Object.entries(profiles)) {
+        for (const profile of profiles) {
+            const id = profile.id;
+            if (!id) continue;
             const name = profile.name || id;
             const selected = id === s.connectionProfileId ? ' selected' : '';
             const isActive = id === selectedId ? ' (active)' : '';
