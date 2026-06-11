@@ -61,14 +61,15 @@ if (!registerSlashCommand) {
     }
 }
 
-// Try to load macro registration
+// Try to load macro registration via the new macro system
+let macroRegistry = null;
 try {
-    const macroModule = await import('../../../../macros.js');
-    if (typeof macroModule.registerMacro === 'function') {
-        registerMacro = macroModule.registerMacro;
+    const macroSystem = await import('../../../../scripts/macros/macro-system.js');
+    if (macroSystem?.macros?.registry && typeof macroSystem.macros.registry.registerMacro === 'function') {
+        macroRegistry = macroSystem.macros.registry;
     }
 } catch {
-    // macros.js may not exist in all ST versions; try context
+    // Fallback: try the deprecated context API
     const ctx = getContextSafe();
     if (ctx && typeof ctx.registerMacro === 'function') {
         registerMacro = ctx.registerMacro.bind(ctx);
@@ -671,7 +672,7 @@ function setupSlashCommands() {
             } catch (err) {
                 return `Error: ${err.message}`;
             }
-        }, 'mwt-refresh', 'Refresh the MWT world state', 0);
+        }, ['mwt-refresh'], 'Refresh the MWT world state');
 
         // /wt-snapshot — Generate chronicle snapshot
         registerSlashCommand('wt-snapshot', async (_args, _command) => {
@@ -684,7 +685,7 @@ function setupSlashCommands() {
             } catch (err) {
                 return `Error: ${err.message}`;
             }
-        }, 'mwt-snapshot', 'Generate a chronicle snapshot', 0);
+        }, ['mwt-snapshot'], 'Generate a chronicle snapshot');
 
         // /wt-scan — Run knowledge NPC scan
         registerSlashCommand('wt-scan', async (_args, _command) => {
@@ -697,7 +698,7 @@ function setupSlashCommands() {
             } catch (err) {
                 return `Error: ${err.message}`;
             }
-        }, 'mwt-scan', 'Run an NPC scan via Knowledge Tracker', 0);
+        }, ['mwt-scan'], 'Run an NPC scan via Knowledge Tracker');
 
         // /wt-inject on|off — Toggle injection for all modules
         registerSlashCommand('wt-inject', async (args, _command) => {
@@ -713,7 +714,7 @@ function setupSlashCommands() {
                 Chronicle.setInjectionEnabled(enabled);
             }
             return `Injection ${mode} for all modules.`;
-        }, 'mwt-inject', 'Toggle injection for all MWT modules (on/off)', 0);
+        }, ['mwt-inject'], 'Toggle injection for all MWT modules (on/off)');
 
         // /wt-state — Return world state text (pipeable)
         registerSlashCommand('wt-state', async (_args, _command) => {
@@ -721,7 +722,7 @@ function setupSlashCommands() {
                 ? WorldState.getWorldStateText()
                 : '';
             return text || '(no world state)';
-        }, 'mwt-state', 'Output the current world state text (pipeable)', 0);
+        }, ['mwt-state'], 'Output the current world state text (pipeable)');
 
         console.log('[MWT] Slash commands registered.');
     } catch (err) {
@@ -732,43 +733,63 @@ function setupSlashCommands() {
 // ─── Macros ──────────────────────────────────────────────────────────────────
 
 function setupMacros() {
-    // Try multiple approaches to register macros
-    const ctx = getContextSafe();
+    // Prefer the new macro system (macros/macro-system.js)
+    if (macroRegistry && typeof macroRegistry.registerMacro === 'function') {
+        try {
+            macroRegistry.registerMacro('worldstate', {
+                handler: () => WorldState.getWorldStateText?.() || '',
+                category: 'state',
+                description: 'Returns the current merged world state text.',
+            });
+            macroRegistry.registerMacro('chronicle', {
+                handler: () => Chronicle.getChronicleText?.() || '',
+                category: 'state',
+                description: 'Returns the full chronicle text.',
+            });
+            macroRegistry.registerMacro('lastchronicle', {
+                handler: () => Chronicle.getLastEntryText?.() || '',
+                category: 'state',
+                description: 'Returns the most recent chronicle entry.',
+            });
+            console.log('[MWT] Macros registered via new macro system: {{worldstate}}, {{chronicle}}, {{lastchronicle}}');
+            return;
+        } catch (err) {
+            console.warn('[MWT] Failed to register macros via new system:', err);
+        }
+    }
 
+    // Fallback: deprecated API or context-based registration
+    const ctx = getContextSafe();
     const registerFn = registerMacro
         || ctx?.registerMacro
         || ctx?.macroApi?.registerMacro;
 
-    if (!registerFn) {
-        // Fallback: try the substitution API
+    if (registerFn) {
         try {
-            if (ctx?.substituteParams && typeof ctx.registerMacro !== 'function') {
-                // Use setExtensionPrompt-based macro workaround:
-                // Register macros via the global macro engine if available
-                const macroEngine = window.MacroEngine || ctx.macroEngine;
-                if (macroEngine?.register) {
-                    console.log('[MWT] Using MacroEngine fallback for macro registration.');
-                    macroEngine.register('worldstate', () => WorldState.getWorldStateText?.() || '');
-                    macroEngine.register('chronicle', () => Chronicle.getChronicleText?.() || '');
-                    macroEngine.register('lastchronicle', () => Chronicle.getLastEntryText?.() || '');
-                    console.log('[MWT] Macros registered via MacroEngine.');
-                    return;
-                }
-            }
-        } catch { /* fallback failed */ }
-
-        console.warn('[MWT] No macro registration API available — macros disabled.');
-        return;
+            registerFn('worldstate', () => WorldState.getWorldStateText?.() || '');
+            registerFn('chronicle', () => Chronicle.getChronicleText?.() || '');
+            registerFn('lastchronicle', () => Chronicle.getLastEntryText?.() || '');
+            console.log('[MWT] Macros registered (deprecated API): {{worldstate}}, {{chronicle}}, {{lastchronicle}}');
+            return;
+        } catch (err) {
+            console.warn('[MWT] Failed to register macros via deprecated API:', err);
+        }
     }
 
+    // Last resort: try the global MacroEngine directly
     try {
-        registerFn('worldstate', () => WorldState.getWorldStateText?.() || '');
-        registerFn('chronicle', () => Chronicle.getChronicleText?.() || '');
-        registerFn('lastchronicle', () => Chronicle.getLastEntryText?.() || '');
-        console.log('[MWT] Macros registered: {{worldstate}}, {{chronicle}}, {{lastchronicle}}');
-    } catch (err) {
-        console.warn('[MWT] Failed to register macros:', err);
-    }
+        const macroEngine = window.MacroEngine || ctx?.macroEngine;
+        if (macroEngine?.register) {
+            console.log('[MWT] Using MacroEngine fallback for macro registration.');
+            macroEngine.register('worldstate', () => WorldState.getWorldStateText?.() || '');
+            macroEngine.register('chronicle', () => Chronicle.getChronicleText?.() || '');
+            macroEngine.register('lastchronicle', () => Chronicle.getLastEntryText?.() || '');
+            console.log('[MWT] Macros registered via MacroEngine.');
+            return;
+        }
+    } catch { /* fallback failed */ }
+
+    console.warn('[MWT] No macro registration API available — macros disabled.');
 }
 
 // ─── Event hooks ─────────────────────────────────────────────────────────────
