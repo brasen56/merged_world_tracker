@@ -172,6 +172,19 @@ let pendingSearch = '';
 let _lastStatusMsg = '';
 let _lastStatusLevel = '';
 
+// Persisted counter mirroring world_state's autoRefreshCounter pattern.
+// Survives reloads and chat switches because it's stored in chat metadata.
+let msgSinceSnapshot = (() => {
+    try {
+        const saved = getChronicleData()?.msgSinceSnapshot;
+        return (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
+    } catch { return 0; }
+})();
+
+function persistMsgSinceSnapshot() {
+    setChronicleData({ msgSinceSnapshot });
+}
+
 // ─── Content helper ──────────────────────────────────────────────────────────
 
 function getContentEl() {
@@ -197,17 +210,38 @@ function scSetStatus(msg, level = 'info') {
 
 function makeAnchor(msg) {
     if (!msg) return null;
+    const chat = getChat();
     const mes = String(msg.mes || '');
-    return { id: msg.id ?? null, name: msg.name || (msg.is_user ? 'User' : 'Assistant'), start: mes.slice(0, 80), end: mes.slice(-80), length: mes.length };
+    return { id: msg.id ?? null, msgIndex: chat.indexOf(msg), name: msg.name || (msg.is_user ? 'User' : 'Assistant'), start: mes.slice(0, 80), end: mes.slice(-80), length: mes.length };
 }
 
 function resolveAnchor(anchor) {
     const chat = getChat();
     if (!anchor) return { index: 0, found: true };
+    // Fast path: use stored message index (validated against content/ID).
+    // Survives reloads where message objects are rebuilt from disk.
+    if (typeof anchor.msgIndex === 'number' && anchor.msgIndex >= 0 && anchor.msgIndex < chat.length) {
+        const candidate = chat[anchor.msgIndex];
+        if (candidate) {
+            const mes = String(candidate.mes || '');
+            const name = candidate.name || (candidate.is_user ? 'User' : 'Assistant');
+            // Validate via ID (preferred) or content match
+            if (anchor.id !== null && anchor.id !== undefined && candidate.id === anchor.id) {
+                return { index: anchor.msgIndex + 1, found: true };
+            }
+            if (anchor.start && anchor.end && anchor.length) {
+                if (name === anchor.name && mes.length === anchor.length && mes.slice(0, 80) === anchor.start && mes.slice(-80) === anchor.end) {
+                    return { index: anchor.msgIndex + 1, found: true };
+                }
+            }
+        }
+    }
+    // Fallback: ID-based lookup
     if (anchor.id !== null && anchor.id !== undefined) {
         const idx = chat.findIndex(m => m.id === anchor.id);
         if (idx !== -1) return { index: idx + 1, found: true };
     }
+    // Fallback: content-based lookup (fragile — breaks on reload)
     if (anchor.start || anchor.end || anchor.length) {
         const idx = chat.findIndex(m => {
             const mes = String(m.mes || '');
@@ -223,9 +257,9 @@ function resolveAnchor(anchor) {
 
 function getChronicleData() {
     const meta = getChatMeta();
-    if (!meta) return { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false };
+    if (!meta) return { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false, msgSinceSnapshot: 0 };
     if (!meta[CHRONICLE_KEY]) {
-        meta[CHRONICLE_KEY] = { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false };
+        meta[CHRONICLE_KEY] = { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false, msgSinceSnapshot: 0 };
     }
     return meta[CHRONICLE_KEY];
 }
@@ -532,6 +566,8 @@ async function generateSnapshot() {
         const snapshots = [...getSnapshots(), snapshot];
         setChronicleData({ snapshots, lastAnchor: newAnchor, suggestSent: true });
         applyInjection();
+        msgSinceSnapshot = 0;
+        persistMsgSinceSnapshot();
         selectedSnapshotId = snapshot.id;
         renderContent();
         if (getSettings().syncWorldState) updateWorldStateFromChronicle(raw);
@@ -773,7 +809,8 @@ function showConfirm(message, detail, onConfirm) {
 // ─── Export / Import ─────────────────────────────────────────────────────────
 
 function exportChronicle() {
-    const data = { snapshots: getSnapshots(), lastAnchor: getChronicleData().lastAnchor, injectEnabled: isInjectionEnabled(), injectCount: getChronicleData().injectCount || 2, injectDepth: getChronicleData().injectDepth || 2, exportedAt: new Date().toISOString(), version: SC_VERSION };
+    const cd = getChronicleData();
+    const data = { snapshots: getSnapshots(), lastAnchor: cd.lastAnchor, injectEnabled: isInjectionEnabled(), injectCount: cd.injectCount || 2, injectDepth: cd.injectDepth || 2, msgSinceSnapshot, exportedAt: new Date().toISOString(), version: SC_VERSION };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -819,10 +856,14 @@ function importChronicle(jsonString) {
         }
         merged.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-        // Restore lastAnchor (data), but skip injection settings (session config)
-        // to avoid silently overwriting the user's current injection preferences
+        // Restore lastAnchor and msgSinceSnapshot (data), but skip injection settings
+        // (session config) to avoid silently overwriting the user's current preferences
         const patch = { snapshots: merged, suggestSent: false };
         if (parsed.lastAnchor) patch.lastAnchor = parsed.lastAnchor;
+        if (typeof parsed.msgSinceSnapshot === 'number' && Number.isFinite(parsed.msgSinceSnapshot)) {
+            patch.msgSinceSnapshot = parsed.msgSinceSnapshot;
+            msgSinceSnapshot = parsed.msgSinceSnapshot;
+        }
         if (parsed.injectEnabled !== undefined || parsed.injectCount !== undefined || parsed.injectDepth !== undefined) {
             const restoreInjection = confirm('Import contains injection settings (enabled/count/depth). Restore those too?');
             if (restoreInjection) {
@@ -1155,7 +1196,6 @@ function renderContent() {
         return classes.join(' ');
     };
 
-    const msgSince = getMessageCountSinceLastSnapshot();
     const autoSettings = getSettings();
 
     const _injStats = getInjectionStats();
@@ -1171,7 +1211,7 @@ function renderContent() {
             </div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap;margin-top:8px">
                 <input type="text" id="sc-search-input" class="mwt-input" placeholder="Search entries…" value="${escapeHtml(pendingSearch)}" style="flex:1">
-                <span style="color:var(--mwt-text-dim)">Msgs since last: ${msgSince ?? '?'}</span>
+                ${autoSettings.autoSnapshot ? `<span style="color:var(--mwt-text-dim)">Msgs until auto: ${Math.max(0, (autoSettings.autoSnapshotThreshold || 40) - msgSinceSnapshot)}</span>` : `<span style="color:var(--mwt-text-dim)">Msgs since last: ${(() => { const v = getMessageCountSinceLastSnapshot(); return v ?? '?'; })()}</span>`}
             </div>
             ${autoSettings.autoSnapshot ? `<div style="color:var(--mwt-accent);margin-top:4px">Auto-snapshot: ON (~${autoSettings.autoSnapshotThreshold} msgs)</div>` : ''}
             ${consolidateMode ? '<div style="color:var(--mwt-accent)">📦 Select 2+ entries then click Consolidate</div>' : ''}
@@ -1288,7 +1328,8 @@ function bindMainEvents() {
     });
     el.querySelector('#sc-reset-btn')?.addEventListener('click', () => {
         showConfirm('Clear all chronicle data?', 'Everything will be deleted.', () => {
-            setChronicleData({ snapshots: [], _deletedBin: [], injectEnabled: false, injectCount: 2, injectDepth: 2 });
+            msgSinceSnapshot = 0;
+            setChronicleData({ snapshots: [], _deletedBin: [], injectEnabled: false, injectCount: 2, injectDepth: 2, msgSinceSnapshot: 0 });
             applyInjection();
             renderContent();
             scSetStatus('Chronicle cleared.', 'success');
@@ -1340,17 +1381,22 @@ export async function onMessageReceived() {
     if (isGenerating) return;
     const settings = getSettings();
     if (!settings.autoSnapshot || !hasValidSettings()) return;
-    const msgSince = getMessageCountSinceLastSnapshot();
-    if (msgSince !== null && msgSince >= settings.autoSnapshotThreshold) {
-        console.log(`[MWT:Chronicle] Auto-snapshot at ${msgSince} messages`);
-        await generateSnapshot();
-        // Notify the user that a snapshot was generated
-        try {
-            if (typeof toastr !== 'undefined' && toastr?.info) {
-                toastr.info('A new chronicle snapshot has been generated and is ready to review.', 'Session Chronicle');
-            }
-        } catch { /* toastr may not be available */ }
-    }
+
+    msgSinceSnapshot++;
+    const threshold = settings.autoSnapshotThreshold || 40;
+
+    console.log(`[MWT:Chronicle] MESSAGE_RECEIVED — counter ${msgSinceSnapshot}/${threshold}`);
+
+    if (msgSinceSnapshot < threshold) { persistMsgSinceSnapshot(); return; }
+
+    console.log(`[MWT:Chronicle] Auto-snapshot at ${msgSinceSnapshot} messages`);
+    await generateSnapshot();
+    // Notify the user that a snapshot was generated
+    try {
+        if (typeof toastr !== 'undefined' && toastr?.info) {
+            toastr.info('A new chronicle snapshot has been generated and is ready to review.', 'Session Chronicle');
+        }
+    } catch { /* toastr may not be available */ }
 }
 
 export function onChatChanged() {
@@ -1363,7 +1409,13 @@ export function onChatChanged() {
     pendingSearch = '';
     _lastStatusMsg = '';
     _lastStatusLevel = '';
+    // Restore counter from the incoming chat's metadata instead of zeroing,
+    // so the counter survives chat switches and reloads.
+    const saved = getChronicleData()?.msgSinceSnapshot;
+    msgSinceSnapshot = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
+    persistMsgSinceSnapshot();
     applyInjection();
+    console.log('[MWT:Chronicle] Chat changed — state reset.');
 }
 
 export function onGenerationStarted() { isMainGenerating = true; }
@@ -1377,9 +1429,7 @@ export function getAutoSnapshotStatus() {
     const settings = getSettings();
     if (!settings.autoSnapshot) return null;
     const threshold = settings.autoSnapshotThreshold || 40;
-    const msgSince = getMessageCountSinceLastSnapshot();
-    if (msgSince === null) return { threshold, counter: 0 };
-    return { threshold, counter: msgSince };
+    return { threshold, counter: msgSinceSnapshot };
 }
 export function getTotalTokens() {
     if (!isInjectionEnabled()) return 0;
