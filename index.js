@@ -541,9 +541,9 @@ function applyButtonStyle() {
         if (style === 'classic') {
             // Classic labels: icon + text
             const classicLabels = {
-                'mwt-float-world': '🌍 World',
-                'mwt-float-chronicle': '📜 Chronicle',
-                'mwt-float-knowledge': '🧠 Knowledge',
+                'mwt-float-world': '🌍 World State',
+                'mwt-float-chronicle': '📜 Session Chronicle',
+                'mwt-float-knowledge': '🧠 Knowledge Tracker',
                 'mwt-float-settings': '⚙️ Settings',
             };
             if (iconEl && classicLabels[cfg.id]) {
@@ -953,60 +953,70 @@ function updateFloatTokenCounts() {
         }
 
         // ── Classic button dynamic state classes ──────────────────────────────
-        if (getSettings().buttonStyle === 'classic') {
-            // World State button state
-            const wsBtn = document.getElementById('mwt-float-world');
-            if (wsBtn) {
-                // Remove all state classes first (mutually exclusive)
-                wsBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
-                const wsStatus = WorldState.getAutoRefreshStatus?.();
-                const wsRefreshing = WorldState.isRefreshing?.() || false;
-                if (wsRefreshing) {
-                    wsBtn.classList.add('mwt-btn--refreshing');
-                } else if (wsStatus) {
-                    wsBtn.classList.add('mwt-btn--active');
-                } else if (WorldState.getWorldStateText?.() && WorldState.getWorldStateText()) {
-                    wsBtn.classList.add('mwt-btn--inactive');
-                } else {
-                    wsBtn.classList.add('mwt-btn--empty');
-                }
-            }
-
-            // Chronicle button state
-            const chBtn = document.getElementById('mwt-float-chronicle');
-            if (chBtn) {
-                chBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
-                const chSnapping = Chronicle.isGeneratingSnapshot?.() || false;
-                const chStatus = Chronicle.getAutoSnapshotStatus?.();
-                if (chSnapping) {
-                    chBtn.classList.add('mwt-btn--refreshing');
-                } else if (chStatus) {
-                    chBtn.classList.add('mwt-btn--active');
-                } else if (Chronicle.getLastEntryText?.() && Chronicle.getLastEntryText()) {
-                    chBtn.classList.add('mwt-btn--inactive');
-                } else {
-                    chBtn.classList.add('mwt-btn--empty');
-                }
-            }
-
-            // Knowledge button state
-            const knBtn = document.getElementById('mwt-float-knowledge');
-            if (knBtn) {
-                knBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
-                const knScanning = Knowledge.isScanning?.() || false;
-                if (knScanning) {
-                    knBtn.classList.add('mwt-btn--refreshing');
-                } else if (Knowledge.getNpcCount?.() > 0) {
-                    knBtn.classList.add('mwt-btn--active');
-                } else {
-                    knBtn.classList.add('mwt-btn--empty');
-                }
-            }
-        }
+        updateButtonStates();
     } catch { /* ignore */ }
 }
+
+/** Standalone per-button state updater for classic-style buttons.
+ *  Called from the 5s poll AND immediately when a module's busy flag flips. */
+function updateButtonStates() {
+    if (getSettings().buttonStyle !== 'classic') return;
+
+    // World State button state
+    const wsBtn = document.getElementById('mwt-float-world');
+    if (wsBtn) {
+        wsBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+        const wsStatus = WorldState.getAutoRefreshStatus?.();
+        const wsRefreshing = WorldState.isRefreshing?.() || false;
+        if (wsRefreshing) {
+            wsBtn.classList.add('mwt-btn--refreshing');
+        } else if (wsStatus) {
+            wsBtn.classList.add('mwt-btn--active');
+        } else if (WorldState.getWorldStateText?.() && WorldState.getWorldStateText()) {
+            wsBtn.classList.add('mwt-btn--inactive');
+        } else {
+            wsBtn.classList.add('mwt-btn--empty');
+        }
+    }
+
+    // Chronicle button state
+    const chBtn = document.getElementById('mwt-float-chronicle');
+    if (chBtn) {
+        chBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+        const chSnapping = Chronicle.isGeneratingSnapshot?.() || false;
+        const chStatus = Chronicle.getAutoSnapshotStatus?.();
+        if (chSnapping) {
+            chBtn.classList.add('mwt-btn--refreshing');
+        } else if (chStatus) {
+            chBtn.classList.add('mwt-btn--active');
+        } else if (Chronicle.getLastEntryText?.() && Chronicle.getLastEntryText()) {
+            chBtn.classList.add('mwt-btn--inactive');
+        } else {
+            chBtn.classList.add('mwt-btn--empty');
+        }
+    }
+
+    // Knowledge button state
+    const knBtn = document.getElementById('mwt-float-knowledge');
+    if (knBtn) {
+        knBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+        const knScanning = Knowledge.isScanning?.() || false;
+        if (knScanning) {
+            knBtn.classList.add('mwt-btn--refreshing');
+        } else if (Knowledge.getNpcCount?.() > 0) {
+            knBtn.classList.add('mwt-btn--active');
+        } else {
+            knBtn.classList.add('mwt-btn--empty');
+        }
+    }
+}
+
+// Listen for busy-state changes from any module (decoupled via CustomEvent)
+document.addEventListener('mwt:busy-changed', updateButtonStates);
+
 setInterval(updateFloatTokenCounts, 5000);
 setTimeout(updateFloatTokenCounts, 2000);
+
 
 console.log('[MWT] Merged World Tracker extension loaded (Phase 4 — Knowledge Tracker integrated).');
 console.log('[MWT] Shared API available at window.__mwt_shared');

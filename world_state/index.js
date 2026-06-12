@@ -571,6 +571,7 @@ async function refreshWorldState(isAuto = false) {
     const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
     const chatLenBefore = getChat()?.length;
     wstIsRefreshing = true;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
     try {
         const chat = getChat();
@@ -635,6 +636,7 @@ async function refreshWorldState(isAuto = false) {
         throw err;
     } finally {
         wstIsRefreshing = false;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         if (autoRefreshQueued) {
             autoRefreshQueued = false;
             // Use setTimeout instead of direct recursive call to avoid
@@ -766,6 +768,7 @@ async function regenerateSection(sectionName, variety = 2) {
     }
 
     wstIsRefreshing = true;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
     try {
         // Build API settings with variety-boosted temperature
@@ -804,6 +807,7 @@ async function regenerateSection(sectionName, variety = 2) {
         return updated;
     } finally {
         wstIsRefreshing = false;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
 }
 

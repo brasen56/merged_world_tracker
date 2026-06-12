@@ -1102,6 +1102,7 @@ function renderNpcsSubTab() {
     el.querySelector('#kt-scan')?.addEventListener('click', async () => {
         if (isRunning) return;
         isRunning = true;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         try {
             ktSetStatus('Scanning…', 'info');
             renderNpcsSubTab(); // Re-render to show "⏳ Scanning…" state
@@ -1133,7 +1134,7 @@ function renderNpcsSubTab() {
             ktSetStatus(`Scan failed: ${err.message}`, 'error');
             try { if (typeof toastr !== 'undefined' && toastr?.error) toastr.error(`Scan failed: ${err.message}`, 'Knowledge Tracker'); } catch { /* */ }
         }
-        finally { isRunning = false; renderNpcsSubTab(); }
+        finally { isRunning = false; document.dispatchEvent(new CustomEvent('mwt:busy-changed')); renderNpcsSubTab(); }
     });
 
     // Wire sub-tab specific events
@@ -1998,6 +1999,7 @@ export function onMessageReceived() {
     queueTrackerWork(async () => {
         if (isRunning) return;
         isRunning = true;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         try {
             const reg = getStateRegistry();
             const currentMsgIdx = getChat()?.length || 0;
@@ -2034,7 +2036,7 @@ export function onMessageReceived() {
                 console.log(`[MWT:Knowledge] Auto-trigger: ${staged} state proposal(s) staged.`);
                 try { if (typeof toastr !== 'undefined' && toastr?.info) toastr.info(`${staged} state tracker update(s) ready for review.`, 'Knowledge Tracker'); } catch { /* */ }
             }
-        } finally { isRunning = false; }
+        } finally { isRunning = false; document.dispatchEvent(new CustomEvent('mwt:busy-changed')); }
     });
 }
 

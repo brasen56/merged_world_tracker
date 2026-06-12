@@ -324,7 +324,7 @@ a:focus-visible {
     left: 50%;
     transform: translateX(-50%);
     background: #22c55e;
-    color: #fff;
+    color: #000;
     font-size: 9px;
     font-weight: 700;
     font-family: var(--mwt-font-mono);
@@ -2983,9 +2983,19 @@ body.mwt-buttons--classic .mwt-float-btn-tokens {
 }
 
 body.mwt-buttons--classic .mwt-float-btn-countdown {
+    /* In classic mode the countdown is inline colored text on the button,
+       not the modern green pill — reset the badge styling inherited from the
+       base .mwt-float-btn-countdown rule, or the state color rules below would
+       render (e.g.) green text on a green background. */
+    position: static;
+    transform: none;
+    background: transparent;
+    padding: 0;
+    min-width: 0;
+    border-radius: 0;
     font-size: 10px;
     line-height: 1;
-    margin-left: 2px;
+    margin-left: 8px;
 }
 
 /* Classic state borders */

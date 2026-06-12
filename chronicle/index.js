@@ -529,6 +529,7 @@ async function generateSnapshot() {
     if (!text.trim()) { scSetStatus('No filterable messages to chronicle.', 'error'); return null; }
 
     isGenerating = true;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     scSetStatus('Generating chronicle entry…', 'info');
     try {
         if (typeof toastr !== 'undefined' && toastr?.info) {
@@ -584,6 +585,7 @@ async function generateSnapshot() {
         return null;
     } finally {
         isGenerating = false;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
 }
 
@@ -597,6 +599,7 @@ async function regenerateSnapshot(snapshotId) {
     const snapshot = snapshots[idx];
     const originalText = snapshot.text;
     isGenerating = true;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     scSetStatus('Regenerating…', 'info');
     const chat = getChat();
     const from = snapshot.fromIndex ?? 0;
@@ -629,6 +632,7 @@ async function regenerateSnapshot(snapshotId) {
                 renderContent();
             }
             isGenerating = false;
+            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         });
     } catch (err) {
         scSetStatus(`Regeneration failed: ${err.message}`, 'error');
@@ -638,6 +642,7 @@ async function regenerateSnapshot(snapshotId) {
             }
         } catch { /* toastr may not be available */ }
         isGenerating = false;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
 }
 
