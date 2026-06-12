@@ -1439,6 +1439,11 @@ export function onChatChanged() {
     console.log('[MWT:WorldState] Chat changed — state reset.');
 }
 
+/** Returns true if world state is currently refreshing */
+export function isRefreshing() {
+    return wstIsRefreshing;
+}
+
 /** Returns estimated token count for the currently injected world state text */
 export function getTotalTokens() {
     const text = getWorldStateText();

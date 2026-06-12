@@ -2134,6 +2134,16 @@ export function getTrackedNpcNames() {
     return getAllNpcNames();
 }
 
+/** Returns true if an NPC scan is currently in progress */
+export function isScanning() {
+    return isRunning;
+}
+
+/** Returns the total count of tracked NPCs (major + minor) */
+export function getNpcCount() {
+    return Object.keys(getRegistry()).length;
+}
+
 /** Macro: return a specific NPC's lorebook content */
 export async function getNpcContent(name) {
     const reg = getRegistry()[name];

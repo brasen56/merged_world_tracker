@@ -102,6 +102,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         showFloatKnowledge: true,
         showFloatSettings: true,
         collapseFloatButtons: false,
+        buttonStyle: 'modern', // 'modern' | 'classic'
     },
     logPrefix: '[MWT]',
 });
@@ -287,6 +288,12 @@ function renderSettingsTab() {
 
             <label class="mwt-label">⚙️ Settings</label>
             <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-settings" ${s.showFloatSettings !== false ? 'checked' : ''}> Visible</label>
+
+            <label class="mwt-label">🎨 Style</label>
+            <select id="mwt-s-button-style" class="mwt-input" style="width:auto">
+                <option value="modern" ${(s.buttonStyle || 'modern') === 'modern' ? 'selected' : ''}>Modern (icons-only)</option>
+                <option value="classic" ${s.buttonStyle === 'classic' ? 'selected' : ''}>Classic (text + icon)</option>
+            </select>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -414,9 +421,11 @@ function renderModal() {
                 showFloatKnowledge: modal.querySelector('#mwt-s-show-knowledge')?.checked ?? true,
                 showFloatSettings: modal.querySelector('#mwt-s-show-settings')?.checked ?? true,
                 collapseFloatButtons: modal.querySelector('#mwt-s-collapse-float')?.checked ?? false,
+                buttonStyle: modal.querySelector('#mwt-s-button-style')?.value || 'modern',
             };
             saveSettings(patch);
             applyButtonVisibility();
+            applyButtonStyle();
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });
     }
@@ -512,6 +521,46 @@ function applyButtonVisibility() {
         if (!btn) continue;
         const visible = s[cfg.visibilityKey] !== false;
         btn.style.display = (collapsed || !visible) ? 'none' : 'flex';
+    }
+}
+
+/** Toggle body class and update classic button inner HTML */
+function applyButtonStyle() {
+    const style = getSettings().buttonStyle || 'modern';
+    if (style === 'classic') {
+        document.body.classList.add('mwt-buttons--classic');
+    } else {
+        document.body.classList.remove('mwt-buttons--classic');
+    }
+
+    // Swap button inner HTML for classic mode labels
+    for (const cfg of FLOAT_BUTTONS) {
+        const btn = document.getElementById(cfg.id);
+        if (!btn) continue;
+        const iconEl = btn.querySelector('.mwt-float-btn-icon');
+        if (style === 'classic') {
+            // Classic labels: icon + text
+            const classicLabels = {
+                'mwt-float-world': '🌍 World',
+                'mwt-float-chronicle': '📜 Chronicle',
+                'mwt-float-knowledge': '🧠 Knowledge',
+                'mwt-float-settings': '⚙️ Settings',
+            };
+            if (iconEl && classicLabels[cfg.id]) {
+                iconEl.textContent = classicLabels[cfg.id];
+            }
+        } else {
+            // Modern labels: icon only
+            const modernLabels = {
+                'mwt-float-world': '🌍',
+                'mwt-float-chronicle': '📜',
+                'mwt-float-knowledge': '🧠',
+                'mwt-float-settings': '⚙️',
+            };
+            if (iconEl && modernLabels[cfg.id]) {
+                iconEl.textContent = modernLabels[cfg.id];
+            }
+        }
     }
 }
 
@@ -833,6 +882,7 @@ if (eventSource && event_types?.GENERATION_ENDED) {
 // ─── Initialize ──────────────────────────────────────────────────────────────
 
 setupButtonBar();
+applyButtonStyle(); // Apply button style class on load
 setupExtensionsDrawer();
 setupWandMenu();
 setupSlashCommands();
@@ -899,6 +949,58 @@ function updateFloatTokenCounts() {
                 chCountdownEl.textContent = '';
                 chCountdownEl.style.display = 'none';
                 chCountdownEl.title = '';
+            }
+        }
+
+        // ── Classic button dynamic state classes ──────────────────────────────
+        if (getSettings().buttonStyle === 'classic') {
+            // World State button state
+            const wsBtn = document.getElementById('mwt-float-world');
+            if (wsBtn) {
+                // Remove all state classes first (mutually exclusive)
+                wsBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+                const wsStatus = WorldState.getAutoRefreshStatus?.();
+                const wsRefreshing = WorldState.isRefreshing?.() || false;
+                if (wsRefreshing) {
+                    wsBtn.classList.add('mwt-btn--refreshing');
+                } else if (wsStatus) {
+                    wsBtn.classList.add('mwt-btn--active');
+                } else if (WorldState.getWorldStateText?.() && WorldState.getWorldStateText()) {
+                    wsBtn.classList.add('mwt-btn--inactive');
+                } else {
+                    wsBtn.classList.add('mwt-btn--empty');
+                }
+            }
+
+            // Chronicle button state
+            const chBtn = document.getElementById('mwt-float-chronicle');
+            if (chBtn) {
+                chBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+                const chSnapping = Chronicle.isGeneratingSnapshot?.() || false;
+                const chStatus = Chronicle.getAutoSnapshotStatus?.();
+                if (chSnapping) {
+                    chBtn.classList.add('mwt-btn--refreshing');
+                } else if (chStatus) {
+                    chBtn.classList.add('mwt-btn--active');
+                } else if (Chronicle.getLastEntryText?.() && Chronicle.getLastEntryText()) {
+                    chBtn.classList.add('mwt-btn--inactive');
+                } else {
+                    chBtn.classList.add('mwt-btn--empty');
+                }
+            }
+
+            // Knowledge button state
+            const knBtn = document.getElementById('mwt-float-knowledge');
+            if (knBtn) {
+                knBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+                const knScanning = Knowledge.isScanning?.() || false;
+                if (knScanning) {
+                    knBtn.classList.add('mwt-btn--refreshing');
+                } else if (Knowledge.getNpcCount?.() > 0) {
+                    knBtn.classList.add('mwt-btn--active');
+                } else {
+                    knBtn.classList.add('mwt-btn--empty');
+                }
             }
         }
     } catch { /* ignore */ }

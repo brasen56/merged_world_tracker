@@ -2948,3 +2948,80 @@ input[type="number"].mwt-input {
         font-size: 12px;
     }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Classic floating button style — scoped under body.mwt-buttons--classic
+   ────────────────────────────────────────────────────────────────────────── */
+
+body.mwt-buttons--classic .mwt-float-btn {
+    background: #1f2937;
+    color: #e5e7eb;
+    border: 1px solid #4b5563;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    width: auto;
+    height: auto;
+    min-width: unset;
+    min-height: unset;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+body.mwt-buttons--classic .mwt-float-btn:hover {
+    background: #374151;
+}
+
+body.mwt-buttons--classic .mwt-float-btn-icon {
+    font-size: 14px;
+    line-height: 1;
+}
+
+body.mwt-buttons--classic .mwt-float-btn-tokens {
+    font-size: 10px;
+    margin-left: 4px;
+    opacity: 0.7;
+}
+
+body.mwt-buttons--classic .mwt-float-btn-countdown {
+    font-size: 10px;
+    line-height: 1;
+    margin-left: 2px;
+}
+
+/* Classic state borders */
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--empty {
+    border-color: #4b5563;
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--active {
+    border-color: #22c55e;
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--active .mwt-float-btn-countdown {
+    color: #22c55e;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--inactive {
+    border-color: #6b7280;
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--inactive .mwt-float-btn-countdown {
+    color: #6b7280;
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--refreshing {
+    border-color: #f59e0b;
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--refreshing .mwt-float-btn-countdown {
+    color: #f59e0b;
+    animation: mwt-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mwt-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}

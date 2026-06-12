@@ -1431,6 +1431,12 @@ export function getAutoSnapshotStatus() {
     const threshold = settings.autoSnapshotThreshold || 40;
     return { threshold, counter: msgSinceSnapshot };
 }
+
+/** Returns true if a snapshot is currently being generated */
+export function isGeneratingSnapshot() {
+    return isGenerating;
+}
+
 export function getTotalTokens() {
     if (!isInjectionEnabled()) return 0;
     const entries = getEntriesForInjection();
