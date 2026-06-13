@@ -47,6 +47,27 @@ export function removeRelationship(from, to) {
     }
 }
 
+export function removeAllRelationshipsFor(name) {
+    const rels = getRelationships();
+    let changed = false;
+
+    // Remove outgoing edges from this NPC
+    if (rels[name]) {
+        delete rels[name];
+        changed = true;
+    }
+
+    // Remove incoming edges pointing to this NPC
+    for (const [from, targets] of Object.entries(rels)) {
+        const before = targets.length;
+        rels[from] = targets.filter(r => r.target !== name);
+        if (rels[from].length === 0) delete rels[from];
+        if (rels[from].length !== before) changed = true;
+    }
+
+    if (changed) saveRelationships(rels);
+}
+
 export function updateRelationship(from, to, type, notes) {
     const rels = getRelationships();
     if (!rels[from]) rels[from] = [];

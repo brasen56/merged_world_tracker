@@ -27,6 +27,7 @@ import {
 } from './lorebook.js';
 import {
     getRelationships, updateRelationship, removeRelationship,
+    removeAllRelationshipsFor,
     syncRelationshipsToLorebook, syncAllRelationshipsToLorebooks,
 } from './relationships.js';
 import {
@@ -427,6 +428,7 @@ function wireNpcListEvents(el, type) {
             const reg = getRegistry();
             delete reg[name];
             saveRegistry(reg);
+            removeAllRelationshipsFor(name);
             renderNpcsSubTab();
         });
     });
