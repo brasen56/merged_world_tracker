@@ -126,35 +126,6 @@ export function setStatus(modalIdOrEl, message, type = 'info', clearAfterMs = 0)
 }
 
 /**
- * Inject a button bar into the document body (for quick-access toolbar buttons).
- *
- * @param {string} id — DOM id for the bar
- * @param {Array<{id:string, label:string, title:string, onClick:Function}>} buttons
- * @returns {HTMLElement}
- */
-export function injectButtonBar(id, buttons) {
-    let existing = document.getElementById(id);
-    if (existing) existing.remove();
-
-    const bar = document.createElement('div');
-    bar.id = id;
-    bar.className = 'mwt-button-bar';
-
-    for (const btn of buttons) {
-        const el = document.createElement('button');
-        el.id = btn.id;
-        el.className = 'mwt-bar-btn';
-        el.title = btn.title || '';
-        el.textContent = btn.label;
-        el.addEventListener('click', btn.onClick);
-        bar.appendChild(el);
-    }
-
-    document.body.appendChild(bar);
-    return bar;
-}
-
-/**
  * Format a date for display.
  */
 export function formatDate(isoOrLocale) {

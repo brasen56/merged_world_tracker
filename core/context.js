@@ -67,15 +67,24 @@ export function getRecentMessages({
  * Returns a Set of player / co-protagonist names (lower-cased).
  * Useful for filtering out non-NPCs during scans.
  */
-export function getPlayerNames() {
+export function getPlayerNames({ lower = true, includeFirstChat = false } = {}) {
     const ctx = getContextSafe();
     const names = new Set();
-    if (ctx?.name1) names.add(String(ctx.name1).toLowerCase());
-    if (ctx?.name2) names.add(String(ctx.name2).toLowerCase());
+    const transform = lower ? (s) => s.toLowerCase() : (s) => s;
+    if (ctx?.name1) names.add(transform(String(ctx.name1).trim()));
+    if (ctx?.name2) names.add(transform(String(ctx.name2).trim()));
     // Group-chat member names
     if (Array.isArray(ctx?.characters)) {
         for (const ch of ctx.characters) {
-            if (ch?.name) names.add(String(ch.name).toLowerCase());
+            if (ch?.name) names.add(transform(String(ch.name).trim()));
+        }
+    }
+    // Fallback: first message in chat (usually the AI character's greeting)
+    if (includeFirstChat) {
+        const chat = getChat();
+        if (chat) {
+            const first = chat[0];
+            if (first?.name) names.add(transform(first.name.trim()));
         }
     }
     return names;

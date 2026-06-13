@@ -15,6 +15,35 @@ export function normalizeApiBase(url) {
 }
 
 /**
+ * Generic async retry with exponential backoff.
+ *
+ * The inner function should throw errors as normal. To prevent retry on
+ * specific errors, set `err._noRetry = true` before throwing.
+ *
+ * @param {number} attempts — max retries (0 = one attempt, no retries)
+ * @param {function(number): Promise<T>} fn — async function receiving attempt index
+ * @param {object} [opts]
+ * @param {function(Error, number, number): void} [opts.onRetry] — called before each retry with (err, attempt, delay)
+ * @returns {Promise<T>}
+ */
+export async function retryAsync(attempts, fn, { onRetry } = {}) {
+    let lastErr;
+    for (let attempt = 0; attempt <= attempts; attempt++) {
+        try {
+            return await fn(attempt);
+        } catch (err) {
+            lastErr = err;
+            if (attempt >= attempts) throw err;
+            if (err._noRetry) throw err;
+            const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+            onRetry?.(err, attempt, delay);
+            await new Promise(r => setTimeout(r, delay));
+        }
+    }
+    throw lastErr;
+}
+
+/**
  * Send a chat-completion request to an OpenAI-compatible API.
  *
  * @param {object} opts
@@ -60,85 +89,70 @@ export async function fetchFromApi({
     if (settings.frequencyPenalty != null) payload.frequency_penalty = Number(settings.frequencyPenalty);
     if (settings.presencePenalty != null) payload.presence_penalty = Number(settings.presencePenalty);
 
-    let lastErr = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-            console.log(`[MWT API] POST ${endpoint} model=${settings.modelName} attempt=${attempt}`);
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(payload),
-            });
+    return retryAsync(retries, async (attempt) => {
+        console.log(`[MWT API] POST ${endpoint} model=${settings.modelName} attempt=${attempt}`);
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+        });
 
-            if (!response.ok) {
-                const errText = await response.text().catch(() => response.statusText);
-                const err = new Error(`API error ${response.status}: ${errText}`);
+        if (!response.ok) {
+            const errText = await response.text().catch(() => response.statusText);
 
-                // Retry on 5xx / 429; fatal on 4xx
-                if (response.status >= 500 || response.status === 429) {
-                    lastErr = err;
-                    if (attempt < retries) {
-                        const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
-                        await new Promise(r => setTimeout(r, delay));
-                        continue;
-                    }
-                    // Retry exhausted — fall through to HTML detection below
-                }
-
-                // Detect HTML responses (wrong URL) — checked AFTER 5xx retry
-                // so that a proxy returning 502 HTML retries instead of failing.
-                if (/^\s*<!DOCTYPE/i.test(errText) || /^\s*<html/i.test(errText)) {
-                    throw new Error(
-                        `API URL returned HTML instead of JSON (${response.status}). ` +
-                        `Check the API URL — resolved to: "${endpoint}". ` +
-                        `For OpenAI-compatible APIs, use a base URL like https://api.openai.com/v1`
-                    );
-                }
-
+            // Detect HTML responses (wrong URL) — always fatal
+            if (/^\s*<!DOCTYPE/i.test(errText) || /^\s*<html/i.test(errText)) {
+                const err = new Error(
+                    `API URL returned HTML instead of JSON (${response.status}). ` +
+                    `Check the API URL — resolved to: "${endpoint}". ` +
+                    `For OpenAI-compatible APIs, use a base URL like https://api.openai.com/v1`
+                );
+                err._noRetry = true;
                 throw err;
             }
 
-            const data = await response.json();
-            const message = data?.choices?.[0]?.message;
-            let content = message?.content;
-            const finishReason = data?.choices?.[0]?.finish_reason;
-
-            // Some models (DeepSeek, o1, etc.) put reasoning in a separate field.
-            // If content is empty but reasoning_content exists, the model may have
-            // hit max_tokens during the thinking phase. Try to recover.
-            if (!content || !content.trim()) {
-                const reasoning = message?.reasoning_content || message?.reasoning || '';
-                if (reasoning.trim()) {
-                    console.warn(`[MWT API] Content empty but reasoning_content present (${reasoning.length} chars). finish_reason=${finishReason}. Using reasoning_content as fallback.`);
-                    content = reasoning;
-                } else if (finishReason === 'length') {
-                    throw new Error(
-                        `API returned empty content — the model hit max_tokens (${settings.maxTokens}) before producing output. ` +
-                        `Try increasing Max Tokens in settings, or use a model that doesn't use extended thinking.`
-                    );
-                } else {
-                    throw new Error('API returned no content. Response: ' + JSON.stringify(data).slice(0, 300));
-                }
-            }
-
-            // Log token usage if available
-            if (data?.usage) {
-                console.log(`[MWT API] Token usage — prompt: ${data.usage.prompt_tokens || 0}, completion: ${data.usage.completion_tokens || 0}, total: ${data.usage.total_tokens || 0}`);
-            }
-
-            return content;
-        } catch (err) {
-            lastErr = err;
-            // Network-level errors (TypeError from fetch) — retry
-            if (err instanceof TypeError && attempt < retries) {
-                const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
-                await new Promise(r => setTimeout(r, delay));
-                continue;
+            const err = new Error(`API error ${response.status}: ${errText}`);
+            // Only retry on 5xx / 429; 4xx is fatal
+            if (response.status < 500 && response.status !== 429) {
+                err._noRetry = true;
             }
             throw err;
         }
-    }
-    throw lastErr || new Error('API request failed');
+
+        const data = await response.json();
+        const message = data?.choices?.[0]?.message;
+        let content = message?.content;
+        const finishReason = data?.choices?.[0]?.finish_reason;
+
+        // Some models (DeepSeek, o1, etc.) put reasoning in a separate field.
+        // If content is empty but reasoning_content exists, the model may have
+        // hit max_tokens during the thinking phase. Try to recover.
+        if (!content || !content.trim()) {
+            const reasoning = message?.reasoning_content || message?.reasoning || '';
+            if (reasoning.trim()) {
+                console.warn(`[MWT API] Content empty but reasoning_content present (${reasoning.length} chars). finish_reason=${finishReason}. Using reasoning_content as fallback.`);
+                content = reasoning;
+            } else if (finishReason === 'length') {
+                const err = new Error(
+                    `API returned empty content — the model hit max_tokens (${settings.maxTokens}) before producing output. ` +
+                    `Try increasing Max Tokens in settings, or use a model that doesn't use extended thinking.`
+                );
+                err._noRetry = true;
+                throw err;
+            } else {
+                const err = new Error('API returned no content. Response: ' + JSON.stringify(data).slice(0, 300));
+                err._noRetry = true;
+                throw err;
+            }
+        }
+
+        // Log token usage if available
+        if (data?.usage) {
+            console.log(`[MWT API] Token usage — prompt: ${data.usage.prompt_tokens || 0}, completion: ${data.usage.completion_tokens || 0}, total: ${data.usage.total_tokens || 0}`);
+        }
+
+        return content;
+    });
 }
 
 /**
@@ -187,88 +201,46 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
     const prompt = ConnectionManagerRequestService.constructPrompt(messages, profileId);
     const maxTokens = Number(settings.maxTokens) || 2000;
 
-    let lastErr = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-            console.log(`[MWT API] Using Connection Profile: ${profileId}, attempt=${attempt}`);
-            const result = await ConnectionManagerRequestService.sendRequest(
-                profileId,
-                prompt,
-                maxTokens,
-                {
-                    extractData: true,
-                    includePreset: true,
-                    includeInstruct: true,
-                },
-            );
+    return retryAsync(retries, async (attempt) => {
+        console.log(`[MWT API] Using Connection Profile: ${profileId}, attempt=${attempt}`);
+        const result = await ConnectionManagerRequestService.sendRequest(
+            profileId,
+            prompt,
+            maxTokens,
+            {
+                extractData: true,
+                includePreset: true,
+                includeInstruct: true,
+            },
+        );
 
-            // Extract text from result — handle multiple possible shapes
-            let text = '';
-            if (typeof result === 'string') {
-                text = result;
-            } else if (result?.text) {
-                text = result.text;
-            } else if (result?.choices?.[0]?.message?.content) {
-                text = result.choices[0].message.content;
-            } else if (result?.choices?.[0]?.text) {
-                text = result.choices[0].text;
-            } else {
-                throw new Error('Unable to extract text from API response: ' + JSON.stringify(result).slice(0, 300));
-            }
-
-            // Log token usage if available
-            if (result?.usage) {
-                console.log(`[MWT API] Token usage — prompt: ${result.usage.prompt_tokens || 0}, completion: ${result.usage.completion_tokens || 0}, total: ${result.usage.total_tokens || 0}`);
-            }
-
-            return text;
-        } catch (err) {
-            lastErr = err;
-            // Retry on transient failures
-            if (attempt < retries) {
-                const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
-                console.warn(`[MWT API] Connection profile request failed (attempt ${attempt}): ${err.message}. Retrying in ${delay}ms...`);
-                await new Promise(r => setTimeout(r, delay));
-                continue;
-            }
+        // Extract text from result — handle multiple possible shapes
+        let text = '';
+        if (typeof result === 'string') {
+            text = result;
+        } else if (result?.text) {
+            text = result.text;
+        } else if (result?.choices?.[0]?.message?.content) {
+            text = result.choices[0].message.content;
+        } else if (result?.choices?.[0]?.text) {
+            text = result.choices[0].text;
+        } else {
+            const err = new Error('Unable to extract text from API response: ' + JSON.stringify(result).slice(0, 300));
+            err._noRetry = true;
             throw err;
         }
-    }
-    throw lastErr || new Error('Connection profile request failed');
-}
 
-/**
- * Send a prompt through SillyTavern's active connection (generateQuietPrompt).
- * @deprecated Use fetchViaConnectionProfile instead — Connection Manager profiles
- *   support all backends with full preset/instruct support.
- *   Kept for backward compatibility only.
- *
- * @param {object} opts
- * @param {string} opts.systemPrompt
- * @param {string} opts.userContent
- * @returns {Promise<string>} the raw content string
- */
-export async function fetchViaSTConnection({ systemPrompt, userContent }) {
-    let generateQuietPrompt = null;
-    const ctx = getContextSafe();
-    if (ctx && typeof ctx.generateQuietPrompt === 'function') {
-        generateQuietPrompt = ctx.generateQuietPrompt.bind(ctx);
-    }
+        // Log token usage if available
+        if (result?.usage) {
+            console.log(`[MWT API] Token usage — prompt: ${result.usage.prompt_tokens || 0}, completion: ${result.usage.completion_tokens || 0}, total: ${result.usage.total_tokens || 0}`);
+        }
 
-    if (!generateQuietPrompt) {
-        throw new Error(
-            'SillyTavern connection not available. ' +
-            'Use a Connection Profile or configure a custom API URL/Key in Settings.'
-        );
-    }
-
-    const fullPrompt = systemPrompt
-        ? `${systemPrompt}\n\n${userContent}`
-        : userContent;
-
-    console.log('[MWT API] Using SillyTavern active connection (generateQuietPrompt) — consider switching to Connection Profiles');
-    const result = await generateQuietPrompt(fullPrompt, false);
-    return result;
+        return text;
+    }, {
+        onRetry: (err, attempt, delay) => {
+            console.warn(`[MWT API] Connection profile request failed (attempt ${attempt + 1}): ${err.message}. Retrying in ${delay}ms...`);
+        },
+    });
 }
 
 /**

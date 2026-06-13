@@ -278,7 +278,7 @@ merged_world_tracker/
 
 ### Module Communication
 
-- Modules share a global settings object via `window.__mwt_shared`
+- Modules read shared global settings (injection depth/role) via `getGlobalSettings()` in `core/settings.js`; the global Settings tab pushes API config to each module through their `syncGlobalSettings()`
 - The Chronicle module can sync time/location data back to World State
 - The Knowledge module reads World State and Chronicle data for richer scan context
 - All modules respond to SillyTavern events (`CHAT_CHANGED`, `MESSAGE_RECEIVED`, `GENERATION_STARTED`, `GENERATION_STOPPED`)

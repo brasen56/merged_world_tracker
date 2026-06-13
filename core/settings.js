@@ -101,3 +101,38 @@ export function createSettingsManager({ settingsKey, legacyKey, defaults, logPre
 
     return { getSettings, saveSettings, hasValidSettings, getExtSettingsRef };
 }
+
+/**
+ * Access the global (merged_world_tracker) settings — useful for modules
+ * that need to read global injection depth/role without relying on
+ * window.__mwt_shared.
+ */
+export function getGlobalSettings() {
+    try {
+        const ctx = getContextSafe();
+        if (ctx?.extensionSettings?.['merged_world_tracker']) {
+            return ctx.extensionSettings['merged_world_tracker'];
+        }
+    } catch { /* ignore */ }
+    return {};
+}
+
+export function syncSharedConnectionSettings(getSettings, saveSettings, patch, logPrefix = '[MWT]') {
+    if (!patch || (
+        patch.apiUrl === undefined &&
+        patch.apiKey === undefined &&
+        patch.modelName === undefined &&
+        patch.connectionProfileId === undefined
+    )) return false;
+
+    const current = getSettings();
+    saveSettings({
+        ...current,
+        connectionProfileId: patch.connectionProfileId ?? current.connectionProfileId,
+        apiUrl: patch.apiUrl ?? current.apiUrl,
+        apiKey: patch.apiKey ?? current.apiKey,
+        modelName: patch.modelName ?? current.modelName,
+    });
+    console.log(`${logPrefix} Synced global API settings`);
+    return true;
+}

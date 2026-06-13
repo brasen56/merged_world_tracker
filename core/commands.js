@@ -1,0 +1,131 @@
+/**
+ * core/commands.js — Slash command and macro registration.
+ *
+ * Extracted from index.js to keep the entry point focused on UI and event hooks.
+ * Macro registration uses only the modern macro-system.js registry
+ * (SillyTavern 1.12+).
+ */
+
+/**
+ * Create the command/macro subsystem.
+ *
+ * @param {object} deps
+ * @param {Function|null} deps.registerSlashCommand — ST slash command registrar
+ * @param {object|null} deps.macroRegistry — ST macro-system registry
+ * @param {object} deps.modules — { WorldState, Chronicle, Knowledge }
+ * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
+ */
+export function createCommands({ registerSlashCommand, macroRegistry, modules }) {
+    const { WorldState, Chronicle, Knowledge } = modules;
+
+    // ─── Slash Commands ──────────────────────────────────────────────────────
+
+    function setupSlashCommands() {
+        if (!registerSlashCommand) {
+            console.warn('[MWT] registerSlashCommand not available — slash commands disabled.');
+            return;
+        }
+
+        try {
+            // /wt-refresh — Trigger world state refresh
+            registerSlashCommand('wt-refresh', async (_args, _command) => {
+                try {
+                    if (typeof WorldState.triggerRefresh === 'function') {
+                        await WorldState.triggerRefresh();
+                        return 'World state refreshed.';
+                    }
+                    return 'World state refresh not available.';
+                } catch (err) {
+                    return `Error: ${err.message}`;
+                }
+            }, ['mwt-refresh'], 'Refresh the MWT world state');
+
+            // /wt-snapshot — Generate chronicle snapshot
+            registerSlashCommand('wt-snapshot', async (_args, _command) => {
+                try {
+                    if (typeof Chronicle.triggerSnapshot === 'function') {
+                        await Chronicle.triggerSnapshot();
+                        return 'Chronicle snapshot generated.';
+                    }
+                    return 'Chronicle snapshot not available.';
+                } catch (err) {
+                    return `Error: ${err.message}`;
+                }
+            }, ['mwt-snapshot'], 'Generate a chronicle snapshot');
+
+            // /wt-scan — Run knowledge NPC scan
+            registerSlashCommand('wt-scan', async (_args, _command) => {
+                try {
+                    if (typeof Knowledge.triggerScan === 'function') {
+                        await Knowledge.triggerScan();
+                        return 'NPC scan complete.';
+                    }
+                    return 'NPC scan not available.';
+                } catch (err) {
+                    return `Error: ${err.message}`;
+                }
+            }, ['mwt-scan'], 'Run an NPC scan via Knowledge Tracker');
+
+            // /wt-inject on|off — Toggle injection for all modules
+            registerSlashCommand('wt-inject', async (args, _command) => {
+                const mode = (args || '').trim().toLowerCase();
+                if (mode !== 'on' && mode !== 'off') {
+                    return 'Usage: /wt-inject on|off';
+                }
+                const enabled = mode === 'on';
+                if (typeof WorldState.setInjectionEnabled === 'function') {
+                    WorldState.setInjectionEnabled(enabled);
+                }
+                if (typeof Chronicle.setInjectionEnabled === 'function') {
+                    Chronicle.setInjectionEnabled(enabled);
+                }
+                return `Injection ${mode} for all modules.`;
+            }, ['mwt-inject'], 'Toggle injection for all MWT modules (on/off)');
+
+            // /wt-state — Return world state text (pipeable)
+            registerSlashCommand('wt-state', async (_args, _command) => {
+                const text = typeof WorldState.getWorldStateText === 'function'
+                    ? WorldState.getWorldStateText()
+                    : '';
+                return text || '(no world state)';
+            }, ['mwt-state'], 'Output the current world state text (pipeable)');
+
+            console.log('[MWT] Slash commands registered.');
+        } catch (err) {
+            console.warn('[MWT] Failed to register slash commands:', err);
+        }
+    }
+
+    // ─── Macros ──────────────────────────────────────────────────────────────
+
+    function setupMacros() {
+        // Requires macro-system.js (available in SillyTavern 1.12+)
+        if (macroRegistry && typeof macroRegistry.registerMacro === 'function') {
+            try {
+                macroRegistry.registerMacro('worldstate', {
+                    handler: () => WorldState.getWorldStateText?.() || '',
+                    category: 'state',
+                    description: 'Returns the current merged world state text.',
+                });
+                macroRegistry.registerMacro('chronicle', {
+                    handler: () => Chronicle.getChronicleText?.() || '',
+                    category: 'state',
+                    description: 'Returns the full chronicle text.',
+                });
+                macroRegistry.registerMacro('lastchronicle', {
+                    handler: () => Chronicle.getLastEntryText?.() || '',
+                    category: 'state',
+                    description: 'Returns the most recent chronicle entry.',
+                });
+                console.log('[MWT] Macros registered: {{worldstate}}, {{chronicle}}, {{lastchronicle}}');
+            } catch (err) {
+                console.warn('[MWT] Failed to register macros:', err);
+            }
+            return;
+        }
+
+        console.warn('[MWT] macro-system.js registry not available — macros disabled.');
+    }
+
+    return { setupSlashCommands, setupMacros };
+}

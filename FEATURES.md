@@ -10,7 +10,7 @@ API pointers verified against this ST install.
   The #1 request for any extension that makes its own LLM calls. Users don't want
   to paste an API key twice, and it instantly supports every backend ST supports
   (Claude, Gemini, NovelAI, KoboldCPP, …) instead of only OpenAI-compatible ones.
-  Also moots the "keyless local backend" issue in TODO.md.
+  Also moots the "keyless local backend" issue.
   *How:* `ConnectionManagerRequestService` (`scripts/extensions/shared.js:388`) for
   profile-pinned calls, or `getContext().generateQuietPrompt` to ride the current
   connection. Keep the existing custom config as an "Advanced override" per module.
