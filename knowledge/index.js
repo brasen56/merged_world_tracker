@@ -10,8 +10,8 @@ import { getChat, escapeRegex, estimateTokens } from '../core/index.js';
 import { state, getNpcsContentEl, ktSetStatus } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
 import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp } from './registry.js';
-import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages } from './lorebook.js';
-import { buildStagingItems, enrichStagingItem } from './staging.js';
+import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
+import { buildStagingItems } from './staging.js';
 import {
     renderNpcsSubTab,
     addNotificationEntry, removeNotificationEntry,
