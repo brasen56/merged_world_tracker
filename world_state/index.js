@@ -46,7 +46,7 @@ export { getWorldStateText, applyWorldStateInjection, onMessageReceived, resetAu
 
 export function onChatChanged() {
     state.isDirty = false;
-    state.autoSaveLastText = '';
+    state.autoSaveLastText = getWorldStateText();
     state.autoRefreshQueued = false;
     if (state.autoRefreshDeferTimer) { clearTimeout(state.autoRefreshDeferTimer); state.autoRefreshDeferTimer = null; }
     const saved = getWorldStateData()?.autoRefreshCounter;
