@@ -113,10 +113,10 @@ export function readApiSettingsValues(el, opts = {}) {
         apiKey: el.querySelector(`#${keyId}`)?.value?.trim() || '',
         modelName: el.querySelector(`#${modelId}`)?.value?.trim() || '',
         maxTokens: Number(el.querySelector(`#${maxTokensId}`)?.value) || maxTokensDefault,
-        temperature: Number(el.querySelector(`#${tempId}`)?.value),
-        topP: Number(el.querySelector(`#${topPId}`)?.value),
-        frequencyPenalty: Number(el.querySelector(`#${freqId}`)?.value),
-        presencePenalty: Number(el.querySelector(`#${presId}`)?.value),
+        temperature: Number(el.querySelector(`#${tempId}`)?.value ?? opts.tempDefault ?? 0.3),
+        topP: Number(el.querySelector(`#${topPId}`)?.value ?? 1),
+        frequencyPenalty: Number(el.querySelector(`#${freqId}`)?.value ?? 0),
+        presencePenalty: Number(el.querySelector(`#${presId}`)?.value ?? 0),
         customHeaders: el.querySelector(`#${headersId}`)?.value || '',
     };
 }
