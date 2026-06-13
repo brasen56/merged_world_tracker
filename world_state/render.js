@@ -457,8 +457,8 @@ export function wireEvents() {
         const hookMode = state.modal.querySelector('#ws-hook-mode')?.value || 'passive';
         const messageFilter = state.modal.querySelector('#ws-message-filter')?.value || '';
 
-        if (!apiValues.apiUrl || !apiValues.apiKey || !apiValues.modelName) {
-            setStatus(state.modal, 'API URL, Key, and Model are required.', 'error');
+        if (!apiValues.apiUrl || !apiValues.modelName) {
+            setStatus(state.modal, 'API URL and Model are required.', 'error');
             return;
         }
 
@@ -482,14 +482,16 @@ export function wireEvents() {
         const url = state.modal.querySelector('#ws-api-url')?.value.trim();
         const key = state.modal.querySelector('#ws-api-key')?.value.trim();
         const model = state.modal.querySelector('#ws-model')?.value.trim();
-        if (!url || !key || !model) { setStatus(state.modal, 'Fill URL, Key, Model first.', 'error'); return; }
+        if (!url || !model) { setStatus(state.modal, 'Fill URL and Model first.', 'error'); return; }
 
         try {
             btn.disabled = true; btn.textContent = 'Testing…';
             setStatus(state.modal, 'Testing connection…', 'info');
+            const headers = { 'Content-Type': 'application/json' };
+            if (key) headers['Authorization'] = `Bearer ${key}`;
             const resp = await fetch(`${url.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+                headers,
                 body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with: OK' }], max_tokens: 10, temperature: 0 }),
             });
             if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
