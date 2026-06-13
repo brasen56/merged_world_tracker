@@ -75,15 +75,18 @@ export function getModuleWireEvents() {
 
 export async function onMessageReceived() {
     if (state.isGenerating) return;
-    const settings = getSettings();
-    if (!settings.autoSnapshot || !hasValidSettings()) return;
 
     state.msgSinceSnapshot++;
+    persistMsgSinceSnapshot();
+
+    const settings = getSettings();
     const threshold = settings.autoSnapshotThreshold || 40;
 
     console.log(`[MWT:Chronicle] MESSAGE_RECEIVED — counter ${state.msgSinceSnapshot}/${threshold}`);
 
-    if (state.msgSinceSnapshot < threshold) { persistMsgSinceSnapshot(); return; }
+    if (!settings.autoSnapshot || !hasValidSettings() || state.msgSinceSnapshot < threshold) {
+        return;
+    }
 
     console.log(`[MWT:Chronicle] Auto-snapshot at ${state.msgSinceSnapshot} messages`);
     await generateSnapshot();
