@@ -54,9 +54,10 @@ export function applyWorldStateInjection() {
     const text = getWorldStateText();
     const enabled = isInjectionEnabled();
     const s = getSettings();
-    const depth = Number.isFinite(Number(s.worldStateDepth))
-        ? Number(s.worldStateDepth)
-        : (s.injectionDepth ?? 1);
+    const rawDepth = Number.isFinite(Number(s.injectionDepth))
+        ? Number(s.injectionDepth)
+        : Number(s.worldStateDepth);
+    const depth = Number.isFinite(rawDepth) ? rawDepth : 1;
 
     try {
         // Split out Plot Seeds section (matching original WorldState behavior).
