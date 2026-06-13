@@ -135,8 +135,18 @@ export async function importNpcs() {
                 continue;
             }
 
+            const incomingUid = entry.uid ?? null;
+            if (incomingUid != null) {
+                for (const [regName, regEntry] of Object.entries(registry)) {
+                    if (regEntry.uid === incomingUid && regName !== name) {
+                        console.warn(`[MWT:Knowledge] Import UID ${incomingUid} was owned by "${regName}", reassigning to "${name}"`);
+                        registry[regName].uid = null;
+                    }
+                }
+            }
+
             registry[name] = {
-                uid: entry.uid ?? null,
+                uid: incomingUid,
                 type: entry.type || 'minor',
                 keywords: entry.keywords || [name],
                 lastUpdated: entry.lastUpdated || Date.now(),
@@ -210,9 +220,21 @@ export async function importFromLorebooks() {
                 }
                 const isMajor = /knowledge ledger\s*:/i.test(entry.content || '');
                 const uid = entry.uid ?? Number(uidStr);
+                const finalUid = Number.isFinite(uid) ? uid : null;
                 const keywords = Array.isArray(entry.key) && entry.key.length ? entry.key : [name];
+
+                // Unlink UID from any other entry that already owns it
+                if (finalUid != null) {
+                    for (const [regName, regEntry] of Object.entries(registry)) {
+                        if (regEntry.uid === finalUid && regName !== name) {
+                            console.warn(`[MWT:Knowledge] UID ${finalUid} was owned by "${regName}", reassigning to "${name}"`);
+                            registry[regName].uid = null;
+                        }
+                    }
+                }
+
                 registry[name] = {
-                    uid: Number.isFinite(uid) ? uid : null,
+                    uid: finalUid,
                     type: isMajor ? 'major' : 'minor',
                     keywords,
                     lastUpdated: Date.now(),
