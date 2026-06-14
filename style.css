@@ -2543,3 +2543,34 @@ body.mwt-buttons--classic .mwt-float-btn.mwt-btn--refreshing .mwt-float-btn-coun
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
 }
+
+/* ─── Disabled / master-off state (works in both modern + classic) ───────────
+   The base .mwt-float-btn uses position: fixed, which establishes a containing
+   block for absolutely-positioned children — so the ::after overlay hugs the
+   circular button. border-radius:50% keeps it circular. */
+.mwt-float-btn.mwt-btn--disabled,
+.mwt-float-btn.mwt-btn--master-off {
+    opacity: 0.45;
+    border-color: #ef4444;
+}
+
+.mwt-float-btn.mwt-btn--disabled::after,
+.mwt-float-btn.mwt-btn--master-off::after {
+    content: "✕";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ef4444;
+    font-size: 1.4em;
+    font-weight: bold;
+    pointer-events: none;
+    border-radius: 50%;
+}
+
+/* Classic mode: tint the border red too (matches the state-border pattern above) */
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--disabled,
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--master-off {
+    border-color: #ef4444;
+}

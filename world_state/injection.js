@@ -4,7 +4,7 @@
  * Depends on data.js and settings.js (leaf modules).
  */
 
-import { applyExtensionPromptInjection, getGlobalSettings, wrapInTag } from '../core/index.js';
+import { applyExtensionPromptInjection, getGlobalSettings, wrapInTag, injectionAllowed } from '../core/index.js';
 
 import { getSettings } from './settings.js';
 import {
@@ -111,7 +111,7 @@ export function buildInjectionPayload(text) {
 
 export function applyWorldStateInjection() {
     const text = getWorldStateText();
-    const enabled = isInjectionEnabled();
+    const enabled = isInjectionEnabled() && injectionAllowed('WorldState');
     const s = getSettings();
     const globalSettings = getGlobalSettings();
 

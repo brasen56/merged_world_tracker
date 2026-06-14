@@ -117,6 +117,23 @@ export function getGlobalSettings() {
     return {};
 }
 
+/**
+ * Is this module allowed to inject / scan right now?
+ *
+ * Single source of truth for the two-layer enable model:
+ *   - injectionMasterOff === true  → nothing injects (panic switch)
+ *   - enable<ModuleKey> === false  → that module is disabled
+ *
+ * @param {string} moduleKey — 'WorldState' | 'Chronicle' | 'Knowledge'
+ * @returns {boolean}
+ */
+export function injectionAllowed(moduleKey) {
+    const g = getGlobalSettings();
+    if (g.injectionMasterOff) return false;               // "stop everything"
+    if (g[`enable${moduleKey}`] === false) return false;  // per-tracker disable
+    return true;
+}
+
 export function syncSharedConnectionSettings(getSettings, saveSettings, patch, logPrefix = '[MWT]') {
     if (!patch || (
         patch.apiUrl === undefined &&

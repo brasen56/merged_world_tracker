@@ -7,7 +7,7 @@
 
 import {
     getGlobalSettings, estimateTokens,
-    applyExtensionPromptInjection, wrapInTag,
+    applyExtensionPromptInjection, wrapInTag, injectionAllowed,
 } from '../core/index.js';
 
 import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
@@ -56,7 +56,7 @@ export function getInjectionStats() {
 }
 
 export function applyInjection() {
-    const enabled = isInjectionEnabled();
+    const enabled = isInjectionEnabled() && injectionAllowed('Chronicle');
     const snapshots = getSnapshots();
 
     const globalSettings = getGlobalSettings();

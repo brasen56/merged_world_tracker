@@ -207,7 +207,7 @@ Control how World State and Chronicle entries are injected into the prompt:
 | Chronicle Depth | Injection depth for chronicle entries | `4` |
 | Chronicle Role | Message role for chronicle injection | `system` |
 
-> **Note:** Knowledge Tracker does not use extension prompt injection — it writes directly to SillyTavern lorebooks, which are triggered by keywords.
+> **Note:** Knowledge Tracker does not use extension prompt injection — it writes directly to SillyTavern lorebooks, which are triggered by keywords. Disabling the Knowledge tracker only stops it from scanning/updating; existing lorebook entries continue to be injected by SillyTavern's World Info until you disable them manually in the World Info panel.
 
 ---
 

@@ -8,6 +8,7 @@
  */
 
 import { escapeHtml } from './diff.js';
+import { notify } from './notifications.js';
 
 // ─── API Settings Field Renderer ────────────────────────────────────────────
 
@@ -124,10 +125,10 @@ export function readApiSettingsValues(el, opts = {}) {
 // ─── Floating Button Bar Factory ────────────────────────────────────────────
 
 const FLOAT_BUTTONS = [
-    { id: 'mwt-float-world', label: '🌍', title: 'World State', tab: 'world-state', visibilityKey: 'showFloatWorld' },
-    { id: 'mwt-float-chronicle', label: '📜', title: 'Chronicle', tab: 'chronicle', visibilityKey: 'showFloatChronicle' },
-    { id: 'mwt-float-knowledge', label: '🧠', title: 'Knowledge', tab: 'knowledge', visibilityKey: 'showFloatKnowledge' },
-    { id: 'mwt-float-settings', label: '⚙️', title: 'All Settings', tab: 'settings', visibilityKey: 'showFloatSettings' },
+    { id: 'mwt-float-world',     label: '🌍', title: 'World State',  tab: 'world-state', visibilityKey: 'showFloatWorld',     enableKey: 'enableWorldState' },
+    { id: 'mwt-float-chronicle', label: '📜', title: 'Chronicle',    tab: 'chronicle',    visibilityKey: 'showFloatChronicle', enableKey: 'enableChronicle' },
+    { id: 'mwt-float-knowledge', label: '🧠', title: 'Knowledge',    tab: 'knowledge',    visibilityKey: 'showFloatKnowledge', enableKey: 'enableKnowledge' },
+    { id: 'mwt-float-settings',  label: '⚙️', title: 'All Settings', tab: 'settings',     visibilityKey: 'showFloatSettings',  masterKey: 'injectionMasterOff' },
 ];
 
 const FLOAT_POSITIONS_KEY = 'mwt_float_positions';
@@ -158,7 +159,7 @@ function saveFloatPosition(btnId, left, top) {
  *                   setupButtonBar, setupExtensionsDrawer, setupWandMenu,
  *                   updateFloatTokenCounts, updateButtonStates
  */
-export function createFloatingButtonBar({ getSettings, openModal, modules }) {
+export function createFloatingButtonBar({ getSettings, saveSettings, openModal, modules }) {
     const { WorldState, Chronicle, Knowledge } = modules;
 
     /**
@@ -307,6 +308,45 @@ export function createFloatingButtonBar({ getSettings, openModal, modules }) {
             btn.addEventListener('pointercancel', () => {
                 dragging = false;
             });
+
+            // Right-click (desktop) / long-press (mobile) → quick toggle.
+            // The browser fires `contextmenu` for both gestures natively.
+            btn.addEventListener('contextmenu', (e) => {
+                e.preventDefault(); // suppress the browser context menu
+                const s = getSettings();
+
+                if (cfg.masterKey) {
+                    // ⚙️ button → flip the global panic switch
+                    const nowOff = s.injectionMasterOff !== true;
+                    saveSettings({ [cfg.masterKey]: nowOff });
+                    try {
+                        WorldState.applyWorldStateInjection?.();
+                        Chronicle.applyInjection?.();
+                    } catch { /* modules may not be initialized yet */ }
+                    updateButtonStates();
+                    notify(
+                        'Merged World Tracker',
+                        nowOff ? 'All trackers disabled (panic switch).' : 'All trackers re-enabled.',
+                        nowOff ? 'info' : 'success',
+                    );
+                } else if (cfg.enableKey) {
+                    // Module button → flip per-module enable
+                    const nowDisabled = s[cfg.enableKey] !== false; // currently enabled → disabling
+                    saveSettings({ [cfg.enableKey]: !nowDisabled });
+                    try {
+                        WorldState.applyWorldStateInjection?.();
+                        Chronicle.applyInjection?.();
+                    } catch { /* modules may not be initialized yet */ }
+                    updateButtonStates();
+                    notify(
+                        cfg.title,
+                        nowDisabled
+                            ? `${cfg.title} disabled. Right-click to re-enable.`
+                            : `${cfg.title} enabled.`,
+                        nowDisabled ? 'info' : 'success',
+                    );
+                }
+            });
         });
 
         applyButtonVisibility();
@@ -444,7 +484,22 @@ export function createFloatingButtonBar({ getSettings, openModal, modules }) {
     /** Standalone per-button state updater for classic-style buttons.
      *  Called from the 5s poll AND immediately when a module's busy flag flips. */
     function updateButtonStates() {
-        if (getSettings().buttonStyle !== 'classic') return;
+        const s = getSettings();
+
+        // ── Disabled / master-off visual state (works in BOTH modern + classic) ──
+        // Applied before the classic early-return so the red ✕ shows everywhere.
+        const masterOff = s.injectionMasterOff === true;
+        for (const cfg of FLOAT_BUTTONS) {
+            const btn = document.getElementById(cfg.id);
+            if (!btn) continue;
+            if (cfg.masterKey) {
+                btn.classList.toggle('mwt-btn--master-off', masterOff);
+            } else if (cfg.enableKey) {
+                btn.classList.toggle('mwt-btn--disabled', s[cfg.enableKey] === false || masterOff);
+            }
+        }
+
+        if (s.buttonStyle !== 'classic') return;
 
         // World State button state
         const wsBtn = document.getElementById('mwt-float-world');

@@ -7,7 +7,7 @@
 export { getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex, estimateTokens, getPlayerNames, getRecentMessages } from './context.js';
 export { normalizeApiBase, fetchFromApi, fetchViaConnectionProfile, resolveApiCall, normaliseOutput, retryAsync } from './api.js';
 export { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from './diff.js';
-export { createSettingsManager, syncSharedConnectionSettings, getGlobalSettings } from './settings.js';
+export { createSettingsManager, syncSharedConnectionSettings, getGlobalSettings, injectionAllowed } from './settings.js';
 export { createModal, showModal, hideModal, setStatus, formatDate } from './modal.js';
 export { applyExtensionPromptInjection, roleToNumber, wrapInTag } from './injection.js';
 export {

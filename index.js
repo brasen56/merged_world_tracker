@@ -103,6 +103,16 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         showFloatSettings: true,
         collapseFloatButtons: false,
         buttonStyle: 'modern', // 'modern' | 'classic'
+        // Per-tracker enable (default on). When false, that tracker stops
+        // injecting + scanning but its floating icon stays visible with a red ✕
+        // so it can be re-enabled via right-click. The icon's *presence* is
+        // controlled independently by the showFloatX settings above.
+        enableWorldState: true,
+        enableChronicle: true,
+        enableKnowledge: true,
+        // Global "stop injecting / scanning everything" panic switch.
+        // Flipped by right-clicking the ⚙️ floating button.
+        injectionMasterOff: false,
     },
     logPrefix: '[MWT]',
 });
@@ -166,7 +176,7 @@ function renderSettingsTab() {
         <hr style="border-color:var(--mwt-border);margin:16px 0">
         <h3 style="margin-bottom:8px">🔧 Injection Settings</h3>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-            Control how each module's entries are injected into the prompt. Depth = how far back from the bottom; Role = which message role. (Knowledge uses SillyTavern's built-in lorebook system and does not use extension prompt injection.)
+            Control how each module's entries are injected into the prompt. Depth = how far back from the bottom; Role = which message role. (Knowledge uses SillyTavern's built-in lorebook system and does not use extension prompt injection. Disabling the Knowledge tracker below only stops it from scanning/updating; existing lorebook entries will continue to be injected by SillyTavern's World Info until you disable them manually in the World Info panel.)
         </p>
         <div class="mwt-settings-grid">
             <label class="mwt-label" style="grid-column:1/3;font-weight:bold">🌍 World State</label>
@@ -229,6 +239,30 @@ function renderSettingsTab() {
                 <option value="modern" ${(s.buttonStyle || 'modern') === 'modern' ? 'selected' : ''}>Modern (icons-only)</option>
                 <option value="classic" ${s.buttonStyle === 'classic' ? 'selected' : ''}>Classic (text + icon)</option>
             </select>
+        </div>
+
+        <hr style="border-color:var(--mwt-border);margin:16px 0">
+        <h3 style="margin-bottom:8px">🛑 Per-Tracker Enable</h3>
+        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
+            Disable a tracker you don't use: it stops injecting and scanning, and its floating button shows a red ✕
+            (right-click it again to re-enable). To remove a button entirely, uncheck its "Visible" box in the
+            Floating Buttons section above. You can also disable <em>everything</em> at once by right-clicking the ⚙️ button.
+        </p>
+        <div class="mwt-settings-grid">
+            <label class="mwt-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="mwt-s-master-off" ${s.injectionMasterOff ? 'checked' : ''}>
+                <span>Disable all trackers (panic switch)</span>
+            </label>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Stops injection and scanning for every module. Useful for testing or branching a chat.</p>
+
+            <label class="mwt-label">🌍 World State</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-world" ${s.enableWorldState !== false ? 'checked' : ''}> Use this tracker</label>
+
+            <label class="mwt-label">📜 Chronicle</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-chronicle" ${s.enableChronicle !== false ? 'checked' : ''}> Use this tracker</label>
+
+            <label class="mwt-label">🧠 Knowledge</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-knowledge" ${s.enableKnowledge !== false ? 'checked' : ''}> Use this tracker</label>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -338,10 +372,23 @@ function renderModal() {
                 showFloatSettings: modal.querySelector('#mwt-s-show-settings')?.checked ?? true,
                 collapseFloatButtons: modal.querySelector('#mwt-s-collapse-float')?.checked ?? false,
                 buttonStyle: modal.querySelector('#mwt-s-button-style')?.value || 'modern',
+                // Per-tracker enable + master panic switch
+                enableWorldState: modal.querySelector('#mwt-s-enable-world')?.checked ?? true,
+                enableChronicle: modal.querySelector('#mwt-s-enable-chronicle')?.checked ?? true,
+                enableKnowledge: modal.querySelector('#mwt-s-enable-knowledge')?.checked ?? true,
+                injectionMasterOff: modal.querySelector('#mwt-s-master-off')?.checked ?? false,
             };
+            // NOTE: enableX and showFloatX are deliberately decoupled. Toggling
+            // "Use this tracker" here only flips enableX (button stays visible
+            // with a red ✕), matching the right-click quick-toggle behavior.
+            // The "Visible" checkboxes above are the sole control over presence.
+            // This avoids the "button vanished after an unrelated save" surprise
+            // that the previous one-way coupling created.
+
             saveSettings(patch);
             ui.applyButtonVisibility();
             ui.applyButtonStyle();
+            ui.updateButtonStates();
             // Re-apply injections so the structural-boundaries toggle takes
             // effect immediately without requiring a new chat message.
             try {
@@ -396,9 +443,13 @@ if (eventSource && event_types?.CHAT_CHANGED) {
 
 if (eventSource && event_types?.MESSAGE_RECEIVED) {
     eventSource.on(event_types.MESSAGE_RECEIVED, () => {
-        WorldState.onMessageReceived();
-        Chronicle.onMessageReceived();
-        Knowledge.onMessageReceived();
+        const s = getSettings();
+        // Gate per-module: disabled trackers stop scanning / counting toward
+        // auto-refresh & auto-snapshot thresholds (no silent background API calls).
+        if (s.injectionMasterOff) return;
+        if (s.enableWorldState !== false) WorldState.onMessageReceived();
+        if (s.enableChronicle  !== false) Chronicle.onMessageReceived();
+        if (s.enableKnowledge  !== false) Knowledge.onMessageReceived();
     });
 }
 
@@ -435,9 +486,11 @@ if (eventSource && event_types?.MESSAGE_DELETED) {
     eventSource.on(event_types.MESSAGE_DELETED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_DELETED (index: ${idx}) — adjusting counters.`);
-        WorldState.onMessageDeleted(idx);
-        Chronicle.onMessageDeleted(idx);
-        Knowledge.onMessageDeleted(idx);
+        const s = getSettings();
+        if (s.injectionMasterOff) return;
+        if (s.enableWorldState !== false) WorldState.onMessageDeleted(idx);
+        if (s.enableChronicle  !== false) Chronicle.onMessageDeleted(idx);
+        if (s.enableKnowledge  !== false) Knowledge.onMessageDeleted(idx);
     });
 }
 
@@ -445,8 +498,10 @@ if (eventSource && event_types?.MESSAGE_SWIPED) {
     eventSource.on(event_types.MESSAGE_SWIPED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_SWIPED (index: ${idx}) — checking anchor / scheduling refresh.`);
-        WorldState.onMessageSwiped(idx);
-        Chronicle.onMessageSwiped(idx);
+        const s = getSettings();
+        if (s.injectionMasterOff) return;
+        if (s.enableWorldState !== false) WorldState.onMessageSwiped(idx);
+        if (s.enableChronicle  !== false) Chronicle.onMessageSwiped(idx);
     });
 }
 
@@ -454,8 +509,10 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
     eventSource.on(event_types.MESSAGE_EDITED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_EDITED (index: ${idx}) — checking anchor / scheduling refresh.`);
-        WorldState.onMessageEdited(idx);
-        Chronicle.onMessageEdited(idx);
+        const s = getSettings();
+        if (s.injectionMasterOff) return;
+        if (s.enableWorldState !== false) WorldState.onMessageEdited(idx);
+        if (s.enableChronicle  !== false) Chronicle.onMessageEdited(idx);
     });
 }
 
@@ -463,6 +520,7 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
 
 const ui = createFloatingButtonBar({
     getSettings,
+    saveSettings,
     openModal: openMwtModal,
     modules: { WorldState, Chronicle, Knowledge },
 });
@@ -479,6 +537,7 @@ const commands = createCommands({
 
 ui.setupButtonBar();
 ui.applyButtonStyle();
+ui.updateButtonStates(); // show disabled/red-X state immediately on load
 ui.setupExtensionsDrawer();
 ui.setupWandMenu();
 commands.setupSlashCommands();
