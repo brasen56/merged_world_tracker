@@ -298,6 +298,10 @@ export function getMessageCountSinceLastSnapshot() {
 export function showConfirm(message, detail, onConfirm) {
     const el = getContentEl();
     if (!el) return;
+    // Prevent stacking: if a confirmation dialog is already open, ignore
+    // additional triggers (e.g. double-clicking "Consolidate" or pressing it
+    // repeatedly while a confirm is still showing).
+    if (el.querySelector('.sc-confirm-overlay')) return;
     const overlay = document.createElement('div');
     overlay.className = 'sc-confirm-overlay';
     overlay.innerHTML = `<div class="sc-confirm-box"><p>${escapeHtml(message)}</p>${detail ? `<p class="sc-confirm-detail">${escapeHtml(detail)}</p>` : ''}<div class="sc-confirm-actions"><button class="sc-confirm-yes sc-btn sc-btn--danger">Yes</button><button class="sc-confirm-no sc-btn">Cancel</button></div></div>`;

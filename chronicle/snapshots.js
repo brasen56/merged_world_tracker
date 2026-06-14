@@ -89,6 +89,20 @@ function validateConsolidationOutput(text, baseEntry, deltaEntries) {
     return validateSnapshotOutput(text);
 }
 
+/**
+ * Drop anything the model emitted before the entry proper.
+ *
+ * Both chronicle prompts require the output to begin with "## Summary", so if
+ * leaked reasoning or a preamble precedes it (e.g. an unterminated <think> block
+ * that normaliseOutput's strip couldn't match), slice from the first "## Summary".
+ * This anchors to the format contract instead of trying to enumerate every
+ * thinking syntax. Returns the text unchanged if no heading is present.
+ */
+function stripToEntry(text) {
+    const i = text.indexOf('## Summary');
+    return i > 0 ? text.slice(i).trim() : text;
+}
+
 // ─── Generate snapshot ───────────────────────────────────────────────────────
 
 export async function generateSnapshot() {
@@ -130,10 +144,12 @@ export async function generateSnapshot() {
         const _scApi1 = resolveApiCall({ moduleSettings: getSettings() });
         let raw = await _scApi1.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi1.settings, retries: 3 });
         raw = normaliseOutput(raw);
+        raw = stripToEntry(raw);
         if (!raw.trim()) {
             const _scApi1b = resolveApiCall({ moduleSettings: getSettings() });
             raw = await _scApi1b.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]', settings: _scApi1b.settings, retries: 3 });
             raw = normaliseOutput(raw);
+            raw = stripToEntry(raw);
         }
         if (!raw.trim()) throw new Error('Chronicle output was empty.');
 
@@ -263,14 +279,26 @@ export async function consolidateEntries(ids) {
             const _scApi3 = resolveApiCall({ moduleSettings: getSettings() });
             let raw = await _scApi3.fetchFn({ systemPrompt: CONSOLIDATE_SYSTEM_PROMPT, userContent: editedResult || userContent, settings: _scApi3.settings, retries: 3 });
             raw = normaliseOutput(raw);
+            raw = stripToEntry(raw);
             if (!raw.trim()) throw new Error('Empty output.');
+            if (!raw.startsWith('## Summary')) {
+                // No recoverable entry — the model returned pure reasoning/prose
+                // (often a thinking model overflowing max_tokens). Fail loudly
+                // instead of saving the verbose blob.
+                throw new Error('Model returned reasoning instead of an entry — raise Max Tokens or use a non-thinking model.');
+            }
             const validation = validateConsolidationOutput(raw, base, deltas);
             if (!validation.valid) { console.warn('[MWT:Chronicle] Consolidation:', validation.reason); scSetStatus(`Review needed: ${validation.reason}`, 'error'); }
             const allCharacters = new Set();
             selected.forEach(s => { if (s.characters) s.characters.forEach(c => allCharacters.add(c)); });
             const consolidated = {
                 id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                createdAt: new Date().toISOString(), worldDate: selected[selected.length - 1].worldDate,
+                // Sort key = START of the merged range (base = earliest selected),
+                // NOT "now" — stamping wall-clock time made the consolidated entry
+                // leapfrog to the newest slot in both display and injection order.
+                // The real merge time is preserved separately in consolidatedAt.
+                createdAt: base.createdAt, consolidatedAt: new Date().toISOString(),
+                worldDate: selected[selected.length - 1].worldDate,
                 anchor: selected[selected.length - 1].anchor, fromIndex: base.fromIndex ?? -1,
                 toIndex: selected[selected.length - 1].toIndex ?? -1, text: raw,
                 characters: Array.from(allCharacters), consolidated: true, _consolidatedFrom: ids,

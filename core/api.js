@@ -266,8 +266,9 @@ export function resolveApiCall({ moduleSettings, globalSettings = {} }) {
 export function normaliseOutput(raw) {
     let text = (raw || '').trim();
 
-    // Strip thinking blocks
-    text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+    // Strip thinking blocks — <think>, <thinking>, <reasoning>; the backreference
+    // matches the correct closing tag so <thinking>…</thinking> doesn't leave "ing>".
+    text = text.replace(/<(think|thinking|reasoning)\b[\s\S]*?<\/\1>/gi, '').trim();
 
     // Unwrap markdown code fences — handle multiple patterns:
     // 1. Entire response is a single fenced block

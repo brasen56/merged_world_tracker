@@ -546,6 +546,52 @@ html.light body {
 .sc-status--success { color: var(--sc-success); }
 .sc-status--error   { color: var(--sc-danger); }
 
+/* ── Confirmation dialog ───────────────────────────────────────────────── */
+.sc-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sc-overlay);
+  backdrop-filter: blur(1px);
+  animation: sc-confirm-fade 0.12s ease-out;
+}
+@keyframes sc-confirm-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.sc-confirm-box {
+  background: var(--sc-bg-elevated);
+  border: 1px solid var(--sc-border-light);
+  border-radius: var(--sc-radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  padding: 18px 20px;
+  max-width: 360px;
+  width: calc(100% - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sc-confirm-box p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sc-text);
+}
+.sc-confirm-detail {
+  font-weight: 400 !important;
+  font-size: 12px !important;
+  color: var(--sc-text-dim);
+}
+.sc-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 /* ── Search input ───────────────────────────────────────────────────────── */
 .sc-search {
   width: 100%;
