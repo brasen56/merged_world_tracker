@@ -22,7 +22,7 @@ import {
     state, MAX_ENTRY_WORD_COUNT, MAX_TRASH_SIZE,
     getSettings,
     getChronicleData, setChronicleData, getSnapshots,
-    getCharactersInRange, scSetStatus,
+    getCharactersInRange, scSetStatus, getContentEl,
     makeAnchor, resolveAnchor, buildMessageWindow,
     persistMsgSinceSnapshot,
     _render,
@@ -164,7 +164,10 @@ export async function generateSnapshot() {
         state.msgSinceSnapshot = 0;
         persistMsgSinceSnapshot();
         state.selectedSnapshotId = snapshot.id;
-        _render.renderContent();
+        // Only update the UI when the Chronicle tab is actually visible —
+        // auto-snapshot can fire while the modal is closed, in which case
+        // there's nothing to render (and renderContent() would be a no-op).
+        if (getContentEl()) _render.renderContent();
         if (getSettings().syncWorldState) updateWorldStateFromChronicle(raw);
         scSetStatus('Chronicle entry generated.', 'success');
         return snapshot;
