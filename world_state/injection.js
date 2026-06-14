@@ -4,7 +4,7 @@
  * Depends on data.js and settings.js (leaf modules).
  */
 
-import { applyExtensionPromptInjection } from '../core/index.js';
+import { applyExtensionPromptInjection, getGlobalSettings } from '../core/index.js';
 
 import { getSettings } from './settings.js';
 import {
@@ -54,10 +54,7 @@ export function applyWorldStateInjection() {
     const text = getWorldStateText();
     const enabled = isInjectionEnabled();
     const s = getSettings();
-    const rawDepth = Number.isFinite(Number(s.injectionDepth))
-        ? Number(s.injectionDepth)
-        : Number(s.worldStateDepth);
-    const depth = Number.isFinite(rawDepth) ? rawDepth : 1;
+    const globalSettings = getGlobalSettings();
 
     try {
         // Split out Plot Seeds section (matching original WorldState behavior).
@@ -78,16 +75,24 @@ export function applyWorldStateInjection() {
             body += `\n\n---\n\n${seedsHeader}\n\n${seedsText}`;
         }
 
+        // Prefer the global injection depth/role (set in the Settings tab),
+        // falling back to the module-specific injectionDepth when the global
+        // setting hasn't been saved yet.  This mirrors how the Chronicle module
+        // resolves depth and ensures the global Settings tab actually takes
+        // effect (previously the module-only default of 1 always won).
         applyExtensionPromptInjection({
             key: EXTENSION_PROMPT_KEY,
             header: WORLD_STATE_INJECTION_HEADER,
             body,
             enabled,
-            globalDepth: depth,
+            globalDepth: globalSettings.worldStateDepth,
             fallbackDepth: s.injectionDepth ?? 1,
-            globalRole: s.worldStateRole,
+            globalRole: globalSettings.worldStateRole || 'system',
         });
-        console.log(`[MWT:WorldState] Injected ${text.length} chars at depth ${depth}`);
+        const resolvedDepth = Number.isFinite(Number(globalSettings.worldStateDepth))
+            ? Number(globalSettings.worldStateDepth)
+            : (s.injectionDepth ?? 1);
+        console.log(`[MWT:WorldState] Injected ${text.length} chars at depth ${resolvedDepth}`);
     } catch (err) {
         console.warn('[MWT:WorldState] Injection failed:', err);
     }
