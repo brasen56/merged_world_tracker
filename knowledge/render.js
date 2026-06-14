@@ -776,6 +776,34 @@ function computeGraphLayout(edges) {
     return { nodes, edges, pairs };
 }
 
+function drawSelfLoopEdge(ns, edgeGroup, pos, edge) {
+    // Draw a self-relationship as a small loop offset up-right of the node.
+    const r = 14;
+    const cx = pos.x + 20;
+    const cy = pos.y - 20;
+    // Direction from loop center back toward the node; place arc endpoints
+    // near the node so the loop visually attaches to it.
+    const nodeAng = Math.atan2(pos.y - cy, pos.x - cx);
+    const spread = 0.45; // radians between start/end points
+    const sx = cx + r * Math.cos(nodeAng + spread);
+    const sy = cy + r * Math.sin(nodeAng + spread);
+    const ex = cx + r * Math.cos(nodeAng - spread);
+    const ey = cy + r * Math.sin(nodeAng - spread);
+    const color = relEdgeColor(edge.type);
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', `M ${sx} ${sy} A ${r} ${r} 0 1 1 ${ex} ${ey}`);
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', '1.8');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('marker-end', `url(#arrow-${edge.type.replace(/[^a-z0-9]/gi, '')})`);
+    path.setAttribute('opacity', '0.85');
+    path.setAttribute('class', 'kt-rel-graph-edge');
+    const title = document.createElementNS(ns, 'title');
+    title.textContent = `${edge.from} → ${edge.to}: ${edge.type}${edge.notes ? ` (${edge.notes})` : ''}`;
+    path.appendChild(title);
+    edgeGroup.appendChild(path);
+}
+
 function renderRelationshipGraph() {
     const svg = document.getElementById('kt-rel-graph');
     if (!svg) return;
@@ -832,6 +860,11 @@ function renderRelationshipGraph() {
         const aPos = data.nodes.get(p.a);
         const bPos = data.nodes.get(p.b);
         if (!aPos || !bPos) continue;
+        if (p.a === p.b) {
+            const edge = p.forward || p.reverse;
+            if (edge) drawSelfLoopEdge(ns, edgeGroup, aPos, edge);
+            continue;
+        }
         const isBidirectional = !!(p.forward && p.reverse);
         const drawCurve = (fromPos, toPos, edge, offset) => {
             const mx = (fromPos.x + toPos.x) / 2;
@@ -1017,6 +1050,11 @@ function updateEdges(svg, data) {
         const aPos = data.nodes.get(p.a);
         const bPos = data.nodes.get(p.b);
         if (!aPos || !bPos) continue;
+        if (p.a === p.b) {
+            const edge = p.forward || p.reverse;
+            if (edge) drawSelfLoopEdge(ns, edgeGroup, aPos, edge);
+            continue;
+        }
         const isBidirectional = !!(p.forward && p.reverse);
         const drawCurve = (fromPos, toPos, edge, offset) => {
             const mx = (fromPos.x + toPos.x) / 2;
@@ -1084,7 +1122,7 @@ function wireRelationshipEvents(el) {
         }
         const notes = el.querySelector('#kt-rel-notes')?.value?.trim() || '';
         if (!from || !to || !type) { ktSetStatus('Select From, Type, and To.', 'error'); return; }
-        if (from === to) { ktSetStatus('An NPC cannot have a relationship with themselves.', 'error'); return; }
+        // Self-relationships (e.g. "their own worst enemy") are allowed.
         const npcNames = getAllNpcNames();
         if (!npcNames.includes(from)) { ktSetStatus(`"${from}" is not a known NPC.`, 'error'); return; }
         if (!npcNames.includes(to)) { ktSetStatus(`"${to}" is not a known NPC.`, 'error'); return; }

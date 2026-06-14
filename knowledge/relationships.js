@@ -7,7 +7,7 @@
  * from here).
  */
 
-import { getChatMeta, patchChatMeta } from '../core/index.js';
+import { getChatMeta, persistChatMeta } from '../core/index.js';
 
 import {
     RELATIONSHIP_KEY,
@@ -20,11 +20,34 @@ import { getRegistry } from './registry.js';
 export function getRelationships() {
     const meta = getChatMeta();
     if (!meta[RELATIONSHIP_KEY]) meta[RELATIONSHIP_KEY] = {};
-    return meta[RELATIONSHIP_KEY];
+    const rels = meta[RELATIONSHIP_KEY];
+    // Migration / hardening: a previous saveRelationships() routed through
+    // patchChatMeta(), which merged a `lastUpdated` timestamp into this flat
+    // { npcName: Edge[] } map. That non-array value made
+    // `for (const r of targets)` throw ("targets is not iterable"), breaking
+    // the whole sub-tab and preventing navigation back to it. Strip any value
+    // that isn't an array of edges; persist the cleaned map once.
+    let dirty = false;
+    for (const key of Object.keys(rels)) {
+        if (!Array.isArray(rels[key])) {
+            delete rels[key];
+            dirty = true;
+        }
+    }
+    if (dirty) {
+        meta[RELATIONSHIP_KEY] = rels;
+        persistChatMeta();
+    }
+    return rels;
 }
 
 export function saveRelationships(rels) {
-    patchChatMeta(RELATIONSHIP_KEY, rels);
+    // Relationships are a flat { npcName: Edge[] } map. Set it directly rather
+    // than going through patchChatMeta(), which would merge a `lastUpdated`
+    // sibling into the map and corrupt iteration over edges.
+    const meta = getChatMeta();
+    meta[RELATIONSHIP_KEY] = rels;
+    persistChatMeta();
 }
 
 export function getNpcRelationships(name) { return getRelationships()[name] || []; }
