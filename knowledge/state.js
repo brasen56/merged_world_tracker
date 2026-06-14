@@ -36,6 +36,10 @@ export const state = {
 
     /** Active sub-tab: 'staging' | 'minor' | 'major' | 'state' | 'relationships' */
     activeSubTab: 'staging',
+    /** Relationship sub-tab view mode: 'graph' | 'list' */
+    relViewMode: 'graph',
+    /** Cached graph layout data for drag interactions */
+    _graphData: null,
     /** Current staging proposals */
     stagingItems: [],
     /** ID of the currently selected staging item */

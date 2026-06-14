@@ -2198,6 +2198,142 @@ input[type="number"].mwt-input {
     background: rgba(248, 113, 113, 0.1);
 }
 
+/* ── Relationship graph view ────────────────────────────────────────────── */
+
+.kt-rel-view-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    overflow: hidden;
+}
+
+.kt-rel-view-btn {
+    background: var(--mwt-bg-light);
+    border: none;
+    color: var(--mwt-text-dim);
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mwt-font);
+    transition: all var(--mwt-transition);
+    white-space: nowrap;
+}
+
+.kt-rel-view-btn:hover {
+    color: var(--mwt-text);
+    background: var(--mwt-bg-lighter);
+}
+
+.kt-rel-view-btn.active {
+    color: #fff;
+    background: var(--mwt-accent);
+}
+
+.kt-rel-graph-wrap {
+    position: relative;
+    width: 100%;
+    min-height: 420px;
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    background:
+        radial-gradient(circle at center, rgba(74, 158, 255, 0.03), transparent 70%),
+        var(--mwt-bg);
+    overflow: hidden;
+}
+
+.kt-rel-graph {
+    width: 100%;
+    height: 420px;
+    display: block;
+    color: var(--mwt-text);
+    touch-action: none;
+}
+
+.kt-rel-graph-node {
+    transition: filter 0.1s;
+}
+
+.kt-rel-graph-node:hover {
+    filter: brightness(1.25);
+}
+
+.kt-rel-graph-node:hover .kt-rel-graph-node-circle {
+    stroke: var(--mwt-accent-hover);
+    stroke-width: 2.5;
+}
+
+.kt-rel-graph-node-circle {
+    fill: var(--mwt-bg-lighter);
+    stroke: var(--mwt-accent);
+    stroke-width: 1.5;
+    transition: stroke 0.15s, stroke-width 0.15s;
+}
+
+.kt-rel-graph-node-label {
+    pointer-events: none;
+    font-family: var(--mwt-font);
+    font-weight: 500;
+    paint-order: stroke;
+    stroke: var(--mwt-bg);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+}
+
+.kt-rel-graph-edge {
+    transition: opacity 0.15s, stroke-width 0.15s;
+}
+
+.kt-rel-graph-edge:hover {
+    opacity: 1 !important;
+    stroke-width: 2.8 !important;
+    cursor: pointer;
+}
+
+.kt-rel-graph-legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 8px;
+    background: rgba(26, 26, 46, 0.85);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    font-size: 11px;
+    color: var(--mwt-text);
+    pointer-events: none;
+    max-width: calc(100% - 16px);
+}
+
+.kt-rel-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    text-transform: capitalize;
+}
+
+.kt-rel-legend-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.kt-rel-graph-hint {
+    position: absolute;
+    bottom: 6px;
+    right: 8px;
+    font-size: 10px;
+    color: var(--mwt-text-dim);
+    pointer-events: none;
+    background: rgba(26, 26, 46, 0.7);
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
 /* ─── Mobile / Touch Responsive ─────────────────────────────────────────────── */
 
 @media (max-width: 768px) {

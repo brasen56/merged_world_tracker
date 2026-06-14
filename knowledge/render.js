@@ -589,7 +589,32 @@ function wireStateTrackerEvents(el) {
     });
 }
 
+// ─── NPC view modal (shared) ─────────────────────────────────────────────────
+
+async function openNpcViewModal(name) {
+    const reg = getRegistry()[name];
+    if (!reg?.uid && reg?.uid !== 0) return;
+    const content = await loadEntryContent(reg.uid);
+    if (!content) return;
+    const viewModal = document.createElement('div');
+    viewModal.id = 'kt-view-modal';
+    viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
+    document.body.appendChild(viewModal);
+    viewModal.querySelector('.kt-history-close').addEventListener('click', () => viewModal.remove());
+    viewModal.querySelector('.kt-history-backdrop').addEventListener('click', () => viewModal.remove());
+}
+
 // ─── Relationship sub-tab ────────────────────────────────────────────────────
+
+const REL_EDGE_COLORS = {
+    ally: '#4ade80', friend: '#22c55e', family: '#f59e0b', lover: '#ec4899',
+    rival: '#f97316', enemy: '#ef4444', neutral: '#9ca3af', acquaintance: '#6b7280',
+    subordinate: '#3b82f6', superior: '#8b5cf6', mentor: '#06b6d4', student: '#0ea5e9',
+    employer: '#a855f7', employee: '#d946ef',
+};
+function relEdgeColor(type) {
+    return REL_EDGE_COLORS[(type || '').toLowerCase()] || '#6366f1';
+}
 
 function renderRelationshipContent() {
     const rels = getRelationships();
@@ -604,11 +629,20 @@ function renderRelationshipContent() {
     const npcOptions = npcNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
     const typeOptions = RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join('') + '<option value="__other__">Other…</option>';
 
+    const viewMode = state.relViewMode || 'graph';
+
+    // Collect unique types present for the legend
+    const presentTypes = [...new Set(allEdges.map(e => e.type))];
+
     return `
        <div class="kt-rel-container">
            <div class="kt-rel-toolbar">
                <button id="kt-rel-sync-all" class="mwt-btn mwt-btn-primary" title="Write relationship blocks to all NPC lorebook entries">💾 Sync to Lorebooks</button>
                <span style="font-size:12px;color:var(--mwt-text-dim)">${allEdges.length} relationship(s)</span>
+               <span class="kt-rel-view-toggle">
+                   <button class="kt-rel-view-btn ${viewMode === 'graph' ? 'active' : ''}" data-view="graph" title="Graph view">🕸️ Graph</button>
+                   <button class="kt-rel-view-btn ${viewMode === 'list' ? 'active' : ''}" data-view="list" title="List view">📋 List</button>
+               </span>
             </div>
            <div class="kt-rel-add-row">
                <select id="kt-rel-from" class="mwt-input" style="min-width:120px"><option value="">From…</option>${npcOptions}</select>
@@ -618,22 +652,404 @@ function renderRelationshipContent() {
                <input id="kt-rel-notes" class="mwt-input" type="text" placeholder="Notes (optional)" style="flex:1;min-width:120px" />
                <button id="kt-rel-add" class="mwt-btn mwt-btn-primary">+ Add</button>
             </div>
-            ${allEdges.length === 0 ? '<div class="kt-empty">No relationships tracked yet.</div>' : `
+            ${allEdges.length === 0 ? '<div class="kt-empty">No relationships tracked yet.</div>' : (viewMode === 'graph' ? `
+                <div class="kt-rel-graph-wrap">
+                    <svg id="kt-rel-graph" class="kt-rel-graph" xmlns="http://www.w3.org/2000/svg"></svg>
+                    <div class="kt-rel-graph-legend">
+                        ${presentTypes.map(t => `<span class="kt-rel-legend-item"><span class="kt-rel-legend-swatch" style="background:${relEdgeColor(t)}"></span>${escapeHtml(t)}</span>`).join('')}
+                    </div>
+                    <div class="kt-rel-graph-hint">Click a node to view • Drag to rearrange • Scroll to zoom</div>
+                </div>
+            ` : `
            <div class="kt-rel-list">
-                ${allEdges.map(e => {
-                    const reverse = (rels[e.to] || []).find(r => r.target === e.from);
-                    const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${escapeHtml(reverse.type)}">↩ ${escapeHtml(reverse.type)}</span>` : '';
-                    return `<div class="kt-rel-row" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}">
+                 ${allEdges.map(e => {
+                     const reverse = (rels[e.to] || []).find(r => r.target === e.from);
+                     const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${escapeHtml(reverse.type)}">↩ ${escapeHtml(reverse.type)}</span>` : '';
+                     return `<div class="kt-rel-row" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}">
                        <span class="kt-rel-from">${escapeHtml(e.from)}</span>
                        <span class="kt-rel-type">${escapeHtml(e.type)}</span>
                        <span class="kt-rel-to">${escapeHtml(e.to)}</span>
-                        ${e.notes ? `<span class="kt-rel-notes">${escapeHtml(e.notes)}</span>` : ''}
-                        ${reverseLabel}
+                         ${e.notes ? `<span class="kt-rel-notes">${escapeHtml(e.notes)}</span>` : ''}
+                         ${reverseLabel}
                        <button class="kt-rel-remove" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="Remove">✕</button>
-                    </div>`;
-                }).join('')}
-            </div>`}
+                     </div>`;
+                 }).join('')}
+             </div>`)}
         </div>`;
+}
+
+// ─── Relationship graph (force-directed SVG) ─────────────────────────────────
+
+/**
+ * Compute node positions for the relationship graph using a lightweight
+ * Fruchterman–Reingold-style force-directed layout.
+ *
+ * @param {Array<{from:string,to:string,type:string}>} edges
+ * @returns {{nodes:Map<string,{x:number,y:number}>, edges:Array, pairs:Map}}
+ */
+function computeGraphLayout(edges) {
+    // Build node set
+    const nodeNames = new Set();
+    for (const e of edges) { nodeNames.add(e.from); nodeNames.add(e.to); }
+
+    const W = 600, H = 400;
+    const n = nodeNames.size;
+    if (n === 0) return { nodes: new Map(), edges, pairs: new Map() };
+
+    // Initial placement: circle
+    const nodes = new Map();
+    const cx = W / 2, cy = H / 2;
+    const radius = Math.min(W, H) * 0.35;
+    let i = 0;
+    for (const name of nodeNames) {
+        const angle = (i / Math.max(1, n)) * Math.PI * 2;
+        nodes.set(name, {
+            x: cx + radius * Math.cos(angle) + (Math.random() - 0.5) * 20,
+            y: cy + radius * Math.sin(angle) + (Math.random() - 0.5) * 20,
+        });
+        i++;
+    }
+
+    // Group bidirectional edges into pairs for curved rendering
+    const pairs = new Map(); // key "a|b" (sorted) -> { a, b, forward:edge, reverse:edge }
+    for (const e of edges) {
+        const key = [e.from, e.to].sort().join('|');
+        if (!pairs.has(key)) pairs.set(key, { a: e.from, b: e.to, forward: null, reverse: null });
+        const p = pairs.get(key);
+        if (e.from === p.a) p.forward = e; else p.reverse = e;
+    }
+
+    // Simulate
+    const idealLen = Math.max(60, Math.min(W, H) / Math.sqrt(Math.max(1, n)) * 0.8);
+    const k = idealLen;
+    const iterations = 200;
+    const posArr = Array.from(nodes.values());
+
+    for (let iter = 0; iter < iterations; iter++) {
+        const t = 1 - iter / iterations; // cooling
+        const disp = posArr.map(() => ({ x: 0, y: 0 }));
+
+        // Repulsive forces (all pairs)
+        for (let a = 0; a < posArr.length; a++) {
+            for (let b = 0; b < posArr.length; b++) {
+                if (a === b) continue;
+                let dx = posArr[a].x - posArr[b].x;
+                let dy = posArr[a].y - posArr[b].y;
+                let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+                const force = (k * k) / dist;
+                disp[a].x += (dx / dist) * force;
+                disp[a].y += (dy / dist) * force;
+            }
+        }
+
+        // Attractive forces (edges)
+        const edgeList = Array.from(pairs.values());
+        for (const p of edgeList) {
+            const aIdx = Array.from(nodes.keys()).indexOf(p.a);
+            const bIdx = Array.from(nodes.keys()).indexOf(p.b);
+            if (aIdx < 0 || bIdx < 0) continue;
+            let dx = posArr[aIdx].x - posArr[bIdx].x;
+            let dy = posArr[aIdx].y - posArr[bIdx].y;
+            let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            const force = (dist * dist) / k;
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+            disp[aIdx].x -= fx;
+            disp[aIdx].y -= fy;
+            disp[bIdx].x += fx;
+            disp[bIdx].y += fy;
+        }
+
+        // Apply displacement with cooling and frame clamping
+        const maxDisp = Math.max(4, 40 * t);
+        for (let a = 0; a < posArr.length; a++) {
+            let dx = disp[a].x, dy = disp[a].y;
+            let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            const limited = Math.min(dist, maxDisp);
+            posArr[a].x += (dx / dist) * limited;
+            posArr[a].y += (dy / dist) * limited;
+            posArr[a].x = Math.max(30, Math.min(W - 30, posArr[a].x));
+            posArr[a].y = Math.max(30, Math.min(H - 30, posArr[a].y));
+        }
+    }
+
+    return { nodes, edges, pairs };
+}
+
+function renderRelationshipGraph() {
+    const svg = document.getElementById('kt-rel-graph');
+    if (!svg) return;
+
+    const rels = getRelationships();
+    const allEdges = [];
+    for (const [from, targets] of Object.entries(rels)) {
+        for (const r of targets) {
+            allEdges.push({ from, to: r.target, type: r.type, notes: r.notes || '' });
+        }
+    }
+    if (allEdges.length === 0) { svg.innerHTML = ''; return; }
+
+    // Use cached layout if available (preserves drag), else compute
+    if (!state._graphData || state._graphData._edgeSig !== JSON.stringify(allEdges.map(e => [e.from, e.to, e.type]).sort())) {
+        state._graphData = computeGraphLayout(allEdges);
+        state._graphData._edgeSig = JSON.stringify(allEdges.map(e => [e.from, e.to, e.type]).sort());
+    }
+    const data = state._graphData;
+
+    const W = 600, H = 400;
+    const ns = 'http://www.w3.org/2000/svg';
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+    // Clear
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    // <defs> for arrowheads per type color
+    const defs = document.createElementNS(ns, 'defs');
+    const typeColors = new Map();
+    for (const e of allEdges) typeColors.set(e.type, relEdgeColor(e.type));
+    for (const [type, color] of typeColors) {
+        const marker = document.createElementNS(ns, 'marker');
+        marker.setAttribute('id', `arrow-${type.replace(/[^a-z0-9]/gi, '')}`);
+        marker.setAttribute('viewBox', '0 0 10 10');
+        marker.setAttribute('refX', '18');
+        marker.setAttribute('refY', '5');
+        marker.setAttribute('markerWidth', '7');
+        marker.setAttribute('markerHeight', '7');
+        marker.setAttribute('orient', 'auto-start-reverse');
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+        path.setAttribute('fill', color);
+        marker.appendChild(path);
+        defs.appendChild(marker);
+    }
+    svg.appendChild(defs);
+
+    // Edges (as a group beneath nodes)
+    const edgeGroup = document.createElementNS(ns, 'g');
+    edgeGroup.setAttribute('class', 'kt-rel-graph-edges');
+    for (const p of data.pairs.values()) {
+        const aPos = data.nodes.get(p.a);
+        const bPos = data.nodes.get(p.b);
+        if (!aPos || !bPos) continue;
+        const isBidirectional = !!(p.forward && p.reverse);
+        const drawCurve = (fromPos, toPos, edge, offset) => {
+            const mx = (fromPos.x + toPos.x) / 2;
+            const my = (fromPos.y + toPos.y) / 2;
+            const dx = toPos.x - fromPos.x;
+            const dy = toPos.y - fromPos.y;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            // perpendicular unit vector for curve control point
+            const px = -dy / len;
+            const py = dx / len;
+            const cxp = mx + px * offset;
+            const cyp = my + py * offset;
+            const color = relEdgeColor(edge.type);
+            const path = document.createElementNS(ns, 'path');
+            path.setAttribute('d', `M ${fromPos.x} ${fromPos.y} Q ${cxp} ${cyp} ${toPos.x} ${toPos.y}`);
+            path.setAttribute('stroke', color);
+            path.setAttribute('stroke-width', '1.8');
+            path.setAttribute('fill', 'none');
+            path.setAttribute('marker-end', `url(#arrow-${edge.type.replace(/[^a-z0-9]/gi, '')})`);
+            path.setAttribute('opacity', '0.85');
+            path.setAttribute('class', 'kt-rel-graph-edge');
+            const title = document.createElementNS(ns, 'title');
+            title.textContent = `${edge.from} → ${edge.to}: ${edge.type}${edge.notes ? ` (${edge.notes})` : ''}`;
+            path.appendChild(title);
+            edgeGroup.appendChild(path);
+        };
+        if (isBidirectional) {
+            // Offset the two edges so both arrows are visible
+            drawCurve(aPos, bPos, p.forward, 25);
+            drawCurve(bPos, aPos, p.reverse, 25);
+        } else {
+            const single = p.forward || p.reverse;
+            if (single) drawCurve(data.nodes.get(single.from), data.nodes.get(single.to), single, 0);
+        }
+    }
+    svg.appendChild(edgeGroup);
+
+    // Nodes
+    const nodeGroup = document.createElementNS(ns, 'g');
+    nodeGroup.setAttribute('class', 'kt-rel-graph-nodes');
+    for (const [name, pos] of data.nodes) {
+        const g = document.createElementNS(ns, 'g');
+        g.setAttribute('class', 'kt-rel-graph-node');
+        g.setAttribute('data-name', name);
+        g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+        g.style.cursor = 'pointer';
+
+        const circle = document.createElementNS(ns, 'circle');
+        circle.setAttribute('r', '14');
+        circle.setAttribute('class', 'kt-rel-graph-node-circle');
+        g.appendChild(circle);
+
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('dy', '0.35em');
+        text.setAttribute('class', 'kt-rel-graph-node-label');
+        text.textContent = name.length > 10 ? name.slice(0, 9) + '…' : name;
+        text.setAttribute('font-size', '11');
+        text.setAttribute('fill', 'currentColor');
+        g.appendChild(text);
+
+        const title = document.createElementNS(ns, 'title');
+        title.textContent = name;
+        g.appendChild(title);
+
+        nodeGroup.appendChild(g);
+    }
+    svg.appendChild(nodeGroup);
+
+    wireRelationshipGraphInteractions(svg, data);
+}
+
+function wireRelationshipGraphInteractions(svg, data) {
+    const ns = 'http://www.w3.org/2000/svg';
+    let viewBox = svg.viewBox.baseVal;
+    // Clone to make mutable if baseVal is read-only (some engines)
+    const vbState = { x: viewBox.x, y: viewBox.y, w: viewBox.w, h: viewBox.h };
+
+    // Node dragging
+    let dragNode = null;
+    let dragStart = null;
+    let didDrag = false;
+
+    const nodes = svg.querySelectorAll('.kt-rel-graph-node');
+
+    nodes.forEach(nodeG => {
+        const onPointerDown = (ev) => {
+            const name = nodeG.getAttribute('data-name');
+            dragNode = name;
+            const pt = svgPoint(svg, ev);
+            dragStart = { x: pt.x, y: pt.y };
+            didDrag = false;
+            ev.stopPropagation();
+            nodeG.setPointerCapture(ev.pointerId);
+        };
+        const onPointerMove = (ev) => {
+            if (!dragNode || dragNode !== nodeG.getAttribute('data-name')) return;
+            const pt = svgPoint(svg, ev);
+            const pos = data.nodes.get(dragNode);
+            if (pos) {
+                const dx = pt.x - dragStart.x;
+                const dy = pt.y - dragStart.y;
+                if (Math.abs(dx) + Math.abs(dy) > 3) didDrag = true;
+                pos.x = Math.max(20, Math.min(580, pos.x + dx));
+                pos.y = Math.max(20, Math.min(380, pos.y + dy));
+                dragStart = { x: pt.x, y: pt.y };
+                nodeG.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+                updateEdges(svg, data);
+            }
+        };
+        const onPointerUp = (ev) => {
+            if (dragNode === nodeG.getAttribute('data-name')) {
+                try { nodeG.releasePointerCapture(ev.pointerId); } catch { /* */ }
+                if (!didDrag) {
+                    const name = nodeG.getAttribute('data-name');
+                    openNpcViewModal(name);
+                }
+                dragNode = null;
+            }
+        };
+        nodeG.addEventListener('pointerdown', onPointerDown);
+        nodeG.addEventListener('pointermove', onPointerMove);
+        nodeG.addEventListener('pointerup', onPointerUp);
+        nodeG.addEventListener('pointercancel', onPointerUp);
+    });
+
+    // Pan via background drag
+    let panStart = null;
+    svg.addEventListener('pointerdown', (ev) => {
+        if (ev.target === svg || ev.target.tagName === 'rect') {
+            panStart = { x: ev.clientX, y: ev.clientY, vbx: vbState.x, vby: vbState.y };
+            svg.setPointerCapture(ev.pointerId);
+        }
+    });
+    svg.addEventListener('pointermove', (ev) => {
+        if (!panStart) return;
+        const rect = svg.getBoundingClientRect();
+        const scale = vbState.w / rect.width;
+        const dx = (ev.clientX - panStart.x) * scale;
+        const dy = (ev.clientY - panStart.y) * scale;
+        vbState.x = panStart.vbx - dx;
+        vbState.y = panStart.vby - dy;
+        svg.setAttribute('viewBox', `${vbState.x} ${vbState.y} ${vbState.w} ${vbState.h}`);
+    });
+    svg.addEventListener('pointerup', (ev) => {
+        panStart = null;
+        try { svg.releasePointerCapture(ev.pointerId); } catch { /* */ }
+    });
+
+    // Zoom on wheel (cursor-centered)
+    svg.addEventListener('wheel', (ev) => {
+        ev.preventDefault();
+        const rect = svg.getBoundingClientRect();
+        const mx = (ev.clientX - rect.left) / rect.width;
+        const my = (ev.clientY - rect.top) / rect.height;
+        const zoomFactor = ev.deltaY > 0 ? 1.1 : 0.9;
+        const newW = Math.max(150, Math.min(2400, vbState.w * zoomFactor));
+        const newH = newW * (vbState.h / vbState.w);
+        // Keep the point under cursor stable
+        vbState.x += (vbState.w - newW) * mx;
+        vbState.y += (vbState.h - newH) * my;
+        vbState.w = newW;
+        vbState.h = newH;
+        svg.setAttribute('viewBox', `${vbState.x} ${vbState.y} ${vbState.w} ${vbState.h}`);
+    }, { passive: false });
+}
+
+function svgPoint(svg, ev) {
+    const pt = svg.createSVGPoint();
+    pt.x = ev.clientX;
+    pt.y = ev.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function updateEdges(svg, data) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const edgeGroup = svg.querySelector('.kt-rel-graph-edges');
+    if (!edgeGroup) return;
+    edgeGroup.innerHTML = '';
+    const typeColors = new Map();
+    for (const e of data.edges) typeColors.set(e.type, relEdgeColor(e.type));
+    for (const p of data.pairs.values()) {
+        const aPos = data.nodes.get(p.a);
+        const bPos = data.nodes.get(p.b);
+        if (!aPos || !bPos) continue;
+        const isBidirectional = !!(p.forward && p.reverse);
+        const drawCurve = (fromPos, toPos, edge, offset) => {
+            const mx = (fromPos.x + toPos.x) / 2;
+            const my = (fromPos.y + toPos.y) / 2;
+            const dx = toPos.x - fromPos.x;
+            const dy = toPos.y - fromPos.y;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const px = -dy / len;
+            const py = dx / len;
+            const cxp = mx + px * offset;
+            const cyp = my + py * offset;
+            const color = relEdgeColor(edge.type);
+            const path = document.createElementNS(ns, 'path');
+            path.setAttribute('d', `M ${fromPos.x} ${fromPos.y} Q ${cxp} ${cyp} ${toPos.x} ${toPos.y}`);
+            path.setAttribute('stroke', color);
+            path.setAttribute('stroke-width', '1.8');
+            path.setAttribute('fill', 'none');
+            path.setAttribute('marker-end', `url(#arrow-${edge.type.replace(/[^a-z0-9]/gi, '')})`);
+            path.setAttribute('opacity', '0.85');
+            path.setAttribute('class', 'kt-rel-graph-edge');
+            const title = document.createElementNS(ns, 'title');
+            title.textContent = `${edge.from} → ${edge.to}: ${edge.type}${edge.notes ? ` (${edge.notes})` : ''}`;
+            path.appendChild(title);
+            edgeGroup.appendChild(path);
+        };
+        if (isBidirectional) {
+            drawCurve(aPos, bPos, p.forward, 25);
+            drawCurve(bPos, aPos, p.reverse, 25);
+        } else {
+            const single = p.forward || p.reverse;
+            if (single) drawCurve(data.nodes.get(single.from), data.nodes.get(single.to), single, 0);
+        }
+    }
 }
 
 function wireRelationshipEvents(el) {
@@ -644,6 +1060,19 @@ function wireRelationshipEvents(el) {
             customInput.style.display = typeSelect.value === '__other__' ? '' : 'none';
             if (typeSelect.value === '__other__') customInput.focus();
         });
+    }
+
+    // View toggle (graph ↔ list)
+    el.querySelectorAll('.kt-rel-view-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.relViewMode = btn.dataset.view;
+            renderNpcsSubTab();
+        });
+    });
+
+    // Render the graph SVG now that the container is in the DOM
+    if (state.relViewMode === 'graph') {
+        requestAnimationFrame(() => renderRelationshipGraph());
     }
 
     el.querySelector('#kt-rel-add')?.addEventListener('click', async () => {
@@ -660,6 +1089,7 @@ function wireRelationshipEvents(el) {
         if (!npcNames.includes(from)) { ktSetStatus(`"${from}" is not a known NPC.`, 'error'); return; }
         if (!npcNames.includes(to)) { ktSetStatus(`"${to}" is not a known NPC.`, 'error'); return; }
         updateRelationship(from, to, type, notes);
+        state._graphData = null; // invalidate cached layout
         try {
             const result = await syncRelationshipsToLorebook(from);
             if (result.success && !result.unchanged) {
@@ -681,6 +1111,7 @@ function wireRelationshipEvents(el) {
             const to = btn.dataset.to;
             if (!confirm(`Remove relationship: ${from} → ${to}?`)) return;
             removeRelationship(from, to);
+            state._graphData = null; // invalidate cached layout
             try { await syncRelationshipsToLorebook(from); } catch (err) { /* ignore */ }
             renderNpcsSubTab();
         });
