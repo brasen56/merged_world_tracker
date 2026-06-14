@@ -834,6 +834,72 @@ input[type="number"].mwt-input {
     border-bottom: 1px solid var(--mwt-border);
 }
 
+/* ─── Main toolbar (Scan / Export / Import) ──────────────────────────────── */
+.kt-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 0 10px;
+    border-bottom: 1px solid var(--mwt-border);
+    margin-bottom: 8px;
+}
+
+/* ─── Sub-tab bar (Staging / Minor / Major / State / Relationships) ──────── */
+.kt-sub-tabs {
+    display: flex;
+    gap: 2px;
+    flex: 1;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--mwt-border);
+}
+
+.kt-sub-tab {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--mwt-text-dim);
+    padding: 4px 12px;
+    border-radius: var(--mwt-radius);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mwt-font);
+    transition: all var(--mwt-transition);
+    white-space: nowrap;
+}
+
+.kt-sub-tab:hover {
+    color: var(--mwt-text);
+    background: var(--mwt-bg-light);
+}
+
+.kt-sub-tab.active {
+    color: var(--mwt-accent);
+    background: var(--mwt-bg-lighter);
+    border-color: var(--mwt-accent);
+}
+
+.kt-sub-spacer {
+    flex: 1;
+}
+
+.kt-notif-badge {
+    color: var(--mwt-warning) !important;
+    font-weight: 600;
+    animation: kt-notif-pulse 2s ease-in-out infinite;
+}
+
+@keyframes kt-notif-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.kt-sub-content {
+    padding: 8px 0;
+}
+
+/* Legacy aliases for backward compatibility */
 .kt-subtabs {
     display: flex;
     gap: 2px;
@@ -2194,19 +2260,20 @@ input[type="number"].mwt-input {
     }
 
     /* Toolbar wraps on small screens */
-    .kt-npcs-toolbar {
+    .kt-npcs-toolbar,
+    .kt-toolbar {
         flex-wrap: wrap;
         gap: 6px;
     }
 
-    .kt-npcs-toolbar .kt-subtabs {
+    .kt-sub-tabs {
         order: 10;
         width: 100%;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
     }
 
-    .kt-subtab-btn {
+    .kt-sub-tab {
         padding: 6px 8px;
         font-size: 11px;
         white-space: nowrap;

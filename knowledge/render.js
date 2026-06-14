@@ -106,6 +106,12 @@ export function renderNpcsSubTab() {
     const majorEntries = Object.fromEntries(Object.entries(registry).filter(([, v]) => v.type === 'major'));
 
     el.innerHTML = `
+        <div class="kt-toolbar">
+            <button id="kt-scan-btn" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>${state.isRunning ? '⏳ Scanning…' : '🔍 Scan'}</button>
+            <button id="kt-export-btn" class="mwt-btn" title="Export NPC registry">📥 Export</button>
+            <button id="kt-import-btn" class="mwt-btn" title="Import NPCs from JSON">📤 Import</button>
+            <button id="kt-import-lb-btn" class="mwt-btn" title="Import from existing lorebooks">📚 From Lorebooks</button>
+        </div>
         <div class="kt-sub-tabs">
             <button class="kt-sub-tab ${state.activeSubTab === 'staging' ? 'active' : ''}" data-sub="staging">
                 📋 Staging${state.stagingItems.length > 0 ? ` (${state.stagingItems.length})` : ''}
@@ -176,6 +182,11 @@ export function renderNpcsSubTab() {
         }
         finally { state.isRunning = false; document.dispatchEvent(new CustomEvent('mwt:busy-changed')); renderNpcsSubTab(); }
     });
+
+    // Export / Import / Import-from-Lorebooks buttons
+    el.querySelector('#kt-export-btn')?.addEventListener('click', () => exportNpcs());
+    el.querySelector('#kt-import-btn')?.addEventListener('click', () => importNpcs());
+    el.querySelector('#kt-import-lb-btn')?.addEventListener('click', () => importFromLorebooks());
 
     // Wire sub-tab specific events
     if (state.activeSubTab === 'staging') wireStagingEvents(el);

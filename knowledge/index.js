@@ -203,5 +203,6 @@ export function getNpcCount() {
 export async function getNpcContent(name) {
     const reg = getRegistry()[name];
     if (!reg || reg.uid == null) return '';
-    return loadEntryContent(reg.uid) || '';
+    const content = await loadEntryContent(reg.uid);
+    return content || '';
 }
