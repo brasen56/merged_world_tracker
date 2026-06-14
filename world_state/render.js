@@ -70,6 +70,11 @@ export function renderModalContent() {
     if (!state.modal) return;
     const editor = state.modal.querySelector('#ws-editor');
     if (editor) editor.value = getWorldStateText();
+    // The editor now reflects the persisted world state, so there are no
+    // pending unsaved edits. Reset isDirty to avoid a stale "dirty" flag
+    // from a previous editing session (e.g. user typed, closed without
+    // saving, then reopened the modal).
+    state.isDirty = false;
     updateEditorStats();
     refreshRevertButton();
     updateArchiveButtonState();
@@ -520,14 +525,30 @@ export function wireEvents() {
             if (!raw) return;
             const n = parseInt(raw, 10);
             if (isNaN(n) || n < 1) { setStatus(state.modal, 'Invalid interval.', 'error'); return; }
-            const maxScan = getMaxScanMessages(getSettings());
-            const clamped = Math.min(n, maxScan);
+            let maxScan = getMaxScanMessages(getSettings());
+            let interval = n;
             if (n > maxScan) {
-                setStatus(state.modal, `Auto-refresh interval clamped to ${maxScan} (max scan messages).`, 'warning', 5000);
+                if (n > 30) {
+                    // 30 is the hard cap for maxScanMessages; clamp and explain.
+                    interval = 30;
+                    maxScan = 30;
+                    setStatus(state.modal, `Auto-refresh interval set to 30 (maximum scan messages).`, 'warning', 5000);
+                } else if (confirm(`The auto-refresh interval (${n}) exceeds the current "Scan Messages" limit (${maxScan}).\n\nIncrease "Scan Messages" to ${n} to allow the full interval?`)) {
+                    // Raise maxScanMessages to match the desired interval so the
+                    // scanner can actually see enough messages to refresh on.
+                    maxScan = n;
+                    saveSettings({ ...getSettings(), maxScanMessages: n });
+                    const maxScanInput = state.modal.querySelector('#ws-max-scan-messages');
+                    if (maxScanInput) maxScanInput.value = String(n);
+                } else {
+                    // User declined to raise the limit — clamp the interval.
+                    interval = maxScan;
+                    setStatus(state.modal, `Auto-refresh interval clamped to ${maxScan} (max scan messages).`, 'warning', 5000);
+                }
             }
-            setWorldStateData({ autoRefresh: true, autoRefreshInterval: clamped });
+            setWorldStateData({ autoRefresh: true, autoRefreshInterval: interval });
             state.autoRefreshCounter = 0;
-            setStatus(state.modal, `Auto-refresh: every ${clamped} messages.`, 'success', 3000);
+            if (n <= maxScan) setStatus(state.modal, `Auto-refresh: every ${interval} messages.`, 'success', 3000);
         } else {
             setWorldStateData({ autoRefresh: false });
             setStatus(state.modal, 'Auto-refresh disabled.', 'info', 3000);

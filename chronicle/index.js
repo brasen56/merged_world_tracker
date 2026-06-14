@@ -25,6 +25,7 @@ import {
     getSettings, saveSettings, hasValidSettings,
     getChronicleData, setChronicleData, getSnapshots,
     persistMsgSinceSnapshot,
+    isAnchorStale,
 } from './data.js';
 
 import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
@@ -111,6 +112,68 @@ export function onChatChanged() {
     persistMsgSinceSnapshot();
     applyInjection();
     console.log('[MWT:Chronicle] Chat changed — state reset.');
+}
+
+// ─── Swipe / edit / delete awareness ─────────────────────────────────────────
+// Keep the auto-snapshot counter and anchor in sync when the user mutates the
+// chat history, so tracking doesn't drift after edits/deletes/swipes.
+
+/**
+ * A message was deleted. Decrement `msgSinceSnapshot` to reflect the shorter
+ * chat, and invalidate the chronicle anchor if it pointed at or after the
+ * deleted message.
+ *
+ * @param {number} deletedIndex - The chat-array index of the removed message.
+ */
+export function onMessageDeleted(deletedIndex) {
+    if (typeof deletedIndex !== 'number') return;
+    if (state.msgSinceSnapshot > 0) {
+        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - 1);
+        persistMsgSinceSnapshot();
+        console.log(`[MWT:Chronicle] MESSAGE_DELETED at index ${deletedIndex} — counter adjusted to ${state.msgSinceSnapshot}`);
+    }
+    // If the anchor referenced the deleted message (or something after it),
+    // mark it stale so the next snapshot re-anchors against the live chat.
+    const data = getChronicleData();
+    if (data.lastAnchor && typeof data.lastAnchor.msgIndex === 'number') {
+        if (data.lastAnchor.msgIndex >= deletedIndex) {
+            setChronicleData({ anchorStale: true });
+            console.log('[MWT:Chronicle] lastAnchor invalidated by delete — flagged stale.');
+        }
+    }
+    // Force the message-count badge to refresh
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+/**
+ * A message was swiped (its content replaced with an alternate generation).
+ * The auto-snapshot counter does not need adjustment (chat length is unchanged),
+ * but if the swiped message is the chronicle anchor, its content fingerprint
+ * no longer matches, so flag staleness.
+ *
+ * @param {number} swipedIndex - The chat-array index of the swiped message.
+ */
+export function onMessageSwiped(swipedIndex) {
+    const data = getChronicleData();
+    if (isAnchorStale(data.lastAnchor)) {
+        setChronicleData({ anchorStale: true });
+        console.log(`[MWT:Chronicle] MESSAGE_SWIPED at index ${swipedIndex} — anchor flagged stale.`);
+    }
+}
+
+/**
+ * A message was edited. Similar to swipe: if the edited message is the
+ * chronicle anchor (or the anchor is otherwise unresolvable), flag it stale
+ * so the user is aware the chronicle may be out of sync.
+ *
+ * @param {number} editedIndex - The chat-array index of the edited message.
+ */
+export function onMessageEdited(editedIndex) {
+    const data = getChronicleData();
+    if (isAnchorStale(data.lastAnchor)) {
+        setChronicleData({ anchorStale: true });
+        console.log(`[MWT:Chronicle] MESSAGE_EDITED at index ${editedIndex} — anchor flagged stale.`);
+    }
 }
 
 export function onGenerationStarted() { state.isMainGenerating = true; }

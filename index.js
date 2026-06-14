@@ -395,6 +395,50 @@ function onAnyEvent(names, handler) {
 onAnyEvent(['GENERATION_STARTED'], () => Chronicle.onGenerationStarted());
 onAnyEvent(['GENERATION_STOPPED', 'GENERATION_ENDED'], () => Chronicle.onGenerationStopped());
 
+// ─── Swipe / edit / delete awareness (F2) ────────────────────────────────────
+// Keep module counters and chronicle anchors in sync when the user mutates chat
+// history, so tracking doesn't drift after edits/deletes/swipes.
+//
+// SillyTavern's event signatures vary across versions, so we normalize the
+// argument to a chat-array index (number) before delegating to modules.
+
+function extractMessageIndex(arg) {
+    if (typeof arg === 'number') return arg;
+    if (arg && typeof arg === 'object') {
+        if (typeof arg.messageId === 'number') return arg.messageId;
+        if (typeof arg.index === 'number') return arg.index;
+    }
+    return null;
+}
+
+if (eventSource && event_types?.MESSAGE_DELETED) {
+    eventSource.on(event_types.MESSAGE_DELETED, (...args) => {
+        const idx = extractMessageIndex(args[0]);
+        console.log(`[MWT] MESSAGE_DELETED (index: ${idx}) — adjusting counters.`);
+        WorldState.onMessageDeleted(idx);
+        Chronicle.onMessageDeleted(idx);
+        Knowledge.onMessageDeleted(idx);
+    });
+}
+
+if (eventSource && event_types?.MESSAGE_SWIPED) {
+    eventSource.on(event_types.MESSAGE_SWIPED, (...args) => {
+        const idx = extractMessageIndex(args[0]);
+        console.log(`[MWT] MESSAGE_SWIPED (index: ${idx}) — checking anchor / scheduling refresh.`);
+        WorldState.onMessageSwiped(idx);
+        Chronicle.onMessageSwiped(idx);
+    });
+}
+
+if (eventSource && event_types?.MESSAGE_EDITED) {
+    eventSource.on(event_types.MESSAGE_EDITED, (...args) => {
+        const idx = extractMessageIndex(args[0]);
+        console.log(`[MWT] MESSAGE_EDITED (index: ${idx}) — checking anchor / scheduling refresh.`);
+        WorldState.onMessageEdited(idx);
+        Chronicle.onMessageEdited(idx);
+    });
+}
+
 // ─── Floating button bar, drawer, wand menu (via core/ui.js) ────────────────
 
 const ui = createFloatingButtonBar({

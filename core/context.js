@@ -24,6 +24,11 @@ export function getContextSafe() {
 
 /**
  * Returns the chat array from the current context, or an empty array.
+ *
+ * ⚠️ This returns the **live reference** to SillyTavern's internal chat array,
+ * not a copy.  Callers must treat it as read-only — mutating the returned
+ * array (push/splice/sort/etc.) will modify SillyTavern's state directly.
+ * If a mutable copy is needed, use `getChat().slice()` or spread `[...getChat()]`.
  */
 export function getChat() {
     return getContextSafe()?.chat || [];
@@ -144,8 +149,20 @@ export function escapeRegex(s) {
 }
 
 /**
+ * Rough characters-per-token ratio used by the fallback estimator.
+ *
+ * Empirical data for English text on common BPE tokenizers (GPT-2, Llama,
+ * Claude) places the average around 4–5 chars/token.  We use 4.5 as a
+ * middle-ground that avoids the systematic overestimation of the previous
+ * `length / 4` heuristic while still erring slightly high for safety in
+ * budget/usage displays.
+ */
+const FALLBACK_CHARS_PER_TOKEN = 4.5;
+
+/**
  * Estimate token count for a string.
- * Tries SillyTavern's built-in tokenizer first, falls back to ~4 chars/token.
+ * Tries SillyTavern's built-in tokenizer first, falls back to a length-based
+ * heuristic (see `FALLBACK_CHARS_PER_TOKEN`).
  * @param {string} text
  * @returns {number}
  */
@@ -170,6 +187,6 @@ export function estimateTokens(text) {
         }
     } catch { /* fallback */ }
 
-    // Fallback: rough estimate ~4 chars per token
-    return Math.ceil(text.length / 4);
+    // Fallback: rough length-based estimate (see FALLBACK_CHARS_PER_TOKEN).
+    return Math.ceil(text.length / FALLBACK_CHARS_PER_TOKEN);
 }

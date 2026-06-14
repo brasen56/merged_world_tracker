@@ -232,8 +232,10 @@ function renderDetailForItem(item) {
     if (!item) return '<div class="kt-detail-empty">Select a proposal.</div>';
     const editorContent = item.mergedContent || item.proposedContent || '';
 
+    // Skip the diff view for state tracker updates: they use the full entry text
+    // as both existing and proposed content, which produces noisy, misleading diffs.
     let diffHtml = '';
-    if (item.existingContent && editorContent && item.existingContent !== editorContent) {
+    if (item.type !== 'state' && item.existingContent && editorContent && item.existingContent !== editorContent) {
         const diff = renderLineDiff(item.existingContent, editorContent);
         if (diff) {
             diffHtml = `<div class="kt-detail-section">

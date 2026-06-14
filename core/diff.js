@@ -39,7 +39,10 @@ export function computeLcsDiff(oldText, newText, maxLines = 500) {
 
     if (m + n > maxLines * 2) return null; // too large for LCS
 
-    const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+    // Uint32Array (max value ~4.29e9) avoids the wrap-around that Uint16Array
+    // (max 65535) would suffer on very large LCS inputs.  The `maxLines` guard
+    // makes overflow unlikely in practice, but this removes the theoretical risk.
+    const dp = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
     for (let i = 1; i <= m; i++) {
         for (let j = 1; j <= n; j++) {
             if (oldLines[i - 1] === newLines[j - 1]) {

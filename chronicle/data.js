@@ -157,6 +157,34 @@ export function resolveAnchor(anchor) {
     return { index: 0, found: false };
 }
 
+// ─── Anchor staleness detection ──────────────────────────────────────────────
+
+/**
+ * Returns true if the message referenced by `anchor` has changed or disappeared
+ * (edited / swiped / deleted), making the anchor's stored content fingerprint
+ * no longer match the actual chat message at that position.
+ *
+ * This is used by the swipe/edit/delete event hooks to flag staleness so the
+ * user knows the chronicle may be out of sync with the edited chat.
+ */
+export function isAnchorStale(anchor) {
+    if (!anchor || typeof anchor.msgIndex !== 'number') return false;
+    const chat = getChat();
+    const candidate = chat[anchor.msgIndex];
+    // Message gone (deleted) or index out of bounds
+    if (!candidate) return true;
+    const mes = String(candidate.mes || '');
+    // If we tracked content, verify it still matches
+    if (anchor.start && anchor.end && anchor.length) {
+        if (mes.length !== anchor.length
+            || mes.slice(0, 80) !== anchor.start
+            || mes.slice(-80) !== anchor.end) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ─── Chronicle data ──────────────────────────────────────────────────────────
 
 export function getChronicleData() {
@@ -236,6 +264,12 @@ export function buildMessageWindow(fromIndex, toIndex) {
     if (filtered.length === 0) return { text: '', lastMsg: null, fromIndex: start, toIndex: end - 1 };
     const lines = [];
     let total = 0;
+    // Character budget for the assembled message window.  This is deliberately
+    // smaller than the `maxChars = 400000` budget used by core/context.js's
+    // getRecentMessages(): chronicle snapshots feed a focused window into a
+    // summarisation prompt, whereas getRecentMessages() is used for raw
+    // context-building where more history is desirable.  Keeping these
+    // independent lets each caller tune its own cost/quality trade-off.
     const MAX = 100000;
     for (let i = filtered.length - 1; i >= 0; i--) {
         const msg = filtered[i];

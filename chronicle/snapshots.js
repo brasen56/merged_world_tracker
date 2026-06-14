@@ -159,7 +159,7 @@ export async function generateSnapshot() {
             text: raw, characters, note: '',
         };
         const snapshots = [...getSnapshots(), snapshot];
-        setChronicleData({ snapshots, lastAnchor: newAnchor, suggestSent: true });
+        setChronicleData({ snapshots, lastAnchor: newAnchor, suggestSent: true, anchorStale: false });
         applyInjection();
         state.msgSinceSnapshot = 0;
         persistMsgSinceSnapshot();
@@ -198,7 +198,12 @@ export async function regenerateSnapshot(snapshotId) {
     const from = snapshot.fromIndex ?? 0;
     const to = snapshot.toIndex !== undefined && snapshot.toIndex > from ? snapshot.toIndex : Math.min(from + 200, chat.length - 1);
     const { text } = buildMessageWindow(from, to);
-    if (!text.trim()) { scSetStatus('No messages for regeneration.', 'error'); state.isGenerating = false; return; }
+    if (!text.trim()) {
+        scSetStatus('No messages for regeneration.', 'error');
+        state.isGenerating = false;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        return;
+    }
     const worldState = getCurrentWorldState().trim();
     const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
 
@@ -289,6 +294,7 @@ export async function consolidateEntries(ids) {
             notify('Session Chronicle', `Chronicle consolidation failed: ${err.message}`, 'error');
         } finally {
             state.isGenerating = false;
+            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         }
     });
 }

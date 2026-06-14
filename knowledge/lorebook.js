@@ -338,4 +338,26 @@ export async function runNpcUpdate(name, uid) {
     return { currentContent, merged, fields: result.fields || {}, newKnowledge: result.new_knowledge || [] };
 }
 
-export function queueTrackerWork(fn) { state.trackerQueue = state.trackerQueue.then(fn).catch(err => console.error('[MWT:Knowledge] Queued work failed:', err)); return state.trackerQueue; }
+/**
+ * Serialise asynchronous tracker work onto a single promise chain.
+ *
+ * Returns a promise that resolves specifically to `fn`'s own result (or
+ * `undefined` if `fn` throws).  We capture this fn-local promise in a local
+ * variable rather than returning `state.trackerQueue` directly: the queue
+ * field is reassigned by every subsequent call, so returning it would make an
+ * `await` of *this* call resolve to the result of a *later* queued item.
+ *
+ * Errors are logged and swallowed so a single failure can't permanently break
+ * the serialisation chain.
+ *
+ * @param {() => (Promise<*>|*)} fn
+ * @returns {Promise<*>} resolves to fn's return value, or undefined on error
+ */
+export function queueTrackerWork(fn) {
+    const result = state.trackerQueue
+        .catch(() => {})              // a prior failure must not block fn
+        .then(() => fn())
+        .catch(err => console.error('[MWT:Knowledge] Queued work failed:', err));
+    state.trackerQueue = result;
+    return result;
+}

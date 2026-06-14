@@ -113,6 +113,25 @@ export function onChatChanged() {
     document.querySelectorAll('#kt-view-modal').forEach(m => m.remove());
 }
 
+// ─── Delete awareness ────────────────────────────────────────────────────────
+// Keep the knowledge auto-trigger counter in sync when messages are deleted so
+// the "every N messages" cadence doesn't drift relative to the shorter chat.
+
+/**
+ * A message was deleted. Decrement `messageCounter` if positive so the
+ * auto-trigger countdown stays aligned with the chat length.
+ *
+ * @param {number} deletedIndex - The chat-array index of the removed message.
+ */
+export function onMessageDeleted(deletedIndex) {
+    if (!getSettings().autoTriggerEnabled) return;
+    if (typeof deletedIndex !== 'number') return;
+    if (state.messageCounter > 0) {
+        state.messageCounter = Math.max(0, state.messageCounter - 1);
+        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} — counter adjusted to ${state.messageCounter}`);
+    }
+}
+
 // ─── Token tracking ──────────────────────────────────────────────────────────
 
 export function getTotalTokens() {

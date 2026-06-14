@@ -58,7 +58,15 @@ export function createModal({ id, title, content, cssClass = '', onClose = null 
     closeBtn?.addEventListener('click', doClose);
     backdrop?.addEventListener('click', doClose);
 
-    // Escape key — only close the topmost (last-shown) visible modal
+    // Escape key — only close the topmost (last-shown) visible modal.
+    //
+    // Note: this deliberately only considers `.mwt-modal` elements, so if a
+    // SillyTavern-native dialog (or any other non-MWT overlay) is open on top
+    // of an MWT modal, Escape will not close the MWT modal.  This is the
+    // intended behaviour: we never want to dismiss ourselves while a foreign
+    // modal on top of us still requires attention.  The trade-off is that
+    // pressing Escape over an MWT modal with a native dialog stacked above it
+    // appears to "do nothing" from the user's perspective.
     const onKey = (e) => {
         if (e.key !== 'Escape') return;
         if (modal.style.display === 'none') return;

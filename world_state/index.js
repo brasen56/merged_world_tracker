@@ -27,6 +27,7 @@ import {
 } from './injection.js';
 import {
     refreshWorldState, onMessageReceived, restartAutoSaveTimer,
+    scheduleAutoRefresh,
 } from './refresh.js';
 import { render, wireEvents } from './render.js';
 
@@ -54,6 +55,54 @@ export function onChatChanged() {
     persistAutoRefreshCounter();
     applyWorldStateInjection();
     console.log('[MWT:WorldState] Chat changed — state reset.');
+}
+
+// ─── Swipe / edit / delete awareness ─────────────────────────────────────────
+// Keep the auto-refresh counter accurate when the user mutates chat history,
+// and optionally re-trigger a refresh after swipe/edit (since the described
+// events changed).
+
+/**
+ * A message was deleted. Decrement the auto-refresh counter so the countdown
+ * to the next refresh stays aligned with the (now shorter) chat.
+ *
+ * @param {number} deletedIndex - The chat-array index of the removed message.
+ */
+export function onMessageDeleted(deletedIndex) {
+    if (!isAutoRefreshEnabled()) return;
+    if (typeof deletedIndex !== 'number') return;
+    if (state.autoRefreshCounter > 0) {
+        state.autoRefreshCounter = Math.max(0, state.autoRefreshCounter - 1);
+        persistAutoRefreshCounter();
+        console.log(`[MWT:WorldState] MESSAGE_DELETED at index ${deletedIndex} — counter adjusted to ${state.autoRefreshCounter}`);
+    }
+    // Refresh the floating button countdown badge
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+/**
+ * A message was swiped (its content replaced with an alternate generation).
+ * The described events changed, so optionally re-trigger a world state refresh
+ * if auto-refresh is enabled — the new variant may alter the tracked state.
+ *
+ * @param {number} swipedIndex - The chat-array index of the swiped message.
+ */
+export function onMessageSwiped(swipedIndex) {
+    if (!isAutoRefreshEnabled()) return;
+    console.log(`[MWT:WorldState] MESSAGE_SWIPED at index ${swipedIndex} — scheduling refresh.`);
+    scheduleAutoRefresh('message-swiped');
+}
+
+/**
+ * A message was edited. Like swipe, the described events changed, so optionally
+ * re-trigger a world state refresh if auto-refresh is enabled.
+ *
+ * @param {number} editedIndex - The chat-array index of the edited message.
+ */
+export function onMessageEdited(editedIndex) {
+    if (!isAutoRefreshEnabled()) return;
+    console.log(`[MWT:WorldState] MESSAGE_EDITED at index ${editedIndex} — scheduling refresh.`);
+    scheduleAutoRefresh('message-edited');
 }
 
 /** Returns true if world state is currently refreshing */

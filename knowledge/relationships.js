@@ -57,12 +57,18 @@ export function removeAllRelationshipsFor(name) {
         changed = true;
     }
 
-    // Remove incoming edges pointing to this NPC
+    // Remove incoming edges pointing to this NPC.
+    // Compute the filtered list *before* mutating/deleting so the `changed`
+    // flag and the empty-bucket cleanup both rely on a concrete value rather
+    // than reading `.length` from a property that may have just been deleted.
     for (const [from, targets] of Object.entries(rels)) {
         const before = targets.length;
-        rels[from] = targets.filter(r => r.target !== name);
-        if (rels[from].length === 0) delete rels[from];
-        if (rels[from].length !== before) changed = true;
+        const filtered = targets.filter(r => r.target !== name);
+        if (filtered.length !== before) {
+            changed = true;
+            if (filtered.length === 0) delete rels[from];
+            else rels[from] = filtered;
+        }
     }
 
     if (changed) saveRelationships(rels);
