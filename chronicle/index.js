@@ -63,6 +63,8 @@ export function render() {
     return '<div style="text-align:center;padding:20px;color:var(--mwt-text-dim)">Loading chronicle…</div>';
 }
 
+export { applyInjection };
+
 export function getModuleRender() { return render; }
 export function getModuleWireEvents() {
     return () => {

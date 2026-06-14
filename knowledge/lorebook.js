@@ -279,10 +279,10 @@ export async function runScan() {
     const worldState = getCurrentWorldState();
     const chronicle = getLatestChronicleEntry();
     if (!recentMessages) throw new Error('No recent messages to scan.');
-    const knownSection = knownNames.length > 0 ? `### Already Tracked NPCs\n${knownNames.map(n => `- ${n} [${registry[n].type}]`).join('\n')}` : '### Already Tracked NPCs\nNone yet.';
+    const knownSection = knownNames.length > 0 ? `<already_tracked_npcs>\n${knownNames.map(n => `- ${n} [${registry[n].type}]`).join('\n')}\n</already_tracked_npcs>` : '<already_tracked_npcs>\nNone yet.\n</already_tracked_npcs>';
     const playerNames = getPlayerNames({ lower: false, includeFirstChat: true });
-    const playerSection = playerNames.size > 0 ? `### Player Names (EXCLUDE)\n${[...playerNames].map(n => `- ${n}`).join('\n')}` : '';
-    const userContent = [knownSection, '', playerSection, '', worldState ? `### World State\n${worldState}` : '', '', chronicle ? `### Chronicle\n${chronicle}` : '', '', '### Recent Messages', recentMessages, '', '='.repeat(60), 'Scan for NPCs. Output only JSON.'].filter(s => s !== null && s !== '').join('\n');
+    const playerSection = playerNames.size > 0 ? `<player_names_exclude>\n${[...playerNames].map(n => `- ${n}`).join('\n')}\n</player_names_exclude>` : '';
+    const userContent = [knownSection, '', playerSection, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), 'Scan for NPCs. Output only JSON.'].filter(s => s !== null && s !== '').join('\n');
     const raw = await ktFetchFromApi(SCAN_SYSTEM_PROMPT, userContent);
     let cleaned = normaliseOutput(raw);
     try {
@@ -329,7 +329,7 @@ export async function runNpcUpdate(name, uid) {
     const recentMessages = getRecentMessages();
     const worldState = getCurrentWorldState();
     if (!recentMessages) throw new Error('No recent messages.');
-    const userContent = [`### NPC: ${name}`, `### Current Entry\n${currentContent}`, '', worldState ? `### World State\n${worldState}` : '', '', '### Recent Messages', recentMessages, '', '='.repeat(60), `Identify new info about ${name}. Output only JSON.`].filter(Boolean).join('\n');
+    const userContent = [`<entity>${name}</entity>`, `<current_entry>\n${currentContent}\n</current_entry>`, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), `Identify new info about ${name}. Output only JSON.`].filter(Boolean).join('\n');
     const raw = await ktFetchFromApi(NPC_UPDATE_PROMPT, userContent);
     let cleaned = normaliseOutput(raw);
     let result;

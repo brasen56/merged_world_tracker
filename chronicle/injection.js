@@ -7,7 +7,7 @@
 
 import {
     getGlobalSettings, estimateTokens,
-    applyExtensionPromptInjection,
+    applyExtensionPromptInjection, wrapInTag,
 } from '../core/index.js';
 
 import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
@@ -82,5 +82,7 @@ export function applyInjection() {
         globalDepth: globalSettings.chronicleDepth,
         fallbackDepth: getChronicleData().injectDepth ?? 2,
         globalRole: globalSettings.chronicleRole || 'system',
+        wrapperTag: 'mwt_chronicle',
+        useTags: globalSettings.structuralBoundaries !== false,
     });
 }

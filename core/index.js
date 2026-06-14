@@ -9,7 +9,7 @@ export { normalizeApiBase, fetchFromApi, fetchViaConnectionProfile, resolveApiCa
 export { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from './diff.js';
 export { createSettingsManager, syncSharedConnectionSettings, getGlobalSettings } from './settings.js';
 export { createModal, showModal, hideModal, setStatus, formatDate } from './modal.js';
-export { applyExtensionPromptInjection, roleToNumber } from './injection.js';
+export { applyExtensionPromptInjection, roleToNumber, wrapInTag } from './injection.js';
 export {
     getCurrentWorldState,
     getLatestChronicleEntry,

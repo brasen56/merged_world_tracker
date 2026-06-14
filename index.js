@@ -94,6 +94,8 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         worldStateRole: 'system',
         chronicleDepth: 4,
         chronicleRole: 'system',
+        // Structural boundaries: wrap injected blocks in XML tags for clarity
+        structuralBoundaries: true,
         // Floating button visibility
         showFloatWorld: true,
         showFloatChronicle: true,
@@ -186,6 +188,16 @@ function renderSettingsTab() {
                 <option value="user" ${s.chronicleRole === 'user' ? 'selected' : ''}>user</option>
                 <option value="assistant" ${s.chronicleRole === 'assistant' ? 'selected' : ''}>assistant</option>
             </select>
+
+            <label class="mwt-label" style="grid-column:1/3;font-weight:bold">🏷️ Structural Boundaries</label>
+            <label class="mwt-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="mwt-s-structural-boundaries" ${s.structuralBoundaries !== false ? 'checked' : ''}>
+                <span>Wrap injected blocks in XML tags</span>
+            </label>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
+                Wraps each injected reference block (World State, Plot Seeds, Chronicle) in tags like <code><mwt_world_state>…</mwt_world_state></code>.
+                Recommended for smaller / open models (24–70B) that bleed between sections. Frontier models don't need it; turn off to save a few tokens.
+            </p>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -317,6 +329,8 @@ function renderModal() {
                 worldStateRole: modal.querySelector('#mwt-s-ws-role')?.value || 'system',
                 chronicleDepth: Number(modal.querySelector('#mwt-s-ch-depth')?.value) || 4,
                 chronicleRole: modal.querySelector('#mwt-s-ch-role')?.value || 'system',
+                // Structural boundaries
+                structuralBoundaries: modal.querySelector('#mwt-s-structural-boundaries')?.checked ?? true,
                 // Button visibility
                 showFloatWorld: modal.querySelector('#mwt-s-show-world')?.checked ?? true,
                 showFloatChronicle: modal.querySelector('#mwt-s-show-chronicle')?.checked ?? true,
@@ -328,6 +342,12 @@ function renderModal() {
             saveSettings(patch);
             ui.applyButtonVisibility();
             ui.applyButtonStyle();
+            // Re-apply injections so the structural-boundaries toggle takes
+            // effect immediately without requiring a new chat message.
+            try {
+                WorldState.applyWorldStateInjection?.();
+                Chronicle.applyInjection?.();
+            } catch { /* modules may not be initialized yet */ }
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });
     }

@@ -52,11 +52,24 @@ API pointers verified against this ST install.
 
 ## Tier 2 — very likely
 
-- [ ] **Swipe / edit / delete awareness**
+- [x] **Swipe / edit / delete awareness**
   Users will notice the world state describing a swiped-away response or counters
   drifting after deletes. Listen to `MESSAGE_SWIPED`, `MESSAGE_EDITED`,
   `MESSAGE_DELETED` (all in `scripts/events.js`): optionally re-refresh on swipe,
   adjust auto counters, and invalidate stale chronicle anchors.
+  *Implemented:* `index.js` registers listeners for all three events and
+  delegates to per-module `onMessageSwiped` / `onMessageEdited` /
+  `onMessageDeleted` hooks.
+  - **World State:** `MESSAGE_DELETED` decrements `autoRefreshCounter`;
+    `MESSAGE_SWIPED` / `MESSAGE_EDITED` schedule an auto-refresh (gated by the
+    existing auto-refresh toggle) since the described events changed.
+  - **Chronicle:** `MESSAGE_DELETED` decrements `msgSinceSnapshot` and flags
+    `lastAnchor` stale if it referenced the deleted/at-or-after index;
+    `MESSAGE_SWIPED` / `MESSAGE_EDITED` use the new `isAnchorStale()` helper
+    (in `chronicle/data.js`) to flag the anchor when its content fingerprint no
+    longer matches the live chat message.
+  - **Knowledge:** `MESSAGE_DELETED` decrements `messageCounter` so the
+    "every N messages" cadence stays aligned with the shorter chat.
 
 - [ ] **Prompt/template customization for Chronicle & Knowledge + output language**
   World State already has a custom prompt; Chronicle's sections and the scan
@@ -82,9 +95,19 @@ API pointers verified against this ST install.
 
 ## Tier 3 — differentiators / nice-to-have
 
-- [ ] **Relationship graph view** — visual node/edge graph for the relationships
+- [x] **Relationship graph view** — visual node/edge graph for the relationships
   sub-tab (Timelines-style views are popular). SVG or canvas; clicking a node
   opens the NPC.
+  *Implemented:* Force-directed SVG graph in `knowledge/render.js`
+  (`computeGraphLayout`, `renderRelationshipGraph`, `wireRelationshipGraphInteractions`).
+  Nodes are draggable with live edge updates; click (without drag) opens the
+  NPC lorebook entry in the existing view modal. Edges are color-coded by
+  relationship type with arrowheads, and bidirectional edges render as paired
+  curves so both directions are visible. Includes pan/zoom (scroll wheel,
+  background drag) and a color legend. A Graph/List toggle in the toolbar
+  preserves the original list view. State in `knowledge/state.js`
+  (`relViewMode`, `_graphData`); styles in `style.css` under
+  "Relationship graph view".
 - [ ] **Vector/RAG chronicle injection** — inject entries semantically relevant to
   the current scene instead of recent-N, via ST's built-in Vector Storage.
 - [ ] **Configurable lorebook targets** — the "Knowledge Tracker"/"State Tracker"
