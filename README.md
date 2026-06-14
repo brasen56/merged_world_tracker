@@ -86,7 +86,7 @@ Generates timestamped chronicle entries that summarize what happened in the RP, 
 
 - **LLM-Generated Snapshots** — Produces structured entries with Summary, Relationship Shifts, Open Loops, and Time Anchors
 - **Manual Entries** — Create blank entries with the standard format for hand-written notes
-- **Consolidation** — Merge multiple entries into one, with a preview/editor for the input before consolidation
+- **Consolidation** — Merge multiple entries into one, with a preview/editor for the input before consolidation. Optionally **designate a base entry** (the foundation) with ★ — useful for merging fresh entries into an already-consolidated entry where the consolidated entry should be the base and the others the deltas
 - **Regeneration with Diff** — Regenerate any entry and compare the original vs. new version side-by-side with inline word-level diff highlighting
 - **Entry Editor** — Full text editor for any entry with save, regenerate, and delete
 - **Trash & Restore** — Deleted entries go to a trash bin (up to 50) and can be restored
@@ -229,7 +229,11 @@ Control how World State and Chronicle entries are injected into the prompt:
 1. Open the **📜 Chronicle** tab
 2. Click **📸 Snapshot** to generate a chronicle entry from messages since the last snapshot
 3. Review the entry — click it to expand and edit
-4. Use **Consolidate** mode (checkbox icon) to merge multiple entries into one summary
+4. Use **Consolidate** mode to merge multiple entries into one summary:
+   - Click **Consolidate** to enter selection mode
+   - Check the entries you want to merge (2+ required)
+   - Optionally click **☆ Set as Base** on one entry to designate it as the foundation — the others become deltas applied on top of it. This is useful when consolidating fresh entries into an already-consolidated entry where the consolidated one should be the base
+   - Click **Consolidate N entries** to proceed
 5. Toggle **🔌 Injection** to include chronicle entries in the prompt
 6. Configure injection mode via the **⚙ Injection Settings** gear button:
    - **Recent** — last N entries (default: 2)

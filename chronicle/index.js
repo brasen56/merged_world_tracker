@@ -102,6 +102,7 @@ export function onChatChanged() {
     state.isMainGenerating = false;
     state.selectedSnapshotId = null;
     state.consolidateMode = false;
+    state.consolidateBaseId = null;
     state.bulkDeleteMode = false;
     state.checkedForMerge.clear();
     state.pendingSearch = '';

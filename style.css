@@ -657,6 +657,21 @@ html.light body {
   border-left-color: var(--sc-danger);
 }
 
+/* Designated consolidation base — pinned with ★ Set as Base */
+.sc-entry--base {
+  border-left-color: var(--sc-warning);
+  box-shadow: inset 0 0 0 1px var(--sc-warning);
+}
+
+/* The "★ BASE" / "☆ Set as Base" toggle button in consolidate mode */
+.sc-base-toggle {
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.sc-base-toggle:hover {
+  filter: brightness(1.15);
+}
+
 /* ── Entry checkbox ─────────────────────────────────────────────────────── */
 .sc-checkbox {
   width: 15px;

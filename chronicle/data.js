@@ -56,6 +56,11 @@ export const state = {
     isMainGenerating: false,
     selectedSnapshotId: null,
     consolidateMode: false,
+    // User-designated BASE entry for the next consolidation (null = auto, by
+    // earliest createdAt). Lets the user pin an already-consolidated entry as
+    // the foundation and treat fresher entries as deltas, instead of letting
+    // pure timestamp ordering decide which entry is the base.
+    consolidateBaseId: null,
     bulkDeleteMode: false,
     checkedForMerge: new Set(),
     pendingSearch: '',

@@ -258,20 +258,49 @@ export async function regenerateSnapshot(snapshotId) {
 
 // ─── Consolidate entries ─────────────────────────────────────────────────────
 
-export async function consolidateEntries(ids) {
+export async function consolidateEntries(ids, baseId = null) {
     if (state.isGenerating) { scSetStatus('Generation in progress.', 'error'); return; }
     if (!ids || ids.length < 2) { scSetStatus('Select at least 2 entries.', 'error'); return; }
     const snapshots = getSnapshots();
     const selected = ids.map(id => snapshots.find(s => s.id === id)).filter(Boolean);
     if (selected.length < 2) { scSetStatus('Could not find all entries.', 'error'); return; }
-    selected.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    const base = selected[0];
-    const deltas = selected.slice(1);
-    const baseSection = `=== BASE ENTRY (earliest) ===\n${base.text}`;
+    // Resolve the BASE entry.  By default this is the earliest by createdAt
+    // (the historical behaviour).  The user can override via the "★ Set as
+    // Base" control in consolidate mode — e.g. pinning an already-consolidated
+    // entry as the foundation and treating fresher entries as deltas against
+    // it, instead of letting pure timestamp ordering choose the base.
+    const designatedBaseId = baseId || state.consolidateBaseId;
+    let base;
+    let deltas;
+    if (designatedBaseId && selected.some(s => s.id === designatedBaseId)) {
+        base = selected.find(s => s.id === designatedBaseId);
+        deltas = selected.filter(s => s.id !== designatedBaseId);
+        // Keep deltas in chronological order so the model reads them as a
+        // coherent progression.
+        deltas.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    } else {
+        selected.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        base = selected[0];
+        deltas = selected.slice(1);
+    }
+    const baseSection = `=== BASE ENTRY (designated) ===\n${base.text}`;
     const deltaSections = deltas.map((d, i) => `=== DELTA ${i + 1} (later) ===\n${d.text}`).join('\n\n');
     const userContent = `${baseSection}\n\n${deltaSections}`;
 
-    _render.showConsolidationPreview(selected, userContent, async (editedResult) => {
+    // Chronological bounds for metadata, computed from the FULL selected range
+    // regardless of which entry was designated as the base.  The base choice
+    // only affects how the model treats the entries (which is the foundation);
+    // the resulting entry's timestamps/index must still span every entry that
+    // was merged, so display order, injection order, and re-snapshot ranges
+    // stay correct even when the user pins a non-earliest entry as the base.
+    const chronological = [...selected].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const earliest = chronological[0];
+    const latest = chronological[chronological.length - 1];
+
+    // Pass entries to the preview in base-first order so the preview's
+    // index-0-is-BASE labelling matches the actual consolidation intent.
+    const previewEntries = [base, ...deltas];
+    _render.showConsolidationPreview(previewEntries, userContent, async (editedResult) => {
         if (state.isGenerating) return;
         state.isGenerating = true;
         scSetStatus('Consolidating…', 'info');
@@ -293,14 +322,17 @@ export async function consolidateEntries(ids) {
             selected.forEach(s => { if (s.characters) s.characters.forEach(c => allCharacters.add(c)); });
             const consolidated = {
                 id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                // Sort key = START of the merged range (base = earliest selected),
+                // Sort key = START of the merged range (earliest selected),
                 // NOT "now" — stamping wall-clock time made the consolidated entry
                 // leapfrog to the newest slot in both display and injection order.
                 // The real merge time is preserved separately in consolidatedAt.
-                createdAt: base.createdAt, consolidatedAt: new Date().toISOString(),
-                worldDate: selected[selected.length - 1].worldDate,
-                anchor: selected[selected.length - 1].anchor, fromIndex: base.fromIndex ?? -1,
-                toIndex: selected[selected.length - 1].toIndex ?? -1, text: raw,
+                // Uses the chronological bounds (not the designated base) so the
+                // entry spans the full merged range even when the user pins a
+                // non-earliest entry as the consolidation base.
+                createdAt: earliest.createdAt, consolidatedAt: new Date().toISOString(),
+                worldDate: latest.worldDate,
+                anchor: latest.anchor, fromIndex: earliest.fromIndex ?? -1,
+                toIndex: latest.toIndex ?? -1, text: raw,
                 characters: Array.from(allCharacters), consolidated: true, _consolidatedFrom: ids,
             };
             const deletedBin = getChronicleData()._deletedBin || [];
@@ -313,6 +345,7 @@ export async function consolidateEntries(ids) {
             applyInjection();
             state.consolidateMode = false;
             state.checkedForMerge.clear();
+            state.consolidateBaseId = null;
             state.selectedSnapshotId = consolidated.id;
             _render.renderContent();
             if (getSettings().syncWorldState) updateWorldStateFromChronicle(raw);

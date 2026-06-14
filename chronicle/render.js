@@ -334,6 +334,7 @@ export function renderContent() {
         if (s.consolidated) classes.push('sc-entry--consolidated');
         if (state.consolidateMode && state.checkedForMerge.has(s.id)) classes.push('sc-entry--merge-checked');
         if (state.bulkDeleteMode && state.checkedForMerge.has(s.id)) classes.push('sc-entry--delete-checked');
+        if (state.consolidateMode && state.consolidateBaseId === s.id) classes.push('sc-entry--base');
         return classes.join(' ');
     };
 
@@ -355,13 +356,18 @@ export function renderContent() {
                 ${autoSettings.autoSnapshot ? `<span style="color:var(--mwt-text-dim)">Msgs until auto: ${Math.max(0, (autoSettings.autoSnapshotThreshold || 40) - state.msgSinceSnapshot)}</span>` : `<span style="color:var(--mwt-text-dim)">Msgs since last: ${(() => { const v = getMessageCountSinceLastSnapshot(); return v ?? '?'; })()}</span>`}
             </div>
             ${autoSettings.autoSnapshot ? `<div style="color:var(--mwt-accent);margin-top:4px">Auto-snapshot: ON (~${autoSettings.autoSnapshotThreshold} msgs)</div>` : ''}
-            ${state.consolidateMode ? '<div style="color:var(--mwt-accent)">📦 Select 2+ entries then click Consolidate</div>' : ''}
+            ${state.consolidateMode ? '<div style="color:var(--mwt-accent)">📦 Select 2+ entries. Optionally pin one as the BASE (foundation) with ★ — otherwise the earliest is used. Then click Consolidate.</div>' : ''}
             ${state.bulkDeleteMode ? '<div style="color:var(--mwt-danger)">⚠ Select entries to delete</div>' : ''}
         </div>
         <div class="sc-entries">${sorted.map((s, i) => {
             const label = s.manual ? '[Manual]' : s.consolidated ? '[Consolidated]' : `#${i + 1}`;
+            const isChecked = state.consolidateMode && state.checkedForMerge.has(s.id);
+            const isBase = state.consolidateMode && state.consolidateBaseId === s.id;
+            const baseBtn = isChecked
+                ? `<button class="mwt-btn sc-base-toggle" data-id="${escapeHtml(s.id)}" style="font-size:11px;padding:2px 8px;${isBase ? 'background:var(--mwt-accent);color:#fff' : ''}">${isBase ? '★ BASE' : '☆ Set as Base'}</button>`
+                : '';
             return `<div class="${getSnapshotClass(s)}" data-id="${escapeHtml(s.id)}" style="padding:8px;border:1px solid var(--mwt-border);margin:4px 0;cursor:pointer;border-radius:4px">
-                <div style="display:flex;justify-content:space-between"><span>${(state.consolidateMode || state.bulkDeleteMode) ? `<input type="checkbox" class="sc-checkbox" data-id="${escapeHtml(s.id)}" ${state.checkedForMerge.has(s.id) ? 'checked' : ''} style="margin-right:8px">` : ''}<strong>${label}</strong></span><span style="color:var(--mwt-text-dim)">${escapeHtml(s.worldDate || s.createdAt)}</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:center"><span>${(state.consolidateMode || state.bulkDeleteMode) ? `<input type="checkbox" class="sc-checkbox" data-id="${escapeHtml(s.id)}" ${state.checkedForMerge.has(s.id) ? 'checked' : ''} style="margin-right:8px">` : ''}<strong>${label}</strong></span><span style="color:var(--mwt-text-dim);display:flex;align-items:center;gap:8px">${escapeHtml(s.worldDate || s.createdAt)}${baseBtn}</span></div>
                 <div style="color:var(--mwt-text-dim);font-size:12px;margin-top:4px">${escapeHtml((s.text || '').slice(0, 120).replace(/\n/g, ' '))}${s.text?.length > 120 ? '…' : ''}</div>
             </div>`;
         }).join('')}</div>
@@ -385,8 +391,16 @@ export function renderContent() {
     if (state.consolidateMode && state.checkedForMerge.size >= 2) {
         const btn = document.createElement('button');
         btn.className = 'mwt-btn mwt-btn-primary';
-        btn.textContent = `Consolidate ${state.checkedForMerge.size} entries`;
-        btn.addEventListener('click', () => showConfirm(`Consolidate ${state.checkedForMerge.size} entries?`, 'Originals moved to trash.', () => consolidateEntries([...state.checkedForMerge])));
+        const baseLabel = state.consolidateBaseId && state.checkedForMerge.has(state.consolidateBaseId)
+            ? ' (★ base set)'
+            : ' (earliest = base)';
+        btn.textContent = `Consolidate ${state.checkedForMerge.size} entries${baseLabel}`;
+        // Pass the designated base id explicitly so the consolidation logic
+        // doesn't have to rely on the state field alone (defensive: state is
+        // cleared on success, but this makes the intent unambiguous at the
+        // call site).
+        const baseId = (state.consolidateBaseId && state.checkedForMerge.has(state.consolidateBaseId)) ? state.consolidateBaseId : null;
+        btn.addEventListener('click', () => showConfirm(`Consolidate ${state.checkedForMerge.size} entries?`, 'Originals moved to trash.', () => consolidateEntries([...state.checkedForMerge], baseId)));
         el.querySelector('.sc-entries')?.after(btn);
     }
     if (state.bulkDeleteMode && state.checkedForMerge.size >= 1) {
@@ -409,10 +423,18 @@ function bindMainEvents() {
     // Entry clicks
     el.querySelectorAll('.sc-entry').forEach(entry => {
         entry.addEventListener('click', (e) => {
+            // Let the checkbox and base-toggle handle their own clicks.
             if (e.target.closest('.sc-checkbox')) return;
+            if (e.target.closest('.sc-base-toggle')) return;
             const id = entry.dataset.id;
             if (state.consolidateMode || state.bulkDeleteMode) {
-                if (state.checkedForMerge.has(id)) state.checkedForMerge.delete(id); else state.checkedForMerge.add(id);
+                if (state.checkedForMerge.has(id)) {
+                    state.checkedForMerge.delete(id);
+                    // Clear base designation if the base entry was unchecked.
+                    if (state.consolidateBaseId === id) state.consolidateBaseId = null;
+                } else {
+                    state.checkedForMerge.add(id);
+                }
                 renderContent();
             } else {
                 state.selectedSnapshotId = id;
@@ -425,7 +447,26 @@ function bindMainEvents() {
     el.querySelectorAll('.sc-checkbox').forEach(cb => {
         cb.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (cb.checked) state.checkedForMerge.add(cb.dataset.id); else state.checkedForMerge.delete(cb.dataset.id);
+            const id = cb.dataset.id;
+            if (cb.checked) {
+                state.checkedForMerge.add(id);
+            } else {
+                state.checkedForMerge.delete(id);
+                // Clear base designation if the base entry was unchecked.
+                if (state.consolidateBaseId === id) state.consolidateBaseId = null;
+            }
+            renderContent();
+        });
+    });
+
+    // Base-toggle buttons (consolidate mode only)
+    el.querySelectorAll('.sc-base-toggle').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            // Toggle: clicking the current base clears it; clicking another
+            // checked entry makes it the base.
+            state.consolidateBaseId = (state.consolidateBaseId === id) ? null : id;
             renderContent();
         });
     });
@@ -453,12 +494,14 @@ function bindMainEvents() {
         state.consolidateMode = !state.consolidateMode;
         if (state.consolidateMode) state.bulkDeleteMode = false;
         state.checkedForMerge.clear();
+        state.consolidateBaseId = null;
         renderContent();
     });
     el.querySelector('#sc-bulk-delete-btn')?.addEventListener('click', () => {
         state.bulkDeleteMode = !state.bulkDeleteMode;
         if (state.bulkDeleteMode) state.consolidateMode = false;
         state.checkedForMerge.clear();
+        state.consolidateBaseId = null;
         renderContent();
     });
     el.querySelector('#sc-reset-btn')?.addEventListener('click', () => {
