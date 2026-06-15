@@ -324,7 +324,7 @@ export function render() {
 
                 <label class="mwt-label">Message Filter</label>
                 <div>
-                    <textarea id="ws-message-filter" class="mwt-input" rows="3" placeholder="One regex per line. Matching text is stripped from messages before scanning.&#10;Example: [NPC thoughts][\\s\\S]*?[/NPC thoughts]">${escapeHtml(s.messageFilter || '')}</textarea>
+                    <textarea id="ws-message-filter" class="mwt-input" rows="3" placeholder="One regex per line. Matching text is stripped from messages before scanning.&#10;Example: \\[NPC thoughts][\\s\\S]*?\\[/NPC thoughts]">${escapeHtml(s.messageFilter || '')}</textarea>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Each line is a separate regex pattern (case-insensitive). Matching content is removed from chat messages <i>before</i> the World State scanner sees them. Use this to strip out NPC thought blocks, OOC notes, or other content that shouldn't influence the world state.</p>
                 </div>
 
