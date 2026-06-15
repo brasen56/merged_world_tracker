@@ -46,12 +46,25 @@ Situation: [1-2 sentences: what is actively happening right now and the immediat
 
 ## Key Character States
 - **Name**:
-  - Mood:
-  - Current goal:
-  - Notable status:
-  - Immediate pressure:
-  - Key constraint:
-  - Worn / Significant Items:
+  - Mood: [current emotional state]
+  - Current goal: [what they are trying to achieve right now]
+  - Notable status: [physical or mental condition — injuries, exhaustion, intoxication, arousal, etc. NOT clothing or items]
+  - Immediate pressure: [what is forcing them to act this moment]
+  - Key constraint: [what limits their options right now]
+  - Worn / Significant Items: [clothing and carried/significant objects only; "none" if nothing notable]
+
+[For each key character currently in the scene, output the full block above with EVERY field completed — including "Worn / Significant Items" (write "none" if empty). Never omit, merge, or cut a field short.
+Separate each character block with a blank line so multiple characters stay readable, e.g.:
+
+- **Alex**:
+  - Mood: ...
+  - ...
+  - Worn / Significant Items: ...
+
+- **Derek**:
+  - Mood: ...
+  - ...
+  - Worn / Significant Items: ...]
 
 ## Story Momentum
 - near-term development strongly implied by established facts
