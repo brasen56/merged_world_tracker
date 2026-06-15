@@ -133,12 +133,21 @@ export function renderNpcsSubTab() {
     el.innerHTML = `
         <div class="kt-toolbar">
             <button id="kt-scan-btn" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>${state.isRunning ? '⏳ Scanning…' : '🔍 Scan'}</button>
+            ${(() => {
+                const s = getSettings();
+                if (s.npcAutoScanEnabled) {
+                    const everyN = Math.max(1, Number(s.npcAutoScanEveryN) || 10);
+                    const remaining = Math.max(0, everyN - state.npcMessageCounter);
+                    return `<span class="kt-autoscan-countdown" title="Auto-scan fires every ${everyN} messages (${state.npcMessageCounter}/${everyN})">⏱️ ${remaining} msg${remaining !== 1 ? 's' : ''} until auto-scan</span>`;
+                }
+                return '';
+            })()}
             <button id="kt-export-btn" class="mwt-btn" title="Export NPC registry">📥 Export</button>
             <button id="kt-import-btn" class="mwt-btn" title="Import NPCs from JSON">📤 Import</button>
             <button id="kt-import-lb-btn" class="mwt-btn" title="Import from existing lorebooks">📚 From Lorebooks</button>
         </div>
         <div class="kt-sub-tabs">
-            <button class="kt-sub-tab ${state.activeSubTab === 'staging' ? 'active' : ''}" data-sub="staging">
+            <button class="kt-sub-tab ${state.activeSubTab === 'staging' ? 'active' : ''} ${state.stagingItems.length > 0 && state.activeSubTab !== 'staging' ? 'kt-staging-pulse' : ''}" data-sub="staging">
                 📋 Staging${state.stagingItems.length > 0 ? ` (${state.stagingItems.length})` : ''}
             </button>
             <button class="kt-sub-tab ${state.activeSubTab === 'minor' ? 'active' : ''}" data-sub="minor">👤 Minor (${Object.keys(minorEntries).length})</button>
@@ -227,6 +236,11 @@ export function renderNpcsSubTab() {
             statusEl.className = `kt-status kt-status--${state._lastKtStatusLevel}`;
         }
     }
+
+    // Notify the floating-button subsystem that staging state may have changed
+    // so the Knowledge button's attention pulse + countdown badge update
+    // immediately (rather than waiting up to 5 s for the next poll).
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 }
 
 // ─── Staging sub-tab ─────────────────────────────────────────────────────────
@@ -234,6 +248,10 @@ export function renderNpcsSubTab() {
 function renderStagingContent(count) {
     if (count === 0) return '<div class="kt-empty">No pending proposals.<br>Click <strong>🔍 Scan</strong> to analyse recent messages.</div>';
     return `
+        <div class="kt-staging-alert">
+            <span class="kt-staging-alert-icon">📬</span>
+            <span class="kt-staging-alert-text"><strong>${count} proposal${count !== 1 ? 's' : ''}</strong> awaiting your review — Accept to write to the lorebook, or Dismiss to discard.</span>
+        </div>
         <div class="kt-staging-toolbar">
             <button id="kt-batch-accept" class="mwt-btn mwt-btn-primary">✓ Accept All</button>
             <button id="kt-batch-dismiss" class="mwt-btn">✗ Dismiss All</button>

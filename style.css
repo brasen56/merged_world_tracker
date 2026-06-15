@@ -956,6 +956,61 @@ input[type="number"].mwt-input {
     50% { opacity: 0.6; }
 }
 
+/* Auto-scan countdown text in the Knowledge toolbar */
+.kt-autoscan-countdown {
+    font-size: 12px;
+    color: var(--mwt-accent);
+    font-family: var(--mwt-font-mono);
+    padding: 2px 8px;
+    background: var(--mwt-bg-light);
+    border-radius: 4px;
+    border: 1px solid var(--mwt-border);
+    cursor: help;
+    white-space: nowrap;
+}
+
+/* Staging tab pulse — draws attention when proposals are pending and
+   the user is viewing a different sub-tab. */
+.kt-staging-pulse {
+    color: var(--mwt-warning) !important;
+    font-weight: 600;
+    animation: kt-staging-tab-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes kt-staging-tab-pulse {
+    0%, 100% { background: rgba(255, 152, 0, 0.0); }
+    50% { background: rgba(255, 152, 0, 0.18); }
+}
+
+/* Staging alert banner shown at the top of the staging panel */
+.kt-staging-alert {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--mwt-warning);
+    border-radius: var(--mwt-radius);
+    color: var(--mwt-warning);
+    font-size: 13px;
+    animation: kt-staging-alert-fade 0.3s ease-out;
+}
+
+.kt-staging-alert-icon {
+    font-size: 20px;
+    line-height: 1;
+}
+
+.kt-staging-alert-text {
+    flex: 1;
+}
+
+@keyframes kt-staging-alert-fade {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 .kt-sub-content {
     padding: 8px 0;
 }
@@ -2634,4 +2689,22 @@ body.mwt-buttons--classic .mwt-float-btn.mwt-btn--refreshing .mwt-float-btn-coun
 body.mwt-buttons--classic .mwt-float-btn.mwt-btn--disabled,
 body.mwt-buttons--classic .mwt-float-btn.mwt-btn--master-off {
     border-color: #ef4444;
+}
+
+/* ─── Knowledge staging pulse (works in both modern + classic) ───────────────
+   Pulses the Knowledge floating button when there are pending staging items
+   awaiting review, so the user's attention is drawn back to the staging panel. */
+.mwt-float-btn.mwt-btn--has-staging {
+    border-color: var(--mwt-warning, #ff9800);
+    box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.35), 0 2px 12px rgba(255, 152, 0, 0.4);
+    animation: mwt-staging-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mwt-staging-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.25), 0 2px 8px rgba(255, 152, 0, 0.3); }
+    50%      { box-shadow: 0 0 0 5px rgba(255, 152, 0, 0.15), 0 2px 16px rgba(255, 152, 0, 0.5); }
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--has-staging {
+    border-color: var(--mwt-warning, #ff9800);
 }

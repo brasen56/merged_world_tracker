@@ -476,6 +476,23 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 }
             }
 
+            // Update auto-scan countdown on Knowledge floating button
+            // (Mirrors the World State / Chronicle countdown logic.)
+            const knCountdownEl = document.getElementById('mwt-float-knowledge-countdown');
+            if (knCountdownEl) {
+                const knStatus = Knowledge.getAutoScanStatus?.();
+                if (knStatus) {
+                    const remaining = knStatus.interval - knStatus.counter;
+                    knCountdownEl.textContent = `${remaining}`;
+                    knCountdownEl.style.display = 'block';
+                    knCountdownEl.title = `Auto-scan in ${remaining} message${remaining !== 1 ? 's' : ''} (${knStatus.counter}/${knStatus.interval})`;
+                } else {
+                    knCountdownEl.textContent = '';
+                    knCountdownEl.style.display = 'none';
+                    knCountdownEl.title = '';
+                }
+            }
+
             // Classic button dynamic state classes
             updateButtonStates();
         } catch { /* ignore */ }
@@ -496,6 +513,22 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 btn.classList.toggle('mwt-btn--master-off', masterOff);
             } else if (cfg.enableKey) {
                 btn.classList.toggle('mwt-btn--disabled', s[cfg.enableKey] === false || masterOff);
+            }
+        }
+
+        // ── Knowledge staging badge (works in BOTH modern + classic) ──
+        // Pulse the Knowledge floating button when there are pending staging
+        // items awaiting review, so the user is drawn back to the staging panel.
+        // Applied before the classic early-return so the attention pulse shows
+        // in both button styles.
+        const knBtnAny = document.getElementById('mwt-float-knowledge');
+        if (knBtnAny) {
+            const stagingCount = Knowledge.getStagingCount?.() ?? 0;
+            knBtnAny.classList.toggle('mwt-btn--has-staging', stagingCount > 0);
+            if (stagingCount > 0) {
+                knBtnAny.title = `Knowledge Tracker — ${stagingCount} proposal(s) awaiting review`;
+            } else {
+                knBtnAny.title = 'Knowledge';
             }
         }
 

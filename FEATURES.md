@@ -92,6 +92,27 @@ API pointers verified against this ST install.
   now remove the matching notification; clicking the bell navigates to the
   Staging tab and marks entries read so the badge clears.
 
+- [x] **Auto-scan countdown + staging attention cues (Knowledge)**
+  Parity with the World State / Chronicle floating-button countdowns so the
+  user can see *when* the next NPC auto-scan will fire, plus visual cues to
+  draw attention back to the staging panel when proposals are pending.
+  *Implemented:*
+  - New `getAutoScanStatus()` and `getStagingCount()` exports in
+    `knowledge/index.js` mirror the World State / Chronicle status helpers.
+  - `core/ui.js` populates the `#mwt-float-knowledge-countdown` badge
+    (remaining messages until next scan) and toggles a
+    `mwt-btn--has-staging` pulse class on the Knowledge floating button when
+    staging items are pending — works in both modern and classic button
+    styles.
+  - `knowledge/render.js` shows an inline `⏱️ N msgs until auto-scan` chip in
+    the toolbar, a pulsing Staging sub-tab when items are pending on another
+    sub-tab, and a prominent `📬 N proposals awaiting your review` alert
+    banner at the top of the staging panel.
+  - Each render dispatches `mwt:busy-changed` so the floating button updates
+    immediately (rather than waiting for the 5 s poll).
+  - Styles in `style.css`: `.kt-autoscan-countdown`, `.kt-staging-pulse`,
+    `.kt-staging-alert`, `.mwt-btn--has-staging` + `@keyframes mwt-staging-pulse`.
+
 - [ ] **Prompt/template customization for Chronicle & Knowledge + output language**
   World State already has a custom prompt; Chronicle's sections and the scan
   prompt are hardcoded. Non-English RPers will ask "can it write entries in my

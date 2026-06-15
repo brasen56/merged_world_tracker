@@ -305,6 +305,24 @@ export function getNpcCount() {
     return Object.keys(getRegistry()).length;
 }
 
+/** Returns auto-scan status for external display (floating button countdown).
+ *  Mirrors World State's getAutoRefreshStatus() so core/ui.js can populate the
+ *  countdown badge on the Knowledge floating button. */
+export function getAutoScanStatus() {
+    const settings = getSettings();
+    if (!settings.npcAutoScanEnabled) return null;
+    return {
+        counter: state.npcMessageCounter,
+        interval: Math.max(1, Number(settings.npcAutoScanEveryN) || 10),
+    };
+}
+
+/** Returns the count of pending staging items so the floating button can show
+ *  an attention badge when there are proposals awaiting review. */
+export function getStagingCount() {
+    return state.stagingItems.length;
+}
+
 export async function getNpcContent(name) {
     const reg = getRegistry()[name];
     if (!reg || reg.uid == null) return '';
