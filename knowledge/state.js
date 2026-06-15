@@ -53,6 +53,7 @@ export const state = {
 
     // ── Runtime state ──
     messageCounter: 0,
+    npcMessageCounter: 0,
     isRunning: false,
     trackerQueue: Promise.resolve(),
 

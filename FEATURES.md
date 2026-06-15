@@ -71,6 +71,27 @@ API pointers verified against this ST install.
   - **Knowledge:** `MESSAGE_DELETED` decrements `messageCounter` so the
     "every N messages" cadence stays aligned with the shorter chat.
 
+- [x] **NPC auto-scan toggle (Knowledge)**
+  Mirror of the existing state-tracker auto-trigger: every N user messages,
+  automatically run the NPC scan and stage any new/updated minor/major NPC
+  proposals for review (no auto-accept). Shares the same `queueTrackerWork`
+  chain and `isRunning` guard so it never collides with manual scans or state
+  updates. Independent counter (`npcMessageCounter`) and cadence setting
+  (`npcAutoScanEveryN`) so it can run on a different schedule than state
+  trackers; `MESSAGE_DELETED` keeps both counters aligned.
+  *Implemented:* Settings UI + defaults in `knowledge/settings.js`
+  (`npcAutoScanEnabled`, `npcAutoScanEveryN`); counter + hook logic in
+  `knowledge/state.js` / `knowledge/index.js` (`onMessageReceived`,
+  `onChatChanged`, `onMessageDeleted`).
+
+- [x] **Notification bell count fix (Knowledge)**
+  The bell badge could show a stale count after proposals were accepted or
+  dismissed because `notificationEntries` was only partially cleaned up.
+  *Implemented:* A `reconcileNotifications()` pass runs on every render to
+  prune entries whose staging item no longer exists; dismiss/batch-dismiss
+  now remove the matching notification; clicking the bell navigates to the
+  Staging tab and marks entries read so the badge clears.
+
 - [ ] **Prompt/template customization for Chronicle & Knowledge + output language**
   World State already has a custom prompt; Chronicle's sections and the scan
   prompt are hardcoded. Non-English RPers will ask "can it write entries in my

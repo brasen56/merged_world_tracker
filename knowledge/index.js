@@ -49,53 +49,108 @@ export function getModuleWireEvents() {
 
 export function onMessageReceived() {
     const settings = getSettings();
-    if (!settings.autoTriggerEnabled) return;
+    const stateAuto = !!settings.autoTriggerEnabled;
+    const npcAuto = !!settings.npcAutoScanEnabled;
+    if (!stateAuto && !npcAuto) return;
     if (!hasValidSettings()) return;
-    const everyN = Math.max(1, Number(settings.autoTriggerEveryN) || 5);
+
+    let doState = false;
+    let doNpc = false;
+
+    if (stateAuto) {
+        const everyN = Math.max(1, Number(settings.autoTriggerEveryN) || 5);
+        state.messageCounter++;
+        if (state.messageCounter >= everyN) {
+            state.messageCounter = 0;
+            doState = true;
+        }
+    }
+
+    if (npcAuto) {
+        const everyN = Math.max(1, Number(settings.npcAutoScanEveryN) || 10);
+        state.npcMessageCounter++;
+        if (state.npcMessageCounter >= everyN) {
+            state.npcMessageCounter = 0;
+            doNpc = true;
+        }
+    }
+
+    if (!doState && !doNpc) return;
+
     const cooldownMsgs = Math.max(0, Number(settings.trackerCooldownMsgs) || 3);
-    state.messageCounter++;
-    if (state.messageCounter < everyN) return;
-    state.messageCounter = 0;
 
     queueTrackerWork(async () => {
         if (state.isRunning) return;
         state.isRunning = true;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         try {
-            const reg = getStateRegistry();
-            const currentMsgIdx = getChat()?.length || 0;
-            const recent = getRecentMessages(30);
-            let staged = 0;
-            for (const [name, info] of Object.entries(reg)) {
-                if (info.enabled === false) continue;
-                if (!info.alwaysUpdate) {
-                    if (currentMsgIdx - (info.lastUpdatedMsg || 0) < cooldownMsgs) continue;
-                    const nameRe = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
-                    if (!nameRe.test(recent || '')) continue;
-                }
-                try {
-                    const result = await runStateUpdate(name, info.uid);
-                    if (result.unchanged) { bumpStateTrackerTimestamp(name); continue; }
-                    const stagingItem = {
-                        id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'state', action: 'update', name, data: {},
-                        proposedContent: result.merged, existingContent: result.currentContent,
-                        mergedContent: result.merged, keywords: [name], uid: info.uid,
-                    };
-                    const existingIdx = state.stagingItems.findIndex(it => it.type === 'state' && it.uid === info.uid);
-                    if (existingIdx >= 0) {
-                        removeNotificationEntry(state.stagingItems[existingIdx].id);
-                        state.stagingItems[existingIdx] = stagingItem;
-                    } else {
-                        state.stagingItems.push(stagingItem);
+            // ── State tracker auto-update ──
+            if (doState) {
+                const reg = getStateRegistry();
+                const currentMsgIdx = getChat()?.length || 0;
+                const recent = getRecentMessages(30);
+                let staged = 0;
+                for (const [name, info] of Object.entries(reg)) {
+                    if (info.enabled === false) continue;
+                    if (!info.alwaysUpdate) {
+                        if (currentMsgIdx - (info.lastUpdatedMsg || 0) < cooldownMsgs) continue;
+                        const nameRe = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
+                        if (!nameRe.test(recent || '')) continue;
                     }
-                    addNotificationEntry(stagingItem);
-                    staged++;
-                } catch (err) { console.warn(`[MWT:Knowledge] Auto-update "${name}" failed:`, err.message); }
+                    try {
+                        const result = await runStateUpdate(name, info.uid);
+                        if (result.unchanged) { bumpStateTrackerTimestamp(name); continue; }
+                        const stagingItem = {
+                            id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'state', action: 'update', name, data: {},
+                            proposedContent: result.merged, existingContent: result.currentContent,
+                            mergedContent: result.merged, keywords: [name], uid: info.uid,
+                        };
+                        const existingIdx = state.stagingItems.findIndex(it => it.type === 'state' && it.uid === info.uid);
+                        if (existingIdx >= 0) {
+                            removeNotificationEntry(state.stagingItems[existingIdx].id);
+                            state.stagingItems[existingIdx] = stagingItem;
+                        } else {
+                            state.stagingItems.push(stagingItem);
+                        }
+                        addNotificationEntry(stagingItem);
+                        staged++;
+                    } catch (err) { console.warn(`[MWT:Knowledge] Auto-update "${name}" failed:`, err.message); }
+                }
+                if (staged > 0) {
+                    console.log(`[MWT:Knowledge] Auto-trigger: ${staged} state proposal(s) staged.`);
+                    const { notify } = await import('../core/index.js');
+                    notify('Knowledge Tracker', `${staged} state tracker update(s) ready for review.`, 'info');
+                }
             }
-            if (staged > 0) {
-                console.log(`[MWT:Knowledge] Auto-trigger: ${staged} state proposal(s) staged.`);
-                const { notify } = await import('../core/index.js');
-                notify('Knowledge Tracker', `${staged} state tracker update(s) ready for review.`, 'info');
+
+            // ── NPC auto-scan ──
+            if (doNpc) {
+                try {
+                    const result = await runScan();
+                    const newItems = buildStagingItems(result);
+                    const added = [];
+                    for (const item of newItems) {
+                        const key = `${item.name}|${item.action}|${item.type}`;
+                        const existingIdx = state.stagingItems.findIndex(it => `${it.name}|${it.action}|${it.type}` === key);
+                        if (existingIdx >= 0) {
+                            removeNotificationEntry(state.stagingItems[existingIdx].id);
+                            state.stagingItems[existingIdx] = item;
+                        } else {
+                            state.stagingItems.push(item);
+                        }
+                        added.push(item);
+                    }
+                    await Promise.all(added.filter(it => it.action === 'update').map(it => enrichStagingItem(it)));
+                    added.forEach(item => addNotificationEntry(item));
+                    if (added.length > 0) {
+                        console.log(`[MWT:Knowledge] Auto-scan: ${added.length} NPC proposal(s) staged.`);
+                        const { notify } = await import('../core/index.js');
+                        notify('Knowledge Tracker', `Auto-scan found ${added.length} NPC proposal(s) ready for review.`, 'info');
+                    }
+                    renderNpcsSubTab();
+                } catch (err) {
+                    console.warn('[MWT:Knowledge] Auto-scan failed:', err.message);
+                }
             }
         } finally { state.isRunning = false; document.dispatchEvent(new CustomEvent('mwt:busy-changed')); }
     });
@@ -103,6 +158,7 @@ export function onMessageReceived() {
 
 export function onChatChanged() {
     state.messageCounter = 0;
+    state.npcMessageCounter = 0;
     state.isRunning = false;
     state.stagingItems = [];
     state.activeItemId = null;
@@ -124,11 +180,16 @@ export function onChatChanged() {
  * @param {number} deletedIndex - The chat-array index of the removed message.
  */
 export function onMessageDeleted(deletedIndex) {
-    if (!getSettings().autoTriggerEnabled) return;
+    const settings = getSettings();
+    if (!settings.autoTriggerEnabled && !settings.npcAutoScanEnabled) return;
     if (typeof deletedIndex !== 'number') return;
-    if (state.messageCounter > 0) {
+    if (settings.autoTriggerEnabled && state.messageCounter > 0) {
         state.messageCounter = Math.max(0, state.messageCounter - 1);
-        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} — counter adjusted to ${state.messageCounter}`);
+        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} — state counter adjusted to ${state.messageCounter}`);
+    }
+    if (settings.npcAutoScanEnabled && state.npcMessageCounter > 0) {
+        state.npcMessageCounter = Math.max(0, state.npcMessageCounter - 1);
+        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} — NPC counter adjusted to ${state.npcMessageCounter}`);
     }
 }
 

@@ -79,10 +79,31 @@ function removeNotificationEntry(id) {
     delete state.notificationEntries[id];
 }
 
+/**
+ * Reconcile notification entries against staging items so the bell count
+ * never references proposals that have already been accepted/dismissed.
+ * Returns true if any entries were pruned.
+ */
+function reconcileNotifications() {
+    const stagingIds = new Set(state.stagingItems.map(i => i.id));
+    let pruned = false;
+    for (const id of Object.keys(state.notificationEntries)) {
+        if (!stagingIds.has(id)) {
+            delete state.notificationEntries[id];
+            pruned = true;
+        }
+    }
+    return pruned;
+}
+
 function unreadCount() { return Object.values(state.notificationEntries).filter(n => !n.read).length; }
 
 function showNotificationPanel() {
-    state.notifActiveId = true;
+    // Navigate to the staging tab, where staged proposals can be reviewed.
+    reconcileNotifications();
+    state.activeSubTab = 'staging';
+    // Mark all notifications as read since the user is now viewing them.
+    for (const n of Object.values(state.notificationEntries)) n.read = true;
     renderNpcsSubTab();
 }
 
@@ -100,6 +121,10 @@ function initNotificationPanel() {
 export function renderNpcsSubTab() {
     const el = getNpcsContentEl();
     if (!el) return;
+
+    // Keep the notification bell count in sync with staged proposals so it
+    // never reports items that have been accepted/dismissed elsewhere.
+    reconcileNotifications();
 
     const registry = getRegistry();
     const minorEntries = Object.fromEntries(Object.entries(registry).filter(([, v]) => v.type !== 'major'));
@@ -297,6 +322,7 @@ function wireStagingEvents(el) {
     });
 
     el.querySelector('#kt-dismiss')?.addEventListener('click', () => {
+        if (state.activeItemId) removeNotificationEntry(state.activeItemId);
         state.stagingItems = state.stagingItems.filter(i => i.id !== state.activeItemId);
         state.activeItemId = null;
         renderNpcsSubTab();
@@ -313,6 +339,7 @@ function wireStagingEvents(el) {
 
     el.querySelector('#kt-batch-dismiss')?.addEventListener('click', () => {
         if (!confirm(`Dismiss all ${state.stagingItems.length} proposals?`)) return;
+        for (const item of state.stagingItems) removeNotificationEntry(item.id);
         state.stagingItems = [];
         state.activeItemId = null;
         renderNpcsSubTab();

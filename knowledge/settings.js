@@ -23,6 +23,8 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         autoTriggerEnabled: false,
         autoTriggerEveryN: 5,
         trackerCooldownMsgs: 3,
+        npcAutoScanEnabled: false,
+        npcAutoScanEveryN: 10,
     },
     logPrefix: '[MWT:Knowledge]',
 });
@@ -53,6 +55,13 @@ export function showKnowledgeSettings() {
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Auto-trigger scans state trackers every N user messages. Cooldown prevents re-updating recently changed trackers.</p>
         </div>
+        <div style="margin-top:12px">
+            <label><input type="checkbox" id="kt-cfg-npc-autoscan" ${s.npcAutoScanEnabled ? 'checked' : ''}> Auto-scan for NPCs (minor/major)</label>
+            <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                <label style="font-size:12px;color:var(--mwt-text-dim)">Every <input type="number" id="kt-cfg-npc-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.npcAutoScanEveryN || 10}" min="1" max="100"> messages</label>
+            </div>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Auto-scan analyses recent messages for new or updated NPCs every N user messages and stages proposals for review.</p>
+        </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8" style="margin-top:12px">
             <button id="kt-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
             <button id="kt-cancel-settings" class="mwt-btn">Cancel</button>
@@ -67,6 +76,8 @@ export function showKnowledgeSettings() {
             autoTriggerEnabled: el.querySelector('#kt-cfg-auto-trigger')?.checked ?? false,
             autoTriggerEveryN: Number(el.querySelector('#kt-cfg-auto-every')?.value) || 5,
             trackerCooldownMsgs: Number(el.querySelector('#kt-cfg-cooldown')?.value) || 3,
+            npcAutoScanEnabled: el.querySelector('#kt-cfg-npc-autoscan')?.checked ?? false,
+            npcAutoScanEveryN: Number(el.querySelector('#kt-cfg-npc-every')?.value) || 10,
         });
         state.activeSubTab = 'staging';
         import('./render.js').then(({ renderNpcsSubTab }) => renderNpcsSubTab());
