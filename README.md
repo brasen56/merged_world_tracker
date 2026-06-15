@@ -2,7 +2,7 @@
 
 **A unified SillyTavern extension combining World State tracking, Session Chronicle, and NPC Knowledge management into a single modular system.**
 
-*A SillyTavern extension by [Brasen](https://github.com/brasen56)*
+*A SillyTavern extension by [Brasen](https://github.com/brasen56)* · `v1.1.0`
 
 ---
 
@@ -14,12 +14,17 @@
   - [Session Chronicle](#-session-chronicle)
   - [Knowledge Tracker](#-knowledge-tracker)
   - [Shared Core](#shared-core)
+  - [Slash Commands & Macros](#slash-commands--macros)
+  - [Mobile & Touch](#mobile--touch)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
-  - [Global Settings](#global-settings)
+  - [Connection Profiles (Recommended)](#connection-profiles-recommended)
+  - [Custom API Settings](#custom-api-settings)
   - [Per-Module Settings](#per-module-settings)
   - [Injection Settings](#injection-settings)
+  - [Floating Buttons](#floating-buttons)
+  - [Per-Tracker Enable & Panic Switch](#per-tracker-enable--panic-switch)
 - [Usage Guide](#usage-guide)
   - [World State](#world-state)
   - [Session Chronicle](#session-chronicle)
@@ -45,7 +50,7 @@ Instead of juggling multiple standalone extensions, MWT provides a single tabbed
 | **📜 Chronicle** | Generates timestamped summaries of RP events with consolidation, editing, and flexible injection |
 | **🧠 Knowledge** | Scans for NPCs, tracks their knowledge and relationships, and manages state entries via lorebooks |
 
-All three modules use an LLM API (OpenAI-compatible) to analyze your RP and produce structured, validated output.
+All three modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output.
 
 ---
 
@@ -68,9 +73,10 @@ Maintains a live, structured document describing the current state of the rolepl
   - World Pressures
   - Key Character States (mood, goal, status, pressure, items)
   - Story Momentum
-  - Plot Seeds (with passive/proactive/assertive hook modes)
+  - Plot Seeds (with off/passive/proactive/assertive hook modes)
   - Potential Entrances
 - **Plot Seed Hook Modes** — Control how aggressively the LLM introduces narrative hooks:
+  - **Off** — Plot Seeds are not injected into the prompt at all
   - **Passive** — Hooks are available but the LLM decides when to use them
   - **Proactive** — The LLM is encouraged to introduce hooks organically
   - **Assertive** — The LLM is directed to introduce at least one hook per response
@@ -79,12 +85,13 @@ Maintains a live, structured document describing the current state of the rolepl
 - **Import/Export** — JSON archives and plain text/markdown import
 - **Message Filtering** — Regex-based filters to strip unwanted content before scanning
 - **Prompt Injection** — Configurable depth and role for prompt injection
+- **Injection Preview** — Preview exactly what will be injected, including headers and tags
 
 ### 📜 Session Chronicle
 
 Generates timestamped chronicle entries that summarize what happened in the RP, creating a durable historical record that can be injected into future prompts for long-term continuity.
 
-- **LLM-Generated Snapshots** — Produces structured entries with Summary, Relationship Shifts, Open Loops, and Time Anchors
+- **LLM-Generated Snapshots** — Produces structured entries with Summary, Relationship & Institutional Shifts, Open Loops Created, Open Loops Closed, and Time Anchors
 - **Manual Entries** — Create blank entries with the standard format for hand-written notes
 - **Consolidation** — Merge multiple entries into one, with a preview/editor for the input before consolidation. Optionally **designate a base entry** (the foundation) with ★ — useful for merging fresh entries into an already-consolidated entry where the consolidated entry should be the base and the others the deltas
 - **Regeneration with Diff** — Regenerate any entry and compare the original vs. new version side-by-side with inline word-level diff highlighting
@@ -117,8 +124,9 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 - **NPC Promotion/Demotion** — Promote minor NPCs to major (adds Knowledge Ledger) or demote major to minor
 - **NPC Merging** — Merge duplicate NPC entries into one
 - **Relationship Tracking** — Define and track relationships between NPCs (ally, enemy, friend, rival, family, etc.)
+- **Relationship Graph View** — Visual force-directed node/edge graph with color-coded relationship types, draggable nodes, pan/zoom, and a list-view toggle
 - **Notification Panel** — Floating, draggable notification panel alerts you to new scan results
-- **Auto-Trigger** — Automatically run scans every N messages
+- **Auto-Trigger** — Automatically run state tracker scans every N messages (with cooldown to avoid re-updating recently changed trackers)
 - **Import from Lorebook** — Scan existing Knowledge Tracker and State Tracker lorebooks to register entries not yet tracked
 - **Cross-Module Integration** — Scans include current World State and latest Chronicle entry for richer context
 
@@ -126,12 +134,44 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 
 All three modules share a common infrastructure:
 
-- **Unified API Layer** — OpenAI-compatible API with retry logic, error recovery, and custom headers support
+- **Unified API Layer** — OpenAI-compatible API *or* SillyTavern Connection Manager profiles, with retry logic, error recovery, reasoning-content fallback, and custom headers support
 - **Settings Management** — Global defaults with per-module overrides; settings stored in SillyTavern's `extension_settings` with localStorage fallback and legacy key migration
 - **Diff Engine** — LCS-based line and word-level diff computation with customizable HTML rendering
 - **Modal System** — Shared modal lifecycle (create, show, hide, status bar) with escape-key and backdrop-click handling
 - **Context Helpers** — Safe access to SillyTavern context, chat data, metadata, token estimation, and player name resolution
 - **Sync to Modules** — Push global API settings to all modules at once
+- **Injection Helpers** — Shared extension-prompt injection with optional XML structural-boundary wrapping
+
+### Slash Commands & Macros
+
+MWT integrates with SillyTavern's STscript system for power-user automation and Quick Replies:
+
+**Slash Commands:**
+
+| Command | Action |
+|---|---|
+| `/wt-refresh` | Trigger a World State refresh |
+| `/wt-snapshot` | Generate a Chronicle snapshot |
+| `/wt-scan` | Run a Knowledge NPC scan |
+| `/wt-inject on\|off` | Toggle injection for World State and Chronicle |
+| `/wt-state` | Output the current world state text (pipeable) |
+
+**Macros** (SillyTavern 1.12+):
+
+| Macro | Returns |
+|---|---|
+| `{{worldstate}}` | The current world state text |
+| `{{chronicle}}` | The full chronicle injection text |
+| `{{lastchronicle}}` | The most recent chronicle entry |
+
+Macros let you place content anywhere (Author's Note, prompt manager block, char card, custom-depth WI entry) instead of the fixed injection — pair with disabling injection for a "macro-only" workflow.
+
+### Mobile & Touch
+
+- **Pointer Events** — Floating button drag works with mouse, touch, and pen
+- **Responsive Layout** — Modal adapts to small screens (breakpoints at 768px and 480px)
+- **Collapse Mode** — Optionally collapse the four floating buttons into a single hub button
+- **Right-Click / Long-Press** — Quick-toggle any tracker via the floating button's context menu
 
 ---
 
@@ -161,29 +201,34 @@ All three modules share a common infrastructure:
 
 ## Quick Start
 
-1. **Open the MWT Modal** — Click any of the floating emoji buttons on the right side of the screen (🌍, 📜, 🧠, or ⚙️)
-2. **Configure API** — Go to the **⚙️ Settings** tab and enter your:
-   - API URL (e.g., `https://api.openai.com/v1`)
-   - API Key
-   - Model name (e.g., `gpt-4o-mini`)
+1. **Open the MWT Modal** — Click any of the floating emoji buttons on the right side of the screen (🌍, 📜, 🧠, or ⚙️), or use the **MWT** entry in the wand (extensions) menu, or the drawer in the Extensions panel
+2. **Configure API** — Go to the **⚙️ Settings** tab and either:
+   - Select a **Connection Profile** (uses your existing SillyTavern connection), **or**
+   - Enter a custom API URL, Key, and Model
 3. **Save Settings** — Click **Save Settings**
 4. **Start Tracking** — Switch to any module tab and click its action button:
-   - 🌍 World State → **Refresh**
-   - 📜 Chronicle → **Generate Snapshot**
+   - 🌍 World State → **🔄 Refresh**
+   - 📜 Chronicle → **📸 Snapshot**
    - 🧠 Knowledge → **🔍 Scan**
 
 ---
 
 ## Configuration
 
-### Global Settings
+### Connection Profiles (Recommended)
 
-Configured in the **⚙️ Settings** tab. These serve as defaults for all modules.
+Configured in the **⚙️ Settings** tab. Selecting a Connection Manager profile is the recommended way to power MWT — it reuses your existing SillyTavern connection and supports every backend ST supports (OpenAI, Claude, Gemini, TextGen, KoboldCPP, NovelAI, local models, etc.) with full preset and instruct support.
+
+Profiles marked "(active)" are SillyTavern's currently selected profile. Leave the dropdown empty to fall back to a custom API configuration below.
+
+### Custom API Settings
+
+These appear in the **⚙️ Settings** tab when no Connection Profile is selected. They serve as defaults for all modules.
 
 | Setting | Description | Default |
 |---|---|---|
 | API URL | Base URL for OpenAI-compatible API | *(empty)* |
-| API Key | Bearer token for API authentication | *(empty)* |
+| API Key | Bearer token for API authentication (optional for keyless local backends) | *(empty)* |
 | Model | Model identifier (e.g., `gpt-4o-mini`) | *(empty)* |
 | Max Tokens | Maximum tokens in LLM response | `2000` |
 | Temperature | Sampling temperature (0–2) | `0.3` |
@@ -192,9 +237,11 @@ Configured in the **⚙️ Settings** tab. These serve as defaults for all modul
 | Presence Penalty | Penalize present tokens (-2 to 2) | `0` |
 | Custom Headers | Additional HTTP headers (JSON) | *(empty)* |
 
+> **Note:** Only API URL and Model are required. API Key is optional to support keyless local backends (Ollama, LM Studio, llama.cpp, etc.).
+
 ### Per-Module Settings
 
-Each module tab has a **⚙ Settings** button that opens module-specific settings, which can override the global API configuration. This lets you use different models or temperatures for different tasks (e.g., a creative model for world state, a precise model for knowledge scanning).
+Each module tab has a **⚙ Settings** button that opens module-specific settings, which can override the global API configuration. This lets you use different models or temperatures for different tasks (e.g., a creative model for world state, a precise model for knowledge scanning). Use **↓ Sync to Modules** in the global Settings tab to push the global API config to all modules at once.
 
 ### Injection Settings
 
@@ -206,8 +253,19 @@ Control how World State and Chronicle entries are injected into the prompt:
 | World State Role | Message role for injection (`system`, `user`, `assistant`) | `system` |
 | Chronicle Depth | Injection depth for chronicle entries | `4` |
 | Chronicle Role | Message role for chronicle injection | `system` |
+| Structural Boundaries | Wrap injected blocks in XML tags (e.g., `<mwt_world_state>…</mwt_world_state>`) | `On` |
+
+**Structural Boundaries** wrap each injected reference block in tags so the model clearly distinguishes sections. Recommended for smaller / open models (24–70B) that bleed between sections. Frontier models don't need it; turn it off to save a few tokens.
 
 > **Note:** Knowledge Tracker does not use extension prompt injection — it writes directly to SillyTavern lorebooks, which are triggered by keywords. Disabling the Knowledge tracker only stops it from scanning/updating; existing lorebook entries continue to be injected by SillyTavern's World Info until you disable them manually in the World Info panel.
+
+### Floating Buttons
+
+The four floating buttons (🌍 📜 🧠 ⚙️) can be individually shown/hidden, repositioned (drag), collapsed into a single hub button, and styled as icon-only ("Modern") or icon+text ("Classic"). Position is persisted across sessions. You can also open the MWT modal from the wand (extensions) menu or the Extensions panel drawer.
+
+### Per-Tracker Enable & Panic Switch
+
+Each tracker can be individually enabled/disabled. Disabling a tracker stops it from injecting and scanning; its floating button shows a red ✕ and can be re-enabled via right-click (or the Settings tab). The global **panic switch** (right-click the ⚙️ button, or the checkbox in Settings) disables all trackers at once — useful for testing or branching a chat.
 
 ---
 
@@ -218,11 +276,12 @@ Control how World State and Chronicle entries are injected into the prompt:
 1. Open the **🌍 World State** tab
 2. Click **🔄 Refresh** to generate a world state from recent messages
 3. Review the generated document in the editor
-4. Edit manually if needed — changes auto-save to chat metadata
+4. Edit manually if needed — click **💾 Save** to persist changes to chat metadata
 5. Toggle **🔌 Injection** to include the world state in every prompt
 6. Toggle **🔄 Auto** to automatically refresh every N messages
-7. Use **Section Regenerate** buttons (▸ icons next to section headers) to refresh individual sections
-8. Use **↩ Revert** to restore a previous version from auto-save history
+7. Use **Section Regenerate** (select a section, set variety, click **🎲 Regenerate Section**) to refresh individual sections
+8. Use **⏪ Revert** to restore a previous version from auto-save history, or **📋 History** to browse all snapshots
+9. Use **📄 Preview Injection** to see exactly what will be injected
 
 ### Session Chronicle
 
@@ -253,8 +312,9 @@ Control how World State and Chronicle entries are injected into the prompt:
    - Click **✗ Dismiss** to discard
 4. View tracked NPCs in the **Minor** and **Major** tabs
 5. Click any NPC to view/edit their lorebook entry, manage relationships, or promote/demote
-6. **State Trackers** tab shows registered state tracker entries that can be updated via LLM
-7. Enable **Auto-Trigger** in module settings to run scans automatically every N messages
+6. The **Relationships** tab has a force-directed graph view (default) and a list view — toggle with the Graph/List button. Drag nodes, scroll to zoom, and click a node to open that NPC
+7. **State Trackers** tab shows registered state tracker entries that can be updated via LLM
+8. Enable **Auto-Trigger** in module settings to run state tracker scans automatically every N messages (with a cooldown to avoid re-updating recently changed trackers)
 
 ---
 
@@ -262,47 +322,83 @@ Control how World State and Chronicle entries are injected into the prompt:
 
 ```
 merged_world_tracker/
-├── index.js              # Main entry point — tabbed UI, event hooks, floating buttons
+├── index.js              # Main entry — tabbed UI, event hooks, floating buttons, init
 ├── manifest.json         # SillyTavern extension manifest
-├── style.css             # All styles (dark + light theme support)
-├── core/
+├── style.css             # All styles (dark + light theme, responsive breakpoints)
+├── core/                 # Shared infrastructure
 │   ├── index.js          # Barrel re-exports for all core modules
-│   ├── api.js            # Shared OpenAI-compatible API client with retry
+│   ├── api.js            # OpenAI-compatible + Connection Profile API client with retry
+│   ├── commands.js       # Slash command and macro registration
 │   ├── context.js        # SillyTavern context, chat, metadata, token helpers
 │   ├── diff.js           # LCS line/word diff computation and HTML rendering
+│   ├── file.js           # Download / file-pick helpers
+│   ├── injection.js      # Extension prompt injection helpers + XML tag wrapping
+│   ├── metadata.js       # Chat metadata access (world state / chronicle / registry)
 │   ├── modal.js          # Modal lifecycle, status bar, button bar helpers
-│   └── settings.js       # Settings manager factory (extension_settings + localStorage)
-├── world_state/
-│   └── index.js          # World State Tracker module
-├── chronicle/
-│   └── index.js          # Session Chronicle module
-└── knowledge/
-    └── index.js          # Knowledge Tracker module (NPCs + State Trackers)
+│   ├── notifications.js  # Toast notifications
+│   ├── settings.js       # Settings manager factory (extension_settings + localStorage)
+│   └── ui.js             # API field renderer, floating button bar, drawer, wand menu
+├── world_state/          # World State Tracker module
+│   ├── index.js          # Orchestrator — public API and lifecycle hooks
+│   ├── data.js           # Constants, state, data access (leaf)
+│   ├── settings.js       # Settings manager and defaults (leaf)
+│   ├── prompts.js        # System prompt template (leaf)
+│   ├── injection.js      # Prompt injection + Plot Seeds hook-mode headers
+│   ├── refresh.js        # Full refresh, auto-refresh scheduling, auto-save timer
+│   ├── sections.js       # Per-section regeneration
+│   └── render.js         # UI rendering, events, archive/import, revert/diff, preview
+├── chronicle/            # Session Chronicle module
+│   ├── index.js          # Orchestrator — public API and lifecycle hooks
+│   ├── data.js           # Constants, state, settings, data access, anchor helpers (leaf)
+│   ├── prompts.js        # System prompts for snapshot + consolidation (leaf)
+│   ├── injection.js      # Prompt injection logic
+│   ├── snapshots.js      # Generation, validation, CRUD, world state sync
+│   ├── import-export.js  # JSON / Markdown export and import
+│   └── render.js         # All UI rendering
+└── knowledge/            # Knowledge Tracker module (NPCs + State Trackers)
+    ├── index.js          # Public API barrel — lifecycle, slash commands, macros
+    ├── state.js          # Constants, shared mutable state, content helpers (leaf)
+    ├── settings.js       # Settings manager + settings panel (leaf)
+    ├── prompts.js        # Scan and state-update prompts (leaf)
+    ├── registry.js       # NPC + State Tracker registry operations (chat metadata)
+    ├── lorebook.js       # Lorebook read/write, scan, state update, staging enrichment
+    ├── staging.js        # Build staging items from scan results
+    ├── relationships.js  # Relationship storage and graph layout computation
+    └── render.js         # All UI rendering (staging, minor/major, state, graph, settings)
 ```
 
 ### Module Communication
 
-- Modules read shared global settings (injection depth/role) via `getGlobalSettings()` in `core/settings.js`; the global Settings tab pushes API config to each module through their `syncGlobalSettings()`
+- Modules read shared global settings (injection depth/role, structural boundaries, enable flags) via `getGlobalSettings()` and `injectionAllowed()` in `core/settings.js`; the global Settings tab pushes API config to each module through their `syncGlobalSettings()`
 - The Chronicle module can sync time/location data back to World State
 - The Knowledge module reads World State and Chronicle data for richer scan context
-- All modules respond to SillyTavern events (`CHAT_CHANGED`, `MESSAGE_RECEIVED`, `GENERATION_STARTED`, `GENERATION_STOPPED`)
+- All modules respond to SillyTavern events:
+  - `CHAT_CHANGED` — reset module state for the new chat
+  - `MESSAGE_RECEIVED` — advance auto-refresh / auto-snapshot / auto-trigger counters
+  - `GENERATION_STARTED` / `GENERATION_STOPPED` — gate chronicle work during main generation
+  - `MESSAGE_DELETED` — decrement counters and invalidate stale chronicle anchors
+  - `MESSAGE_SWIPED` / `MESSAGE_EDITED` — schedule world state refresh (if auto-refresh enabled) and flag stale chronicle anchors
 
 ---
 
 ## API Compatibility
 
-MWT works with any **OpenAI-compatible** chat completions API. Tested with:
+MWT works with any backend via two modes:
+
+1. **Connection Manager Profiles** (recommended) — uses SillyTavern's own connection, supporting every backend ST supports (OpenAI, Claude, Gemini, NovelAI, KoboldCPP, TextGen, etc.) with full preset/instruct support.
+2. **Custom OpenAI-compatible API** — any API that implements the `/chat/completions` endpoint.
+
+Tested with:
 
 - OpenAI (`gpt-4o-mini`, `gpt-4o`, etc.)
 - Anthropic via OpenAI-compatible proxies
 - DeepSeek
 - Local models via LM Studio, Ollama, text-generation-webui, etc.
-- Any API that implements the `/chat/completions` endpoint
 
 ### Tips for Best Results
 
 - **World State** works best with models ≥ 8K context and strong instruction following
-- **Chronicle** benefits from higher `maxTokens` (8000+) to allow detailed entries
+- **Chronicle** benefits from higher `maxTokens` (8000+ to allow detailed entries)
 - **Knowledge** scans work well with lower temperatures (0.1–0.3) for consistent JSON output
 - For models with extended thinking (e.g., DeepSeek R1, o1), the API layer automatically recovers from empty content by falling back to `reasoning_content`
 
@@ -316,9 +412,10 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 
 ## File Structure Notes
 
-- **Chat data** is stored in SillyTavern's per-chat metadata (survives backup/restore)
+- **Chat data** (world state text, chronicle entries, NPC registry, state tracker registry, relationships) is stored in SillyTavern's per-chat metadata (survives backup/restore)
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID
+- **Floating button positions** are stored in `localStorage`
 - All data is per-chat — switching chats loads that chat's world state, chronicle, and NPC registry
 
 ---
