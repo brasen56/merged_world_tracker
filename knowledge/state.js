@@ -54,6 +54,9 @@ export const state = {
     // ── Runtime state ──
     messageCounter: 0,
     npcMessageCounter: 0,
+    /** Last observed chat length, used by onMessageDeleted to compute how many
+     *  messages were removed during bulk deletes (e.g. "delete above/below"). */
+    lastChatLength: 0,
     isRunning: false,
     trackerQueue: Promise.resolve(),
 

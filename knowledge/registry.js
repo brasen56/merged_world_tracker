@@ -1,10 +1,13 @@
 /**
  * knowledge/registry.js — NPC registry and State Tracker registry operations.
  *
- * Registries are stored in chat metadata via core/patchChatMeta.
+ * Registries are flat { name: {...} } maps stored directly in chat metadata.
+ * We assign the whole map and call persistChatMeta() rather than routing
+ * through patchChatMeta(), which merges a top-level `lastUpdated` timestamp
+ * into the map and corrupts name lookups / iteration.
  */
 
-import { getChatMeta, patchChatMeta, getChat } from '../core/index.js';
+import { getChatMeta, persistChatMeta, getChat } from '../core/index.js';
 
 import { REGISTRY_KEY, STATE_REGISTRY_KEY, state } from './state.js';
 
@@ -13,11 +16,24 @@ import { REGISTRY_KEY, STATE_REGISTRY_KEY, state } from './state.js';
 export function getRegistry() {
     const meta = getChatMeta();
     if (!meta[REGISTRY_KEY]) meta[REGISTRY_KEY] = {};
-    return meta[REGISTRY_KEY];
+    const reg = meta[REGISTRY_KEY];
+    // Migration / hardening: a previous saveRegistry() routed through
+    // patchChatMeta(), which merged a `lastUpdated` timestamp into this flat
+    // { npcName: {...} } map. That phantom key appeared in every NPC list,
+    // dropdown, and scan. Strip it once if present; persist the cleaned map.
+    if (reg.lastUpdated !== undefined) {
+        delete reg.lastUpdated;
+        persistChatMeta();
+    }
+    return reg;
 }
 
 export function saveRegistry(reg) {
-    patchChatMeta(REGISTRY_KEY, reg);
+    // Set the flat map directly — do NOT route through patchChatMeta(), which
+    // would merge a `lastUpdated` sibling into the map and corrupt lookups.
+    const meta = getChatMeta();
+    meta[REGISTRY_KEY] = reg;
+    persistChatMeta();
 }
 
 export function registerEntry(name, uid, type, keywords) {
@@ -40,11 +56,20 @@ export function getAllNpcNames() { return Object.keys(getRegistry()); }
 export function getStateRegistry() {
     const meta = getChatMeta();
     if (!meta[STATE_REGISTRY_KEY]) meta[STATE_REGISTRY_KEY] = {};
-    return meta[STATE_REGISTRY_KEY];
+    const reg = meta[STATE_REGISTRY_KEY];
+    // Same lastUpdated hardening as getRegistry() above.
+    if (reg.lastUpdated !== undefined) {
+        delete reg.lastUpdated;
+        persistChatMeta();
+    }
+    return reg;
 }
 
 export function saveStateRegistry(reg) {
-    patchChatMeta(STATE_REGISTRY_KEY, reg);
+    // Set the flat map directly — same rationale as saveRegistry().
+    const meta = getChatMeta();
+    meta[STATE_REGISTRY_KEY] = reg;
+    persistChatMeta();
 }
 
 export function registerStateTracker(name, uid) {

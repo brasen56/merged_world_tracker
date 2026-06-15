@@ -10,7 +10,7 @@ import { getPlayerNames, notify, downloadJson, pickTextFile } from '../core/inde
 
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, TRACKER_SENTINEL,
-    HISTORY_KEY_PREFIX, state,
+    HISTORY_KEY_PREFIX, state, ktSetStatus,
 } from './state.js';
 import { hasValidSettings, getSettings, saveSettings } from './settings.js';
 import {
@@ -60,9 +60,7 @@ export function buildStagingItems(scanResult) {
         items.push({ id: makeId(), type: 'major', action: 'update', name: data.name, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords: reg.keywords || [data.name], uid: reg.uid, fields: data.fields, newKnowledge: data.new_knowledge || [] });
     });
     if (misclassifiedCount > 0) {
-        import('./render.js').then(({ ktSetStatus }) => {
-            ktSetStatus(`${misclassifiedCount} misclassified entries converted to new proposals.`, 'info');
-        });
+        ktSetStatus(`${misclassifiedCount} misclassified entries converted to new proposals.`, 'info');
     }
     return items;
 }
@@ -101,9 +99,7 @@ export function exportNpcs() {
         entries,
     };
     downloadJson(`knowledge-tracker-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, data);
-    import('./render.js').then(({ ktSetStatus }) => {
-        ktSetStatus('NPC registry exported (API key excluded for security).', 'success');
-    });
+    ktSetStatus('NPC registry exported (API key excluded for security).', 'success');
 }
 
 export async function importNpcs() {
@@ -176,7 +172,7 @@ export async function importNpcs() {
         saveRegistry(registry);
 
         // Trigger re-render
-        const { renderNpcsSubTab, ktSetStatus } = await import('./render.js');
+        const { renderNpcsSubTab } = await import('./render.js');
         renderNpcsSubTab();
 
         let msg = `Imported ${imported} NPC(s).`;
@@ -184,7 +180,6 @@ export async function importNpcs() {
         if (settingsImported) msg += ' Settings restored.';
         ktSetStatus(msg, 'success');
     } catch (err) {
-        const { ktSetStatus } = await import('./render.js');
         ktSetStatus(`Import failed: ${err.message}`, 'error');
     }
 }
@@ -193,7 +188,6 @@ export async function importNpcs() {
 
 export async function importFromLorebooks() {
     if (!state.wiScript) {
-        const { ktSetStatus } = await import('./render.js');
         ktSetStatus('World-info script not available.', 'error');
         return;
     }
@@ -278,7 +272,7 @@ export async function importFromLorebooks() {
     }
 
     // ── Report ──────────────────────────────────────────────────────────
-    const { renderNpcsSubTab, ktSetStatus } = await import('./render.js');
+    const { renderNpcsSubTab } = await import('./render.js');
     renderNpcsSubTab();
 
     const parts = [];

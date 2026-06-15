@@ -5,12 +5,12 @@
  */
 
 import {
-    escapeHtml, renderLineDiff, escapeRegex, notify,
+    escapeHtml, renderLineDiff, notify,
 } from '../core/index.js';
 
 import {
     RELATIONSHIP_TYPES, TRACKER_SENTINEL, STATE_LOREBOOK_NAME,
-    state, getNpcsContentEl, getStateContentEl, ktSetStatus,
+    state, getNpcsContentEl, ktSetStatus,
 } from './state.js';
 import { getSettings, hasValidSettings, showKnowledgeSettings } from './settings.js';
 import {
@@ -19,7 +19,7 @@ import {
     setStateTrackerEnabled, setStateTrackerAlwaysUpdate, bumpStateTrackerTimestamp,
 } from './registry.js';
 import {
-    loadEntryContent, loadStateTrackerEntry, getHistory,
+    loadEntryContent, loadStateTrackerEntry,
     runScan, runStateUpdate, runNpcUpdate,
     buildUpdatedMinorContent, buildUpdatedMajorContent,
     buildPromotedContent, buildDemotedContent,
@@ -31,7 +31,7 @@ import {
     syncRelationshipsToLorebook, syncAllRelationshipsToLorebooks,
 } from './relationships.js';
 import {
-    buildStagingItems, STAGING_PLACEHOLDERS, exportNpcs, importNpcs, importFromLorebooks,
+    buildStagingItems, exportNpcs, importNpcs, importFromLorebooks,
 } from './staging.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -752,6 +752,13 @@ function computeGraphLayout(edges) {
     const iterations = 200;
     const posArr = Array.from(nodes.values());
 
+    // Precompute node-name → array-index lookup once (outside the hot loop).
+    // The previous code called `Array.from(nodes.keys()).indexOf(p.a/b)` inside
+    // the 200-iteration simulation for every edge — O(200 × E × N) linear
+    // searches that dominated layout time for large graphs.
+    const nodeIndex = new Map([...nodes.keys()].map((key, idx) => [key, idx]));
+    const edgeList = Array.from(pairs.values());
+
     for (let iter = 0; iter < iterations; iter++) {
         const t = 1 - iter / iterations; // cooling
         const disp = posArr.map(() => ({ x: 0, y: 0 }));
@@ -770,10 +777,9 @@ function computeGraphLayout(edges) {
         }
 
         // Attractive forces (edges)
-        const edgeList = Array.from(pairs.values());
         for (const p of edgeList) {
-            const aIdx = Array.from(nodes.keys()).indexOf(p.a);
-            const bIdx = Array.from(nodes.keys()).indexOf(p.b);
+            const aIdx = nodeIndex.get(p.a);
+            const bIdx = nodeIndex.get(p.b);
             if (aIdx < 0 || bIdx < 0) continue;
             let dx = posArr[aIdx].x - posArr[bIdx].x;
             let dy = posArr[aIdx].y - posArr[bIdx].y;

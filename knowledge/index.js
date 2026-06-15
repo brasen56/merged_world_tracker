@@ -7,7 +7,7 @@
 
 import { getChat, escapeRegex, estimateTokens } from '../core/index.js';
 
-import { state, getNpcsContentEl, ktSetStatus } from './state.js';
+import { state, getNpcsContentEl } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
 import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
@@ -53,6 +53,10 @@ export function onMessageReceived() {
     const npcAuto = !!settings.npcAutoScanEnabled;
     if (!stateAuto && !npcAuto) return;
     if (!hasValidSettings()) return;
+
+    // Track chat length so onMessageDeleted can compute the number of removed
+    // messages during bulk deletes (e.g. "delete above/below").
+    state.lastChatLength = getChat()?.length || 0;
 
     let doState = false;
     let doNpc = false;
@@ -159,6 +163,7 @@ export function onMessageReceived() {
 export function onChatChanged() {
     state.messageCounter = 0;
     state.npcMessageCounter = 0;
+    state.lastChatLength = getChat()?.length || 0;
     state.isRunning = false;
     state.stagingItems = [];
     state.activeItemId = null;
@@ -172,24 +177,44 @@ export function onChatChanged() {
 // ─── Delete awareness ────────────────────────────────────────────────────────
 // Keep the knowledge auto-trigger counter in sync when messages are deleted so
 // the "every N messages" cadence doesn't drift relative to the shorter chat.
+//
+// SillyTavern supports bulk deletes ("delete messages above/below") which remove
+// many messages at once. A single MESSAGE_DELETED event fires, and by the time
+// it reaches us the chat array already reflects the final (shorter) length. We
+// compare against `state.lastChatLength` to compute how many messages were
+// actually removed and decrement both counters proportionally.
 
 /**
- * A message was deleted. Decrement `messageCounter` if positive so the
- * auto-trigger countdown stays aligned with the chat length.
+ * A message (or messages) was deleted. Decrement the auto-trigger counters by
+ * the number of messages actually removed, so the "every N messages" cadence
+ * stays aligned with the shorter chat.
  *
- * @param {number} deletedIndex - The chat-array index of the removed message.
+ * @param {number} deletedIndex - The chat-array index of the removed message
+ *   (from the event payload). For bulk deletes this is typically the boundary
+ *   index; the actual count removed is derived from `state.lastChatLength`.
  */
 export function onMessageDeleted(deletedIndex) {
     const settings = getSettings();
     if (!settings.autoTriggerEnabled && !settings.npcAutoScanEnabled) return;
     if (typeof deletedIndex !== 'number') return;
+
+    // Compute how many messages were removed. After a delete, getChat() reflects
+    // the new (shorter) length. The delta vs lastChatLength tells us the count;
+    // it is clamped to >= 1 as a safety net when the delta isn't available or
+    // the event fired before the chat array updated (single-message delete).
+    const currentLen = getChat()?.length || 0;
+    const removed = state.lastChatLength > currentLen
+        ? state.lastChatLength - currentLen
+        : 1;
+    state.lastChatLength = currentLen;
+
     if (settings.autoTriggerEnabled && state.messageCounter > 0) {
-        state.messageCounter = Math.max(0, state.messageCounter - 1);
-        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} — state counter adjusted to ${state.messageCounter}`);
+        state.messageCounter = Math.max(0, state.messageCounter - removed);
+        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — state counter adjusted to ${state.messageCounter}`);
     }
     if (settings.npcAutoScanEnabled && state.npcMessageCounter > 0) {
-        state.npcMessageCounter = Math.max(0, state.npcMessageCounter - 1);
-        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} — NPC counter adjusted to ${state.npcMessageCounter}`);
+        state.npcMessageCounter = Math.max(0, state.npcMessageCounter - removed);
+        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — NPC counter adjusted to ${state.npcMessageCounter}`);
     }
 }
 
