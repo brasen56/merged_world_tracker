@@ -23,7 +23,7 @@ import {
 } from './data.js';
 import { STORY_PLAN_INJECTION_HEADER, applyPlanInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
-import { renderContent, wireEvents } from './render.js';
+import { renderContent, wireEvents, refreshDisplay } from './render.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -77,11 +77,13 @@ export async function onMessageReceived() {
             try {
                 const text = await generatePlan(true);
                 if (text) {
-                    // Refresh the editor if the modal is open
+                    // Refresh the editor if the modal is open. Use refreshDisplay
+                    // (in-place text/label updates) instead of renderContent so
+                    // we don't destroy event listeners or collapse <details>.
                     if (state.modal) {
                         const editor = state.modal.querySelector('#sp-editor');
                         if (editor) editor.value = text;
-                        renderContent();
+                        refreshDisplay();
                     }
                     notify('Story Planner', 'Auto-generated a new story plan.', 'info');
                 }

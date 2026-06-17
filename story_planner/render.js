@@ -35,6 +35,79 @@ function getContentEl() {
     return state.contentEl;
 }
 
+// ─── Lightweight display updaters ────────────────────────────────────────────
+// These update specific text/labels in-place WITHOUT replacing the DOM (which
+// would destroy event listeners and collapse <details> elements). Use these
+// instead of renderContent() after any user interaction.
+
+/** Update the char/word/token stat line beneath the editor. */
+function updateEditorStats() {
+    if (!state.modal) return;
+    const editor = state.modal.querySelector('#sp-editor');
+    const stats = state.modal.querySelector('#sp-editor-stats');
+    if (!editor || !stats) return;
+    const text = editor.value;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const tokens = estimateTokens(text);
+    stats.textContent = `${text.length} chars · ${words} words · ~${tokens} tokens`;
+}
+
+/** Update the word/token/auto-counter summary in the toolbar. */
+function updateToolbarStats() {
+    if (!state.modal) return;
+    const editor = state.modal.querySelector('#sp-editor');
+    const text = editor ? editor.value : getPlanText();
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const tokens = estimateTokens(text);
+    const autoEnabled = isAutoEnabled();
+    const autoInterval = getAutoInterval();
+    const el = state.modal.querySelector('#sp-toolbar-stats');
+    if (el) {
+        el.textContent = `${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoCounter}/${autoInterval} msgs` : ''}`;
+    }
+}
+
+/** Update the auto-generate status banner (shown only when auto is ON). */
+function updateAutoBanner() {
+    if (!state.modal) return;
+    const el = state.modal.querySelector('#sp-auto-banner');
+    if (!el) return;
+    const autoEnabled = isAutoEnabled();
+    const autoInterval = getAutoInterval();
+    if (autoEnabled) {
+        el.style.display = '';
+        el.textContent = `🔄 Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)`;
+    } else {
+        el.style.display = 'none';
+    }
+}
+
+/** Update toggle button labels to reflect current persisted state. */
+function refreshButtonLabels() {
+    if (!state.modal) return;
+    const injectBtn = state.modal.querySelector('#sp-toggle-inject');
+    const autoBtn = state.modal.querySelector('#sp-toggle-auto');
+    if (injectBtn) {
+        injectBtn.textContent = isInjectionEnabled() ? '🔌 Injection: ON' : '🔌 Injection: OFF';
+    }
+    if (autoBtn) {
+        const autoInterval = getAutoInterval();
+        autoBtn.textContent = isAutoEnabled() ? `🔄 Auto: ON (${autoInterval})` : '🔄 Auto: OFF';
+    }
+}
+
+/**
+ * Refresh all dynamic display elements in-place (no DOM replacement).
+ * Called after save/clear/generate/toggle to keep stats and labels current
+ * without destroying event listeners or collapsing <details> sections.
+ */
+export function refreshDisplay() {
+    updateEditorStats();
+    updateToolbarStats();
+    updateAutoBanner();
+    refreshButtonLabels();
+}
+
 // ─── Render ──────────────────────────────────────────────────────────────────
 
 export function render() {
@@ -51,7 +124,7 @@ export function render() {
             <button id="sp-generate" class="mwt-btn mwt-btn-primary">🎲 Generate Plan</button>
             <button id="sp-save" class="mwt-btn">💾 Save Plan</button>
             <button id="sp-clear" class="mwt-btn mwt-btn-danger">🗑️ Clear</button>
-            <span class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoCounter}/${autoInterval} msgs` : ''}</span>
+            <span id="sp-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoCounter}/${autoInterval} msgs` : ''}</span>
         </div>
 
         <div class="mwt-form-row">
@@ -59,7 +132,7 @@ export function render() {
             <div id="sp-editor-stats" class="mwt-text-dim mwt-text-sm mwt-mt-8">${text.length} chars · ${words} words · ~${tokens} tokens</div>
         </div>
 
-        ${autoEnabled ? `<div style="color:var(--mwt-accent);font-size:12px;margin-bottom:4px">🔄 Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)</div>` : ''}
+        <div id="sp-auto-banner" style="color:var(--mwt-accent);font-size:12px;margin-bottom:4px;${autoEnabled ? '' : 'display:none'}">${autoEnabled ? `🔄 Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)` : ''}</div>
 
         <details class="mwt-mt-8">
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">⚙️ Story Planner Settings</summary>
@@ -124,7 +197,7 @@ export function wireEvents() {
             if (text) {
                 const editor = state.modal.querySelector('#sp-editor');
                 if (editor) editor.value = text;
-                renderContent(); // refresh stats
+                refreshDisplay();
                 notify('Story Planner', 'Plan generated.', 'success');
             }
         } catch (err) {
@@ -139,7 +212,7 @@ export function wireEvents() {
         const newText = state.modal.querySelector('#sp-editor')?.value || '';
         setPlanData({ text: newText });
         applyPlanInjection();
-        renderContent();
+        refreshDisplay();
         notify('Story Planner', 'Plan saved.', 'success');
     });
 
@@ -148,16 +221,18 @@ export function wireEvents() {
         if (!confirm('Clear the story plan? This cannot be undone.')) return;
         setPlanData({ text: '' });
         applyPlanInjection();
-        renderContent();
+        const editor = state.modal.querySelector('#sp-editor');
+        if (editor) editor.value = '';
+        refreshDisplay();
     });
 
-    // Auto-save textarea on blur (mirrors world_state auto-save friendliness)
+    // Auto-save textarea on blur (saves silently without re-rendering)
     state.modal.querySelector('#sp-editor')?.addEventListener('blur', () => {
         const newText = state.modal.querySelector('#sp-editor')?.value || '';
         if (newText !== getPlanText()) {
             setPlanData({ text: newText });
             applyPlanInjection();
-            renderContent();
+            refreshDisplay();
         }
     });
 
@@ -173,7 +248,7 @@ export function wireEvents() {
             injectionDepth: isNaN(depth) ? 4 : depth,
         });
         setPlanData({ autoInterval: isNaN(autoInterval) ? 10 : Math.max(1, autoInterval) });
-        renderContent();
+        refreshDisplay();
         applyPlanInjection();
         notify('Story Planner', 'Settings saved.', 'success');
     });
@@ -182,7 +257,7 @@ export function wireEvents() {
     state.modal.querySelector('#sp-toggle-inject')?.addEventListener('click', () => {
         setPlanData({ injectEnabled: !isInjectionEnabled() });
         applyPlanInjection();
-        renderContent();
+        refreshDisplay();
     });
 
     // Toggle auto-generate
@@ -193,6 +268,6 @@ export function wireEvents() {
             state.autoCounter = 0;
             setPlanData({ autoCounter: 0 });
         }
-        renderContent();
+        refreshDisplay();
     });
 }
