@@ -20,6 +20,7 @@ import { createCommands } from './core/commands.js';
 import * as WorldState from './world_state/index.js';
 import * as Chronicle from './chronicle/index.js';
 import * as Knowledge from './knowledge/index.js';
+import * as StoryPlanner from './story_planner/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -100,6 +101,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         showFloatWorld: true,
         showFloatChronicle: true,
         showFloatKnowledge: true,
+        showFloatStoryPlanner: true,
         showFloatSettings: true,
         collapseFloatButtons: false,
         buttonStyle: 'modern', // 'modern' | 'classic'
@@ -110,6 +112,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         enableWorldState: true,
         enableChronicle: true,
         enableKnowledge: true,
+        enableStoryPlanner: true,
         // Global "stop injecting / scanning everything" panic switch.
         // Flipped by right-clicking the ⚙️ floating button.
         injectionMasterOff: false,
@@ -123,6 +126,7 @@ const TABS = [
     { id: 'world-state', label: '🌍 World State', module: WorldState },
     { id: 'chronicle', label: '📜 Chronicle', module: Chronicle },
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
+    { id: 'story-planner', label: '🗺️ Story Planner', module: StoryPlanner },
     { id: 'settings', label: '⚙️ Settings', module: null },
 ];
 
@@ -231,6 +235,9 @@ function renderSettingsTab() {
             <label class="mwt-label">🧠 Knowledge</label>
             <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-knowledge" ${s.showFloatKnowledge !== false ? 'checked' : ''}> Visible</label>
 
+            <label class="mwt-label">🗺️ Story Planner</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-story-planner" ${s.showFloatStoryPlanner !== false ? 'checked' : ''}> Visible</label>
+
             <label class="mwt-label">⚙️ Settings</label>
             <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-settings" ${s.showFloatSettings !== false ? 'checked' : ''}> Visible</label>
 
@@ -263,6 +270,9 @@ function renderSettingsTab() {
 
             <label class="mwt-label">🧠 Knowledge</label>
             <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-knowledge" ${s.enableKnowledge !== false ? 'checked' : ''}> Use this tracker</label>
+
+            <label class="mwt-label">🗺️ Story Planner</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-story-planner" ${s.enableStoryPlanner !== false ? 'checked' : ''}> Use this tracker</label>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -369,6 +379,7 @@ function renderModal() {
                 showFloatWorld: modal.querySelector('#mwt-s-show-world')?.checked ?? true,
                 showFloatChronicle: modal.querySelector('#mwt-s-show-chronicle')?.checked ?? true,
                 showFloatKnowledge: modal.querySelector('#mwt-s-show-knowledge')?.checked ?? true,
+                showFloatStoryPlanner: modal.querySelector('#mwt-s-show-story-planner')?.checked ?? true,
                 showFloatSettings: modal.querySelector('#mwt-s-show-settings')?.checked ?? true,
                 collapseFloatButtons: modal.querySelector('#mwt-s-collapse-float')?.checked ?? false,
                 buttonStyle: modal.querySelector('#mwt-s-button-style')?.value || 'modern',
@@ -376,6 +387,7 @@ function renderModal() {
                 enableWorldState: modal.querySelector('#mwt-s-enable-world')?.checked ?? true,
                 enableChronicle: modal.querySelector('#mwt-s-enable-chronicle')?.checked ?? true,
                 enableKnowledge: modal.querySelector('#mwt-s-enable-knowledge')?.checked ?? true,
+                enableStoryPlanner: modal.querySelector('#mwt-s-enable-story-planner')?.checked ?? true,
                 injectionMasterOff: modal.querySelector('#mwt-s-master-off')?.checked ?? false,
             };
             // NOTE: enableX and showFloatX are deliberately decoupled. Toggling
@@ -394,6 +406,7 @@ function renderModal() {
             try {
                 WorldState.applyWorldStateInjection?.();
                 Chronicle.applyInjection?.();
+                StoryPlanner.applyPlanInjection?.();
             } catch { /* modules may not be initialized yet */ }
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });
@@ -411,6 +424,7 @@ function renderModal() {
             if (WorldState.syncGlobalSettings) WorldState.syncGlobalSettings(patch);
             if (Chronicle.syncGlobalSettings) Chronicle.syncGlobalSettings(patch);
             if (Knowledge.syncGlobalSettings) Knowledge.syncGlobalSettings(patch);
+            if (StoryPlanner.syncGlobalSettings) StoryPlanner.syncGlobalSettings(patch);
             setStatus(modal, 'API settings synced to all modules.', 'success', 3000);
         });
     }
@@ -438,6 +452,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
         WorldState.onChatChanged();
         Chronicle.onChatChanged();
         Knowledge.onChatChanged();
+        StoryPlanner.onChatChanged();
     });
 }
 
@@ -450,6 +465,7 @@ if (eventSource && event_types?.MESSAGE_RECEIVED) {
         if (s.enableWorldState !== false) WorldState.onMessageReceived();
         if (s.enableChronicle  !== false) Chronicle.onMessageReceived();
         if (s.enableKnowledge  !== false) Knowledge.onMessageReceived();
+        if (s.enableStoryPlanner !== false) StoryPlanner.onMessageReceived();
     });
 }
 
@@ -491,6 +507,7 @@ if (eventSource && event_types?.MESSAGE_DELETED) {
         if (s.enableWorldState !== false) WorldState.onMessageDeleted(idx);
         if (s.enableChronicle  !== false) Chronicle.onMessageDeleted(idx);
         if (s.enableKnowledge  !== false) Knowledge.onMessageDeleted(idx);
+        if (s.enableStoryPlanner !== false) StoryPlanner.onMessageDeleted(idx);
     });
 }
 
@@ -522,7 +539,7 @@ const ui = createFloatingButtonBar({
     getSettings,
     saveSettings,
     openModal: openMwtModal,
-    modules: { WorldState, Chronicle, Knowledge },
+    modules: { WorldState, Chronicle, Knowledge, StoryPlanner },
 });
 
 // ─── Slash commands & macros (via core/commands.js) ──────────────────────────
@@ -530,7 +547,7 @@ const ui = createFloatingButtonBar({
 const commands = createCommands({
     registerSlashCommand,
     macroRegistry,
-    modules: { WorldState, Chronicle, Knowledge },
+    modules: { WorldState, Chronicle, Knowledge, StoryPlanner },
 });
 
 // ─── Initialize ──────────────────────────────────────────────────────────────
@@ -549,6 +566,7 @@ commands.setupMacros();
 WorldState.init(null);
 Chronicle.init(null);
 Knowledge.init(null);
+StoryPlanner.init(null);
 
 // Periodically update floating button token counts and auto-refresh countdown
 setInterval(ui.updateFloatTokenCounts, 5000);

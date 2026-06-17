@@ -125,10 +125,11 @@ export function readApiSettingsValues(el, opts = {}) {
 // ─── Floating Button Bar Factory ────────────────────────────────────────────
 
 const FLOAT_BUTTONS = [
-    { id: 'mwt-float-world',     label: '🌍', title: 'World State',  tab: 'world-state', visibilityKey: 'showFloatWorld',     enableKey: 'enableWorldState' },
-    { id: 'mwt-float-chronicle', label: '📜', title: 'Chronicle',    tab: 'chronicle',    visibilityKey: 'showFloatChronicle', enableKey: 'enableChronicle' },
-    { id: 'mwt-float-knowledge', label: '🧠', title: 'Knowledge',    tab: 'knowledge',    visibilityKey: 'showFloatKnowledge', enableKey: 'enableKnowledge' },
-    { id: 'mwt-float-settings',  label: '⚙️', title: 'All Settings', tab: 'settings',     visibilityKey: 'showFloatSettings',  masterKey: 'injectionMasterOff' },
+    { id: 'mwt-float-world',         label: '🌍', title: 'World State',   tab: 'world-state',   visibilityKey: 'showFloatWorld',         enableKey: 'enableWorldState' },
+    { id: 'mwt-float-chronicle',     label: '📜', title: 'Chronicle',     tab: 'chronicle',     visibilityKey: 'showFloatChronicle',     enableKey: 'enableChronicle' },
+    { id: 'mwt-float-knowledge',     label: '🧠', title: 'Knowledge',     tab: 'knowledge',     visibilityKey: 'showFloatKnowledge',     enableKey: 'enableKnowledge' },
+    { id: 'mwt-float-story-planner', label: '🗺️', title: 'Story Planner', tab: 'story-planner', visibilityKey: 'showFloatStoryPlanner', enableKey: 'enableStoryPlanner' },
+    { id: 'mwt-float-settings',      label: '⚙️', title: 'All Settings',  tab: 'settings',      visibilityKey: 'showFloatSettings',      masterKey: 'injectionMasterOff' },
 ];
 
 const FLOAT_POSITIONS_KEY = 'mwt_float_positions';
@@ -160,7 +161,7 @@ function saveFloatPosition(btnId, left, top) {
  *                   updateFloatTokenCounts, updateButtonStates
  */
 export function createFloatingButtonBar({ getSettings, saveSettings, openModal, modules }) {
-    const { WorldState, Chronicle, Knowledge } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner } = modules;
 
     /**
      * Apply per-button visibility from settings.
@@ -218,6 +219,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     'mwt-float-world': '🌍 World State',
                     'mwt-float-chronicle': '📜 Session Chronicle',
                     'mwt-float-knowledge': '🧠 Knowledge Tracker',
+                    'mwt-float-story-planner': '🗺️ Story Planner',
                     'mwt-float-settings': '⚙️ Settings',
                 };
                 if (iconEl && classicLabels[cfg.id]) {
@@ -229,6 +231,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     'mwt-float-world': '🌍',
                     'mwt-float-chronicle': '📜',
                     'mwt-float-knowledge': '🧠',
+                    'mwt-float-story-planner': '🗺️',
                     'mwt-float-settings': '⚙️',
                 };
                 if (iconEl && modernLabels[cfg.id]) {
@@ -322,6 +325,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     try {
                         WorldState.applyWorldStateInjection?.();
                         Chronicle.applyInjection?.();
+                        StoryPlanner.applyPlanInjection?.();
                     } catch { /* modules may not be initialized yet */ }
                     updateButtonStates();
                     notify(
@@ -336,6 +340,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     try {
                         WorldState.applyWorldStateInjection?.();
                         Chronicle.applyInjection?.();
+                        StoryPlanner.applyPlanInjection?.();
                     } catch { /* modules may not be initialized yet */ }
                     updateButtonStates();
                     notify(
@@ -368,6 +373,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 <button class="mwt-btn" id="mwt-drawer-world" title="Open World State tab">🌍</button>
                 <button class="mwt-btn" id="mwt-drawer-chronicle" title="Open Chronicle tab">📜</button>
                 <button class="mwt-btn" id="mwt-drawer-knowledge" title="Open Knowledge tab">🧠</button>
+                <button class="mwt-btn" id="mwt-drawer-story-planner" title="Open Story Planner tab">🗺️</button>
             </div>
         `;
 
@@ -385,6 +391,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
         container.querySelector('#mwt-drawer-world')?.addEventListener('click', () => openModal('world-state'));
         container.querySelector('#mwt-drawer-chronicle')?.addEventListener('click', () => openModal('chronicle'));
         container.querySelector('#mwt-drawer-knowledge')?.addEventListener('click', () => openModal('knowledge'));
+        container.querySelector('#mwt-drawer-story-planner')?.addEventListener('click', () => openModal('story-planner'));
     }
 
     // ─── Wand menu entry ─────────────────────────────────────────────────────
@@ -423,6 +430,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 { id: 'mwt-float-world', getTokens: WorldState.getTotalTokens },
                 { id: 'mwt-float-chronicle', getTokens: Chronicle.getTotalTokens },
                 { id: 'mwt-float-knowledge', getTokens: Knowledge.getTotalTokens },
+                { id: 'mwt-float-story-planner', getTokens: StoryPlanner.getTotalTokens },
             ];
             for (const m of mods) {
                 const el = document.getElementById(`${m.id}-tokens`);
@@ -490,6 +498,22 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     knCountdownEl.textContent = '';
                     knCountdownEl.style.display = 'none';
                     knCountdownEl.title = '';
+                }
+            }
+
+            // Update auto-plan countdown on Story Planner floating button
+            const spCountdownEl = document.getElementById('mwt-float-story-planner-countdown');
+            if (spCountdownEl) {
+                const spStatus = StoryPlanner.getAutoPlanStatus?.();
+                if (spStatus) {
+                    const remaining = spStatus.interval - spStatus.counter;
+                    spCountdownEl.textContent = `${remaining}`;
+                    spCountdownEl.style.display = 'block';
+                    spCountdownEl.title = `Auto-plan in ${remaining} message${remaining !== 1 ? 's' : ''} (${spStatus.counter}/${spStatus.interval})`;
+                } else {
+                    spCountdownEl.textContent = '';
+                    spCountdownEl.style.display = 'none';
+                    spCountdownEl.title = '';
                 }
             }
 
@@ -579,6 +603,23 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 knBtn.classList.add('mwt-btn--active');
             } else {
                 knBtn.classList.add('mwt-btn--empty');
+            }
+        }
+
+        // Story Planner button state
+        const spBtn = document.getElementById('mwt-float-story-planner');
+        if (spBtn) {
+            spBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+            const spGenerating = StoryPlanner.isGenerating?.() || false;
+            const spStatus = StoryPlanner.getAutoPlanStatus?.();
+            if (spGenerating) {
+                spBtn.classList.add('mwt-btn--refreshing');
+            } else if (spStatus) {
+                spBtn.classList.add('mwt-btn--active');
+            } else if (StoryPlanner.getPlanTextForMacro?.()) {
+                spBtn.classList.add('mwt-btn--inactive');
+            } else {
+                spBtn.classList.add('mwt-btn--empty');
             }
         }
     }

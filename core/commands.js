@@ -16,7 +16,7 @@
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
 export function createCommands({ registerSlashCommand, macroRegistry, modules }) {
-    const { WorldState, Chronicle, Knowledge } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
 
@@ -65,6 +65,19 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules })
                     return `Error: ${err.message}`;
                 }
             }, ['mwt-scan'], 'Run an NPC scan via Knowledge Tracker');
+
+            // /wt-plan — Generate a story plan
+            registerSlashCommand('wt-plan', async (_args, _command) => {
+                try {
+                    if (typeof StoryPlanner.triggerGenerate === 'function') {
+                        await StoryPlanner.triggerGenerate();
+                        return 'Story plan generated.';
+                    }
+                    return 'Story plan not available.';
+                } catch (err) {
+                    return `Error: ${err.message}`;
+                }
+            }, ['mwt-plan'], 'Generate a Story Planner plan');
 
             // /wt-inject on|off — Toggle injection for all modules
             registerSlashCommand('wt-inject', async (args, _command) => {
@@ -117,7 +130,12 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules })
                     category: 'state',
                     description: 'Returns the most recent chronicle entry.',
                 });
-                console.log('[MWT] Macros registered: {{worldstate}}, {{chronicle}}, {{lastchronicle}}');
+                macroRegistry.registerMacro('storyplan', {
+                    handler: () => StoryPlanner.getPlanTextForMacro?.() || '',
+                    category: 'state',
+                    description: 'Returns the current story plan text.',
+                });
+                console.log('[MWT] Macros registered: {{worldstate}}, {{chronicle}}, {{lastchronicle}}, {{storyplan}}');
             } catch (err) {
                 console.warn('[MWT] Failed to register macros:', err);
             }

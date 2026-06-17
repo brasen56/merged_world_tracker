@@ -22,6 +22,7 @@ import {
     loadEntryContent, loadStateTrackerEntry,
     runScan, runStateUpdate, runNpcUpdate,
     buildUpdatedMinorContent, buildUpdatedMajorContent,
+    buildUpdatedDossierContent,
     buildPromotedContent, buildDemotedContent,
     enrichStagingItem, writeToLorebook, writeStateTracker,
 } from './lorebook.js';
@@ -397,14 +398,18 @@ function wireNpcListEvents(el, type) {
                 const result = await runNpcUpdate(name, reg.uid);
                 const hasChanges = Object.values(result.fields).some(v => v !== null) || result.newKnowledge.length > 0;
                 if (!hasChanges) { ktSetStatus(`No new info for "${name}".`, 'info'); return; }
+                const useDossier = result.dossierMode === true || (result.currentContent && typeof result.currentContent === 'string' && result.currentContent.startsWith('[Dossier]'));
                 const mergedContent = npcType === 'minor'
                     ? buildUpdatedMinorContent(result.currentContent, result.fields || {})
-                    : buildUpdatedMajorContent(result.currentContent, result.fields || {}, result.newKnowledge || []);
+                    : (useDossier
+                        ? buildUpdatedDossierContent(result.currentContent, result.fields || {}, result.newKnowledge || [])
+                        : buildUpdatedMajorContent(result.currentContent, result.fields || {}, result.newKnowledge || []));
                 state.stagingItems.push({
                     id: `npc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: npcType, action: 'update', name, data: {},
                     proposedContent: mergedContent, existingContent: result.currentContent,
                     mergedContent, keywords: reg.keywords || [name], uid: reg.uid,
                     fields: result.fields, newKnowledge: npcType === 'major' ? (result.newKnowledge || []) : [],
+                    dossierMode: useDossier,
                 });
                 const stagedItem = state.stagingItems[state.stagingItems.length - 1];
                 state.activeItemId = stagedItem.id;

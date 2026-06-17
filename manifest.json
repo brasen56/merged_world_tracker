@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Brasen",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "homePage": "",
-  "description": "Unified extension combining World State, Session Chronicle, and Knowledge Tracker into a single modular system. Automatically tracks world state, chronicles sessions, and manages NPC knowledge via lorebooks."
+  "description": "Unified extension combining World State, Session Chronicle, Knowledge Tracker, and Story Planner into a single modular system. Automatically tracks world state, chronicles sessions, manages NPC knowledge via lorebooks, and brainstorms plot possibilities."
 }

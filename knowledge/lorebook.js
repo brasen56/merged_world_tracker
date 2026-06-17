@@ -13,7 +13,7 @@ import {
     escapeRegex,
 } from '../core/index.js';
 
-import { SCAN_SYSTEM_PROMPT, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT } from './prompts.js';
+import { SCAN_SYSTEM_PROMPT, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, TRACKER_SENTINEL,
@@ -204,9 +204,18 @@ export async function enrichStagingItem(item) {
     const existing = await loadEntryContent(item.uid);
     if (existing !== null) {
         item.existingContent = existing;
-        if (item.type === 'minor') item.mergedContent = buildUpdatedMinorContent(existing, item.fields || {});
-        else if (item.type === 'major') item.mergedContent = buildUpdatedMajorContent(existing, item.fields || {}, item.newKnowledge || []);
-        else item.mergedContent = existing;
+        if (item.type === 'minor') {
+            item.mergedContent = buildUpdatedMinorContent(existing, item.fields || {});
+        } else if (item.type === 'major') {
+            // Use the dossier merger if the existing entry is a dossier OR the
+            // scan produced dossier fields (item.dossierMode / result.dossierMode).
+            const useDossier = isDossierEntry(existing) || item.dossierMode === true || item.fromDossierScan === true;
+            item.mergedContent = useDossier
+                ? buildUpdatedDossierContent(existing, item.fields || {}, item.newKnowledge || [])
+                : buildUpdatedMajorContent(existing, item.fields || {}, item.newKnowledge || []);
+        } else {
+            item.mergedContent = existing;
+        }
         item.proposedContent = item.mergedContent || item.proposedContent;
     }
 }
@@ -232,6 +241,119 @@ export function buildDemotedContent(currentContent) {
     }
     while (filtered.length > 0 && filtered[filtered.length - 1].trim() === '') filtered.pop();
     return filtered.join('\n');
+}
+
+// ─── Dossier formatters (Dossier Mode) ───────────────────────────────────────
+// Rich-field entry formatters used when Knowledge Tracker Dossier Mode is ON.
+
+/** Ordered list of dossier fields for consistent formatting. */
+export const DOSSIER_FIELDS = [
+    { key: 'role',         label: 'Role' },
+    { key: 'where_to_find', label: 'Where to Find' },
+    { key: 'appearance',   label: 'Appearance' },
+    { key: 'voice',        label: 'Voice' },
+    { key: 'background',   label: 'Background' },
+    { key: 'personality',  label: 'Personality' },
+    { key: 'read_on_pc',   label: 'Read on PC' },
+    { key: 'agenda',       label: 'Current Agenda' },
+    { key: 'secrets',      label: 'Secrets' },
+    { key: 'canon_lock',   label: 'Canon Lock' },
+    { key: 'image_tags',   label: 'Image Tags' },
+];
+
+/** Marker prepended to dossier-format entries so we can detect the format. */
+export const DOSSIER_MARKER = '[Dossier]';
+
+export function formatDossierEntry(data) {
+    const lines = [
+        `${DOSSIER_MARKER} ${data.name || 'Unknown'} | ${data.species || 'Unknown'} | ${data.descriptor || ''}`,
+        `Tone: ${data.tone || 'unknown'}`,
+        `Perceived as: ${data.perceived_as || 'unknown'}`,
+        `First seen: ${data.first_seen || 'unknown'}`,
+    ];
+    for (const f of DOSSIER_FIELDS) {
+        const val = data[f.key];
+        if (val != null && String(val).trim()) lines.push(`${f.label}: ${val}`);
+    }
+    lines.push('', 'Knowledge Ledger:');
+    const knowledge = data.initial_knowledge || data.new_knowledge || [];
+    if (knowledge.length > 0) knowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
+    else lines.push('- (no entries yet)');
+    return lines.join('\n');
+}
+
+/** Is this lorebook content in dossier format? */
+export function isDossierEntry(content) {
+    return typeof content === 'string' && content.startsWith(DOSSIER_MARKER);
+}
+
+/**
+ * Apply a partial dossier update (from DOSSIER_UPDATE_PROMPT result) to existing
+ * content. Only non-null fields are replaced; unknown fields are ignored.
+ */
+export function buildUpdatedDossierContent(existingContent, fields, newKnowledge) {
+    let lines = existingContent.split('\n');
+    const headerIdx = findHeaderLineIdx(lines);
+
+    lines = lines.map((line, idx) => {
+        if (fields?.tone != null && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
+        if (fields?.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
+        if (fields?.descriptor != null && idx === headerIdx && headerIdx !== -1) {
+            const parts = line.split('|').map(p => p.trim());
+            // Preserve the dossier marker if present
+            const markerMatch = parts[0].match(/^\[Dossier\]\s*(.*)$/);
+            parts[0] = markerMatch ? `${DOSSIER_MARKER} ${markerMatch[1]}` : parts[0];
+            parts[2] = fields.descriptor;
+            return parts.join(' | ');
+        }
+        // Dossier fields — match by label prefix
+        for (const f of DOSSIER_FIELDS) {
+            if (fields?.[f.key] != null && line.startsWith(`${f.label}:`)) {
+                return `${f.label}: ${fields[f.key]}`;
+            }
+        }
+        return line;
+    });
+
+    // Append any new dossier fields that don't yet exist in the entry
+    // (insert them before the Knowledge Ledger section).
+    const ledgerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));
+    const insertIdx = ledgerIdx !== -1 ? ledgerIdx : lines.length;
+    for (const f of DOSSIER_FIELDS) {
+        const val = fields?.[f.key];
+        if (val == null) continue;
+        const prefix = `${f.label}:`;
+        const exists = lines.some(l => l.startsWith(prefix));
+        if (!exists) lines.splice(insertIdx, 0, `${f.label}: ${val}`);
+    }
+
+    if (newKnowledge?.length > 0) {
+        // Ensure there's a Knowledge Ledger section, then append.
+        const ledgerLineIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));
+        if (ledgerLineIdx === -1) {
+            lines.push('', 'Knowledge Ledger:');
+            newKnowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
+        } else {
+            newKnowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
+        }
+    }
+    return lines.join('\n');
+}
+
+export function synthesizeDossierFromUpdate(name, fields, newKnowledge) {
+    const data = {
+        name,
+        species: 'Unknown',
+        tone: fields?.tone || 'unknown',
+        perceived_as: fields?.perceived_as || 'unknown',
+        descriptor: fields?.descriptor || 'unknown',
+        first_seen: 'unknown',
+        initial_knowledge: newKnowledge || [],
+    };
+    for (const f of DOSSIER_FIELDS) {
+        if (fields?.[f.key] != null) data[f.key] = fields[f.key];
+    }
+    return formatDossierEntry(data);
 }
 
 // ─── Validation ──────────────────────────────────────────────────────────────
@@ -273,6 +395,8 @@ export function validateStateOutput(originalEntry, output) {
 
 export async function runScan() {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
+    const settings = getSettings();
+    const dossierMode = settings.dossierMode === true;
     const registry = getRegistry();
     const knownNames = Object.keys(registry).filter(name => registry[name].uid !== null && registry[name].uid !== undefined);
     const recentMessages = getRecentMessages();
@@ -283,13 +407,15 @@ export async function runScan() {
     const playerNames = getPlayerNames({ lower: false, includeFirstChat: true });
     const playerSection = playerNames.size > 0 ? `<player_names_exclude>\n${[...playerNames].map(n => `- ${n}`).join('\n')}\n</player_names_exclude>` : '';
     const userContent = [knownSection, '', playerSection, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), 'Scan for NPCs. Output only JSON.'].filter(s => s !== null && s !== '').join('\n');
-    const raw = await ktFetchFromApi(SCAN_SYSTEM_PROMPT, userContent);
+    const systemPrompt = dossierMode ? DOSSIER_SCAN_SYSTEM_PROMPT : SCAN_SYSTEM_PROMPT;
+    const raw = await ktFetchFromApi(systemPrompt, userContent);
     let cleaned = normaliseOutput(raw);
     try {
         const result = JSON.parse(cleaned);
         const playerSet = new Set([...playerNames].map(n => n.toLowerCase()));
         const notPlayer = (entry) => entry && entry.name && !playerSet.has(String(entry.name).toLowerCase());
         return {
+            dossierMode,
             new_minor: Array.isArray(result.new_minor) ? result.new_minor.filter(notPlayer) : [],
             new_major: Array.isArray(result.new_major) ? result.new_major.filter(notPlayer) : [],
             update_minor: Array.isArray(result.update_minor) ? result.update_minor.filter(notPlayer) : [],
@@ -330,12 +456,19 @@ export async function runNpcUpdate(name, uid) {
     const worldState = getCurrentWorldState();
     if (!recentMessages) throw new Error('No recent messages.');
     const userContent = [`<entity>${name}</entity>`, `<current_entry>\n${currentContent}\n</current_entry>`, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), `Identify new info about ${name}. Output only JSON.`].filter(Boolean).join('\n');
-    const raw = await ktFetchFromApi(NPC_UPDATE_PROMPT, userContent);
+    // Use the dossier update prompt when the existing entry is a dossier, or
+    // when dossier mode is enabled in settings (so new fields get captured).
+    const settings = getSettings();
+    const useDossier = isDossierEntry(currentContent) || settings.dossierMode === true;
+    const systemPrompt = useDossier ? DOSSIER_UPDATE_PROMPT : NPC_UPDATE_PROMPT;
+    const raw = await ktFetchFromApi(systemPrompt, userContent);
     let cleaned = normaliseOutput(raw);
     let result;
     try { result = JSON.parse(cleaned); } catch { throw new Error(`Model did not return valid JSON. Preview: "${cleaned.slice(0, 120)}"`); }
-    const merged = buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);
-    return { currentContent, merged, fields: result.fields || {}, newKnowledge: result.new_knowledge || [] };
+    const merged = useDossier
+        ? buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || [])
+        : buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);
+    return { currentContent, merged, fields: result.fields || {}, newKnowledge: result.new_knowledge || [], dossierMode: useDossier };
 }
 
 /**

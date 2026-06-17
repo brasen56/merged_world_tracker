@@ -25,6 +25,10 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         trackerCooldownMsgs: 3,
         npcAutoScanEnabled: false,
         npcAutoScanEveryN: 10,
+        // Dossier Mode: when ON, scans produce richer NPC entries (role,
+        // appearance, voice, background, secrets, agenda, etc.) stored in the
+        // same lorebook entries. When OFF (default), uses the minimal format.
+        dossierMode: false,
     },
     logPrefix: '[MWT:Knowledge]',
 });
@@ -62,6 +66,10 @@ export function showKnowledgeSettings() {
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Auto-scan analyses recent messages for new or updated NPCs every N user messages and stages proposals for review.</p>
         </div>
+        <div style="margin-top:12px">
+            <label><input type="checkbox" id="kt-cfg-dossier-mode" ${s.dossierMode ? 'checked' : ''}> 📋 Dossier Mode (richer NPC entries)</label>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, NPC scans capture detailed dossier fields (role, appearance, voice, background, personality, secrets, agenda, canon lock, etc.) instead of the compact default format. Entries stay in the same lorebook. Off = the minimal format your tracker already uses.</p>
+        </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8" style="margin-top:12px">
             <button id="kt-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
             <button id="kt-cancel-settings" class="mwt-btn">Cancel</button>
@@ -78,6 +86,7 @@ export function showKnowledgeSettings() {
             trackerCooldownMsgs: Number(el.querySelector('#kt-cfg-cooldown')?.value) || 3,
             npcAutoScanEnabled: el.querySelector('#kt-cfg-npc-autoscan')?.checked ?? false,
             npcAutoScanEveryN: Number(el.querySelector('#kt-cfg-npc-every')?.value) || 10,
+            dossierMode: el.querySelector('#kt-cfg-dossier-mode')?.checked ?? false,
         });
         state.activeSubTab = 'staging';
         import('./render.js').then(({ renderNpcsSubTab }) => renderNpcsSubTab());

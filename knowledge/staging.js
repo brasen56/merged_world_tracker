@@ -20,6 +20,7 @@ import {
 import {
     formatMinorEntry, formatMajorEntry,
     synthesizeMinorFromUpdate, synthesizeMajorFromUpdate,
+    formatDossierEntry, synthesizeDossierFromUpdate,
     enrichStagingItem, writeToLorebook,
 } from './lorebook.js';
 
@@ -32,12 +33,15 @@ export function buildStagingItems(scanResult) {
     const items = [];
     const makeId = () => `kt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let misclassifiedCount = 0;
+    // Dossier mode is determined by the scan result flag (set in runScan).
+    const dossierMode = scanResult.dossierMode === true;
 
     scanResult.new_minor.forEach(data => {
         items.push({ id: makeId(), type: 'minor', action: 'create', name: data.name, data, proposedContent: formatMinorEntry(data), existingContent: null, keywords: [data.name] });
     });
     scanResult.new_major.forEach(data => {
-        items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: formatMajorEntry(data), existingContent: null, keywords: [data.name] });
+        const proposed = dossierMode ? formatDossierEntry(data) : formatMajorEntry(data);
+        items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: proposed, existingContent: null, keywords: [data.name], dossierMode });
     });
     scanResult.update_minor.forEach(data => {
         const reg = registry[data.name];
@@ -54,10 +58,13 @@ export function buildStagingItems(scanResult) {
         const orphan = !reg || reg.uid === null || reg.uid === undefined;
         if (orphan) {
             misclassifiedCount++;
-            items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: synthesizeMajorFromUpdate(data.name, data.fields, data.new_knowledge || []), existingContent: null, keywords: [data.name], synthesized: true });
+            const syn = dossierMode
+                ? synthesizeDossierFromUpdate(data.name, data.fields, data.new_knowledge || [])
+                : synthesizeMajorFromUpdate(data.name, data.fields, data.new_knowledge || []);
+            items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: syn, existingContent: null, keywords: [data.name], synthesized: true, dossierMode });
             return;
         }
-        items.push({ id: makeId(), type: 'major', action: 'update', name: data.name, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords: reg.keywords || [data.name], uid: reg.uid, fields: data.fields, newKnowledge: data.new_knowledge || [] });
+        items.push({ id: makeId(), type: 'major', action: 'update', name: data.name, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords: reg.keywords || [data.name], uid: reg.uid, fields: data.fields, newKnowledge: data.new_knowledge || [], dossierMode });
     });
     if (misclassifiedCount > 0) {
         ktSetStatus(`${misclassifiedCount} misclassified entries converted to new proposals.`, 'info');

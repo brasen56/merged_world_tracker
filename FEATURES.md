@@ -113,6 +113,42 @@ API pointers verified against this ST install.
   - Styles in `style.css`: `.kt-autoscan-countdown`, `.kt-staging-pulse`,
     `.kt-staging-alert`, `.mwt-btn--has-staging` + `@keyframes mwt-staging-pulse`.
 
+- [x] **Story Planner module (new top-level tracker)**
+  Generates a menu of medium/long-term plot possibilities (arcs, chapters,
+  episodes) from the story so far and injects it as inspiration for the AI.
+  Independent injection at its own depth (configurable in the tab's Settings),
+  with optional auto-generate every N messages. Inspired by the concept in
+  Megumin Suite's Story Planner, re-implemented from scratch to fit MWT's
+  clean-API / no-interception architecture.
+  *Implemented:* New `story_planner/` module (`settings.js`, `data.js`,
+  `prompts.js`, `generation.js`, `injection.js`, `render.js`, `index.js`).
+  Wired into `index.js` as a 4th feature tab (`🗺️ Story Planner`) + floating
+  button, with full event hooks (MESSAGE_RECEIVED, CHAT_CHANGED,
+  MESSAGE_DELETED) and settings sync. Slash command `/wt-plan` and macro
+  `{{storyplan}}` added in `core/commands.js`. Prompts written from scratch
+  (no third-party code) for license safety.
+
+- [x] **NPC Dossier Mode (Knowledge Tracker toggle)**
+  An optional richer NPC entry format that captures detailed dossier fields
+  (role, appearance, voice, background, personality, read-on-PC, agenda,
+  tiered secrets, canon lock, image tags) alongside the existing compact
+  fields — stored in the same lorebook entries. When OFF (default), the
+  Knowledge Tracker behaves exactly as before. When ON, scans use a
+  dossier-aware prompt and the staging/diff/update pipeline formats entries
+  with a `[Dossier]` marker so the format is detected on future updates.
+  Inspired by the concept in Megumin Suite's NPC Bank dossier template,
+  re-implemented from scratch with MWT's lorebook-backed storage (no separate
+  registry / no inline-chat extraction).
+  *Implemented:* `dossierMode` setting in `knowledge/settings.js` (default
+  OFF). `DOSSIER_SCAN_SYSTEM_PROMPT` + `DOSSIER_UPDATE_PROMPT` in
+  `knowledge/prompts.js`. `formatDossierEntry` / `buildUpdatedDossierContent`
+  / `synthesizeDossierFromUpdate` / `isDossierEntry` formatters in
+  `knowledge/lorebook.js`. `runScan` and `runNpcUpdate` select the dossier
+  prompt + merger based on the setting and/or existing entry format.
+  `buildStagingItems` in `knowledge/staging.js` propagates `dossierMode`.
+  Update handler in `knowledge/render.js` uses the dossier merger and tags
+  the staging item. Toggle UI in the Knowledge settings panel.
+
 - [ ] **Prompt/template customization for Chronicle & Knowledge + output language**
   World State already has a custom prompt; Chronicle's sections and the scan
   prompt are hardcoded. Non-English RPers will ask "can it write entries in my
