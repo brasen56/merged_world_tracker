@@ -13,7 +13,7 @@
  *   render.js     — UI rendering, event wiring
  */
 
-import { syncSharedConnectionSettings, estimateTokens, notify } from '../core/index.js';
+import { syncSharedConnectionSettings, notify } from '../core/index.js';
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {

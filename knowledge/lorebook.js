@@ -315,6 +315,13 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
         return line;
     });
 
+    // Ensure the header carries the [Dossier] marker so future updates keep
+    // using the dossier format — an entry first created in the compact format
+    // and later updated under Dossier Mode would otherwise lose its identity.
+    if (headerIdx !== -1 && !lines[headerIdx].startsWith(DOSSIER_MARKER)) {
+        lines[headerIdx] = `${DOSSIER_MARKER} ${lines[headerIdx]}`;
+    }
+
     // Append any new dossier fields that don't yet exist in the entry
     // (insert them before the Knowledge Ledger section).
     const ledgerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));

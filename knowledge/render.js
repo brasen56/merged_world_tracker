@@ -21,8 +21,7 @@ import {
 import {
     loadEntryContent, loadStateTrackerEntry,
     runScan, runStateUpdate, runNpcUpdate,
-    buildUpdatedMinorContent, buildUpdatedMajorContent,
-    buildUpdatedDossierContent,
+    buildUpdatedMinorContent,
     buildPromotedContent, buildDemotedContent,
     enrichStagingItem, writeToLorebook, writeStateTracker,
 } from './lorebook.js';
@@ -305,15 +304,10 @@ function wireStagingEvents(el) {
         item.addEventListener('click', async () => {
             state.activeItemId = item.dataset.id;
             const stagingItem = state.stagingItems.find(i => i.id === state.activeItemId);
-            if (stagingItem && stagingItem.action === 'update' && stagingItem.existingContent === null && stagingItem.uid != null) {
-                const existing = await loadEntryContent(stagingItem.uid);
-                if (existing !== null) {
-                    stagingItem.existingContent = existing;
-                    if (stagingItem.type === 'minor') stagingItem.mergedContent = buildUpdatedMinorContent(existing, stagingItem.fields || {});
-                    else if (stagingItem.type === 'major') stagingItem.mergedContent = buildUpdatedMajorContent(existing, stagingItem.fields || {}, stagingItem.newKnowledge || []);
-                    else stagingItem.mergedContent = existing;
-                }
-            }
+            // enrichStagingItem loads the existing entry and builds the merged
+            // content using the correct formatter (minor / major / dossier). It
+            // self-guards on action==='update' && existingContent===null && uid.
+            if (stagingItem) await enrichStagingItem(stagingItem);
             renderNpcsSubTab();
         });
     });
@@ -398,12 +392,12 @@ function wireNpcListEvents(el, type) {
                 const result = await runNpcUpdate(name, reg.uid);
                 const hasChanges = Object.values(result.fields).some(v => v !== null) || result.newKnowledge.length > 0;
                 if (!hasChanges) { ktSetStatus(`No new info for "${name}".`, 'info'); return; }
-                const useDossier = result.dossierMode === true || (result.currentContent && typeof result.currentContent === 'string' && result.currentContent.startsWith('[Dossier]'));
+                // runNpcUpdate already computed the major/dossier merge (result.merged)
+                // and flagged result.dossierMode. Minor entries need their own merge.
+                const useDossier = result.dossierMode === true;
                 const mergedContent = npcType === 'minor'
                     ? buildUpdatedMinorContent(result.currentContent, result.fields || {})
-                    : (useDossier
-                        ? buildUpdatedDossierContent(result.currentContent, result.fields || {}, result.newKnowledge || [])
-                        : buildUpdatedMajorContent(result.currentContent, result.fields || {}, result.newKnowledge || []));
+                    : result.merged;
                 state.stagingItems.push({
                     id: `npc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: npcType, action: 'update', name, data: {},
                     proposedContent: mergedContent, existingContent: result.currentContent,

@@ -74,6 +74,11 @@ export async function generatePlan(isAuto = false) {
     }
     if (!hasValidSettings()) {
         console.warn('[MWT:StoryPlanner] Cannot generate — settings incomplete');
+        // Stay silent for auto-runs, but tell the user when they clicked Generate
+        // (otherwise the button just appears to do nothing).
+        if (!isAuto) {
+            throw new Error('No API connection configured. Open ⚙️ Story Planner Settings, enter your API URL + Model, then click "Save Settings".');
+        }
         return null;
     }
 

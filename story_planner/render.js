@@ -17,6 +17,15 @@ import {
 import { applyPlanInjection } from './injection.js';
 import { generatePlan } from './generation.js';
 
+// ─── API field IDs ───────────────────────────────────────────────────────────
+// One shared map for BOTH renderApiSettingsFields and readApiSettingsValues so
+// every field round-trips (the two must use identical ids).
+const SP_API_FIELD_IDS = {
+    urlId: 'sp-api-url', keyId: 'sp-api-key', modelId: 'sp-model',
+    maxTokensId: 'sp-max-tokens', tempId: 'sp-temp',
+    topPId: 'sp-top-p', freqId: 'sp-freq-pen', presId: 'sp-pres-pen', headersId: 'sp-headers',
+};
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getContentEl() {
@@ -40,7 +49,7 @@ export function render() {
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
             <button id="sp-generate" class="mwt-btn mwt-btn-primary">🎲 Generate Plan</button>
-            <button id="sp-save" class="mwt-btn">💾 Save</button>
+            <button id="sp-save" class="mwt-btn">💾 Save Plan</button>
             <button id="sp-clear" class="mwt-btn mwt-btn-danger">🗑️ Clear</button>
             <span class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoCounter}/${autoInterval} msgs` : ''}</span>
         </div>
@@ -55,7 +64,7 @@ export function render() {
         <details class="mwt-mt-8">
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">⚙️ Story Planner Settings</summary>
             <div class="mwt-settings-grid mwt-mt-8">
-                ${renderApiSettingsFields(s, { urlId: 'sp-api-url', keyId: 'sp-api-key', modelId: 'sp-model', maxTokensId: 'sp-max-tokens', tempId: 'sp-temp', includeAdvanced: true, includeHeaders: true })}
+                ${renderApiSettingsFields(s, { ...SP_API_FIELD_IDS, includeAdvanced: true, includeHeaders: true })}
 
                 <label class="mwt-label">Injection Depth</label>
                 <input id="sp-injection-depth" class="mwt-input" type="number" value="${s.injectionDepth ?? 4}" min="0" max="999">
@@ -73,7 +82,7 @@ export function render() {
                 <label class="mwt-label">Auto-Generate Interval</label>
                 <div>
                     <input id="sp-auto-interval" class="mwt-input" type="number" value="${autoInterval}" min="1" max="100" style="max-width:100px">
-                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When auto-generate is ON, a new plan is generated every N user messages.</p>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When auto-generate is ON, a new plan is generated every N messages (counted on AI replies).</p>
                 </div>
 
                 <div></div>
@@ -154,11 +163,7 @@ export function wireEvents() {
 
     // Save settings
     state.modal.querySelector('#sp-save-settings')?.addEventListener('click', () => {
-        const apiValues = readApiSettingsValues(state.modal, {
-            urlId: 'sp-api-url', keyId: 'sp-api-key', modelId: 'sp-model',
-            maxTokensId: 'sp-max-tokens', tempId: 'sp-temp',
-            topPId: 'sp-top-p', freqId: 'sp-freq-pen', presId: 'sp-pres-pen', headersId: 'sp-headers',
-        });
+        const apiValues = readApiSettingsValues(state.modal, SP_API_FIELD_IDS);
         const depth = Number(state.modal.querySelector('#sp-injection-depth')?.value);
         const autoInterval = Number(state.modal.querySelector('#sp-auto-interval')?.value);
         saveSettings({
