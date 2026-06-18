@@ -20,10 +20,11 @@ import {
 } from './registry.js';
 import {
     loadEntryContent, loadStateTrackerEntry,
-    runScan, runStateUpdate, runNpcUpdate,
+    runScan, runStateUpdate, runNpcUpdate, runNpcEnrich,
     buildUpdatedMinorContent,
     buildPromotedContent, buildDemotedContent,
     enrichStagingItem, writeToLorebook, writeStateTracker,
+    isDossierEntry, countDossierFields, DOSSIER_FIELDS,
 } from './lorebook.js';
 import {
     getRelationships, updateRelationship, removeRelationship,
@@ -364,14 +365,17 @@ function wireStagingEvents(el) {
 function renderNpcListContent(type, entries) {
     if (Object.keys(entries).length === 0) return `<div class="kt-empty">No ${type} NPCs tracked yet.</div>`;
     const sorted = sortEntries(entries, 'name');
+    const dossierMode = getSettings().dossierMode === true;
     return `<div class="kt-npc-list">${sorted.map(([name, info]) => {
         const isOrphan = info.uid === null || info.uid === undefined;
-        return `<div class="kt-npc-card${isOrphan ? ' kt-npc-card--orphan' : ''}" data-name="${escapeHtml(name)}">
+        const showEnrich = type === 'major' && !isOrphan && dossierMode;
+        return `<div class="kt-npc-card${isOrphan ? ' kt-npc-card--orphan' : ''}" data-name="${escapeHtml(name)}" data-uid="${info.uid ?? ''}">
             <div class="kt-npc-card-header"><span class="kt-npc-name">${escapeHtml(name)}${isOrphan ? ' ⚠' : ''}</span><span class="kt-npc-meta">${(info.keywords || [name]).join(', ')}</span></div>
             <div class="kt-npc-actions">
                 ${!isOrphan ? `
                     <button class="mwt-btn kt-npc-update" data-name="${escapeHtml(name)}" data-type="${type}">Update</button>
                     ${type === 'minor' ? `<button class="mwt-btn kt-npc-promote" data-name="${escapeHtml(name)}">⬆ Promote</button>` : ''}
+                    ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)">📋 Enrich</button>` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}">⬇ Demote</button>` : ''}
                     <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}">📖 View</button>
                 ` : ''}
@@ -413,6 +417,40 @@ function wireNpcListEvents(el, type) {
                 ktSetStatus(`Update for "${name}" staged.`, 'success');
             } catch (err) { ktSetStatus(`Update failed: ${err.message}`, 'error'); }
             finally { btn.disabled = false; btn.textContent = 'Update'; }
+        });
+    });
+
+    // ── Enrich (Dossier) handler ──
+    // Fills in ALL missing dossier fields for a major NPC by drawing on full
+    // chat history + the existing entry content. This is the primary way to
+    // upgrade a compact-format entry to a full dossier.
+    el.querySelectorAll('.kt-npc-enrich').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const name = btn.dataset.name;
+            const uid = parseInt(btn.dataset.uid, 10);
+            const reg = getRegistry()[name];
+            if (!reg?.uid && reg?.uid !== 0) { ktSetStatus(`No UID for "${name}".`, 'error'); return; }
+            try {
+                btn.disabled = true; btn.textContent = '⏳…';
+                const result = await runNpcEnrich(name, reg.uid);
+                state.stagingItems.push({
+                    id: `enrich-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    type: 'major', action: 'update', name, data: {},
+                    proposedContent: result.merged,
+                    existingContent: result.currentContent,
+                    mergedContent: result.merged,
+                    keywords: reg.keywords || [name], uid: reg.uid,
+                    fields: result.fields, newKnowledge: result.newKnowledge || [],
+                    dossierMode: true,
+                });
+                const stagedItem = state.stagingItems[state.stagingItems.length - 1];
+                state.activeItemId = stagedItem.id;
+                state.activeSubTab = 'staging';
+                addNotificationEntry(stagedItem);
+                renderNpcsSubTab();
+                ktSetStatus(`Dossier enrichment for "${name}" staged for review.`, 'success');
+            } catch (err) { ktSetStatus(`Enrich failed: ${err.message}`, 'error'); }
+            finally { btn.disabled = false; btn.textContent = '📋 Enrich'; }
         });
     });
 

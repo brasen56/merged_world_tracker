@@ -141,7 +141,8 @@ Classification guide:
 - If uncertain, classify as minor.
 - An NPC name MUST appear in "Already Tracked NPCs" to be classified as update. If not listed, classify as new.
 - Only include NPCs who actually appeared or were meaningfully referenced.
-- For update entries: only include NPCs whose information actually changed. For any unchanged dossier field, output null.
+- For update entries: only include NPCs whose information actually changed.
+- CRITICAL — FILL MISSING FIELDS: If the "Already Tracked NPCs" section includes an entry's current content (inside <existing_entry> tags) and a dossier field is MISSING or EMPTY, FILL IT IN by inferring from the messages and established facts. Only output null for a field that already has a real value and has genuinely not changed.
 - For new_major, leave a field as an empty string "" rather than inventing if truly unknown — but prefer concrete inference from the scene.
 - If no NPCs qualify for a category, use an empty array [].
 - The player character / protagonist is NOT an NPC — do not include them.`;
@@ -151,7 +152,8 @@ export const DOSSIER_UPDATE_PROMPT = `You are a continuity tracker for an ongoin
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Do NOT invent information not established in the messages.
-- If no new information exists, return empty/null fields.
+- FILL MISSING FIELDS: If a dossier field is MISSING or EMPTY in <current_entry>, infer it from the messages and established facts and provide a value. Only output null for a field that already has a real value and has genuinely not changed.
+- If no new information exists AND all fields are already filled, return null fields.
 
 OUTPUT FORMAT:
 {
@@ -159,19 +161,55 @@ OUTPUT FORMAT:
     "tone": "updated communication style if it changed, else null",
     "perceived_as": "updated perception if it changed, else null",
     "descriptor": "updated descriptor if appearance/role changed, else null",
-    "role": "updated role if it changed, else null",
-    "where_to_find": "updated location if it changed, else null",
-    "appearance": "updated appearance if it changed, else null",
-    "voice": "updated voice if it changed, else null",
-    "background": "updated background if new facts emerged, else null",
-    "personality": "updated personality if it changed, else null",
-    "read_on_pc": "updated read on PC if it shifted, else null",
-    "agenda": "updated agenda if it changed, else null",
-    "secrets": "updated secrets if a new secret surfaced, else null",
-    "canon_lock": "updated canon lock if a new immutable fact was established, else null",
-    "image_tags": "updated image tags if appearance changed, else null"
+    "role": "updated role if it changed, else null (FILL if currently missing/empty)",
+    "where_to_find": "updated location if it changed, else null (FILL if currently missing/empty)",
+    "appearance": "updated appearance if it changed, else null (FILL if currently missing/empty)",
+    "voice": "updated voice if it changed, else null (FILL if currently missing/empty)",
+    "background": "updated background if new facts emerged, else null (FILL if currently missing/empty)",
+    "personality": "updated personality if it changed, else null (FILL if currently missing/empty)",
+    "read_on_pc": "updated read on PC if it shifted, else null (FILL if currently missing/empty)",
+    "agenda": "updated agenda if it changed, else null (FILL if currently missing/empty)",
+    "secrets": "updated secrets if a new secret surfaced, else null (FILL if currently missing/empty)",
+    "canon_lock": "updated canon lock if a new immutable fact was established, else null (FILL if currently missing/empty)",
+    "image_tags": "updated image tags if appearance changed, else null (FILL if currently missing/empty)"
   },
   "new_knowledge": [
     { "fact": "concrete new fact this NPC learned or now knows", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
+  ]
+}`;
+
+// ─── Dossier Enrichment prompt ───────────────────────────────────────────────
+// Used by the "Enrich (Dossier)" action to fill in ALL missing dossier fields
+// for a single NPC, drawing on full chat history + the existing entry content.
+
+export const DOSSIER_ENRICH_PROMPT = `You are a character writer for an ongoing roleplay. Your job is to produce a COMPLETE, RICH dossier for a specific NPC by combining their existing tracked entry with everything established in the story so far.
+
+ABSOLUTE RULES:
+- Output ONLY valid JSON. Nothing before or after it. No code fences.
+- Preserve every fact already in <current_entry> — do not drop or contradict established canon.
+- Fill in EVERY dossier field below. Draw concrete inferences from the messages, world state, and the NPC's established behavior.
+- For image_tags, produce 12-20 comma-separated Booru-style physical-only tags (body/face only, no clothes/pose).
+- Do NOT invent facts that contradict the messages. If a field is truly unknowable, give your best grounded inference based on what IS established.
+
+OUTPUT FORMAT:
+{
+  "fields": {
+    "tone": "2-3 word communication style",
+    "perceived_as": "how they present",
+    "descriptor": "3-5 word physical/role descriptor",
+    "role": "current job or function in the scene",
+    "where_to_find": "default location / when they appear",
+    "appearance": "2-3 sentences: build, face, hair, distinguishing marks, how they carry themselves",
+    "voice": "how they speak: cadence, accent, verbal tics, topics they dodge",
+    "background": "3-5 sentences: origin, how they got here, the event that shaped them",
+    "personality": "2-3 defining traits shown as behavior, a core flaw, a core fear, a tell",
+    "read_on_pc": "what this NPC currently thinks of the player character",
+    "agenda": "their main agenda in the story right now",
+    "secrets": "tiered secrets the NPC guards (Tier 1 semi-public, Tier 2 private, Tier 3 buried)",
+    "canon_lock": "3-5 immutable facts that must never change across appearances",
+    "image_tags": "12-20 comma-separated Booru-style physical-only appearance tags"
+  },
+  "new_knowledge": [
+    { "fact": "concrete fact this NPC knows (from existing ledger + new)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
 }`;

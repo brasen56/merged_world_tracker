@@ -14,7 +14,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         apiUrl: '',
         apiKey: '',
         modelName: '',
-        maxTokens: 2000,
+        maxTokens: 8000,
         temperature: 0.1,
         topP: 1.0,
         frequencyPenalty: 0,
@@ -43,7 +43,7 @@ export function showKnowledgeSettings() {
         urlId: 'kt-cfg-api-url', keyId: 'kt-cfg-api-key', modelId: 'kt-cfg-model',
         maxTokensId: 'kt-cfg-max-tokens', tempId: 'kt-cfg-temp', topPId: 'kt-cfg-top-p',
         freqId: 'kt-cfg-freq-pen', presId: 'kt-cfg-pres-pen', headersId: 'kt-cfg-headers',
-        maxTokensDefault: 2000, tempDefault: 0.1,
+        maxTokensDefault: 4000, tempDefault: 0.1,
     };
     el.innerHTML = `<div class="kt-settings-form">
         <h3>Knowledge Tracker Settings</h3>
@@ -68,7 +68,7 @@ export function showKnowledgeSettings() {
         </div>
         <div style="margin-top:12px">
             <label><input type="checkbox" id="kt-cfg-dossier-mode" ${s.dossierMode ? 'checked' : ''}> 📋 Dossier Mode (richer NPC entries)</label>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, NPC scans capture detailed dossier fields (role, appearance, voice, background, personality, secrets, agenda, canon lock, etc.) instead of the compact default format. Entries stay in the same lorebook. Off = the minimal format your tracker already uses.</p>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, NPC scans capture detailed dossier fields (role, appearance, voice, background, personality, secrets, agenda, canon lock, etc.). Major NPCs gain an <strong>📋 Enrich</strong> button to fill in all dossier fields from chat history. Entries stay in the same lorebook. Off = the minimal format.</p>
         </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8" style="margin-top:12px">
             <button id="kt-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>

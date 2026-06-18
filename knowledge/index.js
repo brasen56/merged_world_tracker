@@ -92,7 +92,7 @@ export function onMessageReceived() {
             if (doState) {
                 const reg = getStateRegistry();
                 const currentMsgIdx = getChat()?.length || 0;
-                const recent = getRecentMessages(30);
+                const recent = getRecentMessages(100);
                 let staged = 0;
                 for (const [name, info] of Object.entries(reg)) {
                     if (info.enabled === false) continue;

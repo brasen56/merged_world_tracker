@@ -140,14 +140,20 @@ API pointers verified against this ST install.
   re-implemented from scratch with MWT's lorebook-backed storage (no separate
   registry / no inline-chat extraction).
   *Implemented:* `dossierMode` setting in `knowledge/settings.js` (default
-  OFF). `DOSSIER_SCAN_SYSTEM_PROMPT` + `DOSSIER_UPDATE_PROMPT` in
-  `knowledge/prompts.js`. `formatDossierEntry` / `buildUpdatedDossierContent`
-  / `synthesizeDossierFromUpdate` / `isDossierEntry` formatters in
-  `knowledge/lorebook.js`. `runScan` and `runNpcUpdate` select the dossier
-  prompt + merger based on the setting and/or existing entry format.
+  OFF; `maxTokens` default raised to 4000 to accommodate dossier JSON).
+  `DOSSIER_SCAN_SYSTEM_PROMPT` + `DOSSIER_UPDATE_PROMPT` +
+  `DOSSIER_ENRICH_PROMPT` in `knowledge/prompts.js`.
+  `formatDossierEntry` / `buildUpdatedDossierContent` /
+  `synthesizeDossierFromUpdate` / `isDossierEntry` / `countDossierFields`
+  formatters in `knowledge/lorebook.js`. `runScan` and `runNpcUpdate` select
+  the dossier prompt + merger based on the setting and/or existing entry
+  format. `runScan` now includes existing entry content (truncated) for major
+  NPCs so the model can fill missing dossier fields. `runNpcEnrich` produces
+  a complete dossier from chat history + existing entry.
   `buildStagingItems` in `knowledge/staging.js` propagates `dossierMode`.
-  Update handler in `knowledge/render.js` uses the dossier merger and tags
-  the staging item. Toggle UI in the Knowledge settings panel.
+  Update + Enrich handlers in `knowledge/render.js` use the dossier merger;
+  Major NPC cards show an 📋 Enrich button when Dossier Mode is ON. Toggle UI
+  in the Knowledge settings panel.
 
 - [ ] **Prompt/template customization for Chronicle & Knowledge + output language**
   World State already has a custom prompt; Chronicle's sections and the scan

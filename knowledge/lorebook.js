@@ -13,7 +13,7 @@ import {
     escapeRegex,
 } from '../core/index.js';
 
-import { SCAN_SYSTEM_PROMPT, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT } from './prompts.js';
+import { SCAN_SYSTEM_PROMPT, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, TRACKER_SENTINEL,
@@ -51,7 +51,7 @@ export function getHistory(uid) {
 
 // ─── Message helpers ─────────────────────────────────────────────────────────
 
-export function getRecentMessages(count = 30) {
+export function getRecentMessages(count = 70) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
     const slice = chat.slice(-count);
@@ -288,6 +288,21 @@ export function isDossierEntry(content) {
 }
 
 /**
+ * Count how many dossier fields are present (non-empty) in an entry.
+ * Used by the UI to show whether an entry needs enrichment.
+ */
+export function countDossierFields(content) {
+    if (!content) return 0;
+    let count = 0;
+    for (const f of DOSSIER_FIELDS) {
+        const re = new RegExp(`^${f.label}:\\s*(.+)$`, 'im');
+        const m = content.match(re);
+        if (m && m[1].trim() && m[1].trim().toLowerCase() !== 'unknown') count++;
+    }
+    return count;
+}
+
+/**
  * Apply a partial dossier update (from DOSSIER_UPDATE_PROMPT result) to existing
  * content. Only non-null fields are replaced; unknown fields are ignored.
  */
@@ -410,7 +425,37 @@ export async function runScan() {
     const worldState = getCurrentWorldState();
     const chronicle = getLatestChronicleEntry();
     if (!recentMessages) throw new Error('No recent messages to scan.');
-    const knownSection = knownNames.length > 0 ? `<already_tracked_npcs>\n${knownNames.map(n => `- ${n} [${registry[n].type}]`).join('\n')}\n</already_tracked_npcs>` : '<already_tracked_npcs>\nNone yet.\n</already_tracked_npcs>';
+
+    // Build the "Already Tracked NPCs" section. In Dossier Mode, include the
+    // existing entry content (truncated) so the model can see which dossier
+    // fields are missing and fill them in rather than returning all-null.
+    let knownSection;
+    if (knownNames.length > 0) {
+        const lines = [];
+        for (const name of knownNames) {
+            const info = registry[name];
+            lines.push(`- ${name} [${info.type}]`);
+            // In dossier mode, include existing content for major NPCs so the
+            // scan can detect and fill missing dossier fields.
+            if (dossierMode && info.type === 'major' && info.uid != null) {
+                try {
+                    const existing = await loadEntryContent(info.uid);
+                    if (existing) {
+                        // Truncate to keep the prompt manageable (we only need
+                        // enough for the model to see which fields exist).
+                        const trimmed = existing.length > 800
+                            ? existing.slice(0, 800) + '\n…(truncated)'
+                            : existing;
+                        lines.push(`<existing_entry>\n${trimmed}\n</existing_entry>`);
+                    }
+                } catch { /* ignore load errors */ }
+            }
+        }
+        knownSection = `<already_tracked_npcs>\n${lines.join('\n')}\n</already_tracked_npcs>`;
+    } else {
+        knownSection = '<already_tracked_npcs>\nNone yet.\n</already_tracked_npcs>';
+    }
+
     const playerNames = getPlayerNames({ lower: false, includeFirstChat: true });
     const playerSection = playerNames.size > 0 ? `<player_names_exclude>\n${[...playerNames].map(n => `- ${n}`).join('\n')}\n</player_names_exclude>` : '';
     const userContent = [knownSection, '', playerSection, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), 'Scan for NPCs. Output only JSON.'].filter(s => s !== null && s !== '').join('\n');
@@ -476,6 +521,63 @@ export async function runNpcUpdate(name, uid) {
         ? buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || [])
         : buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);
     return { currentContent, merged, fields: result.fields || {}, newKnowledge: result.new_knowledge || [], dossierMode: useDossier };
+}
+
+// ─── Dossier enrichment ──────────────────────────────────────────────────────
+
+/**
+ * Enrich a single NPC's entry to a complete dossier. Loads the existing entry,
+ * sends it with full chat history to DOSSIER_ENRICH_PROMPT, and produces a
+ * staging item with the fully-filled dossier content.
+ *
+ * Unlike runNpcUpdate (which only captures *changes*), this function asks the
+ * model to fill in ALL missing dossier fields, making it the primary way to
+ * upgrade a compact-format entry to a full dossier or to complete a partial one.
+ *
+ * @param {string} name - NPC name
+ * @param {number} uid - Lorebook UID
+ * @returns {Promise<{currentContent: string, merged: string, fields: object, newKnowledge: array, dossierMode: boolean}>}
+ */
+export async function runNpcEnrich(name, uid) {
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+    const rawContent = await loadEntryContent(uid);
+    if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
+    const currentContent = stripRelationshipBlock(rawContent);
+    const recentMessages = getRecentMessages(100);
+    const worldState = getCurrentWorldState();
+    const chronicle = getLatestChronicleEntry();
+    if (!recentMessages) throw new Error('No recent messages.');
+
+    const userContent = [
+        `<entity>${name}</entity>`,
+        `<current_entry>\n${currentContent}\n</current_entry>`,
+        '',
+        worldState ? `<world_state>\n${worldState}\n</world_state>` : '',
+        chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '',
+        '',
+        '<recent_messages>',
+        recentMessages,
+        '</recent_messages>',
+        '',
+        '='.repeat(60),
+        `Write a COMPLETE dossier for ${name}. Fill every field. Output only JSON.`,
+    ].filter(Boolean).join('\n');
+
+    const raw = await ktFetchFromApi(DOSSIER_ENRICH_PROMPT, userContent);
+    let cleaned = normaliseOutput(raw);
+    let result;
+    try { result = JSON.parse(cleaned); } catch { throw new Error(`Model did not return valid JSON. Preview: "${cleaned.slice(0, 120)}"`); }
+
+    // Build the complete dossier content from the enrich result. We use the
+    // dossier merger which will replace existing fields and add missing ones.
+    const merged = buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || []);
+    return {
+        currentContent,
+        merged,
+        fields: result.fields || {},
+        newKnowledge: result.new_knowledge || [],
+        dossierMode: true,
+    };
 }
 
 /**
