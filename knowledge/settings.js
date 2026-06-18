@@ -43,7 +43,7 @@ export function showKnowledgeSettings() {
         urlId: 'kt-cfg-api-url', keyId: 'kt-cfg-api-key', modelId: 'kt-cfg-model',
         maxTokensId: 'kt-cfg-max-tokens', tempId: 'kt-cfg-temp', topPId: 'kt-cfg-top-p',
         freqId: 'kt-cfg-freq-pen', presId: 'kt-cfg-pres-pen', headersId: 'kt-cfg-headers',
-        maxTokensDefault: 4000, tempDefault: 0.1,
+        maxTokensDefault: 8000, tempDefault: 0.1,
     };
     el.innerHTML = `<div class="kt-settings-form">
         <h3>Knowledge Tracker Settings</h3>

@@ -38,14 +38,14 @@ export function getChat() {
  * Retrieve recent chat messages as formatted text.
  *
  * @param {object} [opts]
- * @param {number} [opts.maxMessages=100]  — max messages to include
- * @param {number} [opts.maxChars=4000000] — character budget
+ * @param {number} [opts.maxMessages=50]  — max messages to include
+ * @param {number} [opts.maxChars=500000] — character budget
  * @param {boolean} [opts.filterSystem=false] — exclude system messages
  * @returns {string} newline-separated "Name: text" lines, oldest-first
  */
 export function getRecentMessages({
-    maxMessages = 100,
-    maxChars = 4000000,
+    maxMessages = 50,
+    maxChars = 500000,
     filterSystem = false,
 } = {}) {
     const chat = getChat();

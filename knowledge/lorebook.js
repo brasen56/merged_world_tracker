@@ -51,7 +51,7 @@ export function getHistory(uid) {
 
 // ─── Message helpers ─────────────────────────────────────────────────────────
 
-export function getRecentMessages(count = 70) {
+export function getRecentMessages(count = 50) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
     const slice = chat.slice(-count);
@@ -571,7 +571,7 @@ export async function runNpcEnrich(name, uid) {
     const rawContent = await loadEntryContent(uid);
     if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
     const currentContent = stripRelationshipBlock(rawContent);
-    const recentMessages = getRecentMessages(100);
+    const recentMessages = getRecentMessages(50);
     const worldState = getCurrentWorldState();
     const chronicle = getLatestChronicleEntry();
     if (!recentMessages) throw new Error('No recent messages.');
