@@ -124,21 +124,32 @@ export async function fetchFromApi({
         let content = message?.content;
         const finishReason = data?.choices?.[0]?.finish_reason;
 
+        // Truncation detection. finish_reason="length" means the model hit the
+        // max_tokens cap mid-generation, so any returned content is a partial,
+        // unusable fragment (e.g. half a JSON object) that would only fail
+        // downstream. Fail fast with a clear, actionable error instead of
+        // returning the broken text. This is especially common with reasoning
+        // models (which spend part of the token budget on thinking) and with
+        // large outputs such as Knowledge Tracker Dossier Mode scans.
+        if (finishReason === 'length') {
+            const err = new Error(
+                `Response truncated — the model hit the Max Tokens limit (${settings.maxTokens}) ` +
+                `before finishing (finish_reason="length"). ` +
+                `Increase "Max Tokens" in the module's Settings. ` +
+                `Reasoning models consume part of the token budget for thinking and need a higher limit; ` +
+                `richer outputs (e.g. Dossier Mode) are also larger.`
+            );
+            err._noRetry = true;
+            throw err;
+        }
+
         // Some models (DeepSeek, o1, etc.) put reasoning in a separate field.
-        // If content is empty but reasoning_content exists, the model may have
-        // hit max_tokens during the thinking phase. Try to recover.
+        // If content is empty but reasoning_content exists, fall back to it.
         if (!content || !content.trim()) {
             const reasoning = message?.reasoning_content || message?.reasoning || '';
             if (reasoning.trim()) {
-                console.warn(`[MWT API] Content empty but reasoning_content present (${reasoning.length} chars). finish_reason=${finishReason}. Using reasoning_content as fallback.`);
+                console.warn(`[MWT API] Content empty but reasoning_content present (${reasoning.length} chars). Using reasoning_content as fallback.`);
                 content = reasoning;
-            } else if (finishReason === 'length') {
-                const err = new Error(
-                    `API returned empty content — the model hit max_tokens (${settings.maxTokens}) before producing output. ` +
-                    `Try increasing Max Tokens in settings, or use a model that doesn't use extended thinking.`
-                );
-                err._noRetry = true;
-                throw err;
             } else {
                 const err = new Error('API returned no content. Response: ' + JSON.stringify(data).slice(0, 300));
                 err._noRetry = true;
@@ -213,6 +224,20 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
                 includeInstruct: true,
             },
         );
+
+        // Truncation detection — see fetchFromApi for rationale.
+        const cmFinishReason = result?.choices?.[0]?.finish_reason;
+        if (cmFinishReason === 'length') {
+            const err = new Error(
+                `Response truncated — the model hit the Max Tokens limit (${maxTokens}) ` +
+                `before finishing (finish_reason="length"). ` +
+                `Increase "Max Tokens" in the module's Settings. ` +
+                `Reasoning models consume part of the token budget for thinking and need a higher limit; ` +
+                `richer outputs (e.g. Dossier Mode) are also larger.`
+            );
+            err._noRetry = true;
+            throw err;
+        }
 
         // Extract text from result — handle multiple possible shapes
         let text = '';
