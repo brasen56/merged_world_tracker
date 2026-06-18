@@ -264,6 +264,32 @@ export const DOSSIER_FIELDS = [
 /** Marker prepended to dossier-format entries so we can detect the format. */
 export const DOSSIER_MARKER = '[Dossier]';
 
+/**
+ * Coerce a dossier field value to a readable string. Some models return
+ * structured values (e.g. secrets as {tier1: "...", tier2: "..."} or canon_lock
+ * as an array of facts) instead of plain strings. Without this, template
+ * interpolation produces "[object Object]".
+ */
+export function stringifyDossierValue(val) {
+    if (val == null) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+    if (Array.isArray(val)) {
+        // Arrays of strings → join with semicolons; arrays of objects →
+        // stringify each element recursively and join.
+        return val.map(v => stringifyDossierValue(v)).filter(Boolean).join('; ');
+    }
+    if (typeof val === 'object') {
+        // Objects with tier keys → "Tier 1: ... | Tier 2: ... | Tier 3: ..."
+        // General objects → "key: value; key: value"
+        const entries = Object.entries(val)
+            .filter(([, v]) => v != null && v !== '')
+            .map(([k, v]) => `${k}: ${stringifyDossierValue(v)}`);
+        return entries.join(' | ');
+    }
+    return String(val);
+}
+
 export function formatDossierEntry(data) {
     const lines = [
         `${DOSSIER_MARKER} ${data.name || 'Unknown'} | ${data.species || 'Unknown'} | ${data.descriptor || ''}`,
@@ -272,8 +298,8 @@ export function formatDossierEntry(data) {
         `First seen: ${data.first_seen || 'unknown'}`,
     ];
     for (const f of DOSSIER_FIELDS) {
-        const val = data[f.key];
-        if (val != null && String(val).trim()) lines.push(`${f.label}: ${val}`);
+        const val = stringifyDossierValue(data[f.key]);
+        if (val) lines.push(`${f.label}: ${val}`);
     }
     lines.push('', 'Knowledge Ledger:');
     const knowledge = data.initial_knowledge || data.new_knowledge || [];
@@ -324,7 +350,7 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
         // Dossier fields — match by label prefix
         for (const f of DOSSIER_FIELDS) {
             if (fields?.[f.key] != null && line.startsWith(`${f.label}:`)) {
-                return `${f.label}: ${fields[f.key]}`;
+                return `${f.label}: ${stringifyDossierValue(fields[f.key])}`;
             }
         }
         return line;
@@ -342,8 +368,10 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
     const ledgerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));
     const insertIdx = ledgerIdx !== -1 ? ledgerIdx : lines.length;
     for (const f of DOSSIER_FIELDS) {
-        const val = fields?.[f.key];
-        if (val == null) continue;
+        const rawVal = fields?.[f.key];
+        if (rawVal == null) continue;
+        const val = stringifyDossierValue(rawVal);
+        if (!val) continue;
         const prefix = `${f.label}:`;
         const exists = lines.some(l => l.startsWith(prefix));
         if (!exists) lines.splice(insertIdx, 0, `${f.label}: ${val}`);

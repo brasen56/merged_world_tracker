@@ -102,9 +102,8 @@ OUTPUT FORMAT:
       "personality": "2-3 defining traits shown as behavior, a core flaw, a core fear, a tell",
       "read_on_pc": "what this NPC currently thinks of the player character",
       "agenda": "their main agenda in the story right now",
-      "secrets": "tiered secrets the NPC guards (never narrate unless disclosed). Tier 1 semi-public, Tier 2 private, Tier 3 buried.",
-      "canon_lock": "3-5 immutable facts that must never change across appearances",
-      "image_tags": "12-20 comma-separated Booru-style physical-only appearance tags (body/face only, no clothes/pose)",
+      "secrets": "A SINGLE STRING: tiered secrets the NPC guards (never narrate unless disclosed). Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
+      "canon_lock": "A SINGLE STRING: 3-5 immutable facts that must never change across appearances, separated by semicolons",
       "initial_knowledge": [{ "fact": "concrete fact", "source": "how they know it", "date": "in-world date" }]
     }
   ],
@@ -128,7 +127,6 @@ OUTPUT FORMAT:
         "agenda": "updated value or null if unchanged",
         "secrets": "updated value or null if unchanged",
         "canon_lock": "updated value or null if unchanged",
-        "image_tags": "updated value or null if unchanged"
       },
       "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows", "source": "how they know it", "date": "in-world date if known" }]
     }
@@ -171,7 +169,6 @@ OUTPUT FORMAT:
     "agenda": "updated agenda if it changed, else null (FILL if currently missing/empty)",
     "secrets": "updated secrets if a new secret surfaced, else null (FILL if currently missing/empty)",
     "canon_lock": "updated canon lock if a new immutable fact was established, else null (FILL if currently missing/empty)",
-    "image_tags": "updated image tags if appearance changed, else null (FILL if currently missing/empty)"
   },
   "new_knowledge": [
     { "fact": "concrete new fact this NPC learned or now knows", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
@@ -205,9 +202,8 @@ OUTPUT FORMAT:
     "personality": "2-3 defining traits shown as behavior, a core flaw, a core fear, a tell",
     "read_on_pc": "what this NPC currently thinks of the player character",
     "agenda": "their main agenda in the story right now",
-    "secrets": "tiered secrets the NPC guards (Tier 1 semi-public, Tier 2 private, Tier 3 buried)",
-    "canon_lock": "3-5 immutable facts that must never change across appearances",
-    "image_tags": "12-20 comma-separated Booru-style physical-only appearance tags"
+    "secrets": "A SINGLE STRING: tiered secrets. Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
+    "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons",
   },
   "new_knowledge": [
     { "fact": "concrete fact this NPC knows (from existing ledger + new)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
