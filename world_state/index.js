@@ -27,7 +27,6 @@ import {
 } from './injection.js';
 import {
     refreshWorldState, onMessageReceived, restartAutoSaveTimer,
-    scheduleAutoRefresh,
 } from './refresh.js';
 import { render, wireEvents } from './render.js';
 
@@ -58,9 +57,10 @@ export function onChatChanged() {
 }
 
 // ─── Swipe / edit / delete awareness ─────────────────────────────────────────
-// Keep the auto-refresh counter accurate when the user mutates chat history,
-// and optionally re-trigger a refresh after swipe/edit (since the described
-// events changed).
+// Keep the auto-refresh counter accurate when the user mutates chat history.
+// NOTE: swipe/edit intentionally do NOT re-trigger a refresh — only the
+// counter (delete) is adjusted, so editing/deleting messages never kicks off
+// an unsolicited world-state generation.
 
 /**
  * A message was deleted. Decrement the auto-refresh counter so the countdown
@@ -82,27 +82,31 @@ export function onMessageDeleted(deletedIndex) {
 
 /**
  * A message was swiped (its content replaced with an alternate generation).
- * The described events changed, so optionally re-trigger a world state refresh
- * if auto-refresh is enabled — the new variant may alter the tracked state.
+ * Awareness only — no counter adjustment (chat length is unchanged) and no
+ * refresh is scheduled. Editing/swiping never starts an unsolicited
+ * world-state generation; the next scheduled auto-refresh will pick up any
+ * content changes naturally.
  *
  * @param {number} swipedIndex - The chat-array index of the swiped message.
  */
 export function onMessageSwiped(swipedIndex) {
-    if (!isAutoRefreshEnabled()) return;
-    console.log(`[MWT:WorldState] MESSAGE_SWIPED at index ${swipedIndex} — scheduling refresh.`);
-    scheduleAutoRefresh('message-swiped');
+    // Awareness only — do NOT re-trigger a refresh on swipe, so editing/
+    // swiping messages never starts an unsolicited generation.
+    console.log(`[MWT:WorldState] MESSAGE_SWIPED at index ${swipedIndex} — no refresh (counter awareness only).`);
 }
 
 /**
- * A message was edited. Like swipe, the described events changed, so optionally
- * re-trigger a world state refresh if auto-refresh is enabled.
+ * A message was edited. Awareness only — no counter adjustment and no
+ * refresh is scheduled. Editing/swiping never starts an unsolicited
+ * world-state generation; the next scheduled auto-refresh will pick up any
+ * content changes naturally.
  *
  * @param {number} editedIndex - The chat-array index of the edited message.
  */
 export function onMessageEdited(editedIndex) {
-    if (!isAutoRefreshEnabled()) return;
-    console.log(`[MWT:WorldState] MESSAGE_EDITED at index ${editedIndex} — scheduling refresh.`);
-    scheduleAutoRefresh('message-edited');
+    // Awareness only — do NOT re-trigger a refresh on edit, so editing
+    // messages never starts an unsolicited generation.
+    console.log(`[MWT:WorldState] MESSAGE_EDITED at index ${editedIndex} — no refresh (counter awareness only).`);
 }
 
 /** Returns true if world state is currently refreshing */
