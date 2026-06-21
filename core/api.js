@@ -320,3 +320,154 @@ export function normaliseOutput(raw) {
 
     return text.trim();
 }
+
+// ─── Lenient JSON extraction & repair ──────────────────────────────────────────
+//
+// Models frequently return JSON that JSON.parse rejects for reasons that are
+// entirely recoverable:
+//
+//   1. Surrounding prose ("Here is the result:\n{ ... }")
+//   2. Truncation — the output hit max_tokens and was cut off mid-object
+//      (sometimes the API doesn't report finish_reason="length", e.g. with
+//      connection profiles or proxies).
+//   3. Trailing commas before a closing } or ].
+//   4. An unterminated string value (the last field was being written when
+//      generation stopped).
+//
+// `parseJsonLenient` handles all of these gracefully. It first tries a strict
+// parse; if that fails it extracts the outermost { … } block, removes trailing
+// commas, repairs truncation, and tries again.
+
+/**
+ * Find the index of the matching closing brace for the opening brace at
+ * `start`, respecting string literals and escape sequences so that braces
+ * inside strings don't affect depth counting.
+ *
+ * Returns the index of the matching '}', or -1 if the object is never closed
+ * (i.e. truncated output).
+ */
+function findMatchingBrace(text, start) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\' && inString) { escaped = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1; // never closed
+}
+
+/**
+ * Attempt to repair a truncated JSON string by:
+ * - Closing any unterminated string
+ * - Removing trailing incomplete key/value fragments and dangling commas
+ * - Closing open arrays and objects in the correct nesting order
+ *
+ * Returns the repaired string (which may still be invalid — caller should try
+ * parsing and fall back to an error).
+ */
+function repairTruncatedJson(text) {
+    let repaired = text;
+
+    // If the text ends mid-string (odd number of unescaped quotes from the last
+    // structural character), close the string.
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < repaired.length; i++) {
+        const ch = repaired[i];
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\' && inString) { escaped = true; continue; }
+        if (ch === '"') inString = !inString;
+    }
+    if (inString) repaired += '"';
+
+    // Trim trailing whitespace and incomplete fragments after the last
+    // complete value.
+    // 1. Drop trailing whitespace + commas (a comma with nothing after it)
+    repaired = repaired.replace(/[\s,]+$/, '');
+    // 2. If it ends with a colon (key with no value), drop that incomplete key
+    repaired = repaired.replace(/"[^"]*"\s*:\s*$/, '');
+    // 3. Drop a dangling comma again (the key-drop above may have exposed one)
+    repaired = repaired.replace(/[\s,]+$/, '');
+
+    // Track a stack of open delimiters (outside strings) so we can close them
+    // in the correct nesting order. Opening order { [ { means closing } ] }.
+    const stack = [];
+    inString = false; escaped = false;
+    for (let i = 0; i < repaired.length; i++) {
+        const ch = repaired[i];
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\' && inString) { escaped = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '{' || ch === '[') stack.push(ch);
+        else if (ch === '}' || ch === ']') stack.pop();
+    }
+
+    // Close in reverse order of opening (pop from the stack)
+    while (stack.length > 0) {
+        const opener = stack.pop();
+        repaired += (opener === '{') ? '}' : ']';
+    }
+
+    return repaired;
+}
+
+/**
+ * Remove trailing commas that appear immediately before } or ] — a common
+ * model output error that strict JSON.parse rejects.
+ */
+function removeTrailingCommas(text) {
+    return text.replace(/,\s*([}\]])/g, '$1');
+}
+
+/**
+ * Parse a string expected to contain a single JSON object, tolerating common
+ * model output problems: surrounding prose, markdown fences, truncation,
+ * trailing commas, and unterminated strings.
+ *
+ * @param {string} raw
+ * @returns {object} the parsed object
+ * @throws {Error} if the string cannot be parsed even after repair
+ */
+export function parseJsonLenient(raw) {
+    const text = (raw || '').trim();
+    if (!text) throw new Error('empty output');
+
+    // Fast path — strict parse
+    try { return JSON.parse(text); } catch { /* continue to recovery */ }
+
+    // Extract the outermost { … } region. This strips prose/code fences.
+    const start = text.indexOf('{');
+    if (start === -1) throw new Error('no JSON object found in output');
+    const end = findMatchingBrace(text, start);
+
+    let jsonText;
+    if (end !== -1) {
+        // Complete object found — try strict parse on the extracted region
+        jsonText = text.slice(start, end + 1);
+        jsonText = removeTrailingCommas(jsonText);
+        try { return JSON.parse(jsonText); } catch { /* continue */ }
+    } else {
+        // Truncated — no closing brace. Work with everything from the first {.
+        jsonText = text.slice(start);
+    }
+
+    // Remove trailing commas then attempt repair + parse
+    jsonText = removeTrailingCommas(jsonText);
+    try { return JSON.parse(jsonText); } catch { /* continue */ }
+
+    // Full repair pipeline: remove trailing commas → repair truncation → parse
+    const repaired = repairTruncatedJson(removeTrailingCommas(jsonText));
+    try { return JSON.parse(repaired); } catch (err) {
+        throw new Error(`Could not parse JSON even after repair: ${err.message}`);
+    }
+}

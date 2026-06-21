@@ -8,7 +8,7 @@
 
 import {
     getChat, getChatMeta, getPlayerNames,
-    resolveApiCall, normaliseOutput,
+    resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, getLatestChronicleEntry,
     escapeRegex,
 } from '../core/index.js';
@@ -488,20 +488,35 @@ export async function runScan() {
     const playerSection = playerNames.size > 0 ? `<player_names_exclude>\n${[...playerNames].map(n => `- ${n}`).join('\n')}\n</player_names_exclude>` : '';
     const userContent = [knownSection, '', playerSection, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), 'Scan for NPCs. Output only JSON.'].filter(s => s !== null && s !== '').join('\n');
     const systemPrompt = dossierMode ? DOSSIER_SCAN_SYSTEM_PROMPT : SCAN_SYSTEM_PROMPT;
-    const raw = await ktFetchFromApi(systemPrompt, userContent);
-    let cleaned = normaliseOutput(raw);
-    try {
-        const result = JSON.parse(cleaned);
-        const playerSet = new Set([...playerNames].map(n => n.toLowerCase()));
-        const notPlayer = (entry) => entry && entry.name && !playerSet.has(String(entry.name).toLowerCase());
-        return {
-            dossierMode,
-            new_minor: Array.isArray(result.new_minor) ? result.new_minor.filter(notPlayer) : [],
-            new_major: Array.isArray(result.new_major) ? result.new_major.filter(notPlayer) : [],
-            update_minor: Array.isArray(result.update_minor) ? result.update_minor.filter(notPlayer) : [],
-            update_major: Array.isArray(result.update_major) ? result.update_major.filter(notPlayer) : [],
-        };
-    } catch (err) { throw new Error(`Model did not return valid JSON. Preview: "${cleaned.slice(0, 120)}"`); }
+
+    // Attempt the scan up to two times. If the first response fails to parse
+    // (typically because it was truncated by max_tokens), retry once — the
+    // model often succeeds on a second pass, and parseJsonLenient will salvage
+    // many truncated responses anyway.
+    let lastErr = null;
+    let lastPreview = '';
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const raw = await ktFetchFromApi(systemPrompt, userContent);
+        const cleaned = normaliseOutput(raw);
+        try {
+            const result = parseJsonLenient(cleaned);
+            const playerSet = new Set([...playerNames].map(n => n.toLowerCase()));
+            const notPlayer = (entry) => entry && entry.name && !playerSet.has(String(entry.name).toLowerCase());
+            return {
+                dossierMode,
+                new_minor: Array.isArray(result.new_minor) ? result.new_minor.filter(notPlayer) : [],
+                new_major: Array.isArray(result.new_major) ? result.new_major.filter(notPlayer) : [],
+                update_minor: Array.isArray(result.update_minor) ? result.update_minor.filter(notPlayer) : [],
+                update_major: Array.isArray(result.update_major) ? result.update_major.filter(notPlayer) : [],
+            };
+        } catch (err) {
+            lastErr = err;
+            lastPreview = cleaned.slice(0, 120);
+            console.warn(`[MWT:Knowledge] Scan JSON parse failed (attempt ${attempt}): ${err.message}. Preview: "${lastPreview}"`);
+            if (attempt < 2) continue;
+        }
+    }
+    throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastErr?.message || 'unknown'}. Preview: "${lastPreview}"`);
 }
 
 // ─── State update ────────────────────────────────────────────────────────────
@@ -542,9 +557,8 @@ export async function runNpcUpdate(name, uid) {
     const useDossier = isDossierEntry(currentContent) || settings.dossierMode === true;
     const systemPrompt = useDossier ? DOSSIER_UPDATE_PROMPT : NPC_UPDATE_PROMPT;
     const raw = await ktFetchFromApi(systemPrompt, userContent);
-    let cleaned = normaliseOutput(raw);
-    let result;
-    try { result = JSON.parse(cleaned); } catch { throw new Error(`Model did not return valid JSON. Preview: "${cleaned.slice(0, 120)}"`); }
+    const cleaned = normaliseOutput(raw);
+    const result = parseJsonLenient(cleaned);
     const merged = useDossier
         ? buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || [])
         : buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);
@@ -592,9 +606,8 @@ export async function runNpcEnrich(name, uid) {
     ].filter(Boolean).join('\n');
 
     const raw = await ktFetchFromApi(DOSSIER_ENRICH_PROMPT, userContent);
-    let cleaned = normaliseOutput(raw);
-    let result;
-    try { result = JSON.parse(cleaned); } catch { throw new Error(`Model did not return valid JSON. Preview: "${cleaned.slice(0, 120)}"`); }
+    const cleaned = normaliseOutput(raw);
+    const result = parseJsonLenient(cleaned);
 
     // Build the complete dossier content from the enrich result. We use the
     // dossier merger which will replace existing fields and add missing ones.
