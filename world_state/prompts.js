@@ -22,6 +22,7 @@ Use ONLY the exact section headers shown below. Do not add, rename, merge, or re
 ## Current Scene
 Date: [calendar date with year]
 Time: [exact in-world time; track elapsed time between updates]
+Location: [where the current scene is taking place]
 Present: [names of characters physically in the scene — names only, e.g. "Alex, Derek, Ranger"]
 Situation: [1-2 sentences: what is actively happening right now and the immediate tension or purpose]
 

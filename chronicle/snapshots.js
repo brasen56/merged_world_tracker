@@ -35,8 +35,13 @@ import { applyInjection } from './injection.js';
 function updateWorldStateFromChronicle(text) {
     const meta = getChatMeta();
     if (!meta) return;
-    const timeMatch = text.match(/## Time Anchor[\s\S]*?In-world date and time[:\s]*([^\n]+)/i);
-    const locMatch = text.match(/## Time Anchor[\s\S]*?Location[:\s]*([^\n]+)/i);
+    // Anchor on the full chronicle field labels so the capture group is just
+    // the value. The chronicle template emits "In-world date and time at end
+    // of this period:" / "Location at end of this period:" — the previous
+    // loose regexes swallowed only the immediate space and let the literal
+    // "at end of this period:" prefix leak into the captured value.
+    const timeMatch = text.match(/## Time Anchor[\s\S]*?In-world date and time at end of this period:\s*(.+)/i);
+    const locMatch = text.match(/## Time Anchor[\s\S]*?Location at end of this period:\s*(.+)/i);
     if (!timeMatch && !locMatch) return;
     const currentWs = meta[WORLD_STATE_METADATA_KEY]?.text || '';
     let newWs = currentWs;
@@ -55,7 +60,12 @@ function updateWorldStateFromChronicle(text) {
     }
     if (locMatch) {
         const loc = locMatch[1].trim();
+        // Scene location is now a first-class `Location:` field in
+        // `## Current Scene`. Replace it in place (consistent with Date/Time)
+        // instead of appending a stray line at the end of the document.
         if (/^Location:/m.test(newWs)) newWs = newWs.replace(/^Location:\s*.*$/m, `Location: ${loc}`);
+        else if (/^Time:/m.test(newWs)) newWs = newWs.replace(/^(Time:.*)$/m, `$1\nLocation: ${loc}`);
+        else if (/^Date:/m.test(newWs)) newWs = newWs.replace(/^(Date:.*)$/m, `$1\nLocation: ${loc}`);
         else newWs += `\nLocation: ${loc}`;
     }
     if (newWs !== currentWs) {
@@ -207,28 +217,30 @@ export async function regenerateSnapshot(snapshotId) {
     if (idx === -1) return;
     const snapshot = snapshots[idx];
     const originalText = snapshot.text;
-    state.isGenerating = true;
-    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
-    scSetStatus('Regenerating…', 'info');
     const chat = getChat();
     const from = snapshot.fromIndex ?? 0;
     const to = snapshot.toIndex !== undefined && snapshot.toIndex > from ? snapshot.toIndex : Math.min(from + 200, chat.length - 1);
     const { text } = buildMessageWindow(from, to);
     if (!text.trim()) {
         scSetStatus('No messages for regeneration.', 'error');
-        state.isGenerating = false;
-        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         return;
     }
     const worldState = getCurrentWorldState().trim();
     const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
 
+    state.isGenerating = true;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+    scSetStatus('Regenerating…', 'info');
+
     try {
         const _scApi2 = resolveApiCall({ moduleSettings: getSettings() });
         let raw = await _scApi2.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi2.settings, retries: 3 });
         raw = normaliseOutput(raw);
+        raw = stripToEntry(raw);
         if (!raw.trim()) throw new Error('Empty output.');
-        const timeMatch = raw.match(/## Time Anchor[\s\S]*?In-world date and time[:\s]*([^\n]+)/i);
+        // Anchor on the full chronicle label so the captured value is just the
+        // date/time, not the "at end of this period:" prefix.
+        const timeMatch = raw.match(/## Time Anchor[\s\S]*?In-world date and time at end of this period:\s*(.+)/i);
         const newWorldDate = timeMatch ? timeMatch[1].trim() : snapshot.worldDate;
         _render.showRegenerateDiff(originalText, raw, async (acceptNew) => {
             if (acceptNew) {
@@ -245,12 +257,17 @@ export async function regenerateSnapshot(snapshotId) {
                 state.selectedSnapshotId = snapshot.id;
                 _render.renderContent();
             }
-            state.isGenerating = false;
-            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         });
     } catch (err) {
         scSetStatus(`Regeneration failed: ${err.message}`, 'error');
         notify('Session Chronicle', `Chronicle regeneration failed: ${err.message}`, 'error');
+    } finally {
+        // Reset busy in `finally` so the flag is always released — even if the
+        // diff preview is dismissed/replaced without the Accept/Keep callback
+        // ever firing. The preview is shown synchronously, so by the time we
+        // reach here the listeners are wired and no longer need the lock
+        // (mirrors consolidateEntries, which does not hold the lock during its
+        // preview either).
         state.isGenerating = false;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }

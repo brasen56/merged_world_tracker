@@ -364,9 +364,11 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
     }
 
     // Append any new dossier fields that don't yet exist in the entry
-    // (insert them before the Knowledge Ledger section).
+    // (insert them before the Knowledge Ledger section). Increment the splice
+    // index after each insert so the fields land in canonical DOSSIER_FIELDS
+    // order rather than reverse.
     const ledgerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));
-    const insertIdx = ledgerIdx !== -1 ? ledgerIdx : lines.length;
+    let insertIdx = ledgerIdx !== -1 ? ledgerIdx : lines.length;
     for (const f of DOSSIER_FIELDS) {
         const rawVal = fields?.[f.key];
         if (rawVal == null) continue;
@@ -374,7 +376,7 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
         if (!val) continue;
         const prefix = `${f.label}:`;
         const exists = lines.some(l => l.startsWith(prefix));
-        if (!exists) lines.splice(insertIdx, 0, `${f.label}: ${val}`);
+        if (!exists) { lines.splice(insertIdx, 0, `${f.label}: ${val}`); insertIdx++; }
     }
 
     if (newKnowledge?.length > 0) {

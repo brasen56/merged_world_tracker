@@ -33,6 +33,7 @@ import {
 } from './relationships.js';
 import {
     buildStagingItems, exportNpcs, importNpcs, importFromLorebooks,
+    STAGING_PLACEHOLDERS,
 } from './staging.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -319,14 +320,16 @@ function wireStagingEvents(el) {
         if (!item) return;
         const editorVal = el.querySelector('#kt-proposal-editor')?.value;
         let text;
-        if (editorVal) {
+        if (editorVal && !STAGING_PLACEHOLDERS.includes(editorVal)) {
             text = editorVal;
-        } else if (item.mergedContent && item.mergedContent !== '(promoting)' && item.mergedContent !== '(demoting)') {
+        } else if (item.mergedContent && !STAGING_PLACEHOLDERS.includes(item.mergedContent)) {
             text = item.mergedContent;
-        } else {
+        } else if (item.proposedContent && !STAGING_PLACEHOLDERS.includes(item.proposedContent)) {
             text = item.proposedContent;
+        } else {
+            text = '';
         }
-        if (text === '(promoting)' || text === '(demoting)') {
+        if (!text || STAGING_PLACEHOLDERS.includes(text)) {
             ktSetStatus('Click the staging item first to load full content before accepting.', 'error');
             return;
         }
@@ -345,9 +348,18 @@ function wireStagingEvents(el) {
     // Batch buttons
     el.querySelector('#kt-batch-accept')?.addEventListener('click', async () => {
         if (!confirm(`Accept all ${state.stagingItems.length} proposals?`)) return;
+        let accepted = 0;
+        let skipped = 0;
         for (const item of [...state.stagingItems]) {
-            try { await handleAccept(item, item.mergedContent || item.proposedContent, item.keywords || [item.name], el); } catch (e) { console.warn('[MWT:Knowledge] Batch accept failed:', e); }
+            const text = item.mergedContent || item.proposedContent;
+            // Reject placeholders (Fetch to see changes / promoting / demoting)
+            // so unloaded proposals are never written to the lorebook. The
+            // single-accept path guards this; the batch path previously had no
+            // guard at all.
+            if (!text || STAGING_PLACEHOLDERS.includes(text)) { skipped++; continue; }
+            try { await handleAccept(item, text, item.keywords || [item.name], el); accepted++; } catch (e) { console.warn('[MWT:Knowledge] Batch accept failed:', e); }
         }
+        if (skipped > 0) ktSetStatus(`${accepted} accepted · ${skipped} skipped (click the item to load its content first).`, 'info');
         renderNpcsSubTab();
     });
 
