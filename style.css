@@ -28,6 +28,7 @@
     --sc-bg-elevated: #1a1a1a;
     --sc-bg-input: #161b22;
     --sc-bg-hover: #1f2937;
+    --sc-bg-hover-strong: #2d3748;
     --sc-bg-diff: #0d1117;
     --sc-border: #2a2a2a;
     --sc-border-light: #30363d;
@@ -468,13 +469,21 @@ html.light body {
   --sc-bg-elevated: #fff;
   --sc-bg-input: #eee;
   --sc-bg-hover: #e5e5e5;
+  --sc-bg-hover-strong: #d4d4d4;
+  --sc-bg-diff: #f6f8fa;
   --sc-border: #d4d4d4;
   --sc-border-light: #ccc;
+  --sc-border-strong: #c4c4c4;
+  --sc-border-focus: #9ca3af;
+  --sc-border-dim: #e5e7eb;
   --sc-text: #1f2937;
   --sc-text-dim: #9ca3af;
   --sc-text-mid: #6b7280;
+  --sc-text-bright: #111827;
+  --sc-text-input: #1f2937;
   --sc-accent: #4f46e5;
   --sc-accent-bg: rgba(79, 70, 229, 0.08);
+  --sc-accent-light: #4f46e5;
   --sc-success: #16a34a;
   --sc-success-bg: #dcfce7;
   --sc-success-border: #bbf7d0;
@@ -484,6 +493,7 @@ html.light body {
   --sc-warning: #d97706;
   --sc-info: #2563eb;
   --sc-overlay: rgba(0, 0, 0, 0.3);
+  --sc-spinner: #4f46e5;
   --sc-accent-btn-bg: #dbeafe;
   --sc-accent-btn-border: #3b82f6;
   --sc-accent-btn-hover: #2563eb;
@@ -790,52 +800,41 @@ html.light body {
   color: var(--sc-text);
 }
 
-/* Fix: auto-snapshot threshold number field visibility */
+/* ── Native input baseline (number / datetime-local / text) ────────────────
+   Single themed baseline shared by #sc-inject-count and all native number,
+   datetime-local and text inputs (including those scoped to the chronicle tab
+   and the stats grid). Fallbacks are omitted because every variable used here
+   is always defined on :root. More specific scopes tweak padding/font-size
+   further down. */
+#sc-inject-count,
 .mwt-input[type="number"],
-input[type="number"].mwt-input {
-  background: var(--sc-bg-input, #161b22);
-  color: var(--sc-text, #e5e7eb);
-  border: 1px solid var(--sc-border-light, #30363d);
-}
-
-input[type="datetime-local"] {
-  background: var(--sc-bg-input, #161b22);
-  color: var(--sc-text, #e5e7eb);
-  border: 1px solid var(--sc-border-light, #30363d);
-  border-radius: var(--sc-radius-sm, 5px);
+input[type="number"].mwt-input,
+input[type="datetime-local"],
+.mwt-tab-content[data-tab="chronicle"] input[type="number"],
+.mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"],
+.mwt-tab-content[data-tab="chronicle"] input[type="text"],
+.sc-stats-grid input[type="number"],
+.sc-stats-grid input[type="datetime-local"],
+.sc-stats-grid input[type="text"] {
+  background: var(--sc-bg-input);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
   padding: 5px 10px;
+  border-radius: var(--sc-radius-sm);
   font-size: 13px;
   font-family: inherit;
   outline: none;
   box-sizing: border-box;
   transition: border-color 0.15s;
 }
+
 input[type="datetime-local"]:focus {
-  border-color: var(--sc-accent, #6366f1);
+  border-color: var(--sc-accent);
 }
 
 input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   filter: invert(0.8);
   cursor: pointer;
-}
-
-#sc-inject-count,
-input[type="number"].mwt-input {
-  background: var(--sc-bg-input, #161b22);
-  color: var(--sc-text, #e5e7eb);
-  border: 1px solid var(--sc-border-light, #30363d);
-}
-
-.mwt-tab-content[data-tab="chronicle"] input[type="number"],
-.mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"],
-.mwt-tab-content[data-tab="chronicle"] input[type="text"] {
-  background: var(--sc-bg-input, #161b22);
-  color: var(--sc-text, #e5e7eb);
-  border: 1px solid var(--sc-border-light, #30363d);
-  padding: 6px 10px;
-  border-radius: 4px;
-  font-size: 13px;
-  box-sizing: border-box;
 }
 
 .sc-stats-grid {
@@ -849,25 +848,12 @@ input[type="number"].mwt-input {
   margin-right: 4px;
 }
 
-.sc-stats-grid input[type="number"],
-.sc-stats-grid input[type="datetime-local"],
-.sc-stats-grid input[type="text"] {
-  background: var(--sc-bg-input, #161b22);
-  color: var(--sc-text, #e5e7eb);
-  border: 1px solid var(--sc-border-light, #30363d);
-  border-radius: var(--sc-radius-sm, 5px);
-  padding: 5px 10px;
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-  box-sizing: border-box;
-}
-
+/* Tighter fields inside the chronicle stats grid */
 .mwt-tab-content[data-tab="chronicle"] .sc-stats-grid input,
 .mwt-tab-content[data-tab="chronicle"] .sc-stats-grid select {
-  background: var(--sc-bg-input, #161b22);
-  color: var(--sc-text, #e5e7eb);
-  border: 1px solid var(--sc-border-light, #30363d);
+  background: var(--sc-bg-input);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 12px;
@@ -906,8 +892,11 @@ input[type="number"].mwt-input {
     margin-bottom: 8px;
 }
 
-/* ─── Sub-tab bar (Staging / Minor / Major / State / Relationships) ──────── */
-.kt-sub-tabs {
+/* ─── Sub-tab bar (Staging / Minor / Major / State / Relationships) ────────
+   Selectors grouped with their legacy aliases (.kt-subtabs / .kt-subtab-btn)
+   for backward compatibility with any older markup. */
+.kt-sub-tabs,
+.kt-subtabs {
     display: flex;
     gap: 2px;
     flex: 1;
@@ -917,7 +906,8 @@ input[type="number"].mwt-input {
     border-bottom: 1px solid var(--mwt-border);
 }
 
-.kt-sub-tab {
+.kt-sub-tab,
+.kt-subtab-btn {
     background: none;
     border: 1px solid transparent;
     color: var(--mwt-text-dim);
@@ -930,12 +920,14 @@ input[type="number"].mwt-input {
     white-space: nowrap;
 }
 
-.kt-sub-tab:hover {
+.kt-sub-tab:hover,
+.kt-subtab-btn:hover {
     color: var(--mwt-text);
     background: var(--mwt-bg-light);
 }
 
-.kt-sub-tab.active {
+.kt-sub-tab.active,
+.kt-subtab-btn--active {
     color: var(--mwt-accent);
     background: var(--mwt-bg-lighter);
     border-color: var(--mwt-accent);
@@ -1015,35 +1007,9 @@ input[type="number"].mwt-input {
     padding: 8px 0;
 }
 
-/* Legacy aliases for backward compatibility */
-.kt-subtabs {
-    display: flex;
-    gap: 2px;
-    flex: 1;
-}
-
-.kt-subtab-btn {
-    background: none;
-    border: 1px solid transparent;
-    color: var(--mwt-text-dim);
-    padding: 4px 12px;
-    border-radius: var(--mwt-radius);
-    cursor: pointer;
-    font-size: 12px;
-    font-family: var(--mwt-font);
-    transition: all var(--mwt-transition);
-}
-
-.kt-subtab-btn:hover {
-    color: var(--mwt-text);
-    background: var(--mwt-bg-light);
-}
-
-.kt-subtab-btn--active {
-    color: var(--mwt-accent);
-    background: var(--mwt-bg-lighter);
-    border-color: var(--mwt-accent);
-}
+/* Note: legacy .kt-subtabs / .kt-subtab-btn aliases are grouped together
+   with the modern .kt-sub-tabs / .kt-sub-tab rules above — no separate
+   definitions needed here. */
 
 .kt-staging-layout {
     display: flex;
@@ -1390,65 +1356,6 @@ input[type="number"].mwt-input {
 
 /* ─── KT diff inside staging detail ───────────────────────────────── */
 
-/* ── Tabs ────────────────────────────────────────────────────────────────── */
-
-.kt-tabs {
-    display: flex;
-    gap: 0;
-    border-bottom: 1px solid #1e1e1e;
-    flex-shrink: 0;
-    padding: 0 14px;
-}
-
-.kt-tab {
-    background: transparent;
-    color: #6b7280;
-    border: none;
-    border-bottom: 2px solid transparent;
-    padding: 8px 14px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
-    margin-bottom: -1px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.kt-tab:hover { color: #e5e7eb; }
-
-.kt-tab--active {
-    color: #a5b4fc;
-    border-bottom-color: #6366f1;
-}
-
-.kt-badge {
-    background: #6366f1;
-    color: #fff;
-    font-size: 10px;
-    font-weight: 600;
-    border-radius: 10px;
-    padding: 1px 6px;
-    min-width: 16px;
-    text-align: center;
-}
-
-/* ── Body ────────────────────────────────────────────────────────────────── */
-
-.kt-body {
-    flex: 1;
-    overflow: hidden;
-    position: relative;
-}
-
-.kt-tab-content {
-    display: none;
-    height: 100%;
-    overflow: hidden;
-}
-
-.kt-tab-content--active { display: flex; flex-direction: column; }
-
 /* Note: all KT staging/detail/npc/accept/dismiss styles are defined
    in the variable-based block above (uses --mwt-* variables) with
    .kt-accept-btn / .kt-dismiss-btn base definitions following .kt-state-dryrun. */
@@ -1580,7 +1487,7 @@ input[type="number"].mwt-input {
 }
  
 .kt-settings-actions button:hover:not(:disabled) {
-    background: #2d3748;
+    background: var(--sc-bg-hover-strong);
 }
  
 .kt-settings-actions button:disabled {
@@ -1672,7 +1579,7 @@ input[type="number"].mwt-input {
 }
  
 .kt-state-register-row button:hover {
-    background: #2d3748;
+    background: var(--sc-bg-hover-strong);
 }
  
 /* State tracker action buttons three side-by-side per card */
@@ -1750,15 +1657,15 @@ input[type="number"].mwt-input {
    updates in the staging list. */
  
 .kt-staging-badge--state.kt-staging-badge--update { background: #1e3a3a; color: #67e8f9; }
-.kt-staging-badge--state.kt-staging-badge--create { background: #1e3a5f; color: #a5b4fc; }
+.kt-staging-badge--state.kt-staging-badge--create { background: var(--sc-accent-btn-bg); color: var(--sc-accent-light); }
  
  
 /* ── Diff view ──────────────────────────────────────────────────────────── */
 /* Used in the staging detail pane to show before/after for state updates. */
 
 .kt-diff {
-    background: #0d1117;
-    border: 1px solid #1e1e1e;
+    background: var(--sc-bg-diff);
+    border: 1px solid var(--sc-border-dim);
     border-radius: 6px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
@@ -1773,82 +1680,230 @@ input[type="number"].mwt-input {
     word-break: break-word;
 }
 
-.kt-diff-same { color: #6b7280; }
-.kt-diff-old  { background: rgba(248, 113, 113, 0.08); color: #f87171; }
-.kt-diff-new  { background: rgba(74, 222, 128, 0.08); color: #4ade80; }
+.kt-diff-same { color: var(--sc-text-dim); }
+.kt-diff-old  { background: rgba(248, 113, 113, 0.08); color: var(--sc-danger); }
+.kt-diff-new  { background: rgba(74, 222, 128, 0.08); color: var(--sc-success); }
 
 
-.kt-state-toolbar          { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid #1e1e1e; }
-.kt-state-toolbar button   { background: #1f2937; color: #e5e7eb; border: 1px solid #374151;
-                             border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
-.kt-state-toolbar button:hover { background: #2d3748; }
+.kt-state-toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--sc-border-dim);
+}
+.kt-state-toolbar button {
+    background: var(--sc-bg-hover);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-strong);
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.kt-state-toolbar button:hover {
+    background: var(--sc-bg-hover-strong);
+}
 
-.kt-state-history          { background: transparent; color: #6b7280; border: 1px solid #2a2a2a;
-                             border-radius: 5px; padding: 4px 8px; font-size: 11px; cursor: pointer;
-                             margin-right: 4px; transition: color 0.15s, border-color 0.15s; }
-.kt-state-history:hover    { color: #a5b4fc; border-color: #6366f1; }
+.kt-state-history {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-right: 4px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.kt-state-history:hover {
+    color: var(--sc-accent-light);
+    border-color: var(--sc-accent);
+}
 
 /* .kt-history-panel, .kt-history-header, .kt-history-body, .kt-history-close
    are defined once in the variable-based block above. */
 #kt-history-modal,
 #kt-view-modal,
-#kt-create-modal               { position: fixed; inset: 0; z-index: var(--z-kt-modal); }
-.kt-history-entry              { background: #0d1117; border: 1px solid #1e1e1e;
-                                 border-radius: 6px; padding: 10px 12px;
-                                 display: flex; flex-direction: column; gap: 8px; }
-.kt-history-meta               { display: flex; gap: 6px; font-size: 11px; color: #6b7280;
-                                 font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.kt-history-content            { margin: 0; padding: 8px 10px; background: #161b22;
-                                 border-radius: 4px; font-family: ui-monospace, SFMono-Regular,
-                                 Menlo, Consolas, monospace; font-size: 11px; color: #9ca3af;
-                                 white-space: pre-wrap; max-height: 200px; overflow-y: auto;
-                                 line-height: 1.5; }
-.kt-history-actions            { display: flex; justify-content: flex-end; }
-.kt-history-restore            { background: #1e3a5f; color: #60a5fa; border: 1px solid #1d4ed8;
-                                 border-radius: 5px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
-.kt-history-restore:hover      { background: #1d4ed8; color: #fff; }
+#kt-create-modal {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-kt-modal);
+}
+.kt-history-entry {
+    background: var(--sc-bg-diff);
+    border: 1px solid var(--sc-border-dim);
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.kt-history-meta {
+    display: flex;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--sc-text-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.kt-history-content {
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--sc-bg-input);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--sc-text-mid);
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+    line-height: 1.5;
+}
+.kt-history-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+.kt-history-restore {
+    background: var(--sc-accent-btn-bg);
+    color: var(--sc-info);
+    border: 1px solid var(--sc-accent-btn-border);
+    border-radius: 5px;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+}
+.kt-history-restore:hover {
+    background: var(--sc-accent-btn-border);
+    color: #fff;
+}
 
 /* ── Injected CSS moved from index.js ───────────────────────────────────── */
 
 /* .kt-staging-toolbar is defined once in the variable-based block above. */
-.kt-batch-btn { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
-.kt-batch-btn:hover { background: #2d3748; }
-.kt-batch-accept { color: #4ade80; border-color: #166534; }
-.kt-batch-dismiss { color: #f87171; border-color: #450a0a; }
-#kt-staging-count-text { font-size: 12px; color: #6b7280; margin-left: auto; }
-.kt-npc-toolbar { padding: 8px 14px; border-bottom: 1px solid #1e1e1e; }
-.kt-search-input { background: #161b22; color: #e5e7eb; border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; font-size: 13px; width: 100%; box-sizing: border-box; }
-.kt-search-input:focus { outline: none; border-color: #4b5563; }
-.kt-npc-promote, .kt-npc-demote { background: transparent; color: #a5b4fc; border: 1px solid #4b5563; border-radius: 5px; padding: 4px 8px; font-size: 11px; cursor: pointer; margin-right: 4px; transition: all 0.15s; }
-.kt-npc-promote:hover { background: #1e3a5f; border-color: #6366f1; }
-.kt-npc-demote:hover { background: #3a2a1e; border-color: #a855f7; }
-.kt-npc-view { background: transparent; color: #6b7280; border: 1px solid #2a2a2a; border-radius: 5px; padding: 4px 8px; font-size: 11px; cursor: pointer; margin-right: 4px; transition: color 0.15s; }
-.kt-npc-view:hover { color: #e5e7eb; border-color: #4b5563; }
+.kt-batch-btn {
+    background: var(--sc-bg-hover);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-strong);
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.kt-batch-btn:hover {
+    background: var(--sc-bg-hover-strong);
+}
+.kt-batch-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.kt-batch-accept {
+    color: var(--sc-success);
+    border-color: var(--sc-success-border);
+}
+.kt-batch-dismiss {
+    color: var(--sc-danger);
+    border-color: var(--sc-danger-bg);
+}
+#kt-staging-count-text {
+    font-size: 12px;
+    color: var(--sc-text-dim);
+    margin-left: auto;
+}
+.kt-npc-toolbar {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--sc-border-dim);
+}
+.kt-search-input {
+    background: var(--sc-bg-input);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-light);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    width: 100%;
+    box-sizing: border-box;
+}
+.kt-search-input:focus {
+    outline: none;
+    border-color: var(--sc-border-focus);
+}
+.kt-npc-promote,
+.kt-npc-demote {
+    background: transparent;
+    color: var(--sc-accent-light);
+    border: 1px solid var(--sc-border-focus);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-right: 4px;
+    transition: all 0.15s;
+}
+.kt-npc-promote:hover {
+    background: var(--sc-accent-btn-bg);
+    border-color: var(--sc-accent);
+}
+.kt-npc-demote:hover {
+    background: #3a2a1e;
+    border-color: #a855f7;
+}
+.kt-npc-view {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-right: 4px;
+    transition: color 0.15s;
+}
+.kt-npc-view:hover {
+    color: var(--sc-text);
+    border-color: var(--sc-border-focus);
+}
 
 /* History / Rename / Merge same compact transparent base */
-.kt-npc-history, .kt-npc-rename, .kt-npc-merge {
+.kt-npc-history,
+.kt-npc-rename,
+.kt-npc-merge {
     background: transparent;
-    color: #6b7280;
-    border: 1px solid #2a2a2a;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
     border-radius: 5px;
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
     transition: color 0.15s, border-color 0.15s;
 }
-.kt-npc-history:hover { color: #a5b4fc; border-color: #6366f1; }
-.kt-npc-rename:hover  { color: #fbbf24; border-color: #b45309; }
-.kt-npc-merge:hover   { color: #67e8f9; border-color: #0e7490; }
-.kt-npc-rel:hover     { color: #4ade80; border-color: #166534; }
-.kt-npc-keywords:hover { color: #fbbf24; border-color: #92400e; }
+.kt-npc-history:hover {
+    color: var(--sc-accent-light);
+    border-color: var(--sc-accent);
+}
+.kt-npc-rename:hover {
+    color: var(--sc-warning);
+    border-color: #b45309;
+}
+.kt-npc-merge:hover {
+    color: #67e8f9;
+    border-color: #0e7490;
+}
+.kt-npc-rel:hover {
+    color: var(--sc-success);
+    border-color: var(--sc-success-border);
+}
+.kt-npc-keywords:hover {
+    color: var(--sc-warning);
+    border-color: #92400e;
+}
 
 /* .kt-npc-rel / .kt-npc-keywords transparent base for NPC cards.
    Inside the relationship modal (or similar panels), a filled style
    is applied via context-specific selectors further down. */
-.kt-npc-rel, .kt-npc-keywords {
+.kt-npc-rel,
+.kt-npc-keywords {
     background: transparent;
-    color: #6b7280;
-    border: 1px solid #2a2a2a;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
     border-radius: 5px;
     padding: 4px 8px;
     font-size: 11px;
@@ -1864,7 +1919,7 @@ input[type="number"].mwt-input {
     cursor: pointer;
     flex-shrink: 0;
 }
-.kt-npc-select input[type="checkbox"] { margin: 0; cursor: pointer; width: 14px; height: 14px; accent-color: var(--sc-accent, #6366f1); }
+.kt-npc-select input[type="checkbox"] { margin: 0; cursor: pointer; width: 14px; height: 14px; accent-color: var(--sc-accent); }
 
 /* "Select all visible" bar above the Major NPCs list */
 .kt-major-selectbar {
@@ -1872,10 +1927,10 @@ input[type="number"].mwt-input {
     align-items: center;
     gap: 8px;
     padding: 6px 14px;
-    border-bottom: 1px solid #1e1e1e;
-    background: #0d1117;
+    border-bottom: 1px solid var(--sc-border-dim);
+    background: var(--sc-bg-diff);
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--sc-text-mid);
 }
 .kt-select-all {
     display: inline-flex;
@@ -1884,10 +1939,11 @@ input[type="number"].mwt-input {
     cursor: pointer;
     user-select: none;
 }
-.kt-select-all input[type="checkbox"] { margin: 0; cursor: pointer; accent-color: var(--sc-accent, #6366f1); }
-
-/* Disabled batch button styling slightly lower contrast so it reads as inactive */
-.kt-batch-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.kt-select-all input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--sc-accent);
+}
 
 /* Per-NPC auto-trigger toggle on State Tracker cards */
 .kt-state-toggle {
@@ -1895,20 +1951,35 @@ input[type="number"].mwt-input {
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--sc-text-mid);
     cursor: pointer;
     padding: 3px 6px;
-    border: 1px solid #2a2a2a;
+    border: 1px solid var(--sc-border);
     border-radius: 5px;
 }
-.kt-state-toggle input[type="checkbox"] { margin: 0; cursor: pointer; accent-color: var(--sc-accent, #6366f1); }
-.kt-state-toggle:hover { border-color: #4b5563; color: #e5e7eb; }
-.kt-type-change-note { background: rgba(99, 102, 241, 0.15); color: #a5b4fc; border: 1px solid #6366f1; border-radius: 6px; padding: 8px 12px; font-size: 12px; }
-.kt-staging-badge--promote { background: #1e3a5f; color: #a5b4fc; }
-.kt-staging-badge--demote { background: #3a2a1e; color: #a855f7; }
-.kt-staging-badge--state { background: rgba(120, 120, 255, 0.18); }
-#kt-staging-toolbar { display: none; }
-#kt-staging-layout { display: none; }
+.kt-state-toggle input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--sc-accent);
+}
+.kt-state-toggle:hover {
+    border-color: var(--sc-border-focus);
+    color: var(--sc-text);
+}
+
+.kt-type-change-note {
+    background: var(--sc-accent-bg);
+    color: var(--sc-accent-light);
+    border: 1px solid var(--sc-accent);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+.kt-staging-badge--promote { background: var(--sc-accent-btn-bg); color: var(--sc-accent-light); }
+.kt-staging-badge--demote  { background: #3a2a1e; color: #a855f7; }
+.kt-staging-badge--state   { background: rgba(120, 120, 255, 0.18); }
+#kt-staging-toolbar  { display: none; }
+#kt-staging-layout   { display: none; }
 #kt-state-import-file { display: none; }
 
 /* View modal overrides */
@@ -1945,8 +2016,8 @@ input[type="number"].mwt-input {
     justify-content: space-between;
     align-items: center;
     padding: 8px 12px;
-    background: #1a1a2e;
-    border-bottom: 1px solid #2a2a4a;
+    background: var(--mwt-bg);
+    border-bottom: 1px solid var(--mwt-bg-lighter);
     cursor: move;
     user-select: none;
     flex-shrink: 0;
@@ -1956,14 +2027,14 @@ input[type="number"].mwt-input {
     margin: 0;
     font-size: 13px;
     font-weight: 600;
-    color: #a5b4fc;
+    color: var(--sc-accent-light);
     display: flex;
     align-items: center;
     gap: 6px;
 }
 
 .kt-notif-header .kt-notif-count {
-    background: #6366f1;
+    background: var(--sc-accent);
     color: #fff;
     font-size: 10px;
     font-weight: 600;
@@ -1980,8 +2051,8 @@ input[type="number"].mwt-input {
 
 .kt-notif-header-actions button {
     background: transparent;
-    color: #6b7280;
-    border: 1px solid #2a2a2a;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
     border-radius: 4px;
     padding: 2px 6px;
     font-size: 11px;
@@ -1990,23 +2061,23 @@ input[type="number"].mwt-input {
 }
 
 .kt-notif-header-actions button:hover {
-    color: #e5e7eb;
-    border-color: #4b5563;
+    color: var(--sc-text);
+    border-color: var(--sc-border-focus);
 }
 
 /* Notification tabs row */
 .kt-notif-tabs {
     display: flex;
     gap: 0;
-    border-bottom: 1px solid #1e1e1e;
+    border-bottom: 1px solid var(--sc-border-dim);
     flex-shrink: 0;
     overflow-x: auto;
-    background: #0d0d1a;
+    background: var(--sc-bg-diff);
 }
 
 .kt-notif-tab {
     background: transparent;
-    color: #6b7280;
+    color: var(--sc-text-dim);
     border: none;
     border-bottom: 2px solid transparent;
     padding: 6px 10px;
@@ -2023,18 +2094,18 @@ input[type="number"].mwt-input {
     gap: 4px;
 }
 
-.kt-notif-tab:hover { color: #e5e7eb; }
+.kt-notif-tab:hover { color: var(--sc-text); }
 
 .kt-notif-tab--active {
-    color: #a5b4fc;
-    border-bottom-color: #6366f1;
+    color: var(--sc-accent-light);
+    border-bottom-color: var(--sc-accent);
 }
 
 .kt-notif-tab .kt-notif-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #4ade80;
+    background: var(--sc-success);
     flex-shrink: 0;
 }
 
@@ -2051,12 +2122,12 @@ input[type="number"].mwt-input {
 .kt-notif-body .kt-detail-name {
     font-size: 13px;
     font-weight: 600;
-    color: #f3f4f6;
+    color: var(--sc-text-bright);
 }
 
 .kt-notif-body .kt-detail-label {
     font-size: 10px;
-    color: #6b7280;
+    color: var(--sc-text-dim);
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
@@ -2073,30 +2144,9 @@ input[type="number"].mwt-input {
     margin-top: 4px;
 }
 
-.kt-notif-body .kt-accept-btn,
-.kt-notif-body .kt-dismiss-btn {
-    padding: 5px 10px;
-    border-radius: 5px;
-    font-size: 11px;
-    cursor: pointer;
-    border: 1px solid;
-    transition: background 0.15s;
-}
-
-.kt-notif-body .kt-accept-btn {
-    background: #14532d;
-    color: #4ade80;
-    border-color: #166534;
-}
-.kt-notif-body .kt-accept-btn:hover:not(:disabled) { background: #166534; }
-.kt-notif-body .kt-accept-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-.kt-notif-body .kt-dismiss-btn {
-    background: #1c0a0a;
-    color: #f87171;
-    border-color: #450a0a;
-}
-.kt-notif-body .kt-dismiss-btn:hover { background: #2d0f0f; }
+/* The base .kt-accept-btn / .kt-dismiss-btn rules (defined above) already
+   theme these buttons via the --sc-* variables, so no override is needed
+   here — this keeps them consistent in both light and dark mode. */
 
 /* Resize handle */
 .kt-notif-resize {
@@ -2106,7 +2156,7 @@ input[type="number"].mwt-input {
     width: 16px;
     height: 16px;
     cursor: nwse-resize;
-    background: linear-gradient(135deg, transparent 50%, #4b5563 50%, transparent 75%);
+    background: linear-gradient(135deg, transparent 50%, var(--sc-border-focus) 50%, transparent 75%);
     border-radius: 0 0 10px 0;
 }
 
@@ -2290,7 +2340,7 @@ input[type="number"].mwt-input {
 }
 
 .kt-rel-reverse {
-    color: #60a5fa;
+    color: var(--sc-info);
     font-size: 11px;
     padding: 1px 6px;
     background: rgba(96, 165, 250, 0.12);
@@ -2300,7 +2350,7 @@ input[type="number"].mwt-input {
 
 .kt-rel-remove {
     background: transparent;
-    color: #9ca3af;
+    color: var(--sc-text-mid);
     border: none;
     cursor: pointer;
     font-size: 12px;
@@ -2310,7 +2360,7 @@ input[type="number"].mwt-input {
 }
 
 .kt-rel-remove:hover {
-    color: #f87171;
+    color: var(--sc-danger);
     background: rgba(248, 113, 113, 0.1);
 }
 
