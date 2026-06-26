@@ -116,9 +116,15 @@ export function applyWorldStateInjection() {
     const globalSettings = getGlobalSettings();
 
     try {
-        // The full payload (header(s) + body + optional tags) is built by
-        // buildInjectionPayload. We pass it as the body with an empty header so
-        // applyExtensionPromptInjection treats it as already fully assembled.
+        // Tag handling is intentionally two layers:
+        //  (1) buildInjectionPayload() above already wraps each semantic block
+        //      (world state, plot seeds) in its own <mwt_*> tag when
+        //      structural boundaries are on. That is the *content* layer.
+        //  (2) Here we hand the fully-assembled payload to the generic injector
+        //      with `useTags: false` so it does NOT add an outer wrapper on top —
+        //      that would double-wrap the blocks. applyExtensionPromptInjection's
+        //      own `useTags` is a separate, generic mechanism unrelated to the
+        //      per-block tags built above.
         const payload = buildInjectionPayload(text);
 
         applyExtensionPromptInjection({
@@ -129,7 +135,8 @@ export function applyWorldStateInjection() {
             globalDepth: globalSettings.worldStateDepth,
             fallbackDepth: s.injectionDepth ?? 1,
             globalRole: globalSettings.worldStateRole || 'system',
-            // Tag wrapping is handled locally per-block above; do not double-wrap.
+            // Content-layer wrapping is already applied per-block above; pass
+            // false so the generic injector doesn't add an additional wrapper.
             useTags: false,
         });
         const resolvedDepth = Number.isFinite(Number(globalSettings.worldStateDepth))

@@ -3,8 +3,7 @@
  *
  * Registries are flat { name: {...} } maps stored directly in chat metadata.
  * We assign the whole map and call persistChatMeta() rather than routing
- * through patchChatMeta(), which merges a top-level `lastUpdated` timestamp
- * into the map and corrupts name lookups / iteration.
+ * through patchChatMeta(), which is reserved for structured (non-flat) data.
  */
 
 import { getChatMeta, persistChatMeta, getChat } from '../core/index.js';
@@ -16,16 +15,7 @@ import { REGISTRY_KEY, STATE_REGISTRY_KEY, state } from './state.js';
 export function getRegistry() {
     const meta = getChatMeta();
     if (!meta[REGISTRY_KEY]) meta[REGISTRY_KEY] = {};
-    const reg = meta[REGISTRY_KEY];
-    // Migration / hardening: a previous saveRegistry() routed through
-    // patchChatMeta(), which merged a `lastUpdated` timestamp into this flat
-    // { npcName: {...} } map. That phantom key appeared in every NPC list,
-    // dropdown, and scan. Strip it once if present; persist the cleaned map.
-    if (reg.lastUpdated !== undefined) {
-        delete reg.lastUpdated;
-        persistChatMeta();
-    }
-    return reg;
+    return meta[REGISTRY_KEY];
 }
 
 export function saveRegistry(reg) {
@@ -56,13 +46,7 @@ export function getAllNpcNames() { return Object.keys(getRegistry()); }
 export function getStateRegistry() {
     const meta = getChatMeta();
     if (!meta[STATE_REGISTRY_KEY]) meta[STATE_REGISTRY_KEY] = {};
-    const reg = meta[STATE_REGISTRY_KEY];
-    // Same lastUpdated hardening as getRegistry() above.
-    if (reg.lastUpdated !== undefined) {
-        delete reg.lastUpdated;
-        persistChatMeta();
-    }
-    return reg;
+    return meta[STATE_REGISTRY_KEY];
 }
 
 export function saveStateRegistry(reg) {

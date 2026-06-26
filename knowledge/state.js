@@ -44,8 +44,6 @@ export const state = {
     stagingItems: [],
     /** ID of the currently selected staging item */
     activeItemId: null,
-    /** Set of NPC names selected as major */
-    selectedMajorNpcs: new Set(),
 
     // ── Notification panel state ──
     notificationEntries: {},

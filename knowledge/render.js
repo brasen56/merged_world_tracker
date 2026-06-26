@@ -33,6 +33,7 @@ import {
 } from './relationships.js';
 import {
     buildStagingItems, exportNpcs, importNpcs, importFromLorebooks,
+    mergeScanResults,
     STAGING_PLACEHOLDERS,
 } from './staging.js';
 
@@ -195,20 +196,10 @@ export function renderNpcsSubTab() {
             state.activeSubTab = 'staging';
             const result = await runScan();
             const newItems = buildStagingItems(result);
-            const added = [];
-            for (const item of newItems) {
-                const key = `${item.name}|${item.action}|${item.type}`;
-                const existingIdx = state.stagingItems.findIndex(it => `${it.name}|${it.action}|${it.type}` === key);
-                if (existingIdx >= 0) {
-                    removeNotificationEntry(state.stagingItems[existingIdx].id);
-                    state.stagingItems[existingIdx] = item;
-                } else {
-                    state.stagingItems.push(item);
-                }
-                added.push(item);
-            }
+            const added = mergeScanResults(newItems, removeNotificationEntry);
             state.activeItemId = null;
-            await Promise.all(added.filter(it => it.action === 'update').map(it => enrichStagingItem(it)));
+            // Enrich non-edited update proposals; edited ones keep their text.
+            await Promise.all(added.filter(it => it.action === 'update' && !it.edited).map(it => enrichStagingItem(it)));
             added.forEach(item => addNotificationEntry(item));
             ktSetStatus(`Scan complete — ${added.length} proposal(s).`, 'success');
             notify('Knowledge Tracker', `Scan found ${added.length} proposal(s).`, added.length ? 'info' : 'success');
@@ -312,6 +303,19 @@ function wireStagingEvents(el) {
             if (stagingItem) await enrichStagingItem(stagingItem);
             renderNpcsSubTab();
         });
+    });
+
+    // Track manual edits to the proposal editor so a subsequent re-scan can
+    // preserve the user's text instead of overwriting it wholesale.
+    const editorEl = el.querySelector('#kt-proposal-editor');
+    editorEl?.addEventListener('input', () => {
+        const item = state.stagingItems.find(i => i.id === state.activeItemId);
+        if (!item) return;
+        item.edited = true;
+        item.mergedContent = editorEl.value;
+        if (!item.proposedContent || STAGING_PLACEHOLDERS.includes(item.proposedContent)) {
+            item.proposedContent = editorEl.value;
+        }
     });
 
     // Accept/dismiss buttons
@@ -507,20 +511,7 @@ function wireNpcListEvents(el, type) {
     });
 
     el.querySelectorAll('.kt-npc-view').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const name = btn.dataset.name;
-            const reg = getRegistry()[name];
-            if (!reg?.uid && reg?.uid !== 0) return;
-            const content = await loadEntryContent(reg.uid);
-            if (content) {
-                const viewModal = document.createElement('div');
-                viewModal.id = 'kt-view-modal';
-                viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
-                document.body.appendChild(viewModal);
-                viewModal.querySelector('.kt-history-close').addEventListener('click', () => viewModal.remove());
-                viewModal.querySelector('.kt-history-backdrop').addEventListener('click', () => viewModal.remove());
-            }
-        });
+        btn.addEventListener('click', () => openNpcViewModal(btn.dataset.name));
     });
 
     el.querySelectorAll('.kt-npc-remove').forEach(btn => {
@@ -847,7 +838,7 @@ function computeGraphLayout(edges) {
         for (const p of edgeList) {
             const aIdx = nodeIndex.get(p.a);
             const bIdx = nodeIndex.get(p.b);
-            if (aIdx < 0 || bIdx < 0) continue;
+            if (aIdx == null || bIdx == null) continue;
             let dx = posArr[aIdx].x - posArr[bIdx].x;
             let dy = posArr[aIdx].y - posArr[bIdx].y;
             let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
@@ -905,7 +896,7 @@ function drawSelfLoopEdge(ns, edgeGroup, pos, edge) {
 }
 
 function renderRelationshipGraph() {
-    const svg = document.getElementById('kt-rel-graph');
+    const svg = state.modal?.querySelector('#kt-rel-graph');
     if (!svg) return;
 
     const rels = getRelationships();
@@ -1055,6 +1046,7 @@ function wireRelationshipGraphInteractions(svg, data) {
             const name = nodeG.getAttribute('data-name');
             dragNode = name;
             const pt = svgPoint(svg, ev);
+            if (!pt) return;
             dragStart = { x: pt.x, y: pt.y };
             didDrag = false;
             ev.stopPropagation();
@@ -1063,6 +1055,7 @@ function wireRelationshipGraphInteractions(svg, data) {
         const onPointerMove = (ev) => {
             if (!dragNode || dragNode !== nodeG.getAttribute('data-name')) return;
             const pt = svgPoint(svg, ev);
+            if (!pt) return;
             const pos = data.nodes.get(dragNode);
             if (pos) {
                 const dx = pt.x - dragStart.x;
@@ -1133,10 +1126,12 @@ function wireRelationshipGraphInteractions(svg, data) {
 }
 
 function svgPoint(svg, ev) {
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
     const pt = svg.createSVGPoint();
     pt.x = ev.clientX;
     pt.y = ev.clientY;
-    return pt.matrixTransform(svg.getScreenCTM().inverse());
+    return pt.matrixTransform(ctm.inverse());
 }
 
 function updateEdges(svg, data) {
@@ -1274,7 +1269,6 @@ export {
     removeNotificationEntry,
     initNotificationPanel,
     hideNotificationPanel,
-    exportNpcs,
     importNpcs,
     importFromLorebooks,
 };

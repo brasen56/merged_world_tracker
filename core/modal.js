@@ -5,6 +5,8 @@
  * modal dialogs.  Used by all three modules' UI layers.
  */
 
+import { escapeHtml } from './diff.js';
+
 /**
  * Create a modal element and append it to document.body.
  * Returns the modal element.
@@ -33,7 +35,7 @@ export function createModal({ id, title, content, cssClass = '', onClose = null 
         <div class="mwt-modal-backdrop"></div>
         <div class="mwt-modal-panel">
             <div class="mwt-modal-header">
-                <h3>${title}</h3>
+                <h3>${escapeHtml(title)}</h3>
                 <button class="mwt-modal-close" title="Close">&times;</button>
             </div>
             <div class="mwt-modal-body">${content}</div>

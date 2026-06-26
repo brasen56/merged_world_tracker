@@ -12,11 +12,25 @@ export function persistChatMeta() {
     else if (ctx?.saveChatDebounced) ctx.saveChatDebounced();
 }
 
-export function patchChatMeta(key, patch, persist = true) {
+/**
+ * Merge `patch` into the chat-metadata value at `key` and persist.
+ *
+ * `lastUpdated` is opt-in: it is only stamped when `stamp` is true. Flat maps
+ * (e.g. the Knowledge registry and relationship map) must never carry a
+ * top-level `lastUpdated` sibling, so callers default to `stamp: false`.
+ *
+ * @param {string}  key     metadata key
+ * @param {object}  patch   object merged into the existing metadata value
+ * @param {boolean} persist trigger a debounced metadata save (default true)
+ * @param {boolean} stamp   also set `lastUpdated: Date.now()` (default false)
+ */
+export function patchChatMeta(key, patch, persist = true, stamp = false) {
     const meta = getChatMeta();
     if (!meta) return undefined;
     if (!meta[key]) meta[key] = {};
-    const next = { ...meta[key], ...patch, lastUpdated: Date.now() };
+    const next = stamp
+        ? { ...meta[key], ...patch, lastUpdated: Date.now() }
+        : { ...meta[key], ...patch };
     meta[key] = next;
     if (persist) persistChatMeta();
     return next;

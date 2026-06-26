@@ -37,18 +37,20 @@ export function buildStagingItems(scanResult) {
     const dossierMode = scanResult.dossierMode === true;
 
     scanResult.new_minor.forEach(data => {
-        items.push({ id: makeId(), type: 'minor', action: 'create', name: data.name, data, proposedContent: formatMinorEntry(data), existingContent: null, keywords: [data.name] });
+        const proposed = formatMinorEntry(data);
+        items.push({ id: makeId(), type: 'minor', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name] });
     });
     scanResult.new_major.forEach(data => {
         const proposed = dossierMode ? formatDossierEntry(data) : formatMajorEntry(data);
-        items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: proposed, existingContent: null, keywords: [data.name], dossierMode });
+        items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name], dossierMode });
     });
     scanResult.update_minor.forEach(data => {
         const reg = registry[data.name];
         const orphan = !reg || reg.uid === null || reg.uid === undefined;
         if (orphan) {
             misclassifiedCount++;
-            items.push({ id: makeId(), type: 'minor', action: 'create', name: data.name, data, proposedContent: synthesizeMinorFromUpdate(data.name, data.fields), existingContent: null, keywords: [data.name], synthesized: true });
+            const proposed = synthesizeMinorFromUpdate(data.name, data.fields);
+            items.push({ id: makeId(), type: 'minor', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name], synthesized: true });
             return;
         }
         items.push({ id: makeId(), type: 'minor', action: 'update', name: data.name, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords: reg.keywords || [data.name], uid: reg.uid, fields: data.fields });
@@ -61,7 +63,7 @@ export function buildStagingItems(scanResult) {
             const syn = dossierMode
                 ? synthesizeDossierFromUpdate(data.name, data.fields, data.new_knowledge || [])
                 : synthesizeMajorFromUpdate(data.name, data.fields, data.new_knowledge || []);
-            items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: syn, existingContent: null, keywords: [data.name], synthesized: true, dossierMode });
+            items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: syn, mergedContent: syn, existingContent: null, keywords: [data.name], synthesized: true, dossierMode });
             return;
         }
         items.push({ id: makeId(), type: 'major', action: 'update', name: data.name, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords: reg.keywords || [data.name], uid: reg.uid, fields: data.fields, newKnowledge: data.new_knowledge || [], dossierMode });
@@ -78,6 +80,52 @@ export function formatHistoryAge(ts) {
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
     return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+/**
+ * Merge freshly-scanned staging items into the existing staging list.
+ *
+ * Items are keyed by `${name}|${action}|${type}`. When a scan re-detects an
+ * item already staged, the new proposal replaces the old one — UNLESS the user
+ * has manually edited the existing proposal (`existing.edited === true`), in
+ * which case the user's edited content is preserved and only the surrounding
+ * metadata (keywords, fields, uid, etc.) is refreshed. This stops a re-scan
+ * from silently discarding hand-edited proposal text.
+ *
+ * @param {Array} newItems                   proposals from buildStagingItems()
+ * @param {(id: string) => void} removeNotification  removes a notification entry by id
+ * @returns {Array} the items now staged for these proposals (for enrichment/notification)
+ */
+export function mergeScanResults(newItems, removeNotification) {
+    const added = [];
+    for (const item of newItems) {
+        const key = `${item.name}|${item.action}|${item.type}`;
+        const existingIdx = state.stagingItems.findIndex(it => `${it.name}|${it.action}|${it.type}` === key);
+        let stored;
+        if (existingIdx >= 0) {
+            const existing = state.stagingItems[existingIdx];
+            removeNotification(existing.id);
+            if (existing.edited) {
+                // Keep the user's edits as the source of truth; refresh metadata only.
+                stored = {
+                    ...item,
+                    id: existing.id,
+                    edited: true,
+                    mergedContent: existing.mergedContent,
+                    proposedContent: existing.mergedContent || existing.proposedContent,
+                    existingContent: existing.existingContent ?? item.existingContent,
+                };
+            } else {
+                stored = item;
+            }
+            state.stagingItems[existingIdx] = stored;
+        } else {
+            state.stagingItems.push(item);
+            stored = item;
+        }
+        added.push(stored);
+    }
+    return added;
 }
 
 // ─── NPC Export / Import ─────────────────────────────────────────────────────

@@ -11,12 +11,12 @@ import { state, getNpcsContentEl } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
 import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
-import { buildStagingItems } from './staging.js';
+import { buildStagingItems, mergeScanResults } from './staging.js';
 import {
     renderNpcsSubTab,
     addNotificationEntry, removeNotificationEntry,
     initNotificationPanel, hideNotificationPanel,
-    exportNpcs, importNpcs, importFromLorebooks,
+    importNpcs, importFromLorebooks,
 } from './render.js';
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -132,19 +132,9 @@ export function onMessageReceived() {
                 try {
                     const result = await runScan();
                     const newItems = buildStagingItems(result);
-                    const added = [];
-                    for (const item of newItems) {
-                        const key = `${item.name}|${item.action}|${item.type}`;
-                        const existingIdx = state.stagingItems.findIndex(it => `${it.name}|${it.action}|${it.type}` === key);
-                        if (existingIdx >= 0) {
-                            removeNotificationEntry(state.stagingItems[existingIdx].id);
-                            state.stagingItems[existingIdx] = item;
-                        } else {
-                            state.stagingItems.push(item);
-                        }
-                        added.push(item);
-                    }
-                    await Promise.all(added.filter(it => it.action === 'update').map(it => enrichStagingItem(it)));
+                    const added = mergeScanResults(newItems, removeNotificationEntry);
+                    // Enrich non-edited update proposals; edited ones keep their text.
+                    await Promise.all(added.filter(it => it.action === 'update' && !it.edited).map(it => enrichStagingItem(it)));
                     added.forEach(item => addNotificationEntry(item));
                     if (added.length > 0) {
                         console.log(`[MWT:Knowledge] Auto-scan: ${added.length} NPC proposal(s) staged.`);

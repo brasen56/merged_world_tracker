@@ -106,9 +106,9 @@ export function scSetStatus(msg, level = 'info') {
     state._lastStatusLevel = level;
     const el = getContentEl();
     if (!el) return;
-    el.querySelectorAll('.sc-status').forEach(s => {
+    el.querySelectorAll('.sc-status-text').forEach(s => {
         s.textContent = msg;
-        s.className = 'sc-status';
+        s.className = 'sc-status-text';
         if (level) s.classList.add(`sc-status--${level}`);
     });
 }

@@ -57,7 +57,7 @@ export function showConsolidationPreview(selectedEntries, inputContent, onConfir
             <p>Review content fed to consolidator. Edit if needed.</p>
             ${selectedEntries.map((e, i) => `<details ${i === 0 ? 'open' : ''}><summary>${i === 0 ? 'BASE' : `DELTA ${i}`} — ${escapeHtml(e.worldDate || e.createdAt)}</summary><pre>${escapeHtml((e.text || '').slice(0, 2000))}</pre></details>`).join('')}
             <textarea id="sc-consolidate-input" class="mwt-textarea" rows="12">${escapeHtml(inputContent)}</textarea>
-            <div class="sc-status"><span class="sc-status"></span></div>
+            <div class="sc-status"><span class="sc-status-text"></span></div>
             <div class="mwt-flex mwt-gap-4"><button id="sc-consolidate-go" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>Consolidate</button><button id="sc-consolidate-cancel" class="mwt-btn">Cancel</button></div>
         </div>`;
     el.querySelector('#sc-consolidate-go')?.addEventListener('click', function () { this.disabled = true; onConfirm(el.querySelector('#sc-consolidate-input')?.value || inputContent); });
@@ -74,7 +74,7 @@ function showEntryEditor(snapshot) {
             <div><span>Characters:</span> ${escapeHtml(charList)}</div>
             <div><span>Note:</span> <input type="text" id="sc-note-input" class="mwt-input" value="${escapeHtml(snapshot.note || '')}" placeholder="Add a note..."></div>
             <textarea id="sc-editor-textarea" class="mwt-textarea" rows="20">${escapeHtml(snapshot.text)}</textarea>
-            <div class="sc-status"><span class="sc-status"></span></div>
+            <div class="sc-status"><span class="sc-status-text"></span></div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                 <button id="sc-save-edit" class="mwt-btn mwt-btn-primary">Save</button>
                 <button id="sc-regenerate-btn" class="mwt-btn" ${!snapshot.manual && hasValidSettings() ? '' : 'disabled'}>Regenerate</button>
@@ -372,7 +372,7 @@ export function renderContent() {
             </div>`;
         }).join('')}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:4px">
-            <div class="sc-status"><span class="sc-status"></span></div>
+            <div class="sc-status"><span class="sc-status-text"></span></div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                 <button id="sc-inject-toggle" class="mwt-btn" style="font-size:12px">${isInjectionEnabled() ? '📥 Injection ON' : '📤 Injection OFF'}</button>
                 <button id="sc-preview-injection" class="mwt-btn" style="font-size:12px">📄 Preview</button>

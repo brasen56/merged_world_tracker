@@ -239,8 +239,10 @@ export function wireEvents() {
     // Save settings
     state.modal.querySelector('#sp-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(state.modal, SP_API_FIELD_IDS);
-        const depth = Number(state.modal.querySelector('#sp-injection-depth')?.value);
-        const autoInterval = Number(state.modal.querySelector('#sp-auto-interval')?.value);
+        const depthRaw = state.modal.querySelector('#sp-injection-depth')?.value;
+        const depth = depthRaw === '' ? 4 : Number(depthRaw);
+        const autoIntervalRaw = state.modal.querySelector('#sp-auto-interval')?.value;
+        const autoInterval = autoIntervalRaw === '' ? 10 : Number(autoIntervalRaw);
         saveSettings({
             ...apiValues,
             customSystemPrompt: state.modal.querySelector('#sp-custom-system-prompt')?.value || '',

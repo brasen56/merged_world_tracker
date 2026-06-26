@@ -60,7 +60,7 @@ export function applyExtensionPromptInjection({
     if (!setEP) return false;
 
     const role = roleToNumber(globalRole);
-    const depth = Number.isFinite(Number(globalDepth)) ? Number(globalDepth) : fallbackDepth;
+    const depth = (globalDepth != null && Number.isFinite(Number(globalDepth))) ? Number(globalDepth) : fallbackDepth;
 
     if (!enabled || !body?.trim()) {
         setEP(key, '', 1, depth, undefined, role);
