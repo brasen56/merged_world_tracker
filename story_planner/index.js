@@ -13,7 +13,7 @@
  *   render.js     — UI rendering, event wiring
  */
 
-import { syncSharedConnectionSettings, notify, getChat } from '../core/index.js';
+import { syncSharedConnectionSettings, notify, getChat, getContextSafe } from '../core/index.js';
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
@@ -75,10 +75,27 @@ export async function onMessageReceived() {
 
     console.log(`[MWT:StoryPlanner] Auto-generate at ${state.autoCounter} messages`);
     resetAutoCounter();
+    // Capture the conditions at schedule time so the deferred closure can
+    // detect if Auto was toggled off or the chat changed during the 1.5s delay
+    // — otherwise a generatePlan(true) fires against the wrong chat (or after
+    // the user disabled auto-generation). Mirrors the chat-key guard in
+    // generation.js.
+    const ctxBefore = getContextSafe();
+    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
     try {
         // Delay slightly so ST finishes saving the chat first.
         setTimeout(async () => {
             try {
+                if (!isAutoEnabled() || !hasValidSettings()) {
+                    console.log('[MWT:StoryPlanner] Deferred auto-generate aborted — Auto disabled or API unset.');
+                    return;
+                }
+                const ctxAtRun = getContextSafe();
+                const chatKeyAtRun = `${ctxAtRun?.characterId ?? ''}|${ctxAtRun?.groupId ?? ''}|${ctxAtRun?.chatId ?? ''}`;
+                if (chatKeyAtRun !== chatKeyBefore) {
+                    console.log('[MWT:StoryPlanner] Deferred auto-generate aborted — chat changed during delay.');
+                    return;
+                }
                 const text = await generatePlan(true);
                 if (text) {
                     // Refresh the editor if the modal is open. Use refreshDisplay
@@ -101,7 +118,12 @@ export async function onMessageReceived() {
 }
 
 export function onChatChanged() {
-    state.isGenerating = false;
+    // NOTE: do NOT unconditionally clear state.isGenerating here. A generation
+    // in flight for the *previous* chat self-clears in its own finally; forcing
+    // the flag false here lets a second generation start concurrently against
+    // the new chat (double API calls, interleaved busy notifications). The
+    // generate path also discards cross-chat results, so leaving the flag is
+    // safe.
     // Restore the per-chat auto counter (each chat tracks its own progress)
     const saved = getPlanData()?.autoCounter;
     state.autoCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;

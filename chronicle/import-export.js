@@ -55,8 +55,18 @@ function importChronicle(jsonString) {
         const existing = getSnapshots();
         const existingIds = new Set(existing.map(s => s.id));
         let added = 0;
+        let skipped = 0;
         const merged = [...existing];
         for (const snap of parsed.snapshots) {
+            // Validate per-snapshot shape: an entry without `text` (or with
+            // non-string text) crashes the consolidation preview's
+            // `e.text.slice(...)` and `validateConsolidationOutput`'s
+            // `e.text.split(...)`. Skip malformed entries instead of writing
+            // them through.
+            if (!snap || typeof snap.text !== 'string' || !snap.text.trim()) {
+                skipped++;
+                continue;
+            }
             if (!existingIds.has(snap.id)) { merged.push({ ...snap, id: snap.id || `imp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }); added++; }
         }
         merged.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
@@ -82,7 +92,7 @@ function importChronicle(jsonString) {
         applyInjection();
         state.selectedSnapshotId = null;
         _render.renderContent();
-        scSetStatus(`Imported ${added} entries (${merged.length} total).`, 'success');
+        scSetStatus(`Imported ${added} entries (${merged.length} total${skipped ? `, ${skipped} skipped (missing text)` : ''}).`, 'success');
     } catch (err) {
         scSetStatus(`Import failed: ${err.message}`, 'error');
     }

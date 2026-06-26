@@ -32,6 +32,13 @@ export async function pickTextFile(accept) {
                 input.remove();
             }
         };
+        // The native picker fires a `cancel` event when the user dismisses it.
+        // Without this the Promise hangs forever (onchange never fires),
+        // leaving the import/export flow stuck. Resolving with '' lets callers
+        // treat it as "no file chosen". The input must be in the DOM for the
+        // cancel event to reliably fire in some browsers.
+        input.addEventListener('cancel', () => { resolve(''); input.remove(); });
+        document.body.appendChild(input);
         input.click();
     });
 }

@@ -109,15 +109,26 @@ export function readApiSettingsValues(el, opts = {}) {
         maxTokensDefault = 2000,
     } = opts;
 
+    // Empty numeric fields must fall through to their defaults. The previous
+    // `??` coalescing only caught null/undefined, so a cleared Temperature
+    // input (value === '') passed through as `Number('') === 0` and got
+    // persisted as 0. Treat the raw value as missing when it's an empty
+    // string so the default applies. (maxTokens already used `||`.)
+    const numericOr = (raw, fallback) => (raw === '' || raw == null ? fallback : Number(raw));
+    const tempRaw = el.querySelector(`#${tempId}`)?.value;
+    const topPRaw = el.querySelector(`#${topPId}`)?.value;
+    const freqRaw = el.querySelector(`#${freqId}`)?.value;
+    const presRaw = el.querySelector(`#${presId}`)?.value;
+
     return {
         apiUrl: el.querySelector(`#${urlId}`)?.value?.trim() || '',
         apiKey: el.querySelector(`#${keyId}`)?.value?.trim() || '',
         modelName: el.querySelector(`#${modelId}`)?.value?.trim() || '',
         maxTokens: Number(el.querySelector(`#${maxTokensId}`)?.value) || maxTokensDefault,
-        temperature: Number(el.querySelector(`#${tempId}`)?.value ?? opts.tempDefault ?? 0.3),
-        topP: Number(el.querySelector(`#${topPId}`)?.value ?? 1),
-        frequencyPenalty: Number(el.querySelector(`#${freqId}`)?.value ?? 0),
-        presencePenalty: Number(el.querySelector(`#${presId}`)?.value ?? 0),
+        temperature: numericOr(tempRaw, opts.tempDefault ?? 0.3),
+        topP: numericOr(topPRaw, 1),
+        frequencyPenalty: numericOr(freqRaw, 0),
+        presencePenalty: numericOr(presRaw, 0),
         customHeaders: el.querySelector(`#${headersId}`)?.value || '',
     };
 }

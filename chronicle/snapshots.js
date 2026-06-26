@@ -94,8 +94,12 @@ function validateSnapshotOutput(text) {
 }
 
 function validateConsolidationOutput(text, baseEntry, deltaEntries) {
-    const maxAllowed = Math.max(baseEntry.text.split(/\s+/).length + deltaEntries.reduce((s, e) => s + e.text.split(/\s+/).length, 0), 600);
-    if (text.split(/\s+/).length > maxAllowed * 1.5) return { valid: false, reason: 'Consolidated entry too long.' };
+    // Guard against entries missing `text` (e.g. malformed imports). The word
+    // counts feed the size ceiling below; an undefined `text` would previously
+    // throw a TypeError on `.split`.
+    const wordCount = (e) => (typeof e?.text === 'string' ? e.text.split(/\s+/).filter(Boolean).length : 0);
+    const maxAllowed = Math.max(wordCount(baseEntry) + deltaEntries.reduce((s, e) => s + wordCount(e), 0), 600);
+    if (wordCount({ text }) > maxAllowed * 1.5) return { valid: false, reason: 'Consolidated entry too long.' };
     return validateSnapshotOutput(text);
 }
 
@@ -218,8 +222,13 @@ export async function regenerateSnapshot(snapshotId) {
     const snapshot = snapshots[idx];
     const originalText = snapshot.text;
     const chat = getChat();
-    const from = snapshot.fromIndex ?? 0;
-    const to = snapshot.toIndex !== undefined && snapshot.toIndex > from ? snapshot.toIndex : Math.min(from + 200, chat.length - 1);
+    // Clamp both bounds to >= 0 — manual entries use fromIndex: -1 and
+    // consolidated entries can carry -1 toIndex, which previously shrank the
+    // message window down to "just the final message". generateSnapshot
+    // already clamps via Math.max(0, index); mirror that here.
+    const from = Math.max(0, snapshot.fromIndex ?? 0);
+    const rawTo = snapshot.toIndex !== undefined && snapshot.toIndex > (snapshot.fromIndex ?? 0) ? snapshot.toIndex : Math.min(from + 200, Math.max(0, chat.length - 1));
+    const to = Math.max(from, rawTo);
     const { text } = buildMessageWindow(from, to);
     if (!text.trim()) {
         scSetStatus('No messages for regeneration.', 'error');

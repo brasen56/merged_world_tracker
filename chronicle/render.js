@@ -55,7 +55,7 @@ export function showConsolidationPreview(selectedEntries, inputContent, onConfir
     el.innerHTML = `
         <div class="sc-consolidate-preview">
             <p>Review content fed to consolidator. Edit if needed.</p>
-            ${selectedEntries.map((e, i) => `<details ${i === 0 ? 'open' : ''}><summary>${i === 0 ? 'BASE' : `DELTA ${i}`} — ${escapeHtml(e.worldDate || e.createdAt)}</summary><pre>${escapeHtml(e.text.slice(0, 2000))}</pre></details>`).join('')}
+            ${selectedEntries.map((e, i) => `<details ${i === 0 ? 'open' : ''}><summary>${i === 0 ? 'BASE' : `DELTA ${i}`} — ${escapeHtml(e.worldDate || e.createdAt)}</summary><pre>${escapeHtml((e.text || '').slice(0, 2000))}</pre></details>`).join('')}
             <textarea id="sc-consolidate-input" class="mwt-textarea" rows="12">${escapeHtml(inputContent)}</textarea>
             <div class="sc-status"><span class="sc-status"></span></div>
             <div class="mwt-flex mwt-gap-4"><button id="sc-consolidate-go" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>Consolidate</button><button id="sc-consolidate-cancel" class="mwt-btn">Cancel</button></div>

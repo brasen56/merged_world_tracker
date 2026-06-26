@@ -432,6 +432,19 @@ export function wireEvents() {
         try {
             regenBtn.disabled = true; regenBtn.textContent = '⏳ Regenerating…';
             setStatus(state.modal, `Regenerating "${sectionName}" (variety: ${VARIETY_LABELS[variety]})…`, 'info');
+
+            // Preserve unsaved editor edits. regenerateSection() rebuilds the
+            // entry from the *persisted* world state (getWorldStateText()),
+            // not the live textarea, so typing that hasn't been Saved would be
+            // silently dropped. Sync the editor into state first — and push the
+            // live text into history so it stays recoverable. Mirrors #ws-refresh.
+            const editorBefore = state.modal.querySelector('#ws-editor');
+            if (editorBefore && editorBefore.value && editorBefore.value !== getWorldStateText()) {
+                pushToHistory(getWorldStateText());
+                state.autoSaveLastText = editorBefore.value;
+                setWorldStateData({ text: editorBefore.value });
+            }
+
             const updated = await regenerateSection(sectionName, variety);
             if (updated) {
                 const editor = state.modal.querySelector('#ws-editor');
