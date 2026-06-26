@@ -265,6 +265,10 @@ export function scheduleAutoRefresh(reason = 'scheduled') {
 export function onMessageReceived() {
     if (!isAutoRefreshEnabled()) return;
 
+    // Track chat length so onMessageDeleted can compute the number of removed
+    // messages during bulk deletes (e.g. "delete above/below").
+    state.lastChatLength = getChat()?.length || 0;
+
     state.autoRefreshCounter++;
     const interval = getAutoRefreshInterval();
 

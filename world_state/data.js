@@ -55,6 +55,9 @@ export const state = {
     autoRefreshDeferTimer: null,
     isDirty: false,
     modal: null,
+    /** Last observed chat length, used by onMessageDeleted to compute how many
+     *  messages were removed during bulk deletes (e.g. "delete above/below"). */
+    lastChatLength: 0,
 };
 
 // ─── Chat data helpers ───────────────────────────────────────────────────────

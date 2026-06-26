@@ -17,7 +17,7 @@
  */
 
 import {
-    syncSharedConnectionSettings, estimateTokens, notify,
+    syncSharedConnectionSettings, estimateTokens, notify, getChat,
 } from '../core/index.js';
 
 import {
@@ -79,6 +79,10 @@ export function getModuleWireEvents() {
 export async function onMessageReceived() {
     if (state.isGenerating) return;
 
+    // Track chat length so onMessageDeleted can compute the number of removed
+    // messages during bulk deletes (e.g. "delete above/below").
+    state.lastChatLength = getChat()?.length || 0;
+
     state.msgSinceSnapshot++;
     persistMsgSinceSnapshot();
 
@@ -113,6 +117,8 @@ export function onChatChanged() {
     const saved = getChronicleData()?.msgSinceSnapshot;
     state.msgSinceSnapshot = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
     persistMsgSinceSnapshot();
+    // Track chat length for bulk-delete counter adjustment
+    state.lastChatLength = getChat()?.length || 0;
     applyInjection();
     console.log('[MWT:Chronicle] Chat changed — state reset.');
 }
@@ -130,10 +136,20 @@ export function onChatChanged() {
  */
 export function onMessageDeleted(deletedIndex) {
     if (typeof deletedIndex !== 'number') return;
+
+    // SillyTavern fires a single MESSAGE_DELETED event for bulk deletes
+    // ("delete above/below"), so compute the actual number removed by comparing
+    // against the cached chat length. Falls back to 1 for single deletes.
+    const currentLen = getChat()?.length || 0;
+    const removed = state.lastChatLength > currentLen
+        ? state.lastChatLength - currentLen
+        : 1;
+    state.lastChatLength = currentLen;
+
     if (state.msgSinceSnapshot > 0) {
-        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - 1);
+        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - removed);
         persistMsgSinceSnapshot();
-        console.log(`[MWT:Chronicle] MESSAGE_DELETED at index ${deletedIndex} — counter adjusted to ${state.msgSinceSnapshot}`);
+        console.log(`[MWT:Chronicle] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.msgSinceSnapshot}`);
     }
     // If the anchor referenced the deleted message (or something after it),
     // mark it stale so the next snapshot re-anchors against the live chat.

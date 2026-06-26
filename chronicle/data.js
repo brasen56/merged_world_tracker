@@ -67,6 +67,9 @@ export const state = {
     _lastStatusMsg: '',
     _lastStatusLevel: '',
     msgSinceSnapshot: 0,
+    /** Last observed chat length, used by onMessageDeleted to compute how many
+     *  messages were removed during bulk deletes (e.g. "delete above/below"). */
+    lastChatLength: 0,
 };
 
 // ─── Late-binding registry for render functions ──────────────────────────────

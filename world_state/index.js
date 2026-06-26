@@ -14,7 +14,7 @@
  *   render.js    — UI rendering, event wiring, archive/import/clear, revert/diff
  */
 
-import { syncSharedConnectionSettings, estimateTokens } from '../core/index.js';
+import { syncSharedConnectionSettings, estimateTokens, getChat } from '../core/index.js';
 
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -52,6 +52,8 @@ export function onChatChanged() {
     const saved = getWorldStateData()?.autoRefreshCounter;
     state.autoRefreshCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
     persistAutoRefreshCounter();
+    // Track chat length for bulk-delete counter adjustment
+    state.lastChatLength = getChat()?.length || 0;
     applyWorldStateInjection();
     console.log('[MWT:WorldState] Chat changed — state reset.');
 }
@@ -71,10 +73,20 @@ export function onChatChanged() {
 export function onMessageDeleted(deletedIndex) {
     if (!isAutoRefreshEnabled()) return;
     if (typeof deletedIndex !== 'number') return;
+
+    // SillyTavern fires a single MESSAGE_DELETED event for bulk deletes
+    // ("delete above/below"), so compute the actual number removed by comparing
+    // against the cached chat length. Falls back to 1 for single deletes.
+    const currentLen = getChat()?.length || 0;
+    const removed = state.lastChatLength > currentLen
+        ? state.lastChatLength - currentLen
+        : 1;
+    state.lastChatLength = currentLen;
+
     if (state.autoRefreshCounter > 0) {
-        state.autoRefreshCounter = Math.max(0, state.autoRefreshCounter - 1);
+        state.autoRefreshCounter = Math.max(0, state.autoRefreshCounter - removed);
         persistAutoRefreshCounter();
-        console.log(`[MWT:WorldState] MESSAGE_DELETED at index ${deletedIndex} — counter adjusted to ${state.autoRefreshCounter}`);
+        console.log(`[MWT:WorldState] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoRefreshCounter}`);
     }
     // Refresh the floating button countdown badge
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));

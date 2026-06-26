@@ -13,7 +13,7 @@
  *   render.js     — UI rendering, event wiring
  */
 
-import { syncSharedConnectionSettings, notify } from '../core/index.js';
+import { syncSharedConnectionSettings, notify, getChat } from '../core/index.js';
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
@@ -61,6 +61,10 @@ export function getModuleWireEvents() {
 export async function onMessageReceived() {
     if (!isAutoEnabled() || !hasValidSettings()) return;
 
+    // Track chat length so onMessageDeleted can compute the number of removed
+    // messages during bulk deletes (e.g. "delete above/below").
+    state.lastChatLength = getChat()?.length || 0;
+
     state.autoCounter++;
     persistAutoCounter();
 
@@ -102,6 +106,8 @@ export function onChatChanged() {
     const saved = getPlanData()?.autoCounter;
     state.autoCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
     persistAutoCounter();
+    // Track chat length for bulk-delete counter adjustment
+    state.lastChatLength = getChat()?.length || 0;
     applyPlanInjection();
     console.log('[MWT:StoryPlanner] Chat changed — state reset.');
 }
@@ -117,10 +123,20 @@ export function onChatChanged() {
 export function onMessageDeleted(deletedIndex) {
     if (!isAutoEnabled()) return;
     if (typeof deletedIndex !== 'number') return;
+
+    // SillyTavern fires a single MESSAGE_DELETED event for bulk deletes
+    // ("delete above/below"), so compute the actual number removed by comparing
+    // against the cached chat length. Falls back to 1 for single deletes.
+    const currentLen = getChat()?.length || 0;
+    const removed = state.lastChatLength > currentLen
+        ? state.lastChatLength - currentLen
+        : 1;
+    state.lastChatLength = currentLen;
+
     if (state.autoCounter > 0) {
-        state.autoCounter = Math.max(0, state.autoCounter - 1);
+        state.autoCounter = Math.max(0, state.autoCounter - removed);
         persistAutoCounter();
-        console.log(`[MWT:StoryPlanner] MESSAGE_DELETED at index ${deletedIndex} — counter adjusted to ${state.autoCounter}`);
+        console.log(`[MWT:StoryPlanner] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoCounter}`);
     }
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 }
