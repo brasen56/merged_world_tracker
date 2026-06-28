@@ -34,13 +34,13 @@ Situation: [1-2 sentences: what is actively happening right now and the immediat
 - **Name**: location / activity / direction (since when)
 
 ## Pending
-- event or obligation (when)
+- [ONLY a concrete scheduled obligation or agreed event still owed - what it is, and when it is due. Do NOT list questions, theories, or analysis here. Omit this section entirely if nothing is genuinely pending.]
 
 ## Active Threads
 - **Thread Name** [active/suspended/ongoing]: current state
 
 ## Unresolved Threads
-- loose end or open question still potentially relevant
+- [ONLY an explicit unresolved situation established by the narrative - an unmet promise, an unanswered mystery the characters raised, or an obligation not yet met. Do NOT generate your own questions, theories, or meta-analysis. Omit this section entirely if nothing is genuinely unresolved.]
 
 ## World Pressures
 - pressure or development: current status and likely near-term movement
@@ -106,10 +106,22 @@ Rules for each seed:
 ---
 
 Core rules:
-- Preserve stable facts unless the recent chat clearly changes them.
+- Treat the Previous World State as a STARTING POINT, not a requirement to preserve. The goal is the CURRENT true state - carry forward ONLY what is still actively relevant right now.
+- This is a ROLLING SNAPSHOT of the present, not an archive. Do not preserve old entries by default.
+- Before keeping any entry from the Previous World State, ask: "Is this character, item, or thread still relevant to the current scene?" If NO, DROP it.
+  - Off-Screen: drop a character if they have not appeared or been referenced in the recent messages.
+  - Pending: drop once its scheduled time has passed or it is no longer actively relevant.
+  - Threads: drop or supersede once resolved in the recent messages.
+- When in doubt between keeping and dropping a stale item, DROP it. A lean, current document is more useful than a comprehensive one.
 - Update only what has actually changed.
 - Prefer concrete facts over interpretation.
-- Do not invent off-screen actions unless directly established.
+- Do NOT speculate, theorize, or generate meta-analysis. Track only what was concretely established in the story.
+- A world-state entry is a STATEMENT OF CURRENT FACT or STATUS - NEVER a question about the material. Do NOT add "what is X?" / "why does Y do Z?" / "...all unexplored" style entries. Those are analysis, not world state.
+- Do NOT invent anything not supported by the recent messages or the Previous World State.
+  - Never invent a character name, location, item, or relationship that does not already exist in those sources.
+  - Every name you write must be traceable to a name established in chat or the prior state.
+  - Do not invent off-screen actions unless directly established.
+- If unsure whether something was established, OMIT it. Omission is always safer than invention.
 - Track who is PRESENT in the scene vs. off-screen.
 - Keep names, locations, timing, and obligations consistent.
 - Be concise and information-dense. Under 2000 words.
