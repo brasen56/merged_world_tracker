@@ -49,6 +49,11 @@ export function onChatChanged() {
     state.autoSaveLastText = getWorldStateText();
     state.autoRefreshQueued = false;
     if (state.autoRefreshDeferTimer) { clearTimeout(state.autoRefreshDeferTimer); state.autoRefreshDeferTimer = null; }
+    // Drop any pending editor-persist so edits typed against the previous chat
+    // are not written into the newly-loaded one (editor.value still shows the
+    // old text until renderModalContent runs).
+    if (state.editorPersistTimer) { clearTimeout(state.editorPersistTimer); state.editorPersistTimer = null; }
+    state.editSessionActive = false;
     const saved = getWorldStateData()?.autoRefreshCounter;
     state.autoRefreshCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
     persistAutoRefreshCounter();

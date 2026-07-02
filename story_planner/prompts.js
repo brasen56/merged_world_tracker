@@ -25,8 +25,14 @@ Example bullet:
 
 export const STORY_PLAN_USER_PROMPT = `Based on the story so far, brainstorm a minimum of 10 theoretical, medium-to-long-term plot developments.
 
+{{worldState}}
+
+{{lastChronicle}}
+
 <recent_story>
 {{chatHistory}}
 </recent_story>
+
+{{previousPlan}}
 
 Output the story plan now. Begin immediately with "## Upcoming Arcs".`;

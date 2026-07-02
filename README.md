@@ -346,9 +346,12 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 2. Click **🎲 Generate Plan** to brainstorm a menu of future plot arcs from your story so far
 3. Review the generated plan in the editor — edit freely; your edits are injected as-is
 4. Click **💾 Save Plan** to persist edits to chat metadata (the editor also auto-saves on blur)
-5. Toggle **🔌 Injection** to include the plan in the prompt as inspiration
-6. Toggle **🔄 Auto** to automatically regenerate the plan every N messages
-7. Expand **⚙️ Story Planner Settings** to override the API config, injection depth, auto-generate interval, or replace the default system/user prompts (the user prompt supports a `{{chatHistory}}` token)
+5. Use **⏪ Revert** / **📋 History** to compare against and restore earlier plans (snapshots are taken automatically before each Generate, Save, or Clear)
+6. Toggle **🔌 Injection** to include the plan in the prompt as inspiration
+7. Toggle **🔄 Auto** to automatically regenerate the plan every N messages
+8. Expand **⚙️ Story Planner Settings** to override the API config, injection depth, auto-generate interval, or replace the default system/user prompts
+
+Regeneration is continuity-aware: the previous plan is fed back so still-relevant arcs are carried forward and evolved rather than discarded. The user prompt supports the tokens `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, and `{{previousPlan}}` — each resolves to empty when that data isn't present, so the planner works whether or not you use the World State and Chronicle modules.
 
 ---
 

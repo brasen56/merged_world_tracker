@@ -44,6 +44,41 @@ export function refreshRevertButton() {
     if (btn) btn.disabled = getAutoSaveHistory().length === 0;
 }
 
+// ─── Live editor persistence ─────────────────────────────────────────────────
+// The old "auto-save" only ever snapshotted the *persisted* text, so anything
+// typed into the editor but not explicitly Saved was lost when the modal
+// re-rendered. Debounce-persist the editor to metadata as the user types so
+// edits are durable; the periodic auto-save timer then snapshots those edits
+// into history naturally (it reads the now-updated persisted text).
+
+const EDITOR_PERSIST_DELAY_MS = 1000;
+
+export function scheduleEditorPersist() {
+    if (state.editorPersistTimer) clearTimeout(state.editorPersistTimer);
+    state.editorPersistTimer = setTimeout(() => {
+        state.editorPersistTimer = null;
+        if (!state.modal) return;
+        const editor = state.modal.querySelector('#ws-editor');
+        if (!editor) return;
+        const val = editor.value;
+        const prev = getWorldStateText();
+        if (val === prev) return;
+        // On the first persist after a canonical state (save/refresh/import/…),
+        // snapshot the outgoing text to history so it stays revertable — this
+        // mirrors what the old explicit Save did. The guard ensures a burst of
+        // keystrokes snapshots the baseline only once, not on every debounce.
+        if (!state.editSessionActive) {
+            if (prev?.trim()) pushToHistory(prev);
+            state.editSessionActive = true;
+        }
+        setWorldStateData({ text: val });
+        state.isDirty = false;
+        applyWorldStateInjection();
+        updateArchiveButtonState();
+        refreshRevertButton();
+    }, EDITOR_PERSIST_DELAY_MS);
+}
+
 function updateArchiveButtonState() {
     if (!state.modal) return;
     const btn = state.modal.querySelector('#ws-archive');
@@ -75,6 +110,7 @@ export function renderModalContent() {
     // from a previous editing session (e.g. user typed, closed without
     // saving, then reopened the modal).
     state.isDirty = false;
+    state.editSessionActive = false;
     updateEditorStats();
     refreshRevertButton();
     updateArchiveButtonState();
@@ -356,6 +392,7 @@ export function wireEvents() {
             state.autoSaveLastText = newText;
         }
         state.isDirty = false;
+        state.editSessionActive = false;
         setWorldStateData({ text: newText });
         applyWorldStateInjection();
         refreshRevertButton();
@@ -378,7 +415,7 @@ export function wireEvents() {
             if (text === null) { setStatus(state.modal, 'Refresh aborted.', 'info'); return; }
             const editor = state.modal.querySelector('#ws-editor');
             if (editor) editor.value = text;
-            state.autoSaveLastText = text; state.isDirty = false;
+            state.autoSaveLastText = text; state.isDirty = false; state.editSessionActive = false;
             updateArchiveButtonState();
             updateEditorStats();
             refreshRevertButton();
@@ -410,6 +447,7 @@ export function wireEvents() {
         state.isDirty = true;
         updateArchiveButtonState();
         updateEditorStats();
+        scheduleEditorPersist();
     });
 
     // Variety slider
@@ -451,6 +489,7 @@ export function wireEvents() {
                 if (editor) editor.value = updated;
                 state.autoSaveLastText = updated;
                 state.isDirty = false;
+                state.editSessionActive = false;
                 updateEditorStats();
                 updateArchiveButtonState();
                 refreshRevertButton();

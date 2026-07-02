@@ -41,6 +41,28 @@ export function getPlanText() {
     return getPlanData().text || '';
 }
 
+// ─── History (snapshots for Revert / History) ────────────────────────────────
+
+/** Max snapshots retained per chat. Kept modest to bound metadata growth. */
+export const MAX_PLAN_HISTORY = 20;
+
+export function getPlanHistory() {
+    return getPlanData().history || [];
+}
+
+/**
+ * Push a plan snapshot onto the per-chat history stack. No-ops on blank text
+ * and on consecutive duplicates so revert steps stay meaningful.
+ */
+export function pushPlanToHistory(text) {
+    if (!text?.trim()) return;
+    const history = getPlanHistory();
+    if (history.length && history[history.length - 1].text === text) return;
+    history.push({ text, timestamp: Date.now() });
+    if (history.length > MAX_PLAN_HISTORY) history.splice(0, history.length - MAX_PLAN_HISTORY);
+    setPlanData({ history });
+}
+
 export function isInjectionEnabled() {
     return getPlanData().injectEnabled !== false;
 }

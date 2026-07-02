@@ -87,8 +87,13 @@ function validateOutput(text) {
         return { ok: false, reason: `only ${found} expected section(s) found — model may have summarised instead of generating a world state` };
     }
 
+    // "Name: "quoted..."" at line start signals leaked dialogue. Exclude the
+    // template's own single-word field labels (Mood, Situation, Date, \u2026), which
+    // legitimately carry quoted values like `Mood: "determined but frayed"` and
+    // would otherwise trigger a false rejection.
+    const FIELD_LABELS = 'Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn';
     const rpMarkers = [
-        { pattern: /^[A-Z][a-z]+:\s*["""\u201C\u201D]/m, label: 'dialogue formatting (Name: "...)' },
+        { pattern: new RegExp(`^(?!(?:${FIELD_LABELS})\\b)[A-Z][a-z]+:\\s*["\u201C\u201D]`, 'm'), label: 'dialogue formatting (Name: "...)' },
         { pattern: /\b(you see|you notice|before you|you feel)\b/i, label: 'second-person narration' },
         { pattern: /^(Meanwhile|Suddenly|As you|The (?:air|room|silence|darkness))\b/im, label: 'narrative prose opener' },
     ];
@@ -191,6 +196,7 @@ export async function refreshWorldState(isAuto = false) {
         setWorldStateData({ text });
         state.autoSaveLastText = text;
         state.isDirty = false;
+        state.editSessionActive = false;
         applyWorldStateInjection();
 
         console.log(`[MWT:WorldState] Refresh complete (${text.length} chars)`);
@@ -250,6 +256,7 @@ export function scheduleAutoRefresh(reason = 'scheduled') {
                     editor.value = text;
                     state.autoSaveLastText = text;
                     state.isDirty = false;
+                    state.editSessionActive = false;
                     // Lazy-load render helpers to avoid circular deps
                     const { updateEditorStats, refreshRevertButton } = await import('./render.js');
                     updateEditorStats();

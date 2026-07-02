@@ -52,6 +52,12 @@ export const state = {
     autoRefreshQueued: false,
     autoSaveLastText: '',
     autoSaveTimer: null,
+    /** Debounce timer that persists live editor edits to metadata (see render.js). */
+    editorPersistTimer: null,
+    /** True once the current editing burst has snapshotted its baseline to
+     *  history. Reset by any canonical state change (save/refresh/import/…) so
+     *  the next burst snapshots again. */
+    editSessionActive: false,
     autoRefreshDeferTimer: null,
     isDirty: false,
     modal: null,
