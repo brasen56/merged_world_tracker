@@ -11,15 +11,16 @@ import {
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
-import { getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL } from './settings.js';
+import { getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL, getPinnedEntities } from './settings.js';
 import {
     state, getWorldStateText, setWorldStateData, getWorldStateData,
     pushToHistory, pushAutoSave,
     isAutoRefreshEnabled, getAutoRefreshInterval,
     persistAutoRefreshCounter,
-    getMaxScanMessages,
+    getMaxScanMessages, setProvenance, getProvenance,
 } from './data.js';
 import { applyWorldStateInjection } from './injection.js';
+import { buildProvenance, groundingGate, applyExpiry } from './provenance.js';
 
 // ─── Message scan helpers ────────────────────────────────────────────────────
 
@@ -191,6 +192,50 @@ export async function refreshWorldState(isAuto = false) {
         }
 
         const oldText = getWorldStateText();
+
+        // ── Grounding gate (§5.3) — strip/reject bolded names the model invented
+        // that don't appear in the scan window, the prior state, or pinnedEntities.
+        const gateSettings = getSettings();
+        if (gateSettings.groundingEnabled) {
+            const scanText = getRecentMessagesForScan();
+            const pinned = getPinnedEntities(gateSettings);
+            let grounding = groundingGate(text, { scanText, priorText: oldText, pinned, mode: gateSettings.groundingMode });
+            if (!grounding.ok) {
+                console.warn(`[MWT:WorldState] Grounding gate rejected: ${grounding.reason} — retrying once`);
+                const _wsApi3 = resolveApiCall({ moduleSettings: getSettings() });
+                result = await _wsApi3.fetchFn({
+                    systemPrompt,
+                    userContent: buildUserMessage(grounding.reason),
+                    settings: _wsApi3.settings,
+                });
+                text = normaliseOutput(result);
+                validation = validateOutput(text);
+                if (!validation.ok) throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
+                grounding = groundingGate(text, { scanText, priorText: oldText, pinned, mode: gateSettings.groundingMode });
+                if (!grounding.ok) {
+                    // Strict mode gave the model one honest chance; don't discard an
+                    // otherwise-valid refresh over it — fall back to a soft strip.
+                    console.warn(`[MWT:WorldState] Grounding gate still rejected after retry (${grounding.reason}) — falling back to soft strip.`);
+                    grounding = groundingGate(text, { scanText, priorText: oldText, pinned, mode: 'soft' });
+                }
+            }
+            text = grounding.cleanedText;
+        }
+
+        // ── Expiry (§5.2) — drop/quarantine/mark entries stale beyond the
+        // configured message-age threshold. Whole-document concern; only runs
+        // on a full refresh, not per-section regen (§7).
+        if (gateSettings.expiryEnabled) {
+            const expiry = applyExpiry(text, getProvenance(), {
+                staleAfterMsgs: gateSettings.expiryStaleAfterMsgs,
+                sections: gateSettings.expirySections,
+                mode: gateSettings.expiryMode,
+                pinned: getPinnedEntities(gateSettings),
+                currentMsgIndex: getChat()?.length || 0,
+            });
+            text = expiry.text;
+        }
+
         if (oldText?.trim()) pushToHistory(oldText);
 
         setWorldStateData({ text });
@@ -198,6 +243,9 @@ export async function refreshWorldState(isAuto = false) {
         state.isDirty = false;
         state.editSessionActive = false;
         applyWorldStateInjection();
+        try { setProvenance(buildProvenance()); } catch (err) {
+            console.warn('[MWT:WorldState] Provenance build failed (non-fatal):', err.message);
+        }
 
         console.log(`[MWT:WorldState] Refresh complete (${text.length} chars)`);
         return text;

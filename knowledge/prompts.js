@@ -126,7 +126,7 @@ OUTPUT FORMAT:
         "read_on_pc": "updated value or null if unchanged",
         "agenda": "updated value or null if unchanged",
         "secrets": "updated value or null if unchanged",
-        "canon_lock": "updated value or null if unchanged",
+        "canon_lock": "updated value or null if unchanged"
       },
       "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows", "source": "how they know it", "date": "in-world date if known" }]
     }
@@ -168,7 +168,7 @@ OUTPUT FORMAT:
     "read_on_pc": "updated read on PC if it shifted, else null (FILL if currently missing/empty)",
     "agenda": "updated agenda if it changed, else null (FILL if currently missing/empty)",
     "secrets": "updated secrets if a new secret surfaced, else null (FILL if currently missing/empty)",
-    "canon_lock": "updated canon lock if a new immutable fact was established, else null (FILL if currently missing/empty)",
+    "canon_lock": "updated canon lock if a new immutable fact was established, else null (FILL if currently missing/empty)"
   },
   "new_knowledge": [
     { "fact": "concrete new fact this NPC learned or now knows", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
@@ -185,7 +185,6 @@ ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Preserve every fact already in <current_entry> — do not drop or contradict established canon.
 - Fill in EVERY dossier field below. Draw concrete inferences from the messages, world state, and the NPC's established behavior.
-- For image_tags, produce 12-20 comma-separated Booru-style physical-only tags (body/face only, no clothes/pose).
 - Do NOT invent facts that contradict the messages. If a field is truly unknowable, give your best grounded inference based on what IS established.
 
 OUTPUT FORMAT:
@@ -203,7 +202,7 @@ OUTPUT FORMAT:
     "read_on_pc": "what this NPC currently thinks of the player character",
     "agenda": "their main agenda in the story right now",
     "secrets": "A SINGLE STRING: tiered secrets. Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
-    "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons",
+    "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons"
   },
   "new_knowledge": [
     { "fact": "concrete fact this NPC knows (from existing ledger + new)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }

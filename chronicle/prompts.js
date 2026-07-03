@@ -72,6 +72,7 @@ ABSOLUTE RULES:
 - Your output MUST begin with the exact text "## Summary" — nothing before it.
 - Write in past tense. These are things that already happened.
 - Be factual and concrete. No emotional language or dramatic phrasing.
+- The Current World State block, if present, is reference context for names, dates, and locations only. Chronicle ONLY events that occur in the messages themselves.
 
 ---
 

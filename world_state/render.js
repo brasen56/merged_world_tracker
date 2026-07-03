@@ -10,21 +10,23 @@ import {
     createModal, showModal, hideModal, setStatus,
     downloadJson, pickTextFile,
     renderApiSettingsFields, readApiSettingsValues,
+    getChat,
 } from '../core/index.js';
 
-import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings } from './settings.js';
+import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntities, EXPIRY_SECTIONS_DEFAULT } from './settings.js';
 import {
     state, SECTIONS, VARIETY_LABELS,
     getWorldStateText, getWorldStateData, setWorldStateData,
     getAutoSaveHistory, pushToHistory,
     isInjectionEnabled, isAutoRefreshEnabled, getAutoRefreshInterval,
-    getMaxScanMessages,
+    getMaxScanMessages, setProvenance, getProvenance,
 } from './data.js';
 import {
     applyWorldStateInjection, getHookMode, buildInjectionPreview,
 } from './injection.js';
 import { refreshWorldState, restartAutoSaveTimer } from './refresh.js';
 import { regenerateSection } from './sections.js';
+import { buildProvenance, getStalenessReport, purgeStaleEntries } from './provenance.js';
 
 // ─── Editor stat helpers ─────────────────────────────────────────────────────
 
@@ -115,6 +117,7 @@ export function renderModalContent() {
     refreshRevertButton();
     updateArchiveButtonState();
     refreshButtonLabels();
+    refreshProvenancePanel();
 }
 
 // ─── Archive / Import / Clear ────────────────────────────────────────────────
@@ -274,6 +277,49 @@ function showAutoSaveHistory() {
     showModal('mwt-ws-history-modal');
 }
 
+// ─── Entity provenance panel (read-only — see STALE_ENTRY_EXPIRY_DESIGN.md) ──
+
+function renderProvenanceRows() {
+    const report = getStalenessReport();
+    if (report.length === 0) {
+        return `<p class="mwt-text-dim mwt-text-sm" style="margin:6px 0">No provenance data yet — run a refresh, regenerate a section, or click "Rebuild" below.</p>`;
+    }
+    const staleAfter = getSettings().expiryStaleAfterMsgs || 40;
+    const staleCount = report.filter(e => e.age !== null && e.age > staleAfter).length;
+    const rows = report.map(e => {
+        const isStale = e.age !== null && e.age > staleAfter;
+        return `
+        <tr${isStale ? ' style="color:var(--mwt-warning,#e0a030)"' : ''}>
+            <td style="padding:3px 8px 3px 0">${escapeHtml(e.label)}${isStale ? ' ⚠️' : ''}</td>
+            <td style="padding:3px 8px;color:var(--mwt-text-dim)">${escapeHtml(e.section || '—')}</td>
+            <td style="padding:3px 8px;text-align:right">${e.lastTouchedMsg ?? '—'}</td>
+            <td style="padding:3px 8px;text-align:right">${e.age ?? 'never seen'}</td>
+            <td style="padding:3px 8px;text-align:right">${e.mentionCount}</td>
+        </tr>`;
+    }).join('');
+    return `
+        <p class="mwt-text-dim mwt-text-sm" style="margin:0 0 6px">${staleCount} of ${report.length} entities over the ${staleAfter}-message threshold.</p>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+                <tr style="color:var(--mwt-text-dim);text-align:left;border-bottom:1px solid var(--mwt-border)">
+                    <th style="padding:3px 8px 3px 0">Entity</th>
+                    <th style="padding:3px 8px">Section</th>
+                    <th style="padding:3px 8px;text-align:right">Last touched (msg #)</th>
+                    <th style="padding:3px 8px;text-align:right">Msgs since</th>
+                    <th style="padding:3px 8px;text-align:right">Mentions</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+export function refreshProvenancePanel() {
+    if (!state.modal) return;
+    const panel = state.modal.querySelector('#ws-provenance-panel');
+    if (panel) panel.innerHTML = renderProvenanceRows();
+}
+
 // ─── Main render ─────────────────────────────────────────────────────────────
 
 export function render() {
@@ -323,6 +369,81 @@ export function render() {
                     <button id="ws-regen-section" class="mwt-btn" style="background:#6d28d9;border-color:#7c3aed;color:#fff">🎲 Regenerate Section</button>
                 </div>
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin:6px 0 0">Regenerate a single section with adjustable variety. Higher variety = bolder, more unexpected results.</p>
+            </div>
+        </details>
+
+        <details class="mwt-mt-8">
+            <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">🕒 Entity Provenance</summary>
+            <div style="padding:8px 0">
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin:0 0 6px">
+                    Tracks the last chat message each tracked entity (bolded name in the world state) was mentioned in.
+                    Rows past the stale threshold are highlighted. Configure automatic expiry below in "Stale-Entry Expiry & Grounding".
+                    See <code>world_state/STALE_ENTRY_EXPIRY_DESIGN.md</code>.
+                </p>
+                <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
+                    <button id="ws-rebuild-provenance" class="mwt-btn">🔄 Rebuild Provenance</button>
+                    <button id="ws-purge-stale" class="mwt-btn mwt-btn-danger">🧹 Purge Stale Entries</button>
+                </div>
+                <div id="ws-provenance-panel" class="mwt-mt-8">${renderProvenanceRows()}</div>
+            </div>
+        </details>
+
+        <details class="mwt-mt-8">
+            <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">🧹 Stale-Entry Expiry &amp; Grounding</summary>
+            <div class="mwt-settings-grid mwt-mt-8">
+                <label class="mwt-label">Expiry</label>
+                <div>
+                    <label class="mwt-text-sm" style="display:flex;align-items:center;gap:6px">
+                        <input id="ws-expiry-enabled" type="checkbox" ${s.expiryEnabled ? 'checked' : ''}>
+                        Automatically expire stale entries on full refresh
+                    </label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Off by default. When on, entries in the sections below that haven't been mentioned in the configured message window are marked/quarantined/removed on every full refresh.</p>
+                </div>
+
+                <label class="mwt-label">Stale After (msgs)</label>
+                <input id="ws-expiry-stale-after" class="mwt-input" type="number" value="${s.expiryStaleAfterMsgs ?? 40}" min="1" style="max-width:100px">
+
+                <label class="mwt-label">Expiry Mode</label>
+                <div>
+                    <select id="ws-expiry-mode" class="mwt-input" style="max-width:180px">
+                        <option value="mark" ${(s.expiryMode || 'mark') === 'mark' ? 'selected' : ''}>Mark (non-destructive)</option>
+                        <option value="quarantine" ${s.expiryMode === 'quarantine' ? 'selected' : ''}>Quarantine (move to Archive)</option>
+                        <option value="remove" ${s.expiryMode === 'remove' ? 'selected' : ''}>Remove (delete outright)</option>
+                    </select>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Mark:</b> appends "(stale)" to the entry. <b>Quarantine:</b> moves it to a "## Archive (Stale)" section, kept out of prompt injection. <b>Remove:</b> deletes it outright.</p>
+                </div>
+
+                <label class="mwt-label">Expiry Sections</label>
+                <div>
+                    ${SECTIONS.filter(sec => sec !== 'Current Scene' && sec !== 'Key Character States').map(sec => {
+                        const checked = (s.expirySections || EXPIRY_SECTIONS_DEFAULT).includes(sec);
+                        return `<label class="mwt-text-sm" style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0"><input type="checkbox" class="ws-expiry-section" value="${escapeHtml(sec)}" ${checked ? 'checked' : ''}>${escapeHtml(sec)}</label>`;
+                    }).join('')}
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">"Current Scene" and "Key Character States" are always exempt (active cast).</p>
+                </div>
+
+                <label class="mwt-label">Grounding Gate</label>
+                <div>
+                    <label class="mwt-text-sm" style="display:flex;align-items:center;gap:6px">
+                        <input id="ws-grounding-enabled" type="checkbox" ${s.groundingEnabled ? 'checked' : ''}>
+                        Reject/strip names not grounded in chat or prior state
+                    </label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Off by default. Catches invented characters/entities the model didn't actually see. Checked against the scan window, the previous world state, and Pinned Entities below.</p>
+                </div>
+
+                <label class="mwt-label">Grounding Mode</label>
+                <div>
+                    <select id="ws-grounding-mode" class="mwt-input" style="max-width:180px">
+                        <option value="soft" ${(s.groundingMode || 'soft') === 'soft' ? 'selected' : ''}>Soft (strip + log)</option>
+                        <option value="strict" ${s.groundingMode === 'strict' ? 'selected' : ''}>Strict (retry once, then soft-fallback)</option>
+                    </select>
+                </div>
+
+                <label class="mwt-label">Pinned Entities</label>
+                <div>
+                    <input id="ws-pinned-entities" class="mwt-input" type="text" value="${escapeHtml(s.pinnedEntities || '')}" placeholder="e.g. Protagonist Name, Companion Name">
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Comma-separated names that never expire and are never flagged as ungrounded.</p>
+                </div>
             </div>
         </details>
 
@@ -419,6 +540,7 @@ export function wireEvents() {
             updateArchiveButtonState();
             updateEditorStats();
             refreshRevertButton();
+            refreshProvenancePanel();
             setStatus(state.modal, 'Refresh complete.', 'success', 3000);
         } catch (err) {
             setStatus(state.modal, `Error: ${err.message}`, 'error');
@@ -493,6 +615,7 @@ export function wireEvents() {
                 updateEditorStats();
                 updateArchiveButtonState();
                 refreshRevertButton();
+                refreshProvenancePanel();
                 setStatus(state.modal, `Section "${sectionName}" regenerated (${VARIETY_LABELS[variety]}).`, 'success', 3000);
             }
         } catch (err) {
@@ -500,6 +623,38 @@ export function wireEvents() {
         } finally {
             regenBtn.disabled = false; regenBtn.textContent = '🎲 Regenerate Section';
         }
+    });
+
+    // Rebuild provenance — see STALE_ENTRY_EXPIRY_DESIGN.md
+    state.modal.querySelector('#ws-rebuild-provenance')?.addEventListener('click', () => {
+        try {
+            setProvenance(buildProvenance());
+            refreshProvenancePanel();
+            setStatus(state.modal, 'Provenance rebuilt.', 'success', 3000);
+        } catch (err) {
+            setStatus(state.modal, `Provenance rebuild failed: ${err.message}`, 'error');
+        }
+    });
+
+    // Purge stale entries (§8 manual trigger) — always removes, regardless of
+    // the configured Expiry Mode, using the current expiry sections/threshold/pinned settings.
+    state.modal.querySelector('#ws-purge-stale')?.addEventListener('click', () => {
+        const currentText = getWorldStateText();
+        if (!currentText?.trim()) { setStatus(state.modal, 'No world state text to purge.', 'warning'); return; }
+        const s = getSettings();
+        const { text: purged, changed, report } = purgeStaleEntries(currentText, getProvenance(), {
+            staleAfterMsgs: s.expiryStaleAfterMsgs,
+            sections: s.expirySections || EXPIRY_SECTIONS_DEFAULT,
+            pinned: getPinnedEntities(s),
+            currentMsgIndex: getChat()?.length || 0,
+        });
+        if (!changed) { setStatus(state.modal, 'No stale entries found.', 'info', 3000); return; }
+        if (!confirm(`Remove ${report.length} stale entr${report.length === 1 ? 'y' : 'ies'} (${report.map(r => r.label).join(', ')})?`)) return;
+        pushToHistory(currentText);
+        setWorldStateData({ text: purged });
+        applyWorldStateInjection();
+        renderModalContent();
+        setStatus(state.modal, `Purged ${report.length} stale entr${report.length === 1 ? 'y' : 'ies'}.`, 'success', 3000);
     });
 
     const wsApiFieldOpts = { urlId: 'ws-api-url', keyId: 'ws-api-key', modelId: 'ws-model', maxTokensId: 'ws-max-tokens', tempId: 'ws-temp', includeAdvanced: false, includeHeaders: false };
@@ -514,6 +669,14 @@ export function wireEvents() {
         const hookMode = state.modal.querySelector('#ws-hook-mode')?.value || 'passive';
         const messageFilter = state.modal.querySelector('#ws-message-filter')?.value || '';
 
+        const expiryEnabled = !!state.modal.querySelector('#ws-expiry-enabled')?.checked;
+        const expiryStaleAfterMsgs = Math.max(1, parseInt(state.modal.querySelector('#ws-expiry-stale-after')?.value, 10) || 40);
+        const expiryMode = state.modal.querySelector('#ws-expiry-mode')?.value || 'mark';
+        const expirySections = Array.from(state.modal.querySelectorAll('.ws-expiry-section:checked')).map(el => el.value);
+        const groundingEnabled = !!state.modal.querySelector('#ws-grounding-enabled')?.checked;
+        const groundingMode = state.modal.querySelector('#ws-grounding-mode')?.value || 'soft';
+        const pinnedEntities = state.modal.querySelector('#ws-pinned-entities')?.value.trim() || '';
+
         if (!apiValues.apiUrl || !apiValues.modelName) {
             setStatus(state.modal, 'API URL and Model are required.', 'error');
             return;
@@ -527,9 +690,17 @@ export function wireEvents() {
             maxScanMessages: Math.min(Math.max(1, isNaN(maxScan) ? 20 : maxScan), 30),
             hookMode,
             messageFilter,
+            expiryEnabled,
+            expiryStaleAfterMsgs,
+            expiryMode,
+            expirySections,
+            groundingEnabled,
+            groundingMode,
+            pinnedEntities,
         });
         applyWorldStateInjection();
         restartAutoSaveTimer();
+        refreshProvenancePanel();
         setStatus(state.modal, 'Settings saved.', 'success', 3000);
     });
 

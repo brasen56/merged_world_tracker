@@ -59,16 +59,24 @@ export function structuralBoundariesEnabled() {
 
 /**
  * Split a world-state document into its body and the Plot Seeds section text.
+ * Also strips the "## Archive (Stale)" section (quarantine-mode expiry, see
+ * STALE_ENTRY_EXPIRY_DESIGN.md §5.2) — it's kept in the saved document for the
+ * user to review/purge, but never injected into the prompt.
  * Returns { worldStateBody, seedsText }.
  */
 function splitWorldState(text) {
+    // Note: no trailing \b — "Archive (Stale)" ends in punctuation, and \b
+    // (which requires a word char on at least one side) never matches there.
+    const archivePattern = new RegExp(`\\s*## Archive \\(Stale\\)(?![A-Za-z0-9_])[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
+    const withoutArchive = text.replace(archivePattern, '');
+
     const seedsPattern = new RegExp(`## Plot Seeds\\b[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
-    const seedsMatch = text.match(seedsPattern);
+    const seedsMatch = withoutArchive.match(seedsPattern);
     const seedsBlock = seedsMatch ? seedsMatch[0] : '';
     const seedsText = seedsBlock.replace(/^## Plot Seeds[^\n]*\n?/, '').trim();
     const worldStateBody = seedsMatch
-        ? text.replace(seedsBlock, '').replace(/\n{3,}/g, '\n\n').trim()
-        : text;
+        ? withoutArchive.replace(seedsBlock, '').replace(/\n{3,}/g, '\n\n').trim()
+        : withoutArchive.trim();
     return { worldStateBody, seedsText };
 }
 

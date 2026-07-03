@@ -9,41 +9,18 @@ import {
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
-import { getSettings, hasValidSettings } from './settings.js';
+import { getSettings, hasValidSettings, getPinnedEntities } from './settings.js';
 import {
-    state, SECTIONS, VARIETY_LABELS, NEXT_SECTION_LOOKAHEAD,
+    state, SECTIONS, VARIETY_LABELS,
     getWorldStateText, setWorldStateData,
-    pushToHistory,
+    pushToHistory, setProvenance,
+    extractOnlySection, replaceSection,
 } from './data.js';
 import { applyWorldStateInjection } from './injection.js';
 import { getRecentMessagesForScan } from './refresh.js';
+import { buildProvenance, groundingGate } from './provenance.js';
 
-// ─── Section extraction / replacement ────────────────────────────────────────
-
-/**
- * Pull out exactly one "## Section\n...body..." block from a larger text.
- * Stops at the next "## " header or end of text.
- */
-export function extractOnlySection(text, sectionName) {
-    const escaped = escapeRegex(sectionName);
-    const pattern = new RegExp(`(## ${escaped}\\b[\\s\\S]*?)${NEXT_SECTION_LOOKAHEAD}`);
-    const match = text.match(pattern);
-    return match ? match[1].trim() : null;
-}
-
-/**
- * Replace one "## Section" block in the document with newContent.
- * If the section doesn't already exist, append it.
- */
-export function replaceSection(text, sectionName, newContent) {
-    const escaped = escapeRegex(sectionName);
-    const pattern = new RegExp(`## ${escaped}\\b[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
-    const trimmed = newContent.trim();
-    if (pattern.test(text)) {
-        return text.replace(pattern, () => trimmed);
-    }
-    return (text.trim() + '\n\n' + trimmed).trim();
-}
+export { extractOnlySection, replaceSection };
 
 // ─── Section prompt builders ─────────────────────────────────────────────────
 
@@ -168,14 +145,36 @@ export async function regenerateSection(sectionName, variety = 2) {
             throw new Error(`Section regen validation failed: ${check.reason}`);
         }
 
-        const cleaned = extractOnlySection(text, sectionName) || text.trim();
+        let cleaned = extractOnlySection(text, sectionName) || text.trim();
 
         const currentText = getWorldStateText();
+
+        // Grounding gate only (§7) — expiry is a whole-document concern and
+        // does not run on a single-section regen.
+        if (s.groundingEnabled) {
+            const grounding = groundingGate(cleaned, {
+                scanText: getRecentMessagesForScan(),
+                priorText: currentText,
+                pinned: getPinnedEntities(s),
+                mode: s.groundingMode,
+            });
+            if (!grounding.ok) {
+                throw new Error(`Grounding gate rejected section: ${grounding.reason}`);
+            }
+            for (const { label } of grounding.stripped) {
+                console.warn(`[MWT:WorldState] Grounding gate stripped ungrounded name from "${sectionName}": "${label}"`);
+            }
+            cleaned = grounding.cleanedText;
+        }
+
         const updated = replaceSection(currentText, sectionName, cleaned);
 
         if (currentText?.trim()) pushToHistory(currentText);
         setWorldStateData({ text: updated });
         applyWorldStateInjection();
+        try { setProvenance(buildProvenance()); } catch (err) {
+            console.warn('[MWT:WorldState] Provenance build failed (non-fatal):', err.message);
+        }
 
         console.log(`[MWT:WorldState] Section "${sectionName}" regenerated (variety ${variety}).`);
         return updated;
