@@ -56,6 +56,20 @@ export function extractBoldNames(text) {
     return [...names.values()];
 }
 
+// ─── Message-index sanity ────────────────────────────────────────────────────
+// `lastTouchedMsg` is a chat-array index, which we treat as if chat length only
+// grows. That assumption breaks if messages are deleted or consolidated
+// (bulk delete, "delete above/below", or a summarization extension that
+// splices raw messages out and replaces them with a condensed one) — chat.length
+// can shrink below indices recorded earlier. A stored index beyond the current
+// chat bounds is no longer trustworthy; treat it as "unknown" (null) rather
+// than compute a nonsensical negative age from it.
+function sanitizeLastTouchedMsg(lastTouchedMsg, currentMsgIndex) {
+    if (lastTouchedMsg === null || lastTouchedMsg === undefined) return null;
+    if (lastTouchedMsg > currentMsgIndex) return null;
+    return lastTouchedMsg;
+}
+
 // ─── Scan window (with chat indices) ────────────────────────────────────────
 
 function getScanWindowWithIndices() {
@@ -97,8 +111,12 @@ export function buildProvenance() {
     const candidates = new Map(namesInText.map(n => [n.key, n]));
     for (const [key, entry] of Object.entries(priorEntities)) {
         if (candidates.has(key)) continue;
-        if (entry.lastTouchedMsg !== null && entry.lastTouchedMsg !== undefined
-            && currentMsgIndex - entry.lastTouchedMsg > pruneAfter) continue;
+        const lt = entry.lastTouchedMsg;
+        if (lt !== null && lt !== undefined) {
+            // Drop rather than carry forward when the record is either too old,
+            // or invalid (points past the current chat — see sanitizeLastTouchedMsg).
+            if (lt > currentMsgIndex || currentMsgIndex - lt > pruneAfter) continue;
+        }
         candidates.set(key, { key, label: entry.label, section: entry.section });
     }
 
@@ -106,7 +124,7 @@ export function buildProvenance() {
     const entities = {};
     for (const [key, info] of candidates) {
         const prior = priorEntities[key];
-        let lastTouchedMsg = prior?.lastTouchedMsg ?? null;
+        let lastTouchedMsg = sanitizeLastTouchedMsg(prior?.lastTouchedMsg ?? null, currentMsgIndex);
         let mentionCount = prior?.mentionCount ?? 0;
         let foundInWindow = false;
 
@@ -148,15 +166,18 @@ export function getStalenessReport() {
     const currentMsgIndex = (getChat() || []).length;
 
     return Object.entries(prov.entities || {})
-        .map(([key, e]) => ({
-            key,
-            label: e.label,
-            section: e.section,
-            lastTouchedMsg: e.lastTouchedMsg,
-            age: e.lastTouchedMsg === null ? null : currentMsgIndex - e.lastTouchedMsg,
-            mentionCount: e.mentionCount,
-            source: e.source,
-        }))
+        .map(([key, e]) => {
+            const lt = sanitizeLastTouchedMsg(e.lastTouchedMsg, currentMsgIndex);
+            return {
+                key,
+                label: e.label,
+                section: e.section,
+                lastTouchedMsg: lt,
+                age: lt === null ? null : currentMsgIndex - lt,
+                mentionCount: e.mentionCount,
+                source: e.source,
+            };
+        })
         .sort((a, b) => (b.age ?? -1) - (a.age ?? -1));
 }
 
@@ -220,12 +241,13 @@ export function applyExpiry(text, provenance, opts = {}) {
             if (pinnedSet.has(key)) { kept.push(line); continue; }
 
             const entry = entities[key];
-            if (!entry || entry.lastTouchedMsg === null || entry.lastTouchedMsg === undefined) {
-                kept.push(line); // grace cycle — no provenance yet
+            const lastTouchedMsg = entry ? sanitizeLastTouchedMsg(entry.lastTouchedMsg, currentMsgIndex) : null;
+            if (lastTouchedMsg === null) {
+                kept.push(line); // grace cycle — no trustworthy provenance right now
                 continue;
             }
 
-            const age = currentMsgIndex - entry.lastTouchedMsg;
+            const age = currentMsgIndex - lastTouchedMsg;
             if (age <= staleAfterMsgs) { kept.push(line); continue; }
 
             report.push({ key, label, section: sectionName, age });
