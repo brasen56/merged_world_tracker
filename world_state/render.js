@@ -369,6 +369,7 @@ export function render() {
                     <button id="ws-regen-section" class="mwt-btn" style="background:#6d28d9;border-color:#7c3aed;color:#fff">🎲 Regenerate Section</button>
                 </div>
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin:6px 0 0">Regenerate a single section with adjustable variety. Higher variety = bolder, more unexpected results.</p>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Note:</b> The temperature boost only applies when using a custom API connection (URL + Model). With a Connection Profile, temperature is controlled by the profile/preset — variety then only changes the prompt text.</p>
             </div>
         </details>
 
@@ -780,8 +781,10 @@ export function wireEvents() {
                     setStatus(state.modal, `Auto-refresh interval clamped to ${maxScan} (max scan messages).`, 'warning', 5000);
                 }
             }
-            setWorldStateData({ autoRefresh: true, autoRefreshInterval: interval });
             state.autoRefreshCounter = 0;
+            // Persist the reset counter together with the auto-refresh flags
+            // so a stale value isn't restored on the next chat change.
+            setWorldStateData({ autoRefresh: true, autoRefreshInterval: interval, autoRefreshCounter: 0 });
             if (n <= maxScan) setStatus(state.modal, `Auto-refresh: every ${interval} messages.`, 'success', 3000);
         } else {
             setWorldStateData({ autoRefresh: false });

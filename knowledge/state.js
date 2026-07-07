@@ -24,6 +24,9 @@ export const RELATIONSHIP_TYPES = [
 export const RELATIONSHIP_BLOCK_START = '<!-- mwt:relationships:start -->';
 export const RELATIONSHIP_BLOCK_END = '<!-- mwt:relationships:end -->';
 
+/** Chat-metadata key for persisting auto-trigger counters per chat. */
+export const COUNTERS_META_KEY = 'knowledge_tracker_counters';
+
 // ─── Shared mutable state ────────────────────────────────────────────────────
 
 export const state = {

@@ -273,7 +273,7 @@ export function buildMessageWindow(fromIndex, toIndex) {
     const lines = [];
     let total = 0;
     // Character budget for the assembled message window.  This is deliberately
-    // smaller than the `maxChars = 400000` budget used by core/context.js's
+    // smaller than the `maxChars = 500000` budget used by core/context.js's
     // getRecentMessages(): chronicle snapshots feed a focused window into a
     // summarisation prompt, whereas getRecentMessages() is used for raw
     // context-building where more history is desirable.  Keeping these

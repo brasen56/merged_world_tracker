@@ -5,9 +5,9 @@
  * consumed by the root index.js.  All implementation lives in sub-files.
  */
 
-import { getChat, escapeRegex, estimateTokens, getContextSafe } from '../core/index.js';
+import { getChat, escapeRegex, estimateTokens, getContextSafe, getChatMeta, patchChatMeta } from '../core/index.js';
 
-import { state, getNpcsContentEl } from './state.js';
+import { state, getNpcsContentEl, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
 import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
@@ -18,6 +18,21 @@ import {
     initNotificationPanel, hideNotificationPanel,
     importNpcs, importFromLorebooks,
 } from './render.js';
+
+// ─── Per-chat counter persistence ────────────────────────────────────────────
+//
+// World State, Chronicle, and Story Planner all persist their auto-trigger
+// counters per chat (via chat metadata) and restore them in onChatChanged().
+// Knowledge's messageCounter / npcMessageCounter used to be memory-only,
+// silently resetting on reload or chat switch.  The helpers below mirror the
+// pattern used by the other modules so behaviour is consistent.
+
+export function persistCounters() {
+    patchChatMeta(COUNTERS_META_KEY, {
+        messageCounter: state.messageCounter,
+        npcMessageCounter: state.npcMessageCounter,
+    });
+}
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -78,6 +93,10 @@ export function onMessageReceived() {
             doNpc = true;
         }
     }
+
+    // Persist counters so they survive reloads and chat switches (mirrors World
+    // State, Chronicle, and Story Planner behaviour).
+    persistCounters();
 
     if (!doState && !doNpc) return;
 
@@ -175,8 +194,11 @@ export function onMessageReceived() {
 }
 
 export function onChatChanged() {
-    state.messageCounter = 0;
-    state.npcMessageCounter = 0;
+    // Restore per-chat counters from metadata (mirrors World State, Chronicle,
+    // and Story Planner). Each chat tracks its own "every N messages" progress.
+    const saved = getChatMeta()?.[COUNTERS_META_KEY];
+    state.messageCounter = (typeof saved?.messageCounter === 'number' && Number.isFinite(saved.messageCounter)) ? saved.messageCounter : 0;
+    state.npcMessageCounter = (typeof saved?.npcMessageCounter === 'number' && Number.isFinite(saved.npcMessageCounter)) ? saved.npcMessageCounter : 0;
     state.lastChatLength = getChat()?.length || 0;
     state.isRunning = false;
     state.stagingItems = [];
@@ -222,14 +244,18 @@ export function onMessageDeleted(deletedIndex) {
         : 1;
     state.lastChatLength = currentLen;
 
+    let changed = false;
     if (settings.autoTriggerEnabled && state.messageCounter > 0) {
         state.messageCounter = Math.max(0, state.messageCounter - removed);
+        changed = true;
         console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — state counter adjusted to ${state.messageCounter}`);
     }
     if (settings.npcAutoScanEnabled && state.npcMessageCounter > 0) {
         state.npcMessageCounter = Math.max(0, state.npcMessageCounter - removed);
+        changed = true;
         console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — NPC counter adjusted to ${state.npcMessageCounter}`);
     }
+    if (changed) persistCounters();
 }
 
 // ─── Token tracking ──────────────────────────────────────────────────────────

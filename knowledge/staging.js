@@ -22,6 +22,7 @@ import {
     synthesizeMinorFromUpdate, synthesizeMajorFromUpdate,
     formatDossierEntry, synthesizeDossierFromUpdate,
     enrichStagingItem, writeToLorebook,
+    loadEntryContent, getHistory,
 } from './lorebook.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
@@ -130,17 +131,31 @@ export function mergeScanResults(newItems, removeNotification) {
 
 // ─── NPC Export / Import ─────────────────────────────────────────────────────
 
-export function exportNpcs() {
+export async function exportNpcs() {
     const registry = getRegistry();
     const entries = {};
     for (const [name, info] of Object.entries(registry)) {
+        // Load the actual lorebook entry content and history so the export is
+        // self-contained — a registry-only export (content: null) imported on
+        // another install would carry raw uids that point at different (or no)
+        // entries in the destination lorebook.
+        let content = null;
+        let history = [];
+        if (info.uid != null) {
+            try {
+                content = await loadEntryContent(info.uid);
+            } catch { /* entry may not exist */ }
+            try {
+                history = getHistory(info.uid, LOREBOOK_NAME);
+            } catch { /* ignore */ }
+        }
         entries[name] = {
             uid: info.uid ?? null,
             type: info.type || 'minor',
             keywords: info.keywords || [name],
             lastUpdated: info.lastUpdated || null,
-            content: null,
-            history: [],
+            content,
+            history,
         };
     }
     // Strip API key from export to avoid leaking credentials
@@ -186,7 +201,25 @@ export async function importNpcs() {
                 continue;
             }
 
-            const incomingUid = entry.uid ?? null;
+            let incomingUid = entry.uid ?? null;
+
+            // When a uid is present, verify it against the local lorebook.
+            // An exported uid from another install may point at a different
+            // (or non-existent) entry here. If it can't be verified, drop it
+            // so the entry is either written as new (if content is available)
+            // or registered as an orphan (uid: null).
+            if (incomingUid != null && state.wiScript) {
+                let verified = false;
+                try {
+                    const existing = await loadEntryContent(incomingUid);
+                    verified = existing !== null;
+                } catch { /* assume not found */ }
+                if (!verified) {
+                    console.warn(`[MWT:Knowledge] Import uid ${incomingUid} for "${name}" not found in local lorebook — dropping uid.`);
+                    incomingUid = null;
+                }
+            }
+
             if (incomingUid != null) {
                 for (const [regName, regEntry] of Object.entries(registry)) {
                     if (regEntry.uid === incomingUid && regName !== name) {
@@ -204,7 +237,9 @@ export async function importNpcs() {
             };
             imported++;
 
-            if (entry.content && state.wiScript && entry.uid == null) {
+            // If the uid was dropped (or was never present) but content is
+            // available, write it as a new entry in the local lorebook.
+            if (entry.content && state.wiScript && incomingUid == null) {
                 try {
                     const result = await writeToLorebook(name, entry.content, entry.keywords || [name], null);
                     if (result.success) {
@@ -218,7 +253,7 @@ export async function importNpcs() {
             const finalUid = registry[name].uid;
             if (entry.history && Array.isArray(entry.history) && entry.history.length > 0 && finalUid != null) {
                 try {
-                    const key = HISTORY_KEY_PREFIX + finalUid;
+                    const key = HISTORY_KEY_PREFIX + LOREBOOK_NAME + '_' + finalUid;
                     localStorage.setItem(key, JSON.stringify(entry.history));
                 } catch { /* quota */ }
             }

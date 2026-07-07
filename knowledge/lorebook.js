@@ -33,10 +33,15 @@ try {
 }
 
 // ─── History ─────────────────────────────────────────────────────────────────
+//
+// History keys are namespaced by lorebook name (`kt_history_<lorebook>_<uid>`)
+// so that entries in the "Knowledge Tracker" and "State Tracker" lorebooks —
+// which independently assign UIDs starting at 0 — don't collide in
+// localStorage.  The lorebook name is passed explicitly to every call.
 
-export function pushHistory(uid, content) {
+export function pushHistory(uid, content, lorebook = LOREBOOK_NAME) {
     if (uid === null || uid === undefined) return;
-    const key = HISTORY_KEY_PREFIX + uid;
+    const key = HISTORY_KEY_PREFIX + lorebook + '_' + uid;
     let history = [];
     try { history = JSON.parse(localStorage.getItem(key) || '[]'); } catch { history = []; }
     history.unshift({ ts: Date.now(), content, msgIdx: getChat()?.length || 0 });
@@ -44,9 +49,9 @@ export function pushHistory(uid, content) {
     try { localStorage.setItem(key, JSON.stringify(history)); } catch { /* quota */ }
 }
 
-export function getHistory(uid) {
+export function getHistory(uid, lorebook = LOREBOOK_NAME) {
     if (uid === null || uid === undefined) return [];
-    try { return JSON.parse(localStorage.getItem(HISTORY_KEY_PREFIX + uid) || '[]'); } catch { return []; }
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY_PREFIX + lorebook + '_' + uid) || '[]'); } catch { return []; }
 }
 
 // ─── Message helpers ─────────────────────────────────────────────────────────
@@ -89,7 +94,7 @@ export async function writeStateTracker(uid, name, content) {
         const previousContent = entry.content || '';
         entry.content = content;
         await state.wiScript.saveWorldInfo(STATE_LOREBOOK_NAME, wi);
-        pushHistory(uid, previousContent);
+        pushHistory(uid, previousContent, STATE_LOREBOOK_NAME);
         return { success: true, uid };
     } catch (err) { return { success: false, error: err.message }; }
 }
