@@ -17,7 +17,7 @@
  */
 
 import {
-    syncSharedConnectionSettings, estimateTokens, notify, getChat,
+    syncSharedConnectionSettings, estimateTokens, notify, getChat, getContextSafe,
 } from '../core/index.js';
 
 import {
@@ -96,15 +96,26 @@ export async function onMessageReceived() {
     }
 
     console.log(`[MWT:Chronicle] Auto-snapshot at ${state.msgSinceSnapshot} messages`);
+    // Capture chat identity so the failure-reset below can tell a genuine
+    // failure apart from a mid-generation chat switch.
+    const ctxBefore = getContextSafe();
+    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
     const snapshot = await generateSnapshot();
-    // Reset the counter regardless of success/failure. Previously it was only
-    // reset inside generateSnapshot's success path, so a persistent failure
-    // (API down, empty output, chat-switch discard) left the counter at ≥
-    // threshold, causing every subsequent MESSAGE_RECEIVED to immediately
-    // re-trigger an API call — a retry storm that flooded the endpoint.
+    // On failure, reset the counter (success resets inside generateSnapshot).
+    // Without this, a persistent failure (API down, empty output) left the
+    // counter at ≥ threshold, causing every subsequent MESSAGE_RECEIVED to
+    // immediately re-trigger an API call — a retry storm that flooded the
+    // endpoint. BUT: if the null result is because the user switched chats
+    // mid-generation, onChatChanged has already restored the *new* chat's
+    // counter — resetting here would wipe it and persist 0 into the wrong
+    // chat's metadata, so only reset when we're still on the same chat.
     if (!snapshot) {
-        state.msgSinceSnapshot = 0;
-        persistMsgSinceSnapshot();
+        const ctxAfter = getContextSafe();
+        const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
+        if (chatKeyAfter === chatKeyBefore) {
+            state.msgSinceSnapshot = 0;
+            persistMsgSinceSnapshot();
+        }
     }
     // Only notify on success — generateSnapshot returns null on failure and
     // already shows its own error status/notification in that case.

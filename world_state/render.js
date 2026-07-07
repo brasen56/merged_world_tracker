@@ -677,8 +677,11 @@ export function wireEvents() {
         const groundingMode = state.modal.querySelector('#ws-grounding-mode')?.value || 'soft';
         const pinnedEntities = state.modal.querySelector('#ws-pinned-entities')?.value.trim() || '';
 
-        if (!apiValues.apiUrl || !apiValues.modelName) {
-            setStatus(state.modal, 'API URL and Model are required.', 'error');
+        // Both empty is fine — the module then falls back to the global API
+        // settings (see resolveApiCall). Only a *partial* config is an error,
+        // since it would silently mix module and global connection fields.
+        if (!!apiValues.apiUrl !== !!apiValues.modelName) {
+            setStatus(state.modal, 'Fill in both API URL and Model, or leave both blank to use the global settings.', 'error');
             return;
         }
 
@@ -753,7 +756,15 @@ export function wireEvents() {
             if (n > maxScan) {
                 if (n > 30) {
                     // 30 is the hard cap for maxScanMessages; clamp and explain.
+                    // Also persist the raised scan window — clamping only the
+                    // local variable left the saved setting (e.g. 20) below the
+                    // new interval, the exact mismatch this dialog exists to prevent.
                     interval = 30;
+                    if (maxScan < 30) {
+                        saveSettings({ ...getSettings(), maxScanMessages: 30 });
+                        const maxScanInput = state.modal.querySelector('#ws-max-scan-messages');
+                        if (maxScanInput) maxScanInput.value = '30';
+                    }
                     maxScan = 30;
                     setStatus(state.modal, `Auto-refresh interval set to 30 (maximum scan messages).`, 'warning', 5000);
                 } else if (confirm(`The auto-refresh interval (${n}) exceeds the current "Scan Messages" limit (${maxScan}).\n\nIncrease "Scan Messages" to ${n} to allow the full interval?`)) {

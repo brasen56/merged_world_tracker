@@ -365,13 +365,19 @@ function renderModal() {
     if (saveBtn) {
         saveBtn.addEventListener('click', () => {
             const apiValues = readApiSettingsValues(modal, GLOBAL_API_FIELD_IDS);
+            // Depth 0 ("inject at the very bottom") is a legitimate value, so
+            // don't use `Number(...) || fallback` — that clobbers 0 to the fallback.
+            const depthOr = (sel, fallback) => {
+                const n = parseInt(modal.querySelector(sel)?.value, 10);
+                return Number.isFinite(n) && n >= 0 ? n : fallback;
+            };
             const patch = {
                 ...apiValues,
                 connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
                 // Per-module injection settings
-                worldStateDepth: Number(modal.querySelector('#mwt-s-ws-depth')?.value) || 4,
+                worldStateDepth: depthOr('#mwt-s-ws-depth', 4),
                 worldStateRole: modal.querySelector('#mwt-s-ws-role')?.value || 'system',
-                chronicleDepth: Number(modal.querySelector('#mwt-s-ch-depth')?.value) || 4,
+                chronicleDepth: depthOr('#mwt-s-ch-depth', 4),
                 chronicleRole: modal.querySelector('#mwt-s-ch-role')?.value || 'system',
                 // Structural boundaries
                 structuralBoundaries: modal.querySelector('#mwt-s-structural-boundaries')?.checked ?? true,

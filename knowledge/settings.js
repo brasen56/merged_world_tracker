@@ -79,11 +79,14 @@ export function showKnowledgeSettings() {
 
     el.querySelector('#kt-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(el, apiFieldOpts);
+        // Cooldown 0 ("no cooldown") is a legitimate value (the input allows
+        // min=0), so don't use `Number(...) || 3` — that clobbers 0 to 3.
+        const cooldownN = parseInt(el.querySelector('#kt-cfg-cooldown')?.value, 10);
         saveSettings({
             ...apiValues,
             autoTriggerEnabled: el.querySelector('#kt-cfg-auto-trigger')?.checked ?? false,
             autoTriggerEveryN: Number(el.querySelector('#kt-cfg-auto-every')?.value) || 5,
-            trackerCooldownMsgs: Number(el.querySelector('#kt-cfg-cooldown')?.value) || 3,
+            trackerCooldownMsgs: Number.isFinite(cooldownN) && cooldownN >= 0 ? cooldownN : 3,
             npcAutoScanEnabled: el.querySelector('#kt-cfg-npc-autoscan')?.checked ?? false,
             npcAutoScanEveryN: Number(el.querySelector('#kt-cfg-npc-every')?.value) || 10,
             dossierMode: el.querySelector('#kt-cfg-dossier-mode')?.checked ?? false,

@@ -253,8 +253,21 @@ export async function regenerateSnapshot(snapshotId) {
         const newWorldDate = timeMatch ? timeMatch[1].trim() : snapshot.worldDate;
         _render.showRegenerateDiff(originalText, raw, async (acceptNew) => {
             if (acceptNew) {
-                const updated = [...snapshots];
-                updated[idx] = { ...snapshot, text: raw, worldDate: newWorldDate };
+                // Re-fetch the snapshot list at accept time. The `snapshots`
+                // array captured before the preview is stale: the busy lock is
+                // released while the preview waits, so the user may have
+                // generated, deleted, or consolidated entries in between —
+                // writing the old array back would resurrect deleted entries
+                // or drop new ones.
+                const current = getSnapshots();
+                const curIdx = current.findIndex(s => s.id === snapshotId);
+                if (curIdx === -1) {
+                    scSetStatus('Entry no longer exists — regenerated text discarded.', 'warning');
+                    _render.renderContent();
+                    return;
+                }
+                const updated = [...current];
+                updated[curIdx] = { ...current[curIdx], text: raw, worldDate: newWorldDate };
                 setChronicleData({ snapshots: updated });
                 applyInjection();
                 state.selectedSnapshotId = snapshot.id;

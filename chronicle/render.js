@@ -521,7 +521,20 @@ function bindMainEvents() {
         searchInput.addEventListener('input', (e) => {
             state.pendingSearch = e.target.value;
             clearTimeout(debounce);
-            debounce = setTimeout(() => renderContent(), 200);
+            debounce = setTimeout(() => {
+                // renderContent() rebuilds the whole tab (including this input),
+                // which destroys focus/caret mid-typing. Restore both onto the
+                // fresh input — but only if the user was still in the field.
+                const hadFocus = document.activeElement === e.target;
+                renderContent();
+                if (hadFocus) {
+                    const fresh = getContentEl()?.querySelector('#sc-search-input');
+                    if (fresh) {
+                        fresh.focus();
+                        fresh.setSelectionRange(fresh.value.length, fresh.value.length);
+                    }
+                }
+            }, 200);
         });
     }
 }

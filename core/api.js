@@ -6,6 +6,7 @@
  */
 
 import { getContextSafe } from './context.js';
+import { getGlobalSettings } from './settings.js';
 
 /**
  * Strip trailing slashes and an accidental /chat/completions suffix.
@@ -269,16 +270,49 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
 }
 
 /**
- * Resolve API settings, preferring Connection Profile then falling back
- * to custom API config.
+ * Resolve API settings. The global Settings tab is documented as "defaults
+ * for all modules", so an unconfigured module falls back to it without
+ * requiring an explicit "Sync to Modules". Precedence:
+ *
+ *   1. module Connection Profile
+ *   2. module custom API (URL + model both set)
+ *   3. global Connection Profile
+ *   4. global custom API (module keeps its own generation params)
+ *
+ * A module explicitly configured with a custom URL/model wins over a global
+ * profile — module config is the override, global config is the default.
+ *
  * Returns { mode: 'cm' | 'custom', fetchFn, settings }
  */
-export function resolveApiCall({ moduleSettings, globalSettings = {} }) {
-    const profileId = moduleSettings.connectionProfileId ?? globalSettings.connectionProfileId ?? null;
-    if (profileId) {
+export function resolveApiCall({ moduleSettings, globalSettings }) {
+    const globals = globalSettings ?? getGlobalSettings();
+
+    if (moduleSettings.connectionProfileId) {
         return { mode: 'cm', fetchFn: fetchViaConnectionProfile, settings: moduleSettings };
     }
-    return { mode: 'custom', fetchFn: fetchFromApi, settings: moduleSettings };
+    if (moduleSettings.apiUrl && moduleSettings.modelName) {
+        return { mode: 'custom', fetchFn: fetchFromApi, settings: moduleSettings };
+    }
+    if (globals.connectionProfileId) {
+        return {
+            mode: 'cm',
+            fetchFn: fetchViaConnectionProfile,
+            settings: { ...moduleSettings, connectionProfileId: globals.connectionProfileId },
+        };
+    }
+    // Global custom API: connection fields come from the global settings while
+    // generation params (maxTokens, temperature, …) stay module-specific.
+    return {
+        mode: 'custom',
+        fetchFn: fetchFromApi,
+        settings: {
+            ...moduleSettings,
+            apiUrl: globals.apiUrl || '',
+            apiKey: globals.apiKey || '',
+            modelName: globals.modelName || '',
+            customHeaders: moduleSettings.customHeaders || globals.customHeaders || '',
+        },
+    };
 }
 
 /**

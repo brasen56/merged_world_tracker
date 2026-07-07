@@ -96,7 +96,13 @@ export function createSettingsManager({ settingsKey, legacyKey, defaults, logPre
         if (s.connectionProfileId) return true;
         // Only apiUrl + modelName are required; apiKey is optional for
         // keyless local backends (Ollama, LM Studio, llama.cpp, etc.)
-        return !!(s.apiUrl && s.modelName);
+        if (s.apiUrl && s.modelName) return true;
+        // Fall back to the shared global settings (the main Settings tab is
+        // documented as "defaults for all modules") — resolveApiCall applies
+        // the same fallback when the module's own config is incomplete.
+        const g = getGlobalSettings();
+        if (g.connectionProfileId) return true;
+        return !!(g.apiUrl && g.modelName);
     }
 
     return { getSettings, saveSettings, hasValidSettings, getExtSettingsRef };
