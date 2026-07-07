@@ -53,7 +53,12 @@ function buildUserPrompt(recentText, reminderReason = '') {
     // Continuity: feed the existing plan back so regeneration refines it instead
     // of starting from a blank menu. Templates that omit {{previousPlan}} simply
     // don't get the block (the token resolves to empty).
-    const prevPlan = getPlanText().trim();
+    // Prefer unsaved textarea content over persisted text so the model refines
+    // what the user actually sees in the editor, not a stale saved snapshot.
+    const editorEl = state.modal?.querySelector('#sp-editor');
+    const editorText = editorEl?.value?.trim() ?? '';
+    const persistedPlan = getPlanText().trim();
+    const prevPlan = editorText || persistedPlan;
     const prevBlock = prevPlan
         ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine it against what has since happened — do not simply repeat it.]\n${prevPlan}\n</previous_plan>`
         : '';
@@ -194,9 +199,24 @@ export async function generatePlan(isAuto = false) {
         }
 
         // Snapshot the plan we're about to overwrite so a regeneration is
-        // recoverable via History/Revert.
-        const oldText = getPlanText();
-        if (oldText?.trim()) pushPlanToHistory(oldText);
+        // recoverable via History/Revert. IMPORTANT: also capture unsaved
+        // textarea edits — the user may have typed in the editor without
+        // clicking "Save". Previously only the *persisted* text was snapshotted,
+        // so unsaved edits were silently destroyed and unrecoverable.
+        const editorEl = state.modal?.querySelector('#sp-editor');
+        const editorText = editorEl?.value ?? '';
+        const persistedText = getPlanText();
+        // Snapshot whichever is newer/different — if the editor has unsaved
+        // changes, those represent the user's latest intent.
+        const textToSnapshot = (editorText && editorText.trim() && editorText !== persistedText)
+            ? editorText
+            : persistedText;
+        if (textToSnapshot?.trim()) pushPlanToHistory(textToSnapshot);
+        // Persist unsaved editor text before overwriting so the "previous plan"
+        // in metadata is consistent with what the user saw.
+        if (editorText && editorText.trim() && editorText !== persistedText) {
+            setPlanData({ text: editorText });
+        }
 
         setPlanData({ text });
         applyPlanInjection();

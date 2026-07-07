@@ -5,7 +5,7 @@
  * consumed by the root index.js.  All implementation lives in sub-files.
  */
 
-import { getChat, escapeRegex, estimateTokens } from '../core/index.js';
+import { getChat, escapeRegex, estimateTokens, getContextSafe } from '../core/index.js';
 
 import { state, getNpcsContentEl } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
@@ -83,8 +83,22 @@ export function onMessageReceived() {
 
     const cooldownMsgs = Math.max(0, Number(settings.trackerCooldownMsgs) || 3);
 
+    // Capture chat identity before the async scan/update so we can discard
+    // results if the user switched chats during the API call — otherwise
+    // staging items and lorebook writes from the *old* chat contaminate the
+    // new chat (cross-chat data corruption).
+    const ctxBefore = getContextSafe();
+    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
+
     queueTrackerWork(async () => {
         if (state.isRunning) return;
+        // Abort if the chat already changed while this was queued.
+        const ctxAtRun = getContextSafe();
+        const chatKeyAtRun = `${ctxAtRun?.characterId ?? ''}|${ctxAtRun?.groupId ?? ''}|${ctxAtRun?.chatId ?? ''}`;
+        if (chatKeyAtRun !== chatKeyBefore) {
+            console.log('[MWT:Knowledge] Queued work aborted — chat changed before execution.');
+            return;
+        }
         state.isRunning = true;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         try {
@@ -131,6 +145,16 @@ export function onMessageReceived() {
             if (doNpc) {
                 try {
                     const result = await runScan();
+                    // Re-check chat identity after the long API await. A chat
+                    // switch mid-scan means these results belong to the old
+                    // chat and must not be written into the new chat's staging
+                    // area (cross-chat contamination).
+                    const ctxAfterScan = getContextSafe();
+                    const chatKeyAfterScan = `${ctxAfterScan?.characterId ?? ''}|${ctxAfterScan?.groupId ?? ''}|${ctxAfterScan?.chatId ?? ''}`;
+                    if (chatKeyAfterScan !== chatKeyBefore) {
+                        console.log('[MWT:Knowledge] Auto-scan results discarded — chat changed during API call.');
+                        return;
+                    }
                     const newItems = buildStagingItems(result);
                     const added = mergeScanResults(newItems, removeNotificationEntry);
                     // Enrich non-edited update proposals; edited ones keep their text.

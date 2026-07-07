@@ -96,9 +96,21 @@ export async function onMessageReceived() {
     }
 
     console.log(`[MWT:Chronicle] Auto-snapshot at ${state.msgSinceSnapshot} messages`);
-    await generateSnapshot();
-    // Notify the user that a snapshot was generated
-    notify('Session Chronicle', 'A new chronicle snapshot has been generated and is ready to review.', 'info');
+    const snapshot = await generateSnapshot();
+    // Reset the counter regardless of success/failure. Previously it was only
+    // reset inside generateSnapshot's success path, so a persistent failure
+    // (API down, empty output, chat-switch discard) left the counter at ≥
+    // threshold, causing every subsequent MESSAGE_RECEIVED to immediately
+    // re-trigger an API call — a retry storm that flooded the endpoint.
+    if (!snapshot) {
+        state.msgSinceSnapshot = 0;
+        persistMsgSinceSnapshot();
+    }
+    // Only notify on success — generateSnapshot returns null on failure and
+    // already shows its own error status/notification in that case.
+    if (snapshot) {
+        notify('Session Chronicle', 'A new chronicle snapshot has been generated and is ready to review.', 'info');
+    }
 }
 
 export function onChatChanged() {

@@ -125,17 +125,25 @@ export function buildProvenance() {
     for (const [key, info] of candidates) {
         const prior = priorEntities[key];
         let lastTouchedMsg = sanitizeLastTouchedMsg(prior?.lastTouchedMsg ?? null, currentMsgIndex);
-        let mentionCount = prior?.mentionCount ?? 0;
         let foundInWindow = false;
+        let windowMentions = 0;
 
         const escaped = info.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const re = new RegExp(`\\b${escaped}\\b`, 'i');
         for (const { index, text: msgText } of scan) {
             if (!re.test(msgText)) continue;
             foundInWindow = true;
-            mentionCount += 1;
+            windowMentions += 1;
             if (lastTouchedMsg === null || index > lastTouchedMsg) lastTouchedMsg = index;
         }
+        // Only carry forward the prior cumulative count for entities that fell
+        // out of the current scan window. Entities still present in the window
+        // get a fresh count of their actual mentions this pass — previously
+        // every pass re-counted all overlapping messages and added them to the
+        // prior total, so mentionCount grew without bound on each rebuild.
+        const mentionCount = foundInWindow
+            ? windowMentions
+            : (prior?.mentionCount ?? 0);
 
         entities[key] = {
             label: info.label,
