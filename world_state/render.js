@@ -33,11 +33,25 @@ import { buildProvenance, getStalenessReport, purgeStaleEntries } from './proven
 export function updateEditorStats() {
     if (!state.modal) return;
     const editor = state.modal.querySelector('#ws-editor');
-    const stats = state.modal.querySelector('#ws-editor-stats');
-    if (!editor || !stats) return;
+    if (!editor) return;
     const text = editor.value;
     const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-    stats.textContent = `${text.length} chars · ${words} words · ${text.split('\n').length} lines`;
+    const tokens = estimateTokens(text);
+
+    // Update the editor stats bar — include tokens (matching the initial
+    // render format) instead of line count, so the display stays consistent
+    // after the user types or saves.
+    const stats = state.modal.querySelector('#ws-editor-stats');
+    if (stats) stats.textContent = `${text.length} chars · ${words} words · ~${tokens} tokens`;
+
+    // Update the toolbar word/token counter span so Save reflects the new
+    // counts immediately without requiring a full re-render / modal reopen.
+    const toolbarStats = state.modal.querySelector('#ws-toolbar-stats');
+    if (toolbarStats) {
+        const autoEnabled = isAutoRefreshEnabled();
+        const autoInterval = getAutoRefreshInterval();
+        toolbarStats.textContent = `${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoRefreshCounter}/${autoInterval} msgs` : ''}`;
+    }
 }
 
 export function refreshRevertButton() {
@@ -344,7 +358,7 @@ export function render() {
             <button id="ws-archive" class="mwt-btn" ${!text?.trim() ? 'disabled' : ''}>📦 Export</button>
             <button id="ws-import" class="mwt-btn">📥 Import</button>
             <button id="ws-clear" class="mwt-btn mwt-btn-danger">🗑️ Clear</button>
-            <span class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoRefreshCounter}/${autoInterval} msgs` : ''}</span>
+            <span id="ws-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoRefreshCounter}/${autoInterval} msgs` : ''}</span>
         </div>
 
         <div class="mwt-form-row">

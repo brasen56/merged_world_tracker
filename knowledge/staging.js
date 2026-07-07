@@ -93,6 +93,11 @@ export function formatHistoryAge(ts) {
  * metadata (keywords, fields, uid, etc.) is refreshed. This stops a re-scan
  * from silently discarding hand-edited proposal text.
  *
+ * When a non-edited proposal is superseded by a newer one, the outgoing
+ * proposal text is preserved in a `supersededContent` array so the user can
+ * review what was replaced (it appears in the staging detail panel). This
+ * prevents silent data loss when a re-scan fires while proposals are pending.
+ *
  * @param {Array} newItems                   proposals from buildStagingItems()
  * @param {(id: string) => void} removeNotification  removes a notification entry by id
  * @returns {Array} the items now staged for these proposals (for enrichment/notification)
@@ -117,7 +122,18 @@ export function mergeScanResults(newItems, removeNotification) {
                     existingContent: existing.existingContent ?? item.existingContent,
                 };
             } else {
-                stored = item;
+                // Preserve the outgoing proposal text so the user can see what
+                // was replaced by the new scan. Stack prior superseded entries
+                // too, so nothing is lost across multiple re-scans.
+                const priorSuperseded = Array.isArray(existing.supersededContent) ? existing.supersededContent : [];
+                const outgoingContent = existing.mergedContent || existing.proposedContent;
+                stored = {
+                    ...item,
+                    id: existing.id,
+                    supersededContent: outgoingContent
+                        ? [...priorSuperseded, { content: outgoingContent, timestamp: Date.now() }]
+                        : priorSuperseded,
+                };
             }
             state.stagingItems[existingIdx] = stored;
         } else {

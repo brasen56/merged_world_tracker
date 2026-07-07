@@ -144,7 +144,25 @@ export function onMessageReceived() {
                         };
                         const existingIdx = state.stagingItems.findIndex(it => it.type === 'state' && it.uid === info.uid);
                         if (existingIdx >= 0) {
-                            removeNotificationEntry(state.stagingItems[existingIdx].id);
+                            const existing = state.stagingItems[existingIdx];
+                            removeNotificationEntry(existing.id);
+                            if (existing.edited) {
+                                // Preserve the user's manual edits; only refresh metadata.
+                                stagingItem.id = existing.id;
+                                stagingItem.edited = true;
+                                stagingItem.mergedContent = existing.mergedContent;
+                                stagingItem.proposedContent = existing.mergedContent || existing.proposedContent;
+                                stagingItem.existingContent = existing.existingContent ?? stagingItem.existingContent;
+                            } else {
+                                // Preserve the outgoing proposal as superseded so
+                                // nothing is silently lost on re-scan.
+                                const priorSuperseded = Array.isArray(existing.supersededContent) ? existing.supersededContent : [];
+                                const outgoingContent = existing.mergedContent || existing.proposedContent;
+                                stagingItem.id = existing.id;
+                                stagingItem.supersededContent = outgoingContent
+                                    ? [...priorSuperseded, { content: outgoingContent, timestamp: Date.now() }]
+                                    : priorSuperseded;
+                            }
                             state.stagingItems[existingIdx] = stagingItem;
                         } else {
                             state.stagingItems.push(stagingItem);

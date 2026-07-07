@@ -33,7 +33,7 @@ import {
 } from './relationships.js';
 import {
     buildStagingItems, exportNpcs, importNpcs, importFromLorebooks,
-    mergeScanResults,
+    mergeScanResults, formatHistoryAge,
     STAGING_PLACEHOLDERS,
 } from './staging.js';
 
@@ -281,12 +281,33 @@ function renderDetailForItem(item) {
         }
     }
 
+    // Build a "superseded proposals" section if prior proposals were
+    // replaced by a newer scan. This shows the user exactly what was
+    // overwritten so nothing is lost silently — and lets them restore
+    // an older version if the new scan went in the wrong direction.
+    let supersededHtml = '';
+    if (Array.isArray(item.supersededContent) && item.supersededContent.length > 0) {
+        supersededHtml = `<div class="kt-detail-section">
+            <div class="kt-detail-label">Previous proposal${item.supersededContent.length > 1 ? 's' : ''} (superseded by this scan)</div>
+            ${item.supersededContent.map((entry, i) => `
+                <div class="kt-superseded-entry" style="margin-bottom:8px">
+                    <div class="kt-detail-superseded-meta" style="font-size:11px;color:var(--mwt-text-dim);margin-bottom:2px">
+                        ${escapeHtml(formatHistoryAge(entry.timestamp))}
+                        <button class="mwt-btn kt-superseded-restore" data-idx="${i}" style="margin-left:8px;padding:2px 8px;font-size:11px">↩ Restore</button>
+                    </div>
+                    <pre class="kt-detail-current" style="opacity:0.7">${escapeHtml(entry.content)}</pre>
+                </div>
+            `).join('')}
+        </div>`;
+    }
+
     return `<div class="kt-detail-inner">
         <div class="kt-detail-name">${escapeHtml(item.name)}</div>
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
         <div class="kt-detail-section"><div class="kt-detail-label">Proposed</div><textarea class="kt-detail-editor" id="kt-proposal-editor">${escapeHtml(editorContent)}</textarea></div>
         ${item.type !== 'state' ? `<div class="kt-detail-section"><div class="kt-detail-label">Keywords</div><input class="kt-keyword-input" id="kt-keyword-input" type="text" value="${escapeHtml((item.keywords || [item.name]).join(', '))}" /></div>` : ''}
+        ${supersededHtml}
         <div class="kt-detail-actions"><button class="mwt-btn mwt-btn-primary" id="kt-accept">✓ Accept & Write</button><button class="mwt-btn" id="kt-dismiss">✗ Dismiss</button></div>
     </div>`;
 }
@@ -373,6 +394,32 @@ function wireStagingEvents(el) {
         state.stagingItems = [];
         state.activeItemId = null;
         renderNpcsSubTab();
+    });
+
+    // Restore a superseded proposal — swap the current proposal text for the
+    // older one the user clicked, so nothing a scan produced is ever truly
+    // lost. The current text becomes the latest superseded entry.
+    el.querySelectorAll('.kt-superseded-restore').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const item = state.stagingItems.find(i => i.id === state.activeItemId);
+            if (!item || !Array.isArray(item.supersededContent)) return;
+            const idx = parseInt(btn.dataset.idx, 10);
+            const entry = item.supersededContent[idx];
+            if (!entry) return;
+            const currentContent = item.mergedContent || item.proposedContent || '';
+            // Swap: old restored content becomes the active proposal; the
+            // current proposal is pushed into the superseded stack at the
+            // same position so the user can flip back if they change their mind.
+            item.mergedContent = entry.content;
+            item.proposedContent = entry.content;
+            item.edited = true;
+            const newSuperseded = [...item.supersededContent];
+            newSuperseded.splice(idx, 1);
+            if (currentContent) newSuperseded.push({ content: currentContent, timestamp: Date.now() });
+            item.supersededContent = newSuperseded;
+            renderNpcsSubTab();
+            ktSetStatus('Previous proposal restored.', 'success');
+        });
     });
 }
 
@@ -609,7 +656,25 @@ function wireStateTrackerEvents(el) {
                 };
                 const existingIdx = state.stagingItems.findIndex(it => it.type === 'state' && it.uid === info.uid);
                 if (existingIdx >= 0) {
-                    removeNotificationEntry(state.stagingItems[existingIdx].id);
+                    const existing = state.stagingItems[existingIdx];
+                    removeNotificationEntry(existing.id);
+                    if (existing.edited) {
+                        // Preserve the user's manual edits; only refresh metadata.
+                        stagingItem.id = existing.id;
+                        stagingItem.edited = true;
+                        stagingItem.mergedContent = existing.mergedContent;
+                        stagingItem.proposedContent = existing.mergedContent || existing.proposedContent;
+                        stagingItem.existingContent = existing.existingContent ?? stagingItem.existingContent;
+                    } else {
+                        // Preserve the outgoing proposal as superseded so
+                        // nothing is silently lost on re-scan.
+                        const priorSuperseded = Array.isArray(existing.supersededContent) ? existing.supersededContent : [];
+                        const outgoingContent = existing.mergedContent || existing.proposedContent;
+                        stagingItem.id = existing.id;
+                        stagingItem.supersededContent = outgoingContent
+                            ? [...priorSuperseded, { content: outgoingContent, timestamp: Date.now() }]
+                            : priorSuperseded;
+                    }
                     state.stagingItems[existingIdx] = stagingItem;
                 }
                 else state.stagingItems.push(stagingItem);
