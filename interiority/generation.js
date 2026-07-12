@@ -16,7 +16,7 @@ import {
 
 import { REGISTRY_KEY } from '../knowledge/state.js';
 
-import { INTERIORITY_SYSTEM_PROMPT, buildUserContent } from './prompts.js';
+import { buildSystemPrompt, buildUserContent } from './prompts.js';
 import {
     getSettings, hasValidSettings,
     getInteriorityData, saveInteriorityData,
@@ -179,6 +179,13 @@ export async function runBatchedCall(roster) {
     }
 
     const settings = getSettings();
+    const wantThoughts = settings.generateThoughts !== false;
+    const wantIntentions = settings.generateIntentions !== false;
+    if (!wantThoughts && !wantIntentions) {
+        console.warn('[MWT:Interiority] Both thoughts and intentions are disabled — skipping API call.');
+        return null;
+    }
+
     const npcBlocks = await assembleNpcBlocks(roster);
     const windowSize = Math.max(1, settings.messageWindow || 8);
 
@@ -191,14 +198,16 @@ export async function runBatchedCall(roster) {
 
     const worldTime = getWorldTime();
     const playerName = [...getUserNames({ lower: false })][0] || '';
+    const systemPrompt = buildSystemPrompt({ thoughts: wantThoughts, intentions: wantIntentions });
     const userContent = buildUserContent({
         npcBlocks,
         recentMessages,
         worldTime,
         playerName,
+        includeIntentions: wantIntentions,
     });
 
-    return fetchAndParse(INTERIORITY_SYSTEM_PROMPT, userContent, settings);
+    return fetchAndParse(systemPrompt, userContent, settings);
 }
 
 /**
@@ -215,6 +224,13 @@ export async function runStrictCalls(roster) {
     }
 
     const settings = getSettings();
+    const wantThoughts = settings.generateThoughts !== false;
+    const wantIntentions = settings.generateIntentions !== false;
+    if (!wantThoughts && !wantIntentions) {
+        console.warn('[MWT:Interiority] Both thoughts and intentions are disabled — skipping API call.');
+        return null;
+    }
+
     const windowSize = Math.max(1, settings.messageWindow || 8);
     const recentMessages = getStrippedRecentMessages(windowSize);
     if (!recentMessages) {
@@ -225,6 +241,7 @@ export async function runStrictCalls(roster) {
     const worldTime = getWorldTime();
     const playerName = [...getUserNames({ lower: false })][0] || '';
     const allNpcs = [];
+    const systemPrompt = buildSystemPrompt({ thoughts: wantThoughts, intentions: wantIntentions });
 
     for (const name of roster) {
         const npcBlocks = await assembleNpcBlocks([name]);
@@ -233,9 +250,10 @@ export async function runStrictCalls(roster) {
             recentMessages,
             worldTime,
             playerName,
+            includeIntentions: wantIntentions,
         });
 
-        const result = await fetchAndParse(INTERIORITY_SYSTEM_PROMPT, userContent, settings);
+        const result = await fetchAndParse(systemPrompt, userContent, settings);
         if (result && Array.isArray(result.npcs)) {
             allNpcs.push(...result.npcs);
         }
@@ -301,6 +319,8 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
 export function validateAndApply(result, roster, msgIdx) {
     const data = getInteriorityData();
     const settings = getSettings();
+    const wantThoughts = settings.generateThoughts !== false;
+    const wantIntentions = settings.generateIntentions !== false;
 
     // Take a snapshot of the ledger BEFORE mutations (for rollback)
     const ledgerSnapshot = JSON.parse(JSON.stringify(data.ledger));
@@ -347,7 +367,8 @@ export function validateAndApply(result, roster, msgIdx) {
         seenNpcs.add(name.toLowerCase());
 
         // ── Reaction (display-only, max 1 per NPC per turn) ──
-        if (npcResult.reaction && typeof npcResult.reaction === 'object') {
+        // Skipped entirely when the thoughts feature is disabled.
+        if (wantThoughts && npcResult.reaction && typeof npcResult.reaction === 'object') {
             const re = String(npcResult.reaction.re || '').trim();
             const thought = String(npcResult.reaction.thought || '').trim();
 
@@ -360,6 +381,10 @@ export function validateAndApply(result, roster, msgIdx) {
                 });
             }
         }
+
+        // The executed/dropped/new_intentions blocks mutate the ledger, so
+        // they are skipped entirely when the intentions feature is disabled.
+        if (!wantIntentions) continue;
 
         // ── Executed intentions ──
         if (Array.isArray(npcResult.executed)) {

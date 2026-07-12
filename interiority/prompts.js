@@ -5,48 +5,110 @@
  */
 
 /**
- * System prompt for the interiority generation call.
+ * Build the system prompt for the interiority generation call.
+ *
+ * The prompt is assembled dynamically so that only the requested features
+ * (thoughts and/or intentions) are described to the model. When a feature
+ * is disabled the model is never asked for it, which keeps responses lean
+ * and avoids confusion.
  *
  * House style: ABSOLUTE RULES, JSON only, no fences — matching the
  * knowledge/world state scanner prompts.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.thoughts=true]  - include the reaction/thought contract
+ * @param {boolean} [opts.intentions=true] - include the intention evaluation contract
+ * @returns {string}
  */
-export const INTERIORITY_SYSTEM_PROMPT = `\
-You are an interiority engine for a role-playing story. You generate the private thoughts and hidden intentions of NPCs (non-player characters).
+export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
+    const wantThoughts = thoughts !== false;
+    const wantIntentions = intentions !== false;
 
-You will receive, for each NPC: their knowledge ledger / dossier entry, their current open intentions, and a window of recent story messages.
+    const purposeLine = (() => {
+        if (wantThoughts && wantIntentions) {
+            return 'You are an interiority engine for a role-playing story. You generate the private thoughts and hidden intentions of NPCs (non-player characters).';
+        }
+        if (wantThoughts) {
+            return 'You are an interiority engine for a role-playing story. You generate the private thoughts of NPCs (non-player characters).';
+        }
+        return 'You are an intention tracker for a role-playing story. You track and update the hidden intentions of NPCs (non-player characters).';
+    })();
+
+    const contextLine = wantIntentions
+        ? 'You will receive, for each NPC: their knowledge ledger / dossier entry, their current open intentions, and a window of recent story messages.'
+        : 'You will receive, for each NPC: their knowledge ledger / dossier entry and a window of recent story messages.';
+
+    // ── Rules ──
+    const rules = [];
+    let n = 0;
+
+    rules.push(`${++n}. Output ONLY valid JSON. No markdown fences, no prose before or after.`);
+
+    if (wantThoughts) {
+        rules.push(`${++n}. Each NPC may react ONLY to events they could personally witness in <recent_messages>. Facts are limited to their <knowledge_entry> and witnessed events.`);
+        rules.push(`${++n}. An NPC may NEVER reference, know, or allude to another NPC's thoughts, secrets, or hidden intentions. Each NPC's mind is sealed.`);
+    }
+
+    if (wantIntentions) {
+        rules.push(`${++n}. Evaluate each open intention from the <open_intentions> list:`);
+        rules.push(`   - "executed": the recent messages show the NPC actually performed the action. List its id.`);
+        rules.push(`   - "dropped": the intention no longer makes sense or the NPC abandoned it. Provide the id and a brief in-voice reason.`);
+        rules.push(`   - Otherwise, the intention stays "open" — do not list it; it carries forward automatically.`);
+        rules.push(`${++n}. New intentions require BOTH a concrete "action" AND a "trigger" condition (when/where the NPC will act on it).`);
+    }
+
+    if (wantThoughts) {
+        rules.push(`${++n}. "reaction" may be null if nothing noteworthy happened. Do not produce filler or boilerplate reactions.`);
+    }
+
+    rules.push(`${++n}. Wrong guesses are allowed. Invented facts are forbidden.`);
+
+    if (wantThoughts) {
+        rules.push(`${++n}. Keep thoughts concise (1-3 sentences) and in the NPC's own voice.`);
+    }
+
+    rules.push(`${++n}. NEVER produce a block for the player character (the human user). If a name is given in <player_character>, that person is the user, not an NPC — exclude them entirely, even if they are present in the scene.`);
+
+    // ── Output contract ──
+    const npcFields = [];
+    npcFields.push('      "name": "Mara"');
+    if (wantThoughts) {
+        npcFields.push('      "reaction": { "re": "the witnessed event this turn", "thought": "..." }');
+    }
+    if (wantIntentions) {
+        npcFields.push('      "executed": ["i-3f9a"]');
+        npcFields.push('      "dropped": [{ "id": "i-77c2", "reason": "in-voice one-liner" }]');
+        npcFields.push('      "new_intentions": [{ "action": "...", "trigger": "..." }]');
+    }
+
+    const notes = [];
+    if (wantThoughts) notes.push('- "reaction" may be null.');
+    if (wantIntentions) {
+        notes.push('- "executed" and "dropped" may be empty arrays.');
+        notes.push('- "new_intentions" may be an empty array.');
+    }
+    notes.push('- Only include NPCs from the provided roster.');
+
+    return `\
+${purposeLine}
+
+${contextLine}
 
 ABSOLUTE RULES:
-1. Output ONLY valid JSON. No markdown fences, no prose before or after.
-2. Each NPC may react ONLY to events they could personally witness in <recent_messages>. Facts are limited to their <knowledge_entry> and witnessed events.
-3. An NPC may NEVER reference, know, or allude to another NPC's thoughts, secrets, or hidden intentions. Each NPC's mind is sealed.
-4. Evaluate each open intention from the <open_intentions> list:
-   - "executed": the recent messages show the NPC actually performed the action. List its id.
-   - "dropped": the intention no longer makes sense or the NPC abandoned it. Provide the id and a brief in-voice reason.
-   - Otherwise, the intention stays "open" — do not list it; it carries forward automatically.
-5. New intentions require BOTH a concrete "action" AND a "trigger" condition (when/where the NPC will act on it).
-6. "reaction" may be null if nothing noteworthy happened. Do not produce filler or boilerplate reactions.
-7. Wrong guesses are allowed. Invented facts are forbidden.
-8. Keep thoughts concise (1-3 sentences) and in the NPC's own voice.
-9. NEVER produce a block for the player character (the human user). If a name is given in <player_character>, that person is the user, not an NPC — exclude them entirely, even if they are present in the scene.
+${rules.join('\n')}
 
 OUTPUT CONTRACT (JSON only):
 {
   "npcs": [
     {
-      "name": "Mara",
-      "reaction": { "re": "the witnessed event this turn", "thought": "..." },
-      "executed": ["i-3f9a"],
-      "dropped": [{ "id": "i-77c2", "reason": "in-voice one-liner" }],
-      "new_intentions": [{ "action": "...", "trigger": "..." }]
+${npcFields.join(',\n')}
     }
   ]
 }
 
 Notes:
-- "reaction" may be null.
-- "executed" and "dropped" may be empty arrays.
-- "new_intentions" may be an empty array.
-- Only include NPCs from the provided roster.`;
+${notes.join('\n')}`;
+}
 
 /**
  * Build the user-content message for the interiority API call.
@@ -60,7 +122,7 @@ Notes:
  *   model can exclude them (they are never an NPC)
  * @returns {string} assembled user content
  */
-export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerName }) {
+export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerName, includeIntentions = true }) {
     const parts = [];
 
     if (playerName) {
@@ -75,13 +137,15 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
         } else {
             parts.push(`<knowledge_entry>\n(No knowledge tracker entry for this NPC.)\n</knowledge_entry>`);
         }
-        if (npc.openIntentions && npc.openIntentions.length > 0) {
-            const lines = npc.openIntentions.map(e =>
-                `- [${e.id}] ${e.action} → trigger: ${e.trigger} (since ${e.since || 'unknown'})`
-            );
-            parts.push(`<open_intentions>\n${lines.join('\n')}\n</open_intentions>`);
-        } else {
-            parts.push(`<open_intentions>\n(None.)\n</open_intentions>`);
+        if (includeIntentions !== false) {
+            if (npc.openIntentions && npc.openIntentions.length > 0) {
+                const lines = npc.openIntentions.map(e =>
+                    `- [${e.id}] ${e.action} → trigger: ${e.trigger} (since ${e.since || 'unknown'})`
+                );
+                parts.push(`<open_intentions>\n${lines.join('\n')}\n</open_intentions>`);
+            } else {
+                parts.push(`<open_intentions>\n(None.)\n</open_intentions>`);
+            }
         }
         parts.push('</npc>');
         parts.push('');

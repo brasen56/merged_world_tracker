@@ -148,6 +148,12 @@ export function renderSettingsPanel() {
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, thoughts are generated automatically when an AI message lands. When OFF, use the 💭 Generate button per message.</p>
             </div>
 
+            <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+                <label><input type="checkbox" id="mwt-int-gen-thoughts" ${s.generateThoughts !== false ? 'checked' : ''}> Generate thoughts (private NPC reactions)</label>
+                <label><input type="checkbox" id="mwt-int-gen-intentions" ${s.generateIntentions !== false ? 'checked' : ''}> Generate intentions (persistent NPC plans injected into the narrator prompt)</label>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Toggle either feature off if you only want one. When both are off, no API call is made.</p>
+            </div>
+
             <div style="margin-top:12px">
                 <label>Mode</label>
                 <select id="mwt-int-mode" class="mwt-input">
@@ -173,6 +179,8 @@ export function renderSettingsPanel() {
         saveSettings({
             ...apiValues,
             autoMode: panel.querySelector('#mwt-int-auto-mode')?.checked ?? true,
+            generateThoughts: panel.querySelector('#mwt-int-gen-thoughts')?.checked ?? true,
+            generateIntentions: panel.querySelector('#mwt-int-gen-intentions')?.checked ?? true,
             mode: panel.querySelector('#mwt-int-mode')?.value || 'batched',
             maxNpcs: Number(panel.querySelector('#mwt-int-max-npcs')?.value) || 4,
             messageWindow: Number(panel.querySelector('#mwt-int-window')?.value) || 8,

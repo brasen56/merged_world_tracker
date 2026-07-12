@@ -66,6 +66,9 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         maxNpcs: 4,
         // Message window size (recent messages fed to the model, post-strip)
         messageWindow: 8,
+        // Feature toggles — users may want only thoughts or only intentions
+        generateThoughts: true,
+        generateIntentions: true,
     },
     logPrefix: '[MWT:Interiority]',
 });
