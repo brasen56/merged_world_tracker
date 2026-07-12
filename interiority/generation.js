@@ -277,6 +277,7 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
     const resolved = resolveApiCall({ moduleSettings: settings });
 
     for (let attempt = 1; attempt <= 2; attempt++) {
+        let cleaned = '';
         try {
             const raw = await resolved.fetchFn({
                 systemPrompt,
@@ -284,11 +285,14 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
                 settings: resolved.settings,
                 retries: 1,
             });
-            const cleaned = normaliseOutput(raw);
+            cleaned = normaliseOutput(raw);
             const result = parseJsonLenient(cleaned);
             return result;
         } catch (err) {
             console.warn(`[MWT:Interiority] API/parse attempt ${attempt} failed: ${err.message}`);
+            if (cleaned) {
+                console.warn(`[MWT:Interiority] Normalised output that failed to parse (first 800 chars):\n${cleaned.slice(0, 800)}`);
+            }
             if (attempt >= 2) {
                 console.error('[MWT:Interiority] Giving up after 2 attempts.');
                 return null;
@@ -340,6 +344,7 @@ export function validateAndApply(result, roster, msgIdx) {
     let ledgerChanged = false;
 
     if (!result || !Array.isArray(result.npcs)) {
+        console.warn(`[MWT:Interiority] Result has no "npcs" array — parsed keys: [${result ? Object.keys(result).join(', ') : 'null'}]. Nothing applied.`);
         // Store empty reactions but still snapshot
         setPerMessage(msgIdx, {
             reactions: [],
@@ -354,6 +359,7 @@ export function validateAndApply(result, roster, msgIdx) {
         const name = String(npcResult.name || '').trim();
         if (!name || !rosterLower.has(name.toLowerCase())) {
             // Unknown name — discard
+            console.warn(`[MWT:Interiority] Discarding NPC block "${name}" — not in roster [${roster.join(', ')}].`);
             continue;
         }
         if (userNamesLower.has(name.toLowerCase())) {
@@ -419,10 +425,14 @@ export function validateAndApply(result, roster, msgIdx) {
                 if (!ni) continue;
                 const action = String(ni.action || '').trim();
                 const trigger = String(ni.trigger || '').trim();
-                if (!action || !trigger) continue;
+                if (!action || !trigger) {
+                    console.warn(`[MWT:Interiority] ${name}: discarding new intention missing action/trigger — got keys: [${Object.keys(ni).join(', ')}].`);
+                    continue;
+                }
 
                 // Dedup: never declare the same intention twice
                 if (hasDuplicateIntention(name, action, trigger)) {
+                    console.log(`[MWT:Interiority] ${name}: skipping duplicate intention "${action.slice(0, 60)}".`);
                     continue;
                 }
 
