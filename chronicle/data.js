@@ -9,6 +9,7 @@ import {
     escapeHtml,
     createSettingsManager,
     patchChatMeta,
+    stripNonNarrative,
 } from '../core/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -282,7 +283,7 @@ export function buildMessageWindow(fromIndex, toIndex) {
     for (let i = filtered.length - 1; i >= 0; i--) {
         const msg = filtered[i];
         const name = msg?.name || (msg.is_user ? 'User' : 'Assistant');
-        const text = String(msg.mes || '').trim();
+        const text = stripNonNarrative(String(msg.mes || '').trim());
         const line = `${name}: ${text}`;
         if (total + line.length > MAX) break;
         lines.push(line);

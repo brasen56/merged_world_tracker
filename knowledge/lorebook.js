@@ -10,7 +10,7 @@ import {
     getChat, getChatMeta, getPlayerNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, getLatestChronicleEntry,
-    escapeRegex,
+    escapeRegex, stripNonNarrative,
 } from '../core/index.js';
 
 import { SCAN_SYSTEM_PROMPT, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
@@ -62,7 +62,12 @@ export function getRecentMessages(count = 50) {
     const slice = chat.slice(-count);
     const filtered = slice.filter(m => m.mes && !m.is_system);
     if (!filtered.length) return null;
-    return filtered.map(m => `${m.is_user ? (m.name || 'User') : (m.name || 'Assistant')}: ${m.mes}`).join('\n');
+    // Strip non-narrative blocks (preset trackers, old chatter, time tags)
+    // so tracker secrets don't launder into knowledge scan context.
+    return filtered.map(m => {
+        const name = m.is_user ? (m.name || 'User') : (m.name || 'Assistant');
+        return `${name}: ${stripNonNarrative(m.mes)}`;
+    }).join('\n');
 }
 
 // ─── API fetch (delegates to shared core) ────────────────────────────────────

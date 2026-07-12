@@ -8,6 +8,7 @@ import {
     getContextSafe, getChat,
     resolveApiCall, normaliseOutput, notify,
     getCurrentWorldState, getLatestChronicleEntry,
+    stripNonNarrative,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
@@ -29,7 +30,7 @@ function getRecentMessagesForPlan() {
         const msg = slice[i];
         if (msg?.is_system) continue;
         const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
-        const text = String(msg?.mes || '').trim();
+        const text = stripNonNarrative(String(msg?.mes || '').trim());
         if (!text) continue;
         const line = `${name}: ${text}`;
         if (total + line.length > maxChars) break;

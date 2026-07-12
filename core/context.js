@@ -6,6 +6,8 @@
  * in the merged extension.
  */
 
+import { stripNonNarrative } from './strip.js';
+
 /**
  * Returns the SillyTavern context object, or null if unavailable.
  * Tries both the modern namespace and the legacy global.
@@ -47,6 +49,7 @@ export function getRecentMessages({
     maxMessages = 50,
     maxChars = 500000,
     filterSystem = false,
+    strip = false,
 } = {}) {
     const chat = getChat();
     let slice = chat.slice(-maxMessages);
@@ -58,7 +61,8 @@ export function getRecentMessages({
     for (let i = slice.length - 1; i >= 0; i--) {
         const msg = slice[i];
         const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
-        const text = String(msg?.mes || '').trim();
+        let text = String(msg?.mes || '').trim();
+        if (strip) text = stripNonNarrative(text);
         if (!text) continue;
         const line = `${name}: ${text}`;
         if (total + line.length > maxChars) break;

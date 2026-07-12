@@ -7,7 +7,7 @@
 
 import {
     getContextSafe, getChat,
-    resolveApiCall, normaliseOutput,
+    resolveApiCall, normaliseOutput, stripNonNarrative,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -50,6 +50,8 @@ export function getRecentMessagesForScan() {
         const msg = slice[i];
         const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
         let text = String(msg?.mes || '').trim();
+        // Strip non-narrative blocks (preset trackers, old chatter, time tags)
+        text = stripNonNarrative(text);
         text = applyMessageFilter(text);
         if (!text) continue;
         const line = `${name}: ${text}`;

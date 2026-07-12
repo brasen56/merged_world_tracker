@@ -21,6 +21,7 @@ import * as WorldState from './world_state/index.js';
 import * as Chronicle from './chronicle/index.js';
 import * as Knowledge from './knowledge/index.js';
 import * as StoryPlanner from './story_planner/index.js';
+import * as Interiority from './interiority/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -113,6 +114,10 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         enableChronicle: true,
         enableKnowledge: true,
         enableStoryPlanner: true,
+        enableInteriority: true,
+        // Interiority injection depth/role (same neighborhood as world state)
+        interiorityDepth: 1,
+        interiorityRole: 'system',
         // Global "stop injecting / scanning everything" panic switch.
         // Flipped by right-clicking the ⚙️ floating button.
         injectionMasterOff: false,
@@ -127,6 +132,7 @@ const TABS = [
     { id: 'chronicle', label: '📜 Chronicle', module: Chronicle },
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
     { id: 'story-planner', label: '🗺️ Story Planner', module: StoryPlanner },
+    { id: 'interiority', label: '💭 Interiority', module: Interiority },
     { id: 'settings', label: '⚙️ Settings', module: null },
 ];
 
@@ -203,6 +209,16 @@ function renderSettingsTab() {
                 <option value="assistant" ${s.chronicleRole === 'assistant' ? 'selected' : ''}>assistant</option>
             </select>
 
+            <label class="mwt-label" style="grid-column:1/3;font-weight:bold">💭 Interiority</label>
+            <label class="mwt-label">Depth</label>
+            <input id="mwt-s-int-depth" class="mwt-input" type="number" value="${s.interiorityDepth ?? 1}" min="0" max="999">
+            <label class="mwt-label">Role</label>
+            <select id="mwt-s-int-role" class="mwt-input">
+                <option value="system" ${s.interiorityRole === 'system' ? 'selected' : ''}>system</option>
+                <option value="user" ${s.interiorityRole === 'user' ? 'selected' : ''}>user</option>
+                <option value="assistant" ${s.interiorityRole === 'assistant' ? 'selected' : ''}>assistant</option>
+            </select>
+
             <label class="mwt-label" style="grid-column:1/3;font-weight:bold">🏷️ Structural Boundaries</label>
             <label class="mwt-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
                 <input type="checkbox" id="mwt-s-structural-boundaries" ${s.structuralBoundaries !== false ? 'checked' : ''}>
@@ -273,6 +289,9 @@ function renderSettingsTab() {
 
             <label class="mwt-label">🗺️ Story Planner</label>
             <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-story-planner" ${s.enableStoryPlanner !== false ? 'checked' : ''}> Use this tracker</label>
+
+            <label class="mwt-label">💭 Interiority</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-interiority" ${s.enableInteriority !== false ? 'checked' : ''}> Use this tracker</label>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -394,6 +413,9 @@ function renderModal() {
                 enableChronicle: modal.querySelector('#mwt-s-enable-chronicle')?.checked ?? true,
                 enableKnowledge: modal.querySelector('#mwt-s-enable-knowledge')?.checked ?? true,
                 enableStoryPlanner: modal.querySelector('#mwt-s-enable-story-planner')?.checked ?? true,
+                enableInteriority: modal.querySelector('#mwt-s-enable-interiority')?.checked ?? true,
+                interiorityDepth: depthOr('#mwt-s-int-depth', 1),
+                interiorityRole: modal.querySelector('#mwt-s-int-role')?.value || 'system',
                 injectionMasterOff: modal.querySelector('#mwt-s-master-off')?.checked ?? false,
             };
             // NOTE: enableX and showFloatX are deliberately decoupled. Toggling
@@ -413,6 +435,7 @@ function renderModal() {
                 WorldState.applyWorldStateInjection?.();
                 Chronicle.applyInjection?.();
                 StoryPlanner.applyPlanInjection?.();
+                Interiority.applyIntentionsInjection?.();
             } catch { /* modules may not be initialized yet */ }
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });
@@ -431,6 +454,7 @@ function renderModal() {
             if (Chronicle.syncGlobalSettings) Chronicle.syncGlobalSettings(patch);
             if (Knowledge.syncGlobalSettings) Knowledge.syncGlobalSettings(patch);
             if (StoryPlanner.syncGlobalSettings) StoryPlanner.syncGlobalSettings(patch);
+            if (Interiority.syncGlobalSettings) Interiority.syncGlobalSettings(patch);
             setStatus(modal, 'API settings synced to all modules.', 'success', 3000);
         });
     }
@@ -459,6 +483,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
         Chronicle.onChatChanged();
         Knowledge.onChatChanged();
         StoryPlanner.onChatChanged();
+        Interiority.onChatChanged();
     });
 }
 
@@ -472,6 +497,7 @@ if (eventSource && event_types?.MESSAGE_RECEIVED) {
         if (s.enableChronicle  !== false) Chronicle.onMessageReceived();
         if (s.enableKnowledge  !== false) Knowledge.onMessageReceived();
         if (s.enableStoryPlanner !== false) StoryPlanner.onMessageReceived();
+        if (s.enableInteriority !== false) Interiority.onMessageReceived();
     });
 }
 
@@ -514,6 +540,7 @@ if (eventSource && event_types?.MESSAGE_DELETED) {
         if (s.enableChronicle  !== false) Chronicle.onMessageDeleted(idx);
         if (s.enableKnowledge  !== false) Knowledge.onMessageDeleted(idx);
         if (s.enableStoryPlanner !== false) StoryPlanner.onMessageDeleted(idx);
+        if (s.enableInteriority !== false) Interiority.onMessageDeleted(idx);
     });
 }
 
@@ -525,6 +552,7 @@ if (eventSource && event_types?.MESSAGE_SWIPED) {
         if (s.injectionMasterOff) return;
         if (s.enableWorldState !== false) WorldState.onMessageSwiped(idx);
         if (s.enableChronicle  !== false) Chronicle.onMessageSwiped(idx);
+        if (s.enableInteriority !== false) Interiority.onMessageSwiped(idx);
     });
 }
 
@@ -536,8 +564,20 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
         if (s.injectionMasterOff) return;
         if (s.enableWorldState !== false) WorldState.onMessageEdited(idx);
         if (s.enableChronicle  !== false) Chronicle.onMessageEdited(idx);
+        if (s.enableInteriority !== false) Interiority.onMessageEdited(idx);
     });
 }
+
+// ─── Interiority custom event listeners ──────────────────────────────────────
+// The render.js "Generate Now" button dispatches these custom events.
+
+document.addEventListener('mwt:interiority-generate', () => {
+    Interiority.triggerGenerate?.();
+});
+
+document.addEventListener('mwt:interiority-ledger-changed', () => {
+    Interiority.applyIntentionsInjection?.();
+});
 
 // ─── Floating button bar, drawer, wand menu (via core/ui.js) ────────────────
 
@@ -573,6 +613,7 @@ WorldState.init(null);
 Chronicle.init(null);
 Knowledge.init(null);
 StoryPlanner.init(null);
+Interiority.init(null);
 
 // Periodically update floating button token counts and auto-refresh countdown
 setInterval(ui.updateFloatTokenCounts, 5000);
