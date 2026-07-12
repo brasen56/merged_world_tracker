@@ -2,9 +2,10 @@
  * core/strip.js — Shared message-stripping utility.
  *
  * Removes non-narrative blocks from message text before it is fed to
- * scanner/LLM calls. This prevents preset tracker details, old chatter
- * blocks, and in-story time tags from "laundering" into world state,
- * chronicle, knowledge, or interiority contexts.
+ * scanner/LLM calls. This prevents preset tracker details and old chatter
+ * blocks from "laundering" into world state, chronicle, knowledge, or
+ * interiority contexts. [In-story time: …] tags are deliberately kept — they
+ * are the canonical in-story clock and scanners need them (see below).
  *
  * Used by:
  *   - world_state/refresh.js
@@ -20,7 +21,8 @@
  * Removes:
  *   - `<details>…</details>` blocks (preset trackers, old chatter)
  *   - `<!-- GFX_START -->…<!-- GFX_END -->` blocks
- *   - `[In-story time: …]` tags
+ *
+ * Preserves `[In-story time: …]` tags (canonical in-story clock).
  *
  * Collapses excessive whitespace left behind by removals.
  *
@@ -39,8 +41,9 @@ export function stripNonNarrative(text) {
     // 2. Remove <!-- GFX_START -->…<!-- GFX_END --> blocks (image-gen markers).
     out = out.replace(/<!--\s*GFX_START\s*-->[\s\S]*?<!--\s*GFX_END\s*-->/gi, '');
 
-    // 3. Remove [In-story time: …] tags (bracketed time markers).
-    out = out.replace(/\[In-story time:\s*[^\]]*\]/gi, '');
+    // NOTE: [In-story time: …] tags are intentionally preserved. They are the
+    // only authoritative source of the in-story clock, and scanners (esp. the
+    // world-state tracker) need them to populate time/date fields correctly.
 
     // Collapse 3+ consecutive newlines into 2, and trim.
     out = out.replace(/\n{3,}/g, '\n\n').trim();
