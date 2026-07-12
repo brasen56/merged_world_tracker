@@ -74,7 +74,10 @@ export function getRecentMessages({
 
 /**
  * Returns a Set of player / co-protagonist names (lower-cased).
- * Useful for filtering out non-NPCs during scans.
+ * Includes BOTH {{user}} (name1) AND {{char}} (name2), plus all group-chat
+ * member names. Useful for filtering out non-NPCs during scans (knowledge
+ * tracker). Interiority should use {@link getUserNames} instead, since
+ * {{char}} is a valid NPC target for thought generation.
  */
 export function getPlayerNames({ lower = true, includeFirstChat = false } = {}) {
     const ctx = getContextSafe();
@@ -96,6 +99,27 @@ export function getPlayerNames({ lower = true, includeFirstChat = false } = {}) 
             if (first?.name) names.add(transform(first.name.trim()));
         }
     }
+    return names;
+}
+
+/**
+ * Returns a Set containing ONLY the user persona name(s) ({{user}} / name1),
+ * lower-cased by default. Group-chat member names that aren't the current
+ * persona are NOT included.
+ *
+ * Use this instead of {@link getPlayerNames} when you need to exclude only
+ * the human user but keep {{char}} and other AI characters as valid targets
+ * (e.g. the interiority roster builder).
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.lower=true] — lower-case the names
+ * @returns {Set<string>}
+ */
+export function getUserNames({ lower = true } = {}) {
+    const ctx = getContextSafe();
+    const names = new Set();
+    const transform = lower ? (s) => s.toLowerCase() : (s) => s;
+    if (ctx?.name1) names.add(transform(String(ctx.name1).trim()));
     return names;
 }
 

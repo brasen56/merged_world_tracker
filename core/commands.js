@@ -16,7 +16,7 @@
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
 export function createCommands({ registerSlashCommand, macroRegistry, modules }) {
-    const { WorldState, Chronicle, Knowledge, StoryPlanner } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
 
@@ -78,6 +78,20 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules })
                     return `Error: ${err.message}`;
                 }
             }, ['mwt-plan'], 'Generate a Story Planner plan');
+
+            // /wt-thoughts — Generate interiority (NPC thoughts)
+            registerSlashCommand('wt-thoughts', async (_args, _command) => {
+                try {
+                    if (typeof Interiority.triggerGenerate === 'function') {
+                        const result = await Interiority.triggerGenerate();
+                        if (result) return `Interiority generated: ${result.reactions.length} reaction(s).`;
+                        return 'Interiority generated (no reactions this turn).';
+                    }
+                    return 'Interiority not available.';
+                } catch (err) {
+                    return `Error: ${err.message}`;
+                }
+            }, ['mwt-thoughts'], 'Generate NPC interiority (thoughts and intentions)');
 
             // /wt-inject on|off — Toggle injection for all modules
             registerSlashCommand('wt-inject', async (args, _command) => {

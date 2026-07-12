@@ -27,6 +27,7 @@ ABSOLUTE RULES:
 6. "reaction" may be null if nothing noteworthy happened. Do not produce filler or boilerplate reactions.
 7. Wrong guesses are allowed. Invented facts are forbidden.
 8. Keep thoughts concise (1-3 sentences) and in the NPC's own voice.
+9. NEVER produce a block for the player character (the human user). If a name is given in <player_character>, that person is the user, not an NPC — exclude them entirely, even if they are present in the scene.
 
 OUTPUT CONTRACT (JSON only):
 {
@@ -55,10 +56,17 @@ Notes:
  *   [{ name, knowledgeEntry, openIntentions }]
  * @param {string} opts.recentMessages - stripped recent message window
  * @param {string} [opts.worldTime] - in-world time label from world state
+ * @param {string} [opts.playerName] - the human user's persona name, so the
+ *   model can exclude them (they are never an NPC)
  * @returns {string} assembled user content
  */
-export function buildUserContent({ npcBlocks, recentMessages, worldTime }) {
+export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerName }) {
     const parts = [];
+
+    if (playerName) {
+        parts.push(`<player_character>${playerName}</player_character>`);
+        parts.push('');
+    }
 
     for (const npc of npcBlocks) {
         parts.push(`<npc name="${npc.name}">`);

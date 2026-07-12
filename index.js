@@ -103,6 +103,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         showFloatChronicle: true,
         showFloatKnowledge: true,
         showFloatStoryPlanner: true,
+        showFloatInteriority: true,
         showFloatSettings: true,
         collapseFloatButtons: false,
         buttonStyle: 'modern', // 'modern' | 'classic'
@@ -253,6 +254,9 @@ function renderSettingsTab() {
 
             <label class="mwt-label">🗺️ Story Planner</label>
             <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-story-planner" ${s.showFloatStoryPlanner !== false ? 'checked' : ''}> Visible</label>
+
+            <label class="mwt-label">💭 Interiority</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-interiority" ${s.showFloatInteriority !== false ? 'checked' : ''}> Visible</label>
 
             <label class="mwt-label">⚙️ Settings</label>
             <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-settings" ${s.showFloatSettings !== false ? 'checked' : ''}> Visible</label>
@@ -405,6 +409,7 @@ function renderModal() {
                 showFloatChronicle: modal.querySelector('#mwt-s-show-chronicle')?.checked ?? true,
                 showFloatKnowledge: modal.querySelector('#mwt-s-show-knowledge')?.checked ?? true,
                 showFloatStoryPlanner: modal.querySelector('#mwt-s-show-story-planner')?.checked ?? true,
+                showFloatInteriority: modal.querySelector('#mwt-s-show-interiority')?.checked ?? true,
                 showFloatSettings: modal.querySelector('#mwt-s-show-settings')?.checked ?? true,
                 collapseFloatButtons: modal.querySelector('#mwt-s-collapse-float')?.checked ?? false,
                 buttonStyle: modal.querySelector('#mwt-s-button-style')?.value || 'modern',
@@ -585,7 +590,7 @@ const ui = createFloatingButtonBar({
     getSettings,
     saveSettings,
     openModal: openMwtModal,
-    modules: { WorldState, Chronicle, Knowledge, StoryPlanner },
+    modules: { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority },
 });
 
 // ─── Slash commands & macros (via core/commands.js) ──────────────────────────
@@ -593,7 +598,7 @@ const ui = createFloatingButtonBar({
 const commands = createCommands({
     registerSlashCommand,
     macroRegistry,
-    modules: { WorldState, Chronicle, Knowledge, StoryPlanner },
+    modules: { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority },
 });
 
 // ─── Initialize ──────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@
  */
 
 import {
-    getChatMeta, persistChatMeta,
+    getChatMeta, persistChatMeta, getUserNames,
     createSettingsManager, syncSharedConnectionSettings,
 } from '../core/index.js';
 
@@ -202,6 +202,36 @@ export function removeLedgerEntries(ids) {
  */
 export function setLedger(newLedger) {
     patchInteriorityData({ ledger: Array.isArray(newLedger) ? newLedger : [] });
+}
+
+/**
+ * Remove any ledger entries owned by the human user ({{user}} / name1).
+ *
+ * Migration/cleanup for chats created before the getUserNames roster fix,
+ * where the porous getPlayerNames filter could let a player-named intention
+ * into the ledger. Such entries are excluded from the roster now, so they
+ * would never be evaluated (executed/dropped) again — they'd linger in the
+ * injection forever. This purges them once, at chat load.
+ *
+ * @returns {boolean} true if any entries were removed
+ */
+export function purgeUserLedgerEntries() {
+    const userNames = getUserNames({ lower: true });
+    if (userNames.size === 0) return false;
+
+    const data = getInteriorityData();
+    const before = data.ledger.length;
+    data.ledger = data.ledger.filter(
+        e => !userNames.has(String(e.npc).toLowerCase().trim())
+    );
+
+    const removed = before - data.ledger.length;
+    if (removed > 0) {
+        saveInteriorityData(data);
+        console.log(`[MWT:Interiority] Purged ${removed} stale user ledger entr${removed === 1 ? 'y' : 'ies'}.`);
+        return true;
+    }
+    return false;
 }
 
 /**

@@ -22,7 +22,7 @@ import {
 import {
     state, getSettings, hasValidSettings, syncGlobalSettings,
     getInteriorityData, saveInteriorityData, getLedger, setLedger,
-    deletePerMessage, getPerMessageIndices,
+    deletePerMessage, getPerMessageIndices, purgeUserLedgerEntries,
 } from './data.js';
 
 import {
@@ -44,6 +44,8 @@ export function init(parentModal) {
         state.contentEl = null;
         renderContent();
     }
+    // Clean up any stale user-owned ledger entries from before the roster fix.
+    purgeUserLedgerEntries();
     applyIntentionsInjection();
     // Render any existing thought blocks for the current chat
     setTimeout(() => renderAllThoughtBlocks(), 100);
@@ -174,13 +176,18 @@ async function generateForCurrentMessage() {
 // ─── Chat lifecycle ──────────────────────────────────────────────────────────
 
 export function onChatChanged() {
-    state.isGenerating = false;
+    // NOTE: do NOT unconditionally clear state.isGenerating here. A generation
+    // in flight for the *previous* chat self-clears in its own finally; forcing
+    // the flag false here shows stale "idle" UI and (if the work queue were
+    // ever removed) could allow overlapping calls. Mirrors story_planner.
     state.lastChatLength = getChat()?.length || 0;
     state.contentEl = null;
     // Clear DOM thought blocks from the previous chat
     clearAllThoughtBlocks();
     // Re-render thought blocks for the new chat
     setTimeout(() => renderAllThoughtBlocks(), 200);
+    // Purge stale user-owned ledger entries before re-injecting this chat's ledger
+    purgeUserLedgerEntries();
     // Re-apply injection from the new chat's ledger
     applyIntentionsInjection();
     // Re-render the tab content
@@ -315,6 +322,31 @@ export function getTotalTokens() {
 
 export function isGenerating() {
     return state.isGenerating;
+}
+
+/**
+ * Return a minimal summary of interiority settings for the floating button
+ * state logic. Only fields relevant to the button (autoMode) are included.
+ * @returns {{autoMode: boolean}}
+ */
+export function getSettingsSummary() {
+    try {
+        return { autoMode: getSettings().autoMode !== false };
+    } catch {
+        return { autoMode: false };
+    }
+}
+
+/**
+ * Return the current ledger entry count (for button state display).
+ * @returns {number}
+ */
+export function getLedgerCount() {
+    try {
+        return getLedger().length;
+    } catch {
+        return 0;
+    }
 }
 
 // ─── Settings sync ───────────────────────────────────────────────────────────

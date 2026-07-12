@@ -140,6 +140,7 @@ const FLOAT_BUTTONS = [
     { id: 'mwt-float-chronicle',     label: '📜', title: 'Chronicle',     tab: 'chronicle',     visibilityKey: 'showFloatChronicle',     enableKey: 'enableChronicle' },
     { id: 'mwt-float-knowledge',     label: '🧠', title: 'Knowledge',     tab: 'knowledge',     visibilityKey: 'showFloatKnowledge',     enableKey: 'enableKnowledge' },
     { id: 'mwt-float-story-planner', label: '🗺️', title: 'Story Planner', tab: 'story-planner', visibilityKey: 'showFloatStoryPlanner', enableKey: 'enableStoryPlanner' },
+    { id: 'mwt-float-interiority',   label: '💭', title: 'Interiority',   tab: 'interiority',   visibilityKey: 'showFloatInteriority',   enableKey: 'enableInteriority' },
     { id: 'mwt-float-settings',      label: '⚙️', title: 'All Settings',  tab: 'settings',      visibilityKey: 'showFloatSettings',      masterKey: 'injectionMasterOff' },
 ];
 
@@ -172,7 +173,7 @@ function saveFloatPosition(btnId, left, top) {
  *                   updateFloatTokenCounts, updateButtonStates
  */
 export function createFloatingButtonBar({ getSettings, saveSettings, openModal, modules }) {
-    const { WorldState, Chronicle, Knowledge, StoryPlanner } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority } = modules;
 
     /**
      * Apply per-button visibility from settings.
@@ -231,6 +232,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     'mwt-float-chronicle': '📜 Session Chronicle',
                     'mwt-float-knowledge': '🧠 Knowledge Tracker',
                     'mwt-float-story-planner': '🗺️ Story Planner',
+                    'mwt-float-interiority': '💭 Interiority',
                     'mwt-float-settings': '⚙️ Settings',
                 };
                 if (iconEl && classicLabels[cfg.id]) {
@@ -243,6 +245,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     'mwt-float-chronicle': '📜',
                     'mwt-float-knowledge': '🧠',
                     'mwt-float-story-planner': '🗺️',
+                    'mwt-float-interiority': '💭',
                     'mwt-float-settings': '⚙️',
                 };
                 if (iconEl && modernLabels[cfg.id]) {
@@ -337,6 +340,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                         WorldState.applyWorldStateInjection?.();
                         Chronicle.applyInjection?.();
                         StoryPlanner.applyPlanInjection?.();
+                        Interiority.applyIntentionsInjection?.();
                     } catch { /* modules may not be initialized yet */ }
                     updateButtonStates();
                     notify(
@@ -352,6 +356,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                         WorldState.applyWorldStateInjection?.();
                         Chronicle.applyInjection?.();
                         StoryPlanner.applyPlanInjection?.();
+                        Interiority.applyIntentionsInjection?.();
                     } catch { /* modules may not be initialized yet */ }
                     updateButtonStates();
                     notify(
@@ -385,6 +390,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 <button class="mwt-btn" id="mwt-drawer-chronicle" title="Open Chronicle tab">📜</button>
                 <button class="mwt-btn" id="mwt-drawer-knowledge" title="Open Knowledge tab">🧠</button>
                 <button class="mwt-btn" id="mwt-drawer-story-planner" title="Open Story Planner tab">🗺️</button>
+                <button class="mwt-btn" id="mwt-drawer-interiority" title="Open Interiority tab">💭</button>
             </div>
         `;
 
@@ -403,6 +409,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
         container.querySelector('#mwt-drawer-chronicle')?.addEventListener('click', () => openModal('chronicle'));
         container.querySelector('#mwt-drawer-knowledge')?.addEventListener('click', () => openModal('knowledge'));
         container.querySelector('#mwt-drawer-story-planner')?.addEventListener('click', () => openModal('story-planner'));
+        container.querySelector('#mwt-drawer-interiority')?.addEventListener('click', () => openModal('interiority'));
     }
 
     // ─── Wand menu entry ─────────────────────────────────────────────────────
@@ -442,6 +449,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 { id: 'mwt-float-chronicle', getTokens: Chronicle.getTotalTokens },
                 { id: 'mwt-float-knowledge', getTokens: Knowledge.getTotalTokens },
                 { id: 'mwt-float-story-planner', getTokens: StoryPlanner.getTotalTokens },
+                { id: 'mwt-float-interiority', getTokens: Interiority.getTotalTokens },
             ];
             for (const m of mods) {
                 const el = document.getElementById(`${m.id}-tokens`);
@@ -631,6 +639,25 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 spBtn.classList.add('mwt-btn--inactive');
             } else {
                 spBtn.classList.add('mwt-btn--empty');
+            }
+        }
+
+        // Interiority button state
+        const inBtn = document.getElementById('mwt-float-interiority');
+        if (inBtn) {
+            inBtn.classList.remove('mwt-btn--refreshing', 'mwt-btn--active', 'mwt-btn--inactive', 'mwt-btn--empty');
+            const inGenerating = Interiority.isGenerating?.() || false;
+            const inSettings = Interiority.getSettingsSummary?.();
+            const inAuto = inSettings?.autoMode === true;
+            const inLedgerCount = Interiority.getLedgerCount?.() ?? 0;
+            if (inGenerating) {
+                inBtn.classList.add('mwt-btn--refreshing');
+            } else if (inAuto) {
+                inBtn.classList.add('mwt-btn--active');
+            } else if (inLedgerCount > 0) {
+                inBtn.classList.add('mwt-btn--inactive');
+            } else {
+                inBtn.classList.add('mwt-btn--empty');
             }
         }
     }

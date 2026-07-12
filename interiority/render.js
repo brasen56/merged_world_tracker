@@ -206,6 +206,22 @@ function wireEvents(el) {
         }
     });
 
+    // Clear the "Generating..." status once the generation finishes.
+    // The generation path dispatches mwt:busy-changed when isGenerating flips
+    // false; we update the status pill so it doesn't read "Generating..." forever.
+    if (!state._busyListenerWired) {
+        state._busyListenerWired = true;
+        document.addEventListener('mwt:busy-changed', () => {
+            if (!state.isGenerating) {
+                // Only clear if the status element still shows "Generating..."
+                const statusEl = getContentEl()?.querySelector('#mwt-int-status');
+                if (statusEl && statusEl.textContent === 'Generating...') {
+                    setIntStatus('Ready.', 'info');
+                }
+            }
+        });
+    }
+
     // Clear ledger button
     el.querySelector('#mwt-int-clear-ledger')?.addEventListener('click', () => {
         if (!confirm('Remove all ledger entries? This cannot be undone.')) return;

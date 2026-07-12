@@ -9,7 +9,7 @@
  */
 
 import {
-    getChatMeta, getContextSafe, getRecentMessages, getPlayerNames,
+    getChatMeta, getContextSafe, getRecentMessages, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, escapeRegex,
 } from '../core/index.js';
@@ -40,15 +40,18 @@ import {
  *   2. Fallback: Knowledge Tracker registry names in recent messages.
  *   3. Fallback: `{{char}}` name only.
  *
- * Player names are always excluded.
+ * Player names are always excluded. Only {{user}} (name1) is excluded —
+ * {{char}} (name2) and group-chat members are valid NPC targets.
  *
  * @returns {string[]} NPC names
  */
 export function buildSceneRoster() {
     const settings = getSettings();
     const maxNpcs = Math.max(1, settings.maxNpcs || 4);
-    const playerNames = getPlayerNames({ lower: true, includeFirstChat: true });
-    const exclude = (name) => !name || playerNames.has(name.toLowerCase().trim());
+    // Only exclude the human user. {{char}} and other AI characters are valid
+    // NPC targets for interiority generation.
+    const userNames = getUserNames({ lower: true });
+    const exclude = (name) => !name || userNames.has(name.toLowerCase().trim());
 
     const roster = [];
     const addUnique = (name) => {
@@ -187,10 +190,12 @@ export async function runBatchedCall(roster) {
     }
 
     const worldTime = getWorldTime();
+    const playerName = [...getUserNames({ lower: false })][0] || '';
     const userContent = buildUserContent({
         npcBlocks,
         recentMessages,
         worldTime,
+        playerName,
     });
 
     return fetchAndParse(INTERIORITY_SYSTEM_PROMPT, userContent, settings);
@@ -218,6 +223,7 @@ export async function runStrictCalls(roster) {
     }
 
     const worldTime = getWorldTime();
+    const playerName = [...getUserNames({ lower: false })][0] || '';
     const allNpcs = [];
 
     for (const name of roster) {
@@ -226,6 +232,7 @@ export async function runStrictCalls(roster) {
             npcBlocks,
             recentMessages,
             worldTime,
+            playerName,
         });
 
         const result = await fetchAndParse(INTERIORITY_SYSTEM_PROMPT, userContent, settings);
@@ -301,6 +308,10 @@ export function validateAndApply(result, roster, msgIdx) {
     // Normalize roster for case-insensitive matching
     const rosterLower = new Set(roster.map(n => n.toLowerCase().trim()));
 
+    // Defense-in-depth: also reject {{user}} even if it somehow made it into
+    // the roster (e.g. stale ledger entry from before the getUserNames fix).
+    const userNamesLower = getUserNames({ lower: true });
+
     // Build a map of ledger entry ids for quick lookup
     const ledgerIds = new Set(data.ledger.map(e => e.id));
 
@@ -323,6 +334,10 @@ export function validateAndApply(result, roster, msgIdx) {
         const name = String(npcResult.name || '').trim();
         if (!name || !rosterLower.has(name.toLowerCase())) {
             // Unknown name — discard
+            continue;
+        }
+        if (userNamesLower.has(name.toLowerCase())) {
+            // {{user}} must never get thoughts or ledger entries — discard
             continue;
         }
         if (seenNpcs.has(name.toLowerCase())) {
