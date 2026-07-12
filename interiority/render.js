@@ -15,7 +15,7 @@ import {
 import {
     state, getSettings, saveSettings,
     getInteriorityData, getLedger, getPerMessage, getPerMessageIndices,
-    removeLedgerEntries, setLedger,
+    removeLedgerEntries, setLedger, updateLedgerEntry,
 } from './data.js';
 
 // ─── Main render ─────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ export function renderContent() {
 
             <h3>📋 Intentions Ledger (${ledger.length})</h3>
             <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Persistent NPC intentions injected into the narrator prompt. These are hidden plans that surface only as NPC actions when their trigger condition is met.
+                Persistent NPC intentions injected into the narrator prompt. These are hidden plans that surface only as NPC actions when their trigger condition is met. Click ✎ to edit an intention if the story changes its context.
             </p>
             <div id="mwt-int-ledger-list" class="mwt-int-ledger-list">
                 ${renderLedgerList(ledger)}
@@ -73,7 +73,7 @@ function renderLedgerList(ledger) {
     if (!ledger || ledger.length === 0) {
         return '<p style="color:var(--mwt-text-dim);font-size:12px">No active intentions.</p>';
     }
-    return ledger.map((entry, i) => `
+    return ledger.map((entry) => `
         <div class="mwt-int-ledger-entry" data-id="${escapeHtml(entry.id)}">
             <div class="mwt-int-ledger-entry-main">
                 <span class="mwt-int-ledger-npc">${escapeHtml(entry.npc)}</span>
@@ -84,7 +84,8 @@ function renderLedgerList(ledger) {
             </div>
             <div class="mwt-int-ledger-meta">
                 ${entry.since ? `<span style="color:var(--mwt-text-dim)">since ${escapeHtml(entry.since)}</span>` : ''}
-                <button class="mwt-int-remove-btn mwt-btn" data-id="${escapeHtml(entry.id)}" title="Remove this intention">✕</button>
+                <button class="mwt-int-edit-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Edit this intention">✎</button>
+                <button class="mwt-int-remove-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Remove this intention">✕</button>
             </div>
         </div>
     `).join('');
@@ -238,17 +239,146 @@ function wireEvents(el) {
         document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
     });
 
-    // Per-entry remove buttons (event delegation)
+    // Per-entry edit and remove buttons (event delegation)
     el.querySelector('#mwt-int-ledger-list')?.addEventListener('click', (e) => {
-        const btn = e.target.closest('.mwt-int-remove-btn');
-        if (!btn) return;
-        const id = btn.dataset.id;
-        if (id) {
-            removeLedgerEntries([id]);
-            renderContent();
-            document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+        // Remove button
+        const removeBtn = e.target.closest('.mwt-int-remove-btn');
+        if (removeBtn) {
+            const id = removeBtn.dataset.id;
+            if (id) {
+                removeLedgerEntries([id]);
+                renderContent();
+                document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+            }
+            return;
+        }
+
+        // Edit button — transform the entry into an inline edit form
+        const editBtn = e.target.closest('.mwt-int-edit-btn');
+        if (editBtn) {
+            const id = editBtn.dataset.id;
+            if (id) {
+                showInlineEditForm(id);
+            }
+            return;
+        }
+
+        // Save button (inside inline edit form)
+        const saveBtn = e.target.closest('.mwt-int-edit-save-btn');
+        if (saveBtn) {
+            const id = saveBtn.dataset.id;
+            if (id) {
+                handleInlineEditSave(id);
+            }
+            return;
+        }
+
+        // Cancel button (inside inline edit form)
+        const cancelBtn = e.target.closest('.mwt-int-edit-cancel-btn');
+        if (cancelBtn) {
+            const id = cancelBtn.dataset.id;
+            if (id) {
+                cancelInlineEdit(id);
+            }
+            return;
         }
     });
+}
+
+// ─── Inline edit form ────────────────────────────────────────────────────────
+
+/**
+ * Transform a ledger entry's display into an inline edit form.
+ * Replaces the entry-main + entry-meta with editable inputs.
+ * @param {string} id - ledger entry id
+ */
+function showInlineEditForm(id) {
+    const listEl = getContentEl()?.querySelector('#mwt-int-ledger-list');
+    if (!listEl) return;
+
+    const entryEl = listEl.querySelector(`.mwt-int-ledger-entry[data-id="${CSS.escape(id)}"]`);
+    if (!entryEl) return;
+
+    const ledger = getLedger();
+    const entry = ledger.find(e => e.id === id);
+    if (!entry) return;
+
+    entryEl.classList.add('mwt-int-ledger-entry--editing');
+    entryEl.innerHTML = `
+        <div class="mwt-int-edit-form">
+            <div class="mwt-int-edit-row">
+                <label class="mwt-label">NPC</label>
+                <input type="text" class="mwt-input mwt-int-edit-npc" value="${escapeHtml(entry.npc)}" placeholder="NPC name">
+            </div>
+            <div class="mwt-int-edit-row">
+                <label class="mwt-label">Action</label>
+                <input type="text" class="mwt-input mwt-int-edit-action" value="${escapeHtml(entry.action)}" placeholder="What the NPC plans to do">
+            </div>
+            <div class="mwt-int-edit-row">
+                <label class="mwt-label">Trigger</label>
+                <input type="text" class="mwt-input mwt-int-edit-trigger" value="${escapeHtml(entry.trigger)}" placeholder="When/where the NPC will act">
+            </div>
+            <div class="mwt-int-edit-actions">
+                <button class="mwt-btn mwt-btn-primary mwt-int-edit-save-btn" data-id="${escapeHtml(entry.id)}">💾 Save</button>
+                <button class="mwt-btn mwt-int-edit-cancel-btn" data-id="${escapeHtml(entry.id)}">✕ Cancel</button>
+            </div>
+        </div>
+    `;
+
+    // Focus the action field (most commonly edited) and select its text
+    const actionInput = entryEl.querySelector('.mwt-int-edit-action');
+    if (actionInput) {
+        actionInput.focus();
+        actionInput.select();
+    }
+
+    // Keyboard shortcuts: Enter to save, Escape to cancel
+    entryEl.querySelectorAll('.mwt-int-edit-npc, .mwt-int-edit-action, .mwt-int-edit-trigger').forEach(input => {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleInlineEditSave(id);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelInlineEdit(id);
+            }
+        });
+    });
+}
+
+/**
+ * Handle Save from the inline edit form.
+ * Reads the input values, validates, updates the ledger entry, and re-renders.
+ * @param {string} id - ledger entry id
+ */
+function handleInlineEditSave(id) {
+    const listEl = getContentEl()?.querySelector('#mwt-int-ledger-list');
+    if (!listEl) return;
+
+    const entryEl = listEl.querySelector(`.mwt-int-ledger-entry[data-id="${CSS.escape(id)}"]`);
+    if (!entryEl) return;
+
+    const npc = entryEl.querySelector('.mwt-int-edit-npc')?.value?.trim() || '';
+    const action = entryEl.querySelector('.mwt-int-edit-action')?.value?.trim() || '';
+    const trigger = entryEl.querySelector('.mwt-int-edit-trigger')?.value?.trim() || '';
+
+    if (!npc || !action || !trigger) {
+        setIntStatus('NPC, Action, and Trigger are all required.', 'error');
+        return;
+    }
+
+    updateLedgerEntry(id, { npc, action, trigger });
+    setIntStatus('Intention updated.', 'success');
+    renderContent();
+    document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+}
+
+/**
+ * Cancel the inline edit — re-render to restore the display view.
+ * @param {string} id - ledger entry id
+ */
+function cancelInlineEdit(id) {
+    renderContent();
 }
 
 // ─── Per-message thought display (§9) ────────────────────────────────────────

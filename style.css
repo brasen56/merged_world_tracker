@@ -2861,6 +2861,61 @@ body.mwt-buttons--classic .mwt-float-btn.mwt-btn--has-staging {
     background: rgba(239, 83, 80, 0.15);
 }
 
+/* Small icon buttons for ledger actions */
+.mwt-btn-sm {
+    background: none;
+    border: none;
+    color: var(--mwt-text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all var(--mwt-transition);
+}
+
+.mwt-int-edit-btn:hover {
+    color: var(--mwt-accent);
+    background: rgba(74, 158, 255, 0.15);
+}
+
+/* ─── Inline edit form (ledger entry editing state) ──────────────────────── */
+
+.mwt-int-ledger-entry--editing {
+    display: block;
+    flex-direction: column;
+    padding: 12px;
+    border-color: var(--mwt-accent);
+    background: var(--mwt-bg-lighter);
+}
+
+.mwt-int-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mwt-int-edit-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mwt-int-edit-row .mwt-input {
+    font-size: 13px;
+    padding: 6px 10px;
+}
+
+.mwt-int-edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.mwt-int-edit-actions .mwt-btn {
+    font-size: 12px;
+    padding: 4px 12px;
+}
+
 /* ─── Recent thoughts list ───────────────────────────────────────────────── */
 
 .mwt-int-thoughts-list {

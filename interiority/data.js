@@ -188,6 +188,28 @@ export function addLedgerEntry(entry, since, msgIdx) {
 }
 
 /**
+ * Update a single ledger entry by id (merge patch).
+ * Only action, trigger, npc, and since fields are user-editable.
+ * @param {string} id
+ * @param {object} patch - fields to update (e.g. { action, trigger })
+ * @returns {object|null} the updated entry, or null if not found
+ */
+export function updateLedgerEntry(id, patch) {
+    if (!id) return null;
+    const data = getInteriorityData();
+    const entry = data.ledger.find(e => e.id === id);
+    if (!entry) return null;
+
+    if (patch.npc !== undefined) entry.npc = String(patch.npc).trim() || entry.npc;
+    if (patch.action !== undefined) entry.action = String(patch.action).trim();
+    if (patch.trigger !== undefined) entry.trigger = String(patch.trigger).trim();
+    if (patch.since !== undefined) entry.since = String(patch.since).trim();
+
+    saveInteriorityData(data);
+    return entry;
+}
+
+/**
  * Remove ledger entries by id.
  * @param {string[]} ids
  */
