@@ -165,7 +165,7 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
  * Build the injection header for the narrator-facing intentions block.
  * This is the bracket header that goes inside the <mwt_npc_intentions> tag.
  */
-export const INJECTION_HEADER = `[NPC intentions ledger — live, hidden NPC plans. For every entry whose trigger condition is met in the current scene, that NPC MUST perform the action on-screen in this response, fully committed. Do not narrate these entries, reference them, or let other characters know them — they surface ONLY as the owning NPC's actions.]`;
+export const INJECTION_HEADER = `[NPC intentions ledger — live, hidden NPC plans. For every entry whose trigger condition is met in the current scene, that NPC MUST perform the action on-screen in this response, fully committed. Do not narrate these entries, reference them, or let other characters know them — they surface ONLY as the owning NPC's actions. If an entry describes something that has already occurred in the story, treat it as stale bookkeeping — ignore it silently; never mention, re-perform, or correct it.]`;
 
 /**
  * Format the ledger into the flat arrow-notation lines for injection.
