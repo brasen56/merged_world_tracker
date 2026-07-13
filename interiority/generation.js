@@ -22,7 +22,7 @@ import {
     getInteriorityData, saveInteriorityData,
     getLedger, addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
     setPerMessage, getLedgerEntriesForNpc,
-    MAX_THOUGHT_LENGTH,
+    MAX_THOUGHT_LENGTH, getWorldTime,
 } from './data.js';
 
 // ─── Scene roster (§6) ────────────────────────────────────────────────────────
@@ -150,18 +150,6 @@ export async function assembleNpcBlocks(roster) {
         blocks.push({ name, knowledgeEntry, openIntentions });
     }
     return blocks;
-}
-
-/**
- * Extract the in-world time label from the world state document.
- * Looks for a `Time:` header.
- * @returns {string}
- */
-function getWorldTime() {
-    const ws = getCurrentWorldState();
-    if (!ws) return '';
-    const m = ws.match(/^Time:\s*(.+)$/im);
-    return m ? m[1].trim() : '';
 }
 
 // ─── API call ────────────────────────────────────────────────────────────────

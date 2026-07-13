@@ -16,6 +16,7 @@ import {
     state, getSettings, saveSettings,
     getInteriorityData, getLedger, getPerMessage, getPerMessageIndices,
     removeLedgerEntries, setLedger, updateLedgerEntry,
+    addManualLedgerEntry, hasDuplicateIntention,
 } from './data.js';
 
 // ─── Main render ─────────────────────────────────────────────────────────────
@@ -50,6 +51,8 @@ export function renderContent() {
             <div id="mwt-int-ledger-list" class="mwt-int-ledger-list">
                 ${renderLedgerList(ledger)}
             </div>
+            <div id="mwt-int-add-form-container" style="margin-top:8px"></div>
+            <button id="mwt-int-add-btn" class="mwt-btn" style="margin-top:8px">➕ Add Intention</button>
 
             <hr style="border-color:var(--mwt-border);margin:16px 0">
 
@@ -74,13 +77,14 @@ function renderLedgerList(ledger) {
         return '<p style="color:var(--mwt-text-dim);font-size:12px">No active intentions.</p>';
     }
     return ledger.map((entry) => `
-        <div class="mwt-int-ledger-entry" data-id="${escapeHtml(entry.id)}">
+        <div class="mwt-int-ledger-entry${entry.manual ? ' mwt-int-ledger-entry--manual' : ''}" data-id="${escapeHtml(entry.id)}">
             <div class="mwt-int-ledger-entry-main">
                 <span class="mwt-int-ledger-npc">${escapeHtml(entry.npc)}</span>
                 <span class="mwt-int-arrow">→</span>
                 <span class="mwt-int-ledger-action">${escapeHtml(entry.action)}</span>
                 <span class="mwt-int-arrow">→</span>
                 <span class="mwt-int-ledger-trigger">${escapeHtml(entry.trigger)}</span>
+                ${entry.manual ? '<span class="mwt-int-manual-badge" title="User-authored intention">✋</span>' : ''}
             </div>
             <div class="mwt-int-ledger-meta">
                 ${entry.since ? `<span style="color:var(--mwt-text-dim)">since ${escapeHtml(entry.since)}</span>` : ''}
@@ -239,6 +243,25 @@ function wireEvents(el) {
         document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
     });
 
+    // Add intention button — show inline add form
+    el.querySelector('#mwt-int-add-btn')?.addEventListener('click', () => {
+        showInlineAddForm();
+    });
+
+    // Add form container event delegation (save / cancel)
+    el.querySelector('#mwt-int-add-form-container')?.addEventListener('click', (e) => {
+        const saveBtn = e.target.closest('.mwt-int-add-save-btn');
+        if (saveBtn) {
+            handleInlineAddSave();
+            return;
+        }
+        const cancelBtn = e.target.closest('.mwt-int-add-cancel-btn');
+        if (cancelBtn) {
+            cancelInlineAdd();
+            return;
+        }
+    });
+
     // Per-entry edit and remove buttons (event delegation)
     el.querySelector('#mwt-int-ledger-list')?.addEventListener('click', (e) => {
         // Remove button
@@ -378,6 +401,96 @@ function handleInlineEditSave(id) {
  * @param {string} id - ledger entry id
  */
 function cancelInlineEdit(id) {
+    renderContent();
+}
+
+// ─── Inline add form (user-authored intentions) ──────────────────────────────
+
+/**
+ * Show the inline add form below the ledger list.
+ * Hides the "Add Intention" button while the form is open.
+ */
+function showInlineAddForm() {
+    const container = getContentEl()?.querySelector('#mwt-int-add-form-container');
+    const addBtn = getContentEl()?.querySelector('#mwt-int-add-btn');
+    if (!container) return;
+
+    if (addBtn) addBtn.style.display = 'none';
+
+    container.innerHTML = `
+        <div class="mwt-int-ledger-entry mwt-int-ledger-entry--editing">
+            <div class="mwt-int-edit-form">
+                <div class="mwt-int-edit-row">
+                    <label class="mwt-label">NPC</label>
+                    <input type="text" class="mwt-input mwt-int-add-npc" placeholder="NPC name">
+                </div>
+                <div class="mwt-int-edit-row">
+                    <label class="mwt-label">Action</label>
+                    <input type="text" class="mwt-input mwt-int-add-action" placeholder="What the NPC plans to do">
+                </div>
+                <div class="mwt-int-edit-row">
+                    <label class="mwt-label">Trigger</label>
+                    <input type="text" class="mwt-input mwt-int-add-trigger" placeholder="When/where the NPC will act">
+                </div>
+                <div class="mwt-int-edit-actions">
+                    <button class="mwt-btn mwt-btn-primary mwt-int-add-save-btn">💾 Add</button>
+                    <button class="mwt-btn mwt-int-add-cancel-btn">✕ Cancel</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Focus the NPC field first
+    const npcInput = container.querySelector('.mwt-int-add-npc');
+    if (npcInput) npcInput.focus();
+
+    // Keyboard shortcuts: Enter to save, Escape to cancel
+    container.querySelectorAll('.mwt-int-add-npc, .mwt-int-add-action, .mwt-int-add-trigger').forEach(input => {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleInlineAddSave();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelInlineAdd();
+            }
+        });
+    });
+}
+
+/**
+ * Handle Save from the inline add form.
+ * Reads the input values, validates, adds a manual ledger entry, and re-renders.
+ */
+function handleInlineAddSave() {
+    const container = getContentEl()?.querySelector('#mwt-int-add-form-container');
+    if (!container) return;
+
+    const npc = container.querySelector('.mwt-int-add-npc')?.value?.trim() || '';
+    const action = container.querySelector('.mwt-int-add-action')?.value?.trim() || '';
+    const trigger = container.querySelector('.mwt-int-add-trigger')?.value?.trim() || '';
+
+    if (!npc || !action || !trigger) {
+        setIntStatus('NPC, Action, and Trigger are all required.', 'error');
+        return;
+    }
+
+    // Dedup check — same as engine-generated entries
+    if (hasDuplicateIntention(npc, action, trigger)) {
+        setIntStatus('An identical intention already exists in the ledger.', 'error');
+        return;
+    }
+
+    addManualLedgerEntry({ npc, action, trigger });
+    setIntStatus('Manual intention added.', 'success');
+    renderContent();
+    document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+}
+
+/**
+ * Cancel the inline add form — re-render to restore the button.
+ */
+function cancelInlineAdd() {
     renderContent();
 }
 

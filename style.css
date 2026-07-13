@@ -2916,6 +2916,21 @@ body.mwt-buttons--classic .mwt-float-btn.mwt-btn--has-staging {
     padding: 4px 12px;
 }
 
+/* ─── Manual entry indicator ─────────────────────────────────────────────── */
+
+.mwt-int-ledger-entry--manual {
+    border-left: 3px solid var(--mwt-warning, #ff9800);
+}
+
+.mwt-int-manual-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    margin-left: 4px;
+    cursor: help;
+    opacity: 0.7;
+}
+
 /* ─── Recent thoughts list ───────────────────────────────────────────────── */
 
 .mwt-int-thoughts-list {

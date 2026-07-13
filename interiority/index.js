@@ -21,8 +21,9 @@ import {
 
 import {
     state, getSettings, hasValidSettings, syncGlobalSettings,
-    getInteriorityData, saveInteriorityData, getLedger, setLedger,
+    getInteriorityData, saveInteriorityData, getLedger,
     deletePerMessage, getPerMessageIndices, purgeUserLedgerEntries,
+    restoreLedgerSnapshot,
 } from './data.js';
 
 import {
@@ -225,8 +226,8 @@ export function onMessageDeleted(deletedIndex) {
     const deleted = deletePerMessage(deletedIndex);
 
     if (wasNewest && deleted && Array.isArray(deleted.ledgerSnapshot)) {
-        setLedger(deleted.ledgerSnapshot);
-        console.log(`[MWT:Interiority] MESSAGE_DELETED at index ${deletedIndex} — ledger snapshot restored.`);
+        restoreLedgerSnapshot(deleted.ledgerSnapshot);
+        console.log(`[MWT:Interiority] MESSAGE_DELETED at index ${deletedIndex} — ledger snapshot restored (manual entries preserved).`);
     }
 
     // Re-key perMessage entries: any index > deletedIndex needs to shift down by 1
@@ -260,8 +261,8 @@ function invalidateAndMaybeRegenerate(msgIdx, eventName) {
     const deleted = deletePerMessage(msgIdx);
 
     if (wasNewest && deleted && Array.isArray(deleted.ledgerSnapshot)) {
-        setLedger(deleted.ledgerSnapshot);
-        console.log(`[MWT:Interiority] ${eventName} at index ${msgIdx} — ledger snapshot restored.`);
+        restoreLedgerSnapshot(deleted.ledgerSnapshot);
+        console.log(`[MWT:Interiority] ${eventName} at index ${msgIdx} — ledger snapshot restored (manual entries preserved).`);
     }
 
     applyIntentionsInjection();

@@ -10,7 +10,8 @@
  *   meta.mwt_interiority = {
  *     enabled: true,
  *     ledger: [
- *       { id, npc, action, trigger, since, declaredMsgIdx }
+ *       { id, npc, action, trigger, since, declaredMsgIdx, manual }
+ *                                                                    ↑ optional
  *     ],
  *     perMessage: {
  *       '44': {
@@ -25,6 +26,7 @@
 import {
     getChatMeta, persistChatMeta, getUserNames,
     createSettingsManager, syncSharedConnectionSettings,
+    getCurrentWorldState,
 } from '../core/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -278,6 +280,63 @@ export function hasDuplicateIntention(npc, action, trigger) {
     );
 }
 
+// ─── Manual entries (user-authored intentions) ───────────────────────────────
+
+/**
+ * Add a manually-authored intention to the ledger.
+ *
+ * Manual entries are tagged with `manual: true` so they can be visually
+ * differentiated in the UI and preserved across swipe/edit/delete rollbacks
+ * (engine-generated entries are rolled back via ledgerSnapshot; manual
+ * entries are user-authored state that should survive rollback).
+ *
+ * @param {object} entry - { npc, action, trigger, since }
+ * @returns {object} the created ledger entry
+ */
+export function addManualLedgerEntry(entry) {
+    const data = getInteriorityData();
+    const id = generateEntryId();
+    const since = String(entry.since || '').trim() || getWorldTime();
+    const fullEntry = {
+        id,
+        npc: String(entry.npc || 'Unknown').trim(),
+        action: String(entry.action || '').trim(),
+        trigger: String(entry.trigger || '').trim(),
+        since,
+        declaredMsgIdx: null,
+        manual: true,
+    };
+    data.ledger.push(fullEntry);
+    saveInteriorityData(data);
+    return fullEntry;
+}
+
+/**
+ * Restore a ledger snapshot while preserving manual entries.
+ *
+ * On swipe/edit/delete, engine-generated ledger state is rolled back to the
+ * snapshot taken before that message's generation. Manual entries are
+ * user-authored state — they must survive rollback so the user's intentions
+ * don't silently vanish.
+ *
+ * Entries from the snapshot that have the same id as a current manual entry
+ * are skipped (the manual entry wins, since it may have been edited).
+ *
+ * @param {Array<object>} snapshot - the ledger snapshot to restore
+ */
+export function restoreLedgerSnapshot(snapshot) {
+    const current = getLedger();
+    const snapIds = new Set((snapshot || []).map(e => e.id));
+
+    // Manual entries that aren't already in the snapshot survive the rollback.
+    const manualSurvivors = current.filter(
+        e => e.manual === true && !snapIds.has(e.id)
+    );
+
+    const restored = [...(snapshot || []), ...manualSurvivors];
+    setLedger(restored);
+}
+
 // ─── Per-message helpers ─────────────────────────────────────────────────────
 
 /**
@@ -338,4 +397,20 @@ export function getPerMessageIndices() {
  */
 function generateEntryId() {
     return `i-${Date.now().toString(36)}${Math.random().toString(16).slice(2, 6)}`;
+}
+
+/**
+ * Extract the in-world time label from the world state document.
+ * Looks for a `Time:` header. Returns empty string if unavailable.
+ *
+ * Shared between data.js (manual entry creation) and generation.js (engine
+ * entry creation) so both stamp the same `since` value.
+ *
+ * @returns {string}
+ */
+export function getWorldTime() {
+    const ws = getCurrentWorldState();
+    if (!ws) return '';
+    const m = ws.match(/^Time:\s*(.+)$/im);
+    return m ? m[1].trim() : '';
 }
