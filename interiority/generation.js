@@ -19,9 +19,9 @@ import { REGISTRY_KEY } from '../knowledge/state.js';
 import { buildSystemPrompt, buildUserContent } from './prompts.js';
 import {
     getSettings, hasValidSettings,
-    getInteriorityData, saveInteriorityData,
+    getInteriorityData,
     getLedger, addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
-    setPerMessage, getLedgerEntriesForNpc,
+    setPerMessage, getLedgerEntriesForNpc, getMsgKeyForIndex,
     MAX_THOUGHT_LENGTH, getWorldTime,
 } from './data.js';
 
@@ -305,7 +305,8 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
  *
  * @param {object} result - parsed JSON from the API
  * @param {string[]} roster - the NPC roster for this turn
- * @param {number} msgIdx - message index for this turn
+ * @param {number} msgIdx - chat-array index of the message (for ledger
+ *   entries' declaredMsgIdx metadata)
  * @returns {object} { reactions: [], ledgerChanged: boolean }
  */
 export function validateAndApply(result, roster, msgIdx) {
@@ -313,6 +314,11 @@ export function validateAndApply(result, roster, msgIdx) {
     const settings = getSettings();
     const wantThoughts = settings.generateThoughts !== false;
     const wantIntentions = settings.generateIntentions !== false;
+
+    // Resolve the stable perMessage key for this message. perMessage is
+    // keyed by send_date (not chat index) so thoughts survive chat-array
+    // shifts caused by summarisation tools like Inline Summary.
+    const msgKey = getMsgKeyForIndex(msgIdx);
 
     // Take a snapshot of the ledger BEFORE mutations (for rollback)
     const ledgerSnapshot = JSON.parse(JSON.stringify(data.ledger));
@@ -334,11 +340,13 @@ export function validateAndApply(result, roster, msgIdx) {
     if (!result || !Array.isArray(result.npcs)) {
         console.warn(`[MWT:Interiority] Result has no "npcs" array — parsed keys: [${result ? Object.keys(result).join(', ') : 'null'}]. Nothing applied.`);
         // Store empty reactions but still snapshot
-        setPerMessage(msgIdx, {
-            reactions: [],
-            ledgerSnapshot,
-            generatedAt: Date.now(),
-        });
+        if (msgKey) {
+            setPerMessage(msgKey, {
+                reactions: [],
+                ledgerSnapshot,
+                generatedAt: Date.now(),
+            });
+        }
         return { reactions: [], ledgerChanged: false };
     }
 
@@ -430,12 +438,14 @@ export function validateAndApply(result, roster, msgIdx) {
         }
     }
 
-    // Store per-message reactions + ledger snapshot
-    setPerMessage(msgIdx, {
-        reactions,
-        ledgerSnapshot,
-        generatedAt: Date.now(),
-    });
+    // Store per-message reactions + ledger snapshot (keyed by stable msgKey)
+    if (msgKey) {
+        setPerMessage(msgKey, {
+            reactions,
+            ledgerSnapshot,
+            generatedAt: Date.now(),
+        });
+    }
 
     return { reactions, ledgerChanged };
 }

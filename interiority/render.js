@@ -14,7 +14,8 @@ import {
 
 import {
     state, getSettings, saveSettings,
-    getInteriorityData, getLedger, getPerMessage, getPerMessageIndices,
+    getInteriorityData, getLedger, getPerMessage, getPerMessageKeys,
+    getMsgKeyForIndex, buildKeyToIndexMap,
     removeLedgerEntries, setLedger, updateLedgerEntry,
     addManualLedgerEntry, hasDuplicateIntention,
 } from './data.js';
@@ -31,7 +32,7 @@ export function renderContent() {
 
     const data = getInteriorityData();
     const ledger = getLedger();
-    const msgIndices = getPerMessageIndices();
+    const msgKeys = getPerMessageKeys();
 
     el.innerHTML = `
         <div class="mwt-interiority-tab">
@@ -61,7 +62,7 @@ export function renderContent() {
                 Display-only NPC reactions from recent turns. These are never injected into the narrator prompt.
             </p>
             <div id="mwt-int-thoughts-list" class="mwt-int-thoughts-list">
-                ${renderThoughtsList(msgIndices)}
+                ${renderThoughtsList(msgKeys)}
             </div>
         </div>
     `;
@@ -97,23 +98,33 @@ function renderLedgerList(ledger) {
 
 /**
  * Render the recent thoughts list HTML.
+ *
+ * @param {string[]} msgKeys - stable perMessage keys (sd-* format)
  */
-function renderThoughtsList(msgIndices) {
-    if (!msgIndices || msgIndices.length === 0) {
+function renderThoughtsList(msgKeys) {
+    if (!msgKeys || msgKeys.length === 0) {
         return '<p style="color:var(--mwt-text-dim);font-size:12px">No thoughts generated yet.</p>';
     }
 
-    const shown = msgIndices.slice(0, 20); // Show last 20
+    // Build a key→index map so we can display the current message number.
+    // After Inline Summary shrinks the chat, the index may differ from when
+    // the thought was generated — but it correctly points to where the
+    // message lives *now*.
+    const keyToIndex = buildKeyToIndexMap();
+
+    const shown = msgKeys.slice(0, 20); // Show last 20
     const parts = [];
-    for (const idx of shown) {
-        const pm = getPerMessage(idx);
+    for (const key of shown) {
+        const pm = getPerMessage(key);
         if (!pm || !pm.reactions || pm.reactions.length === 0) continue;
+        const currentIdx = keyToIndex.get(key);
+        const msgLabel = currentIdx != null ? `msg #${currentIdx}` : '';
         for (const r of pm.reactions) {
             parts.push(`
                 <div class="mwt-int-thought-entry">
                     <div class="mwt-int-thought-header">
                         <span class="mwt-int-thought-npc">${escapeHtml(r.npc)}</span>
-                        <span class="mwt-int-thought-msg">msg #${idx}</span>
+                        ${msgLabel ? `<span class="mwt-int-thought-msg">${msgLabel}</span>` : ''}
                     </div>
                     <div class="mwt-int-thought-re">${escapeHtml(r.re)}</div>
                     <div class="mwt-int-thought-text">"${escapeHtml(r.thought)}"</div>
@@ -506,7 +517,11 @@ function cancelInlineAdd() {
  * @param {number} msgIdx - chat-array index of the message
  */
 export function renderThoughtBlockForMessage(msgIdx) {
-    const pm = getPerMessage(msgIdx);
+    // Resolve the stable perMessage key for this index, then look up the data.
+    // perMessage is keyed by send_date, so the lookup survives chat shifts.
+    const msgKey = getMsgKeyForIndex(msgIdx);
+    if (!msgKey) return;
+    const pm = getPerMessage(msgKey);
     if (!pm || !pm.reactions || pm.reactions.length === 0) return;
 
     // Find the message element in the DOM. ST stamps each message element
@@ -546,11 +561,20 @@ export function renderThoughtBlockForMessage(msgIdx) {
 /**
  * Re-render all thought blocks for the current chat.
  * Called on CHAT_CHANGED.
+ *
+ * Iterates over stable perMessage keys, resolves each to its current
+ * chat-array index via buildKeyToIndexMap(), and renders the thought
+ * block on the matching DOM element. Thoughts whose messages have been
+ * removed entirely (not in the chat array) are silently skipped.
  */
 export function renderAllThoughtBlocks() {
-    const indices = getPerMessageIndices();
-    for (const idx of indices) {
-        renderThoughtBlockForMessage(idx);
+    const keys = getPerMessageKeys();
+    const keyToIndex = buildKeyToIndexMap();
+    for (const key of keys) {
+        const idx = keyToIndex.get(key);
+        if (idx != null) {
+            renderThoughtBlockForMessage(idx);
+        }
     }
 }
 

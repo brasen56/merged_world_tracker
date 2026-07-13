@@ -14,19 +14,26 @@
  *                                                                    ↑ optional
  *     ],
  *     perMessage: {
- *       '44': {
+ *       'sd-<send_date>': {
  *         reactions: [ { npc, re, thought } ],
  *         ledgerSnapshot: [ ... ],
  *         generatedAt: 1699999999,
  *       }
  *     }
  *   }
+ *
+ * perMessage keys are stable identifiers derived from each message's
+ * `send_date` property (prefixed 'sd-'), NOT positional chat-array indices.
+ * This makes thoughts immune to summarisation tools (Inline Summary) that
+ * shrink the chat array. Legacy numeric keys are migrated on chat load
+ * via migrateIndexKeys().
  */
 
 import {
     getChatMeta, persistChatMeta, getUserNames,
     createSettingsManager, syncSharedConnectionSettings,
     getCurrentWorldState,
+    getChat,
 } from '../core/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -44,6 +51,15 @@ export const INJECTION_TAG = 'mwt_npc_intentions';
 
 /** Max thought length (characters). */
 export const MAX_THOUGHT_LENGTH = 500;
+
+/**
+ * Prefix for stable perMessage keys based on SillyTavern's `send_date`
+ * property. Each message is assigned a `send_date` at creation that never
+ * changes — even when Inline Summary or other summarisation tools shrink
+ * the chat array. Keying perMessage by `send_date` instead of by chat
+ * array index prevents thought loss and overwrites when the array shifts.
+ */
+const MSG_KEY_PREFIX = 'sd-';
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -337,54 +353,158 @@ export function restoreLedgerSnapshot(snapshot) {
     setLedger(restored);
 }
 
-// ─── Per-message helpers ─────────────────────────────────────────────────────
+// ─── Stable message-key utilities ────────────────────────────────────────────
 
 /**
- * Get the per-message data for a specific message index.
- * @param {number} msgIdx
- * @returns {object|null}
+ * Resolve a chat-array index to a stable perMessage key based on the
+ * message's `send_date` property.
+ *
+ * SillyTavern stamps each message with `send_date` at creation time. This
+ * value never changes — even when Inline Summary, bulk-delete, or any
+ * other tool shrinks/reorders the chat array. Keying perMessage entries
+ * by `send_date` instead of by positional index makes thoughts immune to
+ * array shifts: a thought stored for message X will always be associated
+ * with message X, regardless of how many messages are inserted or removed
+ * before it.
+ *
+ * @param {number} msgIdx - chat-array index
+ * @returns {string|null} stable key like 'sd-1689123456789', or null
  */
-export function getPerMessage(msgIdx) {
-    const data = getInteriorityData();
-    return data.perMessage[String(msgIdx)] || null;
+export function getMsgKeyForIndex(msgIdx) {
+    if (typeof msgIdx !== 'number' || msgIdx < 0) return null;
+    const chat = getChat();
+    const msg = chat[msgIdx];
+    if (!msg || !msg.send_date) return null;
+    return `${MSG_KEY_PREFIX}${msg.send_date}`;
 }
 
 /**
- * Store per-message data (reactions + ledger snapshot) for a message index.
- * @param {number} msgIdx
+ * Build a reverse-lookup map from stable msgKey → chat-array index.
+ * Used by renderers that iterate perMessage keys but need the index to
+ * locate the corresponding DOM element (`.mes[mesid="N"]`).
+ *
+ * @returns {Map<string, number>}
+ */
+export function buildKeyToIndexMap() {
+    const chat = getChat();
+    const map = new Map();
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (msg && msg.send_date) {
+            map.set(`${MSG_KEY_PREFIX}${msg.send_date}`, i);
+        }
+    }
+    return map;
+}
+
+// ─── Per-message helpers (stable-key based) ──────────────────────────────────
+
+/**
+ * Get the per-message data for a specific message key.
+ * @param {string} msgKey - stable key from getMsgKeyForIndex()
+ * @returns {object|null}
+ */
+export function getPerMessage(msgKey) {
+    if (!msgKey) return null;
+    const data = getInteriorityData();
+    return data.perMessage[msgKey] || null;
+}
+
+/**
+ * Store per-message data (reactions + ledger snapshot) for a message key.
+ * @param {string} msgKey - stable key from getMsgKeyForIndex()
  * @param {object} entry - { reactions, ledgerSnapshot, generatedAt }
  */
-export function setPerMessage(msgIdx, entry) {
+export function setPerMessage(msgKey, entry) {
+    if (!msgKey) return;
     const data = getInteriorityData();
-    data.perMessage[String(msgIdx)] = entry;
+    data.perMessage[msgKey] = entry;
     saveInteriorityData(data);
 }
 
 /**
- * Delete per-message data for a message index.
+ * Delete per-message data for a message key.
  * Returns the deleted entry (for ledger snapshot restoration), or null.
- * @param {number} msgIdx
+ * @param {string} msgKey
  * @returns {object|null}
  */
-export function deletePerMessage(msgIdx) {
+export function deletePerMessage(msgKey) {
+    if (!msgKey) return null;
     const data = getInteriorityData();
-    const key = String(msgIdx);
-    const deleted = data.perMessage[key] || null;
-    delete data.perMessage[key];
+    const deleted = data.perMessage[msgKey] || null;
+    delete data.perMessage[msgKey];
     saveInteriorityData(data);
     return deleted;
 }
 
 /**
- * Get all perMessage keys as numbers, sorted descending.
- * @returns {number[]}
+ * Get all perMessage keys (stable `sd-*` keys), sorted by generatedAt
+ * descending (newest first).
+ * @returns {string[]}
  */
-export function getPerMessageIndices() {
+export function getPerMessageKeys() {
     const data = getInteriorityData();
-    return Object.keys(data.perMessage)
-        .map(Number)
-        .filter(n => Number.isFinite(n))
-        .sort((a, b) => b - a);
+    const entries = Object.entries(data.perMessage)
+        .filter(([key, val]) => key.startsWith(MSG_KEY_PREFIX) && val);
+    entries.sort((a, b) => (b[1].generatedAt || 0) - (a[1].generatedAt || 0));
+    return entries.map(([key]) => key);
+}
+
+// ─── Migration (index-based → send_date-based keys) ──────────────────────────
+
+/**
+ * Migrate old numeric-index perMessage keys to stable send_date-based keys.
+ *
+ * For each legacy numeric key "N", looks up chat[N].send_date and rewrites
+ * the key to "sd-<send_date>". If the chat no longer has a message at
+ * position N (e.g. Inline Summary already shrank the array), the entry is
+ * orphaned and dropped — its thoughts referenced a message that no longer
+ * exists at that position, and retaining them risks future collisions.
+ *
+ * Safe to call repeatedly: keys already in `sd-*` form are left as-is,
+ * and a `keyMigrationDone` flag prevents redundant work.
+ *
+ * @returns {number} count of keys migrated
+ */
+export function migrateIndexKeys() {
+    const data = getInteriorityData();
+    if (data.keyMigrationDone) return 0;
+
+    const chat = getChat();
+    const perMessage = data.perMessage;
+    let migrated = 0;
+    let dropped = 0;
+    const newPerMessage = {};
+
+    for (const [key, val] of Object.entries(perMessage)) {
+        if (key.startsWith(MSG_KEY_PREFIX)) {
+            // Already in stable form
+            newPerMessage[key] = val;
+            continue;
+        }
+        // Try to interpret as a legacy numeric index
+        const idx = Number(key);
+        if (Number.isFinite(idx) && idx >= 0 && idx < chat.length) {
+            const msg = chat[idx];
+            if (msg && msg.send_date) {
+                const newKey = `${MSG_KEY_PREFIX}${msg.send_date}`;
+                newPerMessage[newKey] = val;
+                migrated++;
+                continue;
+            }
+        }
+        // Orphaned — can't map to any current message
+        dropped++;
+    }
+
+    data.perMessage = newPerMessage;
+    data.keyMigrationDone = true;
+    saveInteriorityData(data);
+
+    if (migrated > 0 || dropped > 0) {
+        console.log(`[MWT:Interiority] Key migration: ${migrated} migrated, ${dropped} orphaned entr${dropped === 1 ? 'y' : 'ies'} dropped.`);
+    }
+    return migrated;
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────

@@ -21,9 +21,9 @@ import {
 
 import {
     state, getSettings, hasValidSettings, syncGlobalSettings,
-    getInteriorityData, saveInteriorityData, getLedger,
-    deletePerMessage, getPerMessageIndices, purgeUserLedgerEntries,
-    restoreLedgerSnapshot,
+    getLedger,
+    deletePerMessage, getPerMessageKeys, getMsgKeyForIndex,
+    purgeUserLedgerEntries, restoreLedgerSnapshot, migrateIndexKeys,
 } from './data.js';
 
 import {
@@ -45,6 +45,11 @@ export function init(parentModal) {
         state.contentEl = null;
         renderContent();
     }
+    // Migrate legacy numeric-index perMessage keys to stable send_date keys.
+    // This runs once per chat (guarded by data.keyMigrationDone) and is
+    // essential for Inline Summary compatibility — old keys reference
+    // positions that no longer match the (possibly shrunk) chat array.
+    migrateIndexKeys();
     // Clean up any stale user-owned ledger entries from before the roster fix.
     purgeUserLedgerEntries();
     applyIntentionsInjection();
@@ -75,16 +80,24 @@ export function getModuleWireEvents() {
  *
  * Hook is debounced/serialized through the work queue so it never races
  * the knowledge/world-state scans.
+ *
+ * @param {number|null} [msgIdx] - chat-array index of the received message,
+ *   as reported by the event. Captured NOW: in group chats or fast turns,
+ *   another message can land before the queued work runs, and recomputing
+ *   chat.length-1 at run time would double-generate for the newest message
+ *   while the one that fired this event gets nothing.
  */
-export function onMessageReceived() {
+export function onMessageReceived(msgIdx) {
     const settings = getSettings();
     if (!settings.autoMode) return;
     if (!hasValidSettings()) return;
 
     state.lastChatLength = getChat()?.length || 0;
 
+    const targetIdx = typeof msgIdx === 'number' ? msgIdx : (getChat()?.length ?? 0) - 1;
+
     // Serialize through the work queue so generations never overlap.
-    queueWork(() => generateForCurrentMessage());
+    queueWork(() => generateForCurrentMessage(targetIdx));
 }
 
 /**
@@ -102,19 +115,33 @@ export async function triggerGenerate() {
  *   1. Build scene roster
  *   2. Run API call (batched or strict)
  *   3. Validate JSON, apply ledger mutations
- *   4. Store reactions in perMessage[msgIdx]
+ *   4. Store reactions in perMessage (keyed by stable send_date)
  *   5. Render thought block on the message DOM
  *   6. Apply intentions injection
+ *
+ * @param {number} [targetIdx] - chat-array index captured when the work was
+ *   queued. Omitted for manual triggers, which target the current last
+ *   message. A captured index that no longer exists (message deleted while
+ *   queued) skips the generation rather than mis-targeting another message.
  */
-async function generateForCurrentMessage() {
+async function generateForCurrentMessage(targetIdx) {
     const ctx = getContextSafe();
     if (!ctx) return null;
 
     const chat = getChat();
     if (!chat || chat.length === 0) return null;
 
-    // Generate for the last message (the most recent AI message)
-    const msgIdx = chat.length - 1;
+    let msgIdx;
+    if (typeof targetIdx === 'number') {
+        if (targetIdx < 0 || targetIdx >= chat.length) {
+            console.log(`[MWT:Interiority] Skipping generation — target message ${targetIdx} no longer exists.`);
+            return null;
+        }
+        msgIdx = targetIdx;
+    } else {
+        // Manual trigger: generate for the last message
+        msgIdx = chat.length - 1;
+    }
 
     // Capture chat identity for cross-chat guard
     const chatKeyBefore = `${ctx?.characterId ?? ''}|${ctx?.groupId ?? ''}|${ctx?.chatId ?? ''}`;
@@ -183,6 +210,8 @@ export function onChatChanged() {
     // ever removed) could allow overlapping calls. Mirrors story_planner.
     state.lastChatLength = getChat()?.length || 0;
     state.contentEl = null;
+    // Migrate legacy keys for this chat (no-op if already done).
+    migrateIndexKeys();
     // Clear DOM thought blocks from the previous chat
     clearAllThoughtBlocks();
     // Re-render thought blocks for the new chat
@@ -199,7 +228,7 @@ export function onChatChanged() {
 // ─── Swipe / edit / delete rollback (§9) ─────────────────────────────────────
 
 /**
- * Whether msgIdx is the newest generation we have a record for.
+ * Whether msgIdx maps to the newest generation we have a record for.
  *
  * Ledger snapshots are only a valid rollback target for the NEWEST
  * generation — restoring an older snapshot would wipe every ledger
@@ -209,38 +238,80 @@ export function onChatChanged() {
  * @returns {boolean}
  */
 function isNewestGeneration(msgIdx) {
-    const indices = getPerMessageIndices(); // sorted descending
-    return indices.length > 0 && msgIdx === indices[0];
+    const keys = getPerMessageKeys(); // sorted by generatedAt descending
+    if (keys.length === 0) return false;
+    const newestKey = keys[0];
+    const msgKey = getMsgKeyForIndex(msgIdx);
+    return msgKey === newestKey;
 }
 
 /**
- * A message was deleted. Delete perMessage[idx], restore ledgerSnapshot
- * (newest generation only), and adjust subsequent perMessage keys.
+ * A message was deleted. Delete its perMessage entry, restore ledgerSnapshot
+ * (newest generation only), and re-render.
+ *
+ * Because perMessage keys are now stable send_date identifiers (not chat
+ * indices), deleting a message no longer requires re-keying other entries —
+ * their keys remain valid regardless of the array shift. This also means
+ * Inline Summary's batch summarisation won't corrupt the key→message mapping.
  *
  * @param {number} deletedIndex
  */
 export function onMessageDeleted(deletedIndex) {
     if (typeof deletedIndex !== 'number') return;
 
-    const wasNewest = isNewestGeneration(deletedIndex);
-    const deleted = deletePerMessage(deletedIndex);
+    // SillyTavern fires MESSAGE_DELETED *after* removing the message from the
+    // chat array. That means getMsgKeyForIndex(deletedIndex) would resolve to
+    // the send_date of whatever message shifted into that position — the WRONG
+    // key. Instead, we find the orphaned perMessage key: the one whose
+    // send_date no longer exists in the (now-shrunk) chat array.
+    //
+    // This approach is timing-agnostic: it works whether ST fires before or
+    // after the actual array mutation, because it relies on the *current*
+    // state of the chat, not on the deleted index.
+    const allKeys = getPerMessageKeys();
+    if (allKeys.length === 0) return;
 
-    if (wasNewest && deleted && Array.isArray(deleted.ledgerSnapshot)) {
-        restoreLedgerSnapshot(deleted.ledgerSnapshot);
-        console.log(`[MWT:Interiority] MESSAGE_DELETED at index ${deletedIndex} — ledger snapshot restored (manual entries preserved).`);
+    const chat = getChat();
+    const currentKeys = new Set();
+    for (const msg of chat) {
+        if (msg?.send_date) currentKeys.add(`sd-${msg.send_date}`);
     }
 
-    // Re-key perMessage entries: any index > deletedIndex needs to shift down by 1
-    const indices = getPerMessageIndices().sort((a, b) => a - b); // ascending
-    const data = getInteriorityData();
-    const newPerMessage = {};
-    for (const idx of indices) {
-        if (idx === deletedIndex) continue; // already deleted
-        const newIdx = idx > deletedIndex ? idx - 1 : idx;
-        newPerMessage[String(newIdx)] = data.perMessage[String(idx)];
+    // Find perMessage keys that don't map to any current message
+    const orphaned = allKeys.filter(k => !currentKeys.has(k));
+
+    if (orphaned.length === 0) {
+        // The deleted message had no perMessage entry — nothing to clean up
+        return;
     }
-    data.perMessage = newPerMessage;
-    saveInteriorityData(data);
+
+    if (orphaned.length > 1) {
+        // Multiple orphans can happen if Inline Summary or a bulk-delete tool
+        // removed several messages in one operation. In that case we can't
+        // know which orphan corresponds to deletedIndex, but they all need
+        // cleanup — they reference messages that no longer exist.
+        console.log(`[MWT:Interiority] MESSAGE_DELETED: ${orphaned.length} orphaned perMessage entries found — cleaning up all.`);
+    }
+
+    // Capture the newest orphan's snapshot BEFORE deleting (needed for
+    // ledger rollback). allKeys is sorted by generatedAt descending, so
+    // the first orphan that matches allKeys[0] is the newest generation.
+    let snapshotToRestore = null;
+    const newestKey = allKeys[0];
+
+    for (const keyToDelete of orphaned) {
+        const deleted = deletePerMessage(keyToDelete);
+        if (keyToDelete === newestKey && deleted && Array.isArray(deleted.ledgerSnapshot)) {
+            snapshotToRestore = deleted.ledgerSnapshot;
+        }
+    }
+
+    // Restore the ledger snapshot only if the newest generation was deleted.
+    // Restoring an older snapshot would wipe ledger mutations made after it.
+    if (snapshotToRestore) {
+        restoreLedgerSnapshot(snapshotToRestore);
+        console.log(`[MWT:Interiority] MESSAGE_DELETED — ledger snapshot restored (manual entries preserved).`);
+    }
 
     applyIntentionsInjection();
     renderAllThoughtBlocks();
@@ -257,8 +328,12 @@ export function onMessageDeleted(deletedIndex) {
 function invalidateAndMaybeRegenerate(msgIdx, eventName) {
     if (typeof msgIdx !== 'number') return;
 
-    const wasNewest = isNewestGeneration(msgIdx);
-    const deleted = deletePerMessage(msgIdx);
+    const msgKey = getMsgKeyForIndex(msgIdx);
+    if (!msgKey) return;
+
+    const allKeys = getPerMessageKeys();
+    const wasNewest = allKeys.length > 0 && msgKey === allKeys[0];
+    const deleted = deletePerMessage(msgKey);
 
     if (wasNewest && deleted && Array.isArray(deleted.ledgerSnapshot)) {
         restoreLedgerSnapshot(deleted.ledgerSnapshot);
@@ -273,7 +348,23 @@ function invalidateAndMaybeRegenerate(msgIdx, eventName) {
     const isLastMessage = msgIdx === (getChat()?.length ?? 0) - 1;
     const settings = getSettings();
     if (isLastMessage && settings.autoMode && hasValidSettings()) {
-        queueWork(() => generateForCurrentMessage());
+        // Swipe into a fresh (not-yet-generated) slot: ST sets
+        // swipe_id === swipes.length BEFORE emitting MESSAGE_SWIPED, then runs
+        // its own generation, whose saveReply emits MESSAGE_RECEIVED (type
+        // 'swipe') — onMessageReceived generates then, against the NEW
+        // content. Queueing here too would double-generate (the visible
+        // "bubble changed twice" bug) and burn an API call reading the old
+        // content that's about to be replaced. Navigation between existing
+        // swipes (swipe_id < swipes.length) never fires MESSAGE_RECEIVED, so
+        // it still regenerates here.
+        const msg = getChat()?.[msgIdx];
+        const isFreshSwipeSlot = Array.isArray(msg?.swipes)
+            && (msg.swipe_id ?? 0) >= msg.swipes.length;
+        if (isFreshSwipeSlot) {
+            console.log(`[MWT:Interiority] ${eventName} opened a fresh swipe slot — deferring generation to MESSAGE_RECEIVED.`);
+        } else {
+            queueWork(() => generateForCurrentMessage(msgIdx));
+        }
     }
 }
 

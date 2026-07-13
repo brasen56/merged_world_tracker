@@ -493,7 +493,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
 }
 
 if (eventSource && event_types?.MESSAGE_RECEIVED) {
-    eventSource.on(event_types.MESSAGE_RECEIVED, () => {
+    eventSource.on(event_types.MESSAGE_RECEIVED, (...args) => {
         const s = getSettings();
         // Gate per-module: disabled trackers stop scanning / counting toward
         // auto-refresh & auto-snapshot thresholds (no silent background API calls).
@@ -502,7 +502,10 @@ if (eventSource && event_types?.MESSAGE_RECEIVED) {
         if (s.enableChronicle  !== false) Chronicle.onMessageReceived();
         if (s.enableKnowledge  !== false) Knowledge.onMessageReceived();
         if (s.enableStoryPlanner !== false) StoryPlanner.onMessageReceived();
-        if (s.enableInteriority !== false) Interiority.onMessageReceived();
+        // Interiority gets the message index so the generation targets the
+        // message that fired the event, not whatever is last when the queued
+        // work eventually runs.
+        if (s.enableInteriority !== false) Interiority.onMessageReceived(extractMessageIndex(args[0]));
     });
 }
 
