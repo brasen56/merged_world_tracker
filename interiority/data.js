@@ -10,8 +10,9 @@
  *   meta.mwt_interiority = {
  *     enabled: true,
  *     ledger: [
- *       { id, npc, action, trigger, since, declaredMsgIdx, manual }
- *                                                                    ↑ optional
+ *       { id, npc, action, trigger, since, declaredMsgIdx,
+ *         manual, turnsOpen }
+ *                  ↑ optional   ↑ age in generation turns
  *     ],
  *     perMessage: {
  *       'sd-<send_date>': {
@@ -87,6 +88,10 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // Feature toggles — users may want only thoughts or only intentions
         generateThoughts: true,
         generateIntentions: true,
+        // Minimum number of turns an intention must survive before it
+        // can be executed or dropped. Prevents models from prematurely
+        // erasing intentions before their trigger arrives.
+        intentionGracePeriod: 2,
     },
     logPrefix: '[MWT:Interiority]',
 });
@@ -199,6 +204,7 @@ export function addLedgerEntry(entry, since, msgIdx) {
         trigger: String(entry.trigger || '').trim(),
         since: since || '',
         declaredMsgIdx: typeof msgIdx === 'number' ? msgIdx : null,
+        turnsOpen: 0,
     };
     data.ledger.push(fullEntry);
     saveInteriorityData(data);
@@ -321,10 +327,40 @@ export function addManualLedgerEntry(entry) {
         since,
         declaredMsgIdx: null,
         manual: true,
+        turnsOpen: 0,
     };
     data.ledger.push(fullEntry);
     saveInteriorityData(data);
     return fullEntry;
+}
+
+// ─── Age tracking & grace period ─────────────────────────────────────────────
+
+/**
+ * Increment the turnsOpen counter for every ledger entry.
+ *
+ * Called once at the start of each validateAndApply cycle. This tracks
+ * how many generation turns each intention has survived, enabling the
+ * grace-period check that prevents models from prematurely executing
+ * or dropping freshly-created intentions.
+ *
+ * Legacy entries (created before turnsOpen tracking was added) are
+ * backfilled with a mature age (999) so existing intentions aren't
+ * locked behind the newly-introduced grace period.
+ */
+export function incrementLedgerAges() {
+    const data = getInteriorityData();
+    let changed = false;
+    for (const entry of data.ledger) {
+        if (typeof entry.turnsOpen !== 'number') {
+            // Legacy entry — treat as mature
+            entry.turnsOpen = 999;
+        } else {
+            entry.turnsOpen++;
+        }
+        changed = true;
+    }
+    if (changed) saveInteriorityData(data);
 }
 
 /**

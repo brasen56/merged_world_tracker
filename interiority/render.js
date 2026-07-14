@@ -89,6 +89,7 @@ function renderLedgerList(ledger) {
             </div>
             <div class="mwt-int-ledger-meta">
                 ${entry.since ? `<span style="color:var(--mwt-text-dim)">since ${escapeHtml(entry.since)}</span>` : ''}
+                ${entry.turnsOpen != null ? `<span style="color:var(--mwt-text-dim);font-size:11px" title="Turns this intention has survived">${entry.turnsOpen} turn${entry.turnsOpen === 1 ? '' : 's'}</span>` : ''}
                 <button class="mwt-int-edit-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Edit this intention">✎</button>
                 <button class="mwt-int-remove-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Remove this intention">✕</button>
             </div>
@@ -182,7 +183,9 @@ export function renderSettingsPanel() {
             <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                 <label style="font-size:12px;color:var(--mwt-text-dim)">Max NPCs <input type="number" id="mwt-int-max-npcs" class="mwt-input" style="width:60px;display:inline-block" value="${s.maxNpcs || 4}" min="1" max="20"></label>
                 <label style="font-size:12px;color:var(--mwt-text-dim)">Message Window <input type="number" id="mwt-int-window" class="mwt-input" style="width:60px;display:inline-block" value="${s.messageWindow || 8}" min="1" max="50"></label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" title="Minimum turns an intention must survive before it can be executed or dropped. Prevents models from erasing intentions too quickly.">Grace Period <input type="number" id="mwt-int-grace" class="mwt-input" style="width:60px;display:inline-block" value="${s.intentionGracePeriod ?? 2}" min="0" max="20"></label>
             </div>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Grace Period: minimum turns an intention must survive before it can be executed or dropped. Higher values make intentions more persistent. Set to 0 to disable.</p>
 
             <div class="mwt-flex mwt-gap-4" style="margin-top:12px">
                 <button id="mwt-int-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
@@ -200,6 +203,7 @@ export function renderSettingsPanel() {
             mode: panel.querySelector('#mwt-int-mode')?.value || 'batched',
             maxNpcs: Number(panel.querySelector('#mwt-int-max-npcs')?.value) || 4,
             messageWindow: Number(panel.querySelector('#mwt-int-window')?.value) || 8,
+            intentionGracePeriod: Math.max(0, Number(panel.querySelector('#mwt-int-grace')?.value) || 0),
         });
         setIntStatus('Settings saved.', 'success');
         renderContent();

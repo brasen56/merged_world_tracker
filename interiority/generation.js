@@ -22,7 +22,7 @@ import {
     getInteriorityData,
     getLedger, addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
     setPerMessage, getLedgerEntriesForNpc, getMsgKeyForIndex,
-    MAX_THOUGHT_LENGTH, getWorldTime,
+    MAX_THOUGHT_LENGTH, getWorldTime, incrementLedgerAges,
 } from './data.js';
 
 // ─── Scene roster (§6) ────────────────────────────────────────────────────────
@@ -323,6 +323,12 @@ export function validateAndApply(result, roster, msgIdx) {
     // Take a snapshot of the ledger BEFORE mutations (for rollback)
     const ledgerSnapshot = JSON.parse(JSON.stringify(data.ledger));
 
+    // Increment the age of every open intention. This is the first step
+    // of the grace-period mechanism: intentions that haven't survived
+    // enough turns since being declared are protected from premature
+    // execution/dropping (see gracePeriod below).
+    incrementLedgerAges();
+
     // Normalize roster for case-insensitive matching
     const rosterLower = new Set(roster.map(n => n.toLowerCase().trim()));
 
@@ -332,6 +338,14 @@ export function validateAndApply(result, roster, msgIdx) {
 
     // Build a map of ledger entry ids for quick lookup
     const ledgerIds = new Set(data.ledger.map(e => e.id));
+
+    // Build a lookup from id → turnsOpen for grace-period enforcement.
+    // The model frequently declares and executes/drops an intention in the
+    // same turn — or one turn later — before the trigger has had a chance
+    // to arrive. The grace period forces intentions to survive at least
+    // N turns before they can be removed.
+    const ledgerAgeMap = new Map(data.ledger.map(e => [e.id, e.turnsOpen || 0]));
+    const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
 
     const reactions = [];
     const worldTime = getWorldTime();
@@ -389,8 +403,20 @@ export function validateAndApply(result, roster, msgIdx) {
         if (!wantIntentions) continue;
 
         // ── Executed intentions ──
+        // Grace period: intentions that haven't survived enough turns are
+        // protected from premature removal. The model often sees an NPC
+        // talking about or preparing for an action and marks it executed
+        // before the action is actually completed on-screen.
         if (Array.isArray(npcResult.executed)) {
-            const validIds = npcResult.executed.filter(id => ledgerIds.has(id));
+            const validIds = npcResult.executed.filter(id => {
+                if (!ledgerIds.has(id)) return false;
+                const age = ledgerAgeMap.get(id) || 0;
+                if (age < gracePeriod) {
+                    console.log(`[MWT:Interiority] ${name}: intention ${id} executed but still in grace period (age ${age} < ${gracePeriod}) — kept open.`);
+                    return false;
+                }
+                return true;
+            });
             if (validIds.length > 0) {
                 removeLedgerEntries(validIds);
                 validIds.forEach(id => ledgerIds.delete(id));
@@ -400,10 +426,18 @@ export function validateAndApply(result, roster, msgIdx) {
         }
 
         // ── Dropped intentions ──
+        // Same grace period applies — models drop intentions too eagerly
+        // when a minor situation change occurs, before the trigger has
+        // had a chance to arrive.
         if (Array.isArray(npcResult.dropped)) {
             const validIds = [];
             for (const drop of npcResult.dropped) {
                 if (drop && drop.id && ledgerIds.has(drop.id)) {
+                    const age = ledgerAgeMap.get(drop.id) || 0;
+                    if (age < gracePeriod) {
+                        console.log(`[MWT:Interiority] ${name}: intention ${drop.id} dropped but still in grace period (age ${age} < ${gracePeriod}) — kept open.`);
+                        continue;
+                    }
                     validIds.push(drop.id);
                     ledgerIds.delete(drop.id);
                     console.log(`[MWT:Interiority] ${name}: dropped intention ${drop.id} (${String(drop.reason || '').slice(0, 80)}).`);

@@ -50,11 +50,12 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
     }
 
     if (wantIntentions) {
-        rules.push(`${++n}. Evaluate each open intention from the <open_intentions> list:`);
-        rules.push(`   - "executed": the recent messages show the NPC actually performed the action. List its id.`);
-        rules.push(`   - "dropped": the intention no longer makes sense or the NPC abandoned it. Provide the id and a brief in-voice reason.`);
-        rules.push(`   - Otherwise, the intention stays "open" — do not list it; it carries forward automatically.`);
-        rules.push(`${++n}. New intentions require BOTH a concrete "action" AND a "trigger" condition (when/where the NPC will act on it).`);
+        rules.push(`${++n}. Evaluate each open intention from the <open_intentions> list. The DEFAULT outcome is "open" (carry forward) — only mark "executed" or "dropped" when there is clear, unmistakable evidence:`);
+        rules.push(`   - "executed": ONLY if the recent messages show the NPC has ALREADY COMPLETED the action in full, on-screen. Discussing, planning, preparing for, deciding to do, or beginning the action is NOT execution. The action must be done.`);
+        rules.push(`   - "dropped": ONLY if the NPC has EXPLICITLY abandoned or cancelled the intention (said so, or clearly changed their mind). A changed situation, a delay, a new complication, or the trigger not arriving yet is NOT a drop — the intention waits.`);
+        rules.push(`   - "open" (default): if there is ANY doubt whether the action is completed or the intention is truly abandoned, leave it open. Do not list it. It carries forward automatically.`);
+        rules.push(`   - When in doubt between open and executed/dropped: choose open.`);
+        rules.push(`${++n}. New intentions require BOTH a concrete "action" AND a specific "trigger" condition (the event or circumstance when the NPC will act). Vague triggers like "soon" or "when the time is right" are not acceptable — use concrete, verifiable conditions.`);
     }
 
     if (wantThoughts) {
