@@ -1,8 +1,8 @@
 # 🌍 Merged World Tracker
 
-**A unified SillyTavern extension combining World State tracking, Session Chronicle, NPC Knowledge management, and Story Planning into a single modular system.**
+**A unified SillyTavern extension combining World State tracking, Session Chronicle, NPC Knowledge management, Story Planning, and NPC Interiority into a single modular system.**
 
-*A SillyTavern extension by [Brasen](https://github.com/brasen56)* · `v1.2.0`
+*A SillyTavern extension by [Brasen](https://github.com/brasen56)* · `v1.3.0`
 
 ---
 
@@ -14,6 +14,7 @@
   - [📜 Session Chronicle](#-session-chronicle)
   - [🧠 Knowledge Tracker](#-knowledge-tracker)
   - [🗺️ Story Planner](#-story-planner)
+  - [💭 Interiority](#-interiority)
   - [Shared Core](#shared-core)
   - [Slash Commands & Macros](#slash-commands--macros)
   - [Mobile & Touch](#mobile--touch)
@@ -31,6 +32,7 @@
   - [Session Chronicle](#session-chronicle)
   - [Knowledge Tracker](#knowledge-tracker)
   - [Story Planner](#story-planner)
+  - [Interiority](#interiority-1)
 - [Architecture](#architecture)
 - [API Compatibility](#api-compatibility)
 - [Theme Support](#theme-support)
@@ -41,9 +43,9 @@
 
 ## Overview
 
-Merged World Tracker (MWT) is a modular SillyTavern extension that brings four powerful RP assistance tools under one roof. Each module shares a common core for API calls, diff computation, settings management, and UI — while remaining independently configurable.
+Merged World Tracker (MWT) is a modular SillyTavern extension that brings five powerful RP assistance tools under one roof. Each module shares a common core for API calls, diff computation, settings management, and UI — while remaining independently configurable.
 
-Instead of juggling multiple standalone extensions, MWT provides a single tabbed interface with floating quick-access buttons, unified API settings (with per-module overrides), and cross-module integration (e.g., chronicle entries can sync time/location back to the world state, and the Story Planner draws on the current world state and latest chronicle entry for context).
+Instead of juggling multiple standalone extensions, MWT provides a single tabbed interface with floating quick-access buttons, unified API settings (with per-module overrides), and cross-module integration (e.g., chronicle entries can sync time/location back to the world state, the Story Planner draws on the current world state and latest chronicle entry for context, and Interiority reads NPC Knowledge Ledgers to ground each character's private thoughts in what they actually know).
 
 ### What It Does
 
@@ -53,8 +55,9 @@ Instead of juggling multiple standalone extensions, MWT provides a single tabbed
 | **📜 Chronicle** | Generates timestamped summaries of RP events with consolidation, editing, and flexible injection |
 | **🧠 Knowledge** | Scans for NPCs, tracks their knowledge and relationships, and manages state entries via lorebooks |
 | **🗺️ Story Planner** | Brainstorms a menu of medium/long-term plot arcs from your story and injects them as inspiration for the AI |
+| **💭 Interiority** | Generates out-of-band NPC private thoughts and a persistent hidden-intentions ledger that drives on-screen actions without leaking secrets to the narrator |
 
-All four modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output.
+All five modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output.
 
 ---
 
@@ -146,11 +149,28 @@ Acts as a "Story Architect" that brainstorms a menu of future plot possibilities
 - **Custom Prompts** — Override the default system and user prompts; the user prompt supports a `{{chatHistory}}` token
 - **Token & Word Statistics** — Live char/word/token estimates under the editor and in the toolbar
 - **Configurable Injection Depth** — Set how far from the bottom of the prompt the plan is injected
-- **Cross-Module Context** — Generation reads recent chat history for rich, story-aware suggestions
+- **Cross-Module Context** — Generation reads recent chat history to ground its suggestions
+
+### 💭 Interiority
+
+Generates NPC private thoughts and a persistent **intentions ledger** in a separate, out-of-band LLM call. The narrator never sees the thoughts — only the mechanical ledger entries, which are injected back as execution demands. This prevents knowledge leaks (the thinking model physically can't leak secrets to the narration model) and gives NPCs durable hidden agendas that actually surface in their actions.
+
+- **Out-of-Band Generation** — NPC thoughts are generated in a separate API call with restricted context, physically isolated from the narration pass
+- **Persistent Intentions Ledger** — Open intentions survive any number of turns; each entry has an action, trigger condition, and in-world "since" timestamp
+- **Execution Demand Injection** — When an intention's trigger is met, the ledger injects a mechanical directive (`<mwt_npc_intentions>`) that the narrator must execute on-screen
+- **Batched Mode (default)** — One API call per turn covers all scene NPCs simultaneously
+- **Strict Mode (optional)** — One call per NPC for true knowledge partition (NPC A's dossier secrets never co-resident with NPC B's thoughts)
+- **Auto or Manual** — Generate automatically on every AI message, or trigger per-message with a 💭 button
+- **Scene Roster** — Automatically detects present NPCs from the World State, with Knowledge Tracker fallback
+- **Knowledge-Grounded** — Each NPC's thoughts are limited to their own Knowledge Ledger + witnessed events
+- **Per-Message Display** — Thoughts render as collapsible blocks attached to individual chat messages (never in chat history)
+- **Ledger Lifecycle** — Intentions are evaluated each turn: executed (done), dropped (with in-voice reason), or carried forward
+- **Rollback on Swipe/Edit/Delete** — Ledger snapshots per message make it trivial to revert state when messages change
+- **Manual Ledger Editing** — Add, edit, or delete intentions directly in the UI
 
 ### Shared Core
 
-All four modules share a common infrastructure:
+All five modules share a common infrastructure:
 
 - **Unified API Layer** — OpenAI-compatible API *or* SillyTavern Connection Manager profiles, with retry logic, error recovery, reasoning-content fallback, and custom headers support
 - **Settings Management** — Global defaults with per-module overrides; settings stored in SillyTavern's `extension_settings` with localStorage fallback and legacy key migration
@@ -172,10 +192,10 @@ MWT integrates with SillyTavern's STscript system for power-user automation and 
 | `/wt-snapshot` | Generate a Chronicle snapshot |
 | `/wt-scan` | Run a Knowledge NPC scan |
 | `/wt-plan` | Generate a Story Planner plan |
+| `/wt-thoughts` | Generate Interiority for the current/last AI message |
 | `/wt-inject on\|off` | Toggle injection for World State and Chronicle |
-| `/wt-state` | Output the current world state text (pipeable) |
 
-> **Note:** `/wt-inject` toggles World State and Chronicle injection only. Knowledge Tracker uses lorebook keywords (not extension prompts), and Story Planner injection is toggled from its own Settings panel.
+> **Note:** `/wt-inject` toggles World State and Chronicle injection only. Knowledge Tracker uses lorebook keywords (not extension prompts), and Story Planner/Interiority injection are toggled from their own Settings panels.
 
 **Macros** (SillyTavern 1.12+):
 
@@ -192,7 +212,7 @@ Macros let you place content anywhere (Author's Note, prompt manager block, char
 
 - **Pointer Events** — Floating button drag works with mouse, touch, and pen
 - **Responsive Layout** — Modal adapts to small screens (breakpoints at 768px and 480px)
-- **Collapse Mode** — Optionally collapse the five floating buttons into a single hub button
+- **Collapse Mode** — Optionally collapse the floating buttons into a single hub button
 - **Right-Click / Long-Press** — Quick-toggle any tracker via the floating button's context menu
 
 ---
@@ -223,7 +243,7 @@ Macros let you place content anywhere (Author's Note, prompt manager block, char
 
 ## Quick Start
 
-1. **Open the MWT Modal** — Click any of the floating emoji buttons on the right side of the screen (🌍, 📜, 🧠, 🗺️, or ⚙️), or use the **MWT** entry in the wand (extensions) menu, or the drawer in the Extensions panel
+1. **Open the MWT Modal** — Click any of the floating emoji buttons on the right side of the screen (🌍, 📜, 🧠, 🗺️, 💭, or ⚙️), or use the **MWT** entry in the wand (extensions) menu, or the drawer in the Extensions panel
 2. **Configure API** — Go to the **⚙️ Settings** tab and either:
    - Select a **Connection Profile** (uses your existing SillyTavern connection), **or**
    - Enter a custom API URL, Key, and Model
@@ -233,6 +253,7 @@ Macros let you place content anywhere (Author's Note, prompt manager block, char
    - 📜 Chronicle → **📸 Snapshot**
    - 🧠 Knowledge → **🔍 Scan**
    - 🗺️ Story Planner → **🎲 Generate Plan**
+   - 💭 Interiority → **💭 Generate** (or enable **Auto** to run per turn)
 
 ---
 
@@ -264,11 +285,11 @@ These appear in the **⚙️ Settings** tab when no Connection Profile is select
 
 ### Per-Module Settings
 
-Each module tab has a **⚙ Settings** button (or expandable settings section) that opens module-specific settings, which can override the global API configuration. This lets you use different models or temperatures for different tasks (e.g., a creative model for world state, a precise model for knowledge scanning, a higher-temperature model for story planning). Use **↓ Sync to Modules** in the global Settings tab to push the global API config to all modules at once.
+Each module tab has a **⚙ Settings** button (or expandable settings section) that opens module-specific settings, which can override the global API configuration. This lets you use different models or temperatures for different tasks (e.g., a creative model for world state, a precise model for knowledge scanning, a higher-temperature model for story planning, a small/cheap model for interiority). Use **↓ Sync to Modules** in the global Settings tab to push the global API config to all modules at once.
 
 ### Injection Settings
 
-Control how World State, Chronicle, and Story Plan content are injected into the prompt:
+Control how World State, Chronicle, Story Plan, and Interiority content are injected into the prompt:
 
 | Setting | Description | Default |
 |---|---|---|
@@ -277,6 +298,8 @@ Control how World State, Chronicle, and Story Plan content are injected into the
 | Chronicle Depth | Injection depth for chronicle entries | `4` |
 | Chronicle Role | Message role for chronicle injection | `system` |
 | Story Plan Depth | Injection depth for the story plan | `4` |
+| Interiority Depth | Injection depth for NPC intentions ledger | `1` |
+| Interiority Role | Message role for intentions injection | `system` |
 | Structural Boundaries | Wrap injected blocks in XML tags (e.g., `<mwt_world_state>…</mwt_world_state>`) | `On` |
 
 **Structural Boundaries** wrap each injected reference block in tags so the model clearly distinguishes sections. Recommended for smaller / open models (24–70B) that bleed between sections. Frontier models don't need it; turn it off to save a few tokens.
@@ -285,7 +308,7 @@ Control how World State, Chronicle, and Story Plan content are injected into the
 
 ### Floating Buttons
 
-The five floating buttons (🌍 📜 🧠 🗺️ ⚙️) can be individually shown/hidden, repositioned (drag), collapsed into a single hub button, and styled as icon-only ("Modern") or icon+text ("Classic"). Position is persisted across sessions. You can also open the MWT modal from the wand (extensions) menu or the Extensions panel drawer.
+The floating buttons (🌍 📜 🧠 🗺️ 💭 ⚙️) can be individually shown/hidden, repositioned (drag), collapsed into a single hub button, and styled as icon-only ("Modern") or icon+text ("Classic"). Position is persisted across sessions. You can also open the MWT modal from the wand (extensions) menu or the Extensions panel drawer.
 
 ### Per-Tracker Enable & Panic Switch
 
@@ -353,6 +376,20 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 
 Regeneration is continuity-aware: the previous plan is fed back so still-relevant arcs are carried forward and evolved rather than discarded. The user prompt supports the tokens `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, and `{{previousPlan}}` — each resolves to empty when that data isn't present, so the planner works whether or not you use the World State and Chronicle modules.
 
+### Interiority
+
+1. Open the **💭 Interiority** tab to view the current intentions ledger and module settings
+2. Toggle **🔌 Injection** to include the intentions ledger in every prompt
+3. Toggle **🔄 Auto** to automatically generate thoughts on every AI message, or leave it off and use the **💭 Generate** button per message
+4. Choose **Mode**:
+   - **Batched** (default) — one API call per turn for all scene NPCs
+   - **Strict** — one call per NPC for true knowledge isolation (higher cost)
+5. Set **Max NPCs** (default 4) to cap how many characters are processed per turn
+6. View the **Ledger** — a list of open intentions with NPC name, action, trigger condition, and in-world "since" time. Click any entry to edit or delete it
+7. Click **➕ Add Intention** to manually create a new ledger entry
+8. In the chat, click the 💭 icon on any AI message to expand/collapse that message's thought blocks — each NPC's private reaction and thought is displayed there
+9. Thoughts are never injected into the prompt and never appear in chat history — only the flat, mechanical ledger lines reach the narrator
+
 ---
 
 ## Architecture
@@ -374,6 +411,7 @@ merged_world_tracker/
 │   ├── modal.js          # Modal lifecycle, status bar, button bar helpers
 │   ├── notifications.js  # Toast notifications
 │   ├── settings.js       # Settings manager factory (extension_settings + localStorage)
+│   ├── strip.js          # Non-narrative content stripping for scanner contexts
 │   └── ui.js             # API field renderer, floating button bar, drawer, wand menu
 ├── world_state/          # World State Tracker module
 │   ├── index.js          # Orchestrator — public API and lifecycle hooks
@@ -402,14 +440,21 @@ merged_world_tracker/
 │   ├── staging.js        # Build staging items from scan results
 │   ├── relationships.js  # Relationship storage and graph layout computation
 │   └── render.js         # All UI rendering (staging, minor/major, state, graph, settings)
-└── story_planner/        # Story Planner module (future plot arcs)
-    ├── index.js          # Thin orchestrator — public API and lifecycle hooks
-    ├── data.js           # Constants, shared mutable state, data access (leaf)
-    ├── settings.js       # Settings manager and defaults (leaf)
-    ├── prompts.js        # Story Architect system + user prompt templates (leaf)
-    ├── injection.js      # Prompt injection (depth, structural boundaries, header)
-    ├── generation.js     # LLM plan generation with chat-switch guards
-    └── render.js         # UI rendering, toolbar/stats, settings panel, event wiring
+├── story_planner/        # Story Planner module (future plot arcs)
+│   ├── index.js          # Thin orchestrator — public API and lifecycle hooks
+│   ├── data.js           # Constants, shared mutable state, data access (leaf)
+│   ├── settings.js       # Settings manager and defaults (leaf)
+│   ├── prompts.js        # Story Architect system + user prompt templates (leaf)
+│   ├── injection.js      # Prompt injection (depth, structural boundaries, header)
+│   ├── generation.js     # LLM plan generation with chat-switch guards
+│   └── render.js         # UI rendering, toolbar/stats, settings panel, event wiring
+└── interiority/          # Interiority module (NPC thoughts & hidden intentions)
+    ├── index.js          # Orchestrator — public API, event wiring, work queue
+    ├── data.js           # Constants, chat-metadata storage, settings, ledger helpers
+    ├── prompts.js        # System prompt, JSON output contract, injection format
+    ├── generation.js     # Context assembly, batched/strict API calls, validation
+    ├── injection.js      # <mwt_npc_intentions> extension-prompt injection
+    └── render.js         # Settings UI + per-message thought block rendering
 ```
 
 ### Module Communication
@@ -418,12 +463,13 @@ merged_world_tracker/
 - The Chronicle module can sync time/location data back to World State
 - The Knowledge module reads World State and Chronicle data for richer scan context
 - The Story Planner reads recent chat history to ground its suggestions
+- The Interiority module reads the World State for the scene roster, the Knowledge Tracker for per-NPC dossiers, and injects `<mwt_npc_intentions>` back into the prompt
 - All modules respond to SillyTavern events:
   - `CHAT_CHANGED` — reset module state for the new chat
-  - `MESSAGE_RECEIVED` — advance auto-refresh / auto-snapshot / auto-trigger / auto-plan counters
+  - `MESSAGE_RECEIVED` — advance auto-refresh / auto-snapshot / auto-trigger / auto-plan / auto-thoughts counters
   - `GENERATION_STARTED` / `GENERATION_STOPPED` — gate chronicle work during main generation
-  - `MESSAGE_DELETED` — decrement counters and invalidate stale chronicle anchors
-  - `MESSAGE_SWIPED` / `MESSAGE_EDITED` — schedule world state refresh (if auto-refresh enabled) and flag stale chronicle anchors
+  - `MESSAGE_DELETED` — decrement counters and invalidate stale chronicle anchors; Interiority restores ledger snapshots
+  - `MESSAGE_SWIPED` / `MESSAGE_EDITED` — schedule world state refresh (if auto-refresh enabled), flag stale chronicle anchors, and rollback Interiority ledger state
 
 ---
 
@@ -447,6 +493,7 @@ Tested with:
 - **Chronicle** benefits from higher `maxTokens` (8000+ to allow detailed entries)
 - **Knowledge** scans work well with lower temperatures (0.1–0.3) for consistent JSON output
 - **Story Planner** benefits from a higher temperature (default `0.6`) for creative, varied arc suggestions
+- **Interiority** runs well on small/cheap models (default `0.4` temp) — the task is closer to a knowledge scan than narration, and output is validated before applying
 - For models with extended thinking (e.g., DeepSeek R1, o1), the API layer automatically recovers from empty content by falling back to `reasoning_content`
 
 ---
@@ -459,11 +506,11 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 
 ## Data Storage
 
-- **Chat data** (world state text, chronicle entries, NPC registry, state tracker registry, relationships, story plan text) is stored in SillyTavern's per-chat metadata (survives backup/restore)
+- **Chat data** (world state text, chronicle entries, NPC registry, state tracker registry, relationships, story plan text, interiority ledger + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID
 - **Floating button positions** are stored in `localStorage`
-- All data is per-chat — switching chats loads that chat's world state, chronicle, NPC registry, and story plan
+- All data is per-chat — switching chats loads that chat's world state, chronicle, NPC registry, story plan, and interiority ledger
 
 ---
 

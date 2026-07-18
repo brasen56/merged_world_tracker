@@ -125,7 +125,7 @@ OUTPUT FORMAT:
         "personality": "updated value or null if unchanged",
         "read_on_pc": "updated value or null if unchanged",
         "agenda": "updated value or null if unchanged",
-        "secrets": "updated value or null if unchanged",
+        "secrets": "Revise the tiered secrets string when: a NEW secret surfaces; a secret is DISCLOSED in narration (remove it — once known it is no longer a secret; fold any lasting consequence into background); or a secret's premise has RESOLVED or become obsolete because the in-world event it hinges on has passed (drop it). Also re-tier a secret if story pressure changed how buried it is. Else null (FILL if currently missing/empty).",
         "canon_lock": "updated value or null if unchanged"
       },
       "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows", "source": "how they know it", "date": "in-world date if known" }]
@@ -140,6 +140,7 @@ Classification guide:
 - An NPC name MUST appear in "Already Tracked NPCs" to be classified as update. If not listed, classify as new.
 - Only include NPCs who actually appeared or were meaningfully referenced.
 - For update entries: only include NPCs whose information actually changed.
+- SECRETS ARE NOT PERMANENT: a disclosed, resolved, or obsolete secret is a change worth an update_major. If a Tier's premise hinges on an in-world event that has clearly passed (compare against current in-world dates), retire that Tier rather than carrying it forward.
 - CRITICAL — FILL MISSING FIELDS: If the "Already Tracked NPCs" section includes an entry's current content (inside <existing_entry> tags) and a dossier field is MISSING or EMPTY, FILL IT IN by inferring from the messages and established facts. Only output null for a field that already has a real value and has genuinely not changed.
 - For new_major, leave a field as an empty string "" rather than inventing if truly unknown — but prefer concrete inference from the scene.
 - If no NPCs qualify for a category, use an empty array [].
@@ -167,7 +168,7 @@ OUTPUT FORMAT:
     "personality": "updated personality if it changed, else null (FILL if currently missing/empty)",
     "read_on_pc": "updated read on PC if it shifted, else null (FILL if currently missing/empty)",
     "agenda": "updated agenda if it changed, else null (FILL if currently missing/empty)",
-    "secrets": "updated secrets if a new secret surfaced, else null (FILL if currently missing/empty)",
+    "secrets": "Revise the tiered secrets string when: a NEW secret surfaces; a secret is DISCLOSED in narration (remove it — once known it is no longer a secret; fold any lasting consequence into background); or a secret's premise has RESOLVED or become obsolete because the in-world event it hinges on has passed (drop it). Also re-tier a secret if story pressure changed how buried it is. Else null (FILL if currently missing/empty).",
     "canon_lock": "updated canon lock if a new immutable fact was established, else null (FILL if currently missing/empty)"
   },
   "new_knowledge": [
