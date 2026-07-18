@@ -21,7 +21,8 @@ import {
     getSettings, hasValidSettings,
     getInteriorityData,
     getLedger, addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
-    setPerMessage, getLedgerEntriesForNpc, getMsgKeyForIndex,
+    setPerMessage, getLedgerEntriesForNpc,
+    getOrCreateMsgKeyForIndex,
     MAX_THOUGHT_LENGTH, getWorldTime, incrementLedgerAges,
 } from './data.js';
 
@@ -315,10 +316,13 @@ export function validateAndApply(result, roster, msgIdx) {
     const wantThoughts = settings.generateThoughts !== false;
     const wantIntentions = settings.generateIntentions !== false;
 
-    // Resolve the stable perMessage key for this message. perMessage is
-    // keyed by send_date (not chat index) so thoughts survive chat-array
-    // shifts caused by summarisation tools like Inline Summary.
-    const msgKey = getMsgKeyForIndex(msgIdx);
+    // Resolve the stable perMessage key for this message. We use the
+    // create-or-get variant because this is a STORE path: stamping a UUID
+    // here ensures all future reads (which use the read-only getMsgKeyForIndex)
+    // resolve to the same key. perMessage is keyed by UUID (not chat index)
+    // so thoughts survive chat-array shifts caused by summarisation tools
+    // like Inline Summary.
+    const msgKey = getOrCreateMsgKeyForIndex(msgIdx);
 
     // Take a snapshot of the ledger BEFORE mutations (for rollback)
     const ledgerSnapshot = JSON.parse(JSON.stringify(data.ledger));
@@ -346,6 +350,20 @@ export function validateAndApply(result, roster, msgIdx) {
     // N turns before they can be removed.
     const ledgerAgeMap = new Map(data.ledger.map(e => [e.id, e.turnsOpen || 0]));
     const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
+
+    // ── Grace-period design note ────────────────────────────────────────
+    // The grace period trades "premature erasure" for "stale demands": if a
+    // trigger fires the very next turn and the narrator performs the action
+    // (because the injection demands it), the executed-mark is rejected as
+    // in-grace, the entry stays open, and the injection keeps demanding an
+    // action that already happened. The INJECTION_HEADER "stale bookkeeping
+    // — ignore silently" line is the prompt-side mitigation (statistical).
+    //
+    // This is an acceptable trade at the default grace=2. Resist raising it.
+    // If it ever misbehaves, the code-side alternative is: allow executed
+    // during grace ONLY when the entry was declared before the current
+    // message (age ≥ 1), rather than a blanket window.
+    // ────────────────────────────────────────────────────────────────────
 
     const reactions = [];
     const worldTime = getWorldTime();

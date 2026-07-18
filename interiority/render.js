@@ -100,7 +100,7 @@ function renderLedgerList(ledger) {
 /**
  * Render the recent thoughts list HTML.
  *
- * @param {string[]} msgKeys - stable perMessage keys (sd-* format)
+ * @param {string[]} msgKeys - stable perMessage keys (mu-* or sd-* format)
  */
 function renderThoughtsList(msgKeys) {
     if (!msgKeys || msgKeys.length === 0) {
@@ -522,7 +522,8 @@ function cancelInlineAdd() {
  */
 export function renderThoughtBlockForMessage(msgIdx) {
     // Resolve the stable perMessage key for this index, then look up the data.
-    // perMessage is keyed by send_date, so the lookup survives chat shifts.
+    // perMessage is keyed by UUID (mu-*) or send_date (sd-*), so the lookup
+    // survives chat shifts.
     const msgKey = getMsgKeyForIndex(msgIdx);
     if (!msgKey) return;
     const pm = getPerMessage(msgKey);

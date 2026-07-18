@@ -15,7 +15,7 @@
  *                  ↑ optional   ↑ age in generation turns
  *     ],
  *     perMessage: {
- *       'sd-<send_date>': {
+ *       'mu-<uuid>': {
  *         reactions: [ { npc, re, thought } ],
  *         ledgerSnapshot: [ ... ],
  *         generatedAt: 1699999999,
@@ -23,18 +23,21 @@
  *     }
  *   }
  *
- * perMessage keys are stable identifiers derived from each message's
- * `send_date` property (prefixed 'sd-'), NOT positional chat-array indices.
- * This makes thoughts immune to summarisation tools (Inline Summary) that
- * shrink the chat array. Legacy numeric keys are migrated on chat load
- * via migrateIndexKeys().
+ * perMessage keys are stable identifiers derived from a per-message UUID
+ * that Interiority stamps into `msg.extra.mwt_uuid` (prefixed 'mu-'). This
+ * is the canonical place extensions stash per-message data, and it is
+ * persisted with the chat. UUIDs are used instead of `send_date` because
+ * `send_date` has only minute-resolution in some ST versions — two AI
+ * messages in the same minute collide, silently overwriting the first
+ * message's thoughts. Legacy keys ('sd-<send_date>' or numeric indices)
+ * are migrated on chat load via migrateIndexKeys().
  */
 
 import {
     getChatMeta, persistChatMeta, getUserNames,
     createSettingsManager, syncSharedConnectionSettings,
     getCurrentWorldState,
-    getChat,
+    getChat, getContextSafe,
 } from '../core/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -54,13 +57,26 @@ export const INJECTION_TAG = 'mwt_npc_intentions';
 export const MAX_THOUGHT_LENGTH = 500;
 
 /**
- * Prefix for stable perMessage keys based on SillyTavern's `send_date`
- * property. Each message is assigned a `send_date` at creation that never
- * changes — even when Inline Summary or other summarisation tools shrink
- * the chat array. Keying perMessage by `send_date` instead of by chat
- * array index prevents thought loss and overwrites when the array shifts.
+ * Prefix for stable perMessage keys based on a per-message UUID that
+ * Interiority stamps into `msg.extra.mwt_uuid`. This is the canonical
+ * place extensions stash per-message data, and it is persisted with the
+ * chat. UUIDs are used instead of `send_date` because `send_date` has
+ * only minute-resolution in some ST versions — two AI messages in the
+ * same minute collide, silently overwriting the first message's thoughts.
  */
-const MSG_KEY_PREFIX = 'sd-';
+const MSG_KEY_PREFIX = 'mu-';
+
+/**
+ * Legacy prefix for keys based on SillyTavern's `send_date` property.
+ * Older versions of Interiority keyed perMessage entries by send_date.
+ * These are migrated to 'mu-*' keys on chat load via migrateIndexKeys().
+ * Kept as a recognised prefix so orphan detection and key-to-index maps
+ * continue to work for chats that haven't been migrated yet.
+ */
+const LEGACY_SD_KEY_PREFIX = 'sd-';
+
+/** Property name under which we store the UUID in msg.extra. */
+const MSG_UUID_EXTRA_KEY = 'mwt_uuid';
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -115,9 +131,6 @@ export const state = {
 
     /** Serialised promise chain so scans never race each other or the knowledge tracker */
     workQueue: Promise.resolve(),
-
-    /** Last observed chat length, for bulk-delete adjustment */
-    lastChatLength: 0,
 };
 
 // ─── Data access (chat metadata) ─────────────────────────────────────────────
@@ -392,32 +405,111 @@ export function restoreLedgerSnapshot(snapshot) {
 // ─── Stable message-key utilities ────────────────────────────────────────────
 
 /**
- * Resolve a chat-array index to a stable perMessage key based on the
- * message's `send_date` property.
+ * Generate a UUID v4 string.
+ * Uses crypto.randomUUID() when available, falls back to a manual
+ * implementation for older browsers / non-secure contexts.
  *
- * SillyTavern stamps each message with `send_date` at creation time. This
- * value never changes — even when Inline Summary, bulk-delete, or any
- * other tool shrinks/reorders the chat array. Keying perMessage entries
- * by `send_date` instead of by positional index makes thoughts immune to
- * array shifts: a thought stored for message X will always be associated
- * with message X, regardless of how many messages are inserted or removed
- * before it.
+ * @returns {string} UUID string
+ */
+function generateUuid() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    // Fallback: RFC 4122 v4 UUID
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+/**
+ * Trigger a debounced save of the chat array (not just metadata).
+ *
+ * SillyTavern's `saveMetadataDebounced` only persists chatMetadata, not
+ * the chat array itself. Since `msg.extra` lives on the message object
+ * inside the chat array, stamping a UUID requires `saveChatDebounced`.
+ *
+ * This function is only called when we mutate `msg.extra`, not on every
+ * perMessage read/write (those go through chatMetadata).
+ */
+function persistChat() {
+    const ctx = getContextSafe();
+    if (ctx?.saveChatDebounced) ctx.saveChatDebounced();
+    else if (ctx?.saveChat) ctx.saveChat();
+}
+
+/**
+ * Resolve a chat-array index to a stable perMessage key.
+ *
+ * Primary: the per-message UUID stamped in `msg.extra.mwt_uuid`. This is
+ * created by {@link getOrCreateMsgKeyForIndex} and persisted with the chat.
+ * UUIDs are collision-free, unlike `send_date` which has only minute
+ * resolution in some ST versions.
+ *
+ * Fallback: `send_date` (prefixed 'sd-'), for messages that haven't had a
+ * UUID stamped yet. This keeps reads working during the transition window
+ * (e.g. before migration runs, or for messages created by other tools).
  *
  * @param {number} msgIdx - chat-array index
- * @returns {string|null} stable key like 'sd-1689123456789', or null
+ * @returns {string|null} stable key like 'mu-<uuid>' or 'sd-<send_date>', or null
  */
 export function getMsgKeyForIndex(msgIdx) {
     if (typeof msgIdx !== 'number' || msgIdx < 0) return null;
     const chat = getChat();
     const msg = chat[msgIdx];
-    if (!msg || !msg.send_date) return null;
-    return `${MSG_KEY_PREFIX}${msg.send_date}`;
+    if (!msg) return null;
+    // Primary: UUID stamped in msg.extra
+    if (msg.extra?.[MSG_UUID_EXTRA_KEY]) {
+        return `${MSG_KEY_PREFIX}${msg.extra[MSG_UUID_EXTRA_KEY]}`;
+    }
+    // Fallback: send_date (for messages not yet stamped)
+    if (msg.send_date) {
+        return `${LEGACY_SD_KEY_PREFIX}${msg.send_date}`;
+    }
+    return null;
+}
+
+/**
+ * Resolve a chat-array index to a stable perMessage key, stamping a fresh
+ * UUID into `msg.extra.mwt_uuid` if one doesn't exist yet.
+ *
+ * This is the canonical key-creation function: always use it when STORING
+ * perMessage data. Read-only callers (renderers, orphan detection) should
+ * use {@link getMsgKeyForIndex} instead to avoid unnecessary mutations.
+ *
+ * The UUID is persisted with the chat via `saveChatDebounced`, so it
+ * survives reloads, Inline Summary, and any other tool that preserves
+ * the chat array.
+ *
+ * @param {number} msgIdx - chat-array index
+ * @returns {string|null} stable key like 'mu-<uuid>', or null
+ */
+export function getOrCreateMsgKeyForIndex(msgIdx) {
+    if (typeof msgIdx !== 'number' || msgIdx < 0) return null;
+    const chat = getChat();
+    const msg = chat[msgIdx];
+    if (!msg) return null;
+
+    // If UUID already exists, return it (no mutation, no save)
+    if (msg.extra?.[MSG_UUID_EXTRA_KEY]) {
+        return `${MSG_KEY_PREFIX}${msg.extra[MSG_UUID_EXTRA_KEY]}`;
+    }
+
+    // Stamp a new UUID and persist
+    const uuid = generateUuid();
+    if (!msg.extra) msg.extra = {};
+    msg.extra[MSG_UUID_EXTRA_KEY] = uuid;
+    persistChat();
+
+    return `${MSG_KEY_PREFIX}${uuid}`;
 }
 
 /**
  * Build a reverse-lookup map from stable msgKey → chat-array index.
- * Used by renderers that iterate perMessage keys but need the index to
- * locate the corresponding DOM element (`.mes[mesid="N"]`).
+ *
+ * Maps BOTH 'mu-*' (UUID) and 'sd-*' (send_date) keys so that pre-migration
+ * and post-migration entries can both resolve to their DOM elements.
  *
  * @returns {Map<string, number>}
  */
@@ -426,8 +518,14 @@ export function buildKeyToIndexMap() {
     const map = new Map();
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (msg && msg.send_date) {
-            map.set(`${MSG_KEY_PREFIX}${msg.send_date}`, i);
+        if (!msg) continue;
+        // Primary: UUID key
+        if (msg.extra?.[MSG_UUID_EXTRA_KEY]) {
+            map.set(`${MSG_KEY_PREFIX}${msg.extra[MSG_UUID_EXTRA_KEY]}`, i);
+        }
+        // Legacy: send_date key (coexists with UUID until migration)
+        if (msg.send_date) {
+            map.set(`${LEGACY_SD_KEY_PREFIX}${msg.send_date}`, i);
         }
     }
     return map;
@@ -474,31 +572,40 @@ export function deletePerMessage(msgKey) {
 }
 
 /**
- * Get all perMessage keys (stable `sd-*` keys), sorted by generatedAt
- * descending (newest first).
+ * Get all perMessage keys (stable `mu-*` or legacy `sd-*` keys), sorted
+ * by generatedAt descending (newest first).
  * @returns {string[]}
  */
 export function getPerMessageKeys() {
     const data = getInteriorityData();
     const entries = Object.entries(data.perMessage)
-        .filter(([key, val]) => key.startsWith(MSG_KEY_PREFIX) && val);
+        .filter(([key, val]) =>
+            (key.startsWith(MSG_KEY_PREFIX) || key.startsWith(LEGACY_SD_KEY_PREFIX)) && val
+        );
     entries.sort((a, b) => (b[1].generatedAt || 0) - (a[1].generatedAt || 0));
     return entries.map(([key]) => key);
 }
 
-// ─── Migration (index-based → send_date-based keys) ──────────────────────────
+// ─── Migration (numeric / send_date → UUID-based keys) ───────────────────────
 
 /**
- * Migrate old numeric-index perMessage keys to stable send_date-based keys.
+ * Migrate old perMessage keys to stable UUID-based ('mu-*') keys.
  *
- * For each legacy numeric key "N", looks up chat[N].send_date and rewrites
- * the key to "sd-<send_date>". If the chat no longer has a message at
- * position N (e.g. Inline Summary already shrank the array), the entry is
- * orphaned and dropped — its thoughts referenced a message that no longer
- * exists at that position, and retaining them risks future collisions.
+ * Handles two legacy formats:
  *
- * Safe to call repeatedly: keys already in `sd-*` form are left as-is,
- * and a `keyMigrationDone` flag prevents redundant work.
+ * 1. **Numeric index keys** ("0", "1", "2", …) — the original positional
+ *    scheme. For each numeric key "N", looks up chat[N], stamps a UUID via
+ *    {@link getOrCreateMsgKeyForIndex}, and rewrites the key to "mu-<uuid>".
+ *    If the chat no longer has a message at position N (e.g. Inline Summary
+ *    already shrank the array), the entry is orphaned and dropped.
+ *
+ * 2. **send_date keys** ("sd-<send_date>") — the previous stable scheme.
+ *    send_date has minute-resolution in some ST versions, so two messages
+ *    in the same minute would collide. For each, we find the matching
+ *    message, stamp a UUID, and rewrite to "mu-<uuid>".
+ *
+ * Keys already in "mu-*" form are left as-is. The `keyMigrationDone` flag
+ * prevents redundant work on subsequent calls.
  *
  * @returns {number} count of keys migrated
  */
@@ -512,23 +619,46 @@ export function migrateIndexKeys() {
     let dropped = 0;
     const newPerMessage = {};
 
+    // Build a lookup from send_date → msgIdx so we can resolve 'sd-*' keys
+    // without scanning the chat array for each one.
+    const sendDateToIdx = new Map();
+    for (let i = 0; i < chat.length; i++) {
+        if (chat[i]?.send_date) {
+            sendDateToIdx.set(String(chat[i].send_date), i);
+        }
+    }
+
     for (const [key, val] of Object.entries(perMessage)) {
         if (key.startsWith(MSG_KEY_PREFIX)) {
-            // Already in stable form
+            // Already in UUID form — keep as-is
             newPerMessage[key] = val;
             continue;
         }
-        // Try to interpret as a legacy numeric index
-        const idx = Number(key);
-        if (Number.isFinite(idx) && idx >= 0 && idx < chat.length) {
-            const msg = chat[idx];
-            if (msg && msg.send_date) {
-                const newKey = `${MSG_KEY_PREFIX}${msg.send_date}`;
+
+        let msgIdx = null;
+
+        // Resolve legacy send_date key ('sd-<send_date>')
+        if (key.startsWith(LEGACY_SD_KEY_PREFIX)) {
+            const sendDate = key.slice(LEGACY_SD_KEY_PREFIX.length);
+            msgIdx = sendDateToIdx.has(sendDate) ? sendDateToIdx.get(sendDate) : null;
+        } else {
+            // Try numeric index ("0", "1", "2", …)
+            const idx = Number(key);
+            if (Number.isFinite(idx) && idx >= 0 && idx < chat.length) {
+                msgIdx = idx;
+            }
+        }
+
+        if (msgIdx != null) {
+            // Stamp a UUID on the message and rewrite the key
+            const newKey = getOrCreateMsgKeyForIndex(msgIdx);
+            if (newKey) {
                 newPerMessage[newKey] = val;
                 migrated++;
                 continue;
             }
         }
+
         // Orphaned — can't map to any current message
         dropped++;
     }
