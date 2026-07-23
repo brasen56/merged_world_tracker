@@ -14,3 +14,6 @@ logs/
 .DS_Store
 Thumbs.db
 *.stackdump
+
+# Reference copy of the Aikobots fork (port compatibility work) — not part of the extension
+Aikobots-4/
