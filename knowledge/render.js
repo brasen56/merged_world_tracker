@@ -439,6 +439,7 @@ function renderNpcListContent(type, entries) {
                     <button class="mwt-btn kt-npc-update" data-name="${escapeHtml(name)}" data-type="${type}">Update</button>
                     ${type === 'minor' ? `<button class="mwt-btn kt-npc-promote" data-name="${escapeHtml(name)}">⬆ Promote</button>` : ''}
                     ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)">📋 Enrich</button>` : ''}
+                    ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations">🌱 Growth</button>` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}">⬇ Demote</button>` : ''}
                     <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}">📖 View</button>
                 ` : ''}
@@ -554,6 +555,17 @@ function wireNpcListEvents(el, type) {
             state.activeItemId = item.id;
             state.activeSubTab = 'staging';
             renderNpcsSubTab();
+        });
+    });
+
+    // ── Growth Profile handler ──
+    // Generates an evidence-driven character profile (anti-textbook) from
+    // behavioral observations captured in recent messages. Two API calls:
+    // evidence capture, then profile synthesis. See NPC_GROWTH_BLUEPRINT.md.
+    el.querySelectorAll('.kt-npc-growth').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const name = btn.dataset.name;
+            openGrowthProfileModal(name, btn);
         });
     });
 
@@ -736,6 +748,211 @@ function wireStateTrackerEvents(el) {
             renderNpcsSubTab();
             ktSetStatus('State trackers imported.', 'success');
         } catch (err) { ktSetStatus(`Import failed: ${err.message}`, 'error'); }
+    });
+}
+
+// ─── NPC Growth Profile modal ────────────────────────────────────────────────
+
+/**
+ * Open the Growth Profile modal and run the generation pipeline.
+ *
+ * The modal shows a spinner during the two-phase generation (evidence capture
+ * → profile synthesis), then displays the observations with their quote
+ * receipts and the generated profile in an editable textarea with a copy
+ * button. Nothing is persisted in Slice 1 — the user can copy/paste the
+ * profile wherever they want.
+ *
+ * @param {string} name — NPC name
+ * @param {HTMLButtonElement} triggerBtn — the button that launched the modal
+ */
+async function openGrowthProfileModal(name, triggerBtn) {
+    // Build the modal skeleton (empty body, filled in async)
+    const modal = document.createElement('div');
+    modal.id = 'kt-growth-modal';
+    modal.className = 'mwt-modal kt-growth-modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="mwt-modal-backdrop"></div>
+        <div class="mwt-modal-panel">
+            <div class="mwt-modal-header">
+                <h3>🌱 Growth Profile — ${escapeHtml(name)}</h3>
+                <button class="mwt-modal-close" title="Close">&times;</button>
+            </div>
+            <div class="mwt-modal-body">
+                <div class="kt-growth-status">
+                    <span class="kt-growth-spinner"></span>
+                    <span class="kt-growth-status-text">Capturing behavioral evidence…</span>
+                </div>
+                <div class="kt-growth-content"></div>
+            </div>
+            <div class="mwt-modal-statusbar">
+                <span class="mwt-status"></span>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+
+    const closeBtn = modal.querySelector('.mwt-modal-close');
+    const backdrop = modal.querySelector('.mwt-modal-backdrop');
+    const statusText = modal.querySelector('.kt-growth-status-text');
+    const contentEl = modal.querySelector('.kt-growth-content');
+    const statusEl = modal.querySelector('.mwt-status');
+    const cleanup = () => modal.remove();
+    closeBtn.addEventListener('click', cleanup);
+    backdrop.addEventListener('click', cleanup);
+    // Escape key
+    const onKey = (e) => { if (e.key === 'Escape') { cleanup(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
+
+    try {
+        triggerBtn.disabled = true;
+        triggerBtn.textContent = '⏳…';
+
+        // Phase 1: evidence capture (the status text already says "Capturing…")
+        // Phase 2: profile generation (update status text when we get there)
+        // We wrap runGrowthProfile so we can update the status between phases.
+        const { captureEvidence, generateProfile, extractCanonFromEntry } = await import('./growth.js');
+        const { getRegistry } = await import('./registry.js');
+        const { loadEntryContent } = await import('./lorebook.js');
+
+        const reg = getRegistry()[name];
+        if (!reg || (reg.uid === null || reg.uid === undefined)) {
+            throw new Error(`"${name}" has no lorebook entry.`);
+        }
+
+        // Phase 1
+        const observations = await captureEvidence(name, reg.uid);
+        if (observations.length === 0) {
+            throw new Error(
+                `No behavioral observations found for "${name}" in recent messages. ` +
+                `The NPC may not appear enough in the last 80 messages.`
+            );
+        }
+
+        // Extract canon (NOT the Personality: line) via the shared helper
+        let canon = '';
+        try {
+            const content = await loadEntryContent(reg.uid);
+            canon = extractCanonFromEntry(content);
+        } catch { /* ignore */ }
+
+        // Phase 2
+        statusText.textContent = `Synthesizing profile from ${observations.length} observation${observations.length !== 1 ? 's' : ''}…`;
+        const profile = await generateProfile(name, observations, canon);
+
+        // Render the results
+        statusText.textContent = `Generated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}.`;
+        const spinner = modal.querySelector('.kt-growth-spinner');
+        if (spinner) spinner.style.display = 'none';
+
+        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon);
+        wireGrowthProfileEvents(modal, name, profile);
+    } catch (err) {
+        statusText.textContent = '';
+        const spinner = modal.querySelector('.kt-growth-spinner');
+        if (spinner) spinner.style.display = 'none';
+        contentEl.innerHTML = `<div class="kt-growth-error">❌ ${escapeHtml(err.message)}</div>`;
+        console.warn(`[MWT:Knowledge] Growth profile for "${name}" failed:`, err);
+    } finally {
+        triggerBtn.disabled = false;
+        triggerBtn.textContent = '🌱 Growth';
+    }
+}
+
+/**
+ * Render the growth profile results: evidence observations + profile prose.
+ */
+function renderGrowthProfileContent(name, observations, profile, canon) {
+    const obsByCategory = { trait: [], value: [], speech: [] };
+    for (const o of observations) {
+        const cat = obsByCategory[o.category] ? o.category : 'trait';
+        obsByCategory[cat].push(o);
+    }
+
+    const renderObsList = (cat, label) => {
+        const list = obsByCategory[cat];
+        if (!list || list.length === 0) return '';
+        return `<div class="kt-growth-obs-group">
+            <div class="kt-growth-obs-cat">${escapeHtml(label)} (${list.length})</div>
+            ${list.map(o => `
+                <div class="kt-growth-obs">
+                    <div class="kt-growth-obs-claim">${escapeHtml(o.claim)}</div>
+                    <div class="kt-growth-obs-quote">"${escapeHtml(o.quote)}"${o.msgIdx != null ? ` <span class="kt-growth-obs-msgidx">[msg ${o.msgIdx}]</span>` : ''}</div>
+                </div>
+            `).join('')}
+        </div>`;
+    };
+
+    return `
+        <div class="kt-growth-evidence">
+            <div class="kt-growth-section-label">📊 Evidence (${observations.length} observations)</div>
+            ${renderObsList('trait', 'Traits')}
+            ${renderObsList('value', 'Values')}
+            ${renderObsList('speech', 'Speech')}
+        </div>
+        <div class="kt-growth-profile-section">
+            <div class="kt-growth-section-label">📝 Generated Profile <span class="kt-growth-hint">(edit freely — not persisted in this version)</span></div>
+            <textarea class="kt-growth-profile-editor" id="kt-growth-profile-text">${escapeHtml(profile)}</textarea>
+            <div class="kt-growth-actions">
+                <button class="mwt-btn mwt-btn-primary" id="kt-growth-copy">📋 Copy Profile</button>
+                <button class="mwt-btn" id="kt-growth-copy-evidence">📋 Copy Evidence</button>
+            </div>
+        </div>
+        <div class="kt-growth-explainer">
+            <strong>How this works:</strong> The profile above is generated solely from the behavioral
+            observations listed under Evidence — each backed by a verbatim quote. It does not read or
+            refine any prior <code>Personality:</code> line, breaking the feedback loop where personality
+            is re-derived from its own prose every cycle. In this version, the profile is not persisted;
+            copy it wherever you like. (A future version will store evidence in chat metadata and write
+            the profile to a separate, non-injected lorebook.)
+        </div>
+    `;
+}
+
+function wireGrowthProfileEvents(modal, name, profile) {
+    modal.querySelector('#kt-growth-copy')?.addEventListener('click', async () => {
+        const text = modal.querySelector('#kt-growth-profile-text')?.value || profile;
+        try {
+            await navigator.clipboard.writeText(text);
+            const statusEl = modal.querySelector('.mwt-status');
+            if (statusEl) {
+                statusEl.textContent = 'Profile copied to clipboard.';
+                statusEl.className = 'mwt-status mwt-status-success';
+                statusEl.style.opacity = '1';
+                setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+            }
+        } catch (err) {
+            const statusEl = modal.querySelector('.mwt-status');
+            if (statusEl) {
+                statusEl.textContent = `Copy failed: ${err.message}`;
+                statusEl.className = 'mwt-status mwt-status-error';
+                statusEl.style.opacity = '1';
+            }
+        }
+    });
+
+    modal.querySelector('#kt-growth-copy-evidence')?.addEventListener('click', async () => {
+        const text = modal.querySelector('#kt-growth-profile-text')?.value || profile;
+        // Find observations from the rendered content
+        const claims = [...modal.querySelectorAll('.kt-growth-obs-claim')].map(el => el.textContent);
+        const quotes = [...modal.querySelectorAll('.kt-growth-obs-quote')].map(el => el.textContent);
+        const evidenceText = claims.map((c, i) => `- ${c}\n  Quote: ${quotes[i] || ''}`).join('\n');
+        try {
+            await navigator.clipboard.writeText(`Evidence for ${name}:\n${evidenceText}`);
+            const statusEl = modal.querySelector('.mwt-status');
+            if (statusEl) {
+                statusEl.textContent = 'Evidence copied to clipboard.';
+                statusEl.className = 'mwt-status mwt-status-success';
+                statusEl.style.opacity = '1';
+                setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+            }
+        } catch (err) {
+            const statusEl = modal.querySelector('.mwt-status');
+            if (statusEl) {
+                statusEl.textContent = `Copy failed: ${err.message}`;
+                statusEl.className = 'mwt-status mwt-status-error';
+                statusEl.style.opacity = '1';
+            }
+        }
     });
 }
 

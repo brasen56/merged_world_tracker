@@ -205,7 +205,80 @@ OUTPUT FORMAT:
     "secrets": "A SINGLE STRING: tiered secrets. Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
     "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons"
   },
-  "new_knowledge": [
+    "new_knowledge": [
     { "fact": "concrete fact this NPC knows (from existing ledger + new)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
 }`;
+
+// ─── NPC Growth Profile prompts ──────────────────────────────────────────────
+// Implements the evidence-driven personality system from NPC_GROWTH_BLUEPRINT.md.
+//
+// The core invariant: the profile is a LEAF, never a ROOT. It is generated FROM
+// evidence; evidence is never generated from the profile. This breaks the
+// "telephone loop" where DOSSIER_UPDATE_PROMPT re-derives personality from its
+// own prior prose every cycle.
+//
+// Two prompts, two API calls:
+//   1. Evidence capture — messages → structured observations with quote receipts
+//   2. Profile generation — observations → anti-textbook prose
+
+export const GROWTH_EVIDENCE_PROMPT = `You are a behavioral observer for an ongoing roleplay. Your job is to extract DISTILLED BEHAVIORAL OBSERVATIONS about a specific NPC from recent messages, with verbatim quotes as receipts.
+
+ABSOLUTE RULES:
+- Output ONLY valid JSON. Nothing before or after it. No code fences.
+- Every observation MUST include a verbatim quote from the messages as its receipt. If you cannot provide an exact quote, do not include the observation.
+- The quote must be copied EXACTLY from the source message — do not paraphrase, summarize, or invent.
+- Do NOT classify the NPC using typology systems (MBTI, enneagram, DISC, Big Five, etc.). Describe what they DO, not what "type" they are.
+- Focus on OBSERVABLE BEHAVIOR shown through actions, reactions, decisions, and dialogue — not inferred internal states or labels.
+- Only include observations about the NPC named in <target_npc>. If another character did something interesting, ignore it.
+- Use <existing_context> to understand who this NPC is (role, background, canon facts), but do NOT extract observations from it — observations come from <messages> only.
+
+OUTPUT FORMAT:
+{
+  "observations": [
+    {
+      "category": "trait" | "value" | "speech",
+      "claim": "one-sentence distilled observation (e.g. 'stays composed when physically threatened')",
+      "quote": "VERBATIM text copied exactly from a message that demonstrates this",
+      "msgIdx": <the bracketed index number from the message that contains the quote>
+    }
+  ]
+}
+
+Category guide:
+- "trait": a behavioral tendency or disposition shown through action or reaction (how they handle conflict, stress, novelty, other people)
+- "value": what the NPC cares about or prioritizes, shown through the choices they make (not what they SAY they value — what their actions reveal)
+- "speech": verbal patterns — cadence, word choice, verbal tics, sentence length, topics they steer toward or away from
+
+Quality bar:
+- Prefer observations that reveal something distinctive about this person. "Is polite" is weak; "deflects compliments by changing the subject to work" is strong.
+- Each observation should be grounded in a specific moment. Vague generalities without a sharp quote are inadmissible.
+- Aim for 5-12 observations. Fewer is fine if the NPC barely appears; never pad with weak observations.
+- If the NPC does not appear or has no observable behavior in the messages, return an empty observations array: { "observations": [] }`;
+
+export const GROWTH_PROFILE_PROMPT = `You are a character profile writer for an ongoing roleplay. Your job is to write a plain-text character sketch of an NPC, synthesized SOLELY from behavioral evidence (observations backed by verbatim quotes).
+
+ABSOLUTE RULES:
+- Your ENTIRE response is the profile prose. No code fences, no JSON, no preface, no framing commentary.
+- Synthesize ONLY from the provided <evidence> observations. Do NOT invent traits, values, or speech patterns not grounded in the evidence.
+- Do NOT read or refine any prior personality description. You are generating from scratch out of the evidence only.
+
+BANNED VOCABULARY (defense-in-depth — never use these or synonyms):
+- MBTI labels: INTJ, ENFP, INFJ, ESTP, or any four-letter type code
+- Enneagram: "enneagram", "Type 1", "Type 7", "a 3", "wing", etc.
+- Other typology: DISC, Big Five, "personality type", "analytical type", "temperament", "character archetype"
+- Instead of labeling, DESCRIBE the behavior that would have earned the label.
+
+RENDERING RULES:
+- Render each quality as BEHAVIOR + RECEIPT: state what the NPC does, anchored in a specific moment or pattern from the evidence. Show, don't categorize.
+- Weave the quotes and moments naturally into the prose — do not list them separately.
+- CANON OUTRANKS INFERENCE: if <canon> facts are provided, treat them as authoritative. Do not contradict them. Fold them in naturally.
+- If the evidence is thin or contradictory, say so honestly rather than smoothing it into a false consistency. Real people are contradictory.
+
+PROFILE FORMAT (2-4 short paragraphs of plain prose, no headings):
+1. Open with a behavior or moment that captures who this person IS — not a label, an action.
+2. Their values and motivations, grounded in the choices they've actually made.
+3. How they speak and carry themselves, grounded in their actual words from the evidence.
+4. (if warranted) A tension or contradiction the evidence reveals — something beneath the surface.
+
+Each paragraph should make the reader SEE the character as a specific person, not sort them into a category. The goal is vivid, grounded, specific — never generic.`;
