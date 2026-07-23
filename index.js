@@ -76,6 +76,30 @@ try {
     }
 } catch { /* macro-system.js not available */ }
 
+// Fallback: the Aikobots v4 fork (and some older ST versions) don't have
+// scripts/macros/macro-system.js. They expose the legacy MacrosParser in
+// scripts/macros.js with a different API: registerMacro(key, fn, description)
+// instead of registerMacro(key, { handler, category, description }). Build a
+// compatibility wrapper so commands.js can use the modern spec format on both.
+if (!macroRegistry) {
+    try {
+        const macrosModule = await import('../../../../scripts/macros.js');
+        if (macrosModule?.MacrosParser && typeof macrosModule.MacrosParser.registerMacro === 'function') {
+            const legacyParser = macrosModule.MacrosParser;
+            macroRegistry = {
+                registerMacro: (key, spec) => {
+                    // Accept both the modern spec object { handler, description }
+                    // and the legacy bare-function form (key, fn, description).
+                    const fn = typeof spec === 'function' ? spec : (spec?.handler || (() => ''));
+                    const desc = (typeof spec === 'object' && spec?.description) ? spec.description : '';
+                    return legacyParser.registerMacro(key, fn, desc);
+                },
+            };
+            console.log('[MWT] Using legacy MacrosParser fallback for macro registration.');
+        }
+    } catch { /* scripts/macros.js not available either */ }
+}
+
 // ─── Shared settings ────────────────────────────────────────────────────────
 
 const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
@@ -561,6 +585,18 @@ if (eventSource && event_types?.MESSAGE_SWIPED) {
         if (s.enableWorldState !== false) WorldState.onMessageSwiped(idx);
         if (s.enableChronicle  !== false) Chronicle.onMessageSwiped(idx);
         if (s.enableInteriority !== false) Interiority.onMessageSwiped(idx);
+    });
+}
+
+// ─── Sparse-chat: MORE_MESSAGES_LOADED (Aikobots v4 fork) ─────────────────────
+// When older chat ranges are hydrated, re-render thought blocks for newly
+// visible messages and retry deferred key migration. On upstream ST this event
+// doesn't exist, so the guard skips silently.
+
+if (eventSource && event_types?.MORE_MESSAGES_LOADED) {
+    eventSource.on(event_types.MORE_MESSAGES_LOADED, () => {
+        console.log('[MWT] MORE_MESSAGES_LOADED — re-rendering interiority thought blocks.');
+        Interiority.onMoreMessagesLoaded?.();
     });
 }
 

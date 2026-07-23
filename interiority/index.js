@@ -26,6 +26,7 @@ import {
     getOrCreateMsgKeyForIndex,
     buildKeyToIndexMap,
     purgeUserLedgerEntries, restoreLedgerSnapshot, migrateIndexKeys,
+    isChatHydrated,
 } from './data.js';
 
 import {
@@ -51,7 +52,8 @@ export function init(parentModal) {
     // UUID keys. This runs once per chat (guarded by data.keyMigrationDone)
     // and is essential for Inline Summary compatibility — old keys reference
     // positions that no longer match the (possibly shrunk) chat array.
-    migrateIndexKeys();
+    // migrateIndexKeys is now async (defers on sparse-chat forks until hydrated)
+    queueWork(migrateIndexKeys);
     // Clean up any stale user-owned ledger entries from before the roster fix.
     purgeUserLedgerEntries();
     applyIntentionsInjection();
@@ -219,7 +221,8 @@ export function onChatChanged() {
     // ever removed) could allow overlapping calls. Mirrors story_planner.
     state.contentEl = null;
     // Migrate legacy keys for this chat (no-op if already done).
-    migrateIndexKeys();
+    // migrateIndexKeys is async — fire-and-forget; it defers on sparse-chat forks.
+    queueWork(migrateIndexKeys);
     // Clear DOM thought blocks from the previous chat
     clearAllThoughtBlocks();
     // Re-render thought blocks for the new chat
@@ -246,8 +249,19 @@ export function onChatChanged() {
  *
  * @param {number} deletedIndex
  */
-export function onMessageDeleted(deletedIndex) {
+export async function onMessageDeleted(deletedIndex) {
     if (typeof deletedIndex !== 'number') return;
+
+    // Aikobots v4 sparse-chat guard: the orphan cleanup below iterates the
+    // full chat array to find perMessage keys whose messages no longer exist.
+    // On the fork, unhydrated message slots are holes — they'd ALL look like
+    // missing messages, causing mass-deletion of thoughts/snapshots. Defer
+    // cleanup until the chat is fully hydrated. On upstream ST,
+    // isChatHydrated() always returns true.
+    if (!(await isChatHydrated())) {
+        console.log('[MWT:Interiority] MESSAGE_DELETED cleanup deferred — chat not fully hydrated.');
+        return;
+    }
 
     // SillyTavern fires MESSAGE_DELETED *after* removing the message from the
     // chat array. That means getMsgKeyForIndex(deletedIndex) would resolve to
@@ -374,6 +388,22 @@ export function onMessageSwiped(swipedIndex) {
  */
 export function onMessageEdited(editedIndex) {
     invalidateAndMaybeRegenerate(editedIndex, 'MESSAGE_EDITED');
+}
+
+// ─── Sparse-chat: MORE_MESSAGES_LOADED hook ──────────────────────────────────
+
+/**
+ * Older chat ranges were hydrated (Aikobots v4 fork event). Re-render thought
+ * blocks for newly-visible messages and retry deferred key migration.
+ *
+ * On upstream ST this is never called (the event doesn't exist).
+ */
+export function onMoreMessagesLoaded() {
+    // Retry key migration (it defers if chat wasn't hydrated — now it may be)
+    queueWork(migrateIndexKeys);
+    // Re-render thought blocks for newly hydrated messages
+    renderAllThoughtBlocks();
+    console.log('[MWT:Interiority] MORE_MESSAGES_LOADED — re-rendered thought blocks for newly hydrated messages.');
 }
 
 // ─── Work queue (serialization) ──────────────────────────────────────────────

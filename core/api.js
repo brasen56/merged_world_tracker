@@ -205,12 +205,16 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
         );
     }
 
-    // Build messages array — constructPrompt handles text vs. chat completion formatting
+    // Build messages array — constructPrompt handles text vs. chat completion formatting.
+    // Feature-detect: the Aikobots v4 fork removed constructPrompt, but sendRequest
+    // accepts a messages array directly (Array.isArray(prompt) ? prompt : [...]).
     const messages = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
     ];
-    const prompt = ConnectionManagerRequestService.constructPrompt(messages, profileId);
+    const prompt = typeof ConnectionManagerRequestService.constructPrompt === 'function'
+        ? ConnectionManagerRequestService.constructPrompt(messages, profileId)
+        : messages;
     const maxTokens = Number(settings.maxTokens) || 2000;
 
     return retryAsync(retries, async (attempt) => {
@@ -240,10 +244,15 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
             throw err;
         }
 
-        // Extract text from result — handle multiple possible shapes
+        // Extract text from result — handle multiple possible shapes.
+        // The Aikobots v4 fork (and newer ST versions) return { content, reasoning }
+        // where content can be a string or a parsed JSON object (when json_schema
+        // is used). Check this branch before the legacy shapes.
         let text = '';
         if (typeof result === 'string') {
             text = result;
+        } else if (result?.content != null) {
+            text = typeof result.content === 'object' ? JSON.stringify(result.content) : String(result.content);
         } else if (result?.text) {
             text = result.text;
         } else if (result?.choices?.[0]?.message?.content) {

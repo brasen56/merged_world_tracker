@@ -40,6 +40,48 @@ import {
     getChat, getContextSafe,
 } from '../core/index.js';
 
+// ─── Aikobots v4 sparse-chat detection ───────────────────────────────────────
+//
+// The fork moved chat storage to SQLite with bounded range reads. The client
+// chat array keeps the full logical .length, but only loaded ranges are
+// hydrated; older slots are holes (undefined) until a background prefetch or
+// history navigation fills them. Full-array scans (orphan cleanup, key
+// migration) must be deferred until the chat is fully hydrated to avoid
+// mass-deleting entries that reference unhydrated messages.
+//
+// isChatFullyHydrated() is exported from script.js on the fork. On upstream ST
+// it doesn't exist, so isChatHydrated() always returns true (fully hydrated).
+
+let _isChatFullyHydratedFn = null;
+let _isChatFullyHydratedChecked = false;
+
+/**
+ * Lazy-load and cache the fork's isChatFullyHydrated function.
+ * @returns {function|null}
+ */
+async function getHydrationChecker() {
+    if (_isChatFullyHydratedChecked) return _isChatFullyHydratedFn;
+    _isChatFullyHydratedChecked = true;
+    try {
+        const stScript = await import('../../../../../script.js');
+        if (typeof stScript?.isChatFullyHydrated === 'function') {
+            _isChatFullyHydratedFn = stScript.isChatFullyHydrated;
+        }
+    } catch { /* upstream ST — no hydration concept */ }
+    return _isChatFullyHydratedFn;
+}
+
+/**
+ * Returns true if the chat is fully hydrated (all messages loaded).
+ * On upstream ST (no isChatFullyHydrated export), always returns true.
+ * @returns {Promise<boolean>}
+ */
+export async function isChatHydrated() {
+    const checker = await getHydrationChecker();
+    if (!checker) return true; // upstream ST — always hydrated
+    try { return checker(); } catch { return true; }
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const SETTINGS_KEY = 'mwt_interiority';
@@ -609,9 +651,20 @@ export function getPerMessageKeys() {
  *
  * @returns {number} count of keys migrated
  */
-export function migrateIndexKeys() {
+export async function migrateIndexKeys() {
     const data = getInteriorityData();
     if (data.keyMigrationDone) return 0;
+
+    // Aikobots v4 sparse-chat guard: on the fork, the client chat array keeps
+    // the full logical .length but only loaded ranges are hydrated. Iterating
+    // the array before full hydration would make every unhydrated message look
+    // absent, causing migration to drop entries that reference valid messages.
+    // Defer migration until the chat is fully hydrated. On upstream ST,
+    // isChatHydrated() always returns true.
+    if (!(await isChatHydrated())) {
+        console.log('[MWT:Interiority] Key migration deferred — chat not fully hydrated yet.');
+        return 0;
+    }
 
     const chat = getChat();
     const perMessage = data.perMessage;

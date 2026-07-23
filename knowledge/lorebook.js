@@ -108,12 +108,17 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
     if (!state.wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
     try {
         let wi = await state.wiScript.loadWorldInfo(LOREBOOK_NAME);
-        // Auto-create the lorebook if it doesn't exist yet
+        // Auto-create the lorebook if it doesn't exist yet.
+        // createNewWorldInfo returns a boolean on the Aikobots v4 fork (and some
+        // ST versions), not the world-info object. Always re-load after creating
+        // and fall back to { entries: {} } if that still fails.
         if (!wi || !wi.entries) {
             if (typeof state.wiScript.createNewWorldInfo === 'function') {
-                wi = await state.wiScript.createNewWorldInfo(LOREBOOK_NAME);
-            } else {
-                wi = { name: LOREBOOK_NAME, entries: {} };
+                await state.wiScript.createNewWorldInfo(LOREBOOK_NAME);
+            }
+            wi = await state.wiScript.loadWorldInfo(LOREBOOK_NAME);
+            if (!wi || !wi.entries) {
+                wi = { entries: {} };
             }
         }
         const entries = wi.entries;
