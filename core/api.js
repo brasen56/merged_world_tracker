@@ -123,7 +123,8 @@ export async function fetchFromApi({
         const data = await response.json();
         const message = data?.choices?.[0]?.message;
         let content = message?.content;
-        const finishReason = data?.choices?.[0]?.finish_reason;
+        const finishReason = data?.choices?.[0]?.finish_reason
+            ?? data?.finish_reason ?? data?.finishReason ?? null;
 
         // Truncation detection. finish_reason="length" means the model hit the
         // max_tokens cap mid-generation, so any returned content is a partial,
@@ -230,13 +231,27 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
             },
         );
 
-        // Truncation detection — see fetchFromApi for rationale.
-        const cmFinishReason = result?.choices?.[0]?.finish_reason;
+        // Truncation detection — see fetchFromApi for rationale. finish_reason
+        // can surface in several shapes depending on ST version and extractData:
+        // with extractData:true the fork often returns { content, reasoning } and
+        // NO `choices` array, so the raw-shape check alone silently misses
+        // truncation. Check every known location, and log it (plus completion
+        // tokens) on every call so a hidden response-length cap is diagnosable —
+        // e.g. a connection profile whose own preset caps below `maxTokens`.
+        const cmFinishReason = result?.choices?.[0]?.finish_reason
+            ?? result?.finish_reason ?? result?.finishReason ?? null;
+        const cmCompletionTokens = result?.usage?.completion_tokens
+            ?? result?.completion_tokens ?? null;
+        console.log(
+            `[MWT API] CM result — finish_reason=${cmFinishReason ?? 'n/a'}, ` +
+            `completion_tokens=${cmCompletionTokens ?? 'n/a'}, maxTokens(req)=${maxTokens}`
+        );
         if (cmFinishReason === 'length') {
             const err = new Error(
                 `Response truncated — the model hit the Max Tokens limit (${maxTokens}) ` +
                 `before finishing (finish_reason="length"). ` +
-                `Increase "Max Tokens" in the module's Settings. ` +
+                `Increase "Max Tokens" in the module's Settings — or, if it's already high, ` +
+                `check that the connection profile's own response-length preset isn't capping lower. ` +
                 `Reasoning models consume part of the token budget for thinking and need a higher limit; ` +
                 `richer outputs (e.g. Dossier Mode) are also larger.`
             );

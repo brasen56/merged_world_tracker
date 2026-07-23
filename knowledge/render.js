@@ -810,7 +810,7 @@ async function openGrowthProfileModal(name, triggerBtn) {
         // Phase 1: evidence capture (the status text already says "Capturing…")
         // Phase 2: profile generation (update status text when we get there)
         // We wrap runGrowthProfile so we can update the status between phases.
-        const { captureEvidence, generateProfile, extractCanonFromEntry } = await import('./growth.js');
+        const { captureEvidence, generateProfile, extractCanonFromEntry, looksTruncated } = await import('./growth.js');
         const { getRegistry } = await import('./registry.js');
         const { loadEntryContent } = await import('./lorebook.js');
 
@@ -839,12 +839,16 @@ async function openGrowthProfileModal(name, triggerBtn) {
         statusText.textContent = `Synthesizing profile from ${observations.length} observation${observations.length !== 1 ? 's' : ''}…`;
         const profile = await generateProfile(name, observations, canon);
 
-        // Render the results
-        statusText.textContent = `Generated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}.`;
+        // Render the results. Flag a suspected truncation so a half-profile is
+        // surfaced with a warning rather than silently shown as if complete.
+        const truncated = looksTruncated(profile);
+        statusText.textContent = truncated
+            ? '⚠️ Profile may be truncated — see warning below.'
+            : `Generated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}.`;
         const spinner = modal.querySelector('.kt-growth-spinner');
         if (spinner) spinner.style.display = 'none';
 
-        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon);
+        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon, truncated);
         wireGrowthProfileEvents(modal, name, profile);
     } catch (err) {
         statusText.textContent = '';
@@ -861,7 +865,7 @@ async function openGrowthProfileModal(name, triggerBtn) {
 /**
  * Render the growth profile results: evidence observations + profile prose.
  */
-function renderGrowthProfileContent(name, observations, profile, canon) {
+function renderGrowthProfileContent(name, observations, profile, canon, truncated = false) {
     const obsByCategory = { trait: [], value: [], speech: [] };
     for (const o of observations) {
         const cat = obsByCategory[o.category] ? o.category : 'trait';
@@ -883,6 +887,7 @@ function renderGrowthProfileContent(name, observations, profile, canon) {
     };
 
     return `
+        ${truncated ? `<div class="kt-growth-warning">⚠️ <strong>This profile looks cut off mid-sentence.</strong> The model's response was likely truncated by a response-length cap <em>below</em> your Max Tokens — most often the connection profile's own preset. Open the browser console for <code>finish_reason</code> / <code>completion_tokens</code>, raise the effective cap, then regenerate.</div>` : ''}
         <div class="kt-growth-evidence">
             <div class="kt-growth-section-label">📊 Evidence (${observations.length} observations)</div>
             ${renderObsList('trait', 'Traits')}

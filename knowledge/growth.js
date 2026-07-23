@@ -38,6 +38,34 @@ const EVIDENCE_MESSAGE_WINDOW = 80;
  *  authoritative context — but we NEVER extract the Personality: line. */
 const CANON_FIELD_LABELS = ['Canon Lock', 'Background', 'Role', 'Where to Find'];
 
+// ─── Truncation heuristic ────────────────────────────────────────────────────
+
+/**
+ * Heuristic: does this prose look cut off mid-sentence?
+ *
+ * This is a *suspicion* signal for the UI, complementary to the *confirmed*
+ * `finish_reason === 'length'` throw in core/api.js. On connection profiles,
+ * `extractData: true` hides the raw finish_reason, so a hidden response-length
+ * cap can truncate output with no error — this catches that case.
+ *
+ * Complete prose ends in terminal punctuation (`. ! ? …`), optionally followed
+ * by closing quotes/parens/emphasis. A hard cut can leave a balanced-but-empty
+ * artifact like `…six months ago("")` — so we PEEL trailing closers first, then
+ * check whether what remains actually ends a sentence. That tail ends in `)`,
+ * which would fool a naive "ends with punctuation" check.
+ *
+ * @param {string} text
+ * @returns {boolean} true if the text appears truncated
+ */
+export function looksTruncated(text) {
+    const trimmed = (text || '').trimEnd();
+    if (!trimmed) return false; // empty output is a separate error, handled upstream
+    // Peel trailing closers that can legitimately follow a sentence end.
+    const core = trimmed.replace(/[)\]}"'”’»*`_\s]+$/u, '');
+    if (!core) return false; // was nothing but closers — treat as inconclusive
+    return !/[.!?…]$/u.test(core);
+}
+
 // ─── Message formatting ──────────────────────────────────────────────────────
 
 /**
