@@ -18,9 +18,11 @@ import { getSettings, hasValidSettings } from './settings.js';
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, TRACKER_SENTINEL,
     HISTORY_KEY_PREFIX, RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
+    PROFILE_LOREBOOK_NAME,
     state,
 } from './state.js';
 import { getRegistry } from './registry.js';
+import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
@@ -152,6 +154,87 @@ export async function loadEntryContent(uid) {
     if (!state.wiScript) return null;
     try {
         const wi = await state.wiScript.loadWorldInfo(LOREBOOK_NAME);
+        return wi?.entries?.[uid]?.content ?? null;
+    } catch (err) { return null; }
+}
+
+// ─── NPC Profiles lorebook (Slice 2 — non-injected growth profiles) ──────────
+//
+// The "NPC Profiles" lorebook holds evidence-derived personality profiles.
+// Its entries have the NPC name as `comment` (label) and NO keywords
+// (`key: []`), so ST's world-info system never keyword-matches them — they
+// are never injected. This is the "default OFF" position, achieved
+// structurally (empty keywords) rather than via a toggle. If a user later
+// wants the profile injected, they can add keywords manually; the module
+// does not do it for them.
+//
+// See NPC_GROWTH_BLUEPRINT.md §"Profile storage & injection".
+
+/**
+ * Write (or overwrite) an NPC's growth profile in the NPC Profiles lorebook.
+ *
+ * @param {string} name — NPC name (used as entry comment/label)
+ * @param {string} content — profile prose
+ * @param {number|null} [existingUid] — existing profile UID to overwrite
+ * @returns {Promise<{success:boolean, uid?:number, error?:string}>}
+ */
+export async function writeProfileToLorebook(name, content, existingUid) {
+    if (!state.wiScript) return { success: false, error: 'world-info.js not loaded' };
+    try {
+        let wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+        // Auto-create the lorebook if it doesn't exist yet (same pattern as
+        // writeToLorebook — createNewWorldInfo may return boolean, so re-load).
+        if (!wi || !wi.entries) {
+            if (typeof state.wiScript.createNewWorldInfo === 'function') {
+                await state.wiScript.createNewWorldInfo(PROFILE_LOREBOOK_NAME);
+            }
+            wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+            if (!wi || !wi.entries) {
+                wi = { entries: {} };
+            }
+        }
+        const entries = wi.entries;
+        if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
+            entries[existingUid].content = content;
+            entries[existingUid].comment = name;
+            entries[existingUid].key = []; // no keywords → never injected
+            await state.wiScript.saveWorldInfo(PROFILE_LOREBOOK_NAME, wi);
+            return { success: true, uid: existingUid };
+        } else {
+            const existingUids = Object.keys(entries).map(Number).filter(n => !isNaN(n));
+            const newUid = existingUids.length > 0 ? existingUids.reduce((a, b) => a > b ? a : b, -1) + 1 : 0;
+            entries[newUid] = {
+                uid: newUid,
+                key: [],           // no keywords → ST world-info never injects this
+                keysecondary: [],
+                comment: name,
+                content,
+                enabled: true,
+                selective: false, constant: false, order: 100, position: 0,
+                disable: false, addMemo: true, group: '', groupOverride: false,
+                groupWeight: 100, sticky: null, cooldown: null, delay: null,
+                probability: 100, useProbability: true, depth: 4, selectiveLogic: 0,
+                excludeRecursion: false, preventRecursion: false, delayUntilRecursion: false,
+                scanDepth: null, caseSensitive: null, matchWholeWords: null,
+                useGroupScoring: null, automationId: '', role: null, vectorized: false,
+                displayIndex: newUid,
+            };
+            await state.wiScript.saveWorldInfo(PROFILE_LOREBOOK_NAME, wi);
+            return { success: true, uid: newUid };
+        }
+    } catch (err) { return { success: false, error: err.message }; }
+}
+
+/**
+ * Load an NPC's profile content from the NPC Profiles lorebook.
+ *
+ * @param {number} uid — profile lorebook UID
+ * @returns {Promise<string|null>}
+ */
+export async function loadProfileContent(uid) {
+    if (!state.wiScript || uid == null) return null;
+    try {
+        const wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
         return wi?.entries?.[uid]?.content ?? null;
     } catch (err) { return null; }
 }
@@ -576,6 +659,18 @@ export async function runNpcUpdate(name, uid) {
     const raw = await ktFetchFromApi(systemPrompt, userContent);
     const cleaned = normaliseOutput(raw);
     const result = parseJsonLenient(cleaned);
+
+    // Slice 2 guardrail: if this NPC has an evidence file (growth profile
+    // exists), the personality field is OWNED by the growth profile system,
+    // not DOSSIER_UPDATE_PROMPT. Null it out here so the two systems never
+    // touch the same field — the hard structural partition from
+    // NPC_GROWTH_BLUEPRINT.md §"The split-brain resolution". This prevents
+    // DOSSIER_UPDATE_PROMPT from re-deriving personality from its own prior
+    // prose (the telephone loop) for profiled NPCs.
+    if (useDossier && result.fields && hasEvidenceFile(name)) {
+        result.fields.personality = null;
+    }
+
     const merged = useDossier
         ? buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || [])
         : buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);

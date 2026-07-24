@@ -34,6 +34,36 @@ export function registerEntry(name, uid, type, keywords) {
 
 export function isKnown(name) { return !!getRegistry()[name]; }
 
+// ─── Profile UID (NPC Profiles lorebook cross-reference) ─────────────────────
+//
+// The registry gains a `profileUid` field (parallel to `uid`) pointing at the
+// NPC's entry in the "NPC Profiles" lorebook. This lets the editor cross-
+// reference both entries. See NPC_GROWTH_BLUEPRINT.md §"How the two entries
+// relate".
+
+/**
+ * Get the profile lorebook UID for an NPC, or null if none.
+ * @param {string} name — NPC name
+ * @returns {number|null}
+ */
+export function getProfileUid(name) {
+    const info = getRegistry()[name];
+    const uid = info?.profileUid;
+    return (uid === null || uid === undefined) ? null : uid;
+}
+
+/**
+ * Set the profile lorebook UID for an NPC (after writing the profile entry).
+ * @param {string} name — NPC name
+ * @param {number} uid — profile lorebook UID
+ */
+export function setProfileUid(name, uid) {
+    const reg = getRegistry();
+    if (!reg[name]) return;
+    reg[name].profileUid = uid;
+    saveRegistry(reg);
+}
+
 export function findOrphans() {
     const reg = getRegistry();
     return Object.keys(reg).filter(name => reg[name].uid === null || reg[name].uid === undefined);

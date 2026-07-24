@@ -586,6 +586,9 @@ function wireNpcListEvents(el, type) {
             delete reg[name];
             saveRegistry(reg);
             removeAllRelationshipsFor(name);
+            // Clean up the evidence file (Slice 2) so chat metadata doesn't
+            // accumulate orphaned evidence for removed NPCs.
+            import('./evidence.js').then(({ deleteEvidenceFile }) => deleteEvidenceFile(name));
             renderNpcsSubTab();
         });
     });
@@ -758,9 +761,12 @@ function wireStateTrackerEvents(el) {
  *
  * The modal shows a spinner during the two-phase generation (evidence capture
  * → profile synthesis), then displays the observations with their quote
- * receipts and the generated profile in an editable textarea with a copy
- * button. Nothing is persisted in Slice 1 — the user can copy/paste the
- * profile wherever they want.
+ * receipts and the generated profile in an editable textarea.
+ *
+ * Slice 2: observations are persisted to the two-tier evidence store (raw[])
+ * in chat metadata on capture. The user can edit claims, promote to canon,
+ * or delete observations in-place, and save the (possibly edited) profile to
+ * the non-injected "NPC Profiles" lorebook via the Save button.
  *
  * @param {string} name — NPC name
  * @param {HTMLButtonElement} triggerBtn — the button that launched the modal
@@ -807,48 +813,34 @@ async function openGrowthProfileModal(name, triggerBtn) {
         triggerBtn.disabled = true;
         triggerBtn.textContent = '⏳…';
 
-        // Phase 1: evidence capture (the status text already says "Capturing…")
-        // Phase 2: profile generation (update status text when we get there)
-        // We wrap runGrowthProfile so we can update the status between phases.
-        const { captureEvidence, generateProfile, extractCanonFromEntry, looksTruncated } = await import('./growth.js');
-        const { getRegistry } = await import('./registry.js');
-        const { loadEntryContent } = await import('./lorebook.js');
+        // The orchestrator (runGrowthProfile) runs both phases: capture then
+        // generate. It persists observations to the evidence store (raw[]) and
+        // generates from ALL accumulated evidence. We can't interleave status
+        // updates between the two API calls without instrumenting the
+        // orchestrator, so we show a combined status here and the per-phase
+        // counts in the final render.
+        const { runGrowthProfile, looksTruncated, loadProfile } = await import('./growth.js');
 
-        const reg = getRegistry()[name];
-        if (!reg || (reg.uid === null || reg.uid === undefined)) {
-            throw new Error(`"${name}" has no lorebook entry.`);
-        }
+        // Load any existing profile so the user can see (and edit) the current
+        // version rather than starting from blank if they've generated before.
+        const existingProfile = await loadProfile(name);
 
-        // Phase 1
-        const observations = await captureEvidence(name, reg.uid);
-        if (observations.length === 0) {
-            throw new Error(
-                `No behavioral observations found for "${name}" in recent messages. ` +
-                `The NPC may not appear enough in the last 80 messages.`
-            );
-        }
-
-        // Extract canon (NOT the Personality: line) via the shared helper
-        let canon = '';
-        try {
-            const content = await loadEntryContent(reg.uid);
-            canon = extractCanonFromEntry(content);
-        } catch { /* ignore */ }
-
-        // Phase 2
-        statusText.textContent = `Synthesizing profile from ${observations.length} observation${observations.length !== 1 ? 's' : ''}…`;
-        const profile = await generateProfile(name, observations, canon);
+        statusText.textContent = 'Capturing evidence & synthesizing profile…';
+        const { observations, profile, canon, captureStats } = await runGrowthProfile(name);
 
         // Render the results. Flag a suspected truncation so a half-profile is
         // surfaced with a warning rather than silently shown as if complete.
         const truncated = looksTruncated(profile);
+        const addedText = captureStats.added > 0
+            ? ` · ${captureStats.added} new observation${captureStats.added !== 1 ? 's' : ''} added${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} skipped)` : ''}`
+            : (captureStats.skipped > 0 ? ` · ${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} (already captured)` : '');
         statusText.textContent = truncated
             ? '⚠️ Profile may be truncated — see warning below.'
-            : `Generated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}.`;
+            : `Generated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}${addedText}.`;
         const spinner = modal.querySelector('.kt-growth-spinner');
         if (spinner) spinner.style.display = 'none';
 
-        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon, truncated);
+        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon, truncated, existingProfile, captureStats);
         wireGrowthProfileEvents(modal, name, profile);
     } catch (err) {
         statusText.textContent = '';
@@ -864,8 +856,13 @@ async function openGrowthProfileModal(name, triggerBtn) {
 
 /**
  * Render the growth profile results: evidence observations + profile prose.
+ *
+ * Slice 2: the profile section now includes a "Save to Lorebook" button that
+ * writes the (possibly edited) profile to the non-injected "NPC Profiles"
+ * lorebook, and the evidence section is editable (claim text, delete, promote
+ * to canon) so the user can correct the model before saving.
  */
-function renderGrowthProfileContent(name, observations, profile, canon, truncated = false) {
+function renderGrowthProfileContent(name, observations, profile, canon, truncated = false, existingProfile = null, captureStats = null) {
     const obsByCategory = { trait: [], value: [], speech: [] };
     for (const o of observations) {
         const cat = obsByCategory[o.category] ? o.category : 'trait';
@@ -878,27 +875,44 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
         return `<div class="kt-growth-obs-group">
             <div class="kt-growth-obs-cat">${escapeHtml(label)} (${list.length})</div>
             ${list.map(o => `
-                <div class="kt-growth-obs">
-                    <div class="kt-growth-obs-claim">${escapeHtml(o.claim)}</div>
+                <div class="kt-growth-obs" data-obs-id="${escapeHtml(o.id || '')}" data-tier="${escapeHtml(o.tier || 'raw')}">
+                    <div class="kt-growth-obs-header">
+                        ${o.canon ? '<span class="kt-growth-obs-canon" title="Canon: user-authored, authoritative, outranks inference">👑 canon</span>' : ''}
+                        ${o.tier === 'consolidated' ? '<span class="kt-growth-obs-tier" title="Consolidated from raw observations">🔗 consolidated</span>' : ''}
+                    </div>
+                    <div class="kt-growth-obs-claim" contenteditable="true" data-field="claim">${escapeHtml(o.claim)}</div>
                     <div class="kt-growth-obs-quote">"${escapeHtml(o.quote)}"${o.msgIdx != null ? ` <span class="kt-growth-obs-msgidx">[msg ${o.msgIdx}]</span>` : ''}${o.verified === false ? ` <span class="kt-growth-obs-unverified" title="This quote could not be matched word-for-word to its cited message — it may be paraphrased. Trace the message to confirm.">⚠ not verbatim</span>` : ''}</div>
+                    ${o.tier !== 'consolidated' ? `<div class="kt-growth-obs-tools">
+                        <button class="mwt-btn kt-growth-obs-canon-btn" data-action="canon" data-id="${escapeHtml(o.id || '')}">${o.canon ? '👑 Remove canon' : '👑 Promote to canon'}</button>
+                        <button class="mwt-btn kt-growth-obs-del-btn" data-action="delete" data-id="${escapeHtml(o.id || '')}" title="Delete this observation">🗑</button>
+                    </div>` : ''}
                 </div>
             `).join('')}
         </div>`;
     };
 
+    const captureNote = captureStats
+        ? (captureStats.added > 0
+            ? `${captureStats.added} new observation${captureStats.added !== 1 ? 's' : ''} added to evidence${captureStats.skipped > 0 ? `, ${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} skipped` : ''}.`
+            : (captureStats.skipped > 0 ? `${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} — all already captured.` : ''))
+        : '';
+
     return `
         ${truncated ? `<div class="kt-growth-warning">⚠️ <strong>This profile looks cut off mid-sentence.</strong> The model's response was likely truncated by a response-length cap <em>below</em> your Max Tokens — most often the connection profile's own preset. Open the browser console for <code>finish_reason</code> / <code>completion_tokens</code>, raise the effective cap, then regenerate.</div>` : ''}
+        ${existingProfile ? `<div class="kt-growth-existing-note">📝 An existing profile was found in the NPC Profiles lorebook. The generated profile below will replace it when you save.</div>` : ''}
+        ${captureNote ? `<div class="kt-growth-capture-note">📊 ${escapeHtml(captureNote)}</div>` : ''}
         <div class="kt-growth-evidence">
-            <div class="kt-growth-section-label">📊 Evidence (${observations.length} observations)</div>
+            <div class="kt-growth-section-label">📊 Evidence (${observations.length} observation${observations.length !== 1 ? 's' : ''}) <span class="kt-growth-hint">— click a claim to edit, 👑 to promote to canon, 🗑 to delete</span></div>
             ${renderObsList('trait', 'Traits')}
             ${renderObsList('value', 'Values')}
             ${renderObsList('speech', 'Speech')}
         </div>
         <div class="kt-growth-profile-section">
-            <div class="kt-growth-section-label">📝 Generated Profile <span class="kt-growth-hint">(edit freely — not persisted in this version)</span></div>
+            <div class="kt-growth-section-label">📝 Generated Profile <span class="kt-growth-hint">(edit freely before saving)</span></div>
             <textarea class="kt-growth-profile-editor" id="kt-growth-profile-text">${escapeHtml(profile)}</textarea>
             <div class="kt-growth-actions">
-                <button class="mwt-btn mwt-btn-primary" id="kt-growth-copy">📋 Copy Profile</button>
+                <button class="mwt-btn mwt-btn-primary" id="kt-growth-save">💾 Save to Lorebook</button>
+                <button class="mwt-btn" id="kt-growth-copy">📋 Copy Profile</button>
                 <button class="mwt-btn" id="kt-growth-copy-evidence">📋 Copy Evidence</button>
             </div>
         </div>
@@ -906,58 +920,123 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             <strong>How this works:</strong> The profile above is generated solely from the behavioral
             observations listed under Evidence — each backed by a verbatim quote. It does not read or
             refine any prior <code>Personality:</code> line, breaking the feedback loop where personality
-            is re-derived from its own prose every cycle. In this version, the profile is not persisted;
-            copy it wherever you like. (A future version will store evidence in chat metadata and write
-            the profile to a separate, non-injected lorebook.)
+            is re-derived from its own prose every cycle. Observations are now persisted in chat metadata
+            (the two-tier evidence store); saving writes the profile to the <strong>NPC Profiles</strong>
+            lorebook (a separate lorebook with no keywords, so it's never auto-injected). Once an NPC has
+            a growth profile, the dossier updater stops touching its <code>Personality:</code> line.
         </div>
     `;
 }
 
 function wireGrowthProfileEvents(modal, name, profile) {
+
+    // Helper to flash a status message in the modal's status bar.
+    const flash = (msg, type = 'success') => {
+        const statusEl = modal.querySelector('.mwt-status');
+        if (!statusEl) return;
+        statusEl.textContent = msg;
+        statusEl.className = `mwt-status mwt-status-${type}`;
+        statusEl.style.opacity = '1';
+        if (type === 'success') setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+    };
+
+    // ── Save to Lorebook ──
+    modal.querySelector('#kt-growth-save')?.addEventListener('click', async () => {
+        const text = modal.querySelector('#kt-growth-profile-text')?.value || profile;
+        if (!text.trim()) { flash('Profile is empty — nothing to save.', 'error'); return; }
+        const btn = modal.querySelector('#kt-growth-save');
+        try {
+            btn.disabled = true; btn.textContent = '⏳ Saving…';
+            const { saveProfile } = await import('./growth.js');
+            const result = await saveProfile(name, text);
+            if (result.success) {
+                flash(`Profile saved to "NPC Profiles" lorebook (UID ${result.uid}).`, 'success');
+            } else {
+                flash(`Save failed: ${result.error}`, 'error');
+            }
+        } catch (err) {
+            flash(`Save failed: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false; btn.textContent = '💾 Save to Lorebook';
+        }
+    });
+
+    // ── Copy Profile ──
     modal.querySelector('#kt-growth-copy')?.addEventListener('click', async () => {
         const text = modal.querySelector('#kt-growth-profile-text')?.value || profile;
         try {
             await navigator.clipboard.writeText(text);
-            const statusEl = modal.querySelector('.mwt-status');
-            if (statusEl) {
-                statusEl.textContent = 'Profile copied to clipboard.';
-                statusEl.className = 'mwt-status mwt-status-success';
-                statusEl.style.opacity = '1';
-                setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
-            }
+            flash('Profile copied to clipboard.');
         } catch (err) {
-            const statusEl = modal.querySelector('.mwt-status');
-            if (statusEl) {
-                statusEl.textContent = `Copy failed: ${err.message}`;
-                statusEl.className = 'mwt-status mwt-status-error';
-                statusEl.style.opacity = '1';
-            }
+            flash(`Copy failed: ${err.message}`, 'error');
         }
     });
 
+    // ── Copy Evidence ──
     modal.querySelector('#kt-growth-copy-evidence')?.addEventListener('click', async () => {
-        const text = modal.querySelector('#kt-growth-profile-text')?.value || profile;
-        // Find observations from the rendered content
         const claims = [...modal.querySelectorAll('.kt-growth-obs-claim')].map(el => el.textContent);
         const quotes = [...modal.querySelectorAll('.kt-growth-obs-quote')].map(el => el.textContent);
         const evidenceText = claims.map((c, i) => `- ${c}\n  Quote: ${quotes[i] || ''}`).join('\n');
         try {
             await navigator.clipboard.writeText(`Evidence for ${name}:\n${evidenceText}`);
-            const statusEl = modal.querySelector('.mwt-status');
-            if (statusEl) {
-                statusEl.textContent = 'Evidence copied to clipboard.';
-                statusEl.className = 'mwt-status mwt-status-success';
-                statusEl.style.opacity = '1';
-                setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
-            }
+            flash('Evidence copied to clipboard.');
         } catch (err) {
-            const statusEl = modal.querySelector('.mwt-status');
-            if (statusEl) {
-                statusEl.textContent = `Copy failed: ${err.message}`;
-                statusEl.className = 'mwt-status mwt-status-error';
-                statusEl.style.opacity = '1';
-            }
+            flash(`Copy failed: ${err.message}`, 'error');
         }
+    });
+
+    // ── Evidence editor: claim editing (save on blur) ──
+    modal.querySelectorAll('.kt-growth-obs-claim[contenteditable]').forEach(el => {
+        const obsId = el.closest('.kt-growth-obs')?.dataset.obsId;
+        if (!obsId) return;
+        el.addEventListener('blur', async () => {
+            const { updateRawObservation } = await import('./evidence.js');
+            updateRawObservation(name, obsId, { claim: el.textContent.trim() });
+        });
+    });
+
+    // ── Evidence editor: promote/remove canon ──
+    modal.querySelectorAll('.kt-growth-obs-canon-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const obsId = btn.dataset.id;
+            if (!obsId) return;
+            const { toggleCanon } = await import('./evidence.js');
+            const isCanon = toggleCanon(name, obsId);
+            if (isCanon === null) return;
+            // Update the UI in-place without a full re-render so the user's
+            // scroll position and editing focus are preserved.
+            const obsEl = btn.closest('.kt-growth-obs');
+            if (obsEl) {
+                const header = obsEl.querySelector('.kt-growth-obs-header');
+                if (isCanon) {
+                    if (!header.querySelector('.kt-growth-obs-canon')) {
+                        header.innerHTML = '<span class="kt-growth-obs-canon" title="Canon: user-authored, authoritative, outranks inference">👑 canon</span>';
+                    }
+                    btn.textContent = '👑 Remove canon';
+                } else {
+                    header.querySelector('.kt-growth-obs-canon')?.remove();
+                    btn.textContent = '👑 Promote to canon';
+                }
+            }
+            flash(isCanon ? 'Promoted to canon.' : 'Canon removed.');
+        });
+    });
+
+    // ── Evidence editor: delete observation ──
+    modal.querySelectorAll('.kt-growth-obs-del-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const obsId = btn.dataset.id;
+            if (!obsId) return;
+            const obsEl = btn.closest('.kt-growth-obs');
+            if (!obsEl) return;
+            if (!confirm('Delete this observation from the evidence store?')) return;
+            const { deleteRawObservation } = await import('./evidence.js');
+            const deleted = deleteRawObservation(name, obsId);
+            if (deleted) {
+                obsEl.remove();
+                flash('Observation deleted from evidence.');
+            }
+        });
     });
 }
 

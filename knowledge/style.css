@@ -1893,3 +1893,97 @@
     font-family: var(--mwt-font-mono);
     font-size: 10px;
 }
+
+/* ─── Slice 2: Evidence Editor + capture notes ─────────────────────────────── */
+
+.kt-growth-existing-note {
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: rgba(250, 204, 21, 0.08);
+    border: 1px solid rgba(250, 204, 21, 0.3);
+    border-radius: var(--mwt-radius);
+    font-size: 12px;
+    color: var(--mwt-text);
+}
+
+.kt-growth-capture-note {
+    padding: 6px 12px;
+    margin-bottom: 12px;
+    background: rgba(74, 222, 128, 0.08);
+    border: 1px solid rgba(74, 222, 128, 0.2);
+    border-radius: var(--mwt-radius);
+    font-size: 12px;
+    color: var(--mwt-text);
+}
+
+.kt-growth-obs-header {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.kt-growth-obs-canon {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(250, 204, 21, 0.15);
+    border: 1px solid rgba(250, 204, 21, 0.4);
+    color: rgb(250, 204, 21);
+}
+
+.kt-growth-obs-tier {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(99, 102, 241, 0.15);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    color: rgb(129, 140, 248);
+}
+
+.kt-growth-obs-claim[contenteditable] {
+    cursor: text;
+    outline: none;
+    border-radius: 3px;
+    padding: 2px 4px;
+    margin: 0 -4px;
+    transition: background 0.15s;
+}
+
+.kt-growth-obs-claim[contenteditable]:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.kt-growth-obs-claim[contenteditable]:focus {
+    background: rgba(99, 102, 241, 0.08);
+    box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.3);
+}
+
+.kt-growth-obs-tools {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.kt-growth-obs-tools .mwt-btn {
+    padding: 2px 8px;
+    font-size: 10px;
+    min-height: auto;
+}
+
+.kt-growth-obs-canon-btn {
+    border-color: rgba(250, 204, 21, 0.3);
+}
+
+.kt-growth-obs-del-btn {
+    padding: 2px 6px !important;
+    font-size: 11px;
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.kt-growth-obs-del-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+}

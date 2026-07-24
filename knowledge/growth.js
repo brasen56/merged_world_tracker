@@ -1,7 +1,7 @@
 /**
  * knowledge/growth.js — NPC Growth Profile: evidence capture + generation.
  *
- * Implements Slice 1 of NPC_GROWTH_BLUEPRINT.md: a one-shot, user-initiated
+ * Implements Slices 1 & 2 of NPC_GROWTH_BLUEPRINT.md: a user-initiated
  * "Generate growth profile" pass that:
  *
  *   1. Captures behavioral observations (with verbatim quote receipts) from
@@ -9,13 +9,18 @@
  *   2. Generates an anti-textbook character profile FROM those observations
  *      — never from the prior profile or the existing Personality: line.
  *
+ * Slice 2 adds persistence:
+ *   - Captured observations are appended to the two-tier evidence store
+ *     (`raw[]` in chat metadata via evidence.js).
+ *   - The generated profile can be saved to the "NPC Profiles" lorebook (a
+ *     separate, non-injected lorebook with `key: []`).
+ *   - The registry gains a `profileUid` cross-referencing the profile entry.
+ *   - `DOSSIER_UPDATE_PROMPT` is patched (in lorebook.js) to skip the
+ *     `Personality:` line for profiled NPCs — the hard structural partition.
+ *
  * The one rule everything obeys: **the profile is a LEAF, never a ROOT.**
  * Evidence flows one direction (messages → observations → profile). The
  * profile never feeds back into capture or synthesis.
- *
- * Slice 1 does NOT persist the evidence file — observations and profile are
- * returned for display in a modal. Slice 2 adds the two-tier evidence store
- * (raw + consolidated) in chat metadata.
  */
 
 import {
@@ -23,8 +28,12 @@ import {
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
 } from '../core/index.js';
 import { hasValidSettings } from './settings.js';
-import { getRegistry } from './registry.js';
-import { loadEntryContent, ktFetchFromApi } from './lorebook.js';
+import { getRegistry, getProfileUid, setProfileUid } from './registry.js';
+import { loadEntryContent, loadProfileContent, writeProfileToLorebook, ktFetchFromApi } from './lorebook.js';
+import {
+    appendRawObservations, getEvidenceForProfile, stampProfileGenerated,
+    hasEvidenceFile,
+} from './evidence.js';
 import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT } from './prompts.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -282,10 +291,13 @@ export async function generateProfile(name, observations, canon) {
 
     // Format the evidence as a readable list for the generator. Each
     // observation includes its category, distilled claim, and the verbatim
-    // quote receipt.
-    const evidenceText = observations.map((o, i) =>
-        `${i + 1}. [${o.category}] ${o.claim}\n   Quote: "${o.quote}"${o.msgIdx != null ? ` (msg ${o.msgIdx})` : ''}`
-    ).join('\n');
+    // quote receipt. Canon-flagged observations (user-promoted, authoritative)
+    // are marked so the generator knows they outrank inference.
+    const evidenceText = observations.map((o, i) => {
+        const canonTag = o.canon ? ' [CANON]' : '';
+        const tierTag = o.tier === 'consolidated' ? ' [consolidated]' : '';
+        return `${i + 1}. [${o.category}]${canonTag}${tierTag} ${o.claim}\n   Quote: "${o.quote}"${o.msgIdx != null ? ` (msg ${o.msgIdx})` : ''}`;
+    }).join('\n');
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -304,15 +316,57 @@ export async function generateProfile(name, observations, canon) {
     return normaliseOutput(raw);
 }
 
+// ─── Profile persistence ─────────────────────────────────────────────────────
+
+/**
+ * Write (or overwrite) an NPC's growth profile to the NPC Profiles lorebook.
+ *
+ * Uses the existing `profileUid` from the registry if present (overwrites the
+ * same entry); otherwise creates a new entry and records the UID. This is the
+ * "regeneratable while evidence survives" property: overwriting is safe because
+ * the evidence file in chat metadata is the root of truth.
+ *
+ * @param {string} name — NPC name
+ * @param {string} profileText — profile prose
+ * @returns {Promise<{success:boolean, uid?:number, error?:string}>}
+ */
+export async function saveProfile(name, profileText) {
+    const existingUid = getProfileUid(name);
+    const result = await writeProfileToLorebook(name, profileText, existingUid);
+    if (result.success) {
+        setProfileUid(name, result.uid);
+        stampProfileGenerated(name);
+    }
+    return result;
+}
+
+/**
+ * Load an NPC's existing profile from the NPC Profiles lorebook (if any).
+ *
+ * @param {string} name — NPC name
+ * @returns {Promise<string|null>}
+ */
+export async function loadProfile(name) {
+    const uid = getProfileUid(name);
+    if (uid == null) return null;
+    return loadProfileContent(uid);
+}
+
 // ─── Orchestrator ────────────────────────────────────────────────────────────
 
 /**
  * Run the full growth-profile pipeline for an NPC:
  *   1. Capture behavioral evidence (observations with quote receipts)
- *   2. Generate an anti-textbook profile from the evidence
+ *   2. Append observations to the two-tier evidence store (raw[])
+ *   3. Generate an anti-textbook profile from ALL accumulated evidence
+ *      (consolidated first, then raw — not just the fresh capture)
+ *
+ * The profile is NOT auto-saved to the lorebook in this function — the caller
+ * (UI) decides whether to save via saveProfile(). This keeps the human in the
+ * loop: the user reviews the profile before it's persisted.
  *
  * @param {string} name — NPC name (must exist in the registry)
- * @returns {Promise<{observations: Array, profile: string, canon: string}>}
+ * @returns {Promise<{observations: Array, profile: string, canon: string, captureStats: {added:number, skipped:number}}>}
  */
 export async function runGrowthProfile(name) {
     const registry = getRegistry();
@@ -324,14 +378,18 @@ export async function runGrowthProfile(name) {
         throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
     }
 
-    // Step 1: capture evidence
+    // Step 1: capture fresh evidence
     const observations = await captureEvidence(name, uid);
-    if (observations.length === 0) {
+    if (observations.length === 0 && !hasEvidenceFile(name)) {
         throw new Error(
             `No behavioral observations found for "${name}" in recent messages. ` +
             `The NPC may not appear enough in the last ${EVIDENCE_MESSAGE_WINDOW} messages.`
         );
     }
+
+    // Step 2: append fresh observations to the raw tier (persisted).
+    // Append-only — never overwrites. Duplicate observations are skipped.
+    const captureStats = appendRawObservations(name, observations);
 
     // Extract canon from the existing entry (NOT the Personality: line)
     let canon = '';
@@ -340,8 +398,16 @@ export async function runGrowthProfile(name) {
         canon = extractCanonFromEntry(content);
     } catch { /* ignore */ }
 
-    // Step 2: generate profile from evidence
-    const profile = await generateProfile(name, observations, canon);
+    // Step 3: generate profile from ALL accumulated evidence, not just the
+    // fresh capture. This means re-running growth on an NPC with existing
+    // evidence incorporates older observations too. Consolidated entries
+    // (Slice 3) are read first when present.
+    const allEvidence = getEvidenceForProfile(name);
+    if (allEvidence.length === 0) {
+        throw new Error(`No evidence available to generate a profile for "${name}".`);
+    }
 
-    return { observations, profile, canon };
+    const profile = await generateProfile(name, allEvidence, canon);
+
+    return { observations: allEvidence, profile, canon, captureStats };
 }

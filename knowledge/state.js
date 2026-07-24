@@ -15,6 +15,13 @@ export const REGISTRY_KEY = 'knowledge_tracker_registry';
 export const STATE_REGISTRY_KEY = 'state_tracker_registry';
 export const RELATIONSHIP_KEY = 'knowledge_tracker_relationships';
 export const HISTORY_KEY_PREFIX = 'kt_history_';
+
+/** Chat-metadata key for NPC growth evidence files (two-tier: raw + consolidated). */
+export const GROWTH_EVIDENCE_KEY = 'knowledge_growth_evidence';
+
+/** Name of the separate, non-injected lorebook that holds NPC growth profiles.
+ *  Entries use `key: []` (no keywords) so ST's world-info never injects them. */
+export const PROFILE_LOREBOOK_NAME = 'NPC Profiles';
 export const RELATIONSHIP_TYPES = [
     'ally', 'enemy', 'neutral', 'friend', 'rival', 'family', 'lover',
     'subordinate', 'superior', 'acquaintance', 'mentor', 'student',
