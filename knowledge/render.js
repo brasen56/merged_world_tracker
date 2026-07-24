@@ -798,13 +798,15 @@ async function openGrowthProfileModal(name, triggerBtn) {
     document.body.appendChild(modal);
 
     const closeBtn = modal.querySelector('.mwt-modal-close');
-    const backdrop = modal.querySelector('.mwt-modal-backdrop');
     const statusText = modal.querySelector('.kt-growth-status-text');
     const contentEl = modal.querySelector('.kt-growth-content');
     const statusEl = modal.querySelector('.mwt-status');
     const cleanup = () => modal.remove();
     closeBtn.addEventListener('click', cleanup);
-    backdrop.addEventListener('click', cleanup);
+    // Backdrop click intentionally does NOT close this modal — the generated
+    // evidence/profile view is easy to dismiss by accident, so require the ×
+    // button or Escape. (The evidence itself is persisted in the store; this is
+    // just about not nuking the on-screen review pane mid-inspection.)
     // Escape key
     const onKey = (e) => { if (e.key === 'Escape') { cleanup(); document.removeEventListener('keydown', onKey); } };
     document.addEventListener('keydown', onKey);

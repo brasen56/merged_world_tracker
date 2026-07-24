@@ -95,29 +95,89 @@ function normalizeForMatch(s) {
         .trim();
 }
 
+/** How far from the model's cited msgIdx to search. Its index is approximate —
+ *  it miscounts across long or sparse windows (hidden/summary messages create
+ *  index gaps), so a real quote can be cited one or two messages off. */
+const VERIFY_WINDOW = 5;
+
+/** Fraction of a quote's word-bigrams that must appear in a candidate message
+ *  for a non-contiguous match. Tolerates an interposed dialogue tag
+ *  (`"…," he said, "…"`), which only breaks bigrams locally, while still
+ *  rejecting a paraphrase, whose different word choices break most bigrams. */
+const BIGRAM_MATCH_THRESHOLD = 0.7;
+
+function bigrams(tokens) {
+    const out = [];
+    for (let i = 0; i + 1 < tokens.length; i++) out.push(`${tokens[i]} ${tokens[i + 1]}`);
+    return out;
+}
+
 /**
- * Verify an observation's quote is actually a verbatim span of the message it
- * cites. The model is told to copy dialogue OR action-narration word-for-word;
- * this enforces it. A paraphrase (what the model tends to do for actions) will
- * not be a substring of the source and is flagged as unverified.
+ * Does `quote` appear in a single message — either as an exact contiguous span
+ * or, failing that, with enough bigram overlap to be the same words split by an
+ * interposed tag/action? `needle`/`needleBigrams` are precomputed by the caller.
+ */
+function quoteMatchesMessage(needle, needleBigrams, msg) {
+    if (!msg || !msg.mes) return false;
+    const haystack = normalizeForMatch(stripNonNarrative(msg.mes));
+    if (!haystack) return false;
+    if (haystack.includes(needle)) return true; // exact contiguous span (fast path)
+    if (needleBigrams.length === 0) return false;
+    const haySet = new Set(bigrams(haystack.split(' ')));
+    let hit = 0;
+    for (const bg of needleBigrams) if (haySet.has(bg)) hit++;
+    return hit / needleBigrams.length >= BIGRAM_MATCH_THRESHOLD;
+}
+
+/**
+ * Find the chat message that actually contains an observation's quote and return
+ * its index — or -1 if the quote can't be verified. The model is told to copy
+ * dialogue OR action-narration word-for-word; this enforces it. A paraphrase
+ * (what the model tends to do for actions) shares few words with the source and
+ * returns -1.
+ *
+ * Two tolerances keep it from false-flagging *real* quotes:
+ *   1. **Windowed** — the model's cited msgIdx is approximate, so we search a
+ *      small neighborhood, expanding OUTWARD so the first hit is the NEAREST one.
+ *   2. **Interposition-tolerant** — a quote split by a dialogue tag
+ *      (`"…," he murmured, "…"`) isn't a contiguous substring, so we fall back to
+ *      bigram overlap, which survives a local break but not a whole paraphrase.
+ *
+ * Returning the matched index (not just a boolean) lets the caller SNAP the
+ * observation's msgIdx to the real source — fixing both the displayed `[msg N]`
+ * and the evidence store's `ts` anchor (extractMsgTs reads chat[msgIdx].send_date).
  *
  * Matches against the SAME stripped text the evidence prompt was shown
- * (stripNonNarrative), so tracker/system blocks the model never saw don't cause
- * false negatives. Very short needles are rejected as too spurious to trust.
+ * (stripNonNarrative). Very short quotes are rejected as too spurious to trust.
  *
  * @param {string} quote
- * @param {number|null} msgIdx — cited chat-array index
+ * @param {number|null} msgIdx — cited chat-array index (approximate)
  * @param {Array} chat — the chat array
- * @returns {boolean}
+ * @returns {number} matched chat index, or -1 if unverifiable
  */
-function isQuoteVerbatim(quote, msgIdx, chat) {
-    if (msgIdx == null || msgIdx < 0 || msgIdx >= chat.length) return false;
-    const msg = chat[msgIdx];
-    if (!msg || !msg.mes) return false;
+function findQuoteMatch(quote, msgIdx, chat) {
     const needle = normalizeForMatch(quote);
-    if (needle.length < 8) return false; // too short to be a meaningful, non-spurious receipt
-    const haystack = normalizeForMatch(stripNonNarrative(msg.mes));
-    return haystack.includes(needle);
+    if (needle.length < 8) return -1; // too short to be a meaningful, non-spurious receipt
+    const needleTokens = needle.split(' ');
+    if (needleTokens.length < 3) return -1;
+    const needleBigrams = bigrams(needleTokens);
+
+    if (msgIdx != null && msgIdx >= 0 && msgIdx < chat.length) {
+        // Expand outward from the cited index so the first hit is the nearest one.
+        if (quoteMatchesMessage(needle, needleBigrams, chat[msgIdx])) return msgIdx;
+        for (let d = 1; d <= VERIFY_WINDOW; d++) {
+            const lo = msgIdx - d;
+            const hi = msgIdx + d;
+            if (lo >= 0 && quoteMatchesMessage(needle, needleBigrams, chat[lo])) return lo;
+            if (hi < chat.length && quoteMatchesMessage(needle, needleBigrams, chat[hi])) return hi;
+        }
+        return -1;
+    }
+    // No usable cited index — scan the whole chat, return the first match.
+    for (let i = 0; i < chat.length; i++) {
+        if (quoteMatchesMessage(needle, needleBigrams, chat[i])) return i;
+    }
+    return -1;
 }
 
 // ─── Message formatting ──────────────────────────────────────────────────────
@@ -246,13 +306,19 @@ export async function captureEvidence(name, uid) {
         typeof o.quote === 'string' && o.quote.trim()
     ).map(o => {
         const quote = String(o.quote).trim();
-        const msgIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
+        const citedIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
+        const matchIdx = findQuoteMatch(quote, citedIdx, chat);
+        const verified = matchIdx !== -1;
         return {
             category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
             claim: String(o.claim).trim(),
             quote,
-            msgIdx,
-            verified: isQuoteVerbatim(quote, msgIdx, chat),
+            // Snap msgIdx to where the quote actually matched, so the display AND
+            // the store's ts anchor (extractMsgTs → chat[msgIdx].send_date) point
+            // at the real source. If unverified, keep the model's cited index so
+            // the flagged item stays traceable.
+            msgIdx: verified ? matchIdx : citedIdx,
+            verified,
         };
     });
 
