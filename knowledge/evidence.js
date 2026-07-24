@@ -255,6 +255,248 @@ export function toggleCanon(name, id, value) {
     return obs.canon;
 }
 
+// ─── Consolidation: raw → consolidated (Slice 3) ──────────────────────────────
+
+/**
+ * Get the raw observations for a consolidation pass, formatted with numeric
+ * IDs as the model expects them. Canon-flagged observations are marked so the
+ * consolidator knows they're authoritative.
+ *
+ * Only non-canon observations are returned for consolidation — canon claims
+ * are user-authored authoritative facts that should not be distilled away.
+ * They remain in raw[] and are passed to the profile generator separately.
+ *
+ * @param {string} name — NPC name
+ * @returns {Array<{numericId:number, id:string, category:string, claim:string, quote:string, canon:boolean}>}
+ */
+export function getRawForConsolidation(name) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return [];
+    return (file.raw || [])
+        .filter(o => !o.canon) // canon stays raw, never consolidated away
+        .map((o, i) => ({
+            numericId: i + 1,
+            id: o.id,
+            category: validCategory(o.category),
+            claim: o.claim,
+            quote: o.quote,
+            canon: !!o.canon,
+        }));
+}
+
+/**
+ * Apply a consolidation pass: replace consolidated[] with the new entries,
+ * move consumed raw observations to archivedRaw[], and clean up dangling
+ * back-references in any prior consolidated entries.
+ *
+ * Raw observations NOT cited by any new consolidated entry stay in raw[] —
+ * the user can re-consolidate later or leave them as-is. This preserves the
+ * "accumulate, don't overwrite" principle: consolidation only moves what it
+ * actually distilled.
+ *
+ * @param {string} name — NPC name
+ * @param {Array<{category:string, claim:string, sources:number[], confidence?:string}>} consolidated — from the API
+ * @returns {{consolidatedCount:number, archivedCount:number}} counts
+ */
+export function applyConsolidation(name, consolidated) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return { consolidatedCount: 0, archivedCount: 0 };
+    if (!file.raw) file.raw = [];
+    if (!file.consolidated) file.consolidated = [];
+    if (!file.archivedRaw) file.archivedRaw = [];
+
+    // Map numeric source IDs → raw observation ids. The numeric ID is the
+    // 1-based position among non-canon raw observations (as presented to the
+    // consolidator). We rebuild that mapping from the current raw[] state.
+    const nonCanonRaw = file.raw.filter(o => !o.canon);
+    const numericToId = new Map();
+    nonCanonRaw.forEach((o, i) => numericToId.set(i + 1, o.id));
+
+    // Build the new consolidated entries with resolved source ids.
+    const newConsolidated = [];
+    const consumedRawIds = new Set();
+    for (const con of consolidated) {
+        if (!con || !con.claim) continue;
+        const sourceIds = (Array.isArray(con.sources) ? con.sources : [])
+            .map(n => numericToId.get(n))
+            .filter(id => id != null);
+        if (sourceIds.length === 0) continue; // a consolidated claim with no valid sources is inadmissible
+        sourceIds.forEach(id => consumedRawIds.add(id));
+
+        // Compute firstSeen/lastSeen from the source observations.
+        const sourceObs = sourceIds
+            .map(id => file.raw.find(o => o.id === id))
+            .filter(Boolean);
+        const timestamps = sourceObs.map(o => o.ts).filter(t => typeof t === 'number');
+        const firstSeen = timestamps.length > 0 ? Math.min(...timestamps) : null;
+        const lastSeen = timestamps.length > 0 ? Math.max(...timestamps) : null;
+
+        newConsolidated.push({
+            id: nextObsId(file, 'consolidated'),
+            category: validCategory(con.category),
+            claim: String(con.claim).trim(),
+            sources: sourceIds,
+            firstSeen,
+            lastSeen,
+            confidence: ['high', 'medium', 'low'].includes(con.confidence) ? con.confidence : 'medium',
+        });
+    }
+
+    // Move consumed raw observations to archivedRaw (retain original ids so
+    // back-references stay valid). They are NOT deleted — just archived.
+    let archivedCount = 0;
+    if (consumedRawIds.size > 0) {
+        const toArchive = file.raw.filter(o => consumedRawIds.has(o.id));
+        file.archivedRaw.push(...toArchive);
+        file.raw = file.raw.filter(o => !consumedRawIds.has(o.id));
+        archivedCount = toArchive.length;
+    }
+
+    // Replace the consolidated tier with the new entries.
+    file.consolidated = newConsolidated;
+
+    touch(file);
+    return { consolidatedCount: newConsolidated.length, archivedCount };
+}
+
+/**
+ * Update a consolidated claim's text or category. Editing does not change its
+ * sources back-references or id.
+ *
+ * @param {string} name — NPC name
+ * @param {string} id — consolidated entry id (e.g. "con-1")
+ * @param {{claim?:string, category?:string}} patch
+ * @returns {boolean} true if updated
+ */
+export function updateConsolidated(name, id, patch) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return false;
+    const con = (file.consolidated || []).find(c => c.id === id);
+    if (!con) return false;
+    if (patch.claim != null) con.claim = String(patch.claim).trim();
+    if (patch.category != null) con.category = validCategory(patch.category);
+    touch(file);
+    return true;
+}
+
+/**
+ * Delete a consolidated entry. Its source observations stay archived (they
+ * were already moved during consolidation). The consolidated claim is removed
+ * but NOT moved to any audit tier — it was derived, not observed.
+ *
+ * @param {string} name — NPC name
+ * @param {string} id — consolidated entry id
+ * @returns {boolean} true if deleted
+ */
+export function deleteConsolidated(name, id) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return false;
+    const before = (file.consolidated || []).length;
+    file.consolidated = (file.consolidated || []).filter(c => c.id !== id);
+    if (file.consolidated.length === before) return false;
+    touch(file);
+    return true;
+}
+
+/**
+ * Expand a consolidated claim: restore its source observations from
+ * archivedRaw back to raw[] and remove the consolidated entry. This lets the
+ * user undo a consolidation that went in the wrong direction.
+ *
+ * @param {string} name — NPC name
+ * @param {string} id — consolidated entry id
+ * @returns {boolean} true if expanded
+ */
+export function expandConsolidated(name, id) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return false;
+    const con = (file.consolidated || []).find(c => c.id === id);
+    if (!con) return false;
+
+    // Restore archived source observations to raw[]
+    if (Array.isArray(con.sources)) {
+        for (const sourceId of con.sources) {
+            const archivedIdx = (file.archivedRaw || []).findIndex(o => o.id === sourceId);
+            if (archivedIdx !== -1) {
+                file.raw.push(file.archivedRaw[archivedIdx]);
+                file.archivedRaw.splice(archivedIdx, 1);
+            }
+        }
+    }
+
+    // Remove the consolidated entry
+    file.consolidated = (file.consolidated || []).filter(c => c.id !== id);
+    touch(file);
+    return true;
+}
+
+// ─── User overrides (Slice 3) ────────────────────────────────────────────────
+
+/**
+ * Get the userOverrides array from the evidence file. These are hand-edits to
+ * the profile that survive regeneration — the user can pin specific prose or
+ * corrections that the generator should not overwrite.
+ *
+ * @param {string} name — NPC name
+ * @returns {Array<{id:string, text:string, addedAt:number}>}
+ */
+export function getUserOverrides(name) {
+    const file = getEvidenceFile(name, false);
+    return file?.userOverrides || [];
+}
+
+/**
+ * Add a user override — a hand-edit that survives regeneration.
+ *
+ * @param {string} name — NPC name
+ * @param {string} text — the override text
+ * @returns {string|null} the new override id, or null on failure
+ */
+export function addUserOverride(name, text) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return null;
+    if (!file.userOverrides) file.userOverrides = [];
+    const id = `usr-${String(file.userOverrides.length + 1).padStart(3, '0')}`;
+    file.userOverrides.push({ id, text: String(text).trim(), addedAt: Date.now() });
+    touch(file);
+    return id;
+}
+
+/**
+ * Update a user override's text.
+ *
+ * @param {string} name — NPC name
+ * @param {string} id — override id
+ * @param {string} text — new text
+ * @returns {boolean} true if updated
+ */
+export function updateUserOverride(name, id, text) {
+    const file = getEvidenceFile(name, false);
+    if (!file || !file.userOverrides) return false;
+    const ov = file.userOverrides.find(o => o.id === id);
+    if (!ov) return false;
+    ov.text = String(text).trim();
+    touch(file);
+    return true;
+}
+
+/**
+ * Delete a user override.
+ *
+ * @param {string} name — NPC name
+ * @param {string} id — override id
+ * @returns {boolean} true if deleted
+ */
+export function deleteUserOverride(name, id) {
+    const file = getEvidenceFile(name, false);
+    if (!file || !file.userOverrides) return false;
+    const before = file.userOverrides.length;
+    file.userOverrides = file.userOverrides.filter(o => o.id !== id);
+    if (file.userOverrides.length === before) return false;
+    touch(file);
+    return true;
+}
+
 // ─── Reading evidence for profile generation ─────────────────────────────────
 
 /**

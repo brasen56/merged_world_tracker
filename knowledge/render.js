@@ -822,10 +822,12 @@ async function openGrowthProfileModal(name, triggerBtn) {
         // orchestrator, so we show a combined status here and the per-phase
         // counts in the final render.
         const { runGrowthProfile, looksTruncated, loadProfile } = await import('./growth.js');
+        const { getUserOverrides } = await import('./evidence.js');
 
         // Load any existing profile so the user can see (and edit) the current
         // version rather than starting from blank if they've generated before.
         const existingProfile = await loadProfile(name);
+        const overrides = getUserOverrides(name);
 
         statusText.textContent = 'Capturing evidence & synthesizing profile…';
         const { observations, profile, canon, captureStats } = await runGrowthProfile(name);
@@ -842,8 +844,8 @@ async function openGrowthProfileModal(name, triggerBtn) {
         const spinner = modal.querySelector('.kt-growth-spinner');
         if (spinner) spinner.style.display = 'none';
 
-        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon, truncated, existingProfile, captureStats);
-        wireGrowthProfileEvents(modal, name, profile);
+        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon, truncated, existingProfile, captureStats, overrides);
+        wireGrowthProfileEvents(modal, name, profile, triggerBtn);
     } catch (err) {
         statusText.textContent = '';
         const spinner = modal.querySelector('.kt-growth-spinner');
@@ -864,12 +866,17 @@ async function openGrowthProfileModal(name, triggerBtn) {
  * lorebook, and the evidence section is editable (claim text, delete, promote
  * to canon) so the user can correct the model before saving.
  */
-function renderGrowthProfileContent(name, observations, profile, canon, truncated = false, existingProfile = null, captureStats = null) {
+function renderGrowthProfileContent(name, observations, profile, canon, truncated = false, existingProfile = null, captureStats = null, overrides = []) {
     const obsByCategory = { trait: [], value: [], speech: [] };
     for (const o of observations) {
         const cat = obsByCategory[o.category] ? o.category : 'trait';
         obsByCategory[cat].push(o);
     }
+
+    // Count consolidated vs raw for the toolbar status
+    const consolidatedCount = observations.filter(o => o.tier === 'consolidated').length;
+    const rawCount = observations.filter(o => o.tier !== 'consolidated').length;
+    const nonCanonRawCount = observations.filter(o => o.tier !== 'consolidated' && !o.canon).length;
 
     const renderObsList = (cat, label) => {
         const list = obsByCategory[cat];
@@ -887,7 +894,10 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
                     ${o.tier !== 'consolidated' ? `<div class="kt-growth-obs-tools">
                         <button class="mwt-btn kt-growth-obs-canon-btn" data-action="canon" data-id="${escapeHtml(o.id || '')}">${o.canon ? '👑 Remove canon' : '👑 Promote to canon'}</button>
                         <button class="mwt-btn kt-growth-obs-del-btn" data-action="delete" data-id="${escapeHtml(o.id || '')}" title="Delete this observation">🗑</button>
-                    </div>` : ''}
+                    </div>` : `<div class="kt-growth-obs-tools">
+                        <button class="mwt-btn kt-growth-con-del-btn" data-action="con-delete" data-id="${escapeHtml(o.id || '')}" title="Delete this consolidated claim">🗑</button>
+                        <button class="mwt-btn kt-growth-con-expand-btn" data-action="con-expand" data-id="${escapeHtml(o.id || '')}" title="Undo consolidation — restore source observations to raw">↩ Expand</button>
+                    </div>`}
                 </div>
             `).join('')}
         </div>`;
@@ -904,7 +914,13 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
         ${existingProfile ? `<div class="kt-growth-existing-note">📝 An existing profile was found in the NPC Profiles lorebook. The generated profile below will replace it when you save.</div>` : ''}
         ${captureNote ? `<div class="kt-growth-capture-note">📊 ${escapeHtml(captureNote)}</div>` : ''}
         <div class="kt-growth-evidence">
-            <div class="kt-growth-section-label">📊 Evidence (${observations.length} observation${observations.length !== 1 ? 's' : ''}) <span class="kt-growth-hint">— click a claim to edit, 👑 to promote to canon, 🗑 to delete</span></div>
+            <div class="kt-growth-section-label">📊 Evidence (${observations.length} observation${observations.length !== 1 ? 's' : ''}${consolidatedCount > 0 ? `: ${consolidatedCount} consolidated, ${rawCount} raw` : ''}) <span class="kt-growth-hint">— click a claim to edit, 👑 to promote to canon, 🗑 to delete</span></div>
+            ${nonCanonRawCount >= 2 ? `<div class="kt-growth-evidence-tools">
+                <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims (Slice 3). Consumed raw entries are archived, not deleted.">🔗 Consolidate Evidence</button>
+                <button class="mwt-btn" id="kt-growth-regenerate" title="Regenerate the profile from existing evidence without re-capturing">🔄 Regenerate Profile</button>
+            </div>` : (observations.length > 0 ? `<div class="kt-growth-evidence-tools">
+                <button class="mwt-btn" id="kt-growth-regenerate" title="Regenerate the profile from existing evidence without re-capturing">🔄 Regenerate Profile</button>
+            </div>` : '')}
             ${renderObsList('trait', 'Traits')}
             ${renderObsList('value', 'Values')}
             ${renderObsList('speech', 'Speech')}
@@ -918,6 +934,18 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
                 <button class="mwt-btn" id="kt-growth-copy-evidence">📋 Copy Evidence</button>
             </div>
         </div>
+        ${overrides.length > 0 ? `<div class="kt-growth-overrides-section">
+            <div class="kt-growth-section-label">📌 User Notes (survive regeneration) <span class="kt-growth-hint">— hand-edits pinned to the profile</span></div>
+            ${overrides.map(o => `
+                <div class="kt-growth-override" data-override-id="${escapeHtml(o.id)}">
+                    <div class="kt-growth-override-text" contenteditable="true">${escapeHtml(o.text)}</div>
+                    <button class="mwt-btn kt-growth-override-del" data-id="${escapeHtml(o.id)}" title="Delete this user note">🗑</button>
+                </div>
+            `).join('')}
+        </div>` : ''}
+        <div class="kt-growth-overrides-add">
+            <button class="mwt-btn" id="kt-growth-add-override" title="Add a user note that survives profile regeneration">📌 Add User Note</button>
+        </div>
         <div class="kt-growth-explainer">
             <strong>How this works:</strong> The profile above is generated solely from the behavioral
             observations listed under Evidence — each backed by a verbatim quote. It does not read or
@@ -930,7 +958,7 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
     `;
 }
 
-function wireGrowthProfileEvents(modal, name, profile) {
+function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
 
     // Helper to flash a status message in the modal's status bar.
     const flash = (msg, type = 'success') => {
@@ -1037,6 +1065,154 @@ function wireGrowthProfileEvents(modal, name, profile) {
             if (deleted) {
                 obsEl.remove();
                 flash('Observation deleted from evidence.');
+            }
+        });
+    });
+
+    // ── Consolidated evidence: delete ── (Slice 3)
+    modal.querySelectorAll('.kt-growth-con-del-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const conId = btn.dataset.id;
+            if (!conId) return;
+            if (!confirm('Delete this consolidated claim? (Its source observations remain archived.)')) return;
+            const { deleteConsolidated } = await import('./evidence.js');
+            const deleted = deleteConsolidated(name, conId);
+            if (deleted) {
+                btn.closest('.kt-growth-obs')?.remove();
+                flash('Consolidated claim deleted.');
+            }
+        });
+    });
+
+    // ── Consolidated evidence: expand (undo consolidation) ── (Slice 3)
+    modal.querySelectorAll('.kt-growth-con-expand-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const conId = btn.dataset.id;
+            if (!conId) return;
+            if (!confirm('Expand this consolidated claim? Its source observations will be restored from the archive to raw evidence.')) return;
+            const { expandConsolidated } = await import('./evidence.js');
+            const expanded = expandConsolidated(name, conId);
+            if (expanded) {
+                btn.closest('.kt-growth-obs')?.remove();
+                flash('Consolidated claim expanded — source observations restored to raw.');
+            }
+        });
+    });
+
+    // ── Consolidate Evidence (Slice 3) ──
+    modal.querySelector('#kt-growth-consolidate')?.addEventListener('click', async () => {
+        const btn = modal.querySelector('#kt-growth-consolidate');
+        try {
+            btn.disabled = true; btn.textContent = '⏳ Consolidating…';
+            flash('Consolidating evidence…', 'info');
+            const { runConsolidation } = await import('./growth.js');
+            const { consolidatedCount, archivedCount } = await runConsolidation(name);
+
+            // Close this modal and re-open it fresh to show the consolidated
+            // state. We close first so we don't stack two modals, then trigger
+            // the growth button (which re-runs capture+generate with the
+            // updated evidence store — consolidated entries are read first).
+            modal.remove();
+            if (triggerBtn) {
+                triggerBtn.disabled = false;
+                triggerBtn.textContent = '🌱 Growth';
+                triggerBtn.click();
+            }
+        } catch (err) {
+            flash(`Consolidation failed: ${err.message}`, 'error');
+            btn.disabled = false; btn.textContent = '🔗 Consolidate Evidence';
+        }
+    });
+
+    // ── Regenerate Profile (Slice 3) ──
+    modal.querySelector('#kt-growth-regenerate')?.addEventListener('click', async () => {
+        const btn = modal.querySelector('#kt-growth-regenerate');
+        try {
+            btn.disabled = true; btn.textContent = '⏳ Regenerating…';
+            flash('Regenerating profile from existing evidence…', 'info');
+            const { regenerateProfile, looksTruncated } = await import('./growth.js');
+            const { observations, profile: newProfile } = await regenerateProfile(name);
+            const truncated = looksTruncated(newProfile);
+            const { getUserOverrides } = await import('./evidence.js');
+            const overrides = getUserOverrides(name);
+
+            // Update the status text
+            const statusTextEl = modal.querySelector('.kt-growth-status-text');
+            if (statusTextEl) {
+                statusTextEl.textContent = truncated
+                    ? '⚠️ Profile may be truncated — see warning below.'
+                    : `Regenerated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}.`;
+            }
+
+            // Re-render the content with the new profile + evidence
+            const contentEl = modal.querySelector('.kt-growth-content');
+            if (contentEl) {
+                contentEl.innerHTML = renderGrowthProfileContent(name, observations, newProfile, '', truncated, null, null, overrides);
+                wireGrowthProfileEvents(modal, name, newProfile, triggerBtn);
+            }
+            flash('Profile regenerated from existing evidence.', 'success');
+        } catch (err) {
+            flash(`Regeneration failed: ${err.message}`, 'error');
+            btn.disabled = false; btn.textContent = '🔄 Regenerate Profile';
+        }
+    });
+
+    // ── User Overrides: add (Slice 3) ──
+    modal.querySelector('#kt-growth-add-override')?.addEventListener('click', async () => {
+        const text = prompt('Enter a user note that will survive profile regeneration:');
+        if (!text || !text.trim()) return;
+        const { addUserOverride } = await import('./evidence.js');
+        const id = addUserOverride(name, text);
+        if (id) {
+            flash('User note added.');
+            // Re-render to show the new override
+            const { getUserOverrides } = await import('./evidence.js');
+            const overrides = getUserOverrides(name);
+            const editorText = modal.querySelector('#kt-growth-profile-text')?.value || '';
+            const contentEl = modal.querySelector('.kt-growth-content');
+            if (contentEl) {
+                // We need observations for re-render; read from the current modal
+                // state by extracting from existing DOM. For simplicity, just
+                // reload the modal content via regeneration (no API call needed
+                // since the evidence hasn't changed, but we DO need the evidence
+                // array). The cleanest approach: trigger the regenerate button
+                // which reads from the store.
+                const obsEls = [...modal.querySelectorAll('.kt-growth-obs')];
+                const observations = obsEls.map(el => ({
+                    id: el.dataset.obsId || '',
+                    tier: el.dataset.tier || 'raw',
+                    category: 'trait',
+                    claim: el.querySelector('.kt-growth-obs-claim')?.textContent || '',
+                    quote: el.querySelector('.kt-growth-obs-quote')?.textContent?.replace(/^"|"$/g, '') || '',
+                    canon: !!el.querySelector('.kt-growth-obs-canon'),
+                }));
+                contentEl.innerHTML = renderGrowthProfileContent(name, observations, editorText, '', false, null, null, overrides);
+                wireGrowthProfileEvents(modal, name, editorText, triggerBtn);
+            }
+        }
+    });
+
+    // ── User Overrides: edit (save on blur) ── (Slice 3)
+    modal.querySelectorAll('.kt-growth-override-text[contenteditable]').forEach(el => {
+        const overrideEl = el.closest('.kt-growth-override');
+        const overrideId = overrideEl?.dataset.overrideId;
+        if (!overrideId) return;
+        el.addEventListener('blur', async () => {
+            const { updateUserOverride } = await import('./evidence.js');
+            updateUserOverride(name, overrideId, el.textContent.trim());
+        });
+    });
+
+    // ── User Overrides: delete ── (Slice 3)
+    modal.querySelectorAll('.kt-growth-override-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.id;
+            if (!id) return;
+            const { deleteUserOverride } = await import('./evidence.js');
+            const deleted = deleteUserOverride(name, id);
+            if (deleted) {
+                btn.closest('.kt-growth-override')?.remove();
+                flash('User note deleted.');
             }
         });
     });

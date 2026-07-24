@@ -1,7 +1,7 @@
 /**
  * knowledge/growth.js — NPC Growth Profile: evidence capture + generation.
  *
- * Implements Slices 1 & 2 of NPC_GROWTH_BLUEPRINT.md: a user-initiated
+ * Implements Slices 1–3 of NPC_GROWTH_BLUEPRINT.md: a user-initiated
  * "Generate growth profile" pass that:
  *
  *   1. Captures behavioral observations (with verbatim quote receipts) from
@@ -18,6 +18,12 @@
  *   - `DOSSIER_UPDATE_PROMPT` is patched (in lorebook.js) to skip the
  *     `Personality:` line for profiled NPCs — the hard structural partition.
  *
+ * Slice 3 adds consolidation + maturity:
+ *   - User-initiated consolidation pass (raw → consolidated with back-
+ *     references, consumed raw → archived).
+ *   - Profile regeneration from existing evidence (no re-capture).
+ *   - `userOverrides[]` for hand-edits that survive regeneration.
+ *
  * The one rule everything obeys: **the profile is a LEAF, never a ROOT.**
  * Evidence flows one direction (messages → observations → profile). The
  * profile never feeds back into capture or synthesis.
@@ -33,8 +39,10 @@ import { loadEntryContent, loadProfileContent, writeProfileToLorebook, ktFetchFr
 import {
     appendRawObservations, getEvidenceForProfile, stampProfileGenerated,
     hasEvidenceFile,
+    getRawForConsolidation, applyConsolidation,
+    getUserOverrides,
 } from './evidence.js';
-import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT } from './prompts.js';
+import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -475,5 +483,129 @@ export async function runGrowthProfile(name) {
 
     const profile = await generateProfile(name, allEvidence, canon);
 
-    return { observations: allEvidence, profile, canon, captureStats };
+    // If user overrides exist, append them to the generated profile so hand-
+    // edits survive regeneration. (Slice 3)
+    const overrides = getUserOverrides(name);
+    let finalProfile = profile;
+    if (overrides.length > 0) {
+        const overrideText = overrides.map(o => o.text).filter(Boolean).join('\n\n');
+        if (overrideText) {
+            finalProfile = `${profile}\n\n--- User Notes ---\n${overrideText}`;
+        }
+    }
+
+    return { observations: allEvidence, profile: finalProfile, canon, captureStats };
+}
+
+// ─── Consolidation pass (Slice 3) ────────────────────────────────────────────
+
+/**
+ * Run the consolidation API call: distill raw observations into higher-level
+ * consolidated claims with source back-references.
+ *
+ * This reads ONLY raw evidence (never the profile, never consolidated entries).
+ * The leaf invariant is preserved: consolidated claims are evidence-derived.
+ *
+ * @param {string} name — NPC name
+ * @returns {Promise<Array<{category:string, claim:string, sources:number[], confidence?:string}>>}
+ */
+export async function consolidateEvidence(name) {
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+
+    const rawForCon = getRawForConsolidation(name);
+    if (rawForCon.length === 0) {
+        throw new Error(`No raw observations to consolidate for "${name}". (Canon-flagged observations are excluded from consolidation.)`);
+    }
+
+    // Format raw observations with their numeric IDs for the consolidator.
+    const rawText = rawForCon.map(o => {
+        return `[${o.numericId}] [${o.category}] ${o.claim}\n   Quote: "${o.quote}"`;
+    }).join('\n');
+
+    const userContent = [
+        `<target_npc>${name}</target_npc>`,
+        '',
+        '<raw_observations>',
+        rawText,
+        '</raw_observations>',
+        '',
+        '='.repeat(60),
+        `Consolidate the raw observations for ${name}. Output only JSON.`,
+    ].join('\n');
+
+    const rawResponse = await ktFetchFromApi(GROWTH_CONSOLIDATION_PROMPT, userContent, { retries: 1 });
+    const cleaned = normaliseOutput(rawResponse);
+    const result = parseJsonLenient(cleaned);
+
+    return Array.isArray(result.consolidated) ? result.consolidated : [];
+}
+
+/**
+ * Run the full consolidation pipeline for an NPC:
+ *   1. Gather raw observations (excluding canon)
+ *   2. API call to consolidate them into distilled claims
+ *   3. Apply: write consolidated[], archive consumed raw observations
+ *
+ * @param {string} name — NPC name
+ * @returns {Promise<{consolidatedCount:number, archivedCount:number, consolidated:Array}>}
+ */
+export async function runConsolidation(name) {
+    const registry = getRegistry();
+    const info = registry[name];
+    if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
+
+    const consolidated = await consolidateEvidence(name);
+    const stats = applyConsolidation(name, consolidated);
+
+    return { ...stats, consolidated };
+}
+
+// ─── Profile regeneration from existing evidence (Slice 3) ───────────────────
+
+/**
+ * Regenerate the profile from EXISTING evidence without re-capturing.
+ *
+ * This reads the evidence store (consolidated first, then raw) and generates
+ * a new profile. No API call to capture evidence — the user-initiated capture
+ * cadence is separate. This is useful after consolidation, after editing
+ * evidence, or when the user wants a fresh profile from accumulated evidence.
+ *
+ * @param {string} name — NPC name
+ * @returns {Promise<{observations: Array, profile: string, canon: string}>}
+ */
+export async function regenerateProfile(name) {
+    const registry = getRegistry();
+    const info = registry[name];
+    if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
+
+    const uid = info.uid;
+    if (uid === null || uid === undefined) {
+        throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
+    }
+
+    const allEvidence = getEvidenceForProfile(name);
+    if (allEvidence.length === 0) {
+        throw new Error(`No evidence available for "${name}". Run growth capture first.`);
+    }
+
+    // Extract canon from the existing entry (NOT the Personality: line)
+    let canon = '';
+    try {
+        const content = await loadEntryContent(uid);
+        canon = extractCanonFromEntry(content);
+    } catch { /* ignore */ }
+
+    const profile = await generateProfile(name, allEvidence, canon);
+
+    // Apply user overrides (Slice 3)
+    const overrides = getUserOverrides(name);
+    let finalProfile = profile;
+    if (overrides.length > 0) {
+        const overrideText = overrides.map(o => o.text).filter(Boolean).join('\n\n');
+        if (overrideText) {
+            finalProfile = `${profile}\n\n--- User Notes ---\n${overrideText}`;
+        }
+    }
+
+    return { observations: allEvidence, profile: finalProfile, canon };
 }

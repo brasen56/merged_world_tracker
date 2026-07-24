@@ -283,3 +283,41 @@ PROFILE FORMAT (2-4 short paragraphs of plain prose, no headings):
 4. (if warranted) A tension or contradiction the evidence reveals — something beneath the surface.
 
 Each paragraph should make the reader SEE the character as a specific person, not sort them into a category. The goal is vivid, grounded, specific — never generic.`;
+
+// ─── NPC Growth Consolidation prompt (Slice 3) ───────────────────────────────
+// Used by the "Consolidate Evidence" action. Reads raw observations and emits
+// consolidated claims that distill multiple related observations into stable,
+// higher-level patterns. Each consolidated claim cites its source observation
+// ids so the audit trail is preserved. The leaf invariant is upheld: this only
+// reads raw evidence, never the profile.
+
+export const GROWTH_CONSOLIDATION_PROMPT = `You are a behavioral analyst for an ongoing roleplay. Your job is to CONSOLIDATE raw behavioral observations about a specific NPC into distilled, higher-level claims — each citing its source observation IDs.
+
+ABSOLUTE RULES:
+- Output ONLY valid JSON. Nothing before or after it. No code fences.
+- Read the <raw_observations> carefully. Group observations that reveal the SAME underlying behavioral pattern, value, or speech tendency.
+- For each group, write ONE consolidated claim that synthesizes the pattern. The claim should be a higher-level distillation, not a restatement.
+- Each consolidated claim MUST include a "sources" array listing the numeric IDs (the bracketed numbers) of the raw observations it was derived from.
+- Do NOT consolidate observations that are about fundamentally different behaviors just because they're in the same category — each consolidated claim should represent a coherent theme.
+- Preserve the category of the dominant observations in each group.
+- If a raw observation doesn't fit any group, keep it as a standalone consolidated claim (citing just itself).
+- A raw observation may be cited by multiple consolidated claims if it genuinely informs more than one pattern.
+- Do NOT invent observations not in the input. Every source ID must correspond to a real raw observation.
+
+OUTPUT FORMAT:
+{
+  "consolidated": [
+    {
+      "category": "trait" | "value" | "speech",
+      "claim": "a distilled synthesis of the pattern (e.g. 'stays composed under physical threat and speaks more tersely when pressured')",
+      "sources": [1, 3, 7],
+      "confidence": "high" | "medium" | "low"
+    }
+  ]
+}
+
+Quality bar:
+- Consolidated claims should be MORE distilled than the raw observations they replace — that's the point. "Cool under pressure" is a good consolidation of "stayed calm when the ceiling collapsed" and "didn't flinch when the gun was drawn."
+- Aim to reduce the total count by 40-60%. If there are 10 raw observations, 4-6 consolidated claims is typical.
+- Confidence reflects how strongly the sources support the claim: "high" = 3+ consistent observations; "medium" = 2 observations or some ambiguity; "low" = 1 observation or contradictory evidence.
+- Do NOT consolidate ALL observations into 1-2 mega-claims — that loses granularity. Each consolidated claim should represent ONE clear behavioral theme.`;
