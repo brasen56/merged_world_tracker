@@ -1,5 +1,4 @@
-/* ──────────────────────────────────────────────────────────────────────────
-   Knowledge Tracker Styles (.kt-*)
+/*   Knowledge Tracker Styles (.kt-*)
    Staging layout, toolbar, sub-tabs, detail panel, NPC list, state tracker,
    view/history modal, status, diff, settings, relationship editor & graph,
    notification panel, orphan indicators, NPC growth profile modal, mobile.
@@ -2045,4 +2044,54 @@
 
 .kt-growth-obs-del-btn:hover {
     background: rgba(239, 68, 68, 0.15);
+}
+
+/* ─── Psychoanalyze portrait (dead-end view) ───────────────────────────────── */
+
+.kt-growth-psychoanalyze-section {
+    margin-top: 16px;
+    margin-bottom: 20px;
+    padding: 12px;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+    border-radius: var(--mwt-radius);
+    background: rgba(168, 85, 247, 0.04);
+}
+
+.kt-growth-psychoanalyze-warning {
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    background: rgba(250, 204, 21, 0.08);
+    border: 1px solid rgba(250, 204, 21, 0.3);
+    border-radius: var(--mwt-radius);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--mwt-text);
+}
+
+.kt-growth-psychoanalyze-warning code {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: var(--mwt-font-mono);
+    font-size: 10px;
+}
+
+.kt-growth-psychoanalyze-editor {
+    width: 100%;
+    min-height: 300px;
+    padding: 12px;
+    background: var(--mwt-input-bg, transparent);
+    border: 1px solid rgba(168, 85, 247, 0.25);
+    border-radius: var(--mwt-radius);
+    color: var(--mwt-text);
+    font-family: var(--mwt-font);
+    font-size: 13px;
+    line-height: 1.6;
+    resize: vertical;
+    box-sizing: border-box;
+}
+
+.kt-growth-psychoanalyze-editor:focus {
+    outline: none;
+    border-color: rgba(168, 85, 247, 0.6);
 }

@@ -932,7 +932,13 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
                 <button class="mwt-btn mwt-btn-primary" id="kt-growth-save">💾 Save to Lorebook</button>
                 <button class="mwt-btn" id="kt-growth-copy">📋 Copy Profile</button>
                 <button class="mwt-btn" id="kt-growth-copy-evidence">📋 Copy Evidence</button>
+                <button class="mwt-btn" id="kt-growth-psychoanalyze" title="Generate a depth-oriented psychoanalytic portrait (copy-only — NEVER injected or saved)">🧠 Psychoanalyze</button>
             </div>
+        </div>
+        <div class="kt-growth-psychoanalyze-section" id="kt-growth-psychoanalyze-container" style="display:none">
+            <div class="kt-growth-section-label">🧠 Psychoanalytic Portrait <span class="kt-growth-hint">(copy-only · NEVER injected or saved to any lorebook)</span></div>
+            <div class="kt-growth-psychoanalyze-warning">⚠️ <strong>This is a dead-end analytical view.</strong> It reads the full character entry including <code>Personality:</code> as historical baseline. It is never injected, never saved, and never read by any other system. Copy it externally (notepad, etc.) to compare against future portraits.</div>
+            <div class="kt-growth-psychoanalyze-content"></div>
         </div>
         ${overrides.length > 0 ? `<div class="kt-growth-overrides-section">
             <div class="kt-growth-section-label">📌 User Notes (survive regeneration) <span class="kt-growth-hint">— hand-edits pinned to the profile</span></div>
@@ -1012,6 +1018,71 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             flash('Evidence copied to clipboard.');
         } catch (err) {
             flash(`Copy failed: ${err.message}`, 'error');
+        }
+    });
+
+    // ── Psychoanalyze (dead-end view) ──
+    // Generates a depth-oriented psychoanalytic portrait from the existing
+    // evidence + the FULL lorebook entry (including Personality:). This is a
+    // DEAD-END view — never injected, never saved, never read back. The user
+    // copies it externally to compare across generations. See the blueprint
+    // discussion for why the full entry is safe here (no path back to context).
+    modal.querySelector('#kt-growth-psychoanalyze')?.addEventListener('click', async () => {
+        const btn = modal.querySelector('#kt-growth-psychoanalyze');
+        const container = modal.querySelector('#kt-growth-psychoanalyze-container');
+        const contentDiv = modal.querySelector('.kt-growth-psychoanalyze-content');
+        if (!container || !contentDiv) return;
+
+        try {
+            btn.disabled = true; btn.textContent = '⏳ Analyzing…';
+            flash('Generating psychoanalytic portrait…', 'info');
+
+            const { runPsychoanalyzeProfile, looksTruncated } = await import('./growth.js');
+            const { portrait } = await runPsychoanalyzeProfile(name);
+
+            // Prepend a self-documenting header so a saved profile (copied to
+            // notepad) records when it was generated and how much evidence it
+            // was based on — essential for longitudinal comparison.
+            const now = new Date();
+            const ts = now.toLocaleString();
+            const header = `=== Psychoanalytic Portrait: ${name} ===\nGenerated: ${ts}\n(This is a dead-end analytical view — never injected, never saved to any lorebook. Copy externally to compare across generations.)\n\n`;
+
+            const truncated = looksTruncated(portrait);
+            container.style.display = '';
+            contentDiv.innerHTML = `
+                ${truncated ? '<div class="kt-growth-warning" style="margin-bottom:8px">⚠️ <strong>This portrait looks cut off mid-sentence.</strong> The model may have hit a response-length cap below your Max Tokens. Raise the effective cap and regenerate.</div>' : ''}
+                <textarea class="kt-growth-psychoanalyze-editor" id="kt-growth-psychoanalyze-text">${escapeHtml(header + portrait)}</textarea>
+                <div class="kt-growth-actions">
+                    <button class="mwt-btn mwt-btn-primary" id="kt-growth-copy-psychoanalyze">📋 Copy Portrait</button>
+                    <span class="kt-growth-hint" style="margin-left:8px">⚠ NEVER injected or saved — copy externally only</span>
+                </div>
+            `;
+
+            // Wire the copy button for the psychoanalyze portrait
+            const copyBtn = contentDiv.querySelector('#kt-growth-copy-psychoanalyze');
+            copyBtn?.addEventListener('click', async () => {
+                const text = contentDiv.querySelector('#kt-growth-psychoanalyze-text')?.value || '';
+                try {
+                    await navigator.clipboard.writeText(text);
+                    flash('Psychoanalytic portrait copied to clipboard.');
+                } catch (err) {
+                    flash(`Copy failed: ${err.message}`, 'error');
+                }
+            });
+
+            flash('Psychoanalytic portrait generated.', 'success');
+            // Scroll to the new section
+            container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (err) {
+            flash(`Psychoanalyze failed: ${err.message}`, 'error');
+            const contentDiv = modal.querySelector('.kt-growth-psychoanalyze-content');
+            if (contentDiv) {
+                contentDiv.innerHTML = `<div class="kt-growth-error">❌ ${escapeHtml(err.message)}</div>`;
+            }
+            const container = modal.querySelector('#kt-growth-psychoanalyze-container');
+            if (container) container.style.display = '';
+        } finally {
+            btn.disabled = false; btn.textContent = '🧠 Psychoanalyze';
         }
     });
 

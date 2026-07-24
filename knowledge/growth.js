@@ -42,7 +42,7 @@ import {
     getRawForConsolidation, applyConsolidation,
     getUserOverrides,
 } from './evidence.js';
-import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
+import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -388,6 +388,110 @@ export async function generateProfile(name, observations, canon) {
 
     const raw = await ktFetchFromApi(GROWTH_PROFILE_PROMPT, userContent, { retries: 1 });
     return normaliseOutput(raw);
+}
+
+// ─── Psychoanalyze profile generation (dead-end view) ────────────────────────
+
+/**
+ * Run the psychoanalyze-profile API call: synthesize a DEPTH-ORIENTED
+ * psychoanalytic portrait FROM the captured evidence + the full curated entry.
+ *
+ * UNLIKE generateProfile(), this function receives the FULL lorebook entry
+ * (including the Personality: line) as historical baseline. This is safe
+ * because the output is a DEAD-END view — never injected, never saved to any
+ * lorebook, never read by capture or synthesis. The firewall is structural:
+ * there is no path back into live context.
+ *
+ * The evidence store remains primary; the curated entry fills the gap for
+ * older characters whose messages have been summarized or lost.
+ *
+ * @param {string} name — NPC name
+ * @param {Array} observations — from the evidence store (same as generateProfile)
+ * @param {string} curatedEntry — the FULL lorebook entry content (historical baseline)
+ * @param {string} [worldContext] — optional world state + chronicle context
+ * @returns {Promise<string>} psychoanalyze portrait prose
+ */
+export async function generatePsychoanalyzeProfile(name, observations, curatedEntry, worldContext = '') {
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+    if (!observations || observations.length === 0) {
+        throw new Error('No evidence observations to synthesize a psychoanalyze profile from.');
+    }
+
+    // Format the evidence as a readable list (same format as generateProfile).
+    const evidenceText = observations.map((o, i) => {
+        const canonTag = o.canon ? ' [CANON]' : '';
+        const tierTag = o.tier === 'consolidated' ? ' [consolidated]' : '';
+        return `${i + 1}. [${o.category}]${canonTag}${tierTag} ${o.claim}\n   Quote: "${o.quote}"${o.msgIdx != null ? ` (msg ${o.msgIdx})` : ''}`;
+    }).join('\n');
+
+    const userContent = [
+        `<target_npc>${name}</target_npc>`,
+        '',
+        '<evidence>',
+        evidenceText,
+        '</evidence>',
+        '',
+        curatedEntry ? `<curated_entry>\n${curatedEntry}\n</curated_entry>` : '',
+        worldContext ? worldContext : '',
+        '',
+        '='.repeat(60),
+        `Write the psychoanalytic portrait for ${name}.`,
+    ].filter(Boolean).join('\n');
+
+    const raw = await ktFetchFromApi(GROWTH_PSYCHOANALYZE_PROMPT, userContent, { retries: 1 });
+    return normaliseOutput(raw);
+}
+
+/**
+ * Run the full psychoanalyze-profile pipeline for an NPC:
+ *   1. Load evidence from the store (no re-capture)
+ *   2. Load the FULL lorebook entry (historical baseline — includes Personality:)
+ *   3. Generate the psychoanalytic portrait
+ *
+ * This is a DEAD-END view. The result is never injected, never saved to any
+ * lorebook, and never read by capture or synthesis. The caller (UI) displays
+ * it for copy/external-save only.
+ *
+ * @param {string} name — NPC name (must exist in the registry)
+ * @returns {Promise<{observations: Array, portrait: string, curatedEntry: string}>}
+ */
+export async function runPsychoanalyzeProfile(name) {
+    const registry = getRegistry();
+    const info = registry[name];
+    if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
+
+    const uid = info.uid;
+    if (uid === null || uid === undefined) {
+        throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
+    }
+
+    // Step 1: load evidence from the store (no re-capture needed)
+    const observations = getEvidenceForProfile(name);
+    if (observations.length === 0) {
+        throw new Error(`No evidence available for "${name}". Run growth capture first.`);
+    }
+
+    // Step 2: load the FULL lorebook entry as historical baseline.
+    // Unlike the regular profile (which extracts only canon fields and excludes
+    // Personality:), this view receives the entire entry — safe because the
+    // output is a dead-end with no path back to live context.
+    let curatedEntry = '';
+    try {
+        curatedEntry = await loadEntryContent(uid);
+    } catch { /* ignore load errors — proceed with evidence only */ }
+
+    // Step 3: gather optional world context (same as captureEvidence)
+    const worldState = getCurrentWorldState();
+    const chronicle = getLatestChronicleEntry();
+    const worldContext = [
+        worldState ? `<world_state>\n${worldState}\n</world_state>` : '',
+        chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '',
+    ].filter(Boolean).join('\n');
+
+    // Step 4: generate the psychoanalytic portrait
+    const portrait = await generatePsychoanalyzeProfile(name, observations, curatedEntry || '', worldContext);
+
+    return { observations, portrait, curatedEntry: curatedEntry || '' };
 }
 
 // ─── Profile persistence ─────────────────────────────────────────────────────
