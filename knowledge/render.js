@@ -880,7 +880,7 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             ${list.map(o => `
                 <div class="kt-growth-obs">
                     <div class="kt-growth-obs-claim">${escapeHtml(o.claim)}</div>
-                    <div class="kt-growth-obs-quote">"${escapeHtml(o.quote)}"${o.msgIdx != null ? ` <span class="kt-growth-obs-msgidx">[msg ${o.msgIdx}]</span>` : ''}</div>
+                    <div class="kt-growth-obs-quote">"${escapeHtml(o.quote)}"${o.msgIdx != null ? ` <span class="kt-growth-obs-msgidx">[msg ${o.msgIdx}]</span>` : ''}${o.verified === false ? ` <span class="kt-growth-obs-unverified" title="This quote could not be matched word-for-word to its cited message — it may be paraphrased. Trace the message to confirm.">⚠ not verbatim</span>` : ''}</div>
                 </div>
             `).join('')}
         </div>`;

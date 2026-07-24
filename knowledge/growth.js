@@ -66,6 +66,51 @@ export function looksTruncated(text) {
     return !/[.!?…]$/u.test(core);
 }
 
+// ─── Quote verification ──────────────────────────────────────────────────────
+
+/**
+ * Normalize text for lenient verbatim matching: lowercase, drop punctuation and
+ * markdown, collapse whitespace. This lets a faithfully-copied quote match its
+ * source across trivial reformatting (capitalization, wrapping quotes,
+ * `*emphasis*`) while still rejecting a genuine paraphrase, which won't appear
+ * as a substring.
+ *
+ * @param {string} s
+ * @returns {string}
+ */
+function normalizeForMatch(s) {
+    return String(s || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Verify an observation's quote is actually a verbatim span of the message it
+ * cites. The model is told to copy dialogue OR action-narration word-for-word;
+ * this enforces it. A paraphrase (what the model tends to do for actions) will
+ * not be a substring of the source and is flagged as unverified.
+ *
+ * Matches against the SAME stripped text the evidence prompt was shown
+ * (stripNonNarrative), so tracker/system blocks the model never saw don't cause
+ * false negatives. Very short needles are rejected as too spurious to trust.
+ *
+ * @param {string} quote
+ * @param {number|null} msgIdx — cited chat-array index
+ * @param {Array} chat — the chat array
+ * @returns {boolean}
+ */
+function isQuoteVerbatim(quote, msgIdx, chat) {
+    if (msgIdx == null || msgIdx < 0 || msgIdx >= chat.length) return false;
+    const msg = chat[msgIdx];
+    if (!msg || !msg.mes) return false;
+    const needle = normalizeForMatch(quote);
+    if (needle.length < 8) return false; // too short to be a meaningful, non-spurious receipt
+    const haystack = normalizeForMatch(stripNonNarrative(msg.mes));
+    return haystack.includes(needle);
+}
+
 // ─── Message formatting ──────────────────────────────────────────────────────
 
 /**
@@ -179,19 +224,38 @@ export async function captureEvidence(name, uid) {
     const result = parseJsonLenient(cleaned);
 
     const observations = Array.isArray(result.observations) ? result.observations : [];
+    const chat = getChat() || [];
 
-    // Validate: every observation must have a non-empty claim and quote.
-    // Unanchored observations are inadmissible per the blueprint's anchoring
-    // guardrail. Drop them rather than failing the whole pass.
-    return observations.filter(o =>
+    // Validate in two stages. First, drop truly unanchored items (no claim or no
+    // quote) — inadmissible per the blueprint's anchoring guardrail. Then VERIFY
+    // each surviving quote is a verbatim span of its cited message and FLAG (not
+    // drop) the ones that aren't, so a paraphrased receipt is visible rather than
+    // silently trusted. Flag-not-drop because the normalized match can produce
+    // false negatives; the user can eyeball a flagged item via its msgIdx.
+    const admitted = observations.filter(o =>
         o && typeof o.claim === 'string' && o.claim.trim() &&
         typeof o.quote === 'string' && o.quote.trim()
-    ).map(o => ({
-        category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
-        claim: String(o.claim).trim(),
-        quote: String(o.quote).trim(),
-        msgIdx: typeof o.msgIdx === 'number' ? o.msgIdx : null,
-    }));
+    ).map(o => {
+        const quote = String(o.quote).trim();
+        const msgIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
+        return {
+            category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
+            claim: String(o.claim).trim(),
+            quote,
+            msgIdx,
+            verified: isQuoteVerbatim(quote, msgIdx, chat),
+        };
+    });
+
+    const unverified = admitted.filter(o => !o.verified).length;
+    if (unverified > 0) {
+        console.warn(
+            `[MWT:Knowledge] Growth evidence for "${name}": ${admitted.length - unverified}/${admitted.length} ` +
+            `observations verbatim-verified. ${unverified} could not be matched word-for-word to their cited ` +
+            `message (likely paraphrased) — kept but flagged "not verbatim".`
+        );
+    }
+    return admitted;
 }
 
 // ─── Profile generation ──────────────────────────────────────────────────────

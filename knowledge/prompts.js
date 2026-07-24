@@ -228,6 +228,7 @@ ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Every observation MUST include a verbatim quote from the messages as its receipt. If you cannot provide an exact quote, do not include the observation.
 - The quote must be copied EXACTLY from the source message — do not paraphrase, summarize, or invent.
+- The receipt may be spoken dialogue OR the narration describing an action, but either way it must be a word-for-word span lifted from the message — NOT your own description of what happened. When the behavior is an action rather than speech, copy the exact narration clause that shows it. For example, copy "he slid a fresh pen across the desk" — do NOT rewrite it as "delivered a pen because he noticed the ink running out". A paraphrase makes the receipt unverifiable; the whole point of the quote is that it can be matched back to the message character-for-character.
 - Do NOT classify the NPC using typology systems (MBTI, enneagram, DISC, Big Five, etc.). Describe what they DO, not what "type" they are.
 - Focus on OBSERVABLE BEHAVIOR shown through actions, reactions, decisions, and dialogue — not inferred internal states or labels.
 - Only include observations about the NPC named in <target_npc>. If another character did something interesting, ignore it.
@@ -239,7 +240,7 @@ OUTPUT FORMAT:
     {
       "category": "trait" | "value" | "speech",
       "claim": "one-sentence distilled observation (e.g. 'stays composed when physically threatened')",
-      "quote": "VERBATIM text copied exactly from a message that demonstrates this",
+      "quote": "VERBATIM span copied word-for-word from the message (dialogue OR action narration) — never your own paraphrase",
       "msgIdx": <the bracketed index number from the message that contains the quote>
     }
   ]
