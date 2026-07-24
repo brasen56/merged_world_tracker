@@ -1,0 +1,352 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Session Chronicle Styles (.sc-*)
+   Toolbar, buttons, status, confirmation dialog, search, empty state,
+   entry list, entry card, editor, consolidation preview, trash, settings,
+   native input baseline, stats grid.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ── Toolbar ────────────────────────────────────────────────────────────── */
+.sc-toolbar {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--sc-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+  background: var(--sc-bg-elevated);
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+.sc-btn {
+  background: var(--sc-bg-hover);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  font-family: inherit;
+}
+.sc-btn:hover:not(:disabled) { background: var(--sc-bg-hover); filter: brightness(1.3); }
+.sc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.sc-btn--danger {
+  color: var(--sc-danger) !important;
+  border-color: var(--sc-danger-border) !important;
+  background: var(--sc-danger-bg) !important;
+}
+.sc-btn--danger:hover:not(:disabled) { filter: brightness(1.1); }
+
+/* ── Status messages ────────────────────────────────────────────────────── */
+.sc-status {
+  min-height: 20px;
+  font-size: 12px;
+}
+.sc-status--info    { color: var(--sc-info); }
+.sc-status--success { color: var(--sc-success); }
+.sc-status--error   { color: var(--sc-danger); }
+
+/* ── Confirmation dialog ───────────────────────────────────────────────── */
+.sc-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sc-overlay);
+  backdrop-filter: blur(1px);
+  animation: sc-confirm-fade 0.12s ease-out;
+}
+@keyframes sc-confirm-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.sc-confirm-box {
+  background: var(--sc-bg-elevated);
+  border: 1px solid var(--sc-border-light);
+  border-radius: var(--sc-radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  padding: 18px 20px;
+  max-width: 360px;
+  width: calc(100% - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sc-confirm-box p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sc-text);
+}
+.sc-confirm-detail {
+  font-weight: 400 !important;
+  font-size: 12px !important;
+  color: var(--sc-text-dim);
+}
+.sc-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ── Search input ───────────────────────────────────────────────────────── */
+.sc-search {
+  width: 100%;
+  max-width: 260px;
+  background: var(--sc-bg-input);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
+  border-radius: var(--sc-radius-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.sc-search:focus { outline: none; border-color: var(--sc-accent); }
+
+/* ── Empty state ────────────────────────────────────────────────────────── */
+.sc-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--sc-text-dim);
+  font-size: 14px;
+  line-height: 1.8;
+  padding: 32px 16px;
+}
+
+/* ── Entry list ─────────────────────────────────────────────────────────── */
+.sc-entries {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+/* ── Entry card ─────────────────────────────────────────────────────────── */
+.sc-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.1s, border-color 0.15s;
+  border-bottom: 1px solid var(--sc-border);
+}
+.sc-entry:hover { background: var(--sc-bg-elevated); }
+
+.sc-entry--selected {
+  background: var(--sc-accent-bg);
+  border-left-color: var(--sc-accent);
+}
+
+.sc-entry--merge-checked {
+  background: rgba(99, 102, 241, 0.15);
+  border-left-color: var(--sc-accent);
+}
+
+.sc-entry--delete-checked {
+  background: var(--sc-danger-bg);
+  border-left-color: var(--sc-danger);
+}
+
+/* Designated consolidation base — pinned with ★ Set as Base */
+.sc-entry--base {
+  border-left-color: var(--sc-warning);
+  box-shadow: inset 0 0 0 1px var(--sc-warning);
+}
+
+/* The "★ BASE" / "☆ Set as Base" toggle button in consolidate mode */
+.sc-base-toggle {
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.sc-base-toggle:hover {
+  filter: brightness(1.15);
+}
+
+/* ── Entry checkbox ─────────────────────────────────────────────────────── */
+.sc-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--sc-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* ── Editor ─────────────────────────────────────────────────────────────── */
+.sc-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.sc-editor-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--sc-text-dim);
+}
+.sc-badge {
+  display: inline-block;
+  background: var(--sc-accent-bg);
+  color: var(--sc-accent);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.sc-editor textarea {
+  flex: 1;
+  min-height: 300px;
+  width: 100%;
+  padding: 12px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--sc-bg-input);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
+  border-radius: var(--sc-radius);
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.sc-editor textarea:focus { border-color: var(--sc-accent); }
+
+/* ── Consolidation preview ──────────────────────────────────────────────── */
+.sc-consolidate-preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow-y: auto;
+}
+.sc-consolidate-preview textarea {
+  width: 100%;
+  padding: 10px;
+  background: var(--sc-bg-input);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
+  border-radius: var(--sc-radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+.sc-consolidate-preview textarea:focus { border-color: var(--sc-accent); }
+
+/* ── Trash view ─────────────────────────────────────────────────────────── */
+.sc-trash {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow-y: auto;
+}
+.sc-trash h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sc-text);
+}
+.sc-restore-btn {
+  flex-shrink: 0;
+  color: var(--sc-success) !important;
+  border-color: var(--sc-success-border) !important;
+}
+
+/* ─── Settings ──────────────────────────────────────────────────────────── */
+.sc-settings {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow-y: auto;
+}
+.sc-settings h3 {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sc-text);
+}
+
+/* ── Native input baseline (number / datetime-local / text) ────────────────
+   Single themed baseline shared by #sc-inject-count and all native number,
+   datetime-local and text inputs (including those scoped to the chronicle tab
+   and the stats grid). Fallbacks are omitted because every variable used here
+   is always defined on :root. More specific scopes tweak padding/font-size
+   further down. */
+#sc-inject-count,
+.mwt-input[type="number"],
+input[type="number"].mwt-input,
+input[type="datetime-local"],
+.mwt-tab-content[data-tab="chronicle"] input[type="number"],
+.mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"],
+.mwt-tab-content[data-tab="chronicle"] input[type="text"],
+.sc-stats-grid input[type="number"],
+.sc-stats-grid input[type="datetime-local"],
+.sc-stats-grid input[type="text"] {
+  background: var(--sc-bg-input);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
+  padding: 5px 10px;
+  border-radius: var(--sc-radius-sm);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+input[type="datetime-local"]:focus {
+  border-color: var(--sc-accent);
+}
+
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+  cursor: pointer;
+}
+
+.sc-stats-grid {
+  gap: 6px 16px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.sc-stats-grid span {
+  margin-right: 4px;
+}
+
+/* Tighter fields inside the chronicle stats grid */
+.mwt-tab-content[data-tab="chronicle"] .sc-stats-grid input,
+.mwt-tab-content[data-tab="chronicle"] .sc-stats-grid select {
+  background: var(--sc-bg-input);
+  color: var(--sc-text);
+  border: 1px solid var(--sc-border-light);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}

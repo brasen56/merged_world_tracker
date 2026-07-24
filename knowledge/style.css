@@ -1,0 +1,1895 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Knowledge Tracker Styles (.kt-*)
+   Staging layout, toolbar, sub-tabs, detail panel, NPC list, state tracker,
+   view/history modal, status, diff, settings, relationship editor & graph,
+   notification panel, orphan indicators, NPC growth profile modal, mobile.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ─── Staging layout ─────────────────────────────────────────────────────── */
+
+.kt-npcs-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 300px;
+}
+
+.kt-npcs-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--mwt-border);
+}
+
+/* ─── Main toolbar (Scan / Export / Import) ──────────────────────────────── */
+.kt-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 0 10px;
+    border-bottom: 1px solid var(--mwt-border);
+    margin-bottom: 8px;
+}
+
+/* ─── Sub-tab bar (Staging / Minor / Major / State / Relationships) ────────
+   Selectors grouped with their legacy aliases (.kt-subtabs / .kt-subtab-btn)
+   for backward compatibility with any older markup. */
+.kt-sub-tabs,
+.kt-subtabs {
+    display: flex;
+    gap: 2px;
+    flex: 1;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--mwt-border);
+}
+
+.kt-sub-tab,
+.kt-subtab-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--mwt-text-dim);
+    padding: 4px 12px;
+    border-radius: var(--mwt-radius);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mwt-font);
+    transition: all var(--mwt-transition);
+    white-space: nowrap;
+}
+
+.kt-sub-tab:hover,
+.kt-subtab-btn:hover {
+    color: var(--mwt-text);
+    background: var(--mwt-bg-light);
+}
+
+.kt-sub-tab.active,
+.kt-subtab-btn--active {
+    color: var(--mwt-accent);
+    background: var(--mwt-bg-lighter);
+    border-color: var(--mwt-accent);
+}
+
+.kt-sub-spacer {
+    flex: 1;
+}
+
+.kt-notif-badge {
+    color: var(--mwt-warning) !important;
+    font-weight: 600;
+    animation: kt-notif-pulse 2s ease-in-out infinite;
+}
+
+@keyframes kt-notif-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Auto-scan countdown text in the Knowledge toolbar */
+.kt-autoscan-countdown {
+    font-size: 12px;
+    color: var(--mwt-accent);
+    font-family: var(--mwt-font-mono);
+    padding: 2px 8px;
+    background: var(--mwt-bg-light);
+    border-radius: 4px;
+    border: 1px solid var(--mwt-border);
+    cursor: help;
+    white-space: nowrap;
+}
+
+/* Staging tab pulse — draws attention when proposals are pending and
+   the user is viewing a different sub-tab. */
+.kt-staging-pulse {
+    color: var(--mwt-warning) !important;
+    font-weight: 600;
+    animation: kt-staging-tab-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes kt-staging-tab-pulse {
+    0%, 100% { background: rgba(255, 152, 0, 0.0); }
+    50% { background: rgba(255, 152, 0, 0.18); }
+}
+
+/* Staging alert banner shown at the top of the staging panel */
+.kt-staging-alert {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--mwt-warning);
+    border-radius: var(--mwt-radius);
+    color: var(--mwt-warning);
+    font-size: 13px;
+    animation: kt-staging-alert-fade 0.3s ease-out;
+}
+
+.kt-staging-alert-icon {
+    font-size: 20px;
+    line-height: 1;
+}
+
+.kt-staging-alert-text {
+    flex: 1;
+}
+
+@keyframes kt-staging-alert-fade {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.kt-sub-content {
+    padding: 8px 0;
+}
+
+/* Note: legacy .kt-subtabs / .kt-subtab-btn aliases are grouped together
+   with the modern .kt-sub-tabs / .kt-sub-tab rules above — no separate
+   definitions needed here. */
+
+.kt-staging-layout {
+    display: flex;
+    gap: 12px;
+    min-height: 300px;
+}
+
+.kt-staging-list {
+    width: 200px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+    max-height: 60vh;
+}
+
+.kt-staging-item {
+    padding: 8px 10px;
+    border-radius: var(--mwt-radius);
+    border: 1px solid var(--mwt-border);
+    cursor: pointer;
+    transition: all var(--mwt-transition);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.kt-staging-item:hover {
+    background: var(--mwt-bg-light);
+    border-color: var(--mwt-accent);
+}
+
+.kt-staging-item--active {
+    background: rgba(74, 158, 255, 0.15);
+    border-color: var(--mwt-accent);
+}
+
+.kt-staging-badge {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--mwt-accent);
+    font-weight: 600;
+}
+
+.kt-staging-name {
+    font-size: 13px;
+    color: var(--mwt-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-staging-detail {
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-staging-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.kt-staging-toolbar span {
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+}
+
+/* ─── Detail panel ─────────────────────────────────────────────────────────── */
+
+.kt-detail-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.kt-detail-empty {
+    color: var(--mwt-text-dim);
+    text-align: center;
+    padding: 40px 16px;
+    font-size: 13px;
+}
+
+.kt-detail-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--mwt-text);
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--mwt-border);
+}
+
+.kt-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kt-detail-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--mwt-text-dim);
+    font-weight: 500;
+}
+
+.kt-detail-current {
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    padding: 10px 12px;
+    font-family: var(--mwt-font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--mwt-text-dim);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+.kt-detail-editor {
+    width: 100%;
+    min-height: 150px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    padding: 10px 12px;
+    font-family: var(--mwt-font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--mwt-text);
+    resize: vertical;
+    box-sizing: border-box;
+}
+
+.kt-detail-editor:focus {
+    outline: none;
+    border-color: var(--mwt-accent);
+}
+
+.kt-keyword-input {
+    width: 100%;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    padding: 8px 10px;
+    font-family: var(--mwt-font);
+    font-size: 13px;
+    color: var(--mwt-text);
+    box-sizing: border-box;
+}
+
+.kt-keyword-input:focus {
+    outline: none;
+    border-color: var(--mwt-accent);
+}
+
+.kt-detail-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+.kt-empty {
+    color: var(--mwt-text-dim);
+    text-align: center;
+    padding: 40px 16px;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+/* ─── NPC list ─────────────────────────────────────────────────────────────── */
+
+.kt-npc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.kt-npc-card {
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    padding: 10px 14px;
+    transition: border-color var(--mwt-transition);
+}
+
+.kt-npc-card:hover {
+    border-color: var(--mwt-accent);
+}
+
+.kt-npc-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.kt-npc-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--mwt-text);
+}
+
+.kt-npc-meta {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    font-family: var(--mwt-font-mono);
+}
+
+.kt-npc-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.kt-npc-actions label {
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* ─── State tracker ────────────────────────────────────────────────────────── */
+
+.kt-state-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* .kt-state-toolbar — see Injected CSS section below for merged definition */
+
+/* .kt-state-register — see State tracker tab section below for merged definition */
+
+.kt-state-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* ─── View / History modal (NPC + State Tracker) ────────────────────────── */
+
+.kt-view-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-kt-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.kt-history-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: var(--z-kt-modal);
+}
+
+.kt-history-panel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: var(--z-kt-panel);
+    width: min(720px, 90vw);
+    max-height: 80vh;
+    background: var(--mwt-bg);
+    border: 1px solid var(--mwt-border);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    color: var(--mwt-text);
+    font-family: var(--mwt-font);
+}
+
+.kt-history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--mwt-border);
+    flex-shrink: 0;
+}
+
+.kt-history-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--mwt-text);
+}
+
+.kt-history-close {
+    background: none;
+    border: none;
+    color: var(--mwt-text-dim);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    transition: color var(--mwt-transition);
+}
+
+.kt-history-close:hover {
+    color: var(--mwt-error);
+}
+
+.kt-history-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.kt-history-body pre {
+    margin: 0;
+    font-family: var(--mwt-font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--mwt-text);
+}
+
+/* ─── KT status ────────────────────────────────────────────────────────────── */
+
+.kt-status {
+    min-height: 20px;
+    font-size: 12px;
+    padding: 2px 0;
+}
+
+.kt-status--info    { color: var(--mwt-info); }
+.kt-status--success { color: var(--mwt-success); }
+.kt-status--error   { color: var(--mwt-error); }
+
+/* ─── KT diff inside staging detail ───────────────────────────────── */
+
+/* Note: all KT staging/detail/npc/accept/dismiss styles are defined
+   in the variable-based block above (uses --mwt-* variables) with
+   .kt-accept-btn / .kt-dismiss-btn base definitions following .kt-state-dryrun. */
+
+.kt-npc-remove {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+.kt-npc-remove:hover { color: var(--sc-danger); border-color: var(--sc-danger-bg); }
+
+/* ── NPC update button ───────────────────────────────────────────────────── */
+
+.kt-npc-update {
+    background: var(--sc-accent-btn-bg);
+    color: var(--sc-info);
+    border: 1px solid var(--sc-accent-btn-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.kt-npc-update:hover:not(:disabled) { background: var(--sc-accent-btn-border); color: #fff; }
+.kt-npc-update:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Shared helpers ─────────────────────────────────────────────────────── */
+ 
+.kt-help {
+    font-size: 12px;
+    color: var(--sc-text-dim);
+    line-height: 1.5;
+    margin: 0;
+}
+ 
+.kt-help code {
+    background: var(--sc-bg-diff);
+    border: 1px solid var(--sc-border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 11px;
+    color: var(--sc-text-mid);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+ 
+.kt-help--success { color: var(--sc-success); }
+.kt-help--error   { color: var(--sc-danger); }
+ 
+.kt-hint {
+    font-size: 11px;
+    color: var(--sc-text-dim);
+    margin-top: 2px;
+}
+ 
+ 
+/* ── Settings tab ───────────────────────────────────────────────────────── */
+ 
+.kt-settings-form {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 560px;
+}
+ 
+.kt-settings-form h3 {
+    margin: 0 0 4px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--sc-text-bright);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+ 
+.kt-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+ 
+.kt-field > span:first-child {
+    font-size: 11px;
+    color: var(--sc-text-mid);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+ 
+.kt-field input {
+    background: var(--sc-bg-input);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-light);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    width: 100%;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+ 
+.kt-field input:focus {
+    outline: none;
+    border-color: var(--sc-border-focus);
+}
+ 
+.kt-settings-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+ 
+.kt-settings-actions button {
+    background: var(--sc-bg-hover);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-strong);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+ 
+.kt-settings-actions button:hover:not(:disabled) {
+    background: var(--sc-bg-hover-strong);
+}
+ 
+.kt-settings-actions button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+ 
+.kt-primary {
+    background: var(--sc-accent-btn-border) !important;
+    color: #fff !important;
+    border-color: var(--sc-accent-btn-border) !important;
+    font-weight: 600;
+}
+ 
+.kt-primary:hover:not(:disabled) {
+    background: var(--sc-accent-btn-hover) !important;
+}
+ 
+ 
+/* ── State tracker tab ──────────────────────────────────────────────────── */
+ 
+.kt-state-register {
+    background: var(--sc-bg-diff);
+    border-bottom: 1px solid var(--sc-border);
+    padding: 14px 16px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+ 
+.kt-state-register h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--sc-text-bright);
+}
+ 
+.kt-state-register .kt-help {
+    font-size: 11px;
+}
+ 
+.kt-state-register-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+ 
+.kt-state-register-row input {
+    background: var(--sc-bg-input);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-light);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    box-sizing: border-box;
+    min-width: 160px;
+    transition: border-color 0.15s;
+}
+ 
+.kt-state-register-row input:focus {
+    outline: none;
+    border-color: var(--sc-border-focus);
+}
+ 
+.kt-state-register-row input[type="number"] {
+    width: 110px;
+    flex-shrink: 0;
+}
+ 
+.kt-state-register-row input[type="text"] {
+    flex: 1;
+    min-width: 200px;
+}
+ 
+.kt-state-register-row button {
+    background: var(--sc-bg-hover);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-strong);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+    flex-shrink: 0;
+}
+ 
+.kt-state-register-row button:hover {
+    background: var(--sc-bg-hover-strong);
+}
+ 
+/* State tracker action buttons three side-by-side per card */
+ 
+.kt-state-update {
+    background: var(--sc-accent-btn-bg);
+    color: var(--sc-info);
+    border: 1px solid var(--sc-accent-btn-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-right: 4px;
+}
+.kt-state-update:hover:not(:disabled) { background: var(--sc-accent-btn-border); color: #fff; }
+.kt-state-update:disabled              { opacity: 0.45; cursor: not-allowed; }
+ 
+.kt-state-dryrun {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+    margin-right: 4px;
+}
+.kt-state-dryrun:hover                 { color: var(--sc-text); border-color: var(--sc-border-focus); }
+.kt-state-dryrun:disabled              { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Base accept / dismiss buttons (defined once, scoped below by context) ── */
+
+.kt-accept-btn,
+.kt-dismiss-btn {
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid;
+    transition: background 0.15s;
+}
+
+.kt-accept-btn {
+    background: var(--sc-success-bg);
+    color: var(--sc-success);
+    border-color: var(--sc-success-border);
+}
+.kt-accept-btn:hover:not(:disabled) { filter: brightness(1.15); }
+.kt-accept-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.kt-dismiss-btn {
+    background: var(--sc-danger-bg);
+    color: var(--sc-danger);
+    border-color: var(--sc-danger-border);
+}
+.kt-dismiss-btn:hover { filter: brightness(1.15); }
+ 
+.kt-state-remove {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+.kt-state-remove:hover                 { color: var(--sc-danger); border-color: var(--sc-danger-bg); }
+ 
+ 
+/* ── Staging badge for state items ──────────────────────────────────────── */
+/* Cyan tint distinguishes state updates from minor (orange) and major (purple)
+   updates in the staging list. */
+ 
+.kt-staging-badge--state.kt-staging-badge--update { background: #1e3a3a; color: #67e8f9; }
+.kt-staging-badge--state.kt-staging-badge--create { background: var(--sc-accent-btn-bg); color: var(--sc-accent-light); }
+ 
+ 
+/* ── Diff view ──────────────────────────────────────────────────────────── */
+/* Used in the staging detail pane to show before/after for state updates. */
+
+.kt-diff {
+    background: var(--sc-bg-diff);
+    border: 1px solid var(--sc-border-dim);
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-x: auto;
+    padding: 4px 0;
+}
+
+.kt-diff-row {
+    padding: 1px 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.kt-diff-same { color: var(--sc-text-dim); }
+.kt-diff-old  { background: rgba(248, 113, 113, 0.08); color: var(--sc-danger); }
+.kt-diff-new  { background: rgba(74, 222, 128, 0.08); color: var(--sc-success); }
+
+
+.kt-state-toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--sc-border-dim);
+}
+.kt-state-toolbar button {
+    background: var(--sc-bg-hover);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-strong);
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.kt-state-toolbar button:hover {
+    background: var(--sc-bg-hover-strong);
+}
+
+.kt-state-history {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-right: 4px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.kt-state-history:hover {
+    color: var(--sc-accent-light);
+    border-color: var(--sc-accent);
+}
+
+/* .kt-history-panel, .kt-history-header, .kt-history-body, .kt-history-close
+   are defined once in the variable-based block above. */
+#kt-history-modal,
+#kt-view-modal,
+#kt-create-modal {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-kt-modal);
+}
+.kt-history-entry {
+    background: var(--sc-bg-diff);
+    border: 1px solid var(--sc-border-dim);
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.kt-history-meta {
+    display: flex;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--sc-text-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.kt-history-content {
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--sc-bg-input);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--sc-text-mid);
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+    line-height: 1.5;
+}
+.kt-history-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+.kt-history-restore {
+    background: var(--sc-accent-btn-bg);
+    color: var(--sc-info);
+    border: 1px solid var(--sc-accent-btn-border);
+    border-radius: 5px;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+}
+.kt-history-restore:hover {
+    background: var(--sc-accent-btn-border);
+    color: #fff;
+}
+
+/* ── Injected CSS moved from index.js ───────────────────────────────────── */
+
+/* .kt-staging-toolbar is defined once in the variable-based block above. */
+.kt-batch-btn {
+    background: var(--sc-bg-hover);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-strong);
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.kt-batch-btn:hover {
+    background: var(--sc-bg-hover-strong);
+}
+.kt-batch-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.kt-batch-accept {
+    color: var(--sc-success);
+    border-color: var(--sc-success-border);
+}
+.kt-batch-dismiss {
+    color: var(--sc-danger);
+    border-color: var(--sc-danger-bg);
+}
+#kt-staging-count-text {
+    font-size: 12px;
+    color: var(--sc-text-dim);
+    margin-left: auto;
+}
+.kt-npc-toolbar {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--sc-border-dim);
+}
+.kt-search-input {
+    background: var(--sc-bg-input);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-light);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    width: 100%;
+    box-sizing: border-box;
+}
+.kt-search-input:focus {
+    outline: none;
+    border-color: var(--sc-border-focus);
+}
+.kt-npc-promote,
+.kt-npc-demote {
+    background: transparent;
+    color: var(--sc-accent-light);
+    border: 1px solid var(--sc-border-focus);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-right: 4px;
+    transition: all 0.15s;
+}
+.kt-npc-promote:hover {
+    background: var(--sc-accent-btn-bg);
+    border-color: var(--sc-accent);
+}
+.kt-npc-demote:hover {
+    background: #3a2a1e;
+    border-color: #a855f7;
+}
+.kt-npc-view {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-right: 4px;
+    transition: color 0.15s;
+}
+.kt-npc-view:hover {
+    color: var(--sc-text);
+    border-color: var(--sc-border-focus);
+}
+
+/* History / Rename / Merge same compact transparent base */
+.kt-npc-history,
+.kt-npc-rename,
+.kt-npc-merge {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+.kt-npc-history:hover {
+    color: var(--sc-accent-light);
+    border-color: var(--sc-accent);
+}
+.kt-npc-rename:hover {
+    color: var(--sc-warning);
+    border-color: #b45309;
+}
+.kt-npc-merge:hover {
+    color: #67e8f9;
+    border-color: #0e7490;
+}
+.kt-npc-rel:hover {
+    color: var(--sc-success);
+    border-color: var(--sc-success-border);
+}
+.kt-npc-keywords:hover {
+    color: var(--sc-warning);
+    border-color: #92400e;
+}
+
+/* .kt-npc-rel / .kt-npc-keywords transparent base for NPC cards.
+   Inside the relationship modal (or similar panels), a filled style
+   is applied via context-specific selectors further down. */
+.kt-npc-rel,
+.kt-npc-keywords {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+/* Per-card selection checkbox for batch updates (Major NPCs only) */
+.kt-npc-select {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px 0 0;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.kt-npc-select input[type="checkbox"] { margin: 0; cursor: pointer; width: 14px; height: 14px; accent-color: var(--sc-accent); }
+
+/* "Select all visible" bar above the Major NPCs list */
+.kt-major-selectbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--sc-border-dim);
+    background: var(--sc-bg-diff);
+    font-size: 11px;
+    color: var(--sc-text-mid);
+}
+.kt-select-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+.kt-select-all input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--sc-accent);
+}
+
+/* Per-NPC auto-trigger toggle on State Tracker cards */
+.kt-state-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--sc-text-mid);
+    cursor: pointer;
+    padding: 3px 6px;
+    border: 1px solid var(--sc-border);
+    border-radius: 5px;
+}
+.kt-state-toggle input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--sc-accent);
+}
+.kt-state-toggle:hover {
+    border-color: var(--sc-border-focus);
+    color: var(--sc-text);
+}
+
+.kt-type-change-note {
+    background: var(--sc-accent-bg);
+    color: var(--sc-accent-light);
+    border: 1px solid var(--sc-accent);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+.kt-staging-badge--promote { background: var(--sc-accent-btn-bg); color: var(--sc-accent-light); }
+.kt-staging-badge--demote  { background: #3a2a1e; color: #a855f7; }
+.kt-staging-badge--state   { background: rgba(120, 120, 255, 0.18); }
+#kt-staging-toolbar  { display: none; }
+#kt-staging-layout   { display: none; }
+#kt-state-import-file { display: none; }
+
+/* View modal overrides */
+.kt-view-panel { max-width: 600px; }
+.kt-view-content { max-height: none; }
+
+/* ── State Tracker Notification Panel ──────────────────────────────────────── */
+
+#kt-notification-panel {
+    display: none;
+    position: fixed;
+    bottom: 120px;
+    right: 20px;
+    width: 420px;
+    min-width: 300px;
+    max-width: 90vw;
+    height: 380px;
+    min-height: 200px;
+    max-height: 80vh;
+    z-index: var(--z-kt-notif);
+    background: var(--sc-bg);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-accent);
+    border-radius: 10px;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(99, 102, 241, 0.3);
+    transition: opacity 0.2s;
+}
+
+/* Header draggable handle */
+.kt-notif-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--mwt-bg);
+    border-bottom: 1px solid var(--mwt-bg-lighter);
+    cursor: move;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.kt-notif-header h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--sc-accent-light);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-notif-header .kt-notif-count {
+    background: var(--sc-accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 10px;
+    padding: 1px 7px;
+    min-width: 16px;
+    text-align: center;
+}
+
+.kt-notif-header-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.kt-notif-header-actions button {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: 1px solid var(--sc-border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.kt-notif-header-actions button:hover {
+    color: var(--sc-text);
+    border-color: var(--sc-border-focus);
+}
+
+/* Notification tabs row */
+.kt-notif-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--sc-border-dim);
+    flex-shrink: 0;
+    overflow-x: auto;
+    background: var(--sc-bg-diff);
+}
+
+.kt-notif-tab {
+    background: transparent;
+    color: var(--sc-text-dim);
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kt-notif-tab:hover { color: var(--sc-text); }
+
+.kt-notif-tab--active {
+    color: var(--sc-accent-light);
+    border-bottom-color: var(--sc-accent);
+}
+
+.kt-notif-tab .kt-notif-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--sc-success);
+    flex-shrink: 0;
+}
+
+/* Notification body */
+.kt-notif-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.kt-notif-body .kt-detail-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--sc-text-bright);
+}
+
+.kt-notif-body .kt-detail-label {
+    font-size: 10px;
+    color: var(--sc-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.kt-notif-body .kt-diff {
+    font-size: 11px;
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.kt-notif-body .kt-detail-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+/* The base .kt-accept-btn / .kt-dismiss-btn rules (defined above) already
+   theme these buttons via the --sc-* variables, so no override is needed
+   here — this keeps them consistent in both light and dark mode. */
+
+/* Resize handle */
+.kt-notif-resize {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, var(--sc-border-focus) 50%, transparent 75%);
+    border-radius: 0 0 10px 0;
+}
+
+/* ── Orphan indicators ─────────────────────────────────────────────────────── */
+
+.kt-npc-card--orphan        { border-color: #3a2a1e; background: rgba(251, 146, 60, 0.04); }
+.kt-orphan-badge            {
+    display: inline-block; margin-left: 8px; padding: 1px 6px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    background: #3a2a1e; color: #fb923c; border-radius: 4px;
+    text-transform: uppercase; vertical-align: middle;
+}
+.kt-npc-recover, .kt-recover-inline {
+    background: #3a2a1e; color: #fb923c; border: 1px solid #9a3412;
+    border-radius: 5px; padding: 4px 10px; font-size: 11px; cursor: pointer;
+    margin-right: 4px; transition: background 0.15s;
+}
+.kt-npc-recover:hover, .kt-recover-inline:hover {
+    background: #7c2d12; color: #fff;
+}
+
+
+/* ── Create NPC modal ───────────────────────────────────────────────────── */
+
+.kt-create-panel { max-width: 520px; }
+
+/* ── Toolbar row (Update All, Create NPC, Sort) ──────────────────────────── */
+
+.kt-toolbar-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.kt-sort-select {
+    background: var(--sc-bg-input);
+    color: var(--sc-text);
+    border: 1px solid var(--sc-border-light);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.kt-sort-select:focus {
+    outline: none;
+    border-color: var(--sc-border-focus);
+}
+
+/* ── Modals / panels that need filled Rel/Keywords buttons ────────────────── */
+
+/* Inside relationship modal, notification panel, etc. */
+.kt-rel-add-row .kt-npc-rel,
+.kt-rel-add-row .kt-npc-keywords,
+.kt-notif-body .kt-npc-rel,
+.kt-notif-body .kt-npc-keywords,
+.kt-view-panel .kt-npc-rel,
+.kt-view-panel .kt-npc-keywords {
+    background: var(--sc-bg-input);
+    color: var(--sc-text-input);
+    border: 1px solid var(--sc-border-light);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.kt-rel-add-row .kt-npc-rel:hover,
+.kt-rel-add-row .kt-npc-keywords:hover,
+.kt-notif-body .kt-npc-rel:hover,
+.kt-notif-body .kt-npc-keywords:hover,
+.kt-view-panel .kt-npc-rel:hover,
+.kt-view-panel .kt-npc-keywords:hover {
+    background: var(--sc-bg-hover);
+    border-color: var(--sc-border-focus);
+}
+
+.kt-state-view {
+    background: var(--sc-bg-input);
+    color: var(--sc-text-input);
+    border: 1px solid var(--sc-border-light);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.kt-state-view:hover {
+    background: var(--sc-bg-hover);
+    border-color: var(--sc-border-focus);
+}
+
+/* ── Relationship editor ─────────────────────────────────────────────────── */
+
+.kt-rel-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+.kt-rel-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 0 4px;
+}
+
+.kt-rel-add-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--mwt-border);
+    flex-wrap: wrap;
+}
+
+.kt-rel-add-row .mwt-input {
+    font-size: 12px;
+    padding: 5px 8px;
+}
+
+.kt-rel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 4px;
+}
+
+.kt-rel-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.kt-rel-from {
+    font-weight: 600;
+    color: var(--mwt-accent);
+    min-width: 100px;
+}
+
+.kt-rel-target {
+    font-weight: 600;
+    color: var(--mwt-text);
+    min-width: 100px;
+}
+
+.kt-rel-type {
+    color: var(--mwt-accent);
+    font-size: 11px;
+    padding: 1px 6px;
+    background: rgba(74, 158, 255, 0.15);
+    border-radius: 4px;
+    text-transform: capitalize;
+    white-space: nowrap;
+}
+
+.kt-rel-to {
+    font-weight: 600;
+    color: var(--mwt-text);
+    min-width: 100px;
+}
+
+.kt-rel-notes {
+    color: var(--mwt-text-dim);
+    font-size: 11px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-rel-reverse {
+    color: var(--sc-info);
+    font-size: 11px;
+    padding: 1px 6px;
+    background: rgba(96, 165, 250, 0.12);
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.kt-rel-remove {
+    background: transparent;
+    color: var(--sc-text-mid);
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: color 0.15s, background 0.15s;
+}
+
+.kt-rel-remove:hover {
+    color: var(--sc-danger);
+    background: rgba(248, 113, 113, 0.1);
+}
+
+/* ── Relationship graph view ────────────────────────────────────────────── */
+
+.kt-rel-view-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    overflow: hidden;
+}
+
+.kt-rel-view-btn {
+    background: var(--mwt-bg-light);
+    border: none;
+    color: var(--mwt-text-dim);
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mwt-font);
+    transition: all var(--mwt-transition);
+    white-space: nowrap;
+}
+
+.kt-rel-view-btn:hover {
+    color: var(--mwt-text);
+    background: var(--mwt-bg-lighter);
+}
+
+.kt-rel-view-btn.active {
+    color: #fff;
+    background: var(--mwt-accent);
+}
+
+.kt-rel-graph-wrap {
+    position: relative;
+    width: 100%;
+    min-height: 420px;
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    background:
+        radial-gradient(circle at center, rgba(74, 158, 255, 0.03), transparent 70%),
+        var(--mwt-bg);
+    overflow: hidden;
+}
+
+.kt-rel-graph {
+    width: 100%;
+    height: 420px;
+    display: block;
+    color: var(--mwt-text);
+    touch-action: none;
+}
+
+.kt-rel-graph-node {
+    transition: filter 0.1s;
+}
+
+.kt-rel-graph-node:hover {
+    filter: brightness(1.25);
+}
+
+.kt-rel-graph-node:hover .kt-rel-graph-node-circle {
+    stroke: var(--mwt-accent-hover);
+    stroke-width: 2.5;
+}
+
+.kt-rel-graph-node-circle {
+    fill: var(--mwt-bg-lighter);
+    stroke: var(--mwt-accent);
+    stroke-width: 1.5;
+    transition: stroke 0.15s, stroke-width 0.15s;
+}
+
+.kt-rel-graph-node-label {
+    pointer-events: none;
+    font-family: var(--mwt-font);
+    font-weight: 500;
+    paint-order: stroke;
+    stroke: var(--mwt-bg);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+}
+
+.kt-rel-graph-edge {
+    transition: opacity 0.15s, stroke-width 0.15s;
+}
+
+.kt-rel-graph-edge:hover {
+    opacity: 1 !important;
+    stroke-width: 2.8 !important;
+    cursor: pointer;
+}
+
+.kt-rel-graph-legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 8px;
+    background: rgba(26, 26, 46, 0.85);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    font-size: 11px;
+    color: var(--mwt-text);
+    pointer-events: none;
+    max-width: calc(100% - 16px);
+}
+
+.kt-rel-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    text-transform: capitalize;
+}
+
+.kt-rel-legend-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.kt-rel-graph-hint {
+    position: absolute;
+    bottom: 6px;
+    right: 8px;
+    font-size: 10px;
+    color: var(--mwt-text-dim);
+    pointer-events: none;
+    background: rgba(26, 26, 46, 0.7);
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+/* ── Mobile / Touch Responsive (Knowledge-specific) ────────────────────────── */
+
+@media (max-width: 768px) {
+    /* Staging layout stacks vertically on mobile */
+    .kt-staging-layout {
+        flex-direction: column !important;
+    }
+
+    .kt-staging-list {
+        max-height: 150px !important;
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    .kt-staging-detail {
+        width: 100% !important;
+    }
+
+    /* Toolbar wraps on small screens */
+    .kt-npcs-toolbar,
+    .kt-toolbar {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .kt-sub-tabs {
+        order: 10;
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .kt-sub-tab {
+        padding: 6px 8px;
+        font-size: 11px;
+        white-space: nowrap;
+    }
+
+    /* NPC cards stack actions */
+    .kt-npc-card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    .kt-npc-actions {
+        flex-wrap: wrap;
+    }
+
+    /* Relationship add row wraps */
+    .kt-rel-add-row {
+        flex-wrap: wrap;
+    }
+
+    .kt-rel-add-row select,
+    .kt-rel-add-row input {
+        min-width: 0 !important;
+        flex: 1 1 120px;
+    }
+
+    /* Notification panel responsive */
+    #kt-notification-panel {
+        width: calc(100vw - 20px) !important;
+        left: 10px !important;
+        right: 10px !important;
+        bottom: 10px !important;
+        max-height: 50vh;
+    }
+}
+
+/* ─── NPC Growth Profile modal ───────────────────────────────────────────── */
+
+.kt-growth-modal .mwt-modal-panel {
+    max-width: 720px;
+    max-height: 85vh;
+}
+
+.kt-growth-modal .mwt-modal-body {
+    overflow-y: auto;
+}
+
+.kt-growth-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 0;
+    color: var(--mwt-text-dim);
+    font-size: 13px;
+}
+
+.kt-growth-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--mwt-border);
+    border-top-color: var(--mwt-primary, #6366f1);
+    border-radius: 50%;
+    animation: kt-growth-spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes kt-growth-spin {
+    to { transform: rotate(360deg); }
+}
+
+.kt-growth-error {
+    padding: 16px;
+    color: var(--mwt-error);
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--mwt-radius);
+    font-size: 13px;
+}
+
+.kt-growth-warning {
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    color: var(--mwt-text);
+    background: rgba(245, 158, 11, 0.10);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: var(--mwt-radius);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.kt-growth-warning code {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+}
+
+.kt-growth-section-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mwt-text-dim);
+    margin-bottom: 8px;
+    letter-spacing: 0.02em;
+}
+
+.kt-growth-hint {
+    font-weight: 400;
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+.kt-growth-evidence {
+    margin-bottom: 20px;
+}
+
+.kt-growth-obs-group {
+    margin-bottom: 12px;
+}
+
+.kt-growth-obs-cat {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--mwt-primary, #6366f1);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+}
+
+.kt-growth-obs {
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    background: rgba(99, 102, 241, 0.05);
+    border-left: 2px solid rgba(99, 102, 241, 0.3);
+    border-radius: 0 var(--mwt-radius) var(--mwt-radius) 0;
+}
+
+.kt-growth-obs-claim {
+    font-size: 12px;
+    color: var(--mwt-text);
+    line-height: 1.4;
+}
+
+.kt-growth-obs-quote {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    font-style: italic;
+    margin-top: 2px;
+    line-height: 1.4;
+}
+
+.kt-growth-obs-msgidx {
+    font-style: normal;
+    font-family: var(--mwt-font-mono);
+    opacity: 0.6;
+}
+
+.kt-growth-obs-unverified {
+    font-style: normal;
+    color: rgb(245, 158, 11);
+    background: rgba(245, 158, 11, 0.10);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 10px;
+    white-space: nowrap;
+    cursor: help;
+}
+
+.kt-growth-profile-section {
+    margin-bottom: 20px;
+}
+
+.kt-growth-profile-editor {
+    width: 100%;
+    min-height: 200px;
+    padding: 12px;
+    background: var(--mwt-input-bg, transparent);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    color: var(--mwt-text);
+    font-family: var(--mwt-font);
+    font-size: 13px;
+    line-height: 1.6;
+    resize: vertical;
+    box-sizing: border-box;
+}
+
+.kt-growth-profile-editor:focus {
+    outline: none;
+    border-color: var(--mwt-primary, #6366f1);
+}
+
+.kt-growth-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.kt-growth-explainer {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    line-height: 1.5;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+}
+
+.kt-growth-explainer code {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: var(--mwt-font-mono);
+    font-size: 10px;
+}

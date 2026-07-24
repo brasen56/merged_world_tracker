@@ -1,0 +1,257 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Interiority Module Styles (.mwt-int-*)
+   Tab layout, status, intentions ledger, inline edit, manual entries,
+   recent thoughts, per-message thought display (injected into chat DOM).
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ─── Interiority tab layout ─────────────────────────────────────────────── */
+
+.mwt-interiority-tab {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mwt-interiority-tab h3 {
+    margin: 16px 0 4px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mwt-text);
+}
+
+/* ─── Status messages ────────────────────────────────────────────────────── */
+
+.mwt-int-status {
+    min-height: 20px;
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+
+.mwt-int-status--info    { color: var(--mwt-info); }
+.mwt-int-status--success { color: var(--mwt-success); }
+.mwt-int-status--error   { color: var(--mwt-error); }
+
+/* ─── Intentions ledger entries ──────────────────────────────────────────── */
+
+.mwt-int-ledger-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mwt-int-ledger-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    font-size: 13px;
+}
+
+.mwt-int-ledger-entry-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.mwt-int-ledger-npc {
+    font-weight: 600;
+    color: var(--mwt-accent);
+}
+
+.mwt-int-arrow {
+    color: var(--mwt-text-dim);
+    font-size: 12px;
+}
+
+.mwt-int-ledger-action {
+    color: var(--mwt-text);
+}
+
+.mwt-int-ledger-trigger {
+    color: var(--mwt-text-dim);
+    font-style: italic;
+}
+
+.mwt-int-ledger-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.mwt-int-remove-btn {
+    background: none;
+    border: none;
+    color: var(--mwt-text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all var(--mwt-transition);
+}
+
+.mwt-int-remove-btn:hover {
+    color: var(--mwt-error);
+    background: rgba(239, 83, 80, 0.15);
+}
+
+/* Small icon buttons for ledger actions */
+.mwt-btn-sm {
+    background: none;
+    border: none;
+    color: var(--mwt-text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all var(--mwt-transition);
+}
+
+.mwt-int-edit-btn:hover {
+    color: var(--mwt-accent);
+    background: rgba(74, 158, 255, 0.15);
+}
+
+/* ─── Inline edit form (ledger entry editing state) ──────────────────────── */
+
+.mwt-int-ledger-entry--editing {
+    display: block;
+    flex-direction: column;
+    padding: 12px;
+    border-color: var(--mwt-accent);
+    background: var(--mwt-bg-lighter);
+}
+
+.mwt-int-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mwt-int-edit-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mwt-int-edit-row .mwt-input {
+    font-size: 13px;
+    padding: 6px 10px;
+}
+
+.mwt-int-edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.mwt-int-edit-actions .mwt-btn {
+    font-size: 12px;
+    padding: 4px 12px;
+}
+
+/* ─── Manual entry indicator ─────────────────────────────────────────────── */
+
+.mwt-int-ledger-entry--manual {
+    border-left: 3px solid var(--mwt-warning, #ff9800);
+}
+
+.mwt-int-manual-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    margin-left: 4px;
+    cursor: help;
+    opacity: 0.7;
+}
+
+/* ─── Recent thoughts list ───────────────────────────────────────────────── */
+
+.mwt-int-thoughts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mwt-int-thought-entry {
+    padding: 10px 12px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-left: 3px solid var(--mwt-accent);
+    border-radius: var(--mwt-radius);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mwt-int-thought-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mwt-int-thought-npc {
+    font-weight: 600;
+    color: var(--mwt-accent);
+    font-size: 13px;
+}
+
+.mwt-int-thought-msg {
+    font-size: 10px;
+    color: var(--mwt-text-dim);
+    font-family: var(--mwt-font-mono);
+}
+
+.mwt-int-thought-re {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    font-style: italic;
+}
+
+.mwt-int-thought-text {
+    font-size: 13px;
+    color: var(--mwt-text);
+    line-height: 1.5;
+}
+
+/* ─── Per-message thought display (injected into chat DOM) ───────────────── */
+
+.mwt-int-msg-thoughts {
+    margin: 8px 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mwt-int-msg-thought {
+    padding: 6px 12px;
+    background: rgba(138, 43, 226, 0.08);
+    border-left: 3px solid rgba(138, 43, 226, 0.5);
+    border-radius: 0 var(--mwt-radius) var(--mwt-radius) 0;
+    font-size: 12px;
+    line-height: 1.4;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    color: var(--mwt-text);
+}
+
+.mwt-int-msg-thought-npc {
+    font-weight: 600;
+    color: #b88ce0;
+    flex-shrink: 0;
+}
+
+.mwt-int-msg-thought-text {
+    color: var(--mwt-text);
+    opacity: 0.85;
+}
