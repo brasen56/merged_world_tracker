@@ -42,6 +42,7 @@ import {
     getRawForConsolidation, applyConsolidation,
     getUserOverrides,
     getCaptureWatermark, setCaptureWatermark,
+    getBackfillWatermark, setBackfillWatermark,
 } from './evidence.js';
 import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
 import { expandIlsSummaries, isIlsSummary, normalizeSendDate } from './ils_compat.js';
@@ -571,6 +572,21 @@ export async function runGrowthProfile(name) {
     // Append-only — never overwrites. Duplicate observations are skipped.
     const captureStats = appendRawObservations(name, observations);
 
+    // Seed the capture watermark so the first continuous pass doesn't re-scan
+    // these same messages (Minor fix from the capture review). The initial
+    // scan covers the most recent EVIDENCE_MESSAGE_WINDOW messages; stamp the
+    // watermark at the newest send_date in that span.
+    {
+        const chatArr = getChat() || [];
+        const scanStart = Math.max(0, chatArr.length - EVIDENCE_MESSAGE_WINDOW);
+        let maxScanTs = 0;
+        for (let i = scanStart; i < chatArr.length; i++) {
+            const t = normalizeSendDate(chatArr[i]?.send_date);
+            if (t > maxScanTs) maxScanTs = t;
+        }
+        if (maxScanTs > 0) setCaptureWatermark(name, maxScanTs);
+    }
+
     // Extract canon from the existing entry (NOT the Personality: line)
     let canon = '';
     try {
@@ -770,8 +786,11 @@ function buildDeltaWindow(sinceTs) {
 
     if (candidates.length < DELTA_MIN_MESSAGES) return null;
 
-    // Cap at the most recent DELTA_MAX_MESSAGES.
-    const window = candidates.slice(-DELTA_MAX_MESSAGES);
+    // Process the OLDEST DELTA_MAX_MESSAGES of the delta (A2 fix). If more than
+    // the cap accrued since the last cadence fire, processing the oldest batch
+    // first and advancing the watermark to its max lets the next fire continue
+    // forward — no un-processed messages are leapfrogged.
+    const window = candidates.slice(0, DELTA_MAX_MESSAGES);
 
     const lines = [];
     let maxTs = sinceTs ?? 0;
@@ -970,10 +989,14 @@ export async function runIlsBackfillCapture(name, opts = {}) {
     if (!chat || !chat.length) throw new Error('No chat messages.');
 
     const chatMeta = getChatMeta();
-    const sinceTs = getCaptureWatermark(name);
 
-    // Expand all ILS summaries, filtering to messages newer than the watermark.
-    const expanded = expandIlsSummaries(chat, chatMeta, { sinceTs });
+    // B1 fix: do NOT lower-bound the expansion by the capture watermark.
+    // Backfill exists to recover OLD summarized history, which is *older* than
+    // the watermark — filtering it out defeats the purpose. Expand the full
+    // de-summarized history and rely on appendRawObservations' dedup
+    // (normalizeKey on claim+quote) to skip overlap with already-captured
+    // recent messages.
+    const expanded = expandIlsSummaries(chat, chatMeta, { sinceTs: null });
 
     // Count how many summaries were expanded (for reporting).
     const summaryIndices = new Set();
@@ -982,18 +1005,36 @@ export async function runIlsBackfillCapture(name, opts = {}) {
     }
 
     if (expanded.length === 0) {
-        return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs: sinceTs ?? 0 };
+        return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs: getBackfillWatermark(name) ?? 0 };
     }
 
-    // Cap at the most recent `maxMessages` de-summarized entries to bound cost.
-    const window = expanded.slice(-maxMessages);
+    // B2 fix: walk forward in bounded batches. Sort by the real send_date so
+    // the forward walk is chronological (expanded originals carry their own ts,
+    // which may predate their array position). Then advance from the backfill
+    // watermark — a separate forward-walking cursor, NOT the capture watermark
+    // (which is a high-water mark on recent messages and would freeze backfill
+    // in place via setCaptureWatermark's monotonic-only rule).
+    const sorted = [...expanded].sort((a, b) => a.ts - b.ts);
+    const backfillWm = getBackfillWatermark(name);
+    const pending = backfillWm != null
+        ? sorted.filter(e => e.ts > backfillWm)
+        : sorted;
+
+    if (pending.length === 0) {
+        return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs: backfillWm ?? 0 };
+    }
+
+    // Process the OLDEST `maxMessages` of the pending set. Advancing the
+    // backfill watermark only across this batch means repeat runs continue
+    // forward rather than leapfrogging the remainder.
+    const window = pending.slice(0, maxMessages);
 
     // Build the formatted message string for the evidence prompt. We use the
     // ORIGINAL message text (verbatim), not the summary. The idx is synthetic
     // (points at the summary position, not the original array position) — this
     // is consistent with the blueprint's "ts canonical, msgIdx diagnostic" rule.
     const lines = [];
-    let maxTs = sinceTs ?? 0;
+    let maxTs = backfillWm ?? 0;
     for (const entry of window) {
         const msg = entry.msg;
         if (!msg || !msg.mes || msg.is_system) continue;
@@ -1041,34 +1082,62 @@ export async function runIlsBackfillCapture(name, opts = {}) {
 
     const observations = Array.isArray(result.observations) ? result.observations : [];
 
-    // For backfill, quote verification is relaxed: the original messages may
-    // not be at their cited indices (they came from inside summaries). We
-    // search the expanded window instead of the live chat array.
+    // For backfill, quote verification searches both the live chat and the
+    // expanded window (originals may not be at their cited indices — they came
+    // from inside summaries).
     const expandedMessages = window.map(e => e.msg);
     const admitted = observations.filter(o =>
         o && typeof o.claim === 'string' && o.claim.trim() &&
         typeof o.quote === 'string' && o.quote.trim()
     ).map(o => {
         const quote = String(o.quote).trim();
-        // Try the live chat first (the quote might be from a non-summary msg).
         const citedIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
-        let matchIdx = findQuoteMatch(quote, citedIdx, chat);
-        // If not found in live chat, search the expanded originals.
-        if (matchIdx === -1) {
-            matchIdx = findQuoteMatch(quote, null, expandedMessages);
+
+        // Try the live chat first (the quote might be from a non-summary msg).
+        const liveIdx = findQuoteMatch(quote, citedIdx, chat);
+        if (liveIdx !== -1) {
+            // Found in live chat — the index is valid, ts will be extracted
+            // from chat[liveIdx].send_date by appendRawObservations.
+            return {
+                category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
+                claim: String(o.claim).trim(),
+                quote,
+                msgIdx: liveIdx,
+                verified: true,
+            };
         }
-        const verified = matchIdx !== -1;
+
+        // Not in live chat — search the expanded originals.
+        const expandedIdx = findQuoteMatch(quote, null, expandedMessages);
+        if (expandedIdx !== -1) {
+            // B3 fix: the expanded-array index is meaningless as a live index.
+            // Thread the real ts (entry.ts = the original's send_date, preserved
+            // by ils_compat) and set msgIdx = null — exactly the "msgIdx
+            // null/synthetic under expansion" constraint.
+            return {
+                category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
+                claim: String(o.claim).trim(),
+                quote,
+                msgIdx: null,
+                ts: window[expandedIdx].ts,
+                verified: true,
+            };
+        }
+
+        // Unverified — keep the model's cited index for traceability.
         return {
             category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
             claim: String(o.claim).trim(),
             quote,
-            msgIdx: verified ? matchIdx : citedIdx,
-            verified,
+            msgIdx: citedIdx,
+            verified: false,
         };
     });
 
     const stats = appendRawObservations(name, admitted);
-    setCaptureWatermark(name, maxTs);
+    // Advance the backfill watermark (not the capture watermark) across this
+    // batch only, so repeat runs continue forward through the remaining history.
+    setBackfillWatermark(name, maxTs);
 
     console.log(
         `[MWT:Knowledge] ILS backfill for "${name}": expanded ${summaryIndices.size} summary(ies) to ${lines.length} ` +

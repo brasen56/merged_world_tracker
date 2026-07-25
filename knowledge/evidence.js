@@ -149,7 +149,7 @@ export function nextObsId(file, tier) {
  * pile up identical receipts.
  *
  * @param {string} name — NPC name
- * @param {Array<{category:string, claim:string, quote:string, msgIdx:number|null, verified?:boolean}>} observations
+ * @param {Array<{category:string, claim:string, quote:string, msgIdx:number|null, verified?:boolean, ts?:number}>} observations
  * @returns {{added: number, skipped: number}} counts
  */
 export function appendRawObservations(name, observations) {
@@ -167,7 +167,12 @@ export function appendRawObservations(name, observations) {
         if (existing.has(key)) { skipped++; continue; }
         existing.add(key);
 
-        const ts = extractMsgTs(chat, obs.msgIdx);
+        // Prefer an explicit ts when available (e.g. from ILS backfill, where
+        // the msgIdx is a synthetic expanded-array index, not a live one).
+        // Otherwise extract from the live chat by index as usual.
+        const ts = (typeof obs.ts === 'number' && Number.isFinite(obs.ts))
+            ? obs.ts
+            : extractMsgTs(chat, obs.msgIdx);
         file.raw.push({
             id: nextObsId(file, 'raw'),
             category: validCategory(obs.category),
@@ -610,6 +615,49 @@ export function setCaptureWatermark(name, ts) {
     const cur = file.meta.lastCaptureTs;
     if (cur == null || ts > cur) {
         file.meta.lastCaptureTs = ts;
+        touch(file);
+    }
+}
+
+// ─── Backfill watermark (Part B: ILS de-summarize backfill) ──────────────────
+//
+// `lastBackfillTs` is a FORWARD-WALKING cursor separate from the continuous-
+// capture watermark (`lastCaptureTs`). It tracks how far through the de-
+// summarized history backfill has progressed, so repeat backfill runs continue
+// forward rather than re-processing the same batch.
+//
+// It must be separate because the two watermarks point in different directions:
+// continuous capture's watermark is a high-water mark (recent ts); backfill's
+// is a low-to-high cursor walking through OLD summarized history (ts << recent).
+// Sharing one field would make backfill's old batch max lose to continuous's
+// recent max (setCaptureWatermark is monotonic), freezing backfill in place.
+
+/**
+ * Get the backfill watermark for an NPC: the max `ts` of the de-summarized
+ * messages backfill has processed. Returns null if backfill hasn't run yet.
+ *
+ * @param {string} name — NPC name
+ * @returns {number|null} ms timestamp, or null if no backfill has run
+ */
+export function getBackfillWatermark(name) {
+    const file = getEvidenceFile(name, false);
+    return file?.meta?.lastBackfillTs ?? null;
+}
+
+/**
+ * Advance the backfill watermark to the given timestamp (if newer than the
+ * current value). Called after a backfill batch is processed.
+ *
+ * @param {string} name — NPC name
+ * @param {number} ts — the max send_date among backfilled messages in this batch
+ */
+export function setBackfillWatermark(name, ts) {
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) return;
+    const file = getEvidenceFile(name);
+    if (!file.meta) file.meta = {};
+    const cur = file.meta.lastBackfillTs;
+    if (cur == null || ts > cur) {
+        file.meta.lastBackfillTs = ts;
         touch(file);
     }
 }
