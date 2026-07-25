@@ -765,9 +765,10 @@ function wireStateTrackerEvents(el) {
  *   - Capture: extract new behavioral evidence from recent messages
  *   - Generate: synthesize a profile from existing evidence
  *   - Consolidate: distill raw observations into consolidated claims
- *   - Backfill: recover evidence from ILS-summarized history
+ *   - Backfill: recover evidence from ILS-summarized history (one batch)
+ *   - Catch Up: loop Backfill + Capture until evidence is current (multi-batch)
  *
- * All four are explicit button presses — no silent API calls on open.
+ * All are explicit button presses — no silent API calls on open.
  *
  * @param {string} name — NPC name
  * @param {HTMLButtonElement} triggerBtn — the button that launched the modal
@@ -944,7 +945,9 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
                 <button class="mwt-btn mwt-btn-primary" id="kt-growth-regenerate" title="Synthesize the profile from existing evidence (no re-capture). One API call. Disabled if no evidence on file." ${observations.length === 0 ? 'disabled' : ''}>📝 Generate Profile</button>
                 <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims. Consumed raw entries are archived. Disabled if fewer than 2 non-canon raw observations." ${nonCanonRawCount < 2 ? 'disabled' : ''}>🔗 Consolidate</button>
                 <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (one-time/bounded).">📦 Backfill</button>
+                <button class="mwt-btn" id="kt-growth-catchup" title="Continuously read ALL history (summarized + live) until evidence is caught up to the current chat. Fires a notification when done.">🚀 Catch Up</button>
             </div>
+            <div class="kt-growth-catchup-progress" id="kt-growth-catchup-progress" style="display:none"></div>
         </div>
         <div class="kt-growth-evidence">
             <div class="kt-growth-section-label">📊 Evidence (${observations.length} observation${observations.length !== 1 ? 's' : ''}${consolidatedCount > 0 ? `: ${consolidatedCount} consolidated, ${rawCount} raw` : ''}) <span class="kt-growth-hint">— click a claim to edit, 👑 to promote to canon, 🗑 to delete</span></div>
@@ -1298,6 +1301,75 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         } catch (err) {
             flash(`Backfill failed: ${err.message}`, 'error');
             btn.disabled = false; btn.textContent = '📦 Backfill';
+        }
+    });
+
+    // ── Catch Up (loop backfill + continuous capture until current) ──
+    // A user-initiated "read everything until caught up" pass. Loops the
+    // bounded backfill (Part B) through all summarized history, then loops
+    // continuous capture (Part A) through all live messages, firing a
+    // progress update after each batch and a toastr notification on
+    // completion. This complements the single-batch Backfill button — instead
+    // of clicking repeatedly to walk through history 80 messages at a time,
+    // Catch Up does the whole walk in one action.
+    modal.querySelector('#kt-growth-catchup')?.addEventListener('click', async () => {
+        const btn = modal.querySelector('#kt-growth-catchup');
+        const progressEl = modal.querySelector('#kt-growth-catchup-progress');
+        const captureBtn = modal.querySelector('#kt-growth-capture');
+        const regenerateBtn = modal.querySelector('#kt-growth-regenerate');
+        const consolidateBtn = modal.querySelector('#kt-growth-consolidate');
+        const backfillBtn = modal.querySelector('#kt-growth-backfill');
+        try {
+            // Disable all action buttons for the duration — catch-up is a
+            // multi-batch loop and concurrent actions would race the watermarks.
+            [btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => b && (b.disabled = true));
+            btn.textContent = '⏳ Reading…';
+            if (progressEl) {
+                progressEl.style.display = '';
+                progressEl.innerHTML = '<div class="kt-growth-catchup-line">🚀 Starting catch-up…</div>';
+            }
+            flash('Catch-up: reading all history until current…', 'info');
+            const { runCatchUpCapture } = await import('./growth.js');
+
+            // Progress callback updates the in-modal progress panel after each
+            // batch so the user sees the loop making forward progress.
+            const onProgress = (p) => {
+                if (!progressEl) return;
+                const phaseLabel = p.phase === 'backfill' ? '📦 summarized history' : '🔍 live messages';
+                progressEl.innerHTML = `
+                    <div class="kt-growth-catchup-line">
+                        ${phaseLabel} — batch ${p.batch}<br>
+                        +${p.added} observation${p.added !== 1 ? 's' : ''} so far
+                        ${p.skipped > 0 ? ` · ${p.skipped} duplicate${p.skipped !== 1 ? 's' : ''}` : ''}
+                        ${p.batchAdded > 0 ? ` · +${p.batchAdded} this batch` : ''}
+                    </div>`;
+            };
+
+            const result = await runCatchUpCapture(name, onProgress);
+
+            // Re-render the modal so the newly captured evidence appears.
+            const msg = result.added > 0
+                ? `Catch-up complete: +${result.added} observation${result.added !== 1 ? 's' : ''} across ${result.batches} batch${result.batches !== 1 ? 'es' : ''}${result.skipped > 0 ? ` (${result.skipped} duplicate${result.skipped !== 1 ? 's' : ''})` : ''}.`
+                : `Catch-up complete — evidence is already current (${result.batches} batch${result.batches !== 1 ? 'es' : ''}, no new observations).`;
+            await refreshGrowthModalContent(modal, name, triggerBtn, msg);
+
+            // Fire a toastr notification so the user knows it's done even if
+            // they switched away from the modal/tab during the long run.
+            notify('Knowledge Tracker', `Catch-up finished for ${name}: +${result.added} observation(s).`, result.added > 0 ? 'success' : 'info');
+        } catch (err) {
+            flash(`Catch-up failed: ${err.message}`, 'error');
+            notify('Knowledge Tracker', `Catch-up failed for ${name}: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false; btn.textContent = '🚀 Catch Up';
+            // Re-enable the other action buttons (refreshGrowthModalContent
+            // re-renders and re-wires them, but this covers the failure path
+            // where the modal isn't re-rendered).
+            [captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => b && (b.disabled = false));
+            const progressEl2 = modal.querySelector('#kt-growth-catchup-progress');
+            if (progressEl2) {
+                // Keep the final progress line visible briefly, then hide.
+                setTimeout(() => { if (progressEl2) progressEl2.style.display = 'none'; }, 5000);
+            }
         }
     });
 

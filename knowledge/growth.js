@@ -1205,3 +1205,136 @@ export async function runIlsBackfillCapture(name, opts = {}) {
 
     return { ...stats, expandedSummaries: summaryIndices.size, maxTs };
 }
+
+// ─── Catch-up: loop backfill + continuous capture until current ──────────────
+//
+// A user-initiated "read everything until caught up" pass. Loops the bounded
+// backfill (Part B) through ALL summarized history, then loops continuous
+// capture (Part A) through ALL live messages, until both watermarks can no
+// longer advance. Each iteration is one API call; the loop terminates when a
+// batch makes no forward progress (watermark unchanged) or a hard safety cap
+// is reached.
+//
+// This complements the single-batch Backfill button: instead of clicking it
+// repeatedly to walk through history 80 messages at a time, Catch Up does the
+// whole walk in one action and fires a notification when done.
+
+/** Hard safety cap on the number of API-call batches per phase. At 80 (backfill)
+ *  or 40 (continuous) messages per batch this allows ~40k messages — far beyond
+ *  any real chat — while guaranteeing the loop can never run away. */
+const CATCHUP_MAX_BATCHES = 500;
+
+/**
+ * Run a full catch-up pass for an NPC: loop backfill through all summarized
+ * history, then loop continuous capture through all live messages, until both
+ * watermarks have caught up to the current chat.
+ *
+ * Phase 1 (backfill) walks the `lastBackfillTs` cursor forward through ILS-
+ * de-summarized history in bounded batches. Phase 2 (live) walks the
+ * `lastCaptureTs` high-water mark forward through non-summarized messages.
+ * The loop ends when a batch's watermark doesn't advance (nothing left to
+ * process) or the delta drops below `DELTA_MIN_MESSAGES`.
+ *
+ * Best-effort across batches: if one batch throws, the loop stops but the
+ * evidence captured so far (and the watermarks advanced so far) are retained —
+ * partial progress is never lost.
+ *
+ * @param {string} name — NPC name (must exist in the registry)
+ * @param {(progress:{phase:string, batch:number, added:number, skipped:number, batchAdded:number, maxTs:number})=>void} [onProgress]
+ *   optional callback fired after each batch for UI progress reporting
+ * @returns {Promise<{added:number, skipped:number, batches:number, backfillBatches:number, liveBatches:number}>}
+ */
+export async function runCatchUpCapture(name, onProgress) {
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+
+    const registry = getRegistry();
+    const info = registry[name];
+    if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
+    const uid = info.uid;
+    if (uid === null || uid === undefined) {
+        throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
+    }
+
+    let totalAdded = 0;
+    let totalSkipped = 0;
+    let backfillBatches = 0;
+    let liveBatches = 0;
+
+    // ── Phase 1: Loop ILS backfill until the backfill watermark catches up ──
+    //
+    // Each call processes the oldest batch of summarized history and advances
+    // the forward-walking `lastBackfillTs` cursor. The loop ends when the
+    // watermark stops advancing (= no more pending history to process) or the
+    // safety cap is hit.
+    {
+        let prevTs = getBackfillWatermark(name) ?? 0;
+        for (let i = 0; i < CATCHUP_MAX_BATCHES; i++) {
+            let result;
+            try {
+                result = await runIlsBackfillCapture(name);
+            } catch (err) {
+                // A batch failure stops the loop but keeps partial progress.
+                console.warn(`[MWT:Knowledge] Catch-up backfill batch ${i + 1} failed:`, err.message);
+                break;
+            }
+            totalAdded += result.added || 0;
+            totalSkipped += result.skipped || 0;
+            backfillBatches++;
+            if (onProgress) onProgress({
+                phase: 'backfill',
+                batch: backfillBatches,
+                added: totalAdded,
+                skipped: totalSkipped,
+                batchAdded: result.added || 0,
+                maxTs: result.maxTs || 0,
+            });
+            // Watermark didn't advance → caught up (or no summaries exist).
+            const curTs = result.maxTs || 0;
+            if (curTs <= prevTs) break;
+            prevTs = curTs;
+        }
+    }
+
+    // ── Phase 2: Loop continuous capture until the live delta is exhausted ──
+    //
+    // runContinuousCapture returns null when the delta is too small
+    // (< DELTA_MIN_MESSAGES) — that means we're within a few messages of "now"
+    // and further batches would be noise. The remaining stragglers are picked
+    // up by the next regular capture or the auto-capture cadence.
+    {
+        for (let i = 0; i < CATCHUP_MAX_BATCHES; i++) {
+            let result;
+            try {
+                result = await runContinuousCapture(name);
+            } catch (err) {
+                console.warn(`[MWT:Knowledge] Catch-up live batch ${i + 1} failed:`, err.message);
+                break;
+            }
+            if (!result) break; // delta too small or nothing to capture
+            totalAdded += result.added || 0;
+            totalSkipped += result.skipped || 0;
+            liveBatches++;
+            if (onProgress) onProgress({
+                phase: 'live',
+                batch: liveBatches,
+                added: totalAdded,
+                skipped: totalSkipped,
+                batchAdded: result.added || 0,
+                maxTs: result.maxTs || 0,
+            });
+        }
+    }
+
+    console.log(
+        `[MWT:Knowledge] Catch-up for "${name}": ${backfillBatches} backfill batch(es), ` +
+        `${liveBatches} live batch(es), +${totalAdded} observation(s), ${totalSkipped} duplicate(s).`
+    );
+
+    return {
+        added: totalAdded,
+        skipped: totalSkipped,
+        batches: backfillBatches + liveBatches,
+        backfillBatches,
+        liveBatches,
+    };
+}
