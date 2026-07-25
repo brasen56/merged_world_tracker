@@ -177,6 +177,45 @@ export function escapeRegex(s) {
 }
 
 /**
+ * Convert a SillyTavern message `send_date` to epoch milliseconds.
+ *
+ * `send_date` is a STRING whose format varies by ST build:
+ *   - Live ST (`getMessageTimeStamp` → `toISOString`): ISO 8601
+ *     `"2023-06-19T14:20:15.123Z"` — `Date.parse` handles it natively.
+ *   - Aikobots-4 fork (custom humanized string): `"June 19, 2023 2:20pm"` —
+ *     needs ST's `timestampToMoment` parser.
+ *   - Legacy builds may still emit a numeric Unix timestamp (seconds or ms).
+ *
+ * Returns `null` when the value can't be resolved; callers choose their own
+ * fallback (0 for windowing, `Date.now()` for capture-time stamping). This is
+ * the single source of truth for `send_date` parsing — both
+ * `normalizeSendDate` (ils_compat.js) and `extractMsgTs` (evidence.js) route
+ * through it so the two paths can't drift apart again.
+ *
+ * @param {number|string|undefined|null} sendDate
+ * @returns {number|null} epoch milliseconds, or null when unresolved
+ */
+export function sendDateToMs(sendDate) {
+    if (sendDate == null) return null;
+    // Numeric or all-digit string → Unix timestamp (seconds or ms).
+    if (typeof sendDate === 'number' ||
+        (typeof sendDate === 'string' && /^\d+$/.test(sendDate.trim()))) {
+        const n = Number(sendDate);
+        if (Number.isFinite(n) && n > 0) return n > 1e12 ? n : n * 1000;
+    }
+    // ISO 8601 (live ST getMessageTimeStamp → toISOString). Native — no import.
+    const parsed = Date.parse(sendDate);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    // Custom humanized format (Aikobots-4 fork) — only if ST exposes the parser.
+    try {
+        const ctx = getContextSafe();
+        const m = ctx?.timestampToMoment?.(sendDate);
+        if (m && typeof m.isValid === 'function' && m.isValid()) return m.valueOf();
+    } catch { /* parser unavailable — fall through */ }
+    return null;
+}
+
+/**
  * Rough characters-per-token ratio used by the fallback estimator.
  *
  * Empirical data for English text on common BPE tokenizers (GPT-2, Llama,

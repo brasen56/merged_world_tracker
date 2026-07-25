@@ -26,7 +26,7 @@
  * from day one so no migration is needed later.
  */
 
-import { getChatMeta, persistChatMeta, getChat } from '../core/index.js';
+import { getChatMeta, persistChatMeta, getChat, sendDateToMs } from '../core/index.js';
 import { GROWTH_EVIDENCE_KEY } from './state.js';
 
 // ─── Evidence map (all NPCs in this chat) ─────────────────────────────────────
@@ -696,7 +696,8 @@ function normalizeKey(claim, quote) {
 /**
  * Extract the canonical timestamp from a chat message by index.
  * `ts` is canonical for retrieval (survives message deletion/edit). We prefer
- * the message's send_date; if unavailable (or the index is stale), we fall
+ * the message's send_date (parsed via the shared, format-agnostic
+ * `sendDateToMs` helper); if unavailable (or the index is stale), we fall
  * back to the capture time so the field is always populated.
  *
  * @param {Array} chat
@@ -705,13 +706,8 @@ function normalizeKey(claim, quote) {
  */
 function extractMsgTs(chat, msgIdx) {
     if (msgIdx != null && msgIdx >= 0 && msgIdx < chat.length) {
-        const msg = chat[msgIdx];
-        // ST stores send_date as a Unix timestamp (seconds or ms depending on
-        // version). Normalize to ms.
-        const sd = msg?.send_date;
-        if (typeof sd === 'number' && sd > 0) {
-            return sd > 1e12 ? sd : sd * 1000;
-        }
+        const ms = sendDateToMs(chat[msgIdx]?.send_date);
+        if (ms != null) return ms;
     }
     return Date.now();
 }

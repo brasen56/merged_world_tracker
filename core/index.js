@@ -4,7 +4,7 @@
  * Feature modules import from '../core/index.js' to access shared utilities.
  */
 
-export { getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex, estimateTokens, getPlayerNames, getUserNames, getRecentMessages } from './context.js';
+export { getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex, estimateTokens, getPlayerNames, getUserNames, getRecentMessages, sendDateToMs } from './context.js';
 export { normalizeApiBase, fetchFromApi, fetchViaConnectionProfile, resolveApiCall, normaliseOutput, retryAsync, parseJsonLenient } from './api.js';
 export { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from './diff.js';
 export { createSettingsManager, syncSharedConnectionSettings, getGlobalSettings, injectionAllowed } from './settings.js';

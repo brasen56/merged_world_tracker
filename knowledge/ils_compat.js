@@ -37,7 +37,7 @@
  *      spliced open.
  */
 
-import { getChatMeta } from '../core/index.js';
+import { getChatMeta, sendDateToMs } from '../core/index.js';
 
 /** Chat-metadata key where ILS stores original message arrays, keyed by UUID. */
 export const ILS_ORIGINALS_KEY = 'ILS_Originals';
@@ -179,17 +179,14 @@ export function expandIlsSummaries(chat, chatMeta, opts = {}) {
 /**
  * Normalize a SillyTavern send_date to a milliseconds timestamp.
  *
- * ST stores send_date as a Unix timestamp that may be in seconds or
- * milliseconds depending on the version. We normalize to ms for consistent
- * comparison. If the value is missing or invalid, returns 0 (treated as
- * "ancient" — always included in time-bounded windows).
+ * Delegates to the shared `sendDateToMs` helper, which is format-agnostic
+ * (ISO 8601 strings from live ST, humanized strings from the Aikobots-4 fork,
+ * or legacy numeric Unix timestamps). If the value is missing or unresolvable,
+ * returns 0 (treated as "ancient" — always included in time-bounded windows).
  *
  * @param {number|string|undefined} sendDate
  * @returns {number} milliseconds since epoch
  */
 export function normalizeSendDate(sendDate) {
-    const n = Number(sendDate);
-    if (!Number.isFinite(n) || n <= 0) return 0;
-    // If the timestamp is in seconds (< year 2001 in ms), multiply by 1000.
-    return n > 1e12 ? n : n * 1000;
+    return sendDateToMs(sendDate) ?? 0;
 }

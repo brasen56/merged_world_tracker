@@ -1788,6 +1788,29 @@
     opacity: 0.7;
 }
 
+.kt-growth-actions-toolbar {
+    margin-bottom: 20px;
+    padding: 12px;
+    background: rgba(99, 102, 241, 0.06);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: var(--mwt-radius);
+}
+
+.kt-growth-actions-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.kt-growth-actions-buttons .mwt-btn {
+    font-size: 12px;
+}
+
+.kt-growth-actions-buttons .mwt-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .kt-growth-evidence {
     margin-bottom: 20px;
 }

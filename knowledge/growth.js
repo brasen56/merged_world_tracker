@@ -619,6 +619,65 @@ export async function runGrowthProfile(name) {
     return { observations: allEvidence, profile: finalProfile, canon, captureStats };
 }
 
+// ─── Capture-only orchestrator ───────────────────────────────────────────────
+
+/**
+ * Run evidence capture ONLY (no profile generation):
+ *   1. Capture behavioral evidence (observations with quote receipts)
+ *   2. Append observations to the two-tier evidence store (raw[])
+ *   3. Seed/advance the capture watermark
+ *
+ * This is the "Capture" half of runGrowthProfile, split out so the UI can
+ * offer Capture and Generate as separate user-initiated actions (fixing the
+ * design flaw where both fired unconditionally on modal open). Nothing is
+ * generated — the caller can follow up with regenerateProfile() to synthesize
+ * a profile from the now-updated evidence.
+ *
+ * @param {string} name — NPC name (must exist in the registry)
+ * @returns {Promise<{observations: Array, captureStats: {added:number, skipped:number}}>}
+ */
+export async function runCaptureOnly(name) {
+    const registry = getRegistry();
+    const info = registry[name];
+    if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
+
+    const uid = info.uid;
+    if (uid === null || uid === undefined) {
+        throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
+    }
+
+    // Step 1: capture fresh evidence
+    const observations = await captureEvidence(name, uid);
+    if (observations.length === 0 && !hasEvidenceFile(name)) {
+        throw new Error(
+            `No behavioral observations found for "${name}" in recent messages. ` +
+            `The NPC may not appear enough in the last ${EVIDENCE_MESSAGE_WINDOW} messages.`
+        );
+    }
+
+    // Step 2: append fresh observations to the raw tier (persisted).
+    // Append-only — never overwrites. Duplicate observations are skipped.
+    const captureStats = appendRawObservations(name, observations);
+
+    // Seed the capture watermark so continuous capture doesn't re-scan these
+    // same messages. Same logic as runGrowthProfile.
+    {
+        const chatArr = getChat() || [];
+        const scanStart = Math.max(0, chatArr.length - EVIDENCE_MESSAGE_WINDOW);
+        let maxScanTs = 0;
+        for (let i = scanStart; i < chatArr.length; i++) {
+            const t = normalizeSendDate(chatArr[i]?.send_date);
+            if (t > maxScanTs) maxScanTs = t;
+        }
+        if (maxScanTs > 0) setCaptureWatermark(name, maxScanTs);
+    }
+
+    // Return ALL accumulated evidence (not just the fresh capture) so the
+    // caller can re-render the full evidence list.
+    const allEvidence = getEvidenceForProfile(name);
+    return { observations: allEvidence, captureStats };
+}
+
 // ─── Consolidation pass (Slice 3) ────────────────────────────────────────────
 
 /**

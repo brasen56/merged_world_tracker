@@ -757,22 +757,35 @@ function wireStateTrackerEvents(el) {
 // ─── NPC Growth Profile modal ────────────────────────────────────────────────
 
 /**
- * Open the Growth Profile modal and run the generation pipeline.
+ * Open the Growth Profile modal in READ-ONLY mode.
  *
- * The modal shows a spinner during the two-phase generation (evidence capture
- * → profile synthesis), then displays the observations with their quote
- * receipts and the generated profile in an editable textarea.
+ * Design fix: nothing touches the API on open. The modal shows what's already
+ * in evidence (the observation list from the two-tier store) and the last
+ * saved profile (if any). The user then explicitly chooses to:
+ *   - Capture: extract new behavioral evidence from recent messages
+ *   - Generate: synthesize a profile from existing evidence
+ *   - Consolidate: distill raw observations into consolidated claims
+ *   - Backfill: recover evidence from ILS-summarized history
  *
- * Slice 2: observations are persisted to the two-tier evidence store (raw[])
- * in chat metadata on capture. The user can edit claims, promote to canon,
- * or delete observations in-place, and save the (possibly edited) profile to
- * the non-injected "NPC Profiles" lorebook via the Save button.
+ * All four are explicit button presses — no silent API calls on open.
  *
  * @param {string} name — NPC name
  * @param {HTMLButtonElement} triggerBtn — the button that launched the modal
  */
 async function openGrowthProfileModal(name, triggerBtn) {
-    // Build the modal skeleton (empty body, filled in async)
+    // Load what's already in evidence + the last profile — all READ-ONLY
+    // (synchronous reads from chat metadata + one local lorebook read).
+    // No API calls fire here.
+    const { loadProfile } = await import('./growth.js');
+    const { getEvidenceForProfile, getEvidenceSummary, getUserOverrides } = await import('./evidence.js');
+
+    const observations = getEvidenceForProfile(name);
+    const summary = getEvidenceSummary(name);
+    const overrides = getUserOverrides(name);
+    let existingProfile = null;
+    try { existingProfile = await loadProfile(name); } catch { /* ignore load errors */ }
+
+    // Build the modal with the read-only state already populated (no spinner).
     const modal = document.createElement('div');
     modal.id = 'kt-growth-modal';
     modal.className = 'mwt-modal kt-growth-modal';
@@ -786,8 +799,7 @@ async function openGrowthProfileModal(name, triggerBtn) {
             </div>
             <div class="mwt-modal-body">
                 <div class="kt-growth-status">
-                    <span class="kt-growth-spinner"></span>
-                    <span class="kt-growth-status-text">Capturing behavioral evidence…</span>
+                    <span class="kt-growth-status-text">${renderGrowthStatusText(summary, existingProfile)}</span>
                 </div>
                 <div class="kt-growth-content"></div>
             </div>
@@ -798,63 +810,75 @@ async function openGrowthProfileModal(name, triggerBtn) {
     document.body.appendChild(modal);
 
     const closeBtn = modal.querySelector('.mwt-modal-close');
-    const statusText = modal.querySelector('.kt-growth-status-text');
     const contentEl = modal.querySelector('.kt-growth-content');
-    const statusEl = modal.querySelector('.mwt-status');
     const cleanup = () => modal.remove();
     closeBtn.addEventListener('click', cleanup);
-    // Backdrop click intentionally does NOT close this modal — the generated
+    // Backdrop click intentionally does NOT close this modal — the
     // evidence/profile view is easy to dismiss by accident, so require the ×
-    // button or Escape. (The evidence itself is persisted in the store; this is
-    // just about not nuking the on-screen review pane mid-inspection.)
-    // Escape key
+    // button or Escape.
     const onKey = (e) => { if (e.key === 'Escape') { cleanup(); document.removeEventListener('keydown', onKey); } };
     document.addEventListener('keydown', onKey);
 
-    try {
-        triggerBtn.disabled = true;
-        triggerBtn.textContent = '⏳…';
+    // Render the read-only state immediately. The profile editor shows the
+    // existing profile (or an empty editor + hint if none has been generated).
+    contentEl.innerHTML = renderGrowthProfileContent(name, observations, existingProfile || '', '', false, existingProfile, null, overrides);
+    wireGrowthProfileEvents(modal, name, existingProfile || '', triggerBtn);
+}
 
-        // The orchestrator (runGrowthProfile) runs both phases: capture then
-        // generate. It persists observations to the evidence store (raw[]) and
-        // generates from ALL accumulated evidence. We can't interleave status
-        // updates between the two API calls without instrumenting the
-        // orchestrator, so we show a combined status here and the per-phase
-        // counts in the final render.
-        const { runGrowthProfile, looksTruncated, loadProfile } = await import('./growth.js');
-        const { getUserOverrides } = await import('./evidence.js');
+/**
+ * Build the status-line text shown at the top of the growth modal.
+ * Summarizes what's currently in evidence so the user knows their starting
+ * point before pressing any action button.
+ */
+function renderGrowthStatusText(summary, existingProfile) {
+    if (!summary || (summary.raw === 0 && summary.consolidated === 0)) {
+        return 'No evidence captured yet. Use the actions below to begin.';
+    }
+    const parts = [];
+    if (summary.consolidated > 0) parts.push(`${summary.consolidated} consolidated`);
+    if (summary.raw > 0) parts.push(`${summary.raw} raw`);
+    let text = `Evidence on file: ${parts.join(', ')} observation${(summary.raw + summary.consolidated) !== 1 ? 's' : ''}`;
+    if (existingProfile) text += ' · profile loaded (editable below)';
+    if (summary.lastProfileAt) text += ` · last generated ${formatHistoryAge(summary.lastProfileAt)}`;
+    return text;
+}
 
-        // Load any existing profile so the user can see (and edit) the current
-        // version rather than starting from blank if they've generated before.
-        const existingProfile = await loadProfile(name);
-        const overrides = getUserOverrides(name);
+/**
+ * Re-read the evidence store + profile and re-render the modal body in place.
+ * Used after Capture / Consolidate / Backfill mutate the evidence store, so
+ * the user sees the updated state without the modal closing and reopening.
+ *
+ * Preserves any unsaved edits in the profile editor and the optional flash
+ * message is shown in the modal's status bar.
+ */
+async function refreshGrowthModalContent(modal, name, triggerBtn, flashMsg) {
+    const { getEvidenceForProfile, getEvidenceSummary, getUserOverrides } = await import('./evidence.js');
+    const observations = getEvidenceForProfile(name);
+    const summary = getEvidenceSummary(name);
+    const overrides = getUserOverrides(name);
+    // Preserve any unsaved edits in the profile editor so a capture/consolidate
+    // doesn't blow away what the user was typing.
+    const editorEl = modal.querySelector('#kt-growth-profile-text');
+    const preservedProfile = editorEl ? editorEl.value : '';
 
-        statusText.textContent = 'Capturing evidence & synthesizing profile…';
-        const { observations, profile, canon, captureStats } = await runGrowthProfile(name);
+    const statusTextEl = modal.querySelector('.kt-growth-status-text');
+    if (statusTextEl) statusTextEl.textContent = renderGrowthStatusText(summary, preservedProfile || null);
 
-        // Render the results. Flag a suspected truncation so a half-profile is
-        // surfaced with a warning rather than silently shown as if complete.
-        const truncated = looksTruncated(profile);
-        const addedText = captureStats.added > 0
-            ? ` · ${captureStats.added} new observation${captureStats.added !== 1 ? 's' : ''} added${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} skipped)` : ''}`
-            : (captureStats.skipped > 0 ? ` · ${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} (already captured)` : '');
-        statusText.textContent = truncated
-            ? '⚠️ Profile may be truncated — see warning below.'
-            : `Generated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}${addedText}.`;
-        const spinner = modal.querySelector('.kt-growth-spinner');
-        if (spinner) spinner.style.display = 'none';
-
-        contentEl.innerHTML = renderGrowthProfileContent(name, observations, profile, canon, truncated, existingProfile, captureStats, overrides);
-        wireGrowthProfileEvents(modal, name, profile, triggerBtn);
-    } catch (err) {
-        statusText.textContent = '';
-        const spinner = modal.querySelector('.kt-growth-spinner');
-        if (spinner) spinner.style.display = 'none';
-        contentEl.innerHTML = `<div class="kt-growth-error">❌ ${escapeHtml(err.message)}</div>`;
-        console.warn(`[MWT:Knowledge] Growth profile for "${name}" failed:`, err);
-    } finally {
-        triggerBtn.disabled = false;
-        triggerBtn.textContent = '🌱 Growth';
+    const contentEl = modal.querySelector('.kt-growth-content');
+    if (contentEl) {
+        contentEl.innerHTML = renderGrowthProfileContent(name, observations, preservedProfile, '', false, null, null, overrides);
+        wireGrowthProfileEvents(modal, name, preservedProfile, triggerBtn);
+    }
+    if (flashMsg) {
+        const flash = (msg, type = 'success') => {
+            const statusEl = modal.querySelector('.mwt-status');
+            if (!statusEl) return;
+            statusEl.textContent = msg;
+            statusEl.className = `mwt-status mwt-status-${type}`;
+            statusEl.style.opacity = '1';
+            if (type === 'success') setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+        };
+        flash(flashMsg);
     }
 }
 
@@ -913,18 +937,17 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
         ${truncated ? `<div class="kt-growth-warning">⚠️ <strong>This profile looks cut off mid-sentence.</strong> The model's response was likely truncated by a response-length cap <em>below</em> your Max Tokens — most often the connection profile's own preset. Open the browser console for <code>finish_reason</code> / <code>completion_tokens</code>, raise the effective cap, then regenerate.</div>` : ''}
         ${existingProfile ? `<div class="kt-growth-existing-note">📝 An existing profile was found in the NPC Profiles lorebook. The generated profile below will replace it when you save.</div>` : ''}
         ${captureNote ? `<div class="kt-growth-capture-note">📊 ${escapeHtml(captureNote)}</div>` : ''}
+        <div class="kt-growth-actions-toolbar">
+            <div class="kt-growth-section-label">⚙️ Actions <span class="kt-growth-hint">— explicit steps; nothing fires until you press a button</span></div>
+            <div class="kt-growth-actions-buttons">
+                <button class="mwt-btn mwt-btn-primary" id="kt-growth-capture" title="Extract new behavioral evidence (observations + verbatim quotes) from recent messages and append it to the evidence store. One API call.">🔍 Capture Evidence</button>
+                <button class="mwt-btn mwt-btn-primary" id="kt-growth-regenerate" title="Synthesize the profile from existing evidence (no re-capture). One API call. Disabled if no evidence on file." ${observations.length === 0 ? 'disabled' : ''}>📝 Generate Profile</button>
+                <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims. Consumed raw entries are archived. Disabled if fewer than 2 non-canon raw observations." ${nonCanonRawCount < 2 ? 'disabled' : ''}>🔗 Consolidate</button>
+                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (one-time/bounded).">📦 Backfill</button>
+            </div>
+        </div>
         <div class="kt-growth-evidence">
             <div class="kt-growth-section-label">📊 Evidence (${observations.length} observation${observations.length !== 1 ? 's' : ''}${consolidatedCount > 0 ? `: ${consolidatedCount} consolidated, ${rawCount} raw` : ''}) <span class="kt-growth-hint">— click a claim to edit, 👑 to promote to canon, 🗑 to delete</span></div>
-            ${nonCanonRawCount >= 2 ? `<div class="kt-growth-evidence-tools">
-                <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims (Slice 3). Consumed raw entries are archived, not deleted.">🔗 Consolidate Evidence</button>
-                <button class="mwt-btn" id="kt-growth-regenerate" title="Regenerate the profile from existing evidence without re-capturing">🔄 Regenerate Profile</button>
-                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (Part B). One-time/bounded op.">📦 Backfill from Summaries</button>
-            </div>` : (observations.length > 0 ? `<div class="kt-growth-evidence-tools">
-                <button class="mwt-btn" id="kt-growth-regenerate" title="Regenerate the profile from existing evidence without re-capturing">🔄 Regenerate Profile</button>
-                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (Part B). One-time/bounded op.">📦 Backfill from Summaries</button>
-            </div>` : `<div class="kt-growth-evidence-tools">
-                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (Part B). One-time/bounded op.">📦 Backfill from Summaries</button>
-            </div>`)}
             ${renderObsList('trait', 'Traits')}
             ${renderObsList('value', 'Values')}
             ${renderObsList('speech', 'Speech')}
@@ -1174,6 +1197,29 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         });
     });
 
+    // ── Capture Evidence ──
+    // Extract new behavioral evidence from recent messages and append it to
+    // the evidence store. One API call. After capture, re-render the modal
+    // in place so the new observations appear without closing/reopening.
+    modal.querySelector('#kt-growth-capture')?.addEventListener('click', async () => {
+        const btn = modal.querySelector('#kt-growth-capture');
+        try {
+            btn.disabled = true; btn.textContent = '⏳ Capturing…';
+            flash('Capturing behavioral evidence from recent messages…', 'info');
+            const { runCaptureOnly } = await import('./growth.js');
+            const { observations, captureStats } = await runCaptureOnly(name);
+
+            const addedText = captureStats.added > 0
+                ? `Capture complete: +${captureStats.added} observation${captureStats.added !== 1 ? 's' : ''}${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} skipped)` : ''}.`
+                : `No new observations found${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} already captured)` : ''}.`;
+            await refreshGrowthModalContent(modal, name, triggerBtn, addedText);
+        } catch (err) {
+            flash(`Capture failed: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false; btn.textContent = '🔍 Capture Evidence';
+        }
+    });
+
     // ── Consolidate Evidence (Slice 3) ──
     modal.querySelector('#kt-growth-consolidate')?.addEventListener('click', async () => {
         const btn = modal.querySelector('#kt-growth-consolidate');
@@ -1183,28 +1229,26 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             const { runConsolidation } = await import('./growth.js');
             const { consolidatedCount, archivedCount } = await runConsolidation(name);
 
-            // Close this modal and re-open it fresh to show the consolidated
-            // state. We close first so we don't stack two modals, then trigger
-            // the growth button (which re-runs capture+generate with the
-            // updated evidence store — consolidated entries are read first).
-            modal.remove();
-            if (triggerBtn) {
-                triggerBtn.disabled = false;
-                triggerBtn.textContent = '🌱 Growth';
-                triggerBtn.click();
-            }
+            // Re-render the modal in place so the consolidated state appears
+            // without closing/reopening (which would lose any unsaved profile
+            // edits and the user's scroll position).
+            const msg = `Consolidated into ${consolidatedCount} claim${consolidatedCount !== 1 ? 's' : ''}; ${archivedCount} raw observation${archivedCount !== 1 ? 's' : ''} archived.`;
+            await refreshGrowthModalContent(modal, name, triggerBtn, msg);
         } catch (err) {
             flash(`Consolidation failed: ${err.message}`, 'error');
-            btn.disabled = false; btn.textContent = '🔗 Consolidate Evidence';
+            btn.disabled = false; btn.textContent = '🔗 Consolidate';
         }
     });
 
-    // ── Regenerate Profile (Slice 3) ──
+    // ── Generate Profile ──
+    // Synthesize the profile from existing evidence (no re-capture). One API
+    // call. The new profile populates the editor so the user can review/edit
+    // before saving.
     modal.querySelector('#kt-growth-regenerate')?.addEventListener('click', async () => {
         const btn = modal.querySelector('#kt-growth-regenerate');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Regenerating…';
-            flash('Regenerating profile from existing evidence…', 'info');
+            btn.disabled = true; btn.textContent = '⏳ Generating…';
+            flash('Generating profile from existing evidence…', 'info');
             const { regenerateProfile, looksTruncated } = await import('./growth.js');
             const { observations, profile: newProfile } = await regenerateProfile(name);
             const truncated = looksTruncated(newProfile);
@@ -1216,7 +1260,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             if (statusTextEl) {
                 statusTextEl.textContent = truncated
                     ? '⚠️ Profile may be truncated — see warning below.'
-                    : `Regenerated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}.`;
+                    : `Generated from ${observations.length} observation${observations.length !== 1 ? 's' : ''}.`;
             }
 
             // Re-render the content with the new profile + evidence
@@ -1225,10 +1269,10 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
                 contentEl.innerHTML = renderGrowthProfileContent(name, observations, newProfile, '', truncated, null, null, overrides);
                 wireGrowthProfileEvents(modal, name, newProfile, triggerBtn);
             }
-            flash('Profile regenerated from existing evidence.', 'success');
+            flash('Profile generated from existing evidence.', 'success');
         } catch (err) {
-            flash(`Regeneration failed: ${err.message}`, 'error');
-            btn.disabled = false; btn.textContent = '🔄 Regenerate Profile';
+            flash(`Generation failed: ${err.message}`, 'error');
+            btn.disabled = false; btn.textContent = '📝 Generate Profile';
         }
     });
 
@@ -1244,22 +1288,16 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             const { runIlsBackfillCapture } = await import('./growth.js');
             const result = await runIlsBackfillCapture(name);
 
-            if (result.added > 0) {
-                flash(`Backfill complete: expanded ${result.expandedSummaries} summary(ies), +${result.added} observation(s).`, 'success');
-                // Close and re-open to show the updated evidence
-                modal.remove();
-                if (triggerBtn) {
-                    triggerBtn.disabled = false;
-                    triggerBtn.textContent = '🌱 Growth';
-                    triggerBtn.click();
-                }
-            } else {
-                flash(`Backfill: no new observations found (${result.expandedSummaries} summary(ies) expanded, ${result.skipped} duplicate(s)).`, 'info');
-                btn.disabled = false; btn.textContent = '📦 Backfill from Summaries';
-            }
+            // Re-render the modal in place so the backfilled evidence appears
+            // without closing/reopening (preserves unsaved profile edits and
+            // scroll position). Works whether or not new evidence was added.
+            const msg = result.added > 0
+                ? `Backfill complete: expanded ${result.expandedSummaries} summary(ies), +${result.added} observation(s).`
+                : `Backfill: no new observations (${result.expandedSummaries} summary(ies) expanded, ${result.skipped} duplicate(s)).`;
+            await refreshGrowthModalContent(modal, name, triggerBtn, msg);
         } catch (err) {
             flash(`Backfill failed: ${err.message}`, 'error');
-            btn.disabled = false; btn.textContent = '📦 Backfill from Summaries';
+            btn.disabled = false; btn.textContent = '📦 Backfill';
         }
     });
 
