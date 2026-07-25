@@ -1348,14 +1348,41 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             const result = await runCatchUpCapture(name, onProgress);
 
             // Re-render the modal so the newly captured evidence appears.
-            const msg = result.added > 0
-                ? `Catch-up complete: +${result.added} observation${result.added !== 1 ? 's' : ''} across ${result.batches} batch${result.batches !== 1 ? 'es' : ''}${result.skipped > 0 ? ` (${result.skipped} duplicate${result.skipped !== 1 ? 's' : ''})` : ''}.`
-                : `Catch-up complete — evidence is already current (${result.batches} batch${result.batches !== 1 ? 'es' : ''}, no new observations).`;
+            let msg;
+            if (result.stoppedOnError && result.added === 0) {
+                // Complete failure on the first batch — nothing captured.
+                msg = `Catch-up stopped: ${result.errors[0] || 'unknown error'}.`;
+            } else if (result.stoppedOnError) {
+                // Partial success — phrase chronologically using errorPhase so
+                // the message reads in execution order. Phase 1 (backfill) runs
+                // before Phase 2 (live), so a backfill error followed by live
+                // successes must NOT read "+N … then error" (that's backwards).
+                const errMsg = result.errors[result.errors.length - 1] || 'unknown';
+                const obsWord = result.added !== 1 ? 's' : '';
+                if (result.errorPhase === 'backfill' && result.liveBatches > 0) {
+                    msg = `Catch-up incomplete: backfill stopped on error (${errMsg}), but +${result.added} observation${obsWord} were captured from live messages. Partial evidence was saved.`;
+                } else if (result.errorPhase === 'backfill') {
+                    msg = `Catch-up incomplete: backfill stopped on error (${errMsg}); no live messages were processed. Partial evidence was saved.`;
+                } else {
+                    // errorPhase === 'live' — backfill completed first, then live
+                    // errored. "+N … then error" is chronologically correct here.
+                    const batchWord = result.batches !== 1 ? 'es' : '';
+                    msg = `Catch-up incomplete: +${result.added} observation${obsWord} across ${result.batches} batch${batchWord}, then live capture stopped on error: ${errMsg}. Partial evidence was saved.`;
+                }
+            } else if (result.added > 0) {
+                msg = `Catch-up complete: +${result.added} observation${result.added !== 1 ? 's' : ''} across ${result.batches} batch${result.batches !== 1 ? 'es' : ''}${result.skipped > 0 ? ` (${result.skipped} duplicate${result.skipped !== 1 ? 's' : ''})` : ''}.`;
+            } else {
+                msg = `Catch-up complete — evidence is already current (${result.batches} batch${result.batches !== 1 ? 'es' : ''}, no new observations).`;
+            }
             await refreshGrowthModalContent(modal, name, triggerBtn, msg);
 
             // Fire a toastr notification so the user knows it's done even if
             // they switched away from the modal/tab during the long run.
-            notify('Knowledge Tracker', `Catch-up finished for ${name}: +${result.added} observation(s).`, result.added > 0 ? 'success' : 'info');
+            if (result.stoppedOnError) {
+                notify('Knowledge Tracker', `Catch-up incomplete for ${name}: ${result.errors[result.errors.length - 1] || 'error'}. (+${result.added} captured before failure.)`, 'error');
+            } else {
+                notify('Knowledge Tracker', `Catch-up finished for ${name}: +${result.added} observation(s).`, result.added > 0 ? 'success' : 'info');
+            }
         } catch (err) {
             flash(`Catch-up failed: ${err.message}`, 'error');
             notify('Knowledge Tracker', `Catch-up failed for ${name}: ${err.message}`, 'error');

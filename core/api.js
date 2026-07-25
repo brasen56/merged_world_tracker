@@ -137,11 +137,12 @@ export async function fetchFromApi({
             const err = new Error(
                 `Response truncated — the model hit the Max Tokens limit (${settings.maxTokens}) ` +
                 `before finishing (finish_reason="length"). ` +
-                `Increase "Max Tokens" in the module's Settings. ` +
-                `Reasoning models consume part of the token budget for thinking and need a higher limit; ` +
-                `richer outputs (e.g. Dossier Mode) are also larger.`
+                `Reasoning models consume part of the token budget for thinking; reasoning depth is ` +
+                `non-deterministic so a retry may succeed. Consider increasing "Max Tokens" in Settings.`
             );
-            err._noRetry = true;
+            // Allow retry: reasoning models are non-deterministic — a retry may
+            // use fewer reasoning tokens and finish within budget.
+            err._isLengthError = true;
             throw err;
         }
 
@@ -250,12 +251,13 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
             const err = new Error(
                 `Response truncated — the model hit the Max Tokens limit (${maxTokens}) ` +
                 `before finishing (finish_reason="length"). ` +
-                `Increase "Max Tokens" in the module's Settings — or, if it's already high, ` +
-                `check that the connection profile's own response-length preset isn't capping lower. ` +
-                `Reasoning models consume part of the token budget for thinking and need a higher limit; ` +
-                `richer outputs (e.g. Dossier Mode) are also larger.`
+                `If it's already high, check that the connection profile's own response-length ` +
+                `preset isn't capping lower. Reasoning models consume part of the token budget for ` +
+                `thinking; reasoning depth is non-deterministic so a retry may succeed.`
             );
-            err._noRetry = true;
+            // Allow retry: reasoning models are non-deterministic — a retry may
+            // use fewer reasoning tokens and finish within budget.
+            err._isLengthError = true;
             throw err;
         }
 

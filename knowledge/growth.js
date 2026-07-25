@@ -826,7 +826,7 @@ const DELTA_MAX_MESSAGES = 40;
  * @param {number} sinceTs — the watermark (only messages newer than this)
  * @returns {{text:string, maxTs:number, count:number}|null}
  */
-function buildDeltaWindow(sinceTs) {
+function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
 
@@ -845,11 +845,11 @@ function buildDeltaWindow(sinceTs) {
 
     if (candidates.length < DELTA_MIN_MESSAGES) return null;
 
-    // Process the OLDEST DELTA_MAX_MESSAGES of the delta (A2 fix). If more than
+    // Process the OLDEST `maxMessages` of the delta (A2 fix). If more than
     // the cap accrued since the last cadence fire, processing the oldest batch
     // first and advancing the watermark to its max lets the next fire continue
     // forward — no un-processed messages are leapfrogged.
-    const window = candidates.slice(0, DELTA_MAX_MESSAGES);
+    const window = candidates.slice(0, maxMessages);
 
     const lines = [];
     let maxTs = sinceTs ?? 0;
@@ -882,7 +882,7 @@ function buildDeltaWindow(sinceTs) {
  * @returns {Promise<{added:number, skipped:number, maxTs:number}|null>}
  *   null = nothing to capture (delta too small or NPC not in recent messages)
  */
-export async function runContinuousCapture(name) {
+export async function runContinuousCapture(name, opts = {}) {
     if (!hasValidSettings()) return null;
 
     const registry = getRegistry();
@@ -894,8 +894,13 @@ export async function runContinuousCapture(name) {
     if (uid === null || uid === undefined) return null;
 
     const sinceTs = getCaptureWatermark(name);
-    const delta = buildDeltaWindow(sinceTs);
+    const delta = buildDeltaWindow(sinceTs, opts.maxMessages);
     if (!delta) return null;
+
+    // `_retries` lets the catch-up loop disable ktFetchFromApi's own retry so
+    // the retry count doesn't multiply with adaptive halving (8 calls per
+    // stuck batch). Default keeps the single retry for the auto-capture path.
+    const retries = opts._retries ?? 1;
 
     // Load existing entry as context (same as captureEvidence).
     let existingContext = '';
@@ -922,7 +927,7 @@ export async function runContinuousCapture(name) {
         `Extract behavioral observations about ${name} from these recent messages. Output only JSON.`,
     ].filter(Boolean).join('\n');
 
-    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: 1 });
+    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries });
     const cleaned = normaliseOutput(rawResponse);
     const result = parseJsonLenient(cleaned);
 
@@ -969,26 +974,45 @@ export async function runContinuousCapture(name) {
  * already have evidence files (the registry gate — only profiled NPCs get
  * continuous capture) and runs a delta capture for each.
  *
- * Best-effort: errors for one NPC don't stop the others. Runs silently in the
- * background (no UI staging).
+ * Best-effort: errors for one NPC don't stop the others. Runs in the background
+ * (no UI staging).
  *
- * @returns {Promise<{npc:string, added:number}[]>} per-NPC results (only NPCs
- *   that had something to capture)
+ * Per-NPC failures are CAUGHT SO THE LOOP CONTINUES, but they are also
+ * REPORTED back to the caller rather than swallowed — otherwise a failure
+ * (e.g. a token-limit error) is indistinguishable from "found nothing", and the
+ * caller would notify the user that a failed run completed cleanly.
+ *
+ * `attempted` lets the caller distinguish "ran and found nothing" from "no
+ * eligible NPCs, nothing ran at all".
+ *
+ * @returns {Promise<{
+ *   results: {npc:string, added:number}[],
+ *   errors: {npc:string, message:string, isLength:boolean}[],
+ *   attempted: number
+ * }>}
  */
 export async function runContinuousCaptureAll() {
     const registry = getRegistry();
     const results = [];
+    const errors = [];
+    let attempted = 0;
 
     for (const [name, info] of Object.entries(registry)) {
         // Only major NPCs with existing evidence files get continuous capture.
         // Minor NPCs or those without a profile yet are skipped (registry gate).
         if (info.type !== 'major') continue;
         if (!hasEvidenceFile(name)) continue;
+        attempted++;
         try {
             const res = await runContinuousCapture(name);
             if (res && res.added > 0) results.push({ npc: name, added: res.added });
         } catch (err) {
             console.warn(`[MWT:Knowledge] Continuous capture for "${name}" failed:`, err.message);
+            errors.push({
+                npc: name,
+                message: err?.message || String(err),
+                isLength: !!err?._isLengthError,
+            });
         }
     }
 
@@ -996,7 +1020,10 @@ export async function runContinuousCaptureAll() {
         const total = results.reduce((s, r) => s + r.added, 0);
         console.log(`[MWT:Knowledge] Continuous capture: +${total} observation(s) across ${results.length} NPC(s).`);
     }
-    return results;
+    if (errors.length > 0) {
+        console.warn(`[MWT:Knowledge] Continuous capture: ${errors.length} NPC(s) failed — ${errors.map(e => e.npc).join(', ')}.`);
+    }
+    return { results, errors, attempted };
 }
 
 // ─── ILS de-summarize backfill (Part B — bounded, one-time) ─────────────────
@@ -1043,7 +1070,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
     }
 
-    const { maxMessages = EVIDENCE_MESSAGE_WINDOW } = opts;
+    const { maxMessages = EVIDENCE_MESSAGE_WINDOW, _retries = 1 } = opts;
     const chat = getChat();
     if (!chat || !chat.length) throw new Error('No chat messages.');
 
@@ -1135,7 +1162,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         `Extract behavioral observations about ${name} from these messages. Output only JSON.`,
     ].filter(Boolean).join('\n');
 
-    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: 1 });
+    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: _retries });
     const cleaned = normaliseOutput(rawResponse);
     const result = parseJsonLenient(cleaned);
 
@@ -1224,6 +1251,18 @@ export async function runIlsBackfillCapture(name, opts = {}) {
  *  any real chat — while guaranteeing the loop can never run away. */
 const CATCHUP_MAX_BATCHES = 500;
 
+/** Minimum batch size for adaptive halving. When a backfill or live batch fails
+ *  with a token-limit error, the batch size is halved and retried. This floor
+ *  prevents it from collapsing to 1 (which would be extremely slow). The halving
+ *  sequence from 80 is: 80 → 40 → 20 → 10 (3 halvings), then it gives up. */
+const ADAPTIVE_MIN_BATCH = 10;
+
+/** Number of consecutive successful batches before the batch size grows back up
+ *  (doubled, capped at the original max) after a shrink. Prevents a single rich
+ *  patch from permanently crippling throughput for the rest of a long catch-up
+ *  run — standard AIMD (additive increase, multiplicative decrease). */
+const SUCCESSES_BEFORE_GROW = 3;
+
 /**
  * Run a full catch-up pass for an NPC: loop backfill through all summarized
  * history, then loop continuous capture through all live messages, until both
@@ -1240,9 +1279,13 @@ const CATCHUP_MAX_BATCHES = 500;
  * partial progress is never lost.
  *
  * @param {string} name — NPC name (must exist in the registry)
- * @param {(progress:{phase:string, batch:number, added:number, skipped:number, batchAdded:number, maxTs:number})=>void} [onProgress]
+ * @param {(progress:{phase:string, batch:number, added:number, skipped:number, batchAdded:number, maxTs:number, errors?:number})=>void} [onProgress]
  *   optional callback fired after each batch for UI progress reporting
- * @returns {Promise<{added:number, skipped:number, batches:number, backfillBatches:number, liveBatches:number}>}
+ * @returns {Promise<{added:number, skipped:number, batches:number, backfillBatches:number, liveBatches:number, errors:string[], stoppedOnError:boolean, errorPhase:?string}>}
+ *   `errorPhase` = 'backfill' | 'live' | null — names which phase stopped,
+ *   so the UI can phrase the message chronologically (e.g. "error in
+ *   backfill, then +N from live messages" vs the old "+N then stopped on
+ *   error" which read backwards when Phase 1 failed but Phase 2 succeeded).
  */
 export async function runCatchUpCapture(name, onProgress) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
@@ -1259,6 +1302,16 @@ export async function runCatchUpCapture(name, onProgress) {
     let totalSkipped = 0;
     let backfillBatches = 0;
     let liveBatches = 0;
+    const errors = [];
+    let stoppedOnError = false;
+    let errorPhase = null; // 'backfill' | 'live' | null — which phase stopped.
+
+    // Adaptive halving is the ONLY retry mechanism inside catch-up. Each
+    // underlying call passes `_retries: 0` to ktFetchFromApi so the API-level
+    // retry doesn't multiply with halving (otherwise a stuck batch costs up to
+    // 8 full-size calls — 2 retries × 4 halving steps — each carrying the full
+    // constant overhead). Reasoning-model non-determinism is exploited by the
+    // halving itself: a smaller batch is likelier to finish within budget.
 
     // ── Phase 1: Loop ILS backfill until the backfill watermark catches up ──
     //
@@ -1266,20 +1319,64 @@ export async function runCatchUpCapture(name, onProgress) {
     // the forward-walking `lastBackfillTs` cursor. The loop ends when the
     // watermark stops advancing (= no more pending history to process) or the
     // safety cap is hit.
+    //
+    // On a token-limit (length) error, the batch size is halved and retried
+    // (adaptive halving). Reasoning models are non-deterministic — a batch of
+    // 80 messages that spiraled past the token budget will often succeed as two
+    // batches of 40. This lets catch-up push through rich content that would
+    // otherwise dead-end the whole run.
+    //
+    // AIMD recovery: after SUCCESSES_BEFORE_GROW consecutive successes the
+    // batch size doubles (capped at the original max). This stops a single
+    // rich patch from permanently crippling throughput for the rest of a long
+    // run — without it, a 1000-message backfill stuck at batch size 10 would
+    // take ~100 calls instead of ~13.
     {
         let prevTs = getBackfillWatermark(name) ?? 0;
+        let batchSize = EVIDENCE_MESSAGE_WINDOW;
+        let successes = 0;
         for (let i = 0; i < CATCHUP_MAX_BATCHES; i++) {
             let result;
             try {
-                result = await runIlsBackfillCapture(name);
+                result = await runIlsBackfillCapture(name, { maxMessages: batchSize, _retries: 0 });
             } catch (err) {
-                // A batch failure stops the loop but keeps partial progress.
+                // Length error → halve the batch and retry the SAME messages.
+                // The watermark hasn't advanced (the error happens before
+                // setBackfillWatermark), so a smaller batch re-attempts the
+                // oldest pending messages.
+                successes = 0; // reset AIMD success streak
+                if (err._isLengthError && batchSize > ADAPTIVE_MIN_BATCH) {
+                    const halved = Math.max(ADAPTIVE_MIN_BATCH, Math.floor(batchSize / 2));
+                    console.warn(
+                        `[MWT:Knowledge] Catch-up backfill batch ${i + 1} hit token limit at ${batchSize} msgs. ` +
+                        `Halving to ${halved} and retrying.`
+                    );
+                    batchSize = halved;
+                    i--; // don't consume a loop iteration for the retry
+                    continue;
+                }
+                // Non-length error, or already at minimum batch size — record
+                // and stop the phase. Partial progress (prior batches + their
+                // watermark advances) is retained.
                 console.warn(`[MWT:Knowledge] Catch-up backfill batch ${i + 1} failed:`, err.message);
+                errors.push(`Backfill batch ${i + 1}: ${err.message}`);
+                stoppedOnError = true;
+                errorPhase = 'backfill';
                 break;
             }
             totalAdded += result.added || 0;
             totalSkipped += result.skipped || 0;
             backfillBatches++;
+            // AIMD: grow the batch back up after a streak of successes so a
+            // one-off rich patch doesn't shrink the whole run.
+            if (++successes >= SUCCESSES_BEFORE_GROW) {
+                const grown = Math.min(EVIDENCE_MESSAGE_WINDOW, batchSize * 2);
+                if (grown > batchSize) {
+                    console.log(`[MWT:Knowledge] Catch-up backfill: ${successes} successes, growing batch ${batchSize} → ${grown}.`);
+                    batchSize = grown;
+                }
+                successes = 0;
+            }
             if (onProgress) onProgress({
                 phase: 'backfill',
                 batch: backfillBatches,
@@ -1287,6 +1384,7 @@ export async function runCatchUpCapture(name, onProgress) {
                 skipped: totalSkipped,
                 batchAdded: result.added || 0,
                 maxTs: result.maxTs || 0,
+                errors: errors.length,
             });
             // Watermark didn't advance → caught up (or no summaries exist).
             const curTs = result.maxTs || 0;
@@ -1301,19 +1399,46 @@ export async function runCatchUpCapture(name, onProgress) {
     // (< DELTA_MIN_MESSAGES) — that means we're within a few messages of "now"
     // and further batches would be noise. The remaining stragglers are picked
     // up by the next regular capture or the auto-capture cadence.
+    //
+    // Same adaptive-halving + AIMD strategy as Phase 1 on length errors.
     {
+        let batchSize = DELTA_MAX_MESSAGES;
+        let successes = 0;
         for (let i = 0; i < CATCHUP_MAX_BATCHES; i++) {
             let result;
             try {
-                result = await runContinuousCapture(name);
+                result = await runContinuousCapture(name, { maxMessages: batchSize, _retries: 0 });
             } catch (err) {
+                successes = 0;
+                if (err._isLengthError && batchSize > ADAPTIVE_MIN_BATCH) {
+                    const halved = Math.max(ADAPTIVE_MIN_BATCH, Math.floor(batchSize / 2));
+                    console.warn(
+                        `[MWT:Knowledge] Catch-up live batch ${i + 1} hit token limit at ${batchSize} msgs. ` +
+                        `Halving to ${halved} and retrying.`
+                    );
+                    batchSize = halved;
+                    i--;
+                    continue;
+                }
                 console.warn(`[MWT:Knowledge] Catch-up live batch ${i + 1} failed:`, err.message);
+                errors.push(`Live batch ${i + 1}: ${err.message}`);
+                stoppedOnError = true;
+                errorPhase = 'live';
                 break;
             }
             if (!result) break; // delta too small or nothing to capture
             totalAdded += result.added || 0;
             totalSkipped += result.skipped || 0;
             liveBatches++;
+            // AIMD grow (same as Phase 1).
+            if (++successes >= SUCCESSES_BEFORE_GROW) {
+                const grown = Math.min(DELTA_MAX_MESSAGES, batchSize * 2);
+                if (grown > batchSize) {
+                    console.log(`[MWT:Knowledge] Catch-up live: ${successes} successes, growing batch ${batchSize} → ${grown}.`);
+                    batchSize = grown;
+                }
+                successes = 0;
+            }
             if (onProgress) onProgress({
                 phase: 'live',
                 batch: liveBatches,
@@ -1321,13 +1446,15 @@ export async function runCatchUpCapture(name, onProgress) {
                 skipped: totalSkipped,
                 batchAdded: result.added || 0,
                 maxTs: result.maxTs || 0,
+                errors: errors.length,
             });
         }
     }
 
     console.log(
         `[MWT:Knowledge] Catch-up for "${name}": ${backfillBatches} backfill batch(es), ` +
-        `${liveBatches} live batch(es), +${totalAdded} observation(s), ${totalSkipped} duplicate(s).`
+        `${liveBatches} live batch(es), +${totalAdded} observation(s), ${totalSkipped} duplicate(s)` +
+        (errors.length > 0 ? `, ${errors.length} error(s).` : '.')
     );
 
     return {
@@ -1336,5 +1463,8 @@ export async function runCatchUpCapture(name, onProgress) {
         batches: backfillBatches + liveBatches,
         backfillBatches,
         liveBatches,
+        errors,
+        stoppedOnError,
+        errorPhase,
     };
 }

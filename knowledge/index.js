@@ -118,20 +118,60 @@ export function onMessageReceived() {
     if (doGrowth) {
         const ctxG = getContextSafe();
         const chatKeyG = `${ctxG?.characterId ?? ''}|${ctxG?.groupId ?? ''}|${ctxG?.chatId ?? ''}`;
-        runContinuousCaptureAll().then(results => {
+        // Start toast is gated behind a debug setting. At the default cadence
+        // (every 15 messages) firing a toast every cycle is noisy for normal
+        // roleplay. Completion toasts fire only on actual results/errors.
+        if (settings.growthDebugToasts) {
+            import('../core/index.js').then(({ notify }) =>
+                notify('Knowledge Tracker', '🌱 Auto-capturing growth evidence…', 'info')
+            );
+        }
+        runContinuousCaptureAll().then(async ({ results, errors }) => {
             const ctxAfter = getContextSafe();
             const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
             if (chatKeyAfter !== chatKeyG) {
                 console.log('[MWT:Knowledge] Continuous capture results discarded — chat changed during API call.');
+                // If the start toast was shown (debug mode), resolve it so the
+                // user isn't left with a dangling "Auto-capturing…" popup that
+                // never completes. A quiet "cancelled" note explains the
+                // disappearance.
+                if (settings.growthDebugToasts) {
+                    const { notify } = await import('../core/index.js');
+                    notify('Knowledge Tracker', '🌱 Growth capture cancelled (chat changed).', 'info');
+                }
                 return;
             }
-            if (results.length > 0) {
-                const total = results.reduce((s, r) => s + r.added, 0);
-                import('../core/index.js').then(({ notify }) =>
-                    notify('Knowledge Tracker', `Growth capture: +${total} observation(s) for ${results.length} NPC(s).`, 'info')
-                );
+            const { notify } = await import('../core/index.js');
+            const total = results.reduce((s, r) => s + r.added, 0);
+
+            // Only notify on meaningful outcomes. Firing a "no new observations
+            // found" toast every cadence cycle (default 15 msgs) is noisy in
+            // normal roleplay — that's the no-op case, not a result the user
+            // needs to know about.
+            //
+            // Failures are ALWAYS reported: runContinuousCaptureAll catches
+            // per-NPC errors so one bad NPC doesn't stop the rest, which means
+            // a failed run resolves with empty results. Reporting `errors`
+            // explicitly stops a token-limit failure from being mistaken for a
+            // clean "found nothing".
+            if (errors.length > 0) {
+                const lengthErrs = errors.filter(e => e.isLength);
+                const detail = lengthErrs.length > 0
+                    ? `token limit hit for ${lengthErrs.map(e => e.npc).join(', ')} — raise Max Tokens or lower the capture cadence`
+                    : errors[0].message;
+                const partial = total > 0 ? ` (+${total} captured for ${results.length} other NPC(s))` : '';
+                notify('Knowledge Tracker', `🌱 Growth capture failed for ${errors.length} NPC(s): ${detail}.${partial}`, 'error');
+            } else if (results.length > 0) {
+                notify('Knowledge Tracker', `🌱 Growth capture done: +${total} observation(s) for ${results.length} NPC(s).`, 'success');
             }
-        }).catch(err => console.warn('[MWT:Knowledge] Continuous capture pass failed:', err.message));
+            // No toast for "attempted but found nothing" — that's the quiet
+            // no-op path. Errors (above) are the exception.
+        }).catch(err => {
+            console.warn('[MWT:Knowledge] Continuous capture pass failed:', err.message);
+            import('../core/index.js').then(({ notify }) =>
+                notify('Knowledge Tracker', `🌱 Growth capture failed: ${err.message}`, 'error')
+            );
+        });
     }
 
     if (!doState && !doNpc) return;
