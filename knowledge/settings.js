@@ -29,6 +29,12 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // appearance, voice, background, secrets, agenda, etc.) stored in the
         // same lorebook entries. When OFF (default), uses the minimal format.
         dossierMode: false,
+        // Continuous growth evidence capture (Part A — summary-proof by
+        // construction). When ON, captures behavioral observations for major
+        // profiled NPCs on a message cadence, appending to the raw evidence
+        // tier. Uses a ts watermark so only the delta is processed.
+        growthAutoCaptureEnabled: false,
+        growthAutoCaptureEveryN: 15,
     },
     logPrefix: '[MWT:Knowledge]',
 });
@@ -70,6 +76,13 @@ export function showKnowledgeSettings() {
             <label><input type="checkbox" id="kt-cfg-dossier-mode" ${s.dossierMode ? 'checked' : ''}> 📋 Dossier Mode (richer NPC entries)</label>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, NPC scans capture detailed dossier fields (role, appearance, voice, background, personality, secrets, agenda, canon lock, etc.). Major NPCs gain an <strong>📋 Enrich</strong> button to fill in all dossier fields from chat history. Entries stay in the same lorebook. Off = the minimal format.</p>
         </div>
+        <div style="margin-top:12px">
+            <label><input type="checkbox" id="kt-cfg-growth-auto" ${s.growthAutoCaptureEnabled ? 'checked' : ''}> 🌱 Auto-capture growth evidence (continuous)</label>
+            <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                <label style="font-size:12px;color:var(--mwt-text-dim)">Every <input type="number" id="kt-cfg-growth-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.growthAutoCaptureEveryN || 15}" min="1" max="100"> messages</label>
+            </div>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, captures behavioral observations for major profiled NPCs on a message cadence and appends them to the raw evidence tier. Uses a timestamp watermark so only the <em>delta</em> (new messages) is processed — summary-proof by construction (observations are distilled while raw messages are live). Only affects NPCs that already have a growth evidence file; run "Generate growth profile" once per NPC to enroll it.</p>
+        </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8" style="margin-top:12px">
             <button id="kt-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
             <button id="kt-cancel-settings" class="mwt-btn">Cancel</button>
@@ -90,6 +103,8 @@ export function showKnowledgeSettings() {
             npcAutoScanEnabled: el.querySelector('#kt-cfg-npc-autoscan')?.checked ?? false,
             npcAutoScanEveryN: Number(el.querySelector('#kt-cfg-npc-every')?.value) || 10,
             dossierMode: el.querySelector('#kt-cfg-dossier-mode')?.checked ?? false,
+            growthAutoCaptureEnabled: el.querySelector('#kt-cfg-growth-auto')?.checked ?? false,
+            growthAutoCaptureEveryN: Number(el.querySelector('#kt-cfg-growth-every')?.value) || 15,
         });
         state.activeSubTab = 'staging';
         import('./render.js').then(({ renderNpcsSubTab }) => renderNpcsSubTab());

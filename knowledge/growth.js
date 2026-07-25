@@ -30,7 +30,7 @@
  */
 
 import {
-    getChat, stripNonNarrative, getCurrentWorldState,
+    getChat, getChatMeta, stripNonNarrative, getCurrentWorldState,
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
 } from '../core/index.js';
 import { hasValidSettings } from './settings.js';
@@ -41,8 +41,10 @@ import {
     hasEvidenceFile,
     getRawForConsolidation, applyConsolidation,
     getUserOverrides,
+    getCaptureWatermark, setCaptureWatermark,
 } from './evidence.js';
 import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
+import { expandIlsSummaries, isIlsSummary, normalizeSendDate } from './ils_compat.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -712,4 +714,366 @@ export async function regenerateProfile(name) {
     }
 
     return { observations: allEvidence, profile: finalProfile, canon };
+}
+
+// ─── Continuous incremental capture (Part A — the primary fix) ───────────────
+//
+// Implements NPC_GROWTH_BLUEPRINT.md §"(A) Continuous incremental capture".
+//
+// Moves capture from a one-shot 80-message rescan to an append-as-you-go
+// stream keyed on a `ts` watermark. On a message cadence (reuse the existing
+// COUNTERS_META_KEY / npcMessageCounter), we process only the delta — messages
+// newer than the watermark — and append to raw[].
+//
+// Summary-proof by construction: observations (verbatim quote + real ts) are
+// distilled while the raw messages are live, so later summarization can't
+// touch them. Works for ILS, built-in Summarize, qvink — zero coupling to any
+// summarizer. Also fixes the token cost: a delta window is small, versus the
+// 53–87k-token full-window rescans observed in Slice 1 testing.
+
+/** Minimum delta size (in messages) before a continuous capture fires. Avoids
+ *  spamming the API on rapid-fire exchanges with little new material. */
+const DELTA_MIN_MESSAGES = 4;
+
+/** Maximum delta size (in messages) for a single continuous capture pass.
+ *  Bounds the per-call token cost. If the delta is larger (e.g. the extension
+ *  was offline for a while), we process the most recent DELTA_MAX_MESSAGES. */
+const DELTA_MAX_MESSAGES = 40;
+
+/**
+ * Build a formatted message string from a delta window — only messages newer
+ * than the watermark. Skips ILS summary messages (they are not verbatim text)
+ * and system messages.
+ *
+ * Returns the formatted string, the max ts among the included messages, and
+ * the count of included messages. If no messages qualify, returns null.
+ *
+ * @param {number} sinceTs — the watermark (only messages newer than this)
+ * @returns {{text:string, maxTs:number, count:number}|null}
+ */
+function buildDeltaWindow(sinceTs) {
+    const chat = getChat();
+    if (!chat || !chat.length) return null;
+
+    // Collect live (non-summary) messages newer than the watermark.
+    const candidates = [];
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (!msg || !msg.mes || msg.is_system) continue;
+        // Skip ILS summaries on the continuous path — they contain paraphrased
+        // text, not verbatim quotes. Backfill (Part B) handles them separately.
+        if (isIlsSummary(msg)) continue;
+        const ts = normalizeSendDate(msg.send_date);
+        if (sinceTs != null && ts <= sinceTs) continue;
+        candidates.push({ msg, idx: i, ts });
+    }
+
+    if (candidates.length < DELTA_MIN_MESSAGES) return null;
+
+    // Cap at the most recent DELTA_MAX_MESSAGES.
+    const window = candidates.slice(-DELTA_MAX_MESSAGES);
+
+    const lines = [];
+    let maxTs = sinceTs ?? 0;
+    for (const { msg, idx, ts } of window) {
+        const name = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
+        const text = stripNonNarrative(msg.mes).trim();
+        if (!text) continue;
+        lines.push(`[${idx}] ${name}: ${text}`);
+        if (ts > maxTs) maxTs = ts;
+    }
+
+    if (lines.length === 0) return null;
+    return { text: lines.join('\n'), maxTs, count: lines.length };
+}
+
+/**
+ * Run a continuous (incremental) evidence capture pass for a single NPC.
+ *
+ * Processes only the delta — messages newer than the NPC's `lastCaptureTs`
+ * watermark — and appends observations to raw[]. Advances the watermark.
+ *
+ * This is the everyday path (Part A). It is summary-proof: observations are
+ * distilled while messages are live, so later summarization can't touch them.
+ *
+ * Returns null if there's nothing new to capture (delta too small). Never
+ * throws on "no observations found" — continuous capture is best-effort and
+ * runs silently in the background.
+ *
+ * @param {string} name — NPC name (must exist in the registry)
+ * @returns {Promise<{added:number, skipped:number, maxTs:number}|null>}
+ *   null = nothing to capture (delta too small or NPC not in recent messages)
+ */
+export async function runContinuousCapture(name) {
+    if (!hasValidSettings()) return null;
+
+    const registry = getRegistry();
+    const info = registry[name];
+    if (!info) return null;
+    const uid = info.uid;
+    // An NPC without a lorebook entry yet can't have evidence captured (no
+    // context to load). Skip silently.
+    if (uid === null || uid === undefined) return null;
+
+    const sinceTs = getCaptureWatermark(name);
+    const delta = buildDeltaWindow(sinceTs);
+    if (!delta) return null;
+
+    // Load existing entry as context (same as captureEvidence).
+    let existingContext = '';
+    try {
+        const content = await loadEntryContent(uid);
+        if (content) existingContext = content;
+    } catch { /* ignore */ }
+
+    const worldState = getCurrentWorldState();
+    const chronicle = getLatestChronicleEntry();
+
+    const userContent = [
+        `<target_npc>${name}</target_npc>`,
+        '',
+        existingContext ? `<existing_context>\n${existingContext}\n</existing_context>` : '',
+        worldState ? `<world_state>\n${worldState}\n</world_state>` : '',
+        chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '',
+        '',
+        '<recent_messages>',
+        delta.text,
+        '</recent_messages>',
+        '',
+        '='.repeat(60),
+        `Extract behavioral observations about ${name} from these recent messages. Output only JSON.`,
+    ].filter(Boolean).join('\n');
+
+    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: 1 });
+    const cleaned = normaliseOutput(rawResponse);
+    const result = parseJsonLenient(cleaned);
+
+    const observations = Array.isArray(result.observations) ? result.observations : [];
+    const chat = getChat() || [];
+
+    // Validate quotes (same two-stage pipeline as captureEvidence).
+    const admitted = observations.filter(o =>
+        o && typeof o.claim === 'string' && o.claim.trim() &&
+        typeof o.quote === 'string' && o.quote.trim()
+    ).map(o => {
+        const quote = String(o.quote).trim();
+        const citedIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
+        const matchIdx = findQuoteMatch(quote, citedIdx, chat);
+        const verified = matchIdx !== -1;
+        return {
+            category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
+            claim: String(o.claim).trim(),
+            quote,
+            msgIdx: verified ? matchIdx : citedIdx,
+            verified,
+        };
+    });
+
+    const stats = appendRawObservations(name, admitted);
+
+    // Advance the watermark regardless of whether observations were found —
+    // the messages were processed and we don't want to re-scan them.
+    setCaptureWatermark(name, delta.maxTs);
+
+    if (stats.added > 0) {
+        console.log(`[MWT:Knowledge] Continuous capture for "${name}": +${stats.added} observation(s) from ${delta.count} delta message(s).`);
+    }
+
+    return { ...stats, maxTs: delta.maxTs };
+}
+
+/**
+ * Run continuous capture for ALL major NPCs with evidence files, on a message
+ * cadence. Called from the knowledge module's onMessageReceived when the growth
+ * counter hits its threshold.
+ *
+ * This is the auto-trigger entry point for Part A. It iterates major NPCs that
+ * already have evidence files (the registry gate — only profiled NPCs get
+ * continuous capture) and runs a delta capture for each.
+ *
+ * Best-effort: errors for one NPC don't stop the others. Runs silently in the
+ * background (no UI staging).
+ *
+ * @returns {Promise<{npc:string, added:number}[]>} per-NPC results (only NPCs
+ *   that had something to capture)
+ */
+export async function runContinuousCaptureAll() {
+    const registry = getRegistry();
+    const results = [];
+
+    for (const [name, info] of Object.entries(registry)) {
+        // Only major NPCs with existing evidence files get continuous capture.
+        // Minor NPCs or those without a profile yet are skipped (registry gate).
+        if (info.type !== 'major') continue;
+        if (!hasEvidenceFile(name)) continue;
+        try {
+            const res = await runContinuousCapture(name);
+            if (res && res.added > 0) results.push({ npc: name, added: res.added });
+        } catch (err) {
+            console.warn(`[MWT:Knowledge] Continuous capture for "${name}" failed:`, err.message);
+        }
+    }
+
+    if (results.length > 0) {
+        const total = results.reduce((s, r) => s + r.added, 0);
+        console.log(`[MWT:Knowledge] Continuous capture: +${total} observation(s) across ${results.length} NPC(s).`);
+    }
+    return results;
+}
+
+// ─── ILS de-summarize backfill (Part B — bounded, one-time) ─────────────────
+//
+// Implements NPC_GROWTH_BLUEPRINT.md §"(B) ILS de-summarize backfill".
+//
+// Continuous capture (Part A) can't retroactively cover history summarized
+// BEFORE it was active. For that, we expand ILS summary messages back to their
+// originals and capture from the verbatim text.
+//
+// This is a BOUNDED, ONE-TIME op — never per-turn. Expansion re-inflates
+// exactly the tokens ILS compressed; a full de-summarized scan is the 87k
+// problem amplified. Continuous capture (A) is the everyday path; (B) is for
+// backfilling old summarized history.
+
+/**
+ * Run a one-time ILS de-summarize backfill capture for a single NPC.
+ *
+ * Expands ILS summary messages to their verbatim originals (from
+ * chatMetadata.ILS_Originals), then captures behavioral evidence from the
+ * de-summarized window. Observations are appended to raw[] and the watermark
+ * is advanced to cover the backfilled span.
+ *
+ * READ-ONLY with respect to ILS data: this never writes to or GCs
+ * ILS_Originals. It only reads originals from chat metadata.
+ *
+ * Use this when:
+ *   - A chat was summarized before continuous capture (Part A) was active
+ *   - You want to recover evidence from the now-hidden original messages
+ *
+ * @param {string} name — NPC name (must exist in the registry)
+ * @param {object} [opts]
+ * @param {number} [opts.maxMessages=80] — cap on total de-summarized messages
+ * @returns {Promise<{added:number, skipped:number, expandedSummaries:number, maxTs:number}|null>}
+ */
+export async function runIlsBackfillCapture(name, opts = {}) {
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+
+    const registry = getRegistry();
+    const info = registry[name];
+    if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
+    const uid = info.uid;
+    if (uid === null || uid === undefined) {
+        throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
+    }
+
+    const { maxMessages = EVIDENCE_MESSAGE_WINDOW } = opts;
+    const chat = getChat();
+    if (!chat || !chat.length) throw new Error('No chat messages.');
+
+    const chatMeta = getChatMeta();
+    const sinceTs = getCaptureWatermark(name);
+
+    // Expand all ILS summaries, filtering to messages newer than the watermark.
+    const expanded = expandIlsSummaries(chat, chatMeta, { sinceTs });
+
+    // Count how many summaries were expanded (for reporting).
+    const summaryIndices = new Set();
+    for (let i = 0; i < chat.length; i++) {
+        if (isIlsSummary(chat[i])) summaryIndices.add(i);
+    }
+
+    if (expanded.length === 0) {
+        return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs: sinceTs ?? 0 };
+    }
+
+    // Cap at the most recent `maxMessages` de-summarized entries to bound cost.
+    const window = expanded.slice(-maxMessages);
+
+    // Build the formatted message string for the evidence prompt. We use the
+    // ORIGINAL message text (verbatim), not the summary. The idx is synthetic
+    // (points at the summary position, not the original array position) — this
+    // is consistent with the blueprint's "ts canonical, msgIdx diagnostic" rule.
+    const lines = [];
+    let maxTs = sinceTs ?? 0;
+    for (const entry of window) {
+        const msg = entry.msg;
+        if (!msg || !msg.mes || msg.is_system) continue;
+        const name2 = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
+        const text = stripNonNarrative(msg.mes).trim();
+        if (!text) continue;
+        // Mark expanded originals so the user can distinguish them in logs.
+        const tag = entry.fromSummary ? '[restored]' : '';
+        lines.push(`${tag}[${entry.idx}] ${name2}: ${text}`);
+        if (entry.ts > maxTs) maxTs = entry.ts;
+    }
+
+    if (lines.length === 0) {
+        return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs };
+    }
+
+    // Load existing entry as context.
+    let existingContext = '';
+    try {
+        const content = await loadEntryContent(uid);
+        if (content) existingContext = content;
+    } catch { /* ignore */ }
+
+    const worldState = getCurrentWorldState();
+    const chronicle = getLatestChronicleEntry();
+
+    const userContent = [
+        `<target_npc>${name}</target_npc>`,
+        '',
+        existingContext ? `<existing_context>\n${existingContext}\n</existing_context>` : '',
+        worldState ? `<world_state>\n${worldState}\n</world_state>` : '',
+        chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '',
+        '',
+        '<messages>',
+        lines.join('\n'),
+        '</messages>',
+        '',
+        '='.repeat(60),
+        `Extract behavioral observations about ${name} from these messages. Output only JSON.`,
+    ].filter(Boolean).join('\n');
+
+    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: 1 });
+    const cleaned = normaliseOutput(rawResponse);
+    const result = parseJsonLenient(cleaned);
+
+    const observations = Array.isArray(result.observations) ? result.observations : [];
+
+    // For backfill, quote verification is relaxed: the original messages may
+    // not be at their cited indices (they came from inside summaries). We
+    // search the expanded window instead of the live chat array.
+    const expandedMessages = window.map(e => e.msg);
+    const admitted = observations.filter(o =>
+        o && typeof o.claim === 'string' && o.claim.trim() &&
+        typeof o.quote === 'string' && o.quote.trim()
+    ).map(o => {
+        const quote = String(o.quote).trim();
+        // Try the live chat first (the quote might be from a non-summary msg).
+        const citedIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
+        let matchIdx = findQuoteMatch(quote, citedIdx, chat);
+        // If not found in live chat, search the expanded originals.
+        if (matchIdx === -1) {
+            matchIdx = findQuoteMatch(quote, null, expandedMessages);
+        }
+        const verified = matchIdx !== -1;
+        return {
+            category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
+            claim: String(o.claim).trim(),
+            quote,
+            msgIdx: verified ? matchIdx : citedIdx,
+            verified,
+        };
+    });
+
+    const stats = appendRawObservations(name, admitted);
+    setCaptureWatermark(name, maxTs);
+
+    console.log(
+        `[MWT:Knowledge] ILS backfill for "${name}": expanded ${summaryIndices.size} summary(ies) to ${lines.length} ` +
+        `original(s), +${stats.added} observation(s).`
+    );
+
+    return { ...stats, expandedSummaries: summaryIndices.size, maxTs };
 }

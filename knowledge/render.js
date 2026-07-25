@@ -918,9 +918,13 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             ${nonCanonRawCount >= 2 ? `<div class="kt-growth-evidence-tools">
                 <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims (Slice 3). Consumed raw entries are archived, not deleted.">🔗 Consolidate Evidence</button>
                 <button class="mwt-btn" id="kt-growth-regenerate" title="Regenerate the profile from existing evidence without re-capturing">🔄 Regenerate Profile</button>
+                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (Part B). One-time/bounded op.">📦 Backfill from Summaries</button>
             </div>` : (observations.length > 0 ? `<div class="kt-growth-evidence-tools">
                 <button class="mwt-btn" id="kt-growth-regenerate" title="Regenerate the profile from existing evidence without re-capturing">🔄 Regenerate Profile</button>
-            </div>` : '')}
+                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (Part B). One-time/bounded op.">📦 Backfill from Summaries</button>
+            </div>` : `<div class="kt-growth-evidence-tools">
+                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (Part B). One-time/bounded op.">📦 Backfill from Summaries</button>
+            </div>`)}
             ${renderObsList('trait', 'Traits')}
             ${renderObsList('value', 'Values')}
             ${renderObsList('speech', 'Speech')}
@@ -1225,6 +1229,37 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         } catch (err) {
             flash(`Regeneration failed: ${err.message}`, 'error');
             btn.disabled = false; btn.textContent = '🔄 Regenerate Profile';
+        }
+    });
+
+    // ── ILS Backfill (Part B) ──
+    // Expands ILS summary messages to their verbatim originals (from
+    // chatMetadata.ILS_Originals) and captures evidence from the restored
+    // text. READ-ONLY with respect to ILS data. Bounded/one-time op.
+    modal.querySelector('#kt-growth-backfill')?.addEventListener('click', async () => {
+        const btn = modal.querySelector('#kt-growth-backfill');
+        try {
+            btn.disabled = true; btn.textContent = '⏳ Backfilling…';
+            flash('Backfilling evidence from ILS summaries…', 'info');
+            const { runIlsBackfillCapture } = await import('./growth.js');
+            const result = await runIlsBackfillCapture(name);
+
+            if (result.added > 0) {
+                flash(`Backfill complete: expanded ${result.expandedSummaries} summary(ies), +${result.added} observation(s).`, 'success');
+                // Close and re-open to show the updated evidence
+                modal.remove();
+                if (triggerBtn) {
+                    triggerBtn.disabled = false;
+                    triggerBtn.textContent = '🌱 Growth';
+                    triggerBtn.click();
+                }
+            } else {
+                flash(`Backfill: no new observations found (${result.expandedSummaries} summary(ies) expanded, ${result.skipped} duplicate(s)).`, 'info');
+                btn.disabled = false; btn.textContent = '📦 Backfill from Summaries';
+            }
+        } catch (err) {
+            flash(`Backfill failed: ${err.message}`, 'error');
+            btn.disabled = false; btn.textContent = '📦 Backfill from Summaries';
         }
     });
 

@@ -62,6 +62,9 @@ export const state = {
     // ── Runtime state ──
     messageCounter: 0,
     npcMessageCounter: 0,
+    /** Counter for continuous growth evidence capture (Part A). Fires on a
+     *  separate cadence from npcMessageCounter so users can tune it. */
+    growthMessageCounter: 0,
     /** Last observed chat length, used by onMessageDeleted to compute how many
      *  messages were removed during bulk deletes (e.g. "delete above/below"). */
     lastChatLength: 0,

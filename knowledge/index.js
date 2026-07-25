@@ -12,6 +12,7 @@ import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js
 import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
+import { runContinuousCaptureAll } from './growth.js';
 import {
     renderNpcsSubTab,
     addNotificationEntry, removeNotificationEntry,
@@ -31,6 +32,7 @@ export function persistCounters() {
     patchChatMeta(COUNTERS_META_KEY, {
         messageCounter: state.messageCounter,
         npcMessageCounter: state.npcMessageCounter,
+        growthMessageCounter: state.growthMessageCounter,
     });
 }
 
@@ -66,7 +68,8 @@ export function onMessageReceived() {
     const settings = getSettings();
     const stateAuto = !!settings.autoTriggerEnabled;
     const npcAuto = !!settings.npcAutoScanEnabled;
-    if (!stateAuto && !npcAuto) return;
+    const growthAuto = !!settings.growthAutoCaptureEnabled;
+    if (!stateAuto && !npcAuto && !growthAuto) return;
     if (!hasValidSettings()) return;
 
     // Track chat length so onMessageDeleted can compute the number of removed
@@ -94,9 +97,42 @@ export function onMessageReceived() {
         }
     }
 
+    let doGrowth = false;
+    if (growthAuto) {
+        const everyN = Math.max(1, Number(settings.growthAutoCaptureEveryN) || 15);
+        state.growthMessageCounter++;
+        if (state.growthMessageCounter >= everyN) {
+            state.growthMessageCounter = 0;
+            doGrowth = true;
+        }
+    }
+
     // Persist counters so they survive reloads and chat switches (mirrors World
     // State, Chronicle, and Story Planner behaviour).
     persistCounters();
+
+    // Continuous growth capture (Part A) runs on its own cadence and does NOT
+    // go through the staging queue — it appends silently to the evidence store
+    // (no UI staging). Fire it independently so it doesn't block on scan/state
+    // work, and guard against cross-chat contamination.
+    if (doGrowth) {
+        const ctxG = getContextSafe();
+        const chatKeyG = `${ctxG?.characterId ?? ''}|${ctxG?.groupId ?? ''}|${ctxG?.chatId ?? ''}`;
+        runContinuousCaptureAll().then(results => {
+            const ctxAfter = getContextSafe();
+            const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
+            if (chatKeyAfter !== chatKeyG) {
+                console.log('[MWT:Knowledge] Continuous capture results discarded — chat changed during API call.');
+                return;
+            }
+            if (results.length > 0) {
+                const total = results.reduce((s, r) => s + r.added, 0);
+                import('../core/index.js').then(({ notify }) =>
+                    notify('Knowledge Tracker', `Growth capture: +${total} observation(s) for ${results.length} NPC(s).`, 'info')
+                );
+            }
+        }).catch(err => console.warn('[MWT:Knowledge] Continuous capture pass failed:', err.message));
+    }
 
     if (!doState && !doNpc) return;
 
@@ -217,6 +253,7 @@ export function onChatChanged() {
     const saved = getChatMeta()?.[COUNTERS_META_KEY];
     state.messageCounter = (typeof saved?.messageCounter === 'number' && Number.isFinite(saved.messageCounter)) ? saved.messageCounter : 0;
     state.npcMessageCounter = (typeof saved?.npcMessageCounter === 'number' && Number.isFinite(saved.npcMessageCounter)) ? saved.npcMessageCounter : 0;
+    state.growthMessageCounter = (typeof saved?.growthMessageCounter === 'number' && Number.isFinite(saved.growthMessageCounter)) ? saved.growthMessageCounter : 0;
     state.lastChatLength = getChat()?.length || 0;
     state.isRunning = false;
     state.stagingItems = [];
@@ -249,7 +286,7 @@ export function onChatChanged() {
  */
 export function onMessageDeleted(deletedIndex) {
     const settings = getSettings();
-    if (!settings.autoTriggerEnabled && !settings.npcAutoScanEnabled) return;
+    if (!settings.autoTriggerEnabled && !settings.npcAutoScanEnabled && !settings.growthAutoCaptureEnabled) return;
     if (typeof deletedIndex !== 'number') return;
 
     // Compute how many messages were removed. After a delete, getChat() reflects
@@ -272,6 +309,11 @@ export function onMessageDeleted(deletedIndex) {
         state.npcMessageCounter = Math.max(0, state.npcMessageCounter - removed);
         changed = true;
         console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — NPC counter adjusted to ${state.npcMessageCounter}`);
+    }
+    if (settings.growthAutoCaptureEnabled && state.growthMessageCounter > 0) {
+        state.growthMessageCounter = Math.max(0, state.growthMessageCounter - removed);
+        changed = true;
+        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — growth counter adjusted to ${state.growthMessageCounter}`);
     }
     if (changed) persistCounters();
 }

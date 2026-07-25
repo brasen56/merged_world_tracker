@@ -8,7 +8,7 @@
  *     raw: [ { id, category, claim, quote, msgIdx, ts, capturedAt, canon? } ],
  *     consolidated: [ { id, category, claim, sources: [rawId...], firstSeen, lastSeen, confidence } ],
  *     archivedRaw: [ ...same shape as raw, retained for audit... ],
- *     meta: { createdAt, updatedAt, lastProfileAt }
+ *     meta: { createdAt, updatedAt, lastProfileAt, lastCaptureTs }
  *   }
  *
  * Invariants enforced here (from the blueprint's non-negotiable rules):
@@ -573,6 +573,45 @@ export function getEvidenceSummary(name) {
         archivedRaw: (file.archivedRaw || []).length,
         lastProfileAt: file.meta?.lastProfileAt || null,
     };
+}
+
+// ─── Capture watermark (Part A: continuous incremental capture) ──────────────
+//
+// `lastCaptureTs` is a high-water mark: the maximum `ts` among all messages
+// processed by capture for this NPC. Continuous capture (Part A) processes
+// only the delta — messages with send_date > lastCaptureTs — and appends to
+// raw[]. This is summary-proof by construction: observations are distilled
+// while raw messages are live, so later summarization can't touch them.
+// Watermark on ts (not msgIdx) because indices are unstable across edits.
+
+/**
+ * Get the capture watermark for an NPC: the max `ts` of all messages whose
+ * evidence has been captured. Returns null for a new NPC (nothing captured
+ * yet), meaning a full initial window should be scanned.
+ *
+ * @param {string} name — NPC name
+ * @returns {number|null} ms timestamp, or null if no capture has run
+ */
+export function getCaptureWatermark(name) {
+    const file = getEvidenceFile(name, false);
+    return file?.meta?.lastCaptureTs ?? null;
+}
+
+/**
+ * Advance the capture watermark to the given timestamp (if it's newer than the
+ * current value). Called after a successful capture pass.
+ *
+ * @param {string} name — NPC name
+ * @param {number} ts — the max send_date among captured messages
+ */
+export function setCaptureWatermark(name, ts) {
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) return;
+    const file = getEvidenceFile(name);
+    const cur = file.meta.lastCaptureTs;
+    if (cur == null || ts > cur) {
+        file.meta.lastCaptureTs = ts;
+        touch(file);
+    }
 }
 
 // ─── Profile stamp ───────────────────────────────────────────────────────────
