@@ -102,6 +102,65 @@ export function deleteEvidenceFile(name) {
 }
 
 /**
+ * Clear ALL evidence for an NPC but keep the file skeleton (so it remains
+ * "enrolled" in continuous capture). Wipes raw, consolidated, archivedRaw,
+ * userOverrides, and resets both watermarks + the profile stamp. The NPC can
+ * then be re-captured from scratch.
+ *
+ * This is the "start over for one NPC" operation.
+ *
+ * @param {string} name — NPC name
+ * @returns {boolean} true if the file was reset
+ */
+export function clearEvidence(name) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return false;
+    file.raw = [];
+    file.consolidated = [];
+    file.archivedRaw = [];
+    file.userOverrides = [];
+    file.meta = {
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        lastProfileAt: null,
+        lastCaptureTs: null,
+        lastBackfillTs: null,
+    };
+    touch(file);
+    return true;
+}
+
+/**
+ * Clear ALL growth evidence for EVERY NPC in this chat. Wipes every file's
+ * raw, consolidated, archivedRaw, userOverrides, and watermarks — a full reset
+ * of the growth feature for the current chat.
+ *
+ * This is the "start over completely" operation.
+ *
+ * @returns {number} the count of NPC files reset
+ */
+export function clearAllEvidence() {
+    const map = getEvidenceMap();
+    let count = 0;
+    for (const name of Object.keys(map)) {
+        map[name].raw = [];
+        map[name].consolidated = [];
+        map[name].archivedRaw = [];
+        map[name].userOverrides = [];
+        map[name].meta = {
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            lastProfileAt: null,
+            lastCaptureTs: null,
+            lastBackfillTs: null,
+        };
+        count++;
+    }
+    if (count > 0) saveEvidenceMap();
+    return count;
+}
+
+/**
  * Stamp `meta.updatedAt` and persist.
  *
  * @param {EvidenceFile} file

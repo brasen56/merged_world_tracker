@@ -666,4 +666,60 @@ setTimeout(ui.updateFloatTokenCounts, 2000);
 // Listen for busy-state changes from any module (decoupled via CustomEvent)
 document.addEventListener('mwt:busy-changed', ui.updateButtonStates);
 
+// ─── Console debugging API ───────────────────────────────────────────────────
+//
+// Expose a small, stable API on `window.MWT` so users (and developers) can
+// inspect and reset growth evidence from the browser console without digging
+// through chat metadata by hand. The evidence store lives in
+// chat_metadata.knowledge_growth_evidence, keyed by NPC name.
+//
+// Usage examples:
+//   MWT.evidence.list()                  // list NPCs with evidence + counts
+//   MWT.evidence.clear('Kira')           // wipe one NPC's evidence (start over)
+//   MWT.evidence.clearAll()              // wipe ALL NPCs' evidence in this chat
+//   MWT.evidence.summary('Kira')         // show tiers + last-profile time
+//   MWT.evidence.inspect('Kira')         // dump the full evidence file object
+try {
+    const evidenceApi = await import('./knowledge/evidence.js');
+    window.MWT = window.MWT || {};
+    window.MWT.evidence = {
+        list: () => {
+            const map = evidenceApi.getEvidenceMap();
+            const out = [];
+            for (const [name, file] of Object.entries(map)) {
+                out.push({
+                    npc: name,
+                    raw: (file.raw || []).length,
+                    consolidated: (file.consolidated || []).length,
+                    archivedRaw: (file.archivedRaw || []).length,
+                    overrides: (file.userOverrides || []).length,
+                    lastProfileAt: file.meta?.lastProfileAt || null,
+                });
+            }
+            console.table(out);
+            return out;
+        },
+        summary: (name) => console.log('Evidence summary for', name, ':', evidenceApi.getEvidenceSummary(name)),
+        inspect: (name) => {
+            const file = evidenceApi.getEvidenceFile(name, false);
+            if (!file) { console.log(`No evidence file for "${name}".`); return; }
+            console.log(`Evidence file for "${name}":`, file);
+            return file;
+        },
+        clear: (name) => {
+            const ok = evidenceApi.clearEvidence(name);
+            console.log(ok ? `Cleared all evidence for "${name}". The NPC remains enrolled in continuous capture.` : `No evidence file found for "${name}".`);
+            return ok;
+        },
+        clearAll: () => {
+            const count = evidenceApi.clearAllEvidence();
+            console.log(count > 0 ? `Cleared evidence for ${count} NPC(s) in this chat.` : 'No evidence found to clear.');
+            return count;
+        },
+    };
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}');
+} catch (err) {
+    console.warn('[MWT] Could not load console evidence API:', err.message);
+}
+
 console.log('[MWT] Merged World Tracker extension loaded.');
