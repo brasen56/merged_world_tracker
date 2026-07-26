@@ -490,6 +490,49 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
     return lines.join('\n');
 }
 
+/**
+ * Extract identity fields (Tone, Perceived as, Voice, Personality) from a
+ * dossier entry, returning them separately from the remainder of the content.
+ *
+ * Used by the Interiority thoughts call (v2 §17) to build a `<character_core>`
+ * block for non-profiled NPCs — lifting personality/voice/tone out of the
+ * dossier without duplicating format parsing. One owner of the dossier format
+ * (this module), riding the already-sanctioned interiority→knowledge import.
+ *
+ * The fields and remainder PARTITION the entry: extracted fields do NOT appear
+ * in `remainder`, so `<character_core>` and `<knowledge_entry>` carry different
+ * content rather than overlapping.
+ *
+ * @param {string} content — lorebook entry content (dossier or compact format)
+ * @returns {{fields: Object<string,string>, remainder: string}}
+ *   `fields` is a label→value map (e.g. `{ Tone: '...', Voice: '...' }`);
+ *   `remainder` is the entry text with identity-field lines removed.
+ */
+export function extractIdentityFields(content) {
+    if (!content || typeof content !== 'string') return { fields: {}, remainder: '' };
+    const identityLabels = ['Tone', 'Perceived as', 'Voice', 'Personality'];
+    const lines = content.split('\n');
+    const fields = {};
+    const remainderLines = [];
+
+    for (const line of lines) {
+        let matched = false;
+        for (const label of identityLabels) {
+            if (line.startsWith(`${label}:`)) {
+                const val = line.slice(label.length + 1).trim();
+                if (val && val.toLowerCase() !== 'unknown') fields[label] = val;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) remainderLines.push(line);
+    }
+
+    // Collapse multiple blank lines left by extraction
+    const remainder = remainderLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    return { fields, remainder };
+}
+
 export function synthesizeDossierFromUpdate(name, fields, newKnowledge) {
     const data = {
         name,

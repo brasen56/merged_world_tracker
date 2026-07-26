@@ -25,12 +25,16 @@ import {
     deletePerMessage, getPerMessageKeys, getMsgKeyForIndex,
     getOrCreateMsgKeyForIndex,
     buildKeyToIndexMap,
-    purgeUserLedgerEntries, restoreLedgerSnapshot, migrateIndexKeys,
+    purgeUserLedgerEntries,
+    restoreLedgerSnapshot, restoreInnerStatesSnapshot,
+    migrateIndexKeys,
     isChatHydrated,
+    incrementTurnCounter, isDormantPollDue,
 } from './data.js';
 
 import {
     buildSceneRoster, runBatchedCall, runStrictCalls, validateAndApply,
+    runSplitCall, mergeSplitResults, runDormantPoll,
 } from './generation.js';
 
 import { applyIntentionsInjection } from './injection.js';
@@ -161,6 +165,31 @@ async function generateForCurrentMessage(targetKey) {
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
     try {
+        // §20: increment the generation turn counter BEFORE the main call so
+        // the dormant poll scheduler sees the correct turn number. The poll
+        // fires when counter % DORMANT_POLL_INTERVAL === 0 and there are
+        // dormant entries — it runs after generation, waking any entries
+        // whose trigger is near so they're active for the NEXT turn.
+        incrementTurnCounter();
+
+        // §20: Dormant poll (lazy wake). Runs BEFORE the main call so woken
+        // entries are included in this turn's roster + injection. Fires only
+        // when isDormantPollDue() is true (every DORMANT_POLL_INTERVAL turns
+        // with dormant entries present).
+        if (isDormantPollDue()) {
+            try {
+                const woken = await runDormantPoll();
+                if (woken > 0) {
+                    console.log(`[MWT:Interiority] Dormant poll woke ${woken} intention(s) — they are now active.`);
+                    // Re-apply injection immediately so woken entries appear
+                    // in this turn's narrator prompt.
+                    applyIntentionsInjection();
+                }
+            } catch (err) {
+                console.warn('[MWT:Interiority] Dormant poll failed (non-blocking):', err);
+            }
+        }
+
         // 1. Build roster
         const roster = buildSceneRoster();
         if (roster.length === 0) {
@@ -170,26 +199,54 @@ async function generateForCurrentMessage(targetKey) {
 
         console.log(`[MWT:Interiority] Generating for ${roster.length} NPC(s): ${roster.join(', ')}`);
 
-        // 2. Run API call
+        // 2. Run API call(s).
+        //
+        // Split mode (§16): when splitThoughts is ON and both features are
+        // enabled, fire two parallel calls — one for intentions, one for
+        // thoughts — then merge the results into a single object that the
+        // unchanged validateAndApply can process. When OFF, or when only one
+        // feature is enabled, run a single unified call (v1 behavior).
         const settings = getSettings();
+        const wantThoughts = settings.generateThoughts !== false;
+        const wantIntentions = settings.generateIntentions !== false;
+        const useSplit = settings.splitThoughts === true && wantThoughts && wantIntentions;
+
         let result;
-        if (settings.mode === 'strict') {
-            result = await runStrictCalls(roster);
+        if (useSplit) {
+            console.log('[MWT:Interiority] Split mode ON — running parallel intentions + thoughts calls.');
+            const { intentionsResult, thoughtsResult } = await runSplitCall(roster);
+            // Cross-chat guard after the parallel pair completes.
+            const ctxAfter = getContextSafe();
+            const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
+            if (chatKeyAfter !== chatKeyBefore) {
+                console.log('[MWT:Interiority] Results discarded — chat changed during API call.');
+                return null;
+            }
+            // Both null = total failure; bail like v1 does.
+            if (!intentionsResult && !thoughtsResult) {
+                console.warn('[MWT:Interiority] Both split calls returned no result. Skipping silently.');
+                return null;
+            }
+            result = mergeSplitResults(intentionsResult, thoughtsResult, roster);
         } else {
-            result = await runBatchedCall(roster);
-        }
+            if (settings.mode === 'strict') {
+                result = await runStrictCalls(roster);
+            } else {
+                result = await runBatchedCall(roster);
+            }
 
-        // Cross-chat guard: discard if the user switched chats during the API call
-        const ctxAfter = getContextSafe();
-        const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
-        if (chatKeyAfter !== chatKeyBefore) {
-            console.log('[MWT:Interiority] Results discarded — chat changed during API call.');
-            return null;
-        }
+            // Cross-chat guard: discard if the user switched chats during the API call
+            const ctxAfter = getContextSafe();
+            const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
+            if (chatKeyAfter !== chatKeyBefore) {
+                console.log('[MWT:Interiority] Results discarded — chat changed during API call.');
+                return null;
+            }
 
-        if (!result) {
-            console.warn('[MWT:Interiority] Generation returned no result (API/parse failure). Skipping silently.');
-            return null;
+            if (!result) {
+                console.warn('[MWT:Interiority] Generation returned no result (API/parse failure). Skipping silently.');
+                return null;
+            }
         }
 
         // 3-4. Validate and apply
@@ -296,24 +353,34 @@ export async function onMessageDeleted(deletedIndex) {
         console.log(`[MWT:Interiority] MESSAGE_DELETED: ${orphaned.length} orphaned perMessage entries found — cleaning up all.`);
     }
 
-    // Capture the newest orphan's snapshot BEFORE deleting (needed for
-    // ledger rollback). allKeys is sorted by generatedAt descending, so
-    // the first orphan that matches allKeys[0] is the newest generation.
+    // Capture the newest orphan's snapshots BEFORE deleting (needed for
+    // rollback of both ledger and inner states). allKeys is sorted by
+    // generatedAt descending, so the first orphan matching allKeys[0] is
+    // the newest generation.
     let snapshotToRestore = null;
+    let innerStatesSnapshotToRestore = null;
     const newestKey = allKeys[0];
 
     for (const keyToDelete of orphaned) {
         const deleted = deletePerMessage(keyToDelete);
-        if (keyToDelete === newestKey && deleted && Array.isArray(deleted.ledgerSnapshot)) {
-            snapshotToRestore = deleted.ledgerSnapshot;
+        if (keyToDelete === newestKey && deleted) {
+            if (Array.isArray(deleted.ledgerSnapshot)) snapshotToRestore = deleted.ledgerSnapshot;
+            if (deleted.innerStatesSnapshot) innerStatesSnapshotToRestore = deleted.innerStatesSnapshot;
         }
     }
 
-    // Restore the ledger snapshot only if the newest generation was deleted.
-    // Restoring an older snapshot would wipe ledger mutations made after it.
+    // Restore snapshots only if the newest generation was deleted.
+    // Restoring older snapshots would wipe mutations made after them.
     if (snapshotToRestore) {
         restoreLedgerSnapshot(snapshotToRestore);
-        console.log(`[MWT:Interiority] MESSAGE_DELETED — ledger snapshot restored (manual entries preserved).`);
+    }
+    // §18: roll back inner states too, or a swipe reverts Mara's intentions
+    // but leaves her mood from the abandoned timeline.
+    if (innerStatesSnapshotToRestore) {
+        restoreInnerStatesSnapshot(innerStatesSnapshotToRestore);
+    }
+    if (snapshotToRestore || innerStatesSnapshotToRestore) {
+        console.log(`[MWT:Interiority] MESSAGE_DELETED — snapshots restored (manual ledger entries preserved).`);
     }
 
     applyIntentionsInjection();
@@ -338,9 +405,18 @@ function invalidateAndMaybeRegenerate(msgIdx, eventName) {
     const wasNewest = allKeys.length > 0 && msgKey === allKeys[0];
     const deleted = deletePerMessage(msgKey);
 
-    if (wasNewest && deleted && Array.isArray(deleted.ledgerSnapshot)) {
-        restoreLedgerSnapshot(deleted.ledgerSnapshot);
-        console.log(`[MWT:Interiority] ${eventName} at index ${msgIdx} — ledger snapshot restored (manual entries preserved).`);
+    if (wasNewest && deleted) {
+        // §18: roll back BOTH snapshots, so a swipe reverts Mara's intentions
+        // and her mood together — not just the ledger.
+        if (Array.isArray(deleted.ledgerSnapshot)) {
+            restoreLedgerSnapshot(deleted.ledgerSnapshot);
+        }
+        if (deleted.innerStatesSnapshot) {
+            restoreInnerStatesSnapshot(deleted.innerStatesSnapshot);
+        }
+        if (Array.isArray(deleted.ledgerSnapshot) || deleted.innerStatesSnapshot) {
+            console.log(`[MWT:Interiority] ${eventName} at index ${msgIdx} — snapshots restored (manual ledger entries preserved).`);
+        }
     }
 
     applyIntentionsInjection();
@@ -427,7 +503,8 @@ function queueWork(fn) {
 // ─── Token tracking ──────────────────────────────────────────────────────────
 
 export function getTotalTokens() {
-    const ledger = getLedger();
+    // §20: only active entries are injected, so only they count toward tokens.
+    const ledger = getLedger().filter(e => e.status !== 'dormant');
     if (!ledger.length) return 0;
     // Rough estimate of the injection payload
     const lines = ledger.map(e => `- ${e.npc} → ${e.action} → ${e.trigger} (since ${e.since || 'unknown'})`);

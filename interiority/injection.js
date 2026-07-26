@@ -15,13 +15,16 @@ import {
 } from '../core/index.js';
 
 import { INJECTION_HEADER, formatLedgerForInjection } from './prompts.js';
-import { INJECTION_KEY, INJECTION_TAG, getLedger, getInteriorityData } from './data.js';
+import { INJECTION_KEY, INJECTION_TAG, getLedger, getInteriorityData, getActiveLedger, getDormantLedger } from './data.js';
 
 /**
  * Apply (or clear) the NPC intentions injection.
  *
  * Called after each turn's interiority generation, on CHAT_CHANGED, and
  * when the module is toggled on/off.
+ *
+ * Dormant entries (§20) are filtered out by formatLedgerForInjection — the
+ * narrator never spends attention on a trigger that cannot be met yet.
  */
 export function applyIntentionsInjection() {
     const data = getInteriorityData();
@@ -29,6 +32,8 @@ export function applyIntentionsInjection() {
     const globalSettings = getGlobalSettings();
 
     const ledger = getLedger();
+    const activeCount = getActiveLedger().length;
+    const dormantCount = getDormantLedger().length;
     const body = formatLedgerForInjection(ledger);
 
     applyExtensionPromptInjection({
@@ -46,5 +51,6 @@ export function applyIntentionsInjection() {
     const depth = Number.isFinite(Number(globalSettings.interiorityDepth))
         ? Number(globalSettings.interiorityDepth)
         : 1;
-    console.log(`[MWT:Interiority] Injection ${enabled && body ? 'applied' : 'cleared'} — ${ledger.length} ledger entries, depth ${depth}.`);
+    const dormantNote = dormantCount > 0 ? ` (${dormantCount} dormant, filtered)` : '';
+    console.log(`[MWT:Interiority] Injection ${enabled && body ? 'applied' : 'cleared'} — ${activeCount} active of ${ledger.length} ledger entries${dormantNote}, depth ${depth}.`);
 }

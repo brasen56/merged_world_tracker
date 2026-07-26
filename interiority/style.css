@@ -216,10 +216,113 @@
     font-style: italic;
 }
 
+.mwt-int-thought-type {
+    font-size: 10px;
+    color: var(--mwt-text-dim);
+    background: var(--mwt-bg-lighter, rgba(128, 128, 128, 0.15));
+    border: 1px solid var(--mwt-border);
+    border-radius: 8px;
+    padding: 1px 6px;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+}
+
+.mwt-int-thought-state {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    border-top: 1px dashed var(--mwt-border);
+    padding-top: 4px;
+    margin-top: 2px;
+    line-height: 1.4;
+}
+
 .mwt-int-thought-text {
     font-size: 13px;
     color: var(--mwt-text);
     line-height: 1.5;
+}
+
+/* ─── Inner states list (v2 §18) ────────────────────────────────────────── */
+
+.mwt-int-inner-states-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mwt-int-inner-state-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-left: 3px solid #b88ce0;
+    border-radius: var(--mwt-radius);
+    font-size: 13px;
+}
+
+.mwt-int-inner-state-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.mwt-int-inner-state-npc {
+    font-weight: 600;
+    color: #b88ce0;
+}
+
+.mwt-int-inner-state-line {
+    color: var(--mwt-text);
+    font-style: italic;
+    line-height: 1.4;
+}
+
+.mwt-int-state-edit-btn:hover {
+    color: var(--mwt-accent);
+    background: rgba(74, 158, 255, 0.15);
+}
+
+.mwt-int-state-remove-btn:hover {
+    color: var(--mwt-error);
+    background: rgba(239, 83, 80, 0.15);
+}
+
+/* ─── Dormant entries (v2 §20 — scheduled intentions) ───────────────────── */
+
+.mwt-int-ledger-entry--dormant {
+    border-left: 3px solid var(--mwt-warning, #ff9800);
+    opacity: 0.85;
+}
+
+.mwt-int-dormant-hint {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    margin-left: 4px;
+    color: var(--mwt-warning, #ff9800);
+    cursor: help;
+    opacity: 0.9;
+}
+
+.mwt-int-wake-btn {
+    background: none;
+    border: none;
+    color: var(--mwt-warning, #ff9800);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all var(--mwt-transition);
+}
+
+.mwt-int-wake-btn:hover {
+    color: var(--mwt-accent);
+    background: rgba(255, 152, 0, 0.15);
 }
 
 /* ─── Per-message thought display (injected into chat DOM) ───────────────── */
@@ -254,4 +357,24 @@
 .mwt-int-msg-thought-text {
     color: var(--mwt-text);
     opacity: 0.85;
+}
+
+.mwt-int-msg-thought-type {
+    font-size: 9px;
+    color: var(--mwt-text-dim);
+    background: rgba(138, 43, 226, 0.15);
+    border-radius: 6px;
+    padding: 0 5px;
+    text-transform: lowercase;
+    flex-shrink: 0;
+    align-self: center;
+}
+
+.mwt-int-msg-thought-state {
+    font-size: 10px;
+    color: var(--mwt-text-dim);
+    opacity: 0.8;
+    font-style: italic;
+    flex-shrink: 0;
+    align-self: center;
 }

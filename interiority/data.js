@@ -11,9 +11,12 @@
  *     enabled: true,
  *     ledger: [
  *       { id, npc, action, trigger, since, declaredMsgIdx,
- *         manual, turnsOpen }
+ *         manual, turnsOpen,
  *                  ↑ optional   ↑ age in generation turns
+ *         status, wakeHint }
+ *           ↑ 'active'|'dormant' (§20)   ↑ free-text wake condition
  *     ],
+ *     turnCounter: 0,           ↑ incremented each generation (§20 lazy poll)
  *     perMessage: {
  *       'mu-<uuid>': {
  *         reactions: [ { npc, re, thought } ],
@@ -98,6 +101,17 @@ export const INJECTION_TAG = 'mwt_npc_intentions';
 /** Max thought length (characters). */
 export const MAX_THOUGHT_LENGTH = 500;
 
+/** Max inner state line length (characters). See §18. */
+export const MAX_INNER_STATE_LENGTH = 200;
+
+/**
+ * How often (in generation turns) the dormant-intentions lazy poll fires.
+ * See §20 — a 100-turn wait costs ~10 micro-checks instead of 100 full
+ * evaluations. The poll is always-on (dormancy strictly reduces cost); this
+ * is the only knob.
+ */
+export const DORMANT_POLL_INTERVAL = 10;
+
 /**
  * Prefix for stable perMessage keys based on a per-message UUID that
  * Interiority stamps into `msg.extra.mwt_uuid`. This is the canonical
@@ -146,6 +160,10 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // Feature toggles — users may want only thoughts or only intentions
         generateThoughts: true,
         generateIntentions: true,
+        // v2 split-call: when true AND both features are enabled, fire two
+        // parallel calls (intentions + thoughts) instead of one unified call.
+        // Default off = byte-identical v1 behavior. See §16.
+        splitThoughts: false,
         // Minimum number of turns an intention must survive before it
         // can be executed or dropped. Prevents models from prematurely
         // erasing intentions before their trigger arrives.
@@ -261,6 +279,11 @@ export function addLedgerEntry(entry, since, msgIdx) {
         declaredMsgIdx: typeof msgIdx === 'number' ? msgIdx : null,
         turnsOpen: 0,
     };
+    // §20: scheduled intentions start dormant; immediate/event are active.
+    if (entry.status === 'dormant') {
+        fullEntry.status = 'dormant';
+        fullEntry.wakeHint = String(entry.wakeHint || '').trim();
+    }
     data.ledger.push(fullEntry);
     saveInteriorityData(data);
     return fullEntry;
@@ -407,6 +430,10 @@ export function incrementLedgerAges() {
     const data = getInteriorityData();
     let changed = false;
     for (const entry of data.ledger) {
+        // §20: dormant entries don't accrue age — their trigger is not yet
+        // actionable, so there is nothing to evaluate. Aging resumes on wake.
+        if (entry.status === 'dormant') continue;
+
         if (typeof entry.turnsOpen !== 'number') {
             // Legacy entry — treat as mature
             entry.turnsOpen = 999;
@@ -442,6 +469,310 @@ export function restoreLedgerSnapshot(snapshot) {
 
     const restored = [...(snapshot || []), ...manualSurvivors];
     setLedger(restored);
+}
+
+// ─── Dormant intentions (v2 §20 — scheduling) ─────────────────────────────────
+
+/**
+ * Get all ACTIVE ledger entries (status !== 'dormant').
+ *
+ * Active entries are the only entries that cost narrator attention
+ * (injection) and scan evaluation (executed/dropped checks) per turn.
+ * Dormant entries are excluded from both. Legacy entries (no `status`
+ * field) are treated as active — the safe default per §20.
+ *
+ * @returns {Array<object>}
+ */
+export function getActiveLedger() {
+    return getLedger().filter(e => e.status !== 'dormant');
+}
+
+/**
+ * Get all DORMANT ledger entries (status === 'dormant').
+ *
+ * Dormant entries are excluded from injection and per-turn evaluation, but
+ * remain visible to the thoughts call (anticipation material) and in the
+ * panel under a "Scheduled" section.
+ *
+ * @returns {Array<object>}
+ */
+export function getDormantLedger() {
+    return getLedger().filter(e => e.status === 'dormant');
+}
+
+/**
+ * Wake a dormant ledger entry — flip it to active and stamp its age.
+ *
+ * Per §20: on wake, stamp `turnsOpen = max(turnsOpen, gracePeriod)`. A woken
+ * entry is an old intention whose trigger is imminent; if it woke inside
+ * grace, the narrator could execute it next turn and the grace gate would
+ * reject the executed-mark, recreating the stale-demand loop §8's design
+ * note warns about.
+ *
+ * @param {string} id - ledger entry id
+ * @param {number} [gracePeriod=0] - the current grace period setting
+ * @returns {object|null} the woken entry, or null if not found / already active
+ */
+export function wakeLedgerEntry(id, gracePeriod = 0) {
+    if (!id) return null;
+    const data = getInteriorityData();
+    const entry = data.ledger.find(e => e.id === id);
+    if (!entry) return null;
+    if (entry.status !== 'dormant') return entry; // already active — no-op
+
+    entry.status = 'active';
+    const floor = Math.max(0, Number(gracePeriod) || 0);
+    entry.turnsOpen = Math.max(entry.turnsOpen || 0, floor);
+    saveInteriorityData(data);
+    return entry;
+}
+
+/**
+ * Set an entry dormant (manual scheduling).
+ *
+ * @param {string} id - ledger entry id
+ * @param {string} [wakeHint] - free-text wake condition (e.g. "harvest festival")
+ * @returns {object|null} the updated entry, or null if not found
+ */
+export function setLedgerEntryDormant(id, wakeHint) {
+    if (!id) return null;
+    const data = getInteriorityData();
+    const entry = data.ledger.find(e => e.id === id);
+    if (!entry) return null;
+    entry.status = 'dormant';
+    if (wakeHint !== undefined) entry.wakeHint = String(wakeHint || '').trim();
+    saveInteriorityData(data);
+    return entry;
+}
+
+// ─── Turn counter (§20 lazy poll scheduling) ─────────────────────────────────
+
+/**
+ * Get the generation turn counter (§20 lazy-poll scheduler).
+ *
+ * Incremented once per successful generation. The dormant poll fires when
+ * `counter % DORMANT_POLL_INTERVAL === 0` and there are dormant entries to
+ * check. Lazily initialized to 0 for chats created before §20.
+ *
+ * @returns {number}
+ */
+export function getTurnCounter() {
+    return Number(getInteriorityData().turnCounter) || 0;
+}
+
+/**
+ * Increment and return the turn counter.
+ * @returns {number} the new counter value
+ */
+export function incrementTurnCounter() {
+    const data = getInteriorityData();
+    data.turnCounter = (Number(data.turnCounter) || 0) + 1;
+    saveInteriorityData(data);
+    return data.turnCounter;
+}
+
+/**
+ * Check whether the dormant poll is due this turn.
+ *
+ * The poll fires every {@link DORMANT_POLL_INTERVAL} turns, but only when
+ * there are dormant entries to check.
+ *
+ * @returns {boolean}
+ */
+export function isDormantPollDue() {
+    if (getDormantLedger().length === 0) return false;
+    return getTurnCounter() % DORMANT_POLL_INTERVAL === 0;
+}
+
+// ─── Inner state (v2 §18 — persistent affective line) ────────────────────────
+
+/**
+ * Similarity threshold for the drift backstop (§18 containment #3).
+ *
+ * When a returned inner_state line is at least this similar (by normalized
+ * word-set overlap) to the prior line, the prior line is kept verbatim.
+ * This stops the miniature telephone loop where a model rewords an
+ * unchanged mood every turn — each harmless rewording is one step of drift.
+ *
+ * 0.8 is aggressive by design: it intentionally swallows the occasional
+ * genuine small escalation (one word in fourteen). A stuck line is visible
+ * (it never changes) and recoverable (✎ edit); drift is invisible until
+ * the mood has quietly rewritten itself.
+ */
+const INNER_STATE_DRIFT_THRESHOLD = 0.8;
+
+/**
+ * Get the inner-state store from interiority metadata.
+ *
+ * Stored as `{ [npc]: { line, updatedAt } }`. Lazily created if absent.
+ * @returns {object} the innerStates map (mutating it requires saveInteriorityData)
+ */
+export function getInnerStates() {
+    const data = getInteriorityData();
+    if (!data.innerStates || typeof data.innerStates !== 'object') {
+        data.innerStates = {};
+    }
+    return data.innerStates;
+}
+
+/**
+ * Get a single NPC's inner-state line (null if none set).
+ * Case-insensitive name lookup.
+ * @param {string} npcName
+ * @returns {string|null}
+ */
+export function getInnerState(npcName) {
+    if (!npcName) return null;
+    const states = getInnerStates();
+    // Find a case-insensitive match so "Mara"/"mara"/"MARA" resolve to one line.
+    const key = _findInnerStateKey(npcName, states);
+    if (key == null) return null;
+    const entry = states[key];
+    return entry && typeof entry.line === 'string' ? entry.line : null;
+}
+
+/**
+ * Set an NPC's inner-state line unconditionally (no drift guard).
+ *
+ * Used by manual ✎ edits (which must bypass the drift backstop) and by
+ * {@link setInnerStateGuarded} after it has decided whether to keep the prior.
+ *
+ * @param {string} npcName
+ * @param {string} line - the new line (empty string clears the state)
+ */
+export function setInnerState(npcName, line) {
+    if (!npcName) return;
+    const trimmed = String(line || '').slice(0, MAX_INNER_STATE_LENGTH);
+    const data = getInteriorityData();
+    if (!data.innerStates || typeof data.innerStates !== 'object') {
+        data.innerStates = {};
+    }
+    // Preserve an existing key's casing if present, else use the given name.
+    const key = _findInnerStateKey(npcName, data.innerStates) ?? npcName.trim();
+    if (trimmed) {
+        data.innerStates[key] = { line: trimmed, updatedAt: Date.now() };
+    } else {
+        delete data.innerStates[key];
+    }
+    saveInteriorityData(data);
+}
+
+/**
+ * Set an NPC's inner-state line with the §18 drift backstop applied.
+ *
+ * If `newLine` is near-identical (word-set overlap ≥ threshold) to the
+ * current line, the current line is kept **verbatim** and not overwritten.
+ * This enforces rule 2 of §18's containment: "update only from this turn's
+ * events; otherwise carry the prior line verbatim" — mechanically, not by
+ * prompt pleading, because models reword compulsively.
+ *
+ * @param {string} npcName
+ * @param {string} newLine - the candidate line from the thoughts call
+ * @returns {string} the line that is now stored (prior if near-identical, else newLine)
+ */
+export function setInnerStateGuarded(npcName, newLine) {
+    if (!npcName) return '';
+    const candidate = String(newLine || '').trim().slice(0, MAX_INNER_STATE_LENGTH);
+    const prior = getInnerState(npcName);
+
+    if (!candidate) {
+        // No candidate → default to prior (§18: "defaulted to prior when missing").
+        // (prior may be null; leave store untouched.)
+        return prior || '';
+    }
+    if (prior && _innerStateSimilarity(prior, candidate) >= INNER_STATE_DRIFT_THRESHOLD) {
+        // Near-identical → keep prior verbatim (no rewording drift).
+        return prior;
+    }
+    // Genuinely different → store the new line.
+    setInnerState(npcName, candidate);
+    return candidate;
+}
+
+/**
+ * Snapshot the entire inner-state store for rollback (§18).
+ *
+ * On swipe/edit/delete, inner states are rolled back to the snapshot taken
+ * before that message's generation — otherwise a swipe rolls back Mara's
+ * intentions but leaves her mood from the abandoned timeline.
+ *
+ * @returns {object} deep copy of the current innerStates map
+ */
+export function getInnerStatesSnapshot() {
+    const states = getInnerStates();
+    return JSON.parse(JSON.stringify(states));
+}
+
+/**
+ * Restore an inner-state snapshot taken by {@link getInnerStatesSnapshot}.
+ *
+ * @param {object|null} snapshot - the snapshot to restore (null/undefined → no-op)
+ */
+export function restoreInnerStatesSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    const data = getInteriorityData();
+    data.innerStates = JSON.parse(JSON.stringify(snapshot));
+    saveInteriorityData(data);
+}
+
+/**
+ * Tokenize an inner-state line for set-similarity comparison.
+ *
+ * Lowercased, punctuation-stripped, whitespace-split word set. Stopwords
+ * are NOT removed — the line is short and content words like "wary"/"loud"
+ * dominate, so removing common words would shrink the sets enough to
+ * destabilize the metric. Punctuation stripping lets "wary; guilt" and
+ * "wary, guilt" compare as equal.
+ *
+ * @param {string} text
+ * @returns {Set<string>}
+ */
+function _tokenizeInnerState(text) {
+    return new Set(
+        String(text || '')
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+            .split(/\s+/)
+            .filter(Boolean)
+    );
+}
+
+/**
+ * Compute the Dice coefficient (2|A∩B| / (|A|+|B|)) over the word sets of
+ * two inner-state lines.
+ *
+ * Dice is chosen over raw Jaccard because it's numerically stable on small
+ * sets (it equals Jaccard under monotone transform). Both treat reorderings
+ * ("wary of Jonah; guilt louder" vs "guilt louder; wary of Jonah") as the
+ * same state, which edit distance (Levenshtein) does not. This is the
+ * metric the design doc (§18) specifies.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {number} similarity in [0,1]
+ */
+function _innerStateSimilarity(a, b) {
+    const setA = _tokenizeInnerState(a);
+    const setB = _tokenizeInnerState(b);
+    if (setA.size === 0 && setB.size === 0) return 1; // both empty → identical
+    if (setA.size === 0 || setB.size === 0) return 0;
+    let inter = 0;
+    for (const w of setA) if (setB.has(w)) inter++;
+    return (2 * inter) / (setA.size + setB.size);
+}
+
+/**
+ * Find the stored key matching `npcName` case-insensitively (or null).
+ * @param {string} npcName
+ * @param {object} states
+ * @returns {string|null}
+ */
+function _findInnerStateKey(npcName, states) {
+    const lower = String(npcName).toLowerCase().trim();
+    for (const k of Object.keys(states)) {
+        if (k.toLowerCase() === lower) return k;
+    }
+    return null;
 }
 
 // ─── Stable message-key utilities ────────────────────────────────────────────
@@ -724,6 +1055,46 @@ export async function migrateIndexKeys() {
         console.log(`[MWT:Interiority] Key migration: ${migrated} migrated, ${dropped} orphaned entr${dropped === 1 ? 'y' : 'ies'} dropped.`);
     }
     return migrated;
+}
+
+// ─── Recent thoughts (v2 §17 — interior memory) ──────────────────────────────
+
+/**
+ * Collect an NPC's most recent thoughts from perMessage storage, newest first.
+ *
+ * Used by the thoughts call (v2 §17) to feed an NPC's prior thoughts back as
+ * `<recent_thoughts>` — the interior-memory input that lets worries evolve and
+ * suspicions build instead of every turn generating from scratch.
+ *
+ * Walks perMessage keys (already sorted newest-first by getPerMessageKeys),
+ * collects reactions matching `npcName` (case-insensitive), and returns up to
+ * `count` items shaped as `{ thought, type?, re?, msgIdx? }`.
+ *
+ * @param {string} npcName - NPC name to match
+ * @param {number} [count=4] - max thoughts to return
+ * @returns {Array<{thought: string, type?: string, re?: string, msgIdx?: number}>}
+ */
+export function getRecentThoughtsForNpc(npcName, count = 4) {
+    if (!npcName) return [];
+    const lower = String(npcName).toLowerCase().trim();
+    const out = [];
+    const keys = getPerMessageKeys();
+    const keyToIndex = buildKeyToIndexMap();
+    for (const key of keys) {
+        const pm = getPerMessage(key);
+        if (!pm || !Array.isArray(pm.reactions)) continue;
+        for (const r of pm.reactions) {
+            if (String(r.npc).toLowerCase().trim() !== lower) continue;
+            out.push({
+                thought: String(r.thought || ''),
+                type: r.type || undefined,
+                re: r.re || undefined,
+                msgIdx: keyToIndex.get(key),
+            });
+            if (out.length >= count) return out;
+        }
+    }
+    return out;
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────

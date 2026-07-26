@@ -16,13 +16,20 @@ import {
 
 import { REGISTRY_KEY } from '../knowledge/state.js';
 
-import { buildSystemPrompt, buildUserContent } from './prompts.js';
+import {
+    buildSystemPrompt, buildUserContent,
+    buildThoughtsSystemPrompt, buildThoughtsUserContent,
+    buildDormantPollSystemPrompt, buildDormantPollUserContent,
+} from './prompts.js';
 import {
     getSettings, hasValidSettings,
     getInteriorityData,
     getLedger, addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
     setPerMessage, getLedgerEntriesForNpc,
     getOrCreateMsgKeyForIndex,
+    getRecentThoughtsForNpc,
+    getInnerState, setInnerStateGuarded, getInnerStatesSnapshot,
+    getActiveLedger, getDormantLedger, wakeLedgerEntry,
     MAX_THOUGHT_LENGTH, getWorldTime, incrementLedgerAges,
 } from './data.js';
 
@@ -140,6 +147,12 @@ async function loadNpcKnowledge(npcName) {
 /**
  * Assemble the per-NPC context blocks for the API call.
  *
+ * Dormant entries (§20) are excluded from `openIntentions` — the
+ * intentions call never evaluates them (executed/dropped checks), so
+ * there is no reason to send them. The thoughts call uses
+ * {@link _assembleThoughtsNpcBlocks}, which DOES include dormant entries
+ * as anticipation material.
+ *
  * @param {string[]} roster
  * @returns {Promise<Array<{name, knowledgeEntry, openIntentions}>>}
  */
@@ -147,56 +160,295 @@ export async function assembleNpcBlocks(roster) {
     const blocks = [];
     for (const name of roster) {
         const knowledgeEntry = await loadNpcKnowledge(name);
-        const openIntentions = getLedgerEntriesForNpc(name);
+        // §20: only active entries go to the intentions evaluation list.
+        const openIntentions = getLedgerEntriesForNpc(name)
+            .filter(e => e.status !== 'dormant');
         blocks.push({ name, knowledgeEntry, openIntentions });
     }
     return blocks;
 }
 
+// ─── Thoughts-call context assembly (v2 §17) ─────────────────────────────────
+
+/**
+ * Assemble the richer per-NPC context blocks for the dedicated thoughts call.
+ *
+ * Unlike the lean v1 {@link assembleNpcBlocks}, this loads interpretive layers
+ * that the input-partition rule (§15) permits ONLY on the thoughts side:
+ * growth profile, relationships from data, recent thoughts (interior memory).
+ *
+ * The intentions call NEVER sees these — it stays on {@link assembleNpcBlocks}.
+ *
+ * @param {string[]} roster
+ * @returns {Promise<Array<object>>} rich blocks keyed by §17 block names
+ */
+async function _assembleThoughtsNpcBlocks(roster) {
+    // Dynamic imports — knowledge module is an optional dependency. Cached by
+    // the ES module system, so repeated calls resolve to the same namespace.
+    const knowledgeLorebook = await import('../knowledge/lorebook.js').catch(() => null);
+    const knowledgeGrowth = await import('../knowledge/growth.js').catch(() => null);
+    const knowledgeRelationships = await import('../knowledge/relationships.js').catch(() => null);
+
+    const blocks = [];
+    for (const name of roster) {
+        const block = {
+            name,
+            characterCore: '',
+            knowledgeEntry: '',
+            relationships: '',
+            recentThoughts: '',
+            innerState: getInnerState(name), // §18: prior mood line fed to the thoughts call
+            openIntentions: getLedgerEntriesForNpc(name),
+        };
+
+        // Load raw knowledge entry (already relationship-stripped by loadNpcKnowledge)
+        const rawKnowledge = await loadNpcKnowledge(name);
+
+        // Partition identity fields from the remainder so <character_core>
+        // and <knowledge_entry> carry different content (no overlap, per §17).
+        let identityFields = {};
+        let knowledgeRemainder = rawKnowledge || '';
+        if (rawKnowledge && knowledgeLorebook?.extractIdentityFields) {
+            const split = knowledgeLorebook.extractIdentityFields(rawKnowledge);
+            identityFields = split.fields;
+            knowledgeRemainder = split.remainder;
+        }
+        block.knowledgeEntry = knowledgeRemainder;
+
+        // <character_core> — growth profile (primary), else identity fields (fallback)
+        if (knowledgeGrowth?.loadProfile) {
+            try {
+                const profile = await knowledgeGrowth.loadProfile(name);
+                if (profile) block.characterCore = profile;
+            } catch { /* profile unavailable */ }
+        }
+        if (!block.characterCore && Object.keys(identityFields).length > 0) {
+            block.characterCore = Object.entries(identityFields)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join('\n');
+        }
+
+        // <relationships> — outbound edges filtered to roster (sealed minds)
+        if (knowledgeRelationships?.getNpcRelationships) {
+            block.relationships = _formatRelationshipsForRoster(
+                name, roster, knowledgeRelationships.getNpcRelationships
+            );
+        }
+
+        // <recent_thoughts> — interior memory (continue, don't repeat)
+        const recent = getRecentThoughtsForNpc(name, 4);
+        if (recent.length > 0) {
+            block.recentThoughts = recent.map(r => {
+                const label = r.msgIdx != null ? ` (msg ${r.msgIdx})` : '';
+                return `- "${r.thought}"${label}`;
+            }).join('\n');
+        }
+
+        blocks.push(block);
+    }
+    return blocks;
+}
+
+/**
+ * Format an NPC's outbound relationships, filtered to roster members.
+ *
+ * Implements the sealed-minds rule structurally: Mara's block gets only
+ * Mara→Jonah edges, never Jonah's edge about her.
+ *
+ * @param {string} npcName
+ * @param {string[]} roster
+ * @param {function} getNpcRelationships - from knowledge/relationships.js
+ * @returns {string} formatted relationship lines, or '' if none
+ */
+function _formatRelationshipsForRoster(npcName, roster, getNpcRelationships) {
+    try {
+        const rels = getNpcRelationships(npcName);
+        if (!rels || rels.length === 0) return '';
+        const rosterLower = new Set(roster.map(n => String(n).toLowerCase()));
+        const filtered = rels.filter(r => rosterLower.has(String(r.target).toLowerCase()));
+        if (filtered.length === 0) return '';
+        return filtered.map(r => {
+            const note = r.notes ? ` (${r.notes})` : '';
+            return `- ${npcName} → ${r.target}: ${r.type}${note}`;
+        }).join('\n');
+    } catch {
+        return '';
+    }
+}
+
 // ─── API call ────────────────────────────────────────────────────────────────
 
 /**
- * Make a single batched interiority API call for all roster NPCs.
+ * Private shared implementation for all batched API calls.
  *
  * @param {string[]} roster
+ * @param {object} [opts] - override which features are requested (used by split mode)
+ * @param {boolean|null} [opts.thoughts] - force thoughts on/off; null = use settings
+ * @param {boolean|null} [opts.intentions] - force intentions on/off; null = use settings
+ * @param {string} [opts.label] - log label for the call
  * @returns {Promise<object|null>} parsed JSON result, or null on failure
  */
-export async function runBatchedCall(roster) {
+async function _runCall(roster, { thoughts = null, intentions = null, label = 'batched', useRichThoughtsContext = false } = {}) {
     if (!hasValidSettings()) {
-        console.warn('[MWT:Interiority] No API connection configured.');
+        console.warn(`[MWT:Interiority] No API connection configured (${label}).`);
         return null;
     }
 
     const settings = getSettings();
-    const wantThoughts = settings.generateThoughts !== false;
-    const wantIntentions = settings.generateIntentions !== false;
+    const wantThoughts = thoughts !== null ? thoughts : settings.generateThoughts !== false;
+    const wantIntentions = intentions !== null ? intentions : settings.generateIntentions !== false;
     if (!wantThoughts && !wantIntentions) {
-        console.warn('[MWT:Interiority] Both thoughts and intentions are disabled — skipping API call.');
+        console.warn(`[MWT:Interiority] Both thoughts and intentions are disabled — skipping ${label} call.`);
         return null;
     }
 
-    const npcBlocks = await assembleNpcBlocks(roster);
+    // Rich thoughts context (v2 §17) uses the dedicated craft prompt + richer
+    // per-NPC blocks. The v1 unified call and the intentions-side split call
+    // stay on the lean blocks + unified prompt.
+    const npcBlocks = useRichThoughtsContext
+        ? await _assembleThoughtsNpcBlocks(roster)
+        : await assembleNpcBlocks(roster);
     const windowSize = Math.max(1, settings.messageWindow || 8);
 
     // Get stripped recent messages
     const recentMessages = getStrippedRecentMessages(windowSize);
     if (!recentMessages) {
-        console.warn('[MWT:Interiority] No recent messages to process.');
+        console.warn(`[MWT:Interiority] No recent messages to process (${label}).`);
         return null;
     }
 
     const worldTime = getWorldTime();
     const playerName = [...getUserNames({ lower: false })][0] || '';
-    const systemPrompt = buildSystemPrompt({ thoughts: wantThoughts, intentions: wantIntentions });
-    const userContent = buildUserContent({
-        npcBlocks,
-        recentMessages,
-        worldTime,
-        playerName,
-        includeIntentions: wantIntentions,
-    });
+
+    let systemPrompt, userContent;
+    if (useRichThoughtsContext) {
+        systemPrompt = buildThoughtsSystemPrompt();
+        userContent = buildThoughtsUserContent({
+            npcBlocks,
+            recentMessages,
+            worldTime,
+            playerName,
+        });
+    } else {
+        systemPrompt = buildSystemPrompt({ thoughts: wantThoughts, intentions: wantIntentions });
+        userContent = buildUserContent({
+            npcBlocks,
+            recentMessages,
+            worldTime,
+            playerName,
+            includeIntentions: wantIntentions,
+        });
+    }
 
     return fetchAndParse(systemPrompt, userContent, settings);
+}
+
+/**
+ * Make a single batched interiority API call for all roster NPCs.
+ * v1 path — reads feature flags from settings (thoughts + intentions together).
+ *
+ * @param {string[]} roster
+ * @returns {Promise<object|null>} parsed JSON result, or null on failure
+ */
+export async function runBatchedCall(roster) {
+    return _runCall(roster);
+}
+
+// ─── Split-call mode (v2 §16) ────────────────────────────────────────────────
+
+/**
+ * Run two parallel batched calls — one for intentions only, one for thoughts
+ * only — and return both results. Each call is independently error-isolated:
+ * a failure in one returns null without affecting the other.
+ *
+ * Both calls see the SAME message window and roster. The thoughts call sees
+ * the pre-mutation ledger (including dormant entries once §20 ships); the
+ * intentions call evaluates and mutates it. Because validation happens later
+ * in validateAndApply (after both calls complete), neither call mutates
+ * shared state during execution — parallel execution is safe.
+ *
+ * @param {string[]} roster
+ * @returns {Promise<{intentionsResult: object|null, thoughtsResult: object|null}>}
+ */
+export async function runSplitCall(roster) {
+    const [intentionsRes, thoughtsRes] = await Promise.all([
+        _runCall(roster, { thoughts: false, intentions: true, label: 'intentions' })
+            .catch(err => {
+                console.error('[MWT:Interiority] Intentions call failed:', err);
+                return null;
+            }),
+        _runCall(roster, { thoughts: true, intentions: false, label: 'thoughts', useRichThoughtsContext: true })
+            .catch(err => {
+                console.error('[MWT:Interiority] Thoughts call failed:', err);
+                return null;
+            }),
+    ]);
+    return { intentionsResult: intentionsRes, thoughtsResult: thoughtsRes };
+}
+
+/**
+ * Merge the two split-call results into a single unified result object that
+ * the EXISTING validateAndApply can process unchanged.
+ *
+ * The intentions result carries `executed`/`dropped`/`new_intentions` per NPC;
+ * the thoughts result carries `reaction` per NPC. Neither carries the other's
+ * fields (the prompt only asked for what was requested). Merge by NPC name,
+ * combining fields from both sources.
+ *
+ * NPCs present in one result but not the other (e.g. an NPC that had no
+ * reaction, so the thoughts call omitted it) are still included — the missing
+ * side contributes nothing for that NPC.
+ *
+ * @param {object|null} intentionsResult
+ * @param {object|null} thoughtsResult
+ * @param {string[]} roster - canonical NPC name list (preserves order)
+ * @returns {{npcs: Array<object>}} unified result; empty npcs if both inputs null
+ */
+export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
+    // Build name → entry maps from both results (case-insensitive keys)
+    const intentionsMap = new Map();
+    const thoughtsMap = new Map();
+
+    if (intentionsResult && Array.isArray(intentionsResult.npcs)) {
+        for (const npc of intentionsResult.npcs) {
+            const name = String(npc?.name || '').trim();
+            if (name) intentionsMap.set(name.toLowerCase(), npc);
+        }
+    }
+    if (thoughtsResult && Array.isArray(thoughtsResult.npcs)) {
+        for (const npc of thoughtsResult.npcs) {
+            const name = String(npc?.name || '').trim();
+            if (name) thoughtsMap.set(name.toLowerCase(), npc);
+        }
+    }
+
+    // Merge by roster name. validateAndApply discards non-roster NPCs anyway,
+    // so we only emit roster members here (cleaner + avoids the discard log).
+    const mergedNpcs = [];
+    const seen = new Set();
+    for (const name of roster) {
+        const lower = name.toLowerCase();
+        if (seen.has(lower)) continue;
+        seen.add(lower);
+
+        const intEntry = intentionsMap.get(lower) || {};
+        const thoughtEntry = thoughtsMap.get(lower) || {};
+
+        const merged = { name };
+        // v1 shape: reaction comes from the thoughts call only
+        if (thoughtEntry.reaction !== undefined) merged.reaction = thoughtEntry.reaction;
+        // v2 shape: thought + inner_state come from the thoughts call only
+        if (thoughtEntry.thought !== undefined) merged.thought = thoughtEntry.thought;
+        if (thoughtEntry.inner_state !== undefined) merged.inner_state = thoughtEntry.inner_state;
+        // Intentions come from the intentions call only
+        if (intEntry.executed !== undefined) merged.executed = intEntry.executed;
+        if (intEntry.dropped !== undefined) merged.dropped = intEntry.dropped;
+        if (intEntry.new_intentions !== undefined) merged.new_intentions = intEntry.new_intentions;
+
+        mergedNpcs.push(merged);
+    }
+
+    return { npcs: mergedNpcs };
 }
 
 /**
@@ -249,6 +501,73 @@ export async function runStrictCalls(roster) {
     }
 
     return { npcs: allNpcs };
+}
+
+// ─── Dormant poll (v2 §20) ────────────────────────────────────────────────────
+
+/**
+ * Run the dormant-intentions lazy poll.
+ *
+ * Fires every {@link DORMANT_POLL_INTERVAL} turns when there are dormant
+ * entries. Asks the model a cheap, focused question: is each dormant
+ * intention's trigger near? If so, wake it (flip to active + stamp age).
+ *
+ * Wake semantics (§20): wake EARLY — when the event is "tomorrow," not when
+ * it starts — so the NPC gets a turn or two of anticipatory behavior and the
+ * narrator receives the demand while it's relevant.
+ *
+ * Failure isolation: the poll never blocks the main generation. A parse
+ * failure or API error is logged and swallowed.
+ *
+ * @returns {Promise<number>} count of entries woken (0 if poll didn't fire)
+ */
+export async function runDormantPoll() {
+    const dormant = getDormantLedger();
+    if (dormant.length === 0) return 0;
+
+    if (!hasValidSettings()) {
+        console.warn('[MWT:Interiority] Dormant poll skipped — no API connection configured.');
+        return 0;
+    }
+
+    const settings = getSettings();
+    const windowSize = Math.max(1, settings.messageWindow || 8);
+    const recentMessages = getStrippedRecentMessages(windowSize);
+    if (!recentMessages) return 0;
+
+    const worldTime = getWorldTime();
+    const systemPrompt = buildDormantPollSystemPrompt();
+    const userContent = buildDormantPollUserContent({
+        dormantEntries: dormant,
+        recentMessages,
+        worldTime,
+    });
+
+    const result = await fetchAndParse(systemPrompt, userContent, settings);
+    if (!result || !Array.isArray(result.intentions)) {
+        console.warn('[MWT:Interiority] Dormant poll returned no valid result.');
+        return 0;
+    }
+
+    const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
+    const validIds = new Set(dormant.map(e => e.id));
+    let woken = 0;
+
+    for (const item of result.intentions) {
+        if (!item || typeof item.wake !== 'boolean') continue;
+        const id = String(item.id || '').trim();
+        if (!id || !validIds.has(id)) continue; // unknown id — ignore
+        if (item.wake) {
+            wakeLedgerEntry(id, gracePeriod);
+            woken++;
+            console.log(`[MWT:Interiority] Dormant intention ${id} woken by poll.`);
+        }
+    }
+
+    if (woken > 0) {
+        console.log(`[MWT:Interiority] Dormant poll woke ${woken} intention(s).`);
+    }
+    return woken;
 }
 
 // ─── Core fetch + parse with retry-once ──────────────────────────────────────
@@ -327,6 +646,11 @@ export function validateAndApply(result, roster, msgIdx) {
     // Take a snapshot of the ledger BEFORE mutations (for rollback)
     const ledgerSnapshot = JSON.parse(JSON.stringify(data.ledger));
 
+    // Snapshot the inner-state store BEFORE this turn's thoughts call
+    // rewrites it (§18 rollback). Without this, a swipe would roll back
+    // Mara's intentions but leave her mood from the abandoned timeline.
+    const innerStatesSnapshot = getInnerStatesSnapshot();
+
     // Increment the age of every open intention. This is the first step
     // of the grace-period mechanism: intentions that haven't survived
     // enough turns since being declared are protected from premature
@@ -340,15 +664,23 @@ export function validateAndApply(result, roster, msgIdx) {
     // the roster (e.g. stale ledger entry from before the getUserNames fix).
     const userNamesLower = getUserNames({ lower: true });
 
-    // Build a map of ledger entry ids for quick lookup
-    const ledgerIds = new Set(data.ledger.map(e => e.id));
+    // Build a map of ledger entry ids for quick lookup.
+    // §20: dormant entries are excluded from executed/dropped evaluation —
+    // they never appear in the prompt's <open_intentions>, so any reference
+    // to a dormant id is a hallucination that should be ignored.
+    const ledgerIds = new Set(
+        data.ledger.filter(e => e.status !== 'dormant').map(e => e.id)
+    );
 
     // Build a lookup from id → turnsOpen for grace-period enforcement.
     // The model frequently declares and executes/drops an intention in the
     // same turn — or one turn later — before the trigger has had a chance
     // to arrive. The grace period forces intentions to survive at least
     // N turns before they can be removed.
-    const ledgerAgeMap = new Map(data.ledger.map(e => [e.id, e.turnsOpen || 0]));
+    const ledgerAgeMap = new Map(
+        data.ledger.filter(e => e.status !== 'dormant')
+            .map(e => [e.id, e.turnsOpen || 0])
+    );
     const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
 
     // ── Grace-period design note ────────────────────────────────────────
@@ -376,6 +708,7 @@ export function validateAndApply(result, roster, msgIdx) {
             setPerMessage(msgKey, {
                 reactions: [],
                 ledgerSnapshot,
+                innerStatesSnapshot,
                 generatedAt: Date.now(),
             });
         }
@@ -400,20 +733,63 @@ export function validateAndApply(result, roster, msgIdx) {
         }
         seenNpcs.add(name.toLowerCase());
 
-        // ── Reaction (display-only, max 1 per NPC per turn) ──
+        // ── Thought / Reaction (display-only, max 1 per NPC per turn) ──
         // Skipped entirely when the thoughts feature is disabled.
-        if (wantThoughts && npcResult.reaction && typeof npcResult.reaction === 'object') {
-            const re = String(npcResult.reaction.re || '').trim();
-            const thought = String(npcResult.reaction.thought || '').trim();
-
-            // Drop empty/boilerplate reactions (Omission Over Filler)
-            if (re && thought && !isBoilerplate(thought)) {
-                reactions.push({
-                    npc: name,
-                    re: re.slice(0, 300),
-                    thought: thought.slice(0, MAX_THOUGHT_LENGTH),
-                });
+        // Handles BOTH shapes:
+        //   v1: reaction: { re, thought }
+        //   v2: thought: { type, re?, text } + inner_state
+        if (wantThoughts) {
+            // ── Inner state (§18) — persist BEFORE building the reaction ──
+            // The inner_state field is a sibling of `thought` in the v2
+            // contract, so it must be persisted even when the thought itself
+            // is dropped (boilerplate/null). setInnerStateGuarded applies the
+            // drift backstop: if the returned line is near-identical to the
+            // prior, the prior is kept verbatim. The return value is the line
+            // now stored (prior or new), which the reaction entry should
+            // display so the UI matches the persistent state.
+            let storedInnerState = undefined;
+            const isV2Shape = npcResult.thought !== undefined || npcResult.inner_state !== undefined;
+            if (isV2Shape) {
+                const rawInnerState = String(npcResult.inner_state || '').trim();
+                if (rawInnerState) {
+                    storedInnerState = setInnerStateGuarded(name, rawInnerState);
+                }
             }
+
+            let reactionEntry = null;
+
+            if (npcResult.thought && typeof npcResult.thought === 'object') {
+                // v2 thoughts-call shape — type taxonomy + optional re
+                const t = npcResult.thought;
+                const validTypes = ['reaction', 'rumination', 'memory', 'anticipation'];
+                const type = validTypes.includes(t.type) ? t.type : 'reaction';
+                const text = String(t.text || '').trim();
+                const re = String(t.re || '').trim();
+                // reaction requires re; rumination/memory/anticipation don't.
+                // Drop empty/boilerplate (Omission Over Filler).
+                if (text && !isBoilerplate(text) && (type !== 'reaction' || re)) {
+                    reactionEntry = {
+                        npc: name,
+                        type,
+                        re: re || undefined,
+                        thought: text.slice(0, MAX_THOUGHT_LENGTH),
+                        innerState: storedInnerState || undefined,
+                    };
+                }
+            } else if (npcResult.reaction && typeof npcResult.reaction === 'object') {
+                // v1 unified-call shape — implicitly type "reaction"
+                const re = String(npcResult.reaction.re || '').trim();
+                const thought = String(npcResult.reaction.thought || '').trim();
+                if (re && thought && !isBoilerplate(thought)) {
+                    reactionEntry = {
+                        npc: name,
+                        re: re.slice(0, 300),
+                        thought: thought.slice(0, MAX_THOUGHT_LENGTH),
+                    };
+                }
+            }
+
+            if (reactionEntry) reactions.push(reactionEntry);
         }
 
         // The executed/dropped/new_intentions blocks mutate the ledger, so
@@ -484,17 +860,39 @@ export function validateAndApply(result, roster, msgIdx) {
                     continue;
                 }
 
-                addLedgerEntry({ npc: name, action, trigger }, worldTime, msgIdx);
+                // §20: classify horizon. Scheduled → dormant; immediate/event → active.
+                // Unknown/missing horizon → active (safe default per §20).
+                const horizon = String(ni.horizon || '').toLowerCase().trim();
+                const wakeHint = String(ni.wake_hint || '').trim();
+                let entryStatus = undefined;
+                let entryWakeHint = undefined;
+                if (horizon === 'scheduled') {
+                    entryStatus = 'dormant';
+                    entryWakeHint = wakeHint;
+                }
+                // Event-conditional triggers can never be scheduled — ignore
+                // horizon=scheduled if the trigger looks event-conditional.
+                // (The prompt forbids this, but be defensive.)
+
+                addLedgerEntry(
+                    { npc: name, action, trigger, status: entryStatus, wakeHint: entryWakeHint },
+                    worldTime,
+                    msgIdx,
+                );
                 ledgerChanged = true;
             }
         }
     }
 
-    // Store per-message reactions + ledger snapshot (keyed by stable msgKey)
+    // Store per-message reactions + ledger + inner-state snapshots
+    // (keyed by stable msgKey). Both snapshots enable swipe/edit/delete
+    // rollback — without innerStatesSnapshot, a swipe would roll back
+    // Mara's intentions but leave her mood from the abandoned timeline.
     if (msgKey) {
         setPerMessage(msgKey, {
             reactions,
             ledgerSnapshot,
+            innerStatesSnapshot,
             generatedAt: Date.now(),
         });
     }
