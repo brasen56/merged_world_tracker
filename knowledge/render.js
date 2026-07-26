@@ -774,6 +774,14 @@ function wireStateTrackerEvents(el) {
  * @param {HTMLButtonElement} triggerBtn — the button that launched the modal
  */
 async function openGrowthProfileModal(name, triggerBtn) {
+    // Opening a Growth Profile modal = the user is now reviewing evidence.
+    // Clear the unread counter so the floating-button pulse stops, and
+    // dispatch mwt:busy-changed so the button updates immediately.
+    if (state.unreadGrowthEvidenceCount !== 0) {
+        state.unreadGrowthEvidenceCount = 0;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+    }
+
     // Load what's already in evidence + the last profile — all READ-ONLY
     // (synchronous reads from chat metadata + one local lorebook read).
     // No API calls fire here.
@@ -1212,9 +1220,14 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             const { runCaptureOnly } = await import('./growth.js');
             const { observations, captureStats } = await runCaptureOnly(name);
 
-            const addedText = captureStats.added > 0
-                ? `Capture complete: +${captureStats.added} observation${captureStats.added !== 1 ? 's' : ''}${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} skipped)` : ''}.`
-                : `No new observations found${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} already captured)` : ''}.`;
+            let addedText;
+            if (captureStats.deltaTooSmall) {
+                addedText = `Already up to date — no new messages found since the last capture. Use “Catch Up” to read all history, or play a few more turns and try again.`;
+            } else if (captureStats.added > 0) {
+                addedText = `Capture complete: +${captureStats.added} observation${captureStats.added !== 1 ? 's' : ''}${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} skipped)` : ''}.`;
+            } else {
+                addedText = `No new observations found${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} already captured)` : ''}.`;
+            }
             await refreshGrowthModalContent(modal, name, triggerBtn, addedText);
         } catch (err) {
             flash(`Capture failed: ${err.message}`, 'error');

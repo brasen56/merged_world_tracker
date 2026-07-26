@@ -622,10 +622,21 @@ export async function runGrowthProfile(name) {
 // ─── Capture-only orchestrator ───────────────────────────────────────────────
 
 /**
- * Run evidence capture ONLY (no profile generation):
- *   1. Capture behavioral evidence (observations with quote receipts)
- *   2. Append observations to the two-tier evidence store (raw[])
- *   3. Seed/advance the capture watermark
+ * Run evidence capture ONLY (no profile generation), watermark-gated for
+ * enrolled NPCs.
+ *
+ * Two paths:
+ *
+ *   1. **First-ever capture** (no watermark yet): full EVIDENCE_MESSAGE_WINDOW
+ *      bootstrap scan via captureEvidence(). Seeds the watermark so subsequent
+ *      captures only process the delta.
+ *
+ *   2. **Subsequent captures** (watermark exists): delta-gated via
+ *      runContinuousCapture() — processes only messages newer than the
+ *      watermark. This prevents near-duplicate accumulation: re-scanning the
+ *      same messages gives the model a fresh chance to reword claims or pick
+ *      alternate quotes, which slip past the string-based dedup in
+ *      appendRawObservations and pile up in raw[].
  *
  * This is the "Capture" half of runGrowthProfile, split out so the UI can
  * offer Capture and Generate as separate user-initiated actions (fixing the
@@ -634,7 +645,10 @@ export async function runGrowthProfile(name) {
  * a profile from the now-updated evidence.
  *
  * @param {string} name — NPC name (must exist in the registry)
- * @returns {Promise<{observations: Array, captureStats: {added:number, skipped:number}}>}
+ * @returns {Promise<{observations: Array, captureStats: {added:number, skipped:number, deltaTooSmall?:boolean}}>}
+ *   `deltaTooSmall: true` signals that no new messages were found past the
+ *   watermark (enrolled NPC, nothing to capture). The caller should surface
+ *   this as "already up to date" rather than an error.
  */
 export async function runCaptureOnly(name) {
     const registry = getRegistry();
@@ -646,6 +660,45 @@ export async function runCaptureOnly(name) {
         throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
     }
 
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+
+    // ── Delta-gated path for enrolled NPCs (watermark exists) ──────────────
+    //
+    // Once an NPC has been captured at least once, the manual Capture Evidence
+    // button processes only the delta — messages newer than the watermark —
+    // instead of re-scanning the full 80-message window. This is the same
+    // buildDeltaWindow logic used by continuous capture, ensuring the manual
+    // and automatic paths never re-process the same messages.
+    //
+    // minMessages is lowered to 1 (from continuous capture's DELTA_MIN_MESSAGES
+    // of 4) because this is a deliberate user action — even a single new
+    // message is worth capturing if the user clicked the button.
+    if (getCaptureWatermark(name) != null) {
+        const deltaResult = await runContinuousCapture(name, { minMessages: 1 });
+        const allEvidence = getEvidenceForProfile(name);
+
+        if (deltaResult === null) {
+            // Delta empty or too small — nothing new to capture. This is a
+            // valid, non-error outcome for a user-initiated action; surface it
+            // via the deltaTooSmall flag rather than throwing.
+            return {
+                observations: allEvidence,
+                captureStats: { added: 0, skipped: 0, deltaTooSmall: true },
+            };
+        }
+
+        return {
+            observations: allEvidence,
+            captureStats: { added: deltaResult.added, skipped: deltaResult.skipped },
+        };
+    }
+
+    // ── First-ever capture: full 80-message bootstrap scan ─────────────────
+    //
+    // No watermark exists yet, so this is the NPC's initial capture. Scan the
+    // full window to build an evidence base, then seed the watermark so the
+    // next press (and continuous capture) only process the delta going forward.
+    //
     // Step 1: capture fresh evidence
     const observations = await captureEvidence(name, uid);
     if (observations.length === 0 && !hasEvidenceFile(name)) {
@@ -826,7 +879,7 @@ const DELTA_MAX_MESSAGES = 40;
  * @param {number} sinceTs — the watermark (only messages newer than this)
  * @returns {{text:string, maxTs:number, count:number}|null}
  */
-function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES) {
+function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages = DELTA_MIN_MESSAGES) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
 
@@ -843,7 +896,7 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES) {
         candidates.push({ msg, idx: i, ts });
     }
 
-    if (candidates.length < DELTA_MIN_MESSAGES) return null;
+    if (candidates.length < minMessages) return null;
 
     // Process the OLDEST `maxMessages` of the delta (A2 fix). If more than
     // the cap accrued since the last cadence fire, processing the oldest batch
@@ -894,7 +947,7 @@ export async function runContinuousCapture(name, opts = {}) {
     if (uid === null || uid === undefined) return null;
 
     const sinceTs = getCaptureWatermark(name);
-    const delta = buildDeltaWindow(sinceTs, opts.maxMessages);
+    const delta = buildDeltaWindow(sinceTs, opts.maxMessages, opts.minMessages);
     if (!delta) return null;
 
     // `_retries` lets the catch-up loop disable ktFetchFromApi's own retry so

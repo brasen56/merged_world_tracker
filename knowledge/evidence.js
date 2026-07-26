@@ -119,8 +119,11 @@ export function clearEvidence(name) {
     file.consolidated = [];
     file.archivedRaw = [];
     file.userOverrides = [];
+    // Preserve createdAt: this clears the file's CONTENTS, it does not re-create
+    // the file. Resetting it would lose when the NPC was first enrolled and make
+    // "how long has this character been tracked" unanswerable.
     file.meta = {
-        createdAt: Date.now(),
+        createdAt: file.meta?.createdAt ?? Date.now(),
         updatedAt: Date.now(),
         lastProfileAt: null,
         lastCaptureTs: null,
@@ -147,8 +150,9 @@ export function clearAllEvidence() {
         map[name].consolidated = [];
         map[name].archivedRaw = [];
         map[name].userOverrides = [];
+        // Preserve createdAt — see clearEvidence().
         map[name].meta = {
-            createdAt: Date.now(),
+            createdAt: map[name].meta?.createdAt ?? Date.now(),
             updatedAt: Date.now(),
             lastProfileAt: null,
             lastCaptureTs: null,

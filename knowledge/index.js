@@ -144,6 +144,16 @@ export function onMessageReceived() {
             const { notify } = await import('../core/index.js');
             const total = results.reduce((s, r) => s + r.added, 0);
 
+            // Increment the unread growth evidence counter so the floating
+            // button pulses green — a persistent, visible signal that new
+            // evidence is waiting to be reviewed, even when the MWT modal is
+            // closed. Mirrors the staging-proposal pulse (orange) already in
+            // place for scan/state proposals.
+            if (total > 0) {
+                state.unreadGrowthEvidenceCount += total;
+                document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+            }
+
             // Only notify on meaningful outcomes. Firing a "no new observations
             // found" toast every cadence cycle (default 15 msgs) is noisy in
             // normal roleplay — that's the no-op case, not a result the user
@@ -301,6 +311,10 @@ export function onChatChanged() {
     state.activeSubTab = 'staging';
     state._cachedTokenCount = 0;
     state.notificationEntries = {};
+    // Reset the growth evidence badge counter for the new chat — unread
+    // evidence from the previous chat shouldn't follow the user here.
+    state.unreadGrowthEvidenceCount = 0;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     hideNotificationPanel();
     document.querySelectorAll('#kt-view-modal').forEach(m => m.remove());
 }
@@ -461,6 +475,14 @@ export function getAutoScanStatus() {
  *  an attention badge when there are proposals awaiting review. */
 export function getStagingCount() {
     return state.stagingItems.length;
+}
+
+/** Returns the count of unread growth observations captured in the background
+ *  since the user last opened a Growth Profile modal. Drives a green pulse on
+ *  the floating button so new evidence is visible even when the modal is
+ *  closed — the transient toastr fires once and is easy to miss. */
+export function getGrowthEvidenceCount() {
+    return state.unreadGrowthEvidenceCount;
 }
 
 export async function getNpcContent(name) {

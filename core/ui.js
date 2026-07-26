@@ -559,17 +559,32 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             }
         }
 
-        // ── Knowledge staging badge (works in BOTH modern + classic) ──
-        // Pulse the Knowledge floating button when there are pending staging
-        // items awaiting review, so the user is drawn back to the staging panel.
-        // Applied before the classic early-return so the attention pulse shows
-        // in both button styles.
+        // ── Knowledge staging + growth badges (works in BOTH modern + classic) ──
+        // Two independent attention signals, both on the Knowledge button:
+        //
+        //   • staging (orange) — pending scan/state proposals awaiting review.
+        //   • growth  (green)  — unread behavioral evidence captured in the
+        //     background since the user last opened a Growth Profile modal.
+        //
+        // Both pulse so the user is drawn back even when the MWT modal is
+        // closed. The growth badge is the persistent companion to the transient
+        // toastr that fires once on capture completion.
         const knBtnAny = document.getElementById('mwt-float-knowledge');
         if (knBtnAny) {
             const stagingCount = Knowledge.getStagingCount?.() ?? 0;
+            const growthCount = Knowledge.getGrowthEvidenceCount?.() ?? 0;
             knBtnAny.classList.toggle('mwt-btn--has-staging', stagingCount > 0);
-            if (stagingCount > 0) {
+            knBtnAny.classList.toggle('mwt-btn--has-growth', growthCount > 0);
+
+            // Title shows whichever signal(s) are active. Staging takes
+            // precedence in the wording since proposals need action; growth
+            // evidence is informational (already saved to the evidence store).
+            if (stagingCount > 0 && growthCount > 0) {
+                knBtnAny.title = `Knowledge Tracker — ${stagingCount} proposal(s) + ${growthCount} new growth observation(s)`;
+            } else if (stagingCount > 0) {
                 knBtnAny.title = `Knowledge Tracker — ${stagingCount} proposal(s) awaiting review`;
+            } else if (growthCount > 0) {
+                knBtnAny.title = `Knowledge Tracker — ${growthCount} new growth observation(s) (open a Growth Profile to review)`;
             } else {
                 knBtnAny.title = 'Knowledge';
             }

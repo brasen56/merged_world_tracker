@@ -59,6 +59,13 @@ export const state = {
     notificationEntries: {},
     notifActiveId: null,
 
+    // ── Growth evidence badge state ──
+    // Incremented when continuous capture adds new observations in the
+    // background. Reset to 0 when the user opens any Growth Profile modal.
+    // Drives the floating-button pulse so the user is drawn back to review
+    // new evidence even when the MWT modal is closed.
+    unreadGrowthEvidenceCount: 0,
+
     // ── Runtime state ──
     messageCounter: 0,
     npcMessageCounter: 0,

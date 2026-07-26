@@ -676,11 +676,35 @@ document.addEventListener('mwt:busy-changed', ui.updateButtonStates);
 // Usage examples:
 //   MWT.evidence.list()                  // list NPCs with evidence + counts
 //   MWT.evidence.clear('Kira')           // wipe one NPC's evidence (start over)
-//   MWT.evidence.clearAll()              // wipe ALL NPCs' evidence in this chat
+//   MWT.evidence.clearAll(true)          // wipe ALL NPCs' evidence in this chat
 //   MWT.evidence.summary('Kira')         // show tiers + last-profile time
 //   MWT.evidence.inspect('Kira')         // dump the full evidence file object
+//
+// NOTE ON CLEARING: evidence is the ROOT, a generated profile is a LEAF. Clearing
+// evidence does NOT delete the NPC's entry in the "NPC Profiles" lorebook, which
+// would leave a profile with nothing backing it — the unfalsifiable state this
+// feature exists to prevent. Both clear operations warn when that applies.
 try {
     const evidenceApi = await import('./knowledge/evidence.js');
+    const registryApi = await import('./knowledge/registry.js');
+
+    /**
+     * Warn when cleared NPCs still have a profile entry in the NPC Profiles
+     * lorebook — it is now unbacked by any evidence.
+     */
+    const warnOrphanedProfiles = (names) => {
+        const orphaned = names.filter(n => {
+            try { return registryApi.getProfileUid(n) !== null; } catch { return false; }
+        });
+        if (orphaned.length === 0) return;
+        console.warn(
+            `[MWT] ⚠ ${orphaned.length} generated profile(s) are now UNBACKED by evidence: ` +
+            `${orphaned.join(', ')}.\n` +
+            `Their entries still exist in the "NPC Profiles" lorebook but nothing supports them ` +
+            `anymore. Re-capture and regenerate, or delete those entries manually.`
+        );
+    };
+
     window.MWT = window.MWT || {};
     window.MWT.evidence = {
         list: () => {
@@ -699,7 +723,11 @@ try {
             console.table(out);
             return out;
         },
-        summary: (name) => console.log('Evidence summary for', name, ':', evidenceApi.getEvidenceSummary(name)),
+        summary: (name) => {
+            const s = evidenceApi.getEvidenceSummary(name);
+            console.log('Evidence summary for', name, ':', s);
+            return s;
+        },
         inspect: (name) => {
             const file = evidenceApi.getEvidenceFile(name, false);
             if (!file) { console.log(`No evidence file for "${name}".`); return; }
@@ -708,12 +736,30 @@ try {
         },
         clear: (name) => {
             const ok = evidenceApi.clearEvidence(name);
-            console.log(ok ? `Cleared all evidence for "${name}". The NPC remains enrolled in continuous capture.` : `No evidence file found for "${name}".`);
-            return ok;
+            if (!ok) { console.log(`No evidence file found for "${name}".`); return false; }
+            console.log(`Cleared all evidence for "${name}". The NPC remains enrolled in continuous capture.`);
+            warnOrphanedProfiles([name]);
+            return true;
         },
-        clearAll: () => {
+        clearAll: (confirm) => {
+            // Guarded: this wipes every NPC's evidence for the chat, including the
+            // archivedRaw audit trail. Rebuilding it means re-running capture over
+            // the whole history — real API cost — so a bare clearAll() (or a typo
+            // where clear('Name') was meant) must not be destructive.
+            if (confirm !== true) {
+                const names = Object.keys(evidenceApi.getEvidenceMap());
+                console.warn(
+                    `[MWT] clearAll() would wipe evidence for ${names.length} NPC(s) in THIS chat: ` +
+                    `${names.join(', ') || '(none)'}.\n` +
+                    `This cannot be undone and re-capturing costs API calls. ` +
+                    `Call MWT.evidence.clearAll(true) to confirm, or MWT.evidence.clear('Name') for one NPC.`
+                );
+                return 0;
+            }
+            const names = Object.keys(evidenceApi.getEvidenceMap());
             const count = evidenceApi.clearAllEvidence();
             console.log(count > 0 ? `Cleared evidence for ${count} NPC(s) in this chat.` : 'No evidence found to clear.');
+            if (count > 0) warnOrphanedProfiles(names);
             return count;
         },
     };

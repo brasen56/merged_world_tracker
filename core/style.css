@@ -712,3 +712,39 @@ body.mwt-buttons--classic .mwt-float-btn.mwt-btn--master-off {
 body.mwt-buttons--classic .mwt-float-btn.mwt-btn--has-staging {
     border-color: var(--mwt-warning, #ff9800);
 }
+
+/* ─── Knowledge growth evidence pulse (works in both modern + classic) ────────
+   Pulses the Knowledge floating button GREEN when behavioral evidence has been
+   captured in the background (continuous capture) since the user last opened a
+   Growth Profile modal. This is the persistent, always-visible companion to the
+   transient toastr that fires once on capture completion — the toast is easy to
+   miss, the pulse stays until the user reviews the evidence.
+
+   Green distinguishes it from the orange staging pulse (pending proposals). If
+   both signals are active, the growth glow layers on top of the staging border. */
+.mwt-float-btn.mwt-btn--has-growth {
+    border-color: var(--mwt-success, #4caf50);
+    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.35), 0 2px 12px rgba(76, 175, 80, 0.4);
+    animation: mwt-growth-pulse 1.8s ease-in-out infinite;
+}
+
+/* When both staging (orange) and growth (green) are active, use a layered
+   glow so both signals are visible. The growth animation takes over the
+   box-shadow; the border stays orange from the staging rule above. */
+.mwt-float-btn.mwt-btn--has-staging.mwt-btn--has-growth {
+    border-color: var(--mwt-warning, #ff9800);
+    animation: mwt-growth-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes mwt-growth-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.25), 0 2px 8px rgba(76, 175, 80, 0.3); }
+    50%      { box-shadow: 0 0 0 5px rgba(76, 175, 80, 0.15), 0 2px 16px rgba(76, 175, 80, 0.5); }
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--has-growth {
+    border-color: var(--mwt-success, #4caf50);
+}
+
+body.mwt-buttons--classic .mwt-float-btn.mwt-btn--has-staging.mwt-btn--has-growth {
+    border-color: var(--mwt-warning, #ff9800);
+}
