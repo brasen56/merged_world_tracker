@@ -135,7 +135,12 @@ async function loadNpcKnowledge(npcName) {
         const { loadEntryContent } = await import('../knowledge/lorebook.js');
         const { stripRelationshipBlock } = await import('../knowledge/relationships.js');
         const reg = getRegistry();
-        const info = reg?.[npcName];
+        // Case-insensitive key resolution — roster names can come from the
+        // world state `Present:` line, whose casing need not match the
+        // registry's. An exact lookup silently costs the NPC their entire
+        // knowledge entry (on BOTH the intentions and thoughts calls).
+        const key = reg ? _resolveRegistryKey(reg, npcName) : null;
+        const info = key != null ? reg[key] : null;
         if (!info || info.uid == null) return null;
         const content = await loadEntryContent(info.uid);
         if (!content) return null;
@@ -412,10 +417,10 @@ export async function runSplitCall(roster, { force = false } = {}) {
     // §21: thoughtsProfiledOnly — filter the thoughts roster to profiled NPCs.
     let thoughtsRoster = roster;
     if (!skipThoughtsThisTurn && settings.thoughtsProfiledOnly === true) {
+        // _filterToProfiledNpcs logs a detailed diagnostic when it empties the
+        // roster — the bare "nobody has a profile" message can't distinguish
+        // "no profiles saved yet" from "roster names don't match the registry".
         thoughtsRoster = await _filterToProfiledNpcs(roster);
-        if (thoughtsRoster.length === 0) {
-            console.log('[MWT:Interiority] thoughtsProfiledOnly is on but no roster NPC has a growth profile — skipping thoughts call.');
-        }
     }
     const runThoughts = !skipThoughtsThisTurn && thoughtsRoster.length > 0;
 
@@ -451,10 +456,29 @@ async function _filterToProfiledNpcs(roster) {
         const { getRegistry } = await import('../knowledge/registry.js');
         const reg = getRegistry();
         if (!reg) return roster; // no registry — fail open
-        return roster.filter(name => {
+        const filtered = roster.filter(name => {
             const key = _resolveRegistryKey(reg, name);
             return key != null && reg[key]?.profileUid != null;
         });
+
+        // Diagnostic: an empty result has two very different causes, and the
+        // fix differs. Name both the roster and the NPCs that actually carry a
+        // profileUid so the log distinguishes "no profiles saved yet" from
+        // "roster names don't match any registry entry".
+        if (filtered.length === 0 && roster.length > 0) {
+            const profiled = Object.keys(reg).filter(k => reg[k]?.profileUid != null);
+            const known = Object.keys(reg);
+            console.log(
+                '[MWT:Interiority] "Profiled NPCs only" is ON but no roster NPC has a saved growth profile — skipping thoughts call.\n' +
+                `  Roster this turn: ${roster.join(', ') || '(empty)'}\n` +
+                `  Registry entries WITH a saved profile: ${profiled.join(', ') || '(none)'}\n` +
+                `  Registry entries total: ${known.join(', ') || '(none)'}\n` +
+                '  Note: profileUid is set only when a generated growth profile is SAVED to the ' +
+                '"NPC Profiles" lorebook — generating or psychoanalyzing alone does not set it. ' +
+                'Otherwise turn "Profiled NPCs only" off.'
+            );
+        }
+        return filtered;
     } catch {
         return roster; // knowledge module unavailable — fail open
     }
