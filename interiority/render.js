@@ -7,8 +7,8 @@
  * perMessage metadata on top of the message element).
  */
 
-import { escapeHtml } from '../core/index.js';
 import {
+    escapeHtml, getContextSafe,
     renderApiSettingsFields, readApiSettingsValues,
 } from '../core/index.js';
 
@@ -20,6 +20,7 @@ import {
     addManualLedgerEntry, hasDuplicateIntention,
     getInnerStates, setInnerState, MAX_INNER_STATE_LENGTH,
     getDormantLedger, wakeLedgerEntry, setLedgerEntryDormant,
+    DORMANT_POLL_INTERVAL, getDormantPollInterval,
 } from './data.js';
 
 // ─── Main render ─────────────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ export function renderContent() {
 
             <h3>📅 Scheduled Intentions (${ledger.filter(e => e.status === 'dormant').length})</h3>
             <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Dormant plans anchored to future events. Excluded from the narrator prompt and per-turn evaluation until their trigger is near — checked automatically every ${DORMANT_POLL_INTERVAL} turns, or click ⏰ to wake manually.
+                Dormant plans anchored to future events. Excluded from the narrator prompt and per-turn evaluation until their trigger is near — checked automatically every ${getDormantPollInterval()} turns, or click ⏰ to wake manually.
             </p>
             <div id="mwt-int-dormant-list" class="mwt-int-ledger-list">
                 ${renderDormantList(ledger.filter(e => e.status === 'dormant'))}
@@ -112,6 +113,7 @@ function renderLedgerList(ledger) {
             <div class="mwt-int-ledger-meta">
                 ${entry.since ? `<span style="color:var(--mwt-text-dim)">since ${escapeHtml(entry.since)}</span>` : ''}
                 ${entry.turnsOpen != null ? `<span style="color:var(--mwt-text-dim);font-size:11px" title="Turns this intention has survived">${entry.turnsOpen} turn${entry.turnsOpen === 1 ? '' : 's'}</span>` : ''}
+                <button class="mwt-int-sleep-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Schedule this intention — stops per-turn narrator demands until its trigger is near">💤</button>
                 <button class="mwt-int-edit-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Edit this intention">✎</button>
                 <button class="mwt-int-remove-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Remove this intention">✕</button>
             </div>
@@ -303,6 +305,33 @@ function renderThoughtsList(msgKeys) {
 // ─── Settings panel ──────────────────────────────────────────────────────────
 
 /**
+ * Build the HTML for a Connection Manager profile <select>, mirroring the
+ * global settings panel. Reused for the thoughts-specific profile selector.
+ *
+ * @param {string} selectId - DOM id for the <select>
+ * @param {string} selectedProfileId - currently-selected profile id
+ * @param {string} noneLabel - label for the empty/none option
+ * @returns {string}
+ */
+function renderConnectionProfileSelect(selectId, selectedProfileId, noneLabel) {
+    let optionsHtml = `<option value="">${escapeHtml(noneLabel)}</option>`;
+    try {
+        const ctx = getContextSafe();
+        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
+        const activeId = ctx?.extensionSettings?.connectionManager?.selectedProfile || '';
+        for (const profile of profiles) {
+            const id = profile.id;
+            if (!id) continue;
+            const name = profile.name || id;
+            const selected = id === selectedProfileId ? ' selected' : '';
+            const isActive = id === activeId ? ' (active)' : '';
+            optionsHtml += `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(name)}${isActive}</option>`;
+        }
+    } catch { /* connection manager unavailable */ }
+    return `<select id="${selectId}" class="mwt-input">${optionsHtml}</select>`;
+}
+
+/**
  * Render the settings panel inside the Interiority tab.
  */
 export function renderSettingsPanel() {
@@ -340,13 +369,31 @@ export function renderSettingsPanel() {
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON and both features are enabled, intentions and thoughts run as two parallel calls — enabling a dedicated craft prompt and richer context for thoughts (v2 groundwork). Roughly doubles interiority's per-turn token cost. OFF = the original single unified call.</p>
             </div>
 
+            <div id="mwt-int-v2-dials" style="margin-top:12px;padding:8px 12px;border:1px solid var(--mwt-border);border-radius:4px;${s.splitThoughts === true ? '' : 'display:none'}">
+                <h4 style="margin:4px 0 8px;font-size:13px">Rich thoughts — cost dials</h4>
+
+                <label class="mwt-label">Thoughts Connection Profile</label>
+                ${renderConnectionProfileSelect('mwt-int-thoughts-profile', s.thoughtsConnectionProfileId || '', '— Use module connection —')}
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Optional. Route the (expensive) thoughts call through a separate connection profile so a better model can be pointed at voice without paying for it on bookkeeping. Leave empty to use the module's own connection.</p>
+
+                <div style="margin-top:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                    <label style="font-size:12px;color:var(--mwt-text-dim)" title="Run the thoughts call only every N turns. Intentions still run every turn; off-turns skip thoughts.">Thoughts every <input type="number" id="mwt-int-thoughts-interval" class="mwt-input" style="width:60px;display:inline-block" value="${s.thoughtsInterval ?? 1}" min="1" max="20"> turns</label>
+                </div>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Set to 1 for every turn. Higher values run the expensive thoughts call less often (intentions still run every turn).</p>
+
+                <div style="margin-top:8px">
+                    <label><input type="checkbox" id="mwt-int-thoughts-profiled-only" ${s.thoughtsProfiledOnly === true ? 'checked' : ''}> Profiled NPCs only</label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Restrict the rich thoughts call to NPCs that have a growth profile. Unprofiled NPCs get no thought on a given turn (intentions are unaffected).</p>
+                </div>
+            </div>
+
             <div style="margin-top:12px">
                 <label>Mode</label>
                 <select id="mwt-int-mode" class="mwt-input">
                     <option value="batched" ${s.mode !== 'strict' ? 'selected' : ''}>Batched (one call/turn — recommended)</option>
                     <option value="strict" ${s.mode === 'strict' ? 'selected' : ''}>Strict (one call per NPC — true partition at N× cost)</option>
                 </select>
-                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Batched mode makes one API call per turn containing all NPCs. Strict mode makes one call per NPC for true information partition.</p>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Batched mode makes one API call per turn containing all NPCs. Strict mode makes one call per NPC for true information partition.${s.splitThoughts === true && s.mode === 'strict' ? '</p><p style="font-size:11px;color:#c77">⚠ Rich thoughts (split) is ON, which overrides Strict — the unified call strict partitions is bypassed in favor of the split pair. Turn Rich thoughts OFF to use Strict mode.' : ''}</p>
             </div>
 
             <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -356,11 +403,23 @@ export function renderSettingsPanel() {
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Grace Period: minimum turns an intention must survive before it can be executed or dropped. Higher values make intentions more persistent. Set to 0 to disable.</p>
 
+            <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                <label style="font-size:12px;color:var(--mwt-text-dim)" title="How often (in turns) the dormant-intentions poll fires to check if a scheduled intention's trigger is near.">Dormant Poll <input type="number" id="mwt-int-dormant-poll" class="mwt-input" style="width:60px;display:inline-block" value="${s.dormantPollInterval ?? 10}" min="1" max="200"> turns</label>
+            </div>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">How often scheduled intentions are checked to see if their trigger is near. Lower = sooner wake, higher = fewer API checks. Default: ${DORMANT_POLL_INTERVAL}.</p>
+
             <div class="mwt-flex mwt-gap-4" style="margin-top:12px">
                 <button id="mwt-int-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
             </div>
         </div>
     `;
+
+    // Show/hide the v2 cost dials based on the splitThoughts checkbox.
+    const splitCheckbox = panel.querySelector('#mwt-int-split-thoughts');
+    const v2Dials = panel.querySelector('#mwt-int-v2-dials');
+    splitCheckbox?.addEventListener('change', () => {
+        if (v2Dials) v2Dials.style.display = splitCheckbox.checked ? '' : 'none';
+    });
 
     panel.querySelector('#mwt-int-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(panel, apiFieldOpts);
@@ -370,10 +429,14 @@ export function renderSettingsPanel() {
             generateThoughts: panel.querySelector('#mwt-int-gen-thoughts')?.checked ?? true,
             generateIntentions: panel.querySelector('#mwt-int-gen-intentions')?.checked ?? true,
             splitThoughts: panel.querySelector('#mwt-int-split-thoughts')?.checked ?? false,
+            thoughtsConnectionProfileId: panel.querySelector('#mwt-int-thoughts-profile')?.value || '',
+            thoughtsInterval: Math.max(1, Number(panel.querySelector('#mwt-int-thoughts-interval')?.value) || 1),
+            thoughtsProfiledOnly: panel.querySelector('#mwt-int-thoughts-profiled-only')?.checked ?? false,
             mode: panel.querySelector('#mwt-int-mode')?.value || 'batched',
             maxNpcs: Number(panel.querySelector('#mwt-int-max-npcs')?.value) || 4,
             messageWindow: Number(panel.querySelector('#mwt-int-window')?.value) || 8,
             intentionGracePeriod: Math.max(0, Number(panel.querySelector('#mwt-int-grace')?.value) || 0),
+            dormantPollInterval: Math.max(1, Number(panel.querySelector('#mwt-int-dormant-poll')?.value) || 10),
         });
         setIntStatus('Settings saved.', 'success');
         renderContent();
@@ -488,79 +551,94 @@ function wireEvents(el) {
         }
     });
 
-    // Per-entry edit and remove buttons — ACTIVE list (event delegation)
-    el.querySelector('#mwt-int-ledger-list')?.addEventListener('click', (e) => {
-        // Remove button
-        const removeBtn = e.target.closest('.mwt-int-remove-btn');
-        if (removeBtn) {
-            const id = removeBtn.dataset.id;
-            if (id) {
-                removeLedgerEntries([id]);
-                renderContent();
-                document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
-            }
-            return;
-        }
+    // Per-entry buttons for BOTH ledger lists (event delegation).
+    //
+    // The active and scheduled lists render the same entry shape and share
+    // every control except ⏰ (dormant only) and 💤 (active only) — those
+    // simply never appear in the other list, so one handler serves both.
+    // Keeping them on a single function stops the two lists from drifting
+    // apart (the scheduled list previously rendered an ✎ with no handler).
+    el.querySelector('#mwt-int-ledger-list')?.addEventListener('click', handleLedgerListClick);
+    el.querySelector('#mwt-int-dormant-list')?.addEventListener('click', handleLedgerListClick);
+}
 
-        // Edit button — transform the entry into an inline edit form
-        const editBtn = e.target.closest('.mwt-int-edit-btn');
-        if (editBtn) {
-            const id = editBtn.dataset.id;
-            if (id) {
-                showInlineEditForm(id);
-            }
-            return;
+/**
+ * Shared click handler for the active and scheduled intention lists.
+ * @param {MouseEvent} e
+ */
+function handleLedgerListClick(e) {
+    // §20: Wake button (scheduled list) — flip a dormant intention to active
+    const wakeBtn = e.target.closest('.mwt-int-wake-btn');
+    if (wakeBtn) {
+        const id = wakeBtn.dataset.id;
+        if (id) {
+            const grace = getSettings().intentionGracePeriod || 0;
+            wakeLedgerEntry(id, grace);
+            setIntStatus('Intention woken — now active.', 'success');
+            renderContent();
+            document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
         }
+        return;
+    }
 
-        // Save button (inside inline edit form)
-        const saveBtn = e.target.closest('.mwt-int-edit-save-btn');
-        if (saveBtn) {
-            const id = saveBtn.dataset.id;
-            if (id) {
-                handleInlineEditSave(id);
-            }
-            return;
+    // §20: Sleep button (active list) — schedule a far-future intention.
+    // The scan classifies horizon at declaration and defaults to "immediate"
+    // when unsure, so a plan anchored days out often lands active. This is
+    // the manual correction: dormant entries leave the injection and the
+    // per-turn evaluation until their trigger is near.
+    const sleepBtn = e.target.closest('.mwt-int-sleep-btn');
+    if (sleepBtn) {
+        const id = sleepBtn.dataset.id;
+        if (id) {
+            setLedgerEntryDormant(id);
+            setIntStatus('Intention scheduled — click ✎ to add a wake hint (the event to watch for).', 'success');
+            renderContent();
+            document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
         }
+        return;
+    }
 
-        // Cancel button (inside inline edit form)
-        const cancelBtn = e.target.closest('.mwt-int-edit-cancel-btn');
-        if (cancelBtn) {
-            const id = cancelBtn.dataset.id;
-            if (id) {
-                cancelInlineEdit(id);
-            }
-            return;
+    // Remove button
+    const removeBtn = e.target.closest('.mwt-int-remove-btn');
+    if (removeBtn) {
+        const id = removeBtn.dataset.id;
+        if (id) {
+            removeLedgerEntries([id]);
+            renderContent();
+            document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
         }
-    });
+        return;
+    }
 
-    // §20: Dormant list — wake / edit / remove (event delegation)
-    el.querySelector('#mwt-int-dormant-list')?.addEventListener('click', (e) => {
-        // Wake button — manually wake a dormant intention
-        const wakeBtn = e.target.closest('.mwt-int-wake-btn');
-        if (wakeBtn) {
-            const id = wakeBtn.dataset.id;
-            if (id) {
-                const grace = getSettings().intentionGracePeriod || 0;
-                wakeLedgerEntry(id, grace);
-                setIntStatus('Intention woken — now active.', 'success');
-                renderContent();
-                document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
-            }
-            return;
+    // Edit button — transform the entry into an inline edit form
+    const editBtn = e.target.closest('.mwt-int-edit-btn');
+    if (editBtn) {
+        const id = editBtn.dataset.id;
+        if (id) {
+            showInlineEditForm(id);
         }
+        return;
+    }
 
-        // Remove button
-        const removeBtn = e.target.closest('.mwt-int-remove-btn');
-        if (removeBtn) {
-            const id = removeBtn.dataset.id;
-            if (id) {
-                removeLedgerEntries([id]);
-                renderContent();
-                document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
-            }
-            return;
+    // Save button (inside inline edit form)
+    const saveBtn = e.target.closest('.mwt-int-edit-save-btn');
+    if (saveBtn) {
+        const id = saveBtn.dataset.id;
+        if (id) {
+            handleInlineEditSave(id);
         }
-    });
+        return;
+    }
+
+    // Cancel button (inside inline edit form)
+    const cancelBtn = e.target.closest('.mwt-int-edit-cancel-btn');
+    if (cancelBtn) {
+        const id = cancelBtn.dataset.id;
+        if (id) {
+            cancelInlineEdit(id);
+        }
+        return;
+    }
 }
 
 // ─── Inline edit form ────────────────────────────────────────────────────────
@@ -571,15 +649,14 @@ function wireEvents(el) {
  * @param {string} id - ledger entry id
  */
 function showInlineEditForm(id) {
-    const listEl = getContentEl()?.querySelector('#mwt-int-ledger-list');
-    if (!listEl) return;
-
-    const entryEl = listEl.querySelector(`.mwt-int-ledger-entry[data-id="${CSS.escape(id)}"]`);
+    const entryEl = findLedgerEntryEl(id);
     if (!entryEl) return;
 
     const ledger = getLedger();
     const entry = ledger.find(e => e.id === id);
     if (!entry) return;
+
+    const isDormant = entry.status === 'dormant';
 
     entryEl.classList.add('mwt-int-ledger-entry--editing');
     entryEl.innerHTML = `
@@ -596,6 +673,11 @@ function showInlineEditForm(id) {
                 <label class="mwt-label">Trigger</label>
                 <input type="text" class="mwt-input mwt-int-edit-trigger" value="${escapeHtml(entry.trigger)}" placeholder="When/where the NPC will act">
             </div>
+            ${isDormant ? `
+            <div class="mwt-int-edit-row">
+                <label class="mwt-label">Wake hint</label>
+                <input type="text" class="mwt-input mwt-int-edit-wakehint" value="${escapeHtml(entry.wakeHint || '')}" placeholder="The event or date to watch for (e.g. harvest festival)">
+            </div>` : ''}
             <div class="mwt-int-edit-actions">
                 <button class="mwt-btn mwt-btn-primary mwt-int-edit-save-btn" data-id="${escapeHtml(entry.id)}">💾 Save</button>
                 <button class="mwt-btn mwt-int-edit-cancel-btn" data-id="${escapeHtml(entry.id)}">✕ Cancel</button>
@@ -611,7 +693,7 @@ function showInlineEditForm(id) {
     }
 
     // Keyboard shortcuts: Enter to save, Escape to cancel
-    entryEl.querySelectorAll('.mwt-int-edit-npc, .mwt-int-edit-action, .mwt-int-edit-trigger').forEach(input => {
+    entryEl.querySelectorAll('.mwt-int-edit-npc, .mwt-int-edit-action, .mwt-int-edit-trigger, .mwt-int-edit-wakehint').forEach(input => {
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -630,10 +712,7 @@ function showInlineEditForm(id) {
  * @param {string} id - ledger entry id
  */
 function handleInlineEditSave(id) {
-    const listEl = getContentEl()?.querySelector('#mwt-int-ledger-list');
-    if (!listEl) return;
-
-    const entryEl = listEl.querySelector(`.mwt-int-ledger-entry[data-id="${CSS.escape(id)}"]`);
+    const entryEl = findLedgerEntryEl(id);
     if (!entryEl) return;
 
     const npc = entryEl.querySelector('.mwt-int-edit-npc')?.value?.trim() || '';
@@ -646,9 +725,35 @@ function handleInlineEditSave(id) {
     }
 
     updateLedgerEntry(id, { npc, action, trigger });
+
+    // §20: the wake-hint field only renders for dormant entries. Persist it
+    // via setLedgerEntryDormant, which owns the dormant fields (updateLedgerEntry
+    // deliberately restricts itself to the four user-editable core fields).
+    const wakeHintInput = entryEl.querySelector('.mwt-int-edit-wakehint');
+    if (wakeHintInput) {
+        setLedgerEntryDormant(id, wakeHintInput.value.trim());
+    }
+
     setIntStatus('Intention updated.', 'success');
     renderContent();
     document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+}
+
+/**
+ * Find a ledger entry's DOM element by id, in whichever list it lives —
+ * active (`#mwt-int-ledger-list`) or scheduled (`#mwt-int-dormant-list`).
+ *
+ * Scoped to the two lists rather than the whole panel so the inline ADD form
+ * (which reuses `.mwt-int-ledger-entry` but carries no data-id) can never match.
+ *
+ * @param {string} id - ledger entry id
+ * @returns {HTMLElement|null}
+ */
+function findLedgerEntryEl(id) {
+    const root = getContentEl();
+    if (!root) return null;
+    const sel = `.mwt-int-ledger-entry[data-id="${CSS.escape(id)}"]`;
+    return root.querySelector(`#mwt-int-ledger-list ${sel}, #mwt-int-dormant-list ${sel}`);
 }
 
 /**

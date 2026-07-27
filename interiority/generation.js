@@ -29,7 +29,8 @@ import {
     getOrCreateMsgKeyForIndex,
     getRecentThoughtsForNpc,
     getInnerState, setInnerStateGuarded, getInnerStatesSnapshot,
-    getActiveLedger, getDormantLedger, wakeLedgerEntry,
+    getDormantLedger, wakeLedgerEntry,
+    getTurnCounter,
     MAX_THOUGHT_LENGTH, getWorldTime, incrementLedgerAges,
 } from './data.js';
 
@@ -302,6 +303,15 @@ async function _runCall(roster, { thoughts = null, intentions = null, label = 'b
         return null;
     }
 
+    // §21: thoughts connection profile — when set, route the (expensive)
+    // thoughts call through a separate connection profile so a better model
+    // can be pointed at voice without paying for it on bookkeeping. The
+    // intentions call stays on the module connection. Only applies to the
+    // rich-thoughts (split) call; the unified call uses the module connection.
+    const apiSettings = useRichThoughtsContext && settings.thoughtsConnectionProfileId
+        ? { ...settings, connectionProfileId: settings.thoughtsConnectionProfileId }
+        : settings;
+
     // Rich thoughts context (v2 §17) uses the dedicated craft prompt + richer
     // per-NPC blocks. The v1 unified call and the intentions-side split call
     // stay on the lean blocks + unified prompt.
@@ -340,7 +350,7 @@ async function _runCall(roster, { thoughts = null, intentions = null, label = 'b
         });
     }
 
-    return fetchAndParse(systemPrompt, userContent, settings);
+    return fetchAndParse(systemPrompt, userContent, apiSettings);
 }
 
 /**
@@ -367,23 +377,112 @@ export async function runBatchedCall(roster) {
  * in validateAndApply (after both calls complete), neither call mutates
  * shared state during execution — parallel execution is safe.
  *
+ * §21 cost dials apply to the thoughts side only (intentions always run):
+ *  - `thoughtsInterval` (N): skip the thoughts call on turns where
+ *    `turnCounter % N !== 0`. 1 = every turn (default).
+ *  - `thoughtsProfiledOnly`: restrict the rich-thoughts roster to NPCs that
+ *    have a growth profile; unprofiled NPCs are dropped for that turn.
+ *
+ * When thoughts are skipped, `thoughtsResult` is null — the caller runs the
+ * intentions call alone and validateAndApply applies only ledger mutations
+ * (no reactions), exactly as if the thoughts feature were disabled.
+ *
  * @param {string[]} roster
+ * @param {object} [opts]
+ * @param {boolean} [opts.force=false] - user-initiated generation: bypass the
+ *   `thoughtsInterval` throttle. The interval throttles automatic per-turn
+ *   thoughts; it must never refuse a generation the user explicitly asked for.
+ *   `thoughtsProfiledOnly` is NOT bypassed — that dial is a scope choice about
+ *   which NPCs get rich thoughts, not a cost throttle.
  * @returns {Promise<{intentionsResult: object|null, thoughtsResult: object|null}>}
  */
-export async function runSplitCall(roster) {
+export async function runSplitCall(roster, { force = false } = {}) {
+    const settings = getSettings();
+
+    // §21: thoughtsInterval — skip the thoughts call on off-turns (auto only).
+    const interval = Math.max(1, Number(settings.thoughtsInterval) || 1);
+    const turn = getTurnCounter();
+    const skipThoughtsThisTurn = !force && interval > 1 && (turn % interval !== 0);
+    if (skipThoughtsThisTurn) {
+        console.log(`[MWT:Interiority] Thoughts call skipped this turn (${turn} % ${interval} !== 0) — running intentions only.`);
+    } else if (force && interval > 1 && (turn % interval !== 0)) {
+        console.log(`[MWT:Interiority] Thoughts call forced on an off-turn (user-initiated) — interval ${interval} bypassed.`);
+    }
+
+    // §21: thoughtsProfiledOnly — filter the thoughts roster to profiled NPCs.
+    let thoughtsRoster = roster;
+    if (!skipThoughtsThisTurn && settings.thoughtsProfiledOnly === true) {
+        thoughtsRoster = await _filterToProfiledNpcs(roster);
+        if (thoughtsRoster.length === 0) {
+            console.log('[MWT:Interiority] thoughtsProfiledOnly is on but no roster NPC has a growth profile — skipping thoughts call.');
+        }
+    }
+    const runThoughts = !skipThoughtsThisTurn && thoughtsRoster.length > 0;
+
     const [intentionsRes, thoughtsRes] = await Promise.all([
         _runCall(roster, { thoughts: false, intentions: true, label: 'intentions' })
             .catch(err => {
                 console.error('[MWT:Interiority] Intentions call failed:', err);
                 return null;
             }),
-        _runCall(roster, { thoughts: true, intentions: false, label: 'thoughts', useRichThoughtsContext: true })
-            .catch(err => {
-                console.error('[MWT:Interiority] Thoughts call failed:', err);
-                return null;
-            }),
+        runThoughts
+            ? _runCall(thoughtsRoster, { thoughts: true, intentions: false, label: 'thoughts', useRichThoughtsContext: true })
+                .catch(err => {
+                    console.error('[MWT:Interiority] Thoughts call failed:', err);
+                    return null;
+                })
+            : Promise.resolve(null),
     ]);
     return { intentionsResult: intentionsRes, thoughtsResult: thoughtsRes };
+}
+
+/**
+ * Filter a roster down to NPCs that have a growth profile in the knowledge
+ * module's registry (`profileUid` set). Used by the §21 `thoughtsProfiledOnly`
+ * dial. The knowledge module is an optional dependency; if unavailable, the
+ * roster is returned unchanged (fail-open so a missing module never silently
+ * kills the thoughts call).
+ *
+ * @param {string[]} roster
+ * @returns {Promise<string[]>}
+ */
+async function _filterToProfiledNpcs(roster) {
+    try {
+        const { getRegistry } = await import('../knowledge/registry.js');
+        const reg = getRegistry();
+        if (!reg) return roster; // no registry — fail open
+        return roster.filter(name => {
+            const key = _resolveRegistryKey(reg, name);
+            return key != null && reg[key]?.profileUid != null;
+        });
+    } catch {
+        return roster; // knowledge module unavailable — fail open
+    }
+}
+
+/**
+ * Resolve an NPC name to its registry key, matching case-insensitively.
+ *
+ * Roster names can come from the world state `Present:` line, which is free
+ * text written by the world-state model — its casing need not match the
+ * registry's. An exact lookup silently drops "mara" when the registry holds
+ * "Mara", and under `thoughtsProfiledOnly` that costs the NPC their entire
+ * thought rather than just a missing context block.
+ *
+ * @param {object} reg - the knowledge registry ({ [npcName]: info })
+ * @param {string} name
+ * @returns {string|null} the matching registry key, or null
+ */
+function _resolveRegistryKey(reg, name) {
+    const wanted = String(name || '').toLowerCase().trim();
+    if (!wanted) return null;
+    // Exact hit — cheap path. hasOwnProperty, not `reg[name] !== undefined`:
+    // a bare lookup would match inherited keys ("constructor", "toString").
+    if (Object.prototype.hasOwnProperty.call(reg, name)) return name;
+    for (const key of Object.keys(reg)) {
+        if (key.toLowerCase().trim() === wanted) return key;
+    }
+    return null;
 }
 
 /**
@@ -870,9 +969,10 @@ export function validateAndApply(result, roster, msgIdx) {
                     entryStatus = 'dormant';
                     entryWakeHint = wakeHint;
                 }
-                // Event-conditional triggers can never be scheduled — ignore
-                // horizon=scheduled if the trigger looks event-conditional.
-                // (The prompt forbids this, but be defensive.)
+                // No code-side guard against a scheduled event-conditional
+                // trigger ("next time X"): the prompt forbids it, and a
+                // misclassification is user-correctable from the panel
+                // (⏰ wake / 💤 sleep) rather than silently overridden here.
 
                 addLedgerEntry(
                     { npc: name, action, trigger, status: entryStatus, wakeHint: entryWakeHint },

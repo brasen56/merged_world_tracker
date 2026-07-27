@@ -164,6 +164,19 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // parallel calls (intentions + thoughts) instead of one unified call.
         // Default off = byte-identical v1 behavior. See §16.
         splitThoughts: false,
+        // §21 v2 cost dials (only meaningful when splitThoughts is ON):
+        // Optional separate connection profile for the thoughts (voice) call.
+        // Empty = use the module connection. Lets a better model be pointed at
+        // voice without paying for it on bookkeeping.
+        thoughtsConnectionProfileId: '',
+        // Run the (expensive) thoughts call only every N turns. 1 = every turn.
+        // Intentions still run every turn; off-turns simply skip thoughts.
+        thoughtsInterval: 1,
+        // Restrict the rich thoughts context to NPCs that have a growth profile.
+        // Unprofiled NPCs get no thought on a given turn (intentions unaffected).
+        thoughtsProfiledOnly: false,
+        // §20 dormant-poll interval (turns). Overridable per §21 ("the only knob").
+        dormantPollInterval: 10,
         // Minimum number of turns an intention must survive before it
         // can be executed or dropped. Prevents models from prematurely
         // erasing intentions before their trigger arrives.
@@ -572,16 +585,33 @@ export function incrementTurnCounter() {
 }
 
 /**
+ * Get the effective dormant-poll interval (turns).
+ *
+ * §21 makes the poll interval the only dormancy knob: it is user-configurable
+ * via `settings.dormantPollInterval`, clamped to [1, 200]. Falls back to the
+ * {@link DORMANT_POLL_INTERVAL} constant for chats/settings that predate the
+ * knob or when the value is invalid.
+ *
+ * @returns {number}
+ */
+export function getDormantPollInterval() {
+    const raw = Number(getSettings().dormantPollInterval);
+    if (!Number.isFinite(raw) || raw < 1) return DORMANT_POLL_INTERVAL;
+    return Math.min(200, Math.floor(raw));
+}
+
+/**
  * Check whether the dormant poll is due this turn.
  *
- * The poll fires every {@link DORMANT_POLL_INTERVAL} turns, but only when
+ * The poll fires every {@link getDormantPollInterval} turns, but only when
  * there are dormant entries to check.
  *
  * @returns {boolean}
  */
 export function isDormantPollDue() {
     if (getDormantLedger().length === 0) return false;
-    return getTurnCounter() % DORMANT_POLL_INTERVAL === 0;
+    const interval = getDormantPollInterval();
+    return getTurnCounter() % interval === 0;
 }
 
 // ─── Inner state (v2 §18 — persistent affective line) ────────────────────────

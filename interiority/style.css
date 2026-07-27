@@ -325,6 +325,25 @@
     background: rgba(255, 152, 0, 0.15);
 }
 
+/* Sleep (💤) is the wake button's inverse: it lives in the ACTIVE list and
+   sends an entry to the scheduled list. Rendered dim — it's a de-escalation —
+   and hovers to the warning colour the entry will take on once scheduled. */
+.mwt-int-sleep-btn {
+    background: none;
+    border: none;
+    color: var(--mwt-text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all var(--mwt-transition);
+}
+
+.mwt-int-sleep-btn:hover {
+    color: var(--mwt-warning, #ff9800);
+    background: rgba(255, 152, 0, 0.15);
+}
+
 /* ─── Per-message thought display (injected into chat DOM) ───────────────── */
 
 .mwt-int-msg-thoughts {

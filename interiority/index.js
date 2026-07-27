@@ -113,10 +113,19 @@ export function onMessageReceived(msgIdx) {
 
 /**
  * Manually trigger interiority generation for the current/last AI message.
- * Used by the "💭 Generate" button and slash command.
+ * Used by the "💭 Generate" button and the /wt-thoughts slash command.
+ *
+ * User-initiated generation bypasses the §21 `thoughtsInterval` throttle by
+ * default. That dial exists to cut the cost of AUTOMATIC per-turn thoughts,
+ * not to refuse a generation the user explicitly asked for — and this is also
+ * the repair path after a swipe/edit regeneration lands on an off-turn, so it
+ * has to be able to produce a thought on demand.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.force=true] - bypass the thoughtsInterval throttle
  */
-export async function triggerGenerate() {
-    return queueWork(() => generateForCurrentMessage());
+export async function triggerGenerate({ force = true } = {}) {
+    return queueWork(() => generateForCurrentMessage(null, { force }));
 }
 
 /**
@@ -135,8 +144,12 @@ export async function triggerGenerate() {
  *   index when the work runs, so a message deleted while queued skips the
  *   generation rather than mis-targeting another message. Omitted (null)
  *   for manual triggers, which target the current last message.
+ * @param {object} [opts]
+ * @param {boolean} [opts.force=false] - user-initiated: bypass the §21
+ *   `thoughtsInterval` throttle so an explicit request always runs thoughts.
+ *   Automatic (MESSAGE_RECEIVED) generation leaves this false and stays throttled.
  */
-async function generateForCurrentMessage(targetKey) {
+async function generateForCurrentMessage(targetKey, { force = false } = {}) {
     const ctx = getContextSafe();
     if (!ctx) return null;
 
@@ -214,7 +227,7 @@ async function generateForCurrentMessage(targetKey) {
         let result;
         if (useSplit) {
             console.log('[MWT:Interiority] Split mode ON — running parallel intentions + thoughts calls.');
-            const { intentionsResult, thoughtsResult } = await runSplitCall(roster);
+            const { intentionsResult, thoughtsResult } = await runSplitCall(roster, { force });
             // Cross-chat guard after the parallel pair completes.
             const ctxAfter = getContextSafe();
             const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
