@@ -485,13 +485,26 @@ async function _filterToProfiledNpcs(roster) {
 }
 
 /**
- * Resolve an NPC name to its registry key, matching case-insensitively.
+ * Resolve an NPC name to its registry key.
  *
- * Roster names can come from the world state `Present:` line, which is free
- * text written by the world-state model — its casing need not match the
- * registry's. An exact lookup silently drops "mara" when the registry holds
- * "Mara", and under `thoughtsProfiledOnly` that costs the NPC their entire
- * thought rather than just a missing context block.
+ * Roster names and registry keys are written by different systems and do not
+ * agree on form. The roster comes from the world state `Present:` line — free
+ * text from the world-state model, which routinely writes given names ("Mara")
+ * — while the registry is keyed on whatever the knowledge tracker first
+ * recorded, often fuller ("Mara Vance"). Exact lookup silently returns null
+ * for every such NPC, costing them their whole dossier on BOTH calls: no
+ * facts, no secrets, no agenda, no growth profile. Nothing logs, because
+ * "no entry for this NPC" is a legitimate state for a genuinely new NPC.
+ *
+ * Matching runs strictest-first:
+ *   1. exact key
+ *   2. case-insensitive exact
+ *   3. given-name match, both directions — but ONLY when unambiguous
+ *
+ * Step 3 refuses to guess between two NPCs sharing a given name ("Mara Vance"
+ * / "Mara Chen"). The entry carries that person's secrets, so attaching the
+ * wrong dossier would manufacture exactly the knowledge leak this module
+ * exists to prevent. No entry is always safer than the wrong entry.
  *
  * @param {object} reg - the knowledge registry ({ [npcName]: info })
  * @param {string} name
@@ -500,11 +513,31 @@ async function _filterToProfiledNpcs(roster) {
 function _resolveRegistryKey(reg, name) {
     const wanted = String(name || '').toLowerCase().trim();
     if (!wanted) return null;
-    // Exact hit — cheap path. hasOwnProperty, not `reg[name] !== undefined`:
+
+    // 1. Exact hit — cheap path. hasOwnProperty, not `reg[name] !== undefined`:
     // a bare lookup would match inherited keys ("constructor", "toString").
     if (Object.prototype.hasOwnProperty.call(reg, name)) return name;
-    for (const key of Object.keys(reg)) {
+
+    const keys = Object.keys(reg);
+
+    // 2. Case-insensitive exact match.
+    for (const key of keys) {
         if (key.toLowerCase().trim() === wanted) return key;
+    }
+
+    // 3. Given-name match, both directions:
+    //      roster "Mara"       → registry "Mara Vance"
+    //      roster "Mara Vance" → registry "Mara"
+    const givenName = (s) => s.toLowerCase().trim().split(/\s+/)[0];
+    const wantedGiven = givenName(wanted);
+    const candidates = keys.filter(k => givenName(k) === wantedGiven);
+    if (candidates.length === 1) return candidates[0];
+    if (candidates.length > 1) {
+        console.warn(
+            `[MWT:Interiority] NPC name "${name}" is ambiguous — matches registry entries: ` +
+            `${candidates.join(', ')}. Using no entry rather than risk attaching another ` +
+            `character's dossier. Rename the roster/registry entry to disambiguate.`
+        );
     }
     return null;
 }
