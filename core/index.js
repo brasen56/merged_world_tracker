@@ -15,6 +15,7 @@ export {
     getLatestChronicleEntry,
     patchChatMeta,
     persistChatMeta,
+    persistChatMetaNow,
     WORLD_STATE_METADATA_KEY,
 } from './metadata.js';
 export { notify } from './notifications.js';

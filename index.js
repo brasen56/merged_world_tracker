@@ -763,7 +763,125 @@ try {
             return count;
         },
     };
-    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}');
+
+    // ── Profile entry audit (NPC Profiles lorebook ↔ registry consistency) ──
+    //
+    // A lost `profileUid` pointer makes the next save create a SECOND lorebook
+    // entry for the same NPC instead of overwriting. The pointer loss is fixed
+    // going forward (immediate flush + loud setProfileUid), but chats that
+    // already accumulated duplicates need a way to see and prune them.
+    const profileLorebookApi = await import('./knowledge/lorebook.js');
+
+    /** Group profile entries by NPC name and mark which uid the registry points at. */
+    const auditProfiles = async () => {
+        const entries = await profileLorebookApi.listProfileEntries();
+        const groups = new Map();
+        for (const e of entries) {
+            const key = e.name.toLowerCase().trim() || '(unnamed)';
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(e);
+        }
+        const rows = [];
+        for (const [, list] of groups) {
+            const referenced = registryApi.getProfileUid(list[0].name);
+            for (const e of list) {
+                rows.push({
+                    npc: e.name,
+                    uid: e.uid,
+                    referenced: e.uid === referenced,
+                    duplicate: list.length > 1,
+                    chars: e.chars,
+                    preview: e.preview,
+                });
+            }
+        }
+        return rows;
+    };
+
+    window.MWT.profiles = {
+        list: async () => {
+            const rows = await auditProfiles();
+            if (rows.length === 0) { console.log('[MWT] No entries in the "NPC Profiles" lorebook.'); return []; }
+            console.table(rows);
+            return rows;
+        },
+        duplicates: async () => {
+            const rows = (await auditProfiles()).filter(r => r.duplicate);
+            if (rows.length === 0) { console.log('[MWT] No duplicate profile entries found.'); return []; }
+            console.table(rows);
+            console.log(
+                '[MWT] "referenced: true" is the entry the registry points at — that one is live. ' +
+                'The rest are orphans from lost pointers. MWT.profiles.pruneDuplicates() previews a cleanup.'
+            );
+            return rows;
+        },
+        pruneDuplicates: async (confirm) => {
+            const rows = await auditProfiles();
+            const byNpc = new Map();
+            for (const r of rows) {
+                const key = r.npc.toLowerCase().trim();
+                if (!byNpc.has(key)) byNpc.set(key, []);
+                byNpc.get(key).push(r);
+            }
+
+            // Per NPC: keep the registry-referenced entry; if none is referenced,
+            // keep the LARGEST (a truncated/failed generation is the likelier
+            // orphan) and break ties on the highest uid (most recent). Never
+            // auto-delete when nothing is referenced AND sizes tie — that case
+            // needs eyes, not a heuristic.
+            const toDelete = [];
+            const needsReview = [];
+            for (const [key, list] of byNpc) {
+                if (list.length < 2) continue;
+                // Entries with no comment/name all collapse into one bucket, so
+                // they are not necessarily the same NPC — pruning across them
+                // could delete a different character's profile. Never automate.
+                if (key === '(unnamed)') {
+                    console.warn(
+                        `[MWT] ${list.length} profile entries have no NPC name (uids ` +
+                        `${list.map(r => r.uid).join(', ')}). They cannot be grouped reliably — ` +
+                        `skipped. Inspect with MWT.profiles.list() and handle by hand.`
+                    );
+                    continue;
+                }
+                const referenced = list.find(r => r.referenced);
+                let keep = referenced;
+                if (!keep) {
+                    const sorted = [...list].sort((a, b) => b.chars - a.chars || b.uid - a.uid);
+                    if (sorted[0].chars === sorted[1].chars) { needsReview.push(list); continue; }
+                    keep = sorted[0];
+                }
+                for (const r of list) if (r.uid !== keep.uid) toDelete.push({ ...r, keptUid: keep.uid });
+            }
+
+            for (const list of needsReview) {
+                console.warn(
+                    `[MWT] "${list[0].npc}" has ${list.length} entries, none referenced by the registry ` +
+                    `and identical in size (uids ${list.map(r => r.uid).join(', ')}). Skipped — ` +
+                    `inspect them and delete by hand.`
+                );
+            }
+            if (toDelete.length === 0) { console.log('[MWT] Nothing to prune.'); return []; }
+
+            if (confirm !== true) {
+                console.table(toDelete.map(r => ({ npc: r.npc, deleteUid: r.uid, keepUid: r.keptUid, chars: r.chars, preview: r.preview })));
+                console.warn(
+                    `[MWT] DRY RUN — nothing deleted. The ${toDelete.length} entr${toDelete.length === 1 ? 'y' : 'ies'} above ` +
+                    `would be removed from the "NPC Profiles" lorebook. Review the previews first: ` +
+                    `profiles are regeneratable from evidence, but only if the evidence is still there. ` +
+                    `Call MWT.profiles.pruneDuplicates(true) to actually delete.`
+                );
+                return toDelete;
+            }
+
+            const result = await profileLorebookApi.deleteProfileEntries(toDelete.map(r => r.uid));
+            if (!result.success) { console.error('[MWT] Prune failed:', result.error); return []; }
+            console.log(`[MWT] Deleted ${result.deleted.length} duplicate profile entr${result.deleted.length === 1 ? 'y' : 'ies'}: uids ${result.deleted.join(', ')}.`);
+            return result.deleted;
+        },
+    };
+
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates}');
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }

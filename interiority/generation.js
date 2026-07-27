@@ -131,15 +131,15 @@ export function buildSceneRoster() {
  */
 async function loadNpcKnowledge(npcName) {
     try {
-        const { getRegistry } = await import('../knowledge/registry.js');
+        const { getRegistry, resolveRegistryKey } = await import('../knowledge/registry.js');
         const { loadEntryContent } = await import('../knowledge/lorebook.js');
         const { stripRelationshipBlock } = await import('../knowledge/relationships.js');
         const reg = getRegistry();
-        // Case-insensitive key resolution — roster names can come from the
-        // world state `Present:` line, whose casing need not match the
-        // registry's. An exact lookup silently costs the NPC their entire
-        // knowledge entry (on BOTH the intentions and thoughts calls).
-        const key = reg ? _resolveRegistryKey(reg, npcName) : null;
+        // Roster names come from the world state `Present:` line and need not
+        // match the registry's key form. An exact lookup silently costs the NPC
+        // their entire dossier on BOTH calls. registry.js owns the resolution
+        // rules (one owner of the format).
+        const key = resolveRegistryKey(reg, npcName);
         const info = key != null ? reg[key] : null;
         if (!info || info.uid == null) return null;
         const content = await loadEntryContent(info.uid);
@@ -453,11 +453,11 @@ export async function runSplitCall(roster, { force = false } = {}) {
  */
 async function _filterToProfiledNpcs(roster) {
     try {
-        const { getRegistry } = await import('../knowledge/registry.js');
+        const { getRegistry, resolveRegistryKey } = await import('../knowledge/registry.js');
         const reg = getRegistry();
         if (!reg) return roster; // no registry — fail open
         const filtered = roster.filter(name => {
-            const key = _resolveRegistryKey(reg, name);
+            const key = resolveRegistryKey(reg, name);
             return key != null && reg[key]?.profileUid != null;
         });
 
@@ -482,64 +482,6 @@ async function _filterToProfiledNpcs(roster) {
     } catch {
         return roster; // knowledge module unavailable — fail open
     }
-}
-
-/**
- * Resolve an NPC name to its registry key.
- *
- * Roster names and registry keys are written by different systems and do not
- * agree on form. The roster comes from the world state `Present:` line — free
- * text from the world-state model, which routinely writes given names ("Mara")
- * — while the registry is keyed on whatever the knowledge tracker first
- * recorded, often fuller ("Mara Vance"). Exact lookup silently returns null
- * for every such NPC, costing them their whole dossier on BOTH calls: no
- * facts, no secrets, no agenda, no growth profile. Nothing logs, because
- * "no entry for this NPC" is a legitimate state for a genuinely new NPC.
- *
- * Matching runs strictest-first:
- *   1. exact key
- *   2. case-insensitive exact
- *   3. given-name match, both directions — but ONLY when unambiguous
- *
- * Step 3 refuses to guess between two NPCs sharing a given name ("Mara Vance"
- * / "Mara Chen"). The entry carries that person's secrets, so attaching the
- * wrong dossier would manufacture exactly the knowledge leak this module
- * exists to prevent. No entry is always safer than the wrong entry.
- *
- * @param {object} reg - the knowledge registry ({ [npcName]: info })
- * @param {string} name
- * @returns {string|null} the matching registry key, or null
- */
-function _resolveRegistryKey(reg, name) {
-    const wanted = String(name || '').toLowerCase().trim();
-    if (!wanted) return null;
-
-    // 1. Exact hit — cheap path. hasOwnProperty, not `reg[name] !== undefined`:
-    // a bare lookup would match inherited keys ("constructor", "toString").
-    if (Object.prototype.hasOwnProperty.call(reg, name)) return name;
-
-    const keys = Object.keys(reg);
-
-    // 2. Case-insensitive exact match.
-    for (const key of keys) {
-        if (key.toLowerCase().trim() === wanted) return key;
-    }
-
-    // 3. Given-name match, both directions:
-    //      roster "Mara"       → registry "Mara Vance"
-    //      roster "Mara Vance" → registry "Mara"
-    const givenName = (s) => s.toLowerCase().trim().split(/\s+/)[0];
-    const wantedGiven = givenName(wanted);
-    const candidates = keys.filter(k => givenName(k) === wantedGiven);
-    if (candidates.length === 1) return candidates[0];
-    if (candidates.length > 1) {
-        console.warn(
-            `[MWT:Interiority] NPC name "${name}" is ambiguous — matches registry entries: ` +
-            `${candidates.join(', ')}. Using no entry rather than risk attaching another ` +
-            `character's dossier. Rename the roster/registry entry to disambiguate.`
-        );
-    }
-    return null;
 }
 
 /**

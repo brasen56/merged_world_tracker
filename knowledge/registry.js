@@ -34,6 +34,64 @@ export function registerEntry(name, uid, type, keywords) {
 
 export function isKnown(name) { return !!getRegistry()[name]; }
 
+/**
+ * Resolve an NPC name to its registry key.
+ *
+ * Registry keys and the names other modules hold are written by different
+ * systems and do not agree on form. The world state `Present:` line is free
+ * text from the world-state model and routinely uses given names ("Mara"),
+ * while the registry is keyed on whatever the knowledge tracker first
+ * recorded, often fuller ("Mara Vance"). An exact lookup silently returns
+ * null for every such NPC — and callers read that as "this NPC has no entry",
+ * which is a legitimate state for a genuinely new NPC, so nothing warns.
+ *
+ * Matching runs strictest-first:
+ *   1. exact key
+ *   2. case-insensitive exact
+ *   3. given-name match, both directions — but ONLY when unambiguous
+ *
+ * Step 3 refuses to choose between two NPCs sharing a given name ("Mara
+ * Vance" / "Mara Chen"). Registry entries gate access to a character's
+ * dossier and secrets, so a wrong match would hand one character's private
+ * material to another. No entry is always safer than the wrong entry.
+ *
+ * @param {object} reg — the registry map ({ [npcName]: info })
+ * @param {string} name — the name to resolve
+ * @returns {string|null} the matching registry key, or null
+ */
+export function resolveRegistryKey(reg, name) {
+    if (!reg) return null;
+    const wanted = String(name || '').toLowerCase().trim();
+    if (!wanted) return null;
+
+    // 1. Exact hit — cheap path. hasOwnProperty, not `reg[name] !== undefined`:
+    // a bare lookup would match inherited keys ("constructor", "toString").
+    if (Object.prototype.hasOwnProperty.call(reg, name)) return name;
+
+    const keys = Object.keys(reg);
+
+    // 2. Case-insensitive exact match.
+    for (const key of keys) {
+        if (key.toLowerCase().trim() === wanted) return key;
+    }
+
+    // 3. Given-name match, both directions:
+    //      "Mara"       → registry "Mara Vance"
+    //      "Mara Vance" → registry "Mara"
+    const givenName = (s) => s.toLowerCase().trim().split(/\s+/)[0];
+    const wantedGiven = givenName(wanted);
+    const candidates = keys.filter(k => givenName(k) === wantedGiven);
+    if (candidates.length === 1) return candidates[0];
+    if (candidates.length > 1) {
+        console.warn(
+            `[MWT:Knowledge] NPC name "${name}" is ambiguous — matches registry entries: ` +
+            `${candidates.join(', ')}. Using no entry rather than risk exposing another ` +
+            `character's dossier. Rename one to disambiguate.`
+        );
+    }
+    return null;
+}
+
 // ─── Profile UID (NPC Profiles lorebook cross-reference) ─────────────────────
 //
 // The registry gains a `profileUid` field (parallel to `uid`) pointing at the
@@ -47,21 +105,41 @@ export function isKnown(name) { return !!getRegistry()[name]; }
  * @returns {number|null}
  */
 export function getProfileUid(name) {
-    const info = getRegistry()[name];
+    const reg = getRegistry();
+    const key = resolveRegistryKey(reg, name);
+    const info = key != null ? reg[key] : null;
     const uid = info?.profileUid;
     return (uid === null || uid === undefined) ? null : uid;
 }
 
 /**
  * Set the profile lorebook UID for an NPC (after writing the profile entry).
+ *
+ * Returns whether the uid was actually recorded. This used to fail silently
+ * (`if (!reg[name]) return;`), which let a profile save report success while
+ * recording nothing: the lorebook entry existed, the registry never pointed at
+ * it, and the next save created a duplicate entry instead of overwriting.
+ * A miss is now a loud, actionable warning.
+ *
  * @param {string} name — NPC name
  * @param {number} uid — profile lorebook UID
+ * @returns {boolean} true if recorded, false if no registry entry matched
  */
 export function setProfileUid(name, uid) {
     const reg = getRegistry();
-    if (!reg[name]) return;
-    reg[name].profileUid = uid;
+    const key = resolveRegistryKey(reg, name);
+    if (key == null) {
+        console.warn(
+            `[MWT:Knowledge] Could not record profileUid ${uid} for "${name}" — no matching ` +
+            `registry entry. The profile IS saved in the "NPC Profiles" lorebook, but nothing ` +
+            `points at it, so the next save would create a duplicate. Known entries: ` +
+            `${Object.keys(reg).join(', ') || '(none)'}.`
+        );
+        return false;
+    }
+    reg[key].profileUid = uid;
     saveRegistry(reg);
+    return true;
 }
 
 export function findOrphans() {

@@ -239,6 +239,66 @@ export async function loadProfileContent(uid) {
     } catch (err) { return null; }
 }
 
+/**
+ * List every entry in the NPC Profiles lorebook.
+ *
+ * Read-only. Used by the duplicate audit: a lost `profileUid` pointer makes the
+ * next save create a second entry for the same NPC instead of overwriting, so
+ * the lorebook is the only place those orphans are visible.
+ *
+ * @returns {Promise<Array<{uid:number, name:string, chars:number, preview:string}>>}
+ */
+export async function listProfileEntries() {
+    if (!state.wiScript) return [];
+    try {
+        const wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+        const entries = wi?.entries || {};
+        return Object.keys(entries).map(k => {
+            const e = entries[k];
+            const content = String(e?.content || '');
+            return {
+                uid: Number(e?.uid ?? k),
+                name: String(e?.comment || '').trim(),
+                chars: content.length,
+                preview: content.slice(0, 80).replace(/\s+/g, ' '),
+            };
+        }).sort((a, b) => a.name.localeCompare(b.name) || a.uid - b.uid);
+    } catch (err) {
+        console.warn('[MWT:Knowledge] Could not list profile entries:', err);
+        return [];
+    }
+}
+
+/**
+ * Delete entries from the NPC Profiles lorebook by uid.
+ *
+ * Destructive and deliberately dumb: it deletes exactly the uids it is given
+ * and decides nothing on its own. Callers are responsible for never passing a
+ * uid the registry still points at.
+ *
+ * @param {number[]} uids — profile lorebook UIDs to delete
+ * @returns {Promise<{success:boolean, deleted:number[], error?:string}>}
+ */
+export async function deleteProfileEntries(uids) {
+    if (!state.wiScript) return { success: false, deleted: [], error: 'world-info.js not loaded' };
+    if (!Array.isArray(uids) || uids.length === 0) return { success: true, deleted: [] };
+    try {
+        const wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+        if (!wi || !wi.entries) return { success: false, deleted: [], error: 'profile lorebook not found' };
+        const deleted = [];
+        for (const uid of uids) {
+            if (wi.entries[uid] !== undefined) {
+                delete wi.entries[uid];
+                deleted.push(uid);
+            }
+        }
+        if (deleted.length > 0) await state.wiScript.saveWorldInfo(PROFILE_LOREBOOK_NAME, wi);
+        return { success: true, deleted };
+    } catch (err) {
+        return { success: false, deleted: [], error: err.message };
+    }
+}
+
 // ─── Entry formatters ────────────────────────────────────────────────────────
 
 export function formatMinorEntry(data) {

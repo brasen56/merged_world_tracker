@@ -32,6 +32,7 @@
 import {
     getChat, getChatMeta, stripNonNarrative, getCurrentWorldState,
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
+    persistChatMetaNow,
 } from '../core/index.js';
 import { hasValidSettings } from './settings.js';
 import { getRegistry, getProfileUid, setProfileUid } from './registry.js';
@@ -515,8 +516,23 @@ export async function saveProfile(name, profileText) {
     const existingUid = getProfileUid(name);
     const result = await writeProfileToLorebook(name, profileText, existingUid);
     if (result.success) {
-        setProfileUid(name, result.uid);
+        const recorded = setProfileUid(name, result.uid);
         stampProfileGenerated(name);
+
+        // The lorebook write above is awaited and durable. The registry write
+        // that POINTS at it goes through a debounced metadata save, so a reload
+        // or chat switch inside the debounce window loses the pointer while the
+        // entry survives — and the next save, seeing no uid, creates a duplicate
+        // entry instead of overwriting. Flush now so the two are durable
+        // together. (setProfileUid already warned if it recorded nothing.)
+        if (recorded) {
+            try {
+                await persistChatMetaNow();
+            } catch (err) {
+                console.warn('[MWT:Knowledge] Could not flush profileUid immediately:', err);
+            }
+        }
+        result.uidRecorded = recorded;
     }
     return result;
 }

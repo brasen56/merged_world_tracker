@@ -13,6 +13,38 @@ export function persistChatMeta() {
 }
 
 /**
+ * Persist chat metadata IMMEDIATELY, awaiting the write.
+ *
+ * The debounced {@link persistChatMeta} is correct for high-frequency writes.
+ * It is the wrong tool when the metadata being written is a POINTER to
+ * something already durably stored elsewhere — e.g. the registry's
+ * `profileUid`, which references an NPC Profiles lorebook entry that
+ * `saveWorldInfo` has already written and awaited.
+ *
+ * If the debounce doesn't flush before a reload or chat switch, the pointer is
+ * lost while its target survives. The next save then sees no existing uid,
+ * creates a SECOND lorebook entry instead of overwriting, and the duplicates
+ * accumulate silently. Pointer writes must be durable at the same moment their
+ * target is.
+ *
+ * Falls back to the debounced save when the immediate API is unavailable.
+ *
+ * @returns {Promise<void>}
+ */
+export async function persistChatMetaNow() {
+    const ctx = getContextSafe();
+    try {
+        if (typeof ctx?.saveMetadata === 'function') {
+            await ctx.saveMetadata();
+            return;
+        }
+    } catch (err) {
+        console.warn('[MWT] Immediate metadata save failed — falling back to debounced save.', err);
+    }
+    persistChatMeta();
+}
+
+/**
  * Merge `patch` into the chat-metadata value at `key` and persist.
  *
  * `lastUpdated` is opt-in: it is only stamped when `stamp` is true. Flat maps
