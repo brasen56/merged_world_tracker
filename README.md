@@ -136,6 +136,14 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 - **Auto-Trigger** — Automatically run state tracker scans every N messages (with cooldown to avoid re-updating recently changed trackers)
 - **Import from Lorebook** — Scan existing Knowledge Tracker and State Tracker lorebooks to register entries not yet tracked
 - **Cross-Module Integration** — Scans include current World State and latest Chronicle entry for richer context
+- **NPC Growth Profiles** — Evidence-based character profiling system that builds personality descriptions from behavioral observations, not from the existing `Personality:` line:
+  - **Evidence Capture** — LLM extracts behavioral observations with **verbatim quote receipts** from recent messages. Each quote is verified against the source message (contiguous substring or bigram-overlap match with windowed neighborhood search) to reject paraphrases. Unzitatable "observations" are flagged, not silently trusted
+  - **Two-Tier Evidence Store** — Observational evidence is stored append-only in chat metadata as `raw[]` observations (with category, claim, verbatim quote, and source message timestamp). A **consolidation pass** distills raw observations into higher-level `consolidated[]` claims with source back-references, moving consumed raw items to `archived[]`
+  - **Anti-Textbook Profile Generation** — Synthesizes a character profile *from evidence only* — never reads prior profiles or the `Personality:` line. Only user-authored canon fields (`Canon Lock`, `Background`, `Role`, `Where to Find`) are passed as authoritative context. Profiles are saved to a separate "NPC Profiles" lorebook and never re-feed into capture (the profile is a leaf, never a root)
+  - **Continuous Incremental Capture** — Watermark-gated delta capture that processes only messages newer than the last capture timestamp, preventing the token-bloat of full-window rescans. Runs automatically on message cadence for enrolled NPCs
+  - **ILS Backfill** — Reads InlineSummary (ILS) original messages from chat metadata to expand summarized messages back to their verbatim originals, so evidence capture can quote real text instead of a paraphrase. Read-only — never writes to or garbage-collects ILS data, preventing chat corruption
+  - **Psychoanalyze Profile** — A separate dead-end view that generates a deeper psychoanalytic portrait from evidence + the full curated lorebook entry (including `Personality:`). Safe because the output has no path back to live context — it's never injected or saved to any lorebook, available for copy/external-save only
+  - **User Overrides** — Hand-edits to the profile text that survive automatic regeneration, appended as user notes below the generated profile
 
 ### 🗺️ Story Planner
 
@@ -350,6 +358,8 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 
 ### Knowledge Tracker
 
+**NPC Scanning & Lorebook Management:**
+
 1. Open the **🧠 Knowledge** tab
 2. Click **🔍 Scan** to analyze recent messages for NPCs
 3. Review proposals in the **Staging** tab:
@@ -362,6 +372,18 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 6. The **Relationships** tab has a force-directed graph view (default) and a list view — toggle with the Graph/List button. Drag nodes, scroll to zoom, and click a node to open that NPC
 7. The **State Trackers** tab shows registered state tracker entries that can be updated via LLM
 8. Enable **Auto-Trigger** in module settings to run state tracker scans automatically every N messages (with a cooldown to avoid re-updating recently changed trackers)
+
+**NPC Growth Profile:**
+
+1. Open the **🧠 Knowledge** tab and navigate to the **Growth** sub-tab for any registered major NPC
+2. Click **🔍 Capture Evidence** to extract behavioral observations with verbatim quote receipts from recent messages. Each quote is verified against its source message — unzitatable claims are flagged rather than silently trusted
+3. Review the captured observations — each shows a category (trait/value/speech), the distilled claim, and the verbatim quote with its source message index
+4. Click **🎲 Generate Profile** to synthesize an anti-textbook character profile from the accumulated evidence. The profile never reads the existing `Personality:` line — only user-authored canon fields (Background, Role, etc.) are passed as authoritative context
+5. Review the generated profile text and click **💾 Save Profile** to persist it to the "NPC Profiles" lorebook. The profile is saved with a `profileUid` cross-reference in the NPC registry and does not feed back into future evidence capture
+6. Once enrolled, an NPC is automatically captured on message cadence via **continuous incremental capture** — only new messages since the last capture are processed, avoiding token-bloat rescans
+7. Use **🔄 Consolidate** to distill raw observations into higher-level consolidated claims with source back-references. Consumed raw items are archived but remain referenceable
+8. Use **🔬 Psychoanalyze** to generate a deeper psychoanalytic portrait that includes the full curated lorebook entry as historical baseline. This is a dead-end view — the result is never injected or saved, only available for copy/paste
+9. Hand-edit the profile text via **User Overrides** — these survive automatic regeneration and are appended below the generated profile as user notes
 
 ### Story Planner
 
@@ -430,16 +452,19 @@ merged_world_tracker/
 │   ├── snapshots.js      # Generation, validation, CRUD, world state sync
 │   ├── import-export.js  # JSON / Markdown export and import
 │   └── render.js         # All UI rendering
-├── knowledge/            # Knowledge Tracker module (NPCs + State Trackers)
+├── knowledge/            # Knowledge Tracker module (NPCs + State Trackers + Growth Profile)
 │   ├── index.js          # Public API barrel — lifecycle, slash commands, macros
 │   ├── state.js          # Constants, shared mutable state, content helpers (leaf)
 │   ├── settings.js       # Settings manager + settings panel (leaf)
-│   ├── prompts.js        # Scan and state-update prompts (leaf)
+│   ├── prompts.js        # NPC scan, state-update, evidence, profile, and consolidation prompts
 │   ├── registry.js       # NPC + State Tracker registry operations (chat metadata)
-│   ├── lorebook.js       # Lorebook read/write, scan, state update, staging enrichment
+│   ├── lorebook.js       # Lorebook read/write, scan, state update, staging enrichment, profile persistence
 │   ├── staging.js        # Build staging items from scan results
 │   ├── relationships.js  # Relationship storage and graph layout computation
-│   └── render.js         # All UI rendering (staging, minor/major, state, graph, settings)
+│   ├── evidence.js       # Two-tier evidence store (raw/consolidated/archived), ILS watermark tracking, user overrides
+│   ├── growth.js         # Evidence capture + quote verification, profile generation, continuous incremental capture, consolidation orchestrator
+│   ├── ils_compat.js     # InlineSummary (ILS) de-summarize backfill — read-only ILS originals resolution for verbatim evidence capture
+│   └── render.js         # All UI rendering (staging, minor/major, state, graph, growth, settings)
 ├── story_planner/        # Story Planner module (future plot arcs)
 │   ├── index.js          # Thin orchestrator — public API and lifecycle hooks
 │   ├── data.js           # Constants, shared mutable state, data access (leaf)
@@ -506,11 +531,12 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 
 ## Data Storage
 
-- **Chat data** (world state text, chronicle entries, NPC registry, state tracker registry, relationships, story plan text, interiority ledger + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
+- **Chat data** (world state text, chronicle entries, NPC registry, state tracker registry, relationships, growth evidence store, story plan text, interiority ledger + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID
 - **Floating button positions** are stored in `localStorage`
-- All data is per-chat — switching chats loads that chat's world state, chronicle, NPC registry, story plan, and interiority ledger
+- **NPC Growth Profile evidence** uses a two-tier append-only store in chat metadata (`raw[]` → `consolidated[]` → `archived[]`), with per-NPC watermarks for continuous incremental capture and ILS backfill. Profile text is saved to a separate "NPC Profiles" lorebook with `profileUid` cross-references in the NPC registry
+- All data is per-chat — switching chats loads that chat's world state, chronicle, NPC registry, growth evidence, story plan, and interiority ledger
 
 ---
 
