@@ -2,8 +2,8 @@
 
 **A unified SillyTavern extension combining World State tracking, Session Chronicle, NPC Knowledge management, Story Planning, and NPC Interiority into a single modular system.**
 
-*A SillyTavern extension by [Brasen](https://github.com/brasen56)* · `v1.3.0`
-
+Credits/Inspirations:
+Id like to take a moment and thank dptgreg for inpsiration and use of his Freaky Frankenstein presets. I have modifed his to incorporate MWT. I would also like to thank KazumaONIISAN for the inspiration behind the Story Planner, though theirs is much more advanced than mine at this time!
 ---
 
 ## 📋 Table of Contents
@@ -542,4 +542,4 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 
 ## License
 
-This project is provided as-is for use with SillyTavern. See the repository for license details.
+MIT — see [LICENSE](LICENSE).
