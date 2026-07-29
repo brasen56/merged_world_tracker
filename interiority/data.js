@@ -1090,15 +1090,18 @@ export async function migrateIndexKeys() {
 // ─── Recent thoughts (v2 §17 — interior memory) ──────────────────────────────
 
 /**
- * Collect an NPC's most recent thoughts from perMessage storage, newest first.
+ * Collect an NPC's most recent thoughts from perMessage storage, returning
+ * them in STORY order (newest message first), not wall-clock order.
  *
  * Used by the thoughts call (v2 §17) to feed an NPC's prior thoughts back as
  * `<recent_thoughts>` — the interior-memory input that lets worries evolve and
  * suspicions build instead of every turn generating from scratch.
  *
- * Walks perMessage keys (already sorted newest-first by getPerMessageKeys),
- * collects reactions matching `npcName` (case-insensitive), and returns up to
- * `count` items shaped as `{ thought, type?, re?, msgIdx? }`.
+ * Sorts by the resolved chat-array index so that manually regenerating
+ * thoughts on an old message doesn't make them the NPC's "most recent"
+ * interior memory. Thoughts whose message no longer exists (no resolved
+ * index) fall to the end, ordered by their `generatedAt` timestamp so the
+ * ordering is still deterministic.
  *
  * @param {string} npcName - NPC name to match
  * @param {number} [count=4] - max thoughts to return
@@ -1107,24 +1110,41 @@ export async function migrateIndexKeys() {
 export function getRecentThoughtsForNpc(npcName, count = 4) {
     if (!npcName) return [];
     const lower = String(npcName).toLowerCase().trim();
-    const out = [];
-    const keys = getPerMessageKeys();
     const keyToIndex = buildKeyToIndexMap();
-    for (const key of keys) {
-        const pm = getPerMessage(key);
+
+    // Gather ALL matching reactions first (don't cap during collection), then
+    // sort by story position and take the top `count`.
+    const all = [];
+    for (const [key, pm] of Object.entries(getInteriorityData().perMessage || {})) {
         if (!pm || !Array.isArray(pm.reactions)) continue;
         for (const r of pm.reactions) {
             if (String(r.npc).toLowerCase().trim() !== lower) continue;
-            out.push({
+            const idx = keyToIndex.get(key);
+            all.push({
                 thought: String(r.thought || ''),
                 type: r.type || undefined,
                 re: r.re || undefined,
-                msgIdx: keyToIndex.get(key),
+                msgIdx: idx,
+                // Story position: messages with no resolved index (deleted,
+                // orphaned, or unhydrated) sort to the end. Use -1 so a
+                // reverse-sort (newest-first) drops them last.
+                _sortIdx: idx != null ? idx : -1,
+                // Tiebreaker for entries sharing a story position or having none.
+                _generatedAt: pm.generatedAt || 0,
             });
-            if (out.length >= count) return out;
         }
     }
-    return out;
+
+    // Sort newest-story-first. Entries with a real index sort by it (higher
+    // index = newer message); entries without one sort to the end by their
+    // wall-clock generation time. This keeps a manual regeneration on an old
+    // message from displacing genuinely newer thoughts (item 8b fix).
+    all.sort((a, b) => {
+        if (a._sortIdx !== b._sortIdx) return b._sortIdx - a._sortIdx;
+        return b._generatedAt - a._generatedAt;
+    });
+
+    return all.slice(0, count).map(({ _sortIdx, _generatedAt, ...rest }) => rest);
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────

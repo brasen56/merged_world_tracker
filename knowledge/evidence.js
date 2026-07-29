@@ -86,7 +86,11 @@ export function getEvidenceFile(name, create = true) {
  */
 export function hasEvidenceFile(name) {
     const file = getEvidenceMap()[name];
-    return !!(file && (file.raw?.length > 0 || file.consolidated?.length > 0));
+    // The `enrolled` flag keeps an NPC in the continuous-capture gate even
+    // after clearEvidence() wipes its tiers to empty (item 7 fix). Without it,
+    // a cleared NPC is silently dropped from background capture until the user
+    // manually captures again — which is exactly when you want it running.
+    return !!(file && (file.enrolled === true || file.raw?.length > 0 || file.consolidated?.length > 0));
 }
 
 /**
@@ -119,6 +123,10 @@ export function clearEvidence(name) {
     file.consolidated = [];
     file.archivedRaw = [];
     file.userOverrides = [];
+    // Mark the NPC as enrolled so it stays in the continuous-capture gate even
+    // though its tiers are now empty (item 7 fix). Clearing to re-capture from
+    // scratch is precisely when you WANT background capture running.
+    file.enrolled = true;
     // Preserve createdAt: this clears the file's CONTENTS, it does not re-create
     // the file. Resetting it would lose when the NPC was first enrolled and make
     // "how long has this character been tracked" unanswerable.
@@ -150,6 +158,8 @@ export function clearAllEvidence() {
         map[name].consolidated = [];
         map[name].archivedRaw = [];
         map[name].userOverrides = [];
+        // Keep all NPCs enrolled after a full reset — see clearEvidence().
+        map[name].enrolled = true;
         // Preserve createdAt — see clearEvidence().
         map[name].meta = {
             createdAt: map[name].meta?.createdAt ?? Date.now(),
@@ -177,15 +187,21 @@ function touch(file) {
 // ─── ID generation ───────────────────────────────────────────────────────────
 
 /**
- * Generate the next observation ID for a tier.
- * Scans both the active tier and archivedRaw (for raw) so IDs never collide
- * with archived entries that retain their original ids.
+ * Create an id generator for a tier, seeded once from the file's current
+ * contents and incrementing on its own thereafter.
+ *
+ * Required whenever a BATCH of entries is built into a side array before being
+ * written back to the file. {@link nextObsId} re-derives the next number by
+ * scanning the stored tier, so it only advances once an entry has actually
+ * landed in `file`. A loop that assigns ids while building off-file would hand
+ * every entry in the batch the SAME id — and every id-keyed operation
+ * (edit/delete/expand) then hits all of its siblings at once.
  *
  * @param {EvidenceFile} file
  * @param {'raw'|'consolidated'} tier
- * @returns {string}
+ * @returns {() => string} call to get each successive id
  */
-export function nextObsId(file, tier) {
+function obsIdSequence(file, tier) {
     const prefix = tier === 'consolidated' ? 'con-' : 'obs-';
     const scan = tier === 'raw'
         ? [...(file.raw || []), ...(file.archivedRaw || [])]
@@ -195,7 +211,23 @@ export function nextObsId(file, tier) {
         const m = String(entry.id || '').match(/\d+$/);
         if (m) max = Math.max(max, parseInt(m[0], 10));
     }
-    return `${prefix}${String(max + 1).padStart(3, '0')}`;
+    return () => `${prefix}${String(++max).padStart(3, '0')}`;
+}
+
+/**
+ * Generate the next observation ID for a tier.
+ * Scans both the active tier and archivedRaw (for raw) so IDs never collide
+ * with archived entries that retain their original ids.
+ *
+ * Only correct for one id at a time, against the file's CURRENT state. To mint
+ * several ids before writing any of them back, use {@link obsIdSequence}.
+ *
+ * @param {EvidenceFile} file
+ * @param {'raw'|'consolidated'} tier
+ * @returns {string}
+ */
+export function nextObsId(file, tier) {
+    return obsIdSequence(file, tier)();
 }
 
 // ─── Capture: append to raw[] ────────────────────────────────────────────────
@@ -353,34 +385,58 @@ export function getRawForConsolidation(name) {
 }
 
 /**
- * Apply a consolidation pass: replace consolidated[] with the new entries,
- * move consumed raw observations to archivedRaw[], and clean up dangling
- * back-references in any prior consolidated entries.
+ * Apply a consolidation pass: APPEND the distilled entries to consolidated[]
+ * and move the raw observations they consumed to archivedRaw[].
  *
  * Raw observations NOT cited by any new consolidated entry stay in raw[] —
  * the user can re-consolidate later or leave them as-is. This preserves the
  * "accumulate, don't overwrite" principle: consolidation only moves what it
  * actually distilled.
  *
+ * The tier is APPENDED to, never replaced. Each pass only ever sees the raw
+ * observations captured since the last one (consumed raws are archived out of
+ * the pool), so overwriting the tier would delete the claims distilled from
+ * every earlier era of the chat. Those claims are also the only way back to
+ * their sources — the raws they cite live in archivedRaw, which the profile
+ * generator never reads directly and Expand can only reach through the citing
+ * entry. Appending is what makes consolidation repeatable rather than a
+ * one-shot that silently forgets the character's past.
+ *
  * @param {string} name — NPC name
  * @param {Array<{category:string, claim:string, sources:number[], confidence?:string}>} consolidated — from the API
- * @returns {{consolidatedCount:number, archivedCount:number}} counts
+ * @returns {{consolidatedCount:number, archivedCount:number, totalConsolidated:number}}
+ *   `consolidatedCount` counts the claims ADDED by this pass;
+ *   `totalConsolidated` is the size of the tier afterwards.
  */
-export function applyConsolidation(name, consolidated) {
+export function applyConsolidation(name, consolidated, sourceIds) {
     const file = getEvidenceFile(name, false);
-    if (!file) return { consolidatedCount: 0, archivedCount: 0 };
+    if (!file) return { consolidatedCount: 0, archivedCount: 0, totalConsolidated: 0 };
     if (!file.raw) file.raw = [];
     if (!file.consolidated) file.consolidated = [];
     if (!file.archivedRaw) file.archivedRaw = [];
 
     // Map numeric source IDs → raw observation ids. The numeric ID is the
     // 1-based position among non-canon raw observations (as presented to the
-    // consolidator). We rebuild that mapping from the current raw[] state.
-    const nonCanonRaw = file.raw.filter(o => !o.canon);
+    // consolidator). We prefer a SNAPSHOT of the ids at presentation time
+    // (threaded from consolidateEvidence via `sourceIds`) — re-deriving from
+    // the current raw[] state is unsafe because the user can delete an
+    // observation or toggle canon during the API round-trip, shifting every
+    // position after it and archiving the wrong observations (item 4 fix).
     const numericToId = new Map();
-    nonCanonRaw.forEach((o, i) => numericToId.set(i + 1, o.id));
+    if (Array.isArray(sourceIds)) {
+        sourceIds.forEach((id, i) => numericToId.set(i + 1, id));
+    } else {
+        // Fallback: re-derive from current state (used by callers that
+        // don't thread the snapshot — backward compatible).
+        const nonCanonRaw = file.raw.filter(o => !o.canon);
+        nonCanonRaw.forEach((o, i) => numericToId.set(i + 1, o.id));
+    }
 
-    // Build the new consolidated entries with resolved source ids.
+    // Build the new consolidated entries with resolved source ids. Ids come
+    // from a seeded sequence, not nextObsId: these entries aren't written back
+    // to the file until after the loop, so a per-iteration rescan of the stored
+    // tier would hand every claim in the batch the same id.
+    const nextConsolidatedId = obsIdSequence(file, 'consolidated');
     const newConsolidated = [];
     const consumedRawIds = new Set();
     for (const con of consolidated) {
@@ -400,7 +456,7 @@ export function applyConsolidation(name, consolidated) {
         const lastSeen = timestamps.length > 0 ? Math.max(...timestamps) : null;
 
         newConsolidated.push({
-            id: nextObsId(file, 'consolidated'),
+            id: nextConsolidatedId(),
             category: validCategory(con.category),
             claim: String(con.claim).trim(),
             sources: sourceIds,
@@ -420,11 +476,16 @@ export function applyConsolidation(name, consolidated) {
         archivedCount = toArchive.length;
     }
 
-    // Replace the consolidated tier with the new entries.
-    file.consolidated = newConsolidated;
+    // Append to the consolidated tier — see the note above on why this must
+    // never be a replacement.
+    file.consolidated.push(...newConsolidated);
 
     touch(file);
-    return { consolidatedCount: newConsolidated.length, archivedCount };
+    return {
+        consolidatedCount: newConsolidated.length,
+        archivedCount,
+        totalConsolidated: file.consolidated.length,
+    };
 }
 
 /**

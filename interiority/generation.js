@@ -24,12 +24,12 @@ import {
 import {
     getSettings, hasValidSettings,
     getInteriorityData,
-    getLedger, addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
+    addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
     setPerMessage, getLedgerEntriesForNpc,
     getOrCreateMsgKeyForIndex,
     getRecentThoughtsForNpc,
     getInnerState, setInnerStateGuarded, getInnerStatesSnapshot,
-    getDormantLedger, wakeLedgerEntry,
+    getActiveLedger, getDormantLedger, wakeLedgerEntry,
     getTurnCounter,
     MAX_THOUGHT_LENGTH, getWorldTime, incrementLedgerAges,
 } from './data.js';
@@ -52,9 +52,9 @@ import {
  * Player names are always excluded. Only {{user}} (name1) is excluded —
  * {{char}} (name2) and group-chat members are valid NPC targets.
  *
- * @returns {string[]} NPC names
+ * @returns {Promise<string[]>} NPC names
  */
-export function buildSceneRoster() {
+export async function buildSceneRoster() {
     const settings = getSettings();
     const maxNpcs = Math.max(1, settings.maxNpcs || 4);
     // Only exclude the human user. {{char}} and other AI characters are valid
@@ -62,15 +62,39 @@ export function buildSceneRoster() {
     const userNames = getUserNames({ lower: true });
     const exclude = (name) => !name || userNames.has(name.toLowerCase().trim());
 
+    // Resolve the knowledge registry for name canonicalization (item 2 fix).
+    // Roster names from `Present:` and the model can use different name forms
+    // ("Mara" vs "Mara Vance"). Canonicalizing to the registry key at roster-
+    // build time prevents forking the NPC's inner-state, recent-thoughts, and
+    // ledger stores — each form would otherwise get its own independent line.
+    let reg = null;
+    let resolveKey = null;
+    try {
+        const knowledgeRegistry = await import('../knowledge/registry.js');
+        reg = knowledgeRegistry.getRegistry();
+        resolveKey = knowledgeRegistry.resolveRegistryKey;
+    } catch { /* knowledge module unavailable — names stay as-is */ }
+
+    const canonicalize = (name) => {
+        const n = String(name || '').trim();
+        if (!n || !reg || !resolveKey) return n;
+        const key = resolveKey(reg, n);
+        return key || n; // fall back to raw name when no registry entry
+    };
+
     const roster = [];
     const addUnique = (name) => {
-        const n = String(name || '').trim();
+        const n = canonicalize(name);
         if (exclude(n)) return;
         if (!roster.some(r => r.toLowerCase() === n.toLowerCase())) roster.push(n);
     };
 
-    // Ledger NPCs first — always included, never capped.
-    for (const entry of getLedger()) addUnique(entry.npc);
+    // Active ledger NPCs first — always included, never capped. Dormant-only
+    // NPCs are exempt from injection and evaluation (§20), so they should not
+    // consume a roster slot every turn (item 3 fix). They still join normally
+    // via `Present:` when actually in scene, and the dormant poll wakes their
+    // intentions on schedule regardless of roster membership.
+    for (const entry of getActiveLedger()) addUnique(entry.npc);
     const ledgerCount = roster.length;
 
     // 1. Parse `Present:` from world state. The world-state template emits
@@ -749,12 +773,6 @@ export function validateAndApply(result, roster, msgIdx) {
     // Mara's intentions but leave her mood from the abandoned timeline.
     const innerStatesSnapshot = getInnerStatesSnapshot();
 
-    // Increment the age of every open intention. This is the first step
-    // of the grace-period mechanism: intentions that haven't survived
-    // enough turns since being declared are protected from premature
-    // execution/dropping (see gracePeriod below).
-    incrementLedgerAges();
-
     // Normalize roster for case-insensitive matching
     const rosterLower = new Set(roster.map(n => n.toLowerCase().trim()));
 
@@ -762,23 +780,6 @@ export function validateAndApply(result, roster, msgIdx) {
     // the roster (e.g. stale ledger entry from before the getUserNames fix).
     const userNamesLower = getUserNames({ lower: true });
 
-    // Build a map of ledger entry ids for quick lookup.
-    // §20: dormant entries are excluded from executed/dropped evaluation —
-    // they never appear in the prompt's <open_intentions>, so any reference
-    // to a dormant id is a hallucination that should be ignored.
-    const ledgerIds = new Set(
-        data.ledger.filter(e => e.status !== 'dormant').map(e => e.id)
-    );
-
-    // Build a lookup from id → turnsOpen for grace-period enforcement.
-    // The model frequently declares and executes/drops an intention in the
-    // same turn — or one turn later — before the trigger has had a chance
-    // to arrive. The grace period forces intentions to survive at least
-    // N turns before they can be removed.
-    const ledgerAgeMap = new Map(
-        data.ledger.filter(e => e.status !== 'dormant')
-            .map(e => [e.id, e.turnsOpen || 0])
-    );
     const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
 
     // ── Grace-period design note ────────────────────────────────────────
@@ -812,6 +813,31 @@ export function validateAndApply(result, roster, msgIdx) {
         }
         return { reactions: [], ledgerChanged: false };
     }
+
+    // Increment the age of every open intention — AFTER the shape check so a
+    // garbage parse doesn't burn a turn of grace period off every open
+    // intention (item 8a fix). This is the first step of the grace-period
+    // mechanism: intentions that haven't survived enough turns since being
+    // declared are protected from premature execution/dropping.
+    incrementLedgerAges();
+
+    // Build a map of ledger entry ids for quick lookup.
+    // §20: dormant entries are excluded from executed/dropped evaluation —
+    // they never appear in the prompt's <open_intentions>, so any reference
+    // to a dormant id is a hallucination that should be ignored.
+    const ledgerIds = new Set(
+        data.ledger.filter(e => e.status !== 'dormant').map(e => e.id)
+    );
+
+    // Build a lookup from id → turnsOpen for grace-period enforcement.
+    // The model frequently declares and executes/drops an intention in the
+    // same turn — or one turn later — before the trigger has had a chance
+    // to arrive. The grace period forces intentions to survive at least
+    // N turns before they can be removed.
+    const ledgerAgeMap = new Map(
+        data.ledger.filter(e => e.status !== 'dormant')
+            .map(e => [e.id, e.turnsOpen || 0])
+    );
 
     const seenNpcs = new Set();
     for (const npcResult of result.npcs) {

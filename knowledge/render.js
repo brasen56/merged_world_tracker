@@ -1243,12 +1243,17 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             btn.disabled = true; btn.textContent = '⏳ Consolidating…';
             flash('Consolidating evidence…', 'info');
             const { runConsolidation } = await import('./growth.js');
-            const { consolidatedCount, archivedCount } = await runConsolidation(name);
+            const { consolidatedCount, archivedCount, totalConsolidated } = await runConsolidation(name);
 
             // Re-render the modal in place so the consolidated state appears
             // without closing/reopening (which would lose any unsaved profile
             // edits and the user's scroll position).
-            const msg = `Consolidated into ${consolidatedCount} claim${consolidatedCount !== 1 ? 's' : ''}; ${archivedCount} raw observation${archivedCount !== 1 ? 's' : ''} archived.`;
+            //
+            // Report ADDED and TOTAL separately: a pass appends to the tier
+            // rather than replacing it, so a bare "consolidated into N claims"
+            // would read as if the claims from earlier passes were gone.
+            const totalNote = totalConsolidated > consolidatedCount ? ` (${totalConsolidated} total)` : '';
+            const msg = `+${consolidatedCount} consolidated claim${consolidatedCount !== 1 ? 's' : ''}${totalNote}; ${archivedCount} raw observation${archivedCount !== 1 ? 's' : ''} archived.`;
             await refreshGrowthModalContent(modal, name, triggerBtn, msg);
         } catch (err) {
             flash(`Consolidation failed: ${err.message}`, 'error');

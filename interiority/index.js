@@ -157,9 +157,17 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
     if (!chat || chat.length === 0) return null;
 
     let msgIdx;
+    // Capture a stable key for this message NOW (before any API call) so we
+    // can re-resolve the index after the await. The API call can take seconds;
+    // if a message is deleted or Inline Summary collapses a range during it,
+    // a chat-array index held across the await would point at a different
+    // message — which would then receive this turn's thoughts and rollback
+    // snapshot (item 5 fix).
+    let resolvedKey;
     if (targetKey) {
         // Resolve the stable key → current index. If the message was deleted
         // while this work was queued, the key won't be in the map.
+        resolvedKey = targetKey;
         const keyToIndex = buildKeyToIndexMap();
         msgIdx = keyToIndex.get(targetKey);
         if (msgIdx == null) {
@@ -167,8 +175,10 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
             return null;
         }
     } else {
-        // Manual trigger: generate for the last message
+        // Manual trigger: generate for the last message. Stamp a key now so
+        // we can re-resolve after the API call.
         msgIdx = chat.length - 1;
+        resolvedKey = getOrCreateMsgKeyForIndex(msgIdx);
     }
 
     // Capture chat identity for cross-chat guard
@@ -204,7 +214,7 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         }
 
         // 1. Build roster
-        const roster = buildSceneRoster();
+        const roster = await buildSceneRoster();
         if (roster.length === 0) {
             console.log('[MWT:Interiority] No NPCs in scene — skipping.');
             return null;
@@ -260,6 +270,21 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
                 console.warn('[MWT:Interiority] Generation returned no result (API/parse failure). Skipping silently.');
                 return null;
             }
+        }
+
+        // Re-resolve the message index AFTER the API call(s). The await can
+        // take seconds; if a message was deleted or Inline Summary collapsed a
+        // range during it, the pre-await index now points at a different
+        // message. Re-derive from the stable key and bail if it's gone.
+        // (Item 5 fix.)
+        if (resolvedKey) {
+            const keyToIndexAfter = buildKeyToIndexMap();
+            const msgIdxAfter = keyToIndexAfter.get(resolvedKey);
+            if (msgIdxAfter == null) {
+                console.log(`[MWT:Interiority] Results discarded — target message (key ${resolvedKey}) no longer exists after API call.`);
+                return null;
+            }
+            msgIdx = msgIdxAfter;
         }
 
         // 3-4. Validate and apply

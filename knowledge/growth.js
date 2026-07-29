@@ -216,6 +216,13 @@ function getIndexedMessages(count = EVIDENCE_MESSAGE_WINDOW) {
     for (let i = startIdx; i < chat.length; i++) {
         const msg = chat[i];
         if (!msg || !msg.mes || msg.is_system) continue;
+        // Skip ILS summary messages — they contain paraphrased text, not
+        // verbatim quotes. Extracting "verbatim" quotes from them would create
+        // receipts that pass verification (findQuoteMatch matches them against
+        // the same summary message) but quote something the character never
+        // said. Backfill (Part B) owns that history — it expands summaries to
+        // real originals first. (Item 1 fix.)
+        if (isIlsSummary(msg)) continue;
         const name = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
         const text = stripNonNarrative(msg.mes).trim();
         if (!text) continue;
@@ -767,6 +774,13 @@ export async function consolidateEvidence(name) {
         throw new Error(`No raw observations to consolidate for "${name}". (Canon-flagged observations are excluded from consolidation.)`);
     }
 
+    // Capture the ordered id list NOW, before the API round-trip. The user can
+    // delete an observation or toggle canon during the call, shifting every
+    // position after it. Threading this snapshot into applyConsolidation lets
+    // it resolve source positions against the list it actually presented,
+    // instead of re-deriving from a possibly-changed raw[] (item 4 fix).
+    const sourceIds = rawForCon.map(o => o.id);
+
     // Format raw observations with their numeric IDs for the consolidator.
     const rawText = rawForCon.map(o => {
         return `[${o.numericId}] [${o.category}] ${o.claim}\n   Quote: "${o.quote}"`;
@@ -787,25 +801,31 @@ export async function consolidateEvidence(name) {
     const cleaned = normaliseOutput(rawResponse);
     const result = parseJsonLenient(cleaned);
 
-    return Array.isArray(result.consolidated) ? result.consolidated : [];
+    const consolidated = Array.isArray(result.consolidated) ? result.consolidated : [];
+    return { consolidated, sourceIds };
 }
 
 /**
  * Run the full consolidation pipeline for an NPC:
  *   1. Gather raw observations (excluding canon)
  *   2. API call to consolidate them into distilled claims
- *   3. Apply: write consolidated[], archive consumed raw observations
+ *   3. Apply: append to consolidated[], archive consumed raw observations
+ *
+ * Repeatable: each pass distills only the raw observations captured since the
+ * last one and APPENDS its claims, so earlier eras of the character survive.
  *
  * @param {string} name — NPC name
- * @returns {Promise<{consolidatedCount:number, archivedCount:number, consolidated:Array}>}
+ * @returns {Promise<{consolidatedCount:number, archivedCount:number, totalConsolidated:number, consolidated:Array}>}
+ *   `consolidatedCount` counts the claims added by this pass; `totalConsolidated`
+ *   is the size of the tier afterwards.
  */
 export async function runConsolidation(name) {
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
 
-    const consolidated = await consolidateEvidence(name);
-    const stats = applyConsolidation(name, consolidated);
+    const { consolidated, sourceIds } = await consolidateEvidence(name);
+    const stats = applyConsolidation(name, consolidated, sourceIds);
 
     return { ...stats, consolidated };
 }
@@ -1188,9 +1208,19 @@ export async function runIlsBackfillCapture(name, opts = {}) {
     // ORIGINAL message text (verbatim), not the summary. The idx is synthetic
     // (points at the summary position, not the original array position) — this
     // is consistent with the blueprint's "ts canonical, msgIdx diagnostic" rule.
+    //
+    // Compute maxTs across ALL entries in the window (not just those that
+    // produce non-empty lines) so a batch that's entirely OOC/empty after
+    // stripping still advances the watermark. Otherwise the next run re-
+    // selects the same batch, strips it to nothing again, and Catch Up's
+    // phase 1 sees no watermark movement — a permanent hard stop (item 6 fix).
     const lines = [];
     let maxTs = backfillWm ?? 0;
     for (const entry of window) {
+        // Advance the watermark across every entry in the batch, even those
+        // that produce no line — they WERE processed, there was just nothing
+        // quotable in them.
+        if (entry.ts > maxTs) maxTs = entry.ts;
         const msg = entry.msg;
         if (!msg || !msg.mes || msg.is_system) continue;
         const name2 = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
@@ -1199,10 +1229,13 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         // Mark expanded originals so the user can distinguish them in logs.
         const tag = entry.fromSummary ? '[restored]' : '';
         lines.push(`${tag}[${entry.idx}] ${name2}: ${text}`);
-        if (entry.ts > maxTs) maxTs = entry.ts;
     }
 
     if (lines.length === 0) {
+        // No quotable text survived stripping — but the batch WAS processed.
+        // Advance the watermark so the next run continues forward instead of
+        // re-selecting and re-rejecting the same empty batch forever (item 6).
+        setBackfillWatermark(name, maxTs);
         return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs };
     }
 
