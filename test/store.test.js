@@ -12,15 +12,17 @@
 
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { resetCoreStubs } from './stubs/core.js';
+import { resetCoreStubs, setFakeContextExtras, getFakeMeta } from './stubs/core.js';
 import { state } from '../knowledge/state.js';
 import {
     STORE_SENTINEL,
     hydrateBook, isHydrated, assertHydrated,
     readField, writeField,
-    applyStoreToWorldInfo, flushBook,
+    applyStoreToWorldInfo, flushBook, hydrateCurrentBooks,
     _clearCacheForTests, _setCacheForTests,
 } from '../knowledge/store.js';
+import { saveSettings } from '../knowledge/settings.js';
+import { writeToLorebook } from '../knowledge/lorebook.js';
 
 /**
  * Minimal stand-in for ST's world-info.js.
@@ -287,6 +289,68 @@ describe('applyStoreToWorldInfo', () => {
 });
 
 // ─── Flushing ───────────────────────────────────────────────────────────────
+
+// ─── Seeding is global-only ─────────────────────────────────────────────────
+
+describe('hydrateCurrentBooks seeding', () => {
+    test('the GLOBAL book adopts legacy chat_metadata', async () => {
+        saveSettings({ scope: 'global' });
+        getFakeMeta().knowledge_tracker_registry = { Mara: { uid: 0 } };
+
+        const { knowledge } = await hydrateCurrentBooks();
+        expect(knowledge).toBe('Knowledge Tracker');
+        expect(readField(knowledge, 'registry')).toEqual({ Mara: { uid: 0 } });
+    });
+
+    test('a SCOPED book starts empty and never adopts it', async () => {
+        // The legacy registry's uids point into the GLOBAL book. Copying them
+        // into a scoped book would make writeToLorebook "update" whatever
+        // occupies that uid here — on a new book, the store entry itself.
+        saveSettings({ scope: 'character' });
+        setFakeContextExtras({
+            characterId: 0,
+            characters: [{ name: 'Assistant', avatar: 'default_Assistant.png' }],
+        });
+        getFakeMeta().knowledge_tracker_registry = { Mara: { uid: 0 } };
+
+        const { knowledge } = await hydrateCurrentBooks();
+        expect(knowledge).toBe('Knowledge Tracker - Assistant');
+        expect(readField(knowledge, 'registry')).toEqual({});
+        // Nothing to migrate means no book is created either.
+        expect(wiFake.books.has(knowledge)).toBe(false);
+    });
+});
+
+// ─── Stale-uid guard ────────────────────────────────────────────────────────
+
+describe('writeToLorebook stale-uid guard', () => {
+    test('refuses to overwrite the store entry and creates a new one', async () => {
+        saveSettings({ scope: 'global' });
+        // A book whose only entry is the store, sitting at uid 0 — exactly the
+        // shape a freshly created scoped book has.
+        await hydrateBook('Knowledge Tracker', { registry: { Mara: { uid: 0 } } });
+        expect(storeEntryOf('Knowledge Tracker').uid).toBe(0);
+
+        // A stale registry uid of 0 points straight at the store entry.
+        const result = await writeToLorebook('Mara', 'dossier text', ['Mara'], 0);
+
+        expect(result.success).toBe(true);
+        expect(result.uid).not.toBe(0);
+
+        const saved = wiFake.books.get('Knowledge Tracker');
+        const store = Object.values(saved.entries).find(e => e.comment === STORE_SENTINEL);
+        const mara = Object.values(saved.entries).find(e => e.comment === 'Mara');
+
+        // The store survived intact, and did not acquire keywords.
+        expect(store).toBeTruthy();
+        expect(store.key).toEqual([]);
+        expect(store.content).not.toBe('dossier text');
+        // Mara landed in her own entry.
+        expect(mara).toBeTruthy();
+        expect(mara.content).toBe('dossier text');
+        expect(mara.uid).not.toBe(store.uid);
+    });
+});
 
 describe('flushBook', () => {
     test('creates the book when it does not exist', async () => {

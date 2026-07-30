@@ -38,6 +38,7 @@ import { getChatMeta } from '../core/index.js';
 
 import {
     state, REGISTRY_KEY, STATE_REGISTRY_KEY, RELATIONSHIP_KEY,
+    LOREBOOK_NAME, STATE_LOREBOOK_NAME,
 } from './state.js';
 
 /** Marks the entry that holds this book's store. */
@@ -417,13 +418,25 @@ export async function hydrateCurrentBooks() {
     const stateBook = getStateLorebookName();
     const meta = getChatMeta() || {};
 
-    await hydrateBook(knowledgeBook, {
-        registry: meta[REGISTRY_KEY] || {},
-        relationships: meta[RELATIONSHIP_KEY] || {},
-    });
-    await hydrateBook(stateBook, {
-        stateRegistry: meta[STATE_REGISTRY_KEY] || {},
-    });
+    // Legacy chat_metadata describes entries in the GLOBAL books, so only the
+    // global books may adopt it.
+    //
+    // Seeding a SCOPED book from it would copy a registry whose uids point into
+    // a different book. `writeToLorebook` trusts a registry uid: if an entry
+    // exists at that uid here it takes the update branch — so the first write
+    // after switching scope would overwrite whatever happens to occupy that
+    // uid in the new book. On a freshly created book that is the [MWT:store]
+    // entry itself, which would be rewritten as an NPC entry complete with
+    // keywords. A scoped book must start empty and build its own registry.
+    const knowledgeSeed = knowledgeBook === LOREBOOK_NAME
+        ? { registry: meta[REGISTRY_KEY] || {}, relationships: meta[RELATIONSHIP_KEY] || {} }
+        : {};
+    const stateSeed = stateBook === STATE_LOREBOOK_NAME
+        ? { stateRegistry: meta[STATE_REGISTRY_KEY] || {} }
+        : {};
+
+    await hydrateBook(knowledgeBook, knowledgeSeed);
+    await hydrateBook(stateBook, stateSeed);
 
     return { knowledge: knowledgeBook, state: stateBook };
 }

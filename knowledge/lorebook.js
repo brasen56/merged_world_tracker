@@ -24,7 +24,7 @@ import { getRegistry } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
-import { applyStoreToWorldInfo, assertHydrated } from './store.js';
+import { applyStoreToWorldInfo, assertHydrated, STORE_SENTINEL } from './store.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
 
@@ -134,6 +134,19 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             }
         }
         const entries = wi.entries;
+        // A registry uid is only meaningful for the book it was recorded in. A
+        // stale one (imported registry, hand-deleted entries, a scope switch)
+        // can point at an unrelated entry, and the update branch below would
+        // silently overwrite it. The store entry is the unambiguous case —
+        // never let an NPC be written over the module's own bookkeeping.
+        if (existingUid !== null && existingUid !== undefined
+            && entries[existingUid]?.comment === STORE_SENTINEL) {
+            console.warn(
+                `[MWT:Knowledge] Registry uid ${existingUid} for "${name}" points at the ` +
+                `${STORE_SENTINEL} entry in "${book}" — the uid is stale. Creating a new entry instead.`
+            );
+            existingUid = null;
+        }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
             pushHistory(existingUid, previousContent);
