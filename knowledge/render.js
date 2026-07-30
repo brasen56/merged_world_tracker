@@ -9,7 +9,7 @@ import {
 } from '../core/index.js';
 
 import {
-    RELATIONSHIP_TYPES, TRACKER_SENTINEL, STATE_LOREBOOK_NAME,
+    RELATIONSHIP_TYPES, TRACKER_SENTINEL,
     state, getNpcsContentEl, ktSetStatus,
 } from './state.js';
 import { getSettings, hasValidSettings, showKnowledgeSettings } from './settings.js';
@@ -36,6 +36,7 @@ import {
     mergeScanResults, formatHistoryAge,
     STAGING_PLACEHOLDERS,
 } from './staging.js';
+import { getStateLorebookName } from './scope.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -609,7 +610,7 @@ function renderStateTrackerContent() {
             </div>
             <div class="kt-state-register">
                 <h3>Register a State Tracker</h3>
-                <p style="color:var(--mwt-text-dim);font-size:12px">Create a lorebook entry in <strong>${STATE_LOREBOOK_NAME}</strong> with comment starting with <code>${TRACKER_SENTINEL}</code>.</p>
+                <p style="color:var(--mwt-text-dim);font-size:12px">Create a lorebook entry in <strong>${getStateLorebookName()}</strong> with comment starting with <code>${TRACKER_SENTINEL}</code>.</p>
                 <div style="display:flex;gap:8px;margin-top:8px">
                     <input type="number" id="kt-state-uid" placeholder="UID" min="0" class="mwt-input" style="width:80px" />
                     <input type="text" id="kt-state-name" placeholder="Display name" class="mwt-input" style="flex:1" />

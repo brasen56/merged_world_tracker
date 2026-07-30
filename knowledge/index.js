@@ -12,6 +12,7 @@ import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js
 import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
+import { resetStoreCache, hydrateCurrentBooks } from './store.js';
 import { runContinuousCaptureAll } from './growth.js';
 import {
     renderNpcsSubTab,
@@ -45,6 +46,12 @@ export function init(parentModal) {
         state.stateContentEl = null;
     }
     initNotificationPanel();
+    // Load the registry stores for whatever chat is already open. Without this,
+    // a user who reloads (or upgrades) while sitting in a chat would have no
+    // hydrated store until they switched chats, and every write would be
+    // refused in the meantime. Safe to run before a chat exists: the scope
+    // resolver falls back to the global books, and CHAT_CHANGED re-points them.
+    reloadStores();
     console.log('[MWT:Knowledge] Module initialized');
 }
 
@@ -317,6 +324,28 @@ export function onChatChanged() {
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     hideNotificationPanel();
     document.querySelectorAll('#kt-view-modal').forEach(m => m.remove());
+
+    // Re-point the registry stores at whatever lorebooks the new chat resolves
+    // to. This is fire-and-forget because onChatChanged is synchronous, but it
+    // is not optional: until it lands, the store is un-hydrated and any path
+    // that would create an entry refuses to run (see store.assertHydrated) —
+    // which is the intended behaviour, not a race to be ignored.
+    reloadStores();
+}
+
+/**
+ * Flush the outgoing chat's stores, then load the incoming chat's.
+ * Exported so the settings panel can call it after a scope change.
+ * @returns {Promise<void>}
+ */
+export async function reloadStores() {
+    try {
+        await resetStoreCache();
+        const { knowledge } = await hydrateCurrentBooks();
+        console.log(`[MWT:Knowledge] Store ready — lorebook "${knowledge}".`);
+    } catch (err) {
+        console.warn('[MWT:Knowledge] Store hydration failed:', err?.message || err);
+    }
 }
 
 // ─── Delete awareness ────────────────────────────────────────────────────────

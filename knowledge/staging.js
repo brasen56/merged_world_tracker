@@ -9,7 +9,7 @@
 import { getPlayerNames, notify, downloadJson, pickTextFile } from '../core/index.js';
 
 import {
-    LOREBOOK_NAME, STATE_LOREBOOK_NAME, TRACKER_SENTINEL,
+    TRACKER_SENTINEL,
     HISTORY_KEY_PREFIX, state, ktSetStatus,
 } from './state.js';
 import { hasValidSettings, getSettings, saveSettings } from './settings.js';
@@ -24,6 +24,7 @@ import {
     enrichStagingItem, writeToLorebook,
     loadEntryContent, getHistory,
 } from './lorebook.js';
+import { getLorebookName, getStateLorebookName } from './scope.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
 
@@ -162,7 +163,7 @@ export async function exportNpcs() {
                 content = await loadEntryContent(info.uid);
             } catch { /* entry may not exist */ }
             try {
-                history = getHistory(info.uid, LOREBOOK_NAME);
+                history = getHistory(info.uid, getLorebookName());
             } catch { /* ignore */ }
         }
         entries[name] = {
@@ -180,7 +181,7 @@ export async function exportNpcs() {
         version: 1,
         type: 'knowledge_tracker',
         exportedAt: new Date().toISOString(),
-        lorebook: LOREBOOK_NAME,
+        lorebook: getLorebookName(),
         settings: safeSettings,
         entries,
     };
@@ -269,7 +270,7 @@ export async function importNpcs() {
             const finalUid = registry[name].uid;
             if (entry.history && Array.isArray(entry.history) && entry.history.length > 0 && finalUid != null) {
                 try {
-                    const key = HISTORY_KEY_PREFIX + LOREBOOK_NAME + '_' + finalUid;
+                    const key = HISTORY_KEY_PREFIX + getLorebookName() + '_' + finalUid;
                     localStorage.setItem(key, JSON.stringify(entry.history));
                 } catch { /* quota */ }
             }
@@ -304,7 +305,7 @@ export async function importFromLorebooks() {
 
     // ── Knowledge Tracker ───────────────────────────────────────────────
     try {
-        const ktWi = await state.wiScript.loadWorldInfo(LOREBOOK_NAME);
+        const ktWi = await state.wiScript.loadWorldInfo(getLorebookName());
         if (ktWi?.entries) {
             const registry = getRegistry();
             const playerSet = getPlayerNames();
@@ -349,7 +350,7 @@ export async function importFromLorebooks() {
 
     // ── State Tracker ───────────────────────────────────────────────────
     try {
-        const stWi = await state.wiScript.loadWorldInfo(STATE_LOREBOOK_NAME);
+        const stWi = await state.wiScript.loadWorldInfo(getStateLorebookName());
         if (stWi?.entries) {
             const stateReg = getStateRegistry();
 

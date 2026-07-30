@@ -143,7 +143,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         apiUrl: '',
         apiKey: '',
         modelName: '',
-        maxTokens: 1500,
+        maxTokens: 4000,
         temperature: 0.4,
         topP: 1.0,
         frequencyPenalty: 0,

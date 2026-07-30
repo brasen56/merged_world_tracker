@@ -343,7 +343,7 @@ export function renderSettingsPanel() {
         urlId: 'mwt-int-api-url', keyId: 'mwt-int-api-key', modelId: 'mwt-int-model',
         maxTokensId: 'mwt-int-max-tokens', tempId: 'mwt-int-temp', topPId: 'mwt-int-top-p',
         freqId: 'mwt-int-freq-pen', presId: 'mwt-int-pres-pen', headersId: 'mwt-int-headers',
-        maxTokensDefault: 1500, tempDefault: 0.4,
+        maxTokensDefault: 4000, tempDefault: 0.4,
     };
 
     panel.innerHTML = `

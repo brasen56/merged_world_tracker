@@ -1,0 +1,312 @@
+/**
+ * test/store.test.js — The in-lorebook data store.
+ *
+ * The properties worth protecting:
+ *   1. The store entry can never inject into a prompt.
+ *   2. A missing store adopts legacy chat_metadata (one-way migration).
+ *   3. An existing store is never clobbered by a seed.
+ *   4. A corrupt store does NOT read as "empty" — that would look like
+ *      "no NPCs known" and rebuild the whole book as duplicates.
+ *   5. Writes are refused while un-hydrated, for the same reason.
+ */
+
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+
+import { resetCoreStubs } from './stubs/core.js';
+import { state } from '../knowledge/state.js';
+import {
+    STORE_SENTINEL,
+    hydrateBook, isHydrated, assertHydrated,
+    readField, writeField,
+    applyStoreToWorldInfo, flushBook,
+    _clearCacheForTests, _setCacheForTests,
+} from '../knowledge/store.js';
+
+/**
+ * Minimal stand-in for ST's world-info.js.
+ *
+ * `loadWorldInfo` returns a deep copy, exactly like the real one does — that is
+ * what forces every writer into read-modify-write and makes the interleaving
+ * this store guards against actually reproducible in a test.
+ */
+function makeFakeWorldInfo() {
+    const books = new Map();
+    return {
+        books,
+        async loadWorldInfo(name) {
+            return books.has(name) ? structuredClone(books.get(name)) : null;
+        },
+        async saveWorldInfo(name, wi) {
+            books.set(name, structuredClone(wi));
+        },
+        async createNewWorldInfo(name) {
+            books.set(name, { entries: {} });
+            return true; // the Aikobots v4 fork returns a boolean, not the object
+        },
+    };
+}
+
+let wiFake;
+
+beforeEach(() => {
+    resetCoreStubs();
+    _clearCacheForTests();
+    wiFake = makeFakeWorldInfo();
+    state.wiScript = wiFake;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+    _clearCacheForTests();
+    state.wiScript = null;
+});
+
+/** Pull the store entry out of a fake book. */
+function storeEntryOf(bookName) {
+    const wi = wiFake.books.get(bookName);
+    if (!wi) return null;
+    return Object.values(wi.entries).find(e => e.comment === STORE_SENTINEL) || null;
+}
+
+// ─── Hydration and migration ────────────────────────────────────────────────
+
+describe('hydrateBook', () => {
+    test('adopts legacy chat_metadata when the book has no store yet', () => {
+        // This is the upgrade path off chat_metadata.
+        return hydrateBook('Book A', { registry: { Mara: { uid: 0 } } }).then(data => {
+            expect(data.registry).toEqual({ Mara: { uid: 0 } });
+            expect(isHydrated('Book A')).toBe(true);
+            // Seeding writes through immediately so the migration is durable.
+            const entry = storeEntryOf('Book A');
+            expect(entry).not.toBeNull();
+            expect(JSON.parse(entry.content).registry).toEqual({ Mara: { uid: 0 } });
+        });
+    });
+
+    test('does not write a store when there is nothing to migrate', async () => {
+        await hydrateBook('Book A', { registry: {} });
+        expect(isHydrated('Book A')).toBe(true);
+        // An empty seed is not worth creating an entry for.
+        expect(wiFake.books.has('Book A')).toBe(false);
+    });
+
+    test('reads an existing store back', async () => {
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+        _clearCacheForTests();
+
+        const data = await hydrateBook('Book A', {});
+        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+    });
+
+    test('an existing store is never overwritten by a seed', async () => {
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+        _clearCacheForTests();
+
+        // A stale chat_metadata seed must not clobber the book's own data.
+        const data = await hydrateBook('Book A', { registry: { Someone: { uid: 99 } } });
+        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+    });
+
+    test('a corrupt store stays un-hydrated rather than reading as empty', async () => {
+        wiFake.books.set('Book A', {
+            entries: { 0: { uid: 0, comment: STORE_SENTINEL, content: '{not json' } },
+        });
+
+        await hydrateBook('Book A', {});
+        // Treating this as {} would report every NPC as new and duplicate the book.
+        expect(isHydrated('Book A')).toBe(false);
+        expect(() => assertHydrated('Book A')).toThrow(/not loaded/);
+    });
+
+    test('stays un-hydrated when world-info is unavailable', async () => {
+        state.wiScript = null;
+        await hydrateBook('Book A', {});
+        expect(isHydrated('Book A')).toBe(false);
+    });
+});
+
+// ─── The store entry must never inject ──────────────────────────────────────
+
+describe('store entry shape', () => {
+    test('has no keywords and is disabled', async () => {
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+        const entry = storeEntryOf('Book A');
+
+        // Empty keywords make injection structurally impossible; the flags are
+        // a second line of defence.
+        expect(entry.key).toEqual([]);
+        expect(entry.disable).toBe(true);
+        expect(entry.enabled).toBe(false);
+    });
+
+    test('is not constant and not vectorized', async () => {
+        // Empty keywords only defeat KEYWORD matching. These two flags bypass
+        // keywords entirely, so they are the ones that actually matter.
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+        const entry = storeEntryOf('Book A');
+        expect(entry.constant).toBe(false);
+        expect(entry.vectorized).toBe(false);
+    });
+
+    test('an entry edited into an injecting state is repaired on the next write', async () => {
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+
+        // Simulate a user (or a lossy import) turning this into a live entry
+        // by every available route at once.
+        const wi = await wiFake.loadWorldInfo('Book A');
+        const entry = Object.values(wi.entries).find(e => e.comment === STORE_SENTINEL);
+        entry.key = ['Mara'];
+        entry.keysecondary = ['Vance'];
+        entry.constant = true;
+        entry.vectorized = true;
+        entry.disable = false;
+        entry.enabled = true;
+        await wiFake.saveWorldInfo('Book A', wi);
+
+        writeField('Book A', 'registry', { Mara: { uid: 1 } });
+        await flushBook('Book A');
+
+        const repaired = storeEntryOf('Book A');
+        expect(repaired.key).toEqual([]);
+        expect(repaired.keysecondary).toEqual([]);
+        expect(repaired.constant).toBe(false);
+        expect(repaired.vectorized).toBe(false);
+        expect(repaired.disable).toBe(true);
+        expect(repaired.enabled).toBe(false);
+    });
+
+    test('the _note hint is stripped on read, not kept as data', async () => {
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+        expect(JSON.parse(storeEntryOf('Book A').content)._note).toBeTruthy();
+
+        _clearCacheForTests();
+        const data = await hydrateBook('Book A', {});
+        expect(data._note).toBeUndefined();
+        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+    });
+
+    test('does not collide with existing entry UIDs', async () => {
+        wiFake.books.set('Book A', {
+            entries: {
+                0: { uid: 0, comment: 'Mara', key: ['Mara'], content: 'x' },
+                1: { uid: 1, comment: 'Bren', key: ['Bren'], content: 'y' },
+            },
+        });
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+
+        const entry = storeEntryOf('Book A');
+        expect(entry.uid).toBe(2);
+        // The pre-existing entries survive.
+        expect(wiFake.books.get('Book A').entries[0].comment).toBe('Mara');
+    });
+});
+
+// ─── Field access ───────────────────────────────────────────────────────────
+
+describe('readField / writeField', () => {
+    test('readField installs the fallback so callers can mutate in place', () => {
+        // The chat_metadata version returned a stable object; callers rely on
+        // mutating it and then calling save.
+        const first = readField('Book A', 'registry', {});
+        first.Mara = { uid: 0 };
+        const second = readField('Book A', 'registry', {});
+        expect(second).toBe(first);
+        expect(second.Mara).toEqual({ uid: 0 });
+    });
+
+    test('writeField updates the cache synchronously', () => {
+        writeField('Book A', 'registry', { Mara: { uid: 3 } });
+        expect(readField('Book A', 'registry')).toEqual({ Mara: { uid: 3 } });
+    });
+
+    test('separate books keep separate data', () => {
+        writeField('Book A', 'registry', { Mara: { uid: 0 } });
+        writeField('Book B', 'registry', { Bren: { uid: 0 } });
+        expect(readField('Book A', 'registry')).toEqual({ Mara: { uid: 0 } });
+        expect(readField('Book B', 'registry')).toEqual({ Bren: { uid: 0 } });
+    });
+});
+
+// ─── assertHydrated ─────────────────────────────────────────────────────────
+
+describe('assertHydrated', () => {
+    test('throws with an actionable message when un-hydrated', () => {
+        expect(() => assertHydrated('Book A', 'create an entry'))
+            .toThrow(/refusing to create an entry/);
+        expect(() => assertHydrated('Book A'))
+            .toThrow(/duplicate lorebook entries/);
+    });
+
+    test('passes once hydrated', () => {
+        _setCacheForTests('Book A', { registry: {} });
+        expect(() => assertHydrated('Book A')).not.toThrow();
+    });
+});
+
+// ─── The interleaving guard ─────────────────────────────────────────────────
+
+describe('applyStoreToWorldInfo', () => {
+    test('folds the store into a caller-loaded book', () => {
+        _setCacheForTests('Book A', { registry: { Mara: { uid: 0 } } });
+        const wi = { entries: { 0: { uid: 0, comment: 'Mara', key: ['Mara'], content: 'x' } } };
+
+        expect(applyStoreToWorldInfo('Book A', wi)).toBe(true);
+        const entry = Object.values(wi.entries).find(e => e.comment === STORE_SENTINEL);
+        expect(JSON.parse(entry.content).registry).toEqual({ Mara: { uid: 0 } });
+    });
+
+    test('no-ops for a book with no cached store', () => {
+        const wi = { entries: {} };
+        expect(applyStoreToWorldInfo('Unknown Book', wi)).toBe(false);
+        expect(Object.keys(wi.entries)).toHaveLength(0);
+    });
+
+    test('a caller save that folds in the store does not lose the new entry', async () => {
+        // Reproduces the interleaving this exists to prevent: two writers doing
+        // load-modify-save on the same book. Folding the store into the
+        // caller's own save removes the second writer entirely.
+        _setCacheForTests('Book A', { registry: {} });
+        wiFake.books.set('Book A', { entries: {} });
+
+        // Caller loads, adds an entry, folds in the store, saves.
+        const wi = await wiFake.loadWorldInfo('Book A');
+        wi.entries[0] = { uid: 0, comment: 'Mara', key: ['Mara'], content: 'dossier' };
+        writeField('Book A', 'registry', { Mara: { uid: 0 } });
+        applyStoreToWorldInfo('Book A', wi);
+        await wiFake.saveWorldInfo('Book A', wi);
+
+        const saved = wiFake.books.get('Book A');
+        const names = Object.values(saved.entries).map(e => e.comment);
+        expect(names).toHaveLength(2);
+        expect(names).toEqual(expect.arrayContaining([STORE_SENTINEL, 'Mara']));
+        const store = Object.values(saved.entries).find(e => e.comment === STORE_SENTINEL);
+        expect(JSON.parse(store.content).registry).toEqual({ Mara: { uid: 0 } });
+    });
+});
+
+// ─── Flushing ───────────────────────────────────────────────────────────────
+
+describe('flushBook', () => {
+    test('creates the book when it does not exist', async () => {
+        _setCacheForTests('New Book', { registry: { Mara: { uid: 0 } } });
+        expect(await flushBook('New Book')).toBe(true);
+        expect(JSON.parse(storeEntryOf('New Book').content).registry)
+            .toEqual({ Mara: { uid: 0 } });
+    });
+
+    test('preserves other entries in the book', async () => {
+        wiFake.books.set('Book A', {
+            entries: { 0: { uid: 0, comment: 'Mara', key: ['Mara'], content: 'dossier' } },
+        });
+        _setCacheForTests('Book A', { registry: { Mara: { uid: 0 } } });
+
+        await flushBook('Book A');
+        expect(wiFake.books.get('Book A').entries[0].content).toBe('dossier');
+    });
+
+    test('returns false for a book with no cached store', async () => {
+        expect(await flushBook('Nothing Cached')).toBe(false);
+    });
+});

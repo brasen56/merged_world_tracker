@@ -1,0 +1,445 @@
+/**
+ * knowledge/store.js — Per-lorebook data store, kept inside the lorebook.
+ *
+ * ── Why the store lives in the book ─────────────────────────────────────────
+ * The NPC registry maps an NPC name to a lorebook UID. The registry used to
+ * live in `chat_metadata` while its target lived in the lorebook — two files,
+ * two save paths, two lifetimes. `core/metadata.js` documents at length what
+ * that cost: if the debounced metadata save didn't flush before a reload, the
+ * pointer was lost while the entry it pointed at survived, the next save saw
+ * no existing UID, and a SECOND entry was created. Duplicates accumulated
+ * silently. `persistChatMetaNow()` exists to mitigate exactly that.
+ *
+ * Keeping the registry inside the book removes the failure mode instead of
+ * mitigating it: pointer and target are now the same file, written by the same
+ * `saveWorldInfo` call. It also makes each book self-describing — export or
+ * share a book and its registry travels with it.
+ *
+ * ── The entry is structurally non-injecting ─────────────────────────────────
+ * The store entry uses `key: []` (no keywords) so ST's world-info system can
+ * never keyword-match it, plus `disable: true` as a second line of defence.
+ * This is the same "default OFF by construction, not by toggle" approach the
+ * NPC Profiles lorebook already uses.
+ *
+ * ── Why there is a synchronous cache ────────────────────────────────────────
+ * `loadWorldInfo` is async, but `getRegistry()` and friends are synchronous and
+ * called from render paths all over the module. Rather than convert dozens of
+ * call sites to async, the book is hydrated once (on chat change) into an
+ * in-memory cache that the sync accessors read from.
+ *
+ * That trade has one sharp edge: reading before hydration returns an EMPTY
+ * registry, and an empty registry means "no NPC is known", which is precisely
+ * what causes duplicate entries. So reads are permissive (render paths must not
+ * throw) but any path that CREATES an entry must call `assertHydrated()` first,
+ * turning a silent data-corrupting bug into a loud, actionable error.
+ */
+
+import { getChatMeta } from '../core/index.js';
+
+import {
+    state, REGISTRY_KEY, STATE_REGISTRY_KEY, RELATIONSHIP_KEY,
+} from './state.js';
+
+/** Marks the entry that holds this book's store. */
+export const STORE_SENTINEL = '[MWT:store]';
+
+/** Bumped only on a breaking change to the stored shape. */
+export const STORE_VERSION = 1;
+
+/** How long to wait before flushing a dirty store back to its book. */
+const FLUSH_DEBOUNCE_MS = 1200;
+
+/**
+ * bookName → { data, hydrated, dirty, timer }
+ * @type {Map<string, {data: object, hydrated: boolean, dirty: boolean, timer: any}>}
+ */
+const _cache = new Map();
+
+function blankStore() {
+    return { version: STORE_VERSION };
+}
+
+function slot(bookName) {
+    let entry = _cache.get(bookName);
+    if (!entry) {
+        entry = { data: blankStore(), hydrated: false, dirty: false, timer: null };
+        _cache.set(bookName, entry);
+    }
+    return entry;
+}
+
+/**
+ * Resolve ST's world-info module. `lorebook.js` imports it as a side-effect and
+ * parks it on `state.wiScript`; if this module is used before that happens we
+ * import it ourselves rather than failing.
+ */
+async function getWiScript() {
+    if (state.wiScript) return state.wiScript;
+    try {
+        state.wiScript = await import('../../../../world-info.js');
+        return state.wiScript;
+    } catch (err) {
+        console.warn('[MWT:Knowledge] store: world-info.js unavailable:', err?.message || err);
+        return null;
+    }
+}
+
+/** Find the store entry inside a loaded world-info object, or null. */
+function findStoreEntry(wi) {
+    const entries = wi?.entries;
+    if (!entries) return null;
+    for (const key of Object.keys(entries)) {
+        if (entries[key]?.comment === STORE_SENTINEL) return entries[key];
+    }
+    return null;
+}
+
+// ─── Hydration ──────────────────────────────────────────────────────────────
+
+/**
+ * Load a book's store into the cache.
+ *
+ * When the book has no store entry yet, `seed` is adopted as the starting data
+ * and written through immediately. That is the migration path off
+ * `chat_metadata`: callers pass the legacy per-chat values, and the first
+ * hydration moves them into the book. Seeding only ever happens when the book
+ * has no store — an existing store is never overwritten by a seed.
+ *
+ * @param {string} bookName
+ * @param {object} [seed] — legacy data to adopt if the book has no store yet
+ * @param {boolean} [force] — re-read even if already hydrated
+ * @returns {Promise<object>} the hydrated store data
+ */
+export async function hydrateBook(bookName, seed = {}, force = false) {
+    if (!bookName) return blankStore();
+    const s = slot(bookName);
+    if (s.hydrated && !force) return s.data;
+
+    const wi$ = await getWiScript();
+    if (!wi$) {
+        // No world-info module: stay un-hydrated so write paths refuse to run
+        // rather than creating duplicates against an empty registry.
+        return s.data;
+    }
+
+    let wi = null;
+    try {
+        wi = await wi$.loadWorldInfo(bookName);
+    } catch (err) {
+        console.warn(`[MWT:Knowledge] store: could not load "${bookName}":`, err?.message || err);
+    }
+
+    const entry = findStoreEntry(wi);
+    if (entry) {
+        try {
+            const parsed = JSON.parse(entry.content || '{}');
+            s.data = (parsed && typeof parsed === 'object') ? parsed : blankStore();
+            // Written on flush purely as a human-readable hint — not data.
+            delete s.data._note;
+            if (typeof s.data.version !== 'number') s.data.version = STORE_VERSION;
+            s.hydrated = true;
+            s.dirty = false;
+            return s.data;
+        } catch (err) {
+            // A corrupt store is the one case where we must NOT silently fall
+            // back to empty — that would look like "no NPCs known" and rebuild
+            // the whole book as duplicates. Stay un-hydrated and shout.
+            console.error(
+                `[MWT:Knowledge] store: the ${STORE_SENTINEL} entry in "${bookName}" is not valid ` +
+                `JSON (${err?.message}). Refusing to treat it as empty — fix or delete that entry. ` +
+                `Writes are blocked until this is resolved.`
+            );
+            return s.data;
+        }
+    }
+
+    // No store entry yet. Adopt the legacy chat_metadata values if any were
+    // supplied, then persist so the migration is durable.
+    const seeded = { ...blankStore(), ...(seed || {}) };
+    s.data = seeded;
+    s.hydrated = true;
+    s.dirty = false;
+
+    const hasSeedData = Object.keys(seed || {}).some(k => {
+        const v = seed[k];
+        return v && typeof v === 'object' && Object.keys(v).length > 0;
+    });
+    if (hasSeedData) {
+        console.log(`[MWT:Knowledge] store: migrating legacy chat metadata into "${bookName}".`);
+        await flushBook(bookName);
+    }
+    return s.data;
+}
+
+/** Has this book's store been loaded into the cache? */
+export function isHydrated(bookName) {
+    return !!_cache.get(bookName)?.hydrated;
+}
+
+/**
+ * Throw unless the book's store is loaded.
+ *
+ * Call this before any operation that could CREATE a lorebook entry. Reading an
+ * un-hydrated (empty) registry reports every NPC as unknown, which is what
+ * produces duplicate entries — so this converts a silent corruption into an
+ * error the user can act on.
+ *
+ * @param {string} bookName
+ * @param {string} [context] — what the caller was trying to do
+ */
+export function assertHydrated(bookName, context = 'write') {
+    if (isHydrated(bookName)) return;
+    throw new Error(
+        `Knowledge store for "${bookName}" is not loaded yet — refusing to ${context}. ` +
+        `Proceeding would treat every NPC as new and create duplicate lorebook entries. ` +
+        `Reopen the chat, or check the console for an earlier store-load error.`
+    );
+}
+
+// ─── Field access ───────────────────────────────────────────────────────────
+
+/**
+ * Read a field from a book's store, installing `fallback` when it is absent.
+ *
+ * Installing (rather than just returning) the fallback preserves the semantics
+ * of the `chat_metadata` version this replaced: `getRegistry()` returned a
+ * stable object that callers could mutate in place before calling save. Handing
+ * back a fresh `{}` each time would silently drop those mutations.
+ *
+ * Installing does NOT mark the store dirty — an empty registry is not a change
+ * worth writing, and if the book is not hydrated yet the value is replaced
+ * wholesale by `hydrateBook` anyway.
+ *
+ * Safe to call before hydration; render paths rely on that.
+ */
+export function readField(bookName, field, fallback = {}) {
+    const s = slot(bookName);
+    const value = s.data[field];
+    if (value === undefined || value === null) {
+        s.data[field] = fallback;
+        return fallback;
+    }
+    return value;
+}
+
+/**
+ * Write a field into a book's store and schedule a flush.
+ * The in-memory value updates synchronously so sync callers see it immediately.
+ */
+export function writeField(bookName, field, value) {
+    const s = slot(bookName);
+    s.data[field] = value;
+    s.dirty = true;
+    scheduleFlush(bookName);
+}
+
+// ─── Flushing ───────────────────────────────────────────────────────────────
+
+function scheduleFlush(bookName) {
+    const s = slot(bookName);
+    if (s.timer) clearTimeout(s.timer);
+    s.timer = setTimeout(() => {
+        s.timer = null;
+        flushBook(bookName).catch(err => {
+            console.warn(`[MWT:Knowledge] store: flush of "${bookName}" failed:`, err?.message || err);
+        });
+    }, FLUSH_DEBOUNCE_MS);
+}
+
+/**
+ * Write the cached store into an already-loaded world-info object, in place.
+ *
+ * This is the one function that actually renders the store into a book, and it
+ * is synchronous by design. Every code path that saves a book calls it just
+ * before `saveWorldInfo`, so the store always travels with whatever else is
+ * being written.
+ *
+ * That matters because both this module and `writeToLorebook` do
+ * load-modify-save on the SAME book. Without this, the two could interleave:
+ *
+ *   writeToLorebook loads v1 → store flush loads v1 →
+ *   writeToLorebook saves v1+entry → store flush saves v1+store
+ *
+ * and the last write would silently drop the entry that had just been created.
+ * Folding the store into the caller's own save removes the second writer.
+ *
+ * No-ops when the book has no cached store, so it is always safe to call.
+ *
+ * @param {string} bookName
+ * @param {object} wi — a loaded world-info object (mutated in place)
+ * @returns {boolean} whether a store entry was written
+ */
+export function applyStoreToWorldInfo(bookName, wi) {
+    const s = _cache.get(bookName);
+    if (!s || !wi || !wi.entries) return false;
+
+    // `_note` is written for the benefit of anyone who stumbles across this
+    // entry in the World Info editor, and stripped again on read so it never
+    // accumulates in the cached data.
+    const content = JSON.stringify({
+        _note: 'Bookkeeping for the MWT Knowledge Tracker. Not prompt content. '
+             + 'Safe to delete only if you also accept losing this book\'s NPC registry.',
+        ...s.data,
+    });
+    let entry = findStoreEntry(wi);
+
+    if (!entry) {
+        const uids = Object.keys(wi.entries).map(Number).filter(n => !Number.isNaN(n));
+        const newUid = uids.length > 0 ? Math.max(...uids) + 1 : 0;
+        entry = {
+            uid: newUid,
+            // No keywords: ST's world-info can never keyword-match this entry,
+            // so it is structurally impossible for it to reach the prompt.
+            key: [],
+            keysecondary: [],
+            comment: STORE_SENTINEL,
+            content,
+            // Belt and braces on top of the empty keyword list.
+            enabled: false, disable: true, constant: false, selective: false,
+            order: 100, position: 0, addMemo: true,
+            group: '', groupOverride: false, groupWeight: 100,
+            sticky: null, cooldown: null, delay: null,
+            probability: 100, useProbability: true, depth: 4,
+            selectiveLogic: 0, excludeRecursion: true, preventRecursion: true,
+            delayUntilRecursion: false, scanDepth: null, caseSensitive: null,
+            matchWholeWords: null, useGroupScoring: null, automationId: '',
+            role: null, vectorized: false, displayIndex: newUid,
+        };
+        wi.entries[newUid] = entry;
+    } else {
+        entry.content = content;
+        // Repair an entry that was edited into an injecting state — by a user
+        // poking at it in the World Info editor, or by an import that
+        // normalised the flags.
+        //
+        // An empty keyword list only defeats KEYWORD matching. Two flags bypass
+        // keywords entirely and must be re-asserted every write:
+        //   constant   — injects unconditionally, keywords irrelevant
+        //   vectorized — retrievable by embedding similarity (Vector Storage)
+        entry.key = [];
+        entry.keysecondary = [];
+        entry.constant = false;
+        entry.vectorized = false;
+        entry.disable = true;
+        entry.enabled = false;
+    }
+
+    s.dirty = false;
+    if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+    return true;
+}
+
+/**
+ * Write a book's store back into its lorebook entry, creating the book if it
+ * does not exist yet.
+ *
+ * @param {string} bookName
+ * @returns {Promise<boolean>} whether the write succeeded
+ */
+export async function flushBook(bookName) {
+    const s = _cache.get(bookName);
+    if (!s) return false;
+    if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+
+    const wi$ = await getWiScript();
+    if (!wi$) return false;
+
+    let wi = null;
+    try {
+        wi = await wi$.loadWorldInfo(bookName);
+    } catch { /* handled below */ }
+
+    if (!wi || !wi.entries) {
+        if (typeof wi$.createNewWorldInfo === 'function') {
+            // The Aikobots v4 fork returns a boolean here rather than the world
+            // object, so always re-load instead of trusting the return value.
+            try { await wi$.createNewWorldInfo(bookName); } catch { /* fall through */ }
+        }
+        try { wi = await wi$.loadWorldInfo(bookName); } catch { /* fall through */ }
+        if (!wi || !wi.entries) wi = { entries: {} };
+    }
+
+    applyStoreToWorldInfo(bookName, wi);
+
+    try {
+        await wi$.saveWorldInfo(bookName, wi);
+        s.dirty = false;
+        return true;
+    } catch (err) {
+        console.warn(`[MWT:Knowledge] store: save of "${bookName}" failed:`, err?.message || err);
+        return false;
+    }
+}
+
+/** Flush every dirty book. Await this before anything that could lose state. */
+export async function flushAll() {
+    const names = [..._cache.keys()].filter(name => _cache.get(name)?.dirty);
+    for (const name of names) await flushBook(name);
+}
+
+/**
+ * Drop all cached stores.
+ *
+ * Called on chat change: the next chat may resolve to different books, and a
+ * stale cache would serve one book's registry for another. Flushes pending
+ * writes first so nothing is lost on the way out.
+ */
+export async function resetStoreCache() {
+    try { await flushAll(); } catch { /* best effort — still clear below */ }
+    for (const s of _cache.values()) {
+        if (s.timer) clearTimeout(s.timer);
+    }
+    _cache.clear();
+}
+
+// ─── Orchestration ──────────────────────────────────────────────────────────
+
+/**
+ * Hydrate the stores for the books the current scope resolves to.
+ *
+ * Call this on chat change, and await it before any scan. Legacy per-chat
+ * values from `chat_metadata` are passed as the seed, so a user upgrading from
+ * a pre-store version has their existing registry adopted by the book on first
+ * load. Once the book has a store, the seed is ignored.
+ *
+ * The registry and relationships live in the Knowledge book; the state registry
+ * lives in the State Tracker book. Each book therefore carries the data that
+ * describes its own entries and stays portable on its own.
+ *
+ * @returns {Promise<{ knowledge: string, state: string }>} the books hydrated
+ */
+export async function hydrateCurrentBooks() {
+    // Imported lazily: scope.js reads module settings, which are not available
+    // in every context this file may be pulled into (e.g. unit tests).
+    const { getLorebookName, getStateLorebookName } = await import('./scope.js');
+
+    const knowledgeBook = getLorebookName();
+    const stateBook = getStateLorebookName();
+    const meta = getChatMeta() || {};
+
+    await hydrateBook(knowledgeBook, {
+        registry: meta[REGISTRY_KEY] || {},
+        relationships: meta[RELATIONSHIP_KEY] || {},
+    });
+    await hydrateBook(stateBook, {
+        stateRegistry: meta[STATE_REGISTRY_KEY] || {},
+    });
+
+    return { knowledge: knowledgeBook, state: stateBook };
+}
+
+/** Test seam: synchronously seed the cache without touching a lorebook. */
+export function _setCacheForTests(bookName, data) {
+    const s = slot(bookName);
+    s.data = { ...blankStore(), ...data };
+    s.hydrated = true;
+    s.dirty = false;
+}
+
+/** Test seam: clear the cache without flushing. */
+export function _clearCacheForTests() {
+    for (const s of _cache.values()) {
+        if (s.timer) clearTimeout(s.timer);
+    }
+    _cache.clear();
+}

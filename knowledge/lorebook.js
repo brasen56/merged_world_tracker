@@ -16,14 +16,15 @@ import {
 import { SCAN_SYSTEM_PROMPT, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
-    LOREBOOK_NAME, STATE_LOREBOOK_NAME, TRACKER_SENTINEL,
+    TRACKER_SENTINEL,
     HISTORY_KEY_PREFIX, RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
-    PROFILE_LOREBOOK_NAME,
     state,
 } from './state.js';
 import { getRegistry } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
+import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
+import { applyStoreToWorldInfo, assertHydrated } from './store.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
 
@@ -41,7 +42,7 @@ try {
 // which independently assign UIDs starting at 0 — don't collide in
 // localStorage.  The lorebook name is passed explicitly to every call.
 
-export function pushHistory(uid, content, lorebook = LOREBOOK_NAME) {
+export function pushHistory(uid, content, lorebook = getLorebookName()) {
     if (uid === null || uid === undefined) return;
     const key = HISTORY_KEY_PREFIX + lorebook + '_' + uid;
     let history = [];
@@ -51,7 +52,7 @@ export function pushHistory(uid, content, lorebook = LOREBOOK_NAME) {
     try { localStorage.setItem(key, JSON.stringify(history)); } catch { /* quota */ }
 }
 
-export function getHistory(uid, lorebook = LOREBOOK_NAME) {
+export function getHistory(uid, lorebook = getLorebookName()) {
     if (uid === null || uid === undefined) return [];
     try { return JSON.parse(localStorage.getItem(HISTORY_KEY_PREFIX + lorebook + '_' + uid) || '[]'); } catch { return []; }
 }
@@ -84,7 +85,7 @@ export async function ktFetchFromApi(systemPrompt, userContent, { retries = 1 } 
 export async function loadStateTrackerEntry(uid) {
     if (!state.wiScript) return null;
     try {
-        const wi = await state.wiScript.loadWorldInfo(STATE_LOREBOOK_NAME);
+        const wi = await state.wiScript.loadWorldInfo(getStateLorebookName());
         const entry = wi?.entries?.[uid];
         return entry ? { content: entry.content || '', comment: entry.comment || '' } : null;
     } catch (err) { console.warn('[MWT:Knowledge] Could not load state tracker entry:', err.message); return null; }
@@ -92,33 +93,42 @@ export async function loadStateTrackerEntry(uid) {
 
 export async function writeStateTracker(uid, name, content) {
     if (!state.wiScript) return { success: false, error: 'world-info.js not loaded' };
+    // Resolve ONCE — see writeToLorebook for the full rationale. This function
+    // straddles two awaits, and the store stamp below is the sharp edge: if the
+    // name resolved differently there than at load, one character's registry
+    // would be written into another character's book.
+    const book = getStateLorebookName();
     try {
-        const wi = await state.wiScript.loadWorldInfo(STATE_LOREBOOK_NAME);
+        const wi = await state.wiScript.loadWorldInfo(book);
         const entry = wi?.entries?.[uid];
-        if (!entry) return { success: false, error: `UID ${uid} not found in "${STATE_LOREBOOK_NAME}".` };
+        if (!entry) return { success: false, error: `UID ${uid} not found in "${book}".` };
         const comment = entry.comment || '';
         if (!comment.startsWith(TRACKER_SENTINEL)) return { success: false, error: `UID ${uid} missing ${TRACKER_SENTINEL} sentinel.` };
         const previousContent = entry.content || '';
         entry.content = content;
-        await state.wiScript.saveWorldInfo(STATE_LOREBOOK_NAME, wi);
-        pushHistory(uid, previousContent, STATE_LOREBOOK_NAME);
+        applyStoreToWorldInfo(book, wi);
+        await state.wiScript.saveWorldInfo(book, wi);
+        pushHistory(uid, previousContent, book);
         return { success: true, uid };
     } catch (err) { return { success: false, error: err.message }; }
 }
 
 export async function writeToLorebook(name, content, keywords, existingUid) {
     if (!state.wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
+    // Resolve the book ONCE. Calling the resolver per save could target two
+    // different books within a single write if the scope changed mid-flight.
+    const book = getLorebookName();
     try {
-        let wi = await state.wiScript.loadWorldInfo(LOREBOOK_NAME);
+        let wi = await state.wiScript.loadWorldInfo(book);
         // Auto-create the lorebook if it doesn't exist yet.
         // createNewWorldInfo returns a boolean on the Aikobots v4 fork (and some
         // ST versions), not the world-info object. Always re-load after creating
         // and fall back to { entries: {} } if that still fails.
         if (!wi || !wi.entries) {
             if (typeof state.wiScript.createNewWorldInfo === 'function') {
-                await state.wiScript.createNewWorldInfo(LOREBOOK_NAME);
+                await state.wiScript.createNewWorldInfo(book);
             }
-            wi = await state.wiScript.loadWorldInfo(LOREBOOK_NAME);
+            wi = await state.wiScript.loadWorldInfo(book);
             if (!wi || !wi.entries) {
                 wi = { entries: {} };
             }
@@ -130,9 +140,14 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             entries[existingUid].content = content;
             entries[existingUid].key = keywords;
             entries[existingUid].comment = name;
-            await state.wiScript.saveWorldInfo(LOREBOOK_NAME, wi);
+            applyStoreToWorldInfo(book, wi);
+            await state.wiScript.saveWorldInfo(book, wi);
             return { success: true, uid: existingUid };
         } else {
+            // Creating an entry against an un-hydrated store is the duplicate
+            // bug in miniature: an empty registry reports every NPC as new, so
+            // a scan would rebuild the whole book alongside itself. Refuse.
+            assertHydrated(book, `create a lorebook entry for "${name}"`);
             const existingUids = Object.keys(entries).map(Number).filter(n => !isNaN(n));
             const newUid = existingUids.length > 0 ? existingUids.reduce((a, b) => a > b ? a : b, -1) + 1 : 0;
             entries[newUid] = {
@@ -144,7 +159,8 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
                 matchWholeWords: null, useGroupScoring: null, automationId: '', role: null, vectorized: false,
                 displayIndex: newUid,
             };
-            await state.wiScript.saveWorldInfo(LOREBOOK_NAME, wi);
+            applyStoreToWorldInfo(book, wi);
+            await state.wiScript.saveWorldInfo(book, wi);
             return { success: true, uid: newUid };
         }
     } catch (err) { return { success: false, content, keywords, error: err.message }; }
@@ -153,7 +169,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
 export async function loadEntryContent(uid) {
     if (!state.wiScript) return null;
     try {
-        const wi = await state.wiScript.loadWorldInfo(LOREBOOK_NAME);
+        const wi = await state.wiScript.loadWorldInfo(getLorebookName());
         return wi?.entries?.[uid]?.content ?? null;
     } catch (err) { return null; }
 }
@@ -180,15 +196,18 @@ export async function loadEntryContent(uid) {
  */
 export async function writeProfileToLorebook(name, content, existingUid) {
     if (!state.wiScript) return { success: false, error: 'world-info.js not loaded' };
+    // Resolve ONCE — see writeToLorebook. This one spans a load, a create and a
+    // re-load before it saves, so it has the most await boundaries to cross.
+    const book = getProfileLorebookName();
     try {
-        let wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+        let wi = await state.wiScript.loadWorldInfo(book);
         // Auto-create the lorebook if it doesn't exist yet (same pattern as
         // writeToLorebook — createNewWorldInfo may return boolean, so re-load).
         if (!wi || !wi.entries) {
             if (typeof state.wiScript.createNewWorldInfo === 'function') {
-                await state.wiScript.createNewWorldInfo(PROFILE_LOREBOOK_NAME);
+                await state.wiScript.createNewWorldInfo(book);
             }
-            wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+            wi = await state.wiScript.loadWorldInfo(book);
             if (!wi || !wi.entries) {
                 wi = { entries: {} };
             }
@@ -198,7 +217,7 @@ export async function writeProfileToLorebook(name, content, existingUid) {
             entries[existingUid].content = content;
             entries[existingUid].comment = name;
             entries[existingUid].key = []; // no keywords → never injected
-            await state.wiScript.saveWorldInfo(PROFILE_LOREBOOK_NAME, wi);
+            await state.wiScript.saveWorldInfo(book, wi);
             return { success: true, uid: existingUid };
         } else {
             const existingUids = Object.keys(entries).map(Number).filter(n => !isNaN(n));
@@ -219,7 +238,7 @@ export async function writeProfileToLorebook(name, content, existingUid) {
                 useGroupScoring: null, automationId: '', role: null, vectorized: false,
                 displayIndex: newUid,
             };
-            await state.wiScript.saveWorldInfo(PROFILE_LOREBOOK_NAME, wi);
+            await state.wiScript.saveWorldInfo(book, wi);
             return { success: true, uid: newUid };
         }
     } catch (err) { return { success: false, error: err.message }; }
@@ -234,7 +253,7 @@ export async function writeProfileToLorebook(name, content, existingUid) {
 export async function loadProfileContent(uid) {
     if (!state.wiScript || uid == null) return null;
     try {
-        const wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+        const wi = await state.wiScript.loadWorldInfo(getProfileLorebookName());
         return wi?.entries?.[uid]?.content ?? null;
     } catch (err) { return null; }
 }
@@ -251,7 +270,7 @@ export async function loadProfileContent(uid) {
 export async function listProfileEntries() {
     if (!state.wiScript) return [];
     try {
-        const wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+        const wi = await state.wiScript.loadWorldInfo(getProfileLorebookName());
         const entries = wi?.entries || {};
         return Object.keys(entries).map(k => {
             const e = entries[k];
@@ -282,8 +301,11 @@ export async function listProfileEntries() {
 export async function deleteProfileEntries(uids) {
     if (!state.wiScript) return { success: false, deleted: [], error: 'world-info.js not loaded' };
     if (!Array.isArray(uids) || uids.length === 0) return { success: true, deleted: [] };
+    // Resolve ONCE — see writeToLorebook. Deleting from one book and saving to
+    // another would drop the deletions and leave the originals in place.
+    const book = getProfileLorebookName();
     try {
-        const wi = await state.wiScript.loadWorldInfo(PROFILE_LOREBOOK_NAME);
+        const wi = await state.wiScript.loadWorldInfo(book);
         if (!wi || !wi.entries) return { success: false, deleted: [], error: 'profile lorebook not found' };
         const deleted = [];
         for (const uid of uids) {
@@ -292,7 +314,7 @@ export async function deleteProfileEntries(uids) {
                 deleted.push(uid);
             }
         }
-        if (deleted.length > 0) await state.wiScript.saveWorldInfo(PROFILE_LOREBOOK_NAME, wi);
+        if (deleted.length > 0) await state.wiScript.saveWorldInfo(book, wi);
         return { success: true, deleted };
     } catch (err) {
         return { success: false, deleted: [], error: err.message };

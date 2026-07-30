@@ -7,29 +7,27 @@
  * from here).
  */
 
-import { getChatMeta, persistChatMeta } from '../core/index.js';
-
 import {
-    RELATIONSHIP_KEY,
     RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
 } from './state.js';
 import { getRegistry } from './registry.js';
+import { getLorebookName } from './scope.js';
+import { readField, writeField } from './store.js';
 
 // ─── Relationship data CRUD ──────────────────────────────────────────────────
+//
+// Relationships describe edges between NPCs that have entries in the Knowledge
+// book, so they live in that book's store rather than in chat metadata — same
+// lifetime as the entries they reference.
 
 export function getRelationships() {
-    const meta = getChatMeta();
-    if (!meta[RELATIONSHIP_KEY]) meta[RELATIONSHIP_KEY] = {};
-    return meta[RELATIONSHIP_KEY];
+    return readField(getLorebookName(), 'relationships', {});
 }
 
 export function saveRelationships(rels) {
-    // Relationships are a flat { npcName: Edge[] } map. Set it directly rather
-    // than going through patchChatMeta(), which would merge a `lastUpdated`
-    // sibling into the map and corrupt iteration over edges.
-    const meta = getChatMeta();
-    meta[RELATIONSHIP_KEY] = rels;
-    persistChatMeta();
+    // A flat { npcName: Edge[] } map. Nothing may merge a `lastUpdated` sibling
+    // into it — callers iterate the values as edge arrays.
+    writeField(getLorebookName(), 'relationships', rels);
 }
 
 export function getNpcRelationships(name) { return getRelationships()[name] || []; }

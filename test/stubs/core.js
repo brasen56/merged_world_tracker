@@ -43,6 +43,7 @@
 let _chat = [];
 let _meta = {};
 let _contextExtras = {};
+let _extSettings = {};
 
 /**
  * Wipe all fake state. Call this in `beforeEach` so every test starts clean.
@@ -51,6 +52,14 @@ export function resetCoreStubs() {
     _chat = [];
     _meta = {};
     _contextExtras = {};
+    _extSettings = {};
+}
+
+/**
+ * Read-only peek at the fake extension_settings store (for assertions).
+ */
+export function getFakeExtSettings() {
+    return _extSettings;
 }
 
 /**
@@ -245,7 +254,32 @@ export const resolveApiCall = notImplemented('resolveApiCall');
 export const normaliseOutput = notImplemented('normaliseOutput');
 export const retryAsync = notImplemented('retryAsync');
 export const parseJsonLenient = notImplemented('parseJsonLenient');
-export const createSettingsManager = notImplemented('createSettingsManager');
+/**
+ * In-memory stand-in for core/settings.js's factory.
+ *
+ * Mirrors the real contract that matters to callers: `getSettings()` returns
+ * defaults merged with whatever has been saved, and `saveSettings(patch)`
+ * merges a patch over the current values (so an unrelated save never drops
+ * another key). Backed by `_extSettings`, which `resetCoreStubs()` clears.
+ */
+export function createSettingsManager({ settingsKey, defaults = {} }) {
+    function getExtSettingsRef() {
+        if (!_extSettings[settingsKey]) _extSettings[settingsKey] = {};
+        return _extSettings[settingsKey];
+    }
+    function getSettings() {
+        return { ...defaults, ..._extSettings[settingsKey] };
+    }
+    function saveSettings(patch) {
+        _extSettings[settingsKey] = { ...getSettings(), ...patch };
+        return true;
+    }
+    function hasValidSettings() {
+        const s = getSettings();
+        return !!(s.connectionProfileId || (s.apiUrl && s.modelName));
+    }
+    return { getSettings, saveSettings, hasValidSettings, getExtSettingsRef };
+}
 export const syncSharedConnectionSettings = notImplemented('syncSharedConnectionSettings');
 export const getGlobalSettings = notImplemented('getGlobalSettings');
 export const injectionAllowed = notImplemented('injectionAllowed');

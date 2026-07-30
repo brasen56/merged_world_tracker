@@ -20,6 +20,16 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         frequencyPenalty: 0,
         presencePenalty: 0,
         customHeaders: '',
+        // Which lorebooks this module reads and writes:
+        //   'global'    — one shared set of books (legacy behaviour)
+        //   'character' — one set per character card, shared across their chats
+        //   'chat'      — one set per chat file
+        // Defaults to 'global' so existing installs are unchanged on upgrade.
+        // See scope.js for how names are resolved and bound.
+        scope: 'global',
+        // Stable-key → resolved book names, so renaming a card does not orphan
+        // its books. Written by scope.js; never edited by hand.
+        bookBindings: {},
         autoTriggerEnabled: false,
         autoTriggerEveryN: 5,
         trackerCooldownMsgs: 3,
@@ -60,6 +70,15 @@ export function showKnowledgeSettings() {
         <div class="mwt-settings-grid">
             ${renderApiSettingsFields(s, apiFieldOpts)}
             <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Headers: JSON object of extra HTTP headers. Leave blank if unsure.</p>
+        </div>
+        <div style="margin-top:12px">
+            <label class="mwt-label">Lorebook scope</label>
+            <select id="kt-cfg-scope" class="mwt-input">
+                <option value="global" ${s.scope === 'global' || !s.scope ? 'selected' : ''}>Global — one shared set of lorebooks</option>
+                <option value="character" ${s.scope === 'character' ? 'selected' : ''}>Per character — one set per character card</option>
+                <option value="chat" ${s.scope === 'chat' ? 'selected' : ''}>Per chat — one set per chat file</option>
+            </select>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Which lorebooks NPC entries are written to. <strong>Global</strong> shares one "Knowledge Tracker" book across every chat and character — two characters with an NPC of the same name will share (and both inject) the same entry. <strong>Per character</strong> gives each card its own books, kept across all chats with that card. <strong>Per chat</strong> gives every chat its own. Changing this does not move existing entries; the previous books are left untouched.</p>
         </div>
         <div style="margin-top:12px">
             <label><input type="checkbox" id="kt-cfg-auto-trigger" ${s.autoTriggerEnabled ? 'checked' : ''}> Auto-trigger state tracker updates</label>
@@ -103,8 +122,12 @@ export function showKnowledgeSettings() {
         // Cooldown 0 ("no cooldown") is a legitimate value (the input allows
         // min=0), so don't use `Number(...) || 3` — that clobbers 0 to 3.
         const cooldownN = parseInt(el.querySelector('#kt-cfg-cooldown')?.value, 10);
+        // `s` was read when the panel rendered, so it holds the pre-edit value.
+        const previousScope = s.scope || 'global';
+        const chosenScope = el.querySelector('#kt-cfg-scope')?.value;
         saveSettings({
             ...apiValues,
+            scope: ['global', 'character', 'chat'].includes(chosenScope) ? chosenScope : 'global',
             autoTriggerEnabled: el.querySelector('#kt-cfg-auto-trigger')?.checked ?? false,
             autoTriggerEveryN: Number(el.querySelector('#kt-cfg-auto-every')?.value) || 5,
             trackerCooldownMsgs: Number.isFinite(cooldownN) && cooldownN >= 0 ? cooldownN : 3,
@@ -116,7 +139,17 @@ export function showKnowledgeSettings() {
             growthDebugToasts: el.querySelector('#kt-cfg-growth-debug')?.checked ?? false,
         });
         state.activeSubTab = 'staging';
-        import('./render.js').then(({ renderNpcsSubTab }) => renderNpcsSubTab());
+        // A scope change points the module at different lorebooks, so the
+        // cached stores for the old books must be flushed and the new ones
+        // loaded before anything reads the registry again.
+        if (chosenScope !== previousScope) {
+            import('./index.js')
+                .then(({ reloadStores }) => reloadStores())
+                .then(() => import('./render.js'))
+                .then(({ renderNpcsSubTab }) => renderNpcsSubTab());
+        } else {
+            import('./render.js').then(({ renderNpcsSubTab }) => renderNpcsSubTab());
+        }
         ktSetStatus('Settings saved.', 'success');
     });
     el.querySelector('#kt-cancel-settings')?.addEventListener('click', () => {

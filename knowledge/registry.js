@@ -1,29 +1,33 @@
 /**
  * knowledge/registry.js — NPC registry and State Tracker registry operations.
  *
- * Registries are flat { name: {...} } maps stored directly in chat metadata.
- * We assign the whole map and call persistChatMeta() rather than routing
- * through patchChatMeta(), which is reserved for structured (non-flat) data.
+ * Registries are flat { name: {...} } maps. They used to live in chat metadata,
+ * which gave them a per-chat lifetime while the lorebook entries they point at
+ * were global — so a new chat started from an empty registry and re-created
+ * every entry as a duplicate. They now live inside the lorebook itself (see
+ * store.js), which ties pointer and target to one file and one lifetime.
+ *
+ * These accessors stay synchronous: they read the store's in-memory cache,
+ * which `hydrateCurrentBooks()` fills on chat change.
  */
 
-import { getChatMeta, persistChatMeta, getChat } from '../core/index.js';
+import { getChat } from '../core/index.js';
 
-import { REGISTRY_KEY, STATE_REGISTRY_KEY, state } from './state.js';
+import { state } from './state.js';
+import { getLorebookName, getStateLorebookName } from './scope.js';
+import { readField, writeField } from './store.js';
 
 // ─── NPC Registry ────────────────────────────────────────────────────────────
 
 export function getRegistry() {
-    const meta = getChatMeta();
-    if (!meta[REGISTRY_KEY]) meta[REGISTRY_KEY] = {};
-    return meta[REGISTRY_KEY];
+    return readField(getLorebookName(), 'registry', {});
 }
 
 export function saveRegistry(reg) {
-    // Set the flat map directly — do NOT route through patchChatMeta(), which
-    // would merge a `lastUpdated` sibling into the map and corrupt lookups.
-    const meta = getChatMeta();
-    meta[REGISTRY_KEY] = reg;
-    persistChatMeta();
+    // Store the flat map as-is. Nothing may merge a `lastUpdated` sibling into
+    // it — callers iterate this map as { npcName: info } and a stray key would
+    // be read as an NPC.
+    writeField(getLorebookName(), 'registry', reg);
 }
 
 export function registerEntry(name, uid, type, keywords) {
@@ -152,16 +156,13 @@ export function getAllNpcNames() { return Object.keys(getRegistry()); }
 // ─── State Registry ──────────────────────────────────────────────────────────
 
 export function getStateRegistry() {
-    const meta = getChatMeta();
-    if (!meta[STATE_REGISTRY_KEY]) meta[STATE_REGISTRY_KEY] = {};
-    return meta[STATE_REGISTRY_KEY];
+    // Lives in the State Tracker book, alongside the entries it points at.
+    return readField(getStateLorebookName(), 'stateRegistry', {});
 }
 
 export function saveStateRegistry(reg) {
-    // Set the flat map directly — same rationale as saveRegistry().
-    const meta = getChatMeta();
-    meta[STATE_REGISTRY_KEY] = reg;
-    persistChatMeta();
+    // Store the flat map as-is — same rationale as saveRegistry().
+    writeField(getStateLorebookName(), 'stateRegistry', reg);
 }
 
 export function registerStateTracker(name, uid) {
