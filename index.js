@@ -695,6 +695,9 @@ document.addEventListener('mwt:busy-changed', ui.updateButtonStates);
 //   MWT.evidence.clearAll(true)          // wipe ALL NPCs' evidence in this chat
 //   MWT.evidence.summary('Kira')         // show tiers + last-profile time
 //   MWT.evidence.inspect('Kira')         // dump the full evidence file object
+//   MWT.scope.diagnose()                 // which books this chat resolves to, and why
+//   MWT.scope.bindings()                 // every saved character/chat → lorebook binding
+//   MWT.scope.reload()                   // flush + re-hydrate the registry stores
 //
 // NOTE ON CLEARING: evidence is the ROOT, a generated profile is a LEAF. Clearing
 // evidence does NOT delete the NPC's entry in the "NPC Profiles" lorebook, which
@@ -703,6 +706,9 @@ document.addEventListener('mwt:busy-changed', ui.updateButtonStates);
 try {
     const evidenceApi = await import('./knowledge/evidence.js');
     const registryApi = await import('./knowledge/registry.js');
+    const scopeApi = await import('./knowledge/scope.js');
+    const storeApi = await import('./knowledge/store.js');
+    const ktSettingsApi = await import('./knowledge/settings.js');
 
     /**
      * Warn when cleared NPCs still have a profile entry in the NPC Profiles
@@ -812,6 +818,98 @@ try {
             }
         }
         return rows;
+    };
+
+    // ── Lorebook scope diagnostics ──────────────────────────────────────────
+    //
+    // The scope resolver reads SillyTavern context fields whose names vary
+    // across ST versions and forks. Every read is defensive and falls back to
+    // the global lorebooks, which is safe but SILENT — so this exists to make
+    // the fallback visible. `MWT.scope.diagnose()` reports which fields the
+    // running build actually exposes, what identity they resolve to, and which
+    // books that produces. Run it first whenever scoping misbehaves.
+    window.MWT.scope = {
+        diagnose: () => {
+            const ctx = (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function')
+                ? SillyTavern.getContext() : null;
+            if (!ctx) { console.error('[MWT] No SillyTavern context available.'); return null; }
+
+            const card = (Array.isArray(ctx.characters) && ctx.characterId !== null && ctx.characterId !== undefined)
+                ? ctx.characters[ctx.characterId] : null;
+
+            let currentChatId = '(not a function)';
+            if (typeof ctx.getCurrentChatId === 'function') {
+                try { currentChatId = String(ctx.getCurrentChatId()); }
+                catch (err) { currentChatId = `(threw: ${err?.message})`; }
+            }
+
+            console.log('[MWT] Context fields the scope resolver reads:');
+            console.table({
+                'characterId': ctx.characterId ?? '(absent)',
+                'characters is array': Array.isArray(ctx.characters),
+                'characters[characterId]': card ? 'resolved' : '(not resolved)',
+                '  card.avatar': card?.avatar || '(absent)',
+                '  card.name': card?.name || '(absent)',
+                'name1 (user)': ctx.name1 || '(absent)',
+                'name2 (char)': ctx.name2 || '(absent)',
+                'groupId': ctx.groupId ?? '(absent)',
+                'groups is array': Array.isArray(ctx.groups),
+                'getCurrentChatId()': currentChatId,
+                'chatId': ctx.chatId ?? '(absent)',
+            });
+
+            const charIdentity = scopeApi.getCharacterIdentity();
+            const chatIdentity = scopeApi.getChatIdentity();
+            const scope = ktSettingsApi.getSettings().scope || 'global';
+            const books = scopeApi.resolveBookNames();
+
+            console.log('[MWT] Resolution:');
+            console.table({
+                'scope setting': scope,
+                'character identity': charIdentity
+                    ? `${charIdentity.key} → "${charIdentity.name}"${charIdentity.isGroup ? ' (group)' : ''}`
+                    : '(unresolved)',
+                'chat identity': chatIdentity ? chatIdentity.key : '(unresolved)',
+                'Knowledge book': books.knowledge,
+                'State book': books.state,
+                'Profiles book': books.profiles,
+                'Knowledge store loaded': storeApi.isHydrated(books.knowledge),
+                'State store loaded': storeApi.isHydrated(books.state),
+            });
+
+            const usedIdentity = scope === 'chat' ? chatIdentity : charIdentity;
+            if (scope !== 'global' && !usedIdentity) {
+                console.warn(
+                    `[MWT] ⚠ scope is "${scope}" but the current ${scope} could not be identified, ` +
+                    `so this is silently using the GLOBAL lorebooks. The field table above shows ` +
+                    `which lookup came back absent.`
+                );
+            }
+            if (!storeApi.isHydrated(books.knowledge)) {
+                console.warn(
+                    '[MWT] ⚠ The Knowledge store is not loaded, so creating entries is blocked ' +
+                    '(this is deliberate — it prevents duplicate entries). Switch chats to retry, ' +
+                    'or look for an earlier store error above.'
+                );
+            }
+            return { scope, books, charIdentity, chatIdentity };
+        },
+        bindings: () => {
+            const saved = ktSettingsApi.getSettings().bookBindings || {};
+            const rows = Object.entries(saved).map(([key, v]) => ({
+                key, knowledge: v?.knowledge, state: v?.state, profiles: v?.profiles,
+            }));
+            if (rows.length === 0) { console.log('[MWT] No lorebook bindings saved yet.'); return []; }
+            console.table(rows);
+            console.log('[MWT] "key" is the stable identity (avatar filename), which is why renaming a card keeps its books.');
+            return rows;
+        },
+        reload: async () => {
+            const knowledgeApi = await import('./knowledge/index.js');
+            await knowledgeApi.reloadStores();
+            console.log('[MWT] Stores flushed and reloaded.');
+            return scopeApi.resolveBookNames();
+        },
     };
 
     window.MWT.profiles = {
