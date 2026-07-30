@@ -161,6 +161,20 @@ function saveFloatPosition(btnId, left, top) {
     } catch { /* ignore */ }
 }
 
+// Keeps a floating button's top-left corner within the visible viewport
+// (with a small margin) so an erratic drag — or a browser window that got
+// smaller since the position was saved — can't push a button somewhere the
+// user can no longer see or reach.
+const FLOAT_BTN_EDGE_MARGIN = 4;
+function clampFloatPosition(left, top, width, height) {
+    const maxLeft = Math.max(FLOAT_BTN_EDGE_MARGIN, window.innerWidth - width - FLOAT_BTN_EDGE_MARGIN);
+    const maxTop = Math.max(FLOAT_BTN_EDGE_MARGIN, window.innerHeight - height - FLOAT_BTN_EDGE_MARGIN);
+    return {
+        left: Math.min(Math.max(left, FLOAT_BTN_EDGE_MARGIN), maxLeft),
+        top: Math.min(Math.max(top, FLOAT_BTN_EDGE_MARGIN), maxTop),
+    };
+}
+
 /**
  * Create the floating-button subsystem.
  *
@@ -286,6 +300,19 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             }
             document.body.appendChild(btn);
 
+            // Re-clamp a restored position against the current viewport. Covers
+            // a saved position that's now off-screen because the window/screen
+            // shrank since it was saved (e.g. resize, rotation, different device).
+            if (saved) {
+                const rect = btn.getBoundingClientRect();
+                const clamped = clampFloatPosition(rect.left, rect.top, rect.width, rect.height);
+                if (clamped.left !== rect.left || clamped.top !== rect.top) {
+                    btn.style.left = clamped.left + 'px';
+                    btn.style.top = clamped.top + 'px';
+                    saveFloatPosition(cfg.id, clamped.left, clamped.top);
+                }
+            }
+
             // Click to open modal on that tab
             btn.addEventListener('click', (e) => {
                 if (btn._dragged) { btn._dragged = false; return; }
@@ -308,8 +335,9 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 if (!dragging) return;
                 const dx = e.clientX - startX, dy = e.clientY - startY;
                 if (Math.abs(dx) > 3 || Math.abs(dy) > 3) btn._dragged = true;
-                btn.style.left = (origX + dx) + 'px';
-                btn.style.top = (origY + dy) + 'px';
+                const clamped = clampFloatPosition(origX + dx, origY + dy, btn.offsetWidth, btn.offsetHeight);
+                btn.style.left = clamped.left + 'px';
+                btn.style.top = clamped.top + 'px';
                 btn.style.right = 'auto';
                 btn.style.bottom = 'auto';
             });
@@ -371,6 +399,20 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
         });
 
         applyButtonVisibility();
+
+        window.addEventListener('resize', () => {
+            FLOAT_BUTTONS.forEach((cfg) => {
+                const btn = document.getElementById(cfg.id);
+                if (!btn || !btn.style.left) return; // not dragged, uses right/bottom
+                const rect = btn.getBoundingClientRect();
+                const clamped = clampFloatPosition(rect.left, rect.top, rect.width, rect.height);
+                if (clamped.left !== rect.left || clamped.top !== rect.top) {
+                    btn.style.left = clamped.left + 'px';
+                    btn.style.top = clamped.top + 'px';
+                    saveFloatPosition(cfg.id, clamped.left, clamped.top);
+                }
+            });
+        });
     }
 
     // ─── Extensions panel drawer ─────────────────────────────────────────────
