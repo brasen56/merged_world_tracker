@@ -418,13 +418,18 @@
 }
 
 .kt-history-panel {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    /* Centered via the parent's flex + margin:auto (see #kt-view-modal etc.
+       below) rather than top/left/transform — a transform-centered fixed
+       panel has no scrollable path back into view if it overflows the
+       visible viewport (mobile browser chrome, on-screen keyboard), which
+       traps the user with no way to reach the close button. */
+    position: relative;
     z-index: var(--z-kt-panel);
     width: min(720px, 90vw);
     max-height: 80vh;
+    max-height: 80dvh;
+    margin: auto;
+    flex-shrink: 0;
     background: var(--mwt-bg);
     border: 1px solid var(--mwt-border);
     border-radius: 10px;
@@ -869,6 +874,13 @@
     position: fixed;
     inset: 0;
     z-index: var(--z-kt-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 24px 0;
+    box-sizing: border-box;
 }
 .kt-history-entry {
     background: var(--sc-bg-diff);

@@ -51,7 +51,7 @@ export function init(parentModal) {
     // hydrated store until they switched chats, and every write would be
     // refused in the meantime. Safe to run before a chat exists: the scope
     // resolver falls back to the global books, and CHAT_CHANGED re-points them.
-    reloadStores();
+    reloadStores('init');
     console.log('[MWT:Knowledge] Module initialized');
 }
 
@@ -330,7 +330,7 @@ export function onChatChanged() {
     // is not optional: until it lands, the store is un-hydrated and any path
     // that would create an entry refuses to run (see store.assertHydrated) —
     // which is the intended behaviour, not a race to be ignored.
-    reloadStores();
+    reloadStores('chat change');
 }
 
 /**
@@ -338,11 +338,15 @@ export function onChatChanged() {
  * Exported so the settings panel can call it after a scope change.
  * @returns {Promise<void>}
  */
-export async function reloadStores() {
+export async function reloadStores(reason = 'reload') {
     try {
         await resetStoreCache();
         const { knowledge } = await hydrateCurrentBooks();
-        console.log(`[MWT:Knowledge] Store ready — lorebook "${knowledge}".`);
+        // The reason label matters: `init` runs at page load using whatever
+        // scope was persisted, then CHAT_CHANGED re-points it once ST has
+        // restored the chat. Seeing two different books logged in a row is
+        // expected, and without the label it reads like a bug.
+        console.log(`[MWT:Knowledge] Store ready (${reason}) — lorebook "${knowledge}".`);
     } catch (err) {
         console.warn('[MWT:Knowledge] Store hydration failed:', err?.message || err);
     }

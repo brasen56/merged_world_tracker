@@ -144,7 +144,7 @@ export function showKnowledgeSettings() {
         // loaded before anything reads the registry again.
         if (chosenScope !== previousScope) {
             import('./index.js')
-                .then(({ reloadStores }) => reloadStores())
+                .then(({ reloadStores }) => reloadStores('scope change'))
                 .then(() => import('./render.js'))
                 .then(({ renderNpcsSubTab }) => renderNpcsSubTab());
         } else {
