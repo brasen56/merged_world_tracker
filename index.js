@@ -290,6 +290,12 @@ function renderSettingsTab() {
                 <option value="modern" ${(s.buttonStyle || 'modern') === 'modern' ? 'selected' : ''}>Modern (icons-only)</option>
                 <option value="classic" ${s.buttonStyle === 'classic' ? 'selected' : ''}>Classic (text + icon)</option>
             </select>
+
+            <div></div>
+            <div>
+                <button id="mwt-s-reset-float-positions" class="mwt-btn" title="Restore all floating buttons to their default positions">↩ Reset Button Positions</button>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Dragged buttons return to the default right-edge stack. You can also use the <code>/wt-reset-buttons</code> slash command.</p>
+            </div>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
