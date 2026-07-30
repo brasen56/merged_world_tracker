@@ -470,6 +470,15 @@ function renderModal() {
         });
     }
 
+    // Wire reset-floating-button-positions button
+    const resetBtn = modal.querySelector('#mwt-s-reset-float-positions');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+            ui.resetFloatPositions();
+            setStatus(modal, 'Floating buttons reset to default positions.', 'success', 3000);
+        });
+    }
+
     // Wire sync-to-modules button
     const syncBtn = modal.querySelector('#mwt-s-sync');
     if (syncBtn) {
@@ -638,6 +647,7 @@ const commands = createCommands({
     registerSlashCommand,
     macroRegistry,
     modules: { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority },
+    resetFloatPositions: ui.resetFloatPositions,
 });
 
 // ─── Initialize ──────────────────────────────────────────────────────────────

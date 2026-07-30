@@ -677,12 +677,48 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
         }
     }
 
+    // ── Reset floating-button positions ──────────────────────────────────────
+    //
+    // Clears the saved drag positions from localStorage and restores each
+    // floating button to its default stacked layout (right edge, bottom-up).
+    // Also repositions the collapsed hub button if it exists. Exposed so a
+    // settings button and the `/wt-reset-buttons` slash command can share it.
+
+    function resetFloatPositions() {
+        // 1) Drop persisted positions so setupButtonBar()/future reloads use defaults.
+        try { localStorage.removeItem(FLOAT_POSITIONS_KEY); } catch { /* ignore */ }
+
+        // 2) Live-reset existing buttons in the DOM to the default stack so the
+        //    change is visible immediately without a page reload. This mirrors
+        //    the default-position branch in setupButtonBar().
+        FLOAT_BUTTONS.forEach((cfg, idx) => {
+            const btn = document.getElementById(cfg.id);
+            if (!btn) return;
+            btn.style.left = '';
+            btn.style.top = '';
+            btn.style.right = '16px';
+            btn.style.bottom = `${70 + idx * 48}px`;
+            btn.style.transition = 'left 0.2s, top 0.2s, right 0.2s, bottom 0.2s';
+        });
+
+        // 3) Reset the collapsed hub button to its default spot too.
+        const hub = document.getElementById('mwt-float-hub');
+        if (hub) {
+            hub.style.left = '';
+            hub.style.top = '';
+            hub.style.right = '16px';
+            hub.style.bottom = '70px';
+            hub.style.transition = 'left 0.2s, top 0.2s, right 0.2s, bottom 0.2s';
+        }
+    }
+
     // ── Return public API ────────────────────────────────────────────────────
 
     return {
         FLOAT_BUTTONS,
         applyButtonVisibility,
         applyButtonStyle,
+        resetFloatPositions,
         setupButtonBar,
         setupExtensionsDrawer,
         setupWandMenu,

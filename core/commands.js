@@ -15,7 +15,7 @@
  * @param {object} deps.modules — { WorldState, Chronicle, Knowledge }
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
-export function createCommands({ registerSlashCommand, macroRegistry, modules }) {
+export function createCommands({ registerSlashCommand, macroRegistry, modules, resetFloatPositions }) {
     const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
@@ -116,6 +116,15 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules })
                     : '';
                 return text || '(no world state)';
             }, ['mwt-state'], 'Output the current world state text (pipeable)');
+
+            // /wt-reset-buttons — Reset floating-button positions to defaults
+            registerSlashCommand('wt-reset-buttons', async (_args, _command) => {
+                if (typeof resetFloatPositions === 'function') {
+                    resetFloatPositions();
+                    return 'Floating buttons reset to default positions.';
+                }
+                return 'Reset function not available.';
+            }, ['mwt-reset-buttons'], 'Reset floating MWT buttons to their default positions');
 
             console.log('[MWT] Slash commands registered.');
         } catch (err) {
