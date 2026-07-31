@@ -1,31 +1,50 @@
 /**
  * story_planner/injection.js — Prompt injection for Story Plan.
  *
- * Depends on data.js and settings.js (leaf modules).
+ * Depends on data.js, prompts.js and settings.js (leaf modules).
  */
 
 import {
     getGlobalSettings, estimateTokens,
-    applyExtensionPromptInjection, wrapInTag, injectionAllowed,
+    applyExtensionPromptInjection, injectionAllowed,
 } from '../core/index.js';
 
+import { STORY_PLAN_INJECTION_HEADER } from './prompts.js';
 import {
     EXTENSION_PROMPT_KEY,
-    getPlanText, isInjectionEnabled,
+    getArcs, getInjectMode, serializeArcsToText, isInjectionEnabled,
 } from './data.js';
 import { getSettings } from './settings.js';
 
-// ─── Injection header ────────────────────────────────────────────────────────
+export { STORY_PLAN_INJECTION_HEADER };
 
-export const STORY_PLAN_INJECTION_HEADER = `[Story Plan — a menu of theoretical future plot developments.
-These are branching possibilities for the AI to draw on, not fixed events.
-Use them as inspiration; do not treat any single idea as mandatory or predetermined.]`;
+// ─── Arc selection ───────────────────────────────────────────────────────────
+
+/**
+ * Which arcs reach the model, per the user's injection mode.
+ *
+ * Mirrors chronicle/injection.js's getEntriesForInjection(). Dropped arcs are
+ * excluded in every mode — dropping is the user saying "not this one", so it
+ * should hold regardless of which mode is selected.
+ */
+export function getArcsForInjection() {
+    const arcs = getArcs().filter(a => a.status !== 'dropped');
+    const mode = getInjectMode();
+    if (mode === 'pinned') return arcs.filter(a => a.pinned);
+    if (mode === 'active') return arcs.filter(a => a.status === 'active');
+    return arcs;
+}
+
+/** The exact markdown body that will be injected (also used for token counts). */
+export function buildInjectionBody() {
+    return serializeArcsToText(getArcsForInjection());
+}
 
 // ─── Core injection ──────────────────────────────────────────────────────────
 
 export function applyPlanInjection() {
-    const text = getPlanText();
     const enabled = isInjectionEnabled() && injectionAllowed('StoryPlanner');
+    const body = enabled ? buildInjectionBody() : '';
     const s = getSettings();
     const globalSettings = getGlobalSettings();
 
@@ -37,7 +56,7 @@ export function applyPlanInjection() {
     applyExtensionPromptInjection({
         key: EXTENSION_PROMPT_KEY,
         header: STORY_PLAN_INJECTION_HEADER,
-        body: text,
+        body,
         enabled,
         fallbackDepth: s.injectionDepth ?? 4,
         globalRole: 'system',
@@ -46,14 +65,14 @@ export function applyPlanInjection() {
     });
 
     const depth = s.injectionDepth ?? 4;
-    console.log(`[MWT:StoryPlanner] Injection ${enabled ? 'applied' : 'cleared'} (${text.length} chars) at depth ${depth}`);
+    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", ${getArcsForInjection().length} arcs, ${body.length} chars at depth ${depth}`);
 }
 
 // ─── Token estimate ──────────────────────────────────────────────────────────
 
 export function getInjectedTokenCount() {
     if (!isInjectionEnabled()) return 0;
-    const text = getPlanText();
-    if (!text) return 0;
-    return estimateTokens(`${STORY_PLAN_INJECTION_HEADER}\n\n${text}`);
+    const body = buildInjectionBody();
+    if (!body) return 0;
+    return estimateTokens(`${STORY_PLAN_INJECTION_HEADER}\n\n${body}`);
 }
