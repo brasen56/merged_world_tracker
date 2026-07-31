@@ -9,15 +9,20 @@ import {
     applyExtensionPromptInjection, injectionAllowed,
 } from '../core/index.js';
 
-import { STORY_PLAN_INJECTION_HEADER } from './prompts.js';
+import { STORY_PLAN_INJECTION_HEADER, buildStoryPlanHeader } from './prompts.js';
 import {
     EXTENSION_PROMPT_KEY, SECTIONS,
-    getArcs, getInjectMode, isInjectionEnabled,
+    getArcs, getInjectMode, isInjectionEnabled, getEnforcement,
     isArcReady, getCurrentBeat,
 } from './data.js';
 import { getSettings } from './settings.js';
 
 export { STORY_PLAN_INJECTION_HEADER };
+
+/** The header actually injected, per the chat's enforcement setting. */
+function currentHeader() {
+    return buildStoryPlanHeader(getEnforcement());
+}
 
 // ─── Arc selection ───────────────────────────────────────────────────────────
 
@@ -108,7 +113,7 @@ export function applyPlanInjection() {
 
     applyExtensionPromptInjection({
         key: EXTENSION_PROMPT_KEY,
-        header: STORY_PLAN_INJECTION_HEADER,
+        header: currentHeader(),
         body,
         enabled,
         fallbackDepth: s.injectionDepth ?? 4,
@@ -118,7 +123,7 @@ export function applyPlanInjection() {
     });
 
     const depth = s.injectionDepth ?? 4;
-    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", ${getArcsForInjection().length} arcs, ${body.length} chars at depth ${depth}`);
+    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", push "${getEnforcement()}", ${getArcsForInjection().length} arcs, ${body.length} chars at depth ${depth}`);
 }
 
 // ─── Token estimate ──────────────────────────────────────────────────────────
@@ -127,5 +132,7 @@ export function getInjectedTokenCount() {
     if (!isInjectionEnabled()) return 0;
     const body = buildInjectionBody();
     if (!body) return 0;
-    return estimateTokens(`${STORY_PLAN_INJECTION_HEADER}\n\n${body}`);
+    // Must use the same header applyPlanInjection() sends — the assertive
+    // block is markedly longer than the passive one.
+    return estimateTokens(`${currentHeader()}\n\n${body}`);
 }

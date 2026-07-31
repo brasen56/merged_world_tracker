@@ -86,10 +86,54 @@ Output the story plan now. Begin immediately with the first section heading.`;
  * are all planted graduate into "Ready Now", which is the "now" signal that
  * was missing.
  */
-export const STORY_PLAN_INJECTION_HEADER = `[Story Plan — planned directions for this story.
+/**
+ * Per-mode push blocks. Mirrors world_state's PLOT_SEEDS_HEADERS — same three
+ * escalating levels, same core argument at the top end ("enabling this setting
+ * IS the permission you are waiting for").
+ *
+ * ROUND 3 OF THE SAME BUG: the previous single header contained three separate
+ * permissions to do nothing — "never force any of this against the flow of the
+ * scene", "when a natural opening appears", and "if no opening appears, leave
+ * it and carry on". A timid model reasons its way to "no natural opening" every
+ * turn and does nothing, forever. Brasen worked around it with an author's note
+ * saying the model MAY force things because the user cannot see the plan and so
+ * has no way to ask for it — which is exactly right, and is now the assertive
+ * block below.
+ *
+ * What stays constant at every level: never write for {{user}}, and never
+ * announce the plan. Those are immersion/safety rails, not timidity.
+ */
+const ENFORCEMENT_BLOCKS = {
+    passive: `Work the current step into the scene when a natural opening appears. If none appears this scene, leave it and carry on — though a step that has been waiting many turns should be looked for actively.`,
+
+    proactive: `Introduce the current step when you reasonably can. You do not need to wait to be prompted — steer scenes toward an opening rather than waiting for one to arrive on its own. If a step has been waiting several turns, make an opening for it rather than deferring again.`,
+
+    assertive: `Advance at least one arc in this response — plant its current step, or bring a Ready Now arc to a head.
+
+{{user}} CANNOT SEE THIS PLAN. They have no way to ask for these beats and will never signal for one, so waiting for an invitation means waiting forever. This setting is that invitation: the user has explicitly asked for the story to be pushed forward without being prompted. Acting on it is what they want, not an overstep.
+
+Do not defer a step for lack of a perfect opening — create the opening. The only reason to hold back is a scene at an emotional climax that the step would directly undercut, and even then, plant it in the following response.`,
+};
+
+export const ENFORCEMENT_KEYS = Object.keys(ENFORCEMENT_BLOCKS);
+
+/**
+ * Build the injected header for the given enforcement mode.
+ *
+ * @param {'passive'|'proactive'|'assertive'} mode
+ */
+export function buildStoryPlanHeader(mode) {
+    const push = ENFORCEMENT_BLOCKS[mode] || ENFORCEMENT_BLOCKS.proactive;
+    return `[Story Plan — planned directions for this story.
 
 READY NOW and IMMEDIATE HOOKS are usable in this scene. When a scene needs somewhere to go, take one and let it play out.
 
-Every other arc shows a single "NOW:" line — the one concrete setup step it is currently waiting on. Work that step into the scene when a natural opening appears. Plant only the current step; do not skip ahead to the arc's eventual payoff, and do not invent extra setup beyond it. If no opening appears this scene, leave it and carry on — but a step marked as waiting many turns should be looked for actively.
+Every other arc shows a single "NOW:" line — the one concrete setup step it is currently waiting on. Plant only that step; do not skip ahead to the arc's eventual payoff, and do not invent extra setup beyond it.
 
-Never force any of this against the flow of the scene, never write actions or dialogue for {{user}}, and never announce or reference this plan in the narration.]`;
+${push}
+
+Never write actions, dialogue, or thoughts for {{user}}, and never announce or reference this plan in the narration — simply let these things happen.]`;
+}
+
+/** Default header (proactive) — kept for any consumer importing the constant. */
+export const STORY_PLAN_INJECTION_HEADER = buildStoryPlanHeader('proactive');

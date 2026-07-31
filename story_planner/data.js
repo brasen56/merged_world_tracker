@@ -71,6 +71,19 @@ export const INJECT_MODES = [
     { key: 'active', label: 'Active', blurb: 'Inject only arcs still marked active' },
 ];
 
+/**
+ * How hard the narrator is pushed to act on the plan. Mirrors world_state's
+ * hookMode (passive/proactive/assertive).
+ *
+ * Default is 'proactive', not 'passive': testing showed cautious models read
+ * passive phrasing as standing permission to defer indefinitely.
+ */
+export const ENFORCEMENT_MODES = [
+    { key: 'passive', label: 'Passive', blurb: 'Only plant a beat when a natural opening appears' },
+    { key: 'proactive', label: 'Proactive', blurb: 'Steer scenes toward an opening instead of waiting for one' },
+    { key: 'assertive', label: 'Assertive', blurb: 'Advance an arc every response; create the opening if needed' },
+];
+
 const SECTION_KEYS = new Set(SECTIONS.map(s => s.key));
 
 // ─── Mutable shared state ────────────────────────────────────────────────────
@@ -544,6 +557,11 @@ export function toggleArcPinned(id) {
 export function getInjectMode() {
     const mode = getPlanData().injectMode;
     return INJECT_MODES.some(m => m.key === mode) ? mode : 'all';
+}
+
+export function getEnforcement() {
+    const mode = getPlanData().enforcement;
+    return ENFORCEMENT_MODES.some(m => m.key === mode) ? mode : 'proactive';
 }
 
 export function getDirectionHint() {

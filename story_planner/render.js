@@ -19,13 +19,13 @@ import {
 
 import { getSettings, saveSettings } from './settings.js';
 import {
-    state, SECTIONS, ARC_STATUSES, INJECT_MODES,
+    state, SECTIONS, ARC_STATUSES, INJECT_MODES, ENFORCEMENT_MODES,
     setPlanData, getPlanText,
     getArcs, setArcs, addArc, updateArc, removeArc, toggleArcPinned,
     isArcReady, getCurrentBeat, advanceBeat, retreatBeat,
     getPlanHistory, pushPlanToHistory, historyEntryToText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
-    getInjectMode, getDirectionHint, getArcCount, getSectionMeta,
+    getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta,
 } from './data.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody } from './injection.js';
 import { generatePlan } from './generation.js';
@@ -262,6 +262,7 @@ export function render() {
     const autoEnabled = isAutoEnabled();
     const autoInterval = getAutoInterval();
     const mode = getInjectMode();
+    const enforcement = getEnforcement();
 
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
@@ -279,6 +280,12 @@ export function render() {
                 <label class="sp-mode-label" title="${escapeHtml(m.blurb)}">
                     <input type="radio" name="sp-inject-mode" value="${m.key}" ${m.key === mode ? 'checked' : ''}> ${escapeHtml(m.label)}
                 </label>`).join('')}
+
+            <span class="mwt-text-dim mwt-text-sm" style="margin-left:12px">Push:</span>
+            <select id="sp-enforcement" class="sp-enforcement" title="How hard the AI is pushed to act on the plan">
+                ${ENFORCEMENT_MODES.map(m => `<option value="${m.key}" ${m.key === enforcement ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('')}
+            </select>
+            <span id="sp-enforcement-blurb" class="mwt-text-dim mwt-text-sm">${escapeHtml(ENFORCEMENT_MODES.find(m => m.key === enforcement)?.blurb || '')}</span>
         </div>
 
         <div id="sp-arcs" class="sp-arcs">${renderArcsInner()}</div>
@@ -581,6 +588,15 @@ export function wireEvents() {
             applyPlanInjection();
             renderArcs();
         });
+    });
+
+    // Enforcement ("Push") — applies immediately, like the inject-mode radios.
+    state.modal.querySelector('#sp-enforcement')?.addEventListener('change', (e) => {
+        setPlanData({ enforcement: e.target.value });
+        applyPlanInjection();
+        const blurb = state.modal.querySelector('#sp-enforcement-blurb');
+        if (blurb) blurb.textContent = ENFORCEMENT_MODES.find(m => m.key === getEnforcement())?.blurb || '';
+        refreshDisplay();
     });
 
     // Generate

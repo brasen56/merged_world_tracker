@@ -20,6 +20,28 @@
     accent-color: var(--mwt-accent);
 }
 
+.sp-enforcement {
+    background-color: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 4px;
+    color: var(--mwt-text);
+    font-family: var(--mwt-font);
+    font-size: 12px;
+    padding: 2px 5px;
+    cursor: pointer;
+}
+
+.sp-enforcement option {
+    background-color: var(--mwt-bg-light);
+    color: var(--mwt-text);
+}
+
+.sp-enforcement:hover,
+.sp-enforcement:focus {
+    outline: none;
+    border-color: var(--mwt-accent);
+}
+
 /* ─── Sections ─────────────────────────────────────────────────────────────── */
 
 .sp-section {
