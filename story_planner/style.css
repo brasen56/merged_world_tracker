@@ -16,6 +16,8 @@
 .sp-mode-label input {
     cursor: pointer;
     margin: 0;
+    /* Matches how knowledge/style.css tints its checkboxes. */
+    accent-color: var(--mwt-accent);
 }
 
 /* ─── Sections ─────────────────────────────────────────────────────────────── */
@@ -24,7 +26,9 @@
     border: 1px solid var(--mwt-border);
     border-radius: var(--mwt-radius);
     margin-bottom: 8px;
-    background: var(--mwt-bg-light);
+    /* Section is the base surface; cards sit ON it and are one step lighter
+       (see .sp-arc). Keep these two in sync or the elevation reads inverted. */
+    background: var(--mwt-bg);
 }
 
 .sp-section-head {
@@ -87,7 +91,8 @@
     border: 1px solid var(--mwt-border);
     border-left: 3px solid var(--mwt-border);
     border-radius: var(--mwt-radius);
-    background: var(--mwt-bg);
+    background: var(--mwt-bg-light);
+    color: var(--mwt-text);
     padding: 6px 8px;
     transition: border-color var(--mwt-transition), opacity var(--mwt-transition);
 }
@@ -107,10 +112,16 @@
     gap: 6px;
 }
 
+/* NOTE: background AND color are set explicitly on every field below, even
+   where "transparent"/inherited would look right in isolation. SillyTavern
+   themes style bare input/textarea/select elements globally, so anything left
+   unset bleeds through (this is why chronicle/knowledge always set the full
+   bg + color + border triplet). */
+
 .sp-arc-title {
     flex: 1;
     min-width: 0;
-    background: transparent;
+    background-color: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
     color: var(--mwt-text);
@@ -120,19 +131,29 @@
     padding: 3px 5px;
 }
 
-.sp-arc-title:hover { border-color: var(--mwt-border); }
+.sp-arc-title::placeholder,
+.sp-arc-body::placeholder {
+    color: var(--mwt-text-dim);
+    opacity: 0.7;
+}
+
+.sp-arc-title:hover {
+    border-color: var(--mwt-border);
+    background-color: var(--mwt-bg);
+}
 
 .sp-arc-title:focus {
     outline: none;
     border-color: var(--mwt-accent);
-    background: var(--mwt-bg-light);
+    background-color: var(--mwt-bg);
+    color: var(--mwt-text);
 }
 
 .sp-arc-body {
     width: 100%;
     box-sizing: border-box;
     margin-top: 4px;
-    background: transparent;
+    background-color: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
     color: var(--mwt-text-dim);
@@ -143,12 +164,15 @@
     resize: vertical;
 }
 
-.sp-arc-body:hover { border-color: var(--mwt-border); }
+.sp-arc-body:hover {
+    border-color: var(--mwt-border);
+    background-color: var(--mwt-bg);
+}
 
 .sp-arc-body:focus {
     outline: none;
     border-color: var(--mwt-accent);
-    background: var(--mwt-bg-light);
+    background-color: var(--mwt-bg);
     color: var(--mwt-text);
 }
 
@@ -161,15 +185,27 @@
 
 .sp-arc-section,
 .sp-arc-status {
-    background: var(--mwt-bg-light);
+    background-color: var(--mwt-bg);
     border: 1px solid var(--mwt-border);
     border-radius: 4px;
-    color: var(--mwt-text-dim);
+    color: var(--mwt-text);
     font-family: var(--mwt-font);
     font-size: 11px;
     padding: 2px 4px;
     cursor: pointer;
 }
+
+/* The native dropdown popup does NOT reliably inherit the select's colors —
+   on Windows it falls back to system colors and can render unreadable
+   (dark-on-dark). Style the options explicitly. */
+.sp-arc-section option,
+.sp-arc-status option {
+    background-color: var(--mwt-bg-light);
+    color: var(--mwt-text);
+}
+
+.sp-arc-section:hover,
+.sp-arc-status:hover { border-color: var(--mwt-accent); }
 
 .sp-arc-section:focus,
 .sp-arc-status:focus {
@@ -181,6 +217,7 @@
 .sp-arc-del {
     background: none;
     border: none;
+    color: var(--mwt-text-dim);
     cursor: pointer;
     font-size: 13px;
     line-height: 1;
