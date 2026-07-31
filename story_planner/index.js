@@ -18,13 +18,13 @@ import { syncSharedConnectionSettings, notify, getChat, getContextSafe } from '.
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
     state, getPlanData, setPlanData,
-    getArcs, serializeArcsToText,
+    getArcs, serializeArcsToText, incrementArcTurns,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
 } from './data.js';
 import { applyPlanInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
-import { renderContent, wireEvents, renderArcs } from './render.js';
+import { renderContent, wireEvents, renderArcs, refreshDisplay } from './render.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -60,6 +60,13 @@ export function getModuleWireEvents() {
 // ─── Event hooks ─────────────────────────────────────────────────────────────
 
 export async function onMessageReceived() {
+    // Age every active arc's current beat. This runs BEFORE the auto-generate
+    // early-return on purpose: beat ages drive the "still waiting after N
+    // turns" nudge in the injection, and that has to work whether or not
+    // auto-generate is enabled (it is off by default).
+    incrementArcTurns();
+    if (state.modal) refreshDisplay();
+
     if (!isAutoEnabled() || !hasValidSettings()) return;
 
     // Track chat length so onMessageDeleted can compute the number of removed

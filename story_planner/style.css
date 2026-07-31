@@ -176,6 +176,73 @@
     color: var(--mwt-text);
 }
 
+/* ─── Beat strip (current setup step + advance controls) ───────────────────── */
+
+.sp-beats {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 6px;
+    padding: 5px 7px;
+    border-radius: 4px;
+    background-color: var(--mwt-bg);
+    border-left: 2px solid var(--mwt-accent);
+}
+
+.sp-beats--ready { border-left-color: var(--mwt-success); }
+
+.sp-beat-line {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.sp-beat-badge {
+    flex-shrink: 0;
+    background-color: var(--mwt-bg-lighter);
+    color: var(--mwt-text-dim);
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 5px;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.sp-beat-badge--overdue {
+    background-color: var(--mwt-warning);
+    color: #1a1a2e;
+}
+
+.sp-beat-badge--ready {
+    background-color: var(--mwt-success);
+    color: #fff;
+}
+
+.sp-beat-text {
+    color: var(--mwt-text);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.sp-beat-actions {
+    flex-shrink: 0;
+    display: flex;
+    gap: 4px;
+}
+
+.sp-beat-done,
+.sp-beat-back {
+    font-size: 11px;
+    padding: 2px 7px;
+    white-space: nowrap;
+}
+
+/* A ready arc is the payoff of the whole mechanism — make it findable. */
+.sp-arc--ready { border-left-color: var(--mwt-success); }
+
 .sp-arc-foot {
     display: flex;
     gap: 6px;
@@ -254,4 +321,7 @@
     .sp-arc-foot { flex-direction: column; align-items: stretch; }
     .sp-arc-section,
     .sp-arc-status { width: 100%; }
+    /* Stack the beat text above its buttons rather than squeezing both. */
+    .sp-beats { flex-direction: column; gap: 6px; }
+    .sp-beat-actions { align-self: flex-end; }
 }

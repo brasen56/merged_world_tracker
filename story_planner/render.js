@@ -22,6 +22,7 @@ import {
     state, SECTIONS, ARC_STATUSES, INJECT_MODES,
     setPlanData, getPlanText,
     getArcs, setArcs, addArc, updateArc, removeArc, toggleArcPinned,
+    isArcReady, getCurrentBeat, advanceBeat, retreatBeat,
     getPlanHistory, pushPlanToHistory, historyEntryToText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     getInjectMode, getDirectionHint, getArcCount, getSectionMeta,
@@ -54,17 +55,25 @@ function getContentEl() {
 // would destroy event listeners and collapse <details> elements). Use these
 // instead of renderContent() after any user interaction.
 
+/**
+ * Toolbar summary text. Single owner of this format — render() writes it into
+ * the initial HTML and updateToolbarStats() rewrites it in place afterwards,
+ * and the two drifting apart is exactly how the ready count went missing once.
+ */
+function toolbarStatsText() {
+    const arcs = getArcs();
+    const injected = getArcsForInjection().length;
+    const ready = arcs.filter(a => a.status === 'active' && isArcReady(a)).length;
+    const tokens = estimateTokens(buildInjectionBody());
+    const auto = isAutoEnabled() ? ` · Auto: ${state.autoCounter}/${getAutoInterval()} msgs` : '';
+    return `${arcs.length} arcs · ${injected} injected${ready ? ` · ${ready} ready` : ''} · ~${tokens} tokens${auto}`;
+}
+
 /** Update the arc-count / token summary in the toolbar. */
 function updateToolbarStats() {
     if (!state.modal) return;
     const el = state.modal.querySelector('#sp-toolbar-stats');
-    if (!el) return;
-    const arcs = getArcs();
-    const injected = getArcsForInjection().length;
-    const tokens = estimateTokens(buildInjectionBody());
-    const autoEnabled = isAutoEnabled();
-    const autoInterval = getAutoInterval();
-    el.textContent = `${arcs.length} arcs · ${injected} injected · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoCounter}/${autoInterval} msgs` : ''}`;
+    if (el) el.textContent = toolbarStatsText();
 }
 
 /** Update the auto-generate status banner (shown only when auto is ON). */
@@ -117,11 +126,52 @@ export function refreshDisplay() {
 
 // ─── Arc rendering ───────────────────────────────────────────────────────────
 
+/**
+ * The beat strip: current setup step plus the controls that advance it.
+ * Absent for arcs with no beats (Immediate Hooks are usable as-is).
+ */
+function renderBeatStrip(arc) {
+    const total = arc.beats?.length || 0;
+    if (total === 0) return '';
+    const id = escapeHtml(arc.id);
+    const done = Math.min(arc.beatIndex || 0, total);
+    const waited = arc.turnsSinceAdvance || 0;
+
+    if (isArcReady(arc)) {
+        return `
+            <div class="sp-beats sp-beats--ready">
+                <div class="sp-beat-line">
+                    <span class="sp-beat-badge sp-beat-badge--ready">READY</span>
+                    <span class="sp-beat-text">All ${total} setup beats planted — this can happen now.</span>
+                </div>
+                <div class="sp-beat-actions">
+                    <button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Undo the last '✓ planted'">↺ back</button>
+                </div>
+            </div>`;
+    }
+
+    const beat = getCurrentBeat(arc);
+    const overdue = waited >= 12 ? ' sp-beat-badge--overdue' : '';
+    return `
+        <div class="sp-beats">
+            <div class="sp-beat-line">
+                <span class="sp-beat-badge${overdue}" title="${waited} turn${waited === 1 ? '' : 's'} on this beat">${done + 1}/${total}</span>
+                <span class="sp-beat-text">${escapeHtml(beat)}</span>
+            </div>
+            <div class="sp-beat-actions">
+                <button class="mwt-btn sp-beat-done" data-action="beat-done" data-id="${id}"
+                        title="Mark this setup as planted and move to the next beat">✓ planted</button>
+                ${done > 0 ? `<button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Go back a beat">↺</button>` : ''}
+            </div>
+        </div>`;
+}
+
 function renderArcCard(arc) {
     const dimmed = arc.status !== 'active' ? ' sp-arc--muted' : '';
     const pinnedCls = arc.pinned ? ' sp-arc--pinned' : '';
+    const readyCls = isArcReady(arc) && arc.status === 'active' ? ' sp-arc--ready' : '';
     return `
-        <div class="sp-arc${dimmed}${pinnedCls}" data-id="${escapeHtml(arc.id)}">
+        <div class="sp-arc${dimmed}${pinnedCls}${readyCls}" data-id="${escapeHtml(arc.id)}">
             <div class="sp-arc-head">
                 <button class="sp-pin" data-action="pin" data-id="${escapeHtml(arc.id)}"
                         title="${arc.pinned ? 'Unpin' : 'Pin — keeps this arc through regeneration'}">${arc.pinned ? '📌' : '📍'}</button>
@@ -131,6 +181,7 @@ function renderArcCard(arc) {
             </div>
             <textarea class="sp-arc-body" data-action="body" data-id="${escapeHtml(arc.id)}" rows="2"
                       placeholder="What shift does this arc introduce?">${escapeHtml(arc.body)}</textarea>
+            ${renderBeatStrip(arc)}
             <div class="sp-arc-foot">
                 <select class="sp-arc-section" data-action="section" data-id="${escapeHtml(arc.id)}" title="Move to another section">
                     ${SECTIONS.map(s => `<option value="${s.key}" ${s.key === arc.section ? 'selected' : ''}>${escapeHtml(s.label)}</option>`).join('')}
@@ -210,9 +261,6 @@ export function render() {
     const s = getSettings();
     const autoEnabled = isAutoEnabled();
     const autoInterval = getAutoInterval();
-    const arcs = getArcs();
-    const injected = getArcsForInjection().length;
-    const tokens = estimateTokens(buildInjectionBody());
     const mode = getInjectMode();
 
     return `
@@ -222,7 +270,7 @@ export function render() {
             <button id="sp-history" class="mwt-btn">📋 History</button>
             <button id="sp-preview" class="mwt-btn">👁 Preview Injection</button>
             <button id="sp-clear" class="mwt-btn mwt-btn-danger">🗑️ Clear</button>
-            <span id="sp-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${arcs.length} arcs · ${injected} injected · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoCounter}/${autoInterval} msgs` : ''}</span>
+            <span id="sp-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${escapeHtml(toolbarStatsText())}</span>
         </div>
 
         <div class="sp-inject-modes mwt-flex mwt-gap-8 mwt-mb-8" style="flex-wrap:wrap;align-items:center">
@@ -283,11 +331,16 @@ export function render() {
         </details>
 
         <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:12px">
-            The Story Planner brainstorms future plot possibilities, sorted by how soon the story can use them —
-            <strong>Immediate Hooks</strong> are offered to the AI as usable now, the rest as longer-range groundwork.
-            Edit any arc directly; changes save automatically. <strong>Pin</strong> an arc to keep it through regeneration;
-            mark it <strong>Resolved</strong> or <strong>Dropped</strong> to stop it being suggested again.
-            <strong>Auto-generate</strong> refreshes the plan on a timer; <strong>injection</strong> controls whether it reaches the AI.
+            Long-range arcs carry <strong>setup beats</strong> — small concrete steps toward the arc. Only the
+            <em>current</em> beat is sent to the AI, as a "NOW:" instruction, so it plants one thing at a time instead of
+            being told to vaguely "build toward" something. When you see that setup land in the story, click
+            <strong>✓ planted</strong> to move to the next beat. Once every beat is planted the arc becomes
+            <strong>Ready</strong> and is offered to the AI as usable immediately.
+            <br><br>
+            Edit any arc directly; changes save automatically. <strong>Pin</strong> an arc to keep it through regeneration
+            (arcs with planted beats are kept automatically). Mark one <strong>Resolved</strong> or <strong>Dropped</strong>
+            to stop it being suggested again. <strong>Auto-generate</strong> refreshes the plan on a timer;
+            <strong>injection</strong> controls whether it reaches the AI.
         </p>
     `;
 }
@@ -445,7 +498,15 @@ function handleArcsClick(e) {
     const id = btn.dataset.id;
     if (!id) return;
 
-    if (action === 'pin') {
+    if (action === 'beat-done') {
+        advanceBeat(id);
+        applyPlanInjection();
+        renderArcs();
+    } else if (action === 'beat-back') {
+        retreatBeat(id);
+        applyPlanInjection();
+        renderArcs();
+    } else if (action === 'pin') {
         toggleArcPinned(id);
         applyPlanInjection();
         renderArcs();

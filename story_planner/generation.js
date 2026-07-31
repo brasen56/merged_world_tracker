@@ -15,7 +15,7 @@ import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
     state, getArcs, setArcs, pushPlanToHistory,
-    parsePlanTextToArcs, serializeArcsToText,
+    parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
     getDirectionHint, getArcCount,
 } from './data.js';
 import { applyPlanInjection } from './injection.js';
@@ -63,9 +63,12 @@ function buildUserPrompt(recentText, reminderReason = '') {
     // mean it stops coming back. Resolved/pinned arcs ARE sent, annotated, so
     // the model knows what has already paid off and what the user cares about.
     const kept = getArcs().filter(a => a.status !== 'dropped');
-    const prevPlan = serializeArcsToText(kept, { annotateStatus: true }).trim();
+    const prevPlan = serializeArcsToText(kept, { annotateStatus: true, beats: 'all' }).trim();
     const prevBlock = prevPlan
-        ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Arcs marked RESOLVED have already paid off — do not resurface them. Arcs marked PINNED matter to the user — keep them unless the story has made them impossible. Refine this against what has since happened — do not simply repeat it.]\n${prevPlan}\n</previous_plan>`
+        ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine this against what has since happened — do not simply repeat it.\n`
+          + `Keep the exact arc NAME of any arc you carry forward — the name is how progress on it is tracked, and renaming it loses that progress.\n`
+          + `Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress. Arcs marked SETUP COMPLETE are ready to happen — do not add more setup to them.\n`
+          + `Arcs marked RESOLVED have already paid off — do not resurface them. Arcs marked PINNED matter to the user — keep them unless the story has made them impossible.]\n${prevPlan}\n</previous_plan>`
         : '';
 
     // Cross-module grounding. Both getters return '' when the user isn't using
@@ -224,15 +227,14 @@ export async function generatePlan(isAuto = false) {
         const previous = getArcs();
         if (previous.length) pushPlanToHistory(previous);
 
-        // Carry pinned arcs forward. A pin is the user saying "keep this" — a
-        // regeneration silently dropping it would make the pin meaningless.
-        // Dropped arcs stay dropped; everything else is replaced by the new plan.
-        const pinnedCarry = previous.filter(a => a.pinned && a.status === 'active');
-        const newArcs = [...pinnedCarry, ...parsed];
+        // Merge rather than replace: arcs matched by name keep their id and
+        // their planted-beat progress, and pinned / part-planted arcs the model
+        // dropped are carried forward rather than lost.
+        const { arcs: newArcs, carried, matched, added } = mergeRegeneratedArcs(previous, parsed);
 
         setArcs(newArcs);
         applyPlanInjection();
-        console.log(`[MWT:StoryPlanner] Plan generated (${parsed.length} arcs parsed, ${pinnedCarry.length} pinned carried forward)`);
+        console.log(`[MWT:StoryPlanner] Plan generated — ${matched} arcs kept with progress, ${added} new, ${carried} carried forward (${newArcs.length} total)`);
         return newArcs;
     } catch (err) {
         console.error('[MWT:StoryPlanner] Generation failed:', err);

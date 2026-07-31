@@ -124,11 +124,25 @@ export function newArcId() {
  *   section: 'immediate'|'emerging'|'horizon'|'character'|'unresolved',
  *   status: 'active'|'resolved'|'dropped',   // user-controlled, never LLM-authored
  *   pinned: boolean,
+ *   beats: string[],          // ordered setup beats; [] for Immediate Hooks
+ *   beatIndex: number,        // current beat; >= beats.length means READY
+ *   turnsSinceAdvance: number,// turns since this beat became current
  *   createdAt: number, updatedAt: number,
  * }
+ *
+ * `body` is the arc's ENDPOINT (where it eventually lands). `beats` are the
+ * small, concrete steps toward it. Only the current beat is ever injected —
+ * that is the whole point: the narrator gets one actionable instruction per
+ * arc per turn instead of a destination it cannot act on yet.
  */
-export function makeArc({ title = '', body = '', section = DEFAULT_SECTION, status = 'active', pinned = false } = {}) {
+export function makeArc({
+    title = '', body = '', section = DEFAULT_SECTION, status = 'active',
+    pinned = false, beats = [], beatIndex = 0,
+} = {}) {
     const now = Date.now();
+    const cleanBeats = (Array.isArray(beats) ? beats : [])
+        .map(b => String(b).trim())
+        .filter(Boolean);
     return {
         id: newArcId(),
         title: String(title).trim(),
@@ -136,9 +150,71 @@ export function makeArc({ title = '', body = '', section = DEFAULT_SECTION, stat
         section: SECTION_KEYS.has(section) ? section : DEFAULT_SECTION,
         status: ARC_STATUSES.includes(status) ? status : 'active',
         pinned: !!pinned,
+        beats: cleanBeats,
+        beatIndex: clampBeatIndex(beatIndex, cleanBeats.length),
+        turnsSinceAdvance: 0,
         createdAt: now,
         updatedAt: now,
     };
+}
+
+/** Beat index is allowed to equal beats.length — that is the READY state. */
+function clampBeatIndex(idx, beatCount) {
+    const n = Number(idx);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.min(Math.floor(n), beatCount);
+}
+
+// ─── Beat progression ────────────────────────────────────────────────────────
+
+/** An arc whose beats are all planted — setup is done, it can now happen. */
+export function isArcReady(arc) {
+    const total = arc?.beats?.length || 0;
+    return total > 0 && (arc.beatIndex || 0) >= total;
+}
+
+/** The single beat the narrator should be working on. '' when none/ready. */
+export function getCurrentBeat(arc) {
+    const beats = arc?.beats || [];
+    if (!beats.length) return '';
+    const idx = arc.beatIndex || 0;
+    return idx < beats.length ? beats[idx] : '';
+}
+
+/** Mark the current beat planted and move to the next (or to READY). */
+export function advanceBeat(id) {
+    const arc = getArcs().find(a => a.id === id);
+    if (!arc) return null;
+    const total = arc.beats?.length || 0;
+    if (total === 0 || (arc.beatIndex || 0) >= total) return arc;
+    return updateArc(id, { beatIndex: (arc.beatIndex || 0) + 1, turnsSinceAdvance: 0 });
+}
+
+/** Step back a beat — for when a beat was marked planted by mistake. */
+export function retreatBeat(id) {
+    const arc = getArcs().find(a => a.id === id);
+    if (!arc) return null;
+    if ((arc.beatIndex || 0) <= 0) return arc;
+    return updateArc(id, { beatIndex: (arc.beatIndex || 0) - 1, turnsSinceAdvance: 0 });
+}
+
+/**
+ * Age every arc by one turn. Called on each received message.
+ *
+ * Mirrors interiority's incrementLedgerAges(). The count is advisory context
+ * for the narrator ("6 turns on this beat" reads as overdue), not a value
+ * anything branches on — so message deletion deliberately does not rewind it.
+ */
+export function incrementArcTurns() {
+    const arcs = getArcs();
+    if (!arcs.length) return;
+    let changed = false;
+    const next = arcs.map(a => {
+        if (a.status !== 'active') return a;
+        changed = true;
+        return { ...a, turnsSinceAdvance: (a.turnsSinceAdvance || 0) + 1 };
+    });
+    if (changed) setArcs(next);
 }
 
 // ─── Parsing / serialising ───────────────────────────────────────────────────
@@ -169,6 +245,18 @@ function cleanBulletContent(raw) {
         .replace(/^\s*\[[^\]]{1,24}\]\s*/, '')  // legacy "[Arc] " prefix — never parsed, purely decorative
         .replace(/\*\*/g, '')
         .replace(/^\s*__|__\s*$/g, '')
+        .trim();
+}
+
+/** Strip the leading marker and any "NOW:"/"NEXT:" label off a beat line. */
+function cleanBeatContent(raw) {
+    return String(raw)
+        .replace(/\*\*/g, '')
+        .replace(/^\s*(?:NOW|NEXT|BEAT|SETUP)\s*[:—-]\s*/i, '')
+        .replace(/^\s*\[[^\]]{1,32}\]\s*/, '')  // our own "[beat 2 of 3 · 6 turns]" marker
+        // Trailing progress markers we emit ourselves — stripped so a
+        // serialize → parse round-trip does not bake them into the beat text.
+        .replace(/\s*\[(?:PLANTED|CURRENT|READY|SETUP COMPLETE)\]\s*$/i, '')
         .trim();
 }
 
@@ -213,7 +301,9 @@ export function parsePlanTextToArcs(text) {
 
     for (const rawLine of String(text).split(/\r?\n/)) {
         const line = rawLine.trimEnd();
-        if (!line.trim()) { last = null; continue; }
+        // A blank line does NOT end an arc any more — beats are often separated
+        // from their arc bullet by one. Only a heading or a new bullet does.
+        if (!line.trim()) continue;
 
         const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
         if (heading) {
@@ -222,7 +312,24 @@ export function parsePlanTextToArcs(text) {
             continue;
         }
 
-        const bullet = line.match(/^[ \t]*[-*+][ \t]+(.+)$/);
+        // ── Beats ──
+        // Checked BEFORE the arc bullet, because an indented "- foo" would
+        // otherwise match as a new arc. Two accepted forms, since models are
+        // inconsistent: a numbered line at any indent, or an indented bullet.
+        const numbered = line.match(/^[ \t]*\d+[.)][ \t]+(.+)$/);
+        const indentedBullet = line.match(/^(?:[ \t]{2,}|\t)[-*+][ \t]+(.+)$/);
+        const beatMatch = numbered || indentedBullet;
+        if (beatMatch && last) {
+            const beat = cleanBeatContent(beatMatch[1]);
+            if (beat) last.beats.push(beat);
+            continue;
+        }
+        // A numbered line with no arc above it is malformed — skip rather than
+        // silently turning it into an arc.
+        if (numbered && !last) continue;
+
+        // ── Arc bullet ──
+        const bullet = line.match(/^[ \t]{0,3}[-*+][ \t]+(.+)$/);
         if (bullet) {
             const content = cleanBulletContent(bullet[1]);
             if (!content) { last = null; continue; }
@@ -234,7 +341,7 @@ export function parsePlanTextToArcs(text) {
 
         // A wrapped continuation line beneath a bullet — fold it into that
         // arc's body so multi-line descriptions survive the round-trip.
-        if (last && /^[ \t]+\S/.test(rawLine)) {
+        if (last && /^[ \t]+\S/.test(rawLine) && last.beats.length === 0) {
             last.body = last.body ? `${last.body} ${line.trim()}` : line.trim();
         }
     }
@@ -251,7 +358,7 @@ export function parsePlanTextToArcs(text) {
  * @param {object}  [opts]
  * @param {boolean} [opts.annotateStatus] mark non-active arcs (for the model)
  */
-export function serializeArcsToText(arcs, { annotateStatus = false } = {}) {
+export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all' } = {}) {
     const list = Array.isArray(arcs) ? arcs : [];
     const out = [];
     for (const sec of SECTIONS) {
@@ -262,13 +369,102 @@ export function serializeArcsToText(arcs, { annotateStatus = false } = {}) {
             const flags = [];
             if (annotateStatus && arc.status !== 'active') flags.push(arc.status.toUpperCase());
             if (annotateStatus && arc.pinned) flags.push('PINNED');
+            if (annotateStatus && isArcReady(arc)) flags.push('SETUP COMPLETE');
             const flag = flags.length ? ` [${flags.join(', ')}]` : '';
             const title = arc.title || '(untitled arc)';
             out.push(arc.body ? `- ${title}${flag} — ${arc.body}` : `- ${title}${flag}`);
+
+            if (beats === 'all' && arc.beats?.length) {
+                arc.beats.forEach((beat, i) => {
+                    // Progress markers matter on regeneration: without them the
+                    // model happily re-proposes setup the story already planted.
+                    let mark = '';
+                    if (annotateStatus) {
+                        if (i < (arc.beatIndex || 0)) mark = ' [PLANTED]';
+                        else if (i === (arc.beatIndex || 0)) mark = ' [CURRENT]';
+                    }
+                    out.push(`  ${i + 1}. ${beat}${mark}`);
+                });
+            }
         }
         out.push('');
     }
     return out.join('\n').trim();
+}
+
+// ─── Regeneration merge ──────────────────────────────────────────────────────
+
+/** Loose title key for matching a regenerated arc to the one it replaces. */
+function titleKey(title) {
+    return String(title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Merge a freshly generated arc list into the existing one.
+ *
+ * Regeneration used to REPLACE every non-pinned arc, which quietly reset every
+ * arc to a new id with zero progress — so nothing the narrator planted could
+ * ever accumulate. Progress is the whole point of beats, so identity has to
+ * survive a regenerate.
+ *
+ * Rules:
+ *  - Same (normalised) title as an existing arc → keep its id, beatIndex,
+ *    pinned, status and age; take the model's refreshed body/section/beats.
+ *  - Existing arc the model dropped → discarded, UNLESS it is pinned or has
+ *    beats already planted. Losing an in-progress arc is exactly the bug.
+ *  - Everything else the model returned → added as new.
+ *
+ * @param {object[]} previous existing arcs
+ * @param {object[]} incoming freshly parsed arcs
+ * @returns {{arcs: object[], carried: number, matched: number, added: number}}
+ */
+export function mergeRegeneratedArcs(previous, incoming) {
+    const prev = Array.isArray(previous) ? previous : [];
+    const next = Array.isArray(incoming) ? incoming : [];
+
+    const byTitle = new Map();
+    for (const arc of prev) {
+        const key = titleKey(arc.title);
+        if (key && !byTitle.has(key)) byTitle.set(key, arc);
+    }
+
+    const consumed = new Set();
+    let matched = 0;
+    const merged = next.map(fresh => {
+        const key = titleKey(fresh.title);
+        const old = key ? byTitle.get(key) : null;
+        if (!old || consumed.has(old.id)) return fresh;
+        consumed.add(old.id);
+        matched++;
+        const beats = fresh.beats?.length ? fresh.beats : (old.beats || []);
+        return {
+            ...fresh,
+            id: old.id,
+            pinned: old.pinned,
+            status: old.status,
+            createdAt: old.createdAt,
+            beats,
+            // The model may have rewritten the beat list; clamp rather than
+            // reset, so partially-planted setup is not re-proposed from zero.
+            beatIndex: clampBeatIndex(old.beatIndex, beats.length),
+            turnsSinceAdvance: old.turnsSinceAdvance || 0,
+            updatedAt: Date.now(),
+        };
+    });
+
+    // Arcs the model dropped but that we refuse to lose.
+    const carried = prev.filter(a =>
+        !consumed.has(a.id)
+        && a.status !== 'dropped'
+        && (a.pinned || (a.beatIndex || 0) > 0),
+    );
+
+    return {
+        arcs: [...carried, ...merged],
+        carried: carried.length,
+        matched,
+        added: merged.length - matched,
+    };
 }
 
 // ─── Arc access + migration ──────────────────────────────────────────────────
