@@ -54,8 +54,8 @@ export const SECTIONS = [
     {
         key: 'unresolved',
         label: 'Unresolved Threads',
-        hint: 'Setup the story has already planted but never paid off. Name the original setup.',
-        blurb: 'Planted but never paid off',
+        hint: 'Setup the story already planted that still owes a payoff. Name the original setup so it can be called back and resolved.',
+        blurb: 'Already set up — still owes a payoff',
     },
 ];
 

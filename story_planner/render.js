@@ -142,6 +142,21 @@ function renderArcCard(arc) {
         </div>`;
 }
 
+/**
+ * Label for a section header's arc count.
+ *
+ * Only mentions injection when some arcs are being HELD BACK — "1 · 1 injected"
+ * is pure noise and reads like a warning. Silence means "all of these are
+ * reaching the AI", which is the normal case.
+ */
+function sectionCountLabel(total, injected) {
+    if (total === 0) return 'empty';
+    const arcs = `${total} arc${total === 1 ? '' : 's'}`;
+    if (injected === total) return arcs;
+    if (injected === 0) return `${arcs} · none injected`;
+    return `${arcs} · only ${injected} injected`;
+}
+
 function renderArcsInner() {
     const arcs = getArcs();
     if (arcs.length === 0) {
@@ -161,7 +176,7 @@ function renderArcsInner() {
         <details class="sp-section" data-section="${sec.key}" ${inSection.length ? 'open' : ''}>
             <summary class="sp-section-head">
                 <span class="sp-section-title">${escapeHtml(sec.label)}</span>
-                <span class="sp-section-count">${inSection.length}${inSection.length ? ` · ${injectedHere} injected` : ''}</span>
+                <span class="sp-section-count">${sectionCountLabel(inSection.length, injectedHere)}</span>
             </summary>
             <p class="sp-section-blurb">${escapeHtml(sec.blurb)}</p>
             <div class="sp-section-arcs">${inSection.map(renderArcCard).join('')}</div>

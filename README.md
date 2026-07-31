@@ -54,7 +54,7 @@ Instead of juggling multiple standalone extensions, MWT provides a single tabbed
 | **🌍 World State** | Maintains a rolling structured document of the current scene, characters, threads, and plot seeds |
 | **📜 Chronicle** | Generates timestamped summaries of RP events with consolidation, editing, and flexible injection |
 | **🧠 Knowledge** | Scans for NPCs, tracks their knowledge and relationships, and manages state entries via lorebooks |
-| **🗺️ Story Planner** | Brainstorms a menu of medium/long-term plot arcs from your story and injects them as inspiration for the AI |
+| **🗺️ Story Planner** | Brainstorms structured plot arcs across five timeline sections, managed as editable cards with selective injection — inspiration the AI can draw on, not a fixed roadmap |
 | **💭 Interiority** | Generates out-of-band NPC private thoughts and a persistent hidden-intentions ledger that drives on-screen actions without leaking secrets to the narrator |
 
 All five modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output.
@@ -147,17 +147,35 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 
 ### 🗺️ Story Planner
 
-Acts as a "Story Architect" that brainstorms a menu of future plot possibilities (arcs, chapters, episodes) from your story so far. The plan is injected into the prompt as inspiration the AI can draw on — branching possibilities, not a fixed roadmap.
+Acts as a "Story Architect" that brainstorms a menu of future plot possibilities across five timeline sections. Each arc is an independently editable card with its own status, section, and pin toggle. The plan is injected into the prompt as inspiration the AI can draw on — branching possibilities, not a fixed roadmap.
 
-- **LLM-Generated Plot Menu** — Produces a list of 10+ medium-to-long-term plot developments grouped under "Upcoming Arcs", each framed as a future arc/chapter/episode rather than a time frame
+- **Five Timeline Sections** — Arcs are organized by when the story can use them:
+  - **Immediate Hooks** — Usable right now, could surface in the very next scene
+  - **Emerging Arcs** — Threads already in motion, developing over the next few scenes
+  - **Horizon Arcs** — Major structural shifts the story must build toward
+  - **Character Journeys** — Per-character growth, change, or reckoning arcs
+  - **Unresolved Threads** — Setup already planted that still owes a payoff
+- **Arc-as-Card UI** — Each arc is an independent card with its own title, body, section dropdown, and status selector — not one flat textarea
+- **Arc Status Lifecycle** — Mark arcs as **Active** (live), **Resolved** (paid off), or **Dropped** (abandoned). Dropped arcs are excluded from injection. Resolved arcs are greyed out and kept for reference but never re-suggested
+- **Arc Pinning** — Pin important arcs to keep them through regeneration (unpinned arcs may be replaced when the plan refreshes)
+- **Selective Injection Modes** — Choose which arcs reach the AI:
+  - **All** — Every non-dropped arc
+  - **Pinned** — Only arcs you've pinned
+  - **Active** — Only arcs still marked active (excludes resolved)
+- **Direction Hint** — A free-text field to steer the next generation (e.g. "more political intrigue," "slow down on romance," "I want a villain arc"). Saved per chat
+- **Configurable Arc Count** — Set how many arcs to request per generation (3–30), from a tight focus to a sprawling menu
+- **Continuity-Aware Regeneration** — The previous plan is fed back so still-relevant arcs carry forward and evolve rather than being discarded. Pinned arcs survive generation; resolved arcs suppress re-suggestion
+- **Injection Preview** — Preview exactly what will be injected, showing the current injection mode, arc count, and token estimate
+- **Manual Arc Addition** — Add arcs directly to any section via the `+ Add Arc` button, independent of LLM generation
+- **LLM-Generated Plan** — Produces structured arcs across all five sections, parsed back into cards from the markdown output
 - **User-Safe Prompting** — The system prompt strictly forbids the model from writing actions, dialogue, thoughts, or reactions for `{{user}}`
-- **Manual Editing** — Edit the generated plan freely in the text editor; your edits are injected as-is
 - **Auto-Generate** — Automatically refresh the plan every N messages (configurable interval, counted on AI replies)
 - **Injection Toggle** — Independently control whether the plan reaches the AI (toggle injection off without deleting the plan)
-- **Custom Prompts** — Override the default system and user prompts; the user prompt supports a `{{chatHistory}}` token
-- **Token & Word Statistics** — Live char/word/token estimates under the editor and in the toolbar
+- **Custom Prompts** — Override the default system and user prompts; the user prompt supports tokens: `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, `{{previousPlan}}`, `{{directionHint}}`, `{{arcCount}}`
 - **Configurable Injection Depth** — Set how far from the bottom of the prompt the plan is injected
-- **Cross-Module Context** — Generation reads recent chat history to ground its suggestions
+- **Cross-Module Context** — Generation reads recent chat history, current World State, latest Chronicle entry, and the previous plan to ground its suggestions
+- **Legacy Migration** — Old single-blob plans are automatically parsed into arc cards on first read. The original text is preserved, so migration is recoverable
+- **History & Revert** — Snapshots are taken automatically before each generate/save/clear. Browse history, diff against current, and restore any snapshot
 
 ### 💭 Interiority
 
@@ -388,15 +406,26 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 ### Story Planner
 
 1. Open the **🗺️ Story Planner** tab
-2. Click **🎲 Generate Plan** to brainstorm a menu of future plot arcs from your story so far
-3. Review the generated plan in the editor — edit freely; your edits are injected as-is
-4. Click **💾 Save Plan** to persist edits to chat metadata (the editor also auto-saves on blur)
-5. Use **⏪ Revert** / **📋 History** to compare against and restore earlier plans (snapshots are taken automatically before each Generate, Save, or Clear)
-6. Toggle **🔌 Injection** to include the plan in the prompt as inspiration
-7. Toggle **🔄 Auto** to automatically regenerate the plan every N messages
-8. Expand **⚙️ Story Planner Settings** to override the API config, injection depth, auto-generate interval, or replace the default system/user prompts
+2. Click **🎲 Generate Plan** to brainstorm a menu of future plot arcs organized across five timeline sections
+3. Review the generated arcs — each appears as an independent card with its own title, body, section dropdown, and status selector
+4. **Manage individual arcs:**
+   - Use the **section dropdown** on any card to move an arc between sections (Immediate Hooks → Emerging Arcs → Horizon Arcs → Character Journeys → Unresolved Threads)
+   - Change the **status** of any arc: **Active** (live), **Resolved** (paid off), or **Dropped** (abandoned). Dropped arcs are excluded from injection; resolved arcs are greyed out for reference
+   - Click the **📌 Pin** icon to protect an arc — pinned arcs survive regeneration; unpinned arcs may be replaced
+   - Edit arc titles and bodies inline — changes save automatically
+5. **Add arcs manually** — Click the **+ Add Arc** button at the bottom of any section to create an arc without LLM generation
+6. Choose an **Injection Mode** from the toolbar:
+   - **All** — Every non-dropped arc reaches the AI
+   - **Pinned** — Only arcs you've pinned
+   - **Active** — Only arcs still marked active (excludes resolved)
+7. Use the **💬 Direction Hint** field to steer the next generation (e.g. "more political intrigue," "slow down on romance") — saved per chat
+8. Click **💾 Save** to persist the current plan to chat metadata (arcs also auto-save on change)
+9. Use **📋 History** to browse automatically-taken snapshots, diff against the current plan, and restore any previous version
+10. Toggle **🔌 Injection** to include the plan in the prompt as inspiration
+11. Toggle **🔄 Auto** to automatically regenerate the plan every N messages
+12. Expand **⚙️ Story Planner Settings** to configure arc count (3–30), injection depth, auto-generate interval, injection mode, or replace the system/user prompts
 
-Regeneration is continuity-aware: the previous plan is fed back so still-relevant arcs are carried forward and evolved rather than discarded. The user prompt supports the tokens `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, and `{{previousPlan}}` — each resolves to empty when that data isn't present, so the planner works whether or not you use the World State and Chronicle modules.
+Regeneration is continuity-aware: the previous plan is fed back so still-relevant arcs carry forward and evolve rather than discarded. Pinned arcs survive generation; resolved arcs are never re-suggested. The user prompt supports the tokens `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, `{{previousPlan}}`, `{{directionHint}}`, and `{{arcCount}}` — each resolves to empty when that data isn't present. Old single-blob plans are automatically migrated to arc cards on first read, with the original text preserved for recovery.
 
 ### Interiority
 
