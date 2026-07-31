@@ -17,13 +17,14 @@ import { syncSharedConnectionSettings, notify, getChat, getContextSafe } from '.
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
-    state, getPlanData, setPlanData, getPlanText,
+    state, getPlanData, setPlanData,
+    getArcs, serializeArcsToText,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
 } from './data.js';
-import { STORY_PLAN_INJECTION_HEADER, applyPlanInjection, getInjectedTokenCount } from './injection.js';
+import { applyPlanInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
-import { renderContent, wireEvents, refreshDisplay } from './render.js';
+import { renderContent, wireEvents, renderArcs } from './render.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -96,17 +97,13 @@ export async function onMessageReceived() {
                     console.log('[MWT:StoryPlanner] Deferred auto-generate aborted — chat changed during delay.');
                     return;
                 }
-                const text = await generatePlan(true);
-                if (text) {
-                    // Refresh the editor if the modal is open. Use refreshDisplay
-                    // (in-place text/label updates) instead of renderContent so
-                    // we don't destroy event listeners or collapse <details>.
-                    if (state.modal) {
-                        const editor = state.modal.querySelector('#sp-editor');
-                        if (editor) editor.value = text;
-                        refreshDisplay();
-                    }
-                    notify('Story Planner', 'Auto-generated a new story plan.', 'info');
+                const arcs = await generatePlan(true);
+                if (arcs) {
+                    // Refresh the arc list if the modal is open. renderArcs()
+                    // swaps only the #sp-arcs innerHTML, so the delegated
+                    // listeners and any open <details> elsewhere survive.
+                    if (state.modal) renderArcs();
+                    notify('Story Planner', `Auto-generated a new story plan (${arcs.length} arcs).`, 'info');
                 }
             } catch (err) {
                 console.warn('[MWT:StoryPlanner] Auto-generate failed:', err.message);
@@ -196,7 +193,16 @@ export function setInjectionEnabled(enabled) {
     applyPlanInjection();
 }
 
+/**
+ * Text for the `{{storyplan}}` macro.
+ *
+ * Deliberately NOT filtered by the injection mode: that selector governs the
+ * automatic injection, whereas the macro is the user placing the plan by hand.
+ * Dropped arcs are excluded regardless — dropping one means "stop showing me
+ * this". core/ui.js also uses this as the "does a plan exist" check that drives
+ * the floating button's state.
+ */
 export function getPlanTextForMacro() {
     if (!isInjectionEnabled()) return '';
-    return getPlanText();
+    return serializeArcsToText(getArcs().filter(a => a.status !== 'dropped'));
 }

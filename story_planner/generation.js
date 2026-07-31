@@ -13,7 +13,11 @@ import {
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
-import { state, setPlanData, getPlanText, pushPlanToHistory } from './data.js';
+import {
+    state, getArcs, setArcs, pushPlanToHistory,
+    parsePlanTextToArcs, serializeArcsToText,
+    getDirectionHint, getArcCount,
+} from './data.js';
 import { applyPlanInjection } from './injection.js';
 
 // ─── Message scan helper ─────────────────────────────────────────────────────
@@ -54,14 +58,14 @@ function buildUserPrompt(recentText, reminderReason = '') {
     // Continuity: feed the existing plan back so regeneration refines it instead
     // of starting from a blank menu. Templates that omit {{previousPlan}} simply
     // don't get the block (the token resolves to empty).
-    // Prefer unsaved textarea content over persisted text so the model refines
-    // what the user actually sees in the editor, not a stale saved snapshot.
-    const editorEl = state.modal?.querySelector('#sp-editor');
-    const editorText = editorEl?.value?.trim() ?? '';
-    const persistedPlan = getPlanText().trim();
-    const prevPlan = editorText || persistedPlan;
+    //
+    // Dropped arcs are withheld entirely — the user rejecting an idea should
+    // mean it stops coming back. Resolved/pinned arcs ARE sent, annotated, so
+    // the model knows what has already paid off and what the user cares about.
+    const kept = getArcs().filter(a => a.status !== 'dropped');
+    const prevPlan = serializeArcsToText(kept, { annotateStatus: true }).trim();
     const prevBlock = prevPlan
-        ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine it against what has since happened — do not simply repeat it.]\n${prevPlan}\n</previous_plan>`
+        ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Arcs marked RESOLVED have already paid off — do not resurface them. Arcs marked PINNED matter to the user — keep them unless the story has made them impossible. Refine this against what has since happened — do not simply repeat it.]\n${prevPlan}\n</previous_plan>`
         : '';
 
     // Cross-module grounding. Both getters return '' when the user isn't using
@@ -77,14 +81,23 @@ function buildUserPrompt(recentText, reminderReason = '') {
         ? `<recent_chronicle>\n[The most recent chronicle summary of events so far. Use it for longer-range continuity than the recent messages alone provide.]\n${chron}\n</recent_chronicle>`
         : '';
 
+    // User steering — free-text nudge ("more political intrigue", "ease off the
+    // romance"). Omitted entirely when blank.
+    const hint = getDirectionHint().trim();
+    const hintBlock = hint
+        ? `<direction>\n[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n${hint}\n</direction>`
+        : '';
+
     let out = template
         .replace(/\{\{chatHistory\}\}/g, recentText || 'No recent messages.')
         .replace(/\{\{previousPlan\}\}/g, prevBlock)
         .replace(/\{\{worldState\}\}/g, wsBlock)
-        .replace(/\{\{lastChronicle\}\}/g, chronBlock);
+        .replace(/\{\{lastChronicle\}\}/g, chronBlock)
+        .replace(/\{\{directionHint\}\}/g, hintBlock)
+        .replace(/\{\{arcCount\}\}/g, String(getArcCount()));
 
     if (reminderReason) {
-        out += `\n\n[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (a bulleted list of future arcs). No narration, apology, or preamble.]`;
+        out += `\n\n[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;
     }
     return out;
 }
@@ -132,7 +145,7 @@ function validateOutput(text, expectHeader = true) {
  * Generate a fresh story plan via the LLM and store it in chat metadata.
  *
  * @param {boolean} [isAuto=false] — true when triggered automatically
- * @returns {Promise<string|null>} the plan text, or null if skipped/failed
+ * @returns {Promise<object[]|null>} the new arc list, or null if skipped/failed
  */
 export async function generatePlan(isAuto = false) {
     if (state.isGenerating) {
@@ -199,30 +212,28 @@ export async function generatePlan(isAuto = false) {
             return null;
         }
 
-        // Snapshot the plan we're about to overwrite so a regeneration is
-        // recoverable via History/Revert. IMPORTANT: also capture unsaved
-        // textarea edits — the user may have typed in the editor without
-        // clicking "Save". Previously only the *persisted* text was snapshotted,
-        // so unsaved edits were silently destroyed and unrecoverable.
-        const editorEl = state.modal?.querySelector('#sp-editor');
-        const editorText = editorEl?.value ?? '';
-        const persistedText = getPlanText();
-        // Snapshot whichever is newer/different — if the editor has unsaved
-        // changes, those represent the user's latest intent.
-        const textToSnapshot = (editorText && editorText.trim() && editorText !== persistedText)
-            ? editorText
-            : persistedText;
-        if (textToSnapshot?.trim()) pushPlanToHistory(textToSnapshot);
-        // Persist unsaved editor text before overwriting so the "previous plan"
-        // in metadata is consistent with what the user saw.
-        if (editorText && editorText.trim() && editorText !== persistedText) {
-            setPlanData({ text: editorText });
+        const parsed = parsePlanTextToArcs(text);
+        if (parsed.length === 0) {
+            // Validation passed (bullets were present) but nothing survived the
+            // parse — bail rather than wiping a good plan with an empty one.
+            throw new Error('Could not parse any arcs out of the model response.');
         }
 
-        setPlanData({ text });
+        // Snapshot the plan we're about to replace so a regeneration is
+        // recoverable via History/Revert.
+        const previous = getArcs();
+        if (previous.length) pushPlanToHistory(previous);
+
+        // Carry pinned arcs forward. A pin is the user saying "keep this" — a
+        // regeneration silently dropping it would make the pin meaningless.
+        // Dropped arcs stay dropped; everything else is replaced by the new plan.
+        const pinnedCarry = previous.filter(a => a.pinned && a.status === 'active');
+        const newArcs = [...pinnedCarry, ...parsed];
+
+        setArcs(newArcs);
         applyPlanInjection();
-        console.log(`[MWT:StoryPlanner] Plan generated (${text.length} chars)`);
-        return text;
+        console.log(`[MWT:StoryPlanner] Plan generated (${parsed.length} arcs parsed, ${pinnedCarry.length} pinned carried forward)`);
+        return newArcs;
     } catch (err) {
         console.error('[MWT:StoryPlanner] Generation failed:', err);
         if (!isAuto) notify('Story Planner', `Generation failed: ${err.message}`, 'error');
