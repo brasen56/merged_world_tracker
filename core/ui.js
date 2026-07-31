@@ -303,14 +303,17 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             // Re-clamp a restored position against the current viewport. Covers
             // a saved position that's now off-screen because the window/screen
             // shrank since it was saved (e.g. resize, rotation, different device).
+            //
+            // IMPORTANT: this is a *visual-only* clamp — we never overwrite the
+            // saved position.  Otherwise a temporarily shrunken viewport (e.g.
+            // DevTools console opened) would permanently destroy the user's
+            // intended position, stranding buttons mid-screen when the viewport
+            // returns to full size.  See the matching logic in the resize handler
+            // below.  Only an explicit drag updates the saved position.
             if (saved) {
-                const rect = btn.getBoundingClientRect();
-                const clamped = clampFloatPosition(rect.left, rect.top, rect.width, rect.height);
-                if (clamped.left !== rect.left || clamped.top !== rect.top) {
-                    btn.style.left = clamped.left + 'px';
-                    btn.style.top = clamped.top + 'px';
-                    saveFloatPosition(cfg.id, clamped.left, clamped.top);
-                }
+                const clamped = clampFloatPosition(saved.left, saved.top, btn.offsetWidth, btn.offsetHeight);
+                btn.style.left = clamped.left + 'px';
+                btn.style.top = clamped.top + 'px';
             }
 
             // Click to open modal on that tab
@@ -400,17 +403,29 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
 
         applyButtonVisibility();
 
+        // Re-clamp on viewport resize.  Visual-only — NEVER overwrites saved
+        // positions.  We always re-derive the on-screen position from the
+        // user's *saved* (intended) position and clamp that against the current
+        // viewport.  This is critical for the DevTools-console scenario:
+        //
+        //   • Console opens  → viewport shrinks → saved pos clamps inward.
+        //   • Console closes → viewport grows  → saved pos is re-clamped to a
+        //     larger area, so the button springs back to where the user put it.
+        //
+        // If we instead read the live DOM rect (which may already be clamped
+        // from a previous shrink) and persisted it, the original position would
+        // be lost on the first shrink — exactly the "stranded mid-screen" bug.
+        // Only an explicit drag (pointerup handler above) updates the saved pos.
         window.addEventListener('resize', () => {
+            const positions = loadFloatPositions();
             FLOAT_BUTTONS.forEach((cfg) => {
                 const btn = document.getElementById(cfg.id);
                 if (!btn || !btn.style.left) return; // not dragged, uses right/bottom
-                const rect = btn.getBoundingClientRect();
-                const clamped = clampFloatPosition(rect.left, rect.top, rect.width, rect.height);
-                if (clamped.left !== rect.left || clamped.top !== rect.top) {
-                    btn.style.left = clamped.left + 'px';
-                    btn.style.top = clamped.top + 'px';
-                    saveFloatPosition(cfg.id, clamped.left, clamped.top);
-                }
+                const saved = positions[cfg.id];
+                if (!saved) return;
+                const clamped = clampFloatPosition(saved.left, saved.top, btn.offsetWidth, btn.offsetHeight);
+                btn.style.left = clamped.left + 'px';
+                btn.style.top = clamped.top + 'px';
             });
         });
     }
