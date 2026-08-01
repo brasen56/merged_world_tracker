@@ -28,6 +28,7 @@ ABSOLUTE RULES:
 - Focus on major plot shifts, new character introductions, and escalating conflicts.
 - You are STRICTLY FORBIDDEN from writing dialogue, actions, thoughts, or emotional reactions for {{user}}. Never describe what {{user}} does, feels, or says.
 - Do not predict or suggest what {{user}} should do next.
+- If you are shown a previous plan, an arc's name is its identifier: reproduce the name of any arc you carry forward EXACTLY as written, and never copy a [BRACKETED] annotation into a name. Renaming an arc loses its tracked progress and duplicates it.
 - Be punchy and plot-focused.
 
 FORMAT:

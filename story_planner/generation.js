@@ -65,10 +65,13 @@ function buildUserPrompt(recentText, reminderReason = '') {
     const kept = getArcs().filter(a => a.status !== 'dropped');
     const prevPlan = serializeArcsToText(kept, { annotateStatus: true, beats: 'all' }).trim();
     const prevBlock = prevPlan
-        ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine this against what has since happened — do not simply repeat it.\n`
-          + `Keep the exact arc NAME of any arc you carry forward — the name is how progress on it is tracked, and renaming it loses that progress.\n`
-          + `Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress. Arcs marked SETUP COMPLETE are ready to happen — do not add more setup to them.\n`
-          + `Arcs marked RESOLVED have already paid off — do not resurface them. Arcs marked PINNED matter to the user — keep them unless the story has made them impossible.]\n${prevPlan}\n</previous_plan>`
+        ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine this against what has since happened — do not simply repeat it.\n\n`
+          + `NAMES ARE IDENTIFIERS. An arc's name is how its progress is tracked between generations. If you carry an arc forward, reproduce its name EXACTLY, character for character — do not rename, reword, shorten or otherwise improve it. A renamed arc is read as a brand-new one: its progress is lost and the original is left behind beside it as a duplicate. Only give a name you have not been shown to an arc that is genuinely new.\n\n`
+          + `The [BRACKETED] tags are annotations from the tracker, not part of any name — never copy one into a name you write:\n`
+          + `- [PINNED] — matters to the user; keep it unless the story has made it impossible.\n`
+          + `- [RESOLVED] — already paid off; do not resurface it.\n`
+          + `- [SETUP COMPLETE] — ready to happen; do not add more setup to it.\n`
+          + `- Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress.]\n${prevPlan}\n</previous_plan>`
         : '';
 
     // Cross-module grounding. Both getters return '' when the user isn't using

@@ -261,6 +261,29 @@ function cleanBulletContent(raw) {
         .trim();
 }
 
+/**
+ * Status flags `serializeArcsToText` appends to a title under `annotateStatus`.
+ * Built from the same sources the serializer uses so the two can't drift.
+ */
+const ARC_FLAG_WORDS = [...ARC_STATUSES.map(s => s.toUpperCase()), 'PINNED', 'SETUP COMPLETE'];
+const ARC_FLAG_ALT = ARC_FLAG_WORDS.join('|');
+const ARC_FLAG_RE = new RegExp(
+    `\\s*\\[(?:${ARC_FLAG_ALT})(?:\\s*,\\s*(?:${ARC_FLAG_ALT}))*\\]\\s*$`, 'i',
+);
+
+/**
+ * Strip a trailing "[PINNED]" / "[RESOLVED, SETUP COMPLETE]" off a parsed title.
+ *
+ * The annotated plan is what regeneration hands the model, so a model that
+ * echoes a title back hands the flag back with it. Left in, the flag becomes
+ * part of the stored title — and since titles are the merge key, the arc no
+ * longer matches the one it came from and gets duplicated alongside it.
+ * Symmetric to the [PLANTED]/[CURRENT] strip in {@link cleanBeatContent}.
+ */
+function stripArcFlags(title) {
+    return String(title).replace(ARC_FLAG_RE, '').trim();
+}
+
 /** Strip the leading marker and any "NOW:"/"NEXT:" label off a beat line. */
 function cleanBeatContent(raw) {
     return String(raw)
@@ -347,7 +370,7 @@ export function parsePlanTextToArcs(text) {
             const content = cleanBulletContent(bullet[1]);
             if (!content) { last = null; continue; }
             const { title, body } = splitTitleBody(content);
-            last = makeArc({ title, body, section });
+            last = makeArc({ title: stripArcFlags(title), body, section });
             arcs.push(last);
             continue;
         }
