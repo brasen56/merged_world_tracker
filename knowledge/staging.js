@@ -25,6 +25,7 @@ import {
     loadEntryContent, getHistory,
 } from './lorebook.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
+import { isStoreEntry } from './store.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
 
@@ -311,6 +312,8 @@ export async function importFromLorebooks() {
             const playerSet = getPlayerNames();
 
             for (const [uidStr, entry] of Object.entries(ktWi.entries)) {
+                // The module's own bookkeeping entry is not an NPC.
+                if (isStoreEntry(entry)) continue;
                 const name = String(entry.comment || '').trim();
                 if (!name) continue;
                 if (playerSet.has(name.toLowerCase())) continue;

@@ -15,7 +15,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetCoreStubs, setFakeContextExtras, getFakeMeta } from './stubs/core.js';
 import { state } from '../knowledge/state.js';
 import {
-    STORE_SENTINEL,
+    STORE_SENTINEL, STORE_COMMENT, isStoreEntry,
     hydrateBook, isHydrated, assertHydrated,
     readField, writeField,
     applyStoreToWorldInfo, flushBook, hydrateCurrentBooks,
@@ -69,7 +69,7 @@ afterEach(() => {
 function storeEntryOf(bookName) {
     const wi = wiFake.books.get(bookName);
     if (!wi) return null;
-    return Object.values(wi.entries).find(e => e.comment === STORE_SENTINEL) || null;
+    return Object.values(wi.entries).find(e => isStoreEntry(e)) || null;
 }
 
 // ─── Hydration and migration ────────────────────────────────────────────────
@@ -158,7 +158,7 @@ describe('store entry shape', () => {
         // Simulate a user (or a lossy import) turning this into a live entry
         // by every available route at once.
         const wi = await wiFake.loadWorldInfo('Book A');
-        const entry = Object.values(wi.entries).find(e => e.comment === STORE_SENTINEL);
+        const entry = Object.values(wi.entries).find(e => isStoreEntry(e));
         entry.key = ['Mara'];
         entry.keysecondary = ['Vance'];
         entry.constant = true;
@@ -189,6 +189,37 @@ describe('store entry shape', () => {
         expect(data.registry).toEqual({ Mara: { uid: 0 } });
     });
 
+    test('new entries carry the descriptive title, sentinel first', async () => {
+        await hydrateBook('Book A', { registry: { Mara: { uid: 0 } } });
+        const entry = storeEntryOf('Book A');
+        expect(entry.comment).toBe(STORE_COMMENT);
+        expect(entry.comment.startsWith(STORE_SENTINEL)).toBe(true);
+    });
+
+    test('a legacy bare-sentinel entry is found, not duplicated, and retitled on write', async () => {
+        // Books written before the descriptive title carry the bare sentinel.
+        wiFake.books.set('Book A', {
+            entries: {
+                0: {
+                    uid: 0, comment: STORE_SENTINEL, key: [], disable: true,
+                    content: JSON.stringify({ version: 1, registry: { Mara: { uid: 1 } } }),
+                },
+            },
+        });
+
+        const data = await hydrateBook('Book A', {});
+        expect(data.registry).toEqual({ Mara: { uid: 1 } });
+
+        writeField('Book A', 'registry', { Mara: { uid: 1 }, Bren: { uid: 2 } });
+        await flushBook('Book A');
+
+        const saved = wiFake.books.get('Book A');
+        const stores = Object.values(saved.entries).filter(e => isStoreEntry(e));
+        expect(stores).toHaveLength(1);
+        expect(stores[0].uid).toBe(0);
+        expect(stores[0].comment).toBe(STORE_COMMENT);
+    });
+
     test('does not collide with existing entry UIDs', async () => {
         wiFake.books.set('Book A', {
             entries: {
@@ -202,6 +233,65 @@ describe('store entry shape', () => {
         expect(entry.uid).toBe(2);
         // The pre-existing entries survive.
         expect(wiFake.books.get('Book A').entries[0].comment).toBe('Mara');
+    });
+});
+
+// ─── isStoreEntry ───────────────────────────────────────────────────────────
+
+describe('isStoreEntry', () => {
+    test('matches the bare sentinel and any descriptive title after it', () => {
+        expect(isStoreEntry({ comment: STORE_SENTINEL })).toBe(true);
+        expect(isStoreEntry({ comment: STORE_COMMENT })).toBe(true);
+        expect(isStoreEntry({ comment: `${STORE_SENTINEL} anything else` })).toBe(true);
+    });
+
+    test('rejects NPC entries and malformed comments', () => {
+        expect(isStoreEntry({ comment: 'Mara' })).toBe(false);
+        expect(isStoreEntry({ comment: '' })).toBe(false);
+        expect(isStoreEntry({ comment: null })).toBe(false);
+        expect(isStoreEntry({})).toBe(false);
+        expect(isStoreEntry(null)).toBe(false);
+    });
+});
+
+// ─── Ghost scrub ────────────────────────────────────────────────────────────
+
+describe('store-ghost scrub', () => {
+    test('a "[MWT:store]" NPC left by a pre-fix import is removed on hydrate', async () => {
+        // importFromLorebooks used to register the store entry itself as an NPC.
+        wiFake.books.set('Book A', {
+            entries: {
+                0: {
+                    uid: 0, comment: STORE_SENTINEL, key: [], disable: true,
+                    content: JSON.stringify({
+                        version: 1,
+                        registry: {
+                            Mara: { uid: 1 },
+                            [STORE_SENTINEL]: { uid: 0, keywords: [STORE_SENTINEL] },
+                        },
+                    }),
+                },
+            },
+        });
+
+        const data = await hydrateBook('Book A', {});
+        expect(data.registry).toEqual({ Mara: { uid: 1 } });
+
+        // The scrub persists, so the ghost cannot come back on the next load.
+        await flushBook('Book A');
+        const saved = JSON.parse(storeEntryOf('Book A').content);
+        expect(saved.registry).toEqual({ Mara: { uid: 1 } });
+    });
+
+    test('a ghost in a legacy chat_metadata seed is not adopted', async () => {
+        const seed = {
+            registry: {
+                Mara: { uid: 0 },
+                [STORE_SENTINEL]: { uid: 5, keywords: [STORE_SENTINEL] },
+            },
+        };
+        const data = await hydrateBook('Book A', seed);
+        expect(data.registry).toEqual({ Mara: { uid: 0 } });
     });
 });
 
@@ -255,7 +345,7 @@ describe('applyStoreToWorldInfo', () => {
         const wi = { entries: { 0: { uid: 0, comment: 'Mara', key: ['Mara'], content: 'x' } } };
 
         expect(applyStoreToWorldInfo('Book A', wi)).toBe(true);
-        const entry = Object.values(wi.entries).find(e => e.comment === STORE_SENTINEL);
+        const entry = Object.values(wi.entries).find(e => isStoreEntry(e));
         expect(JSON.parse(entry.content).registry).toEqual({ Mara: { uid: 0 } });
     });
 
@@ -282,8 +372,8 @@ describe('applyStoreToWorldInfo', () => {
         const saved = wiFake.books.get('Book A');
         const names = Object.values(saved.entries).map(e => e.comment);
         expect(names).toHaveLength(2);
-        expect(names).toEqual(expect.arrayContaining([STORE_SENTINEL, 'Mara']));
-        const store = Object.values(saved.entries).find(e => e.comment === STORE_SENTINEL);
+        expect(names).toEqual(expect.arrayContaining([STORE_COMMENT, 'Mara']));
+        const store = Object.values(saved.entries).find(e => isStoreEntry(e));
         expect(JSON.parse(store.content).registry).toEqual({ Mara: { uid: 0 } });
     });
 });
@@ -338,7 +428,7 @@ describe('writeToLorebook stale-uid guard', () => {
         expect(result.uid).not.toBe(0);
 
         const saved = wiFake.books.get('Knowledge Tracker');
-        const store = Object.values(saved.entries).find(e => e.comment === STORE_SENTINEL);
+        const store = Object.values(saved.entries).find(e => isStoreEntry(e));
         const mara = Object.values(saved.entries).find(e => e.comment === 'Mara');
 
         // The store survived intact, and did not acquire keywords.

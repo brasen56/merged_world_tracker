@@ -21,6 +21,14 @@
  * This is the same "default OFF by construction, not by toggle" approach the
  * NPC Profiles lorebook already uses.
  *
+ * ── The entry is visible on purpose ─────────────────────────────────────────
+ * The store could hide as an extra top-level key in the book's JSON, invisible
+ * to the World Info editor. Rejected twice over: format converters (card-book
+ * round-trips, lorebook imports) rebuild books from `entries` and would
+ * silently strip it — and losing the store IS the duplicate-entry bug. And
+ * hidden data in a user's files is a trust problem, not a favour. A plainly
+ * titled entry the user can open, read, and delete is the deliberate choice.
+ *
  * ── Why there is a synchronous cache ────────────────────────────────────────
  * `loadWorldInfo` is async, but `getRegistry()` and friends are synchronous and
  * called from render paths all over the module. Rather than convert dozens of
@@ -41,8 +49,33 @@ import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME,
 } from './state.js';
 
-/** Marks the entry that holds this book's store. */
+/** Marks the entry that holds this book's store. Matched as a PREFIX — see isStoreEntry. */
 export const STORE_SENTINEL = '[MWT:store]';
+
+/**
+ * The full title written on the store entry. The sentinel comes first so the
+ * prefix match keeps working; the rest answers the question a user actually has
+ * when they spot this entry in the World Info editor. Nothing about this store
+ * is meant to be hidden — a plainly-labelled entry the user can open and read
+ * is the point.
+ */
+export const STORE_COMMENT =
+    `${STORE_SENTINEL} — extension bookkeeping (0 tokens, never sent to the AI)`;
+
+/**
+ * Is this world-info entry the store entry?
+ *
+ * Prefix match, not equality: entries written before the descriptive title was
+ * added carry the bare sentinel, and the wording after the sentinel may change
+ * again. Any scan that walks a book's entries (imports, audits) must use this
+ * to recognise and skip the store.
+ *
+ * @param {object} entry — a world-info entry
+ * @returns {boolean}
+ */
+export function isStoreEntry(entry) {
+    return typeof entry?.comment === 'string' && entry.comment.startsWith(STORE_SENTINEL);
+}
 
 /** Bumped only on a breaking change to the stored shape. */
 export const STORE_VERSION = 1;
@@ -90,9 +123,30 @@ function findStoreEntry(wi) {
     const entries = wi?.entries;
     if (!entries) return null;
     for (const key of Object.keys(entries)) {
-        if (entries[key]?.comment === STORE_SENTINEL) return entries[key];
+        if (isStoreEntry(entries[key])) return entries[key];
     }
     return null;
+}
+
+/**
+ * Remove registry entries whose NAME is the store sentinel — ghosts left by
+ * "Import from Lorebook" runs that predate isStoreEntry() and mistook the
+ * store entry itself for an NPC.
+ *
+ * @param {object} data — store data, mutated in place
+ * @returns {boolean} whether anything was removed
+ */
+function scrubStoreGhosts(data) {
+    const reg = data?.registry;
+    if (!reg || typeof reg !== 'object') return false;
+    let removed = false;
+    for (const name of Object.keys(reg)) {
+        if (name.startsWith(STORE_SENTINEL)) {
+            delete reg[name];
+            removed = true;
+        }
+    }
+    return removed;
 }
 
 // ─── Hydration ──────────────────────────────────────────────────────────────
@@ -140,6 +194,11 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
             if (typeof s.data.version !== 'number') s.data.version = STORE_VERSION;
             s.hydrated = true;
             s.dirty = false;
+            if (scrubStoreGhosts(s.data)) {
+                console.log(`[MWT:Knowledge] store: removed a "${STORE_SENTINEL}" ghost NPC from "${bookName}".`);
+                s.dirty = true;
+                scheduleFlush(bookName);
+            }
             return s.data;
         } catch (err) {
             // A corrupt store is the one case where we must NOT silently fall
@@ -157,6 +216,7 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
     // No store entry yet. Adopt the legacy chat_metadata values if any were
     // supplied, then persist so the migration is durable.
     const seeded = { ...blankStore(), ...(seed || {}) };
+    scrubStoreGhosts(seeded);
     s.data = seeded;
     s.hydrated = true;
     s.dirty = false;
@@ -278,8 +338,11 @@ export function applyStoreToWorldInfo(bookName, wi) {
     // entry in the World Info editor, and stripped again on read so it never
     // accumulates in the cached data.
     const content = JSON.stringify({
-        _note: 'Bookkeeping for the MWT Knowledge Tracker. Not prompt content. '
-             + 'Safe to delete only if you also accept losing this book\'s NPC registry.',
+        _note: 'MWT bookkeeping for this lorebook (NPC registry, relationships, state '
+             + 'tracker registry). Never sent to the AI: it has no keywords and is '
+             + 'disabled, non-constant, and non-vectorized — and MWT re-asserts those '
+             + 'flags on every save. Deleting this entry resets the registry for this '
+             + 'book, which can cause duplicate entries on the next scan.',
         ...s.data,
     });
     let entry = findStoreEntry(wi);
@@ -293,7 +356,7 @@ export function applyStoreToWorldInfo(bookName, wi) {
             // so it is structurally impossible for it to reach the prompt.
             key: [],
             keysecondary: [],
-            comment: STORE_SENTINEL,
+            comment: STORE_COMMENT,
             content,
             // Belt and braces on top of the empty keyword list.
             enabled: false, disable: true, constant: false, selective: false,
@@ -323,6 +386,10 @@ export function applyStoreToWorldInfo(bookName, wi) {
         entry.vectorized = false;
         entry.disable = true;
         entry.enabled = false;
+        // Keep the title canonical: upgrades entries written before the
+        // descriptive title existed, and undoes partial edits. The sentinel
+        // prefix is this entry's identity, so it must not drift.
+        entry.comment = STORE_COMMENT;
     }
 
     s.dirty = false;

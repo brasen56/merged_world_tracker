@@ -37,6 +37,7 @@ Id like to take a moment and thank dptgreg for inpsiration and use of his Freaky
 - [API Compatibility](#api-compatibility)
 - [Theme Support](#theme-support)
 - [Data Storage](#data-storage)
+  - [The \[MWT:store\] entry](#the-mwtstore-entry--what-it-is-and-why-its-there)
 - [License](#license)
 
 ---
@@ -391,6 +392,8 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 7. The **State Trackers** tab shows registered state tracker entries that can be updated via LLM
 8. Enable **Auto-Trigger** in module settings to run state tracker scans automatically every N messages (with a cooldown to avoid re-updating recently changed trackers)
 
+> **Seeing a `[MWT:store]` entry in your lorebook?** That's MWT's registry for that book — a disabled, keyword-less entry that costs 0 tokens and is never sent to the AI. Full explanation in [Data Storage](#the-mwtstore-entry--what-it-is-and-why-its-there).
+
 **NPC Growth Profile:**
 
 1. Open the **🧠 Knowledge** tab and navigate to the **Growth** sub-tab for any registered major NPC
@@ -560,12 +563,34 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 
 ## Data Storage
 
-- **Chat data** (world state text, chronicle entries, NPC registry, state tracker registry, relationships, growth evidence store, story plan text, interiority ledger + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
+- **Chat data** (world state text, chronicle entries, growth evidence store, story plan text, interiority ledger + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
+- **Lorebook bookkeeping** (NPC registry, state tracker registry, relationships) lives inside the Knowledge Tracker and State Tracker lorebooks themselves, in a single disabled entry titled `[MWT:store]` — see [the section below](#the-mwtstore-entry--what-it-is-and-why-its-there) for exactly what it is and why it can never reach your prompt
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID
 - **Floating button positions** are stored in `localStorage`
 - **NPC Growth Profile evidence** uses a two-tier append-only store in chat metadata (`raw[]` → `consolidated[]` → `archived[]`), with per-NPC watermarks for continuous incremental capture and ILS backfill. Profile text is saved to a separate "NPC Profiles" lorebook with `profileUid` cross-references in the NPC registry
-- All data is per-chat — switching chats loads that chat's world state, chronicle, NPC registry, growth evidence, story plan, and interiority ledger
+- Chat data is per-chat — switching chats loads that chat's world state, chronicle, growth evidence, story plan, and interiority ledger. The Knowledge Tracker's lorebooks follow its **Scope** setting (global / per-character / per-chat), and each book carries its own registry so books never cross-contaminate
+
+### The `[MWT:store]` entry — what it is and why it's there
+
+If you open a Knowledge Tracker or State Tracker lorebook in the World Info editor, you'll find one entry titled:
+
+> **[MWT:store] — extension bookkeeping (0 tokens, never sent to the AI)**
+
+**What it is.** MWT's bookkeeping for that specific book: the registry that maps each NPC / state tracker name to its lorebook entry, plus relationship data. It's plain, readable JSON — open it and see for yourself. It never contains your API keys, your settings, or your chat log.
+
+**Why it lives in the lorebook.** The registry has to live and die with the book it describes. Older MWT versions kept it in chat metadata, and the two could drift out of sync (a save flushing to one file but not the other), which produced duplicate NPC entries. Keeping it inside the book means the registry and the entries it points at are always written together in one file — and an exported book stays self-contained. It's a visible, plainly labeled entry *on purpose*: you should never have to wonder what an extension has hidden in your files.
+
+**It never reaches your prompt.** Four independent locks, and it costs 0 tokens:
+
+1. **No keywords** — SillyTavern's keyword matching can't ever select it
+2. **Disabled** — the World Info scan skips disabled entries entirely
+3. **Not constant, not vectorized** — the only two flags that bypass keyword matching are both off
+4. **Self-repairing** — MWT re-asserts all of the above every time it saves the book, so a lossy import or an accidental edit can't silently switch it live
+
+**If you delete it.** That book's registry resets: MWT no longer knows which entry belongs to which NPC, and the next scan may create duplicates. Delete it only if you're deliberately resetting the book.
+
+**If you share or export a book.** The store travels with the book by design — that's what keeps a shared book working out of the box. What it carries is the same kind of chat-derived information as the visible NPC entries (names, keywords, relationship summaries) — never credentials or chat logs. If you'd rather share a clean book, just delete the `[MWT:store]` entry from the exported copy; the recipient's MWT will simply rebuild a fresh registry.
 
 ---
 
