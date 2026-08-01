@@ -80,6 +80,44 @@
     --z-kt-notif: 100010;
 }
 
+/* ─── Mobile fixed-positioning fix (SillyTavern interaction) ─────────────────
+   Every MWT overlay is position:fixed and anchored with `inset: 0` or a
+   `bottom:` offset.  Both resolve against the *containing block*, and in
+   SillyTavern that containing block is <html>, not the viewport, because
+   ST's style.css carries a Chrome flicker workaround:
+
+       html { -webkit-transform: translateZ(0); -webkit-perspective: 1000; }
+
+   A transform on an element makes it the containing block for all
+   position:fixed descendants.  On desktop that is harmless — <html> is
+   viewport-height because <body> is in normal flow.  But ST's
+   css/mobile-styles.css does this at <= 1000px wide:
+
+       body { touch-action: none; overflow: hidden; position: fixed; }
+
+   A fixed <body> is out of flow, so <html> has no in-flow content left and
+   its auto height computes to 0.  Every MWT fixed element then resolves
+   against a zero-height box: `inset: 0` collapses the modal to just its
+   padding (a thin bar across the top of the screen, over ST's menu), and
+   `bottom: 70px` puts the floating buttons ~114px *above* the top edge,
+   off-screen.  Dragged buttons survived because a drag switches them to
+   left/top, which is measured from y=0 and so still lands correctly.
+
+   Giving the root a real height restores the intended containing block.
+   `100%` resolves against the initial containing block (the viewport), so
+   this is a no-op on desktop and on any browser where ST has not made
+   <body> fixed.  Verified against ST 1.18.0: #top-settings-holder, #sheld,
+   .drawer-content, <body> and scrollHeight are all unchanged by this rule.
+
+   Depends on this rule: .mwt-modal, .mwt-float-btn (default positions),
+   .mwt-button-bar, .kt-view-modal-overlay, .kt-history-backdrop,
+   #kt-history-modal / #kt-view-modal / #kt-create-modal,
+   #kt-notification-panel.  Remove it and all of them break on mobile. */
+
+html {
+    min-height: 100%;
+}
+
 /* ─── Global focus-visible (keyboard accessibility) ──────────────────────── */
 button:focus-visible,
 input:focus-visible,
