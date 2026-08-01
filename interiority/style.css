@@ -39,8 +39,19 @@
     gap: 6px;
 }
 
+/* The entry is [ npc → action → trigger ] on the left and [ since · turns ·
+   buttons ] on the right.  The meta block used to be flex-shrink:0, so on a
+   narrow container it held its full ~290px while the main block — flex-basis
+   0 — was crushed to its min-content width, i.e. the single longest word.
+   The action rendered one word per line and the row still overflowed
+   horizontally.  Wrapping here, plus a real flex-basis on the main block,
+   drops the meta to its own row instead: main gets the full width and the
+   meta right-aligns underneath via its margin-left:auto.  Above ~560px of
+   entry width both still fit on one row, so this is a no-op at desktop
+   widths — verified byte-identical box geometry at 1280. */
 .mwt-int-ledger-entry {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
@@ -56,7 +67,9 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    flex: 1;
+    /* basis, not 0: below this the meta wraps rather than crushing the text */
+    flex: 1 1 240px;
+    min-width: 0;
 }
 
 .mwt-int-ledger-npc {
@@ -81,8 +94,20 @@
 .mwt-int-ledger-meta {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     font-size: 11px;
+    /* Deliberately shrinkable — no flex-shrink:0 here.  That used to protect
+       the buttons, but it also pinned the block at its ~290px max-content
+       width, which still overflowed a ~320px screen even once it had a row to
+       itself.  The buttons are protected individually below instead, so this
+       block can narrow and let its own children wrap.
+       margin-left:auto keeps it right-aligned both inline and on its own
+       wrapped row (the parent's justify-content can't reach a wrapped line). */
+    margin-left: auto;
+}
+
+.mwt-int-ledger-meta > button {
     flex-shrink: 0;
 }
 
@@ -250,8 +275,11 @@
     gap: 6px;
 }
 
+/* Same shape as .mwt-int-ledger-entry (it reuses .mwt-int-ledger-meta), so it
+   needs the same wrap treatment — see the note there. */
 .mwt-int-inner-state-entry {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
@@ -268,7 +296,8 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    flex: 1;
+    flex: 1 1 240px;
+    min-width: 0;
 }
 
 .mwt-int-inner-state-npc {
