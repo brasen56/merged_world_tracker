@@ -383,6 +383,11 @@
     gap: 4px;
 }
 
+/* Same crush as the ledger rows, but in the chat rather than the modal: the
+   npc name, type pill and state pill are all flex-shrink:0, so on a ~335px
+   message they held 161px between them and left the thought text — the thing
+   being read — only 130px, four words wide.  Wrapping lets the text take a
+   full row of its own once the four don't fit; it stays inline when they do. */
 .mwt-int-msg-thought {
     padding: 6px 12px;
     background: rgba(138, 43, 226, 0.08);
@@ -391,6 +396,7 @@
     font-size: 12px;
     line-height: 1.4;
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     align-items: baseline;
     color: var(--mwt-text);
@@ -403,6 +409,10 @@
 }
 
 .mwt-int-msg-thought-text {
+    /* basis, not auto: below this the text claims its own row rather than
+       being squeezed between the name and the two pills */
+    flex: 1 1 200px;
+    min-width: 0;
     color: var(--mwt-text);
     opacity: 0.85;
 }

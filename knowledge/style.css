@@ -1713,6 +1713,30 @@
         flex: 1 1 120px;
     }
 
+    /* Relationship *list* rows — the add row above was already handled, this
+       one was not.  .kt-rel-from/-to carry min-width:100px, a floor that
+       flex-shrink cannot cross, and -type/-reverse/-notes are all nowrap, so
+       at 375px the row demanded ~381px of a 338px box: it overflowed by 56px
+       and squeezed .kt-rel-notes — the actual payload — to zero width, i.e.
+       invisible.  Drop the alignment floors and give the notes their own
+       wrapped row where they can use normal wrapping instead of an ellipsis
+       that has nothing left to ellipse. */
+    .kt-rel-row {
+        flex-wrap: wrap;
+    }
+
+    .kt-rel-from,
+    .kt-rel-to {
+        min-width: 0;
+    }
+
+    .kt-rel-notes {
+        flex-basis: 100%;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+
     /* Notification panel responsive */
     #kt-notification-panel {
         width: calc(100vw - 20px) !important;
