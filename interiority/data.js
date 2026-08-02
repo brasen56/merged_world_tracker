@@ -315,6 +315,29 @@ export function updateLedgerEntry(id, patch) {
     const entry = data.ledger.find(e => e.id === id);
     if (!entry) return null;
 
+    // Preserve the text this entry had BEFORE the user first edited it.
+    //
+    // hasDuplicateIntention matches action+trigger as exact strings, so
+    // correcting an entry is exactly what stops the engine recognising its own
+    // intention: the next generation re-proposes it from unchanged story
+    // context, the strings no longer match, and the original lands again as a
+    // brand-new entry beside the correction. Keeping the pre-edit text as a
+    // second dedup key closes that loop.
+    //
+    // Recorded ONCE, on the first edit. The engine only ever re-proposes what
+    // IT wrote, so a later edit must not overwrite the original with the user's
+    // own intermediate wording.
+    const rememberOriginal = (field) => {
+        const originalField = `original${field[0].toUpperCase()}${field.slice(1)}`;
+        if (entry[originalField] === undefined) entry[originalField] = entry[field];
+    };
+    if (patch.action !== undefined && String(patch.action).trim() !== entry.action) {
+        rememberOriginal('action');
+    }
+    if (patch.trigger !== undefined && String(patch.trigger).trim() !== entry.trigger) {
+        rememberOriginal('trigger');
+    }
+
     if (patch.npc !== undefined) entry.npc = String(patch.npc).trim() || entry.npc;
     if (patch.action !== undefined) entry.action = String(patch.action).trim();
     if (patch.trigger !== undefined) entry.trigger = String(patch.trigger).trim();
@@ -386,11 +409,24 @@ export function hasDuplicateIntention(npc, action, trigger) {
     const lower = String(npc).toLowerCase();
     const a = String(action).trim().toLowerCase();
     const t = String(trigger).trim().toLowerCase();
-    return getLedger().some(e =>
-        String(e.npc).toLowerCase() === lower &&
-        String(e.action).trim().toLowerCase() === a &&
-        String(e.trigger).trim().toLowerCase() === t
-    );
+    const norm = v => String(v ?? '').trim().toLowerCase();
+
+    // An entry matches on its CURRENT text or on the text it had before the
+    // user edited it (see updateLedgerEntry). Without the second key, correcting
+    // an auto-generated intention makes the engine re-add its own original
+    // alongside the correction, forever.
+    //
+    // Both fields fall back to the current value when no edit was recorded, so
+    // this stays an exact-string match — an unedited entry behaves exactly as
+    // before, and no genuinely new intention is suppressed.
+    return getLedger().some((e) => {
+        if (String(e.npc).toLowerCase() !== lower) return false;
+        const actions = new Set([norm(e.action)]);
+        const triggers = new Set([norm(e.trigger)]);
+        if (e.originalAction !== undefined) actions.add(norm(e.originalAction));
+        if (e.originalTrigger !== undefined) triggers.add(norm(e.originalTrigger));
+        return actions.has(a) && triggers.has(t);
+    });
 }
 
 // ─── Manual entries (user-authored intentions) ───────────────────────────────

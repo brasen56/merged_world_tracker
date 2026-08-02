@@ -15,11 +15,88 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { resetCoreStubs } from './stubs/core.js';
 import {
     getLedger, setLedger, restoreLedgerSnapshot,
+    addLedgerEntry, updateLedgerEntry, hasDuplicateIntention,
     getInnerState, getInnerStates, setInnerState,
     getInnerStatesSnapshot, restoreInnerStatesSnapshot,
 } from '../interiority/data.js';
 
 beforeEach(() => resetCoreStubs());
+
+describe('dedup survives a user edit', () => {
+
+    // THE BUG (reported from live use): an auto-generated scheduled intention
+    // named the wrong character. The user corrected the name. The original then
+    // reappeared alongside the corrected one, repeatedly, near-verbatim.
+    //
+    // hasDuplicateIntention matches action+trigger as exact strings, so
+    // correcting the text is precisely what stops the engine recognising its own
+    // intention: the next generation re-proposes it from unchanged story context,
+    // the strings no longer match, and it lands as a brand-new entry.
+
+    test('a re-proposal of the ORIGINAL text is still caught after an edit', () => {
+        const entry = addLedgerEntry({
+            npc: 'Mara',
+            action: 'confront Jaimie about the letter',
+            trigger: 'when they are alone',
+            status: 'dormant',
+        }, 'day 1', 3);
+
+        // User fixes the wrong name. Same entry, corrected text.
+        updateLedgerEntry(entry.id, { action: 'confront James about the letter' });
+
+        // The model re-proposes it next turn, still with the name the story
+        // context drives it toward.
+        expect(hasDuplicateIntention(
+            'Mara', 'confront Jaimie about the letter', 'when they are alone',
+        )).toBe(true);
+    });
+
+    test('the corrected text is still caught as a duplicate too', () => {
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'confront Jaimie', trigger: 'when alone',
+        }, 'day 1', 3);
+        updateLedgerEntry(entry.id, { action: 'confront James' });
+
+        expect(hasDuplicateIntention('Mara', 'confront James', 'when alone')).toBe(true);
+    });
+
+    test('a genuinely different intention is NOT suppressed', () => {
+        // The guard must not become "never add anything for this NPC again".
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'confront Jaimie', trigger: 'when alone',
+        }, 'day 1', 3);
+        updateLedgerEntry(entry.id, { action: 'confront James' });
+
+        expect(hasDuplicateIntention('Mara', 'leave the city', 'at dawn')).toBe(false);
+        // Same action, different trigger is a different intention.
+        expect(hasDuplicateIntention('Mara', 'confront James', 'in public')).toBe(false);
+        // Same text, different NPC.
+        expect(hasDuplicateIntention('Rowan', 'confront James', 'when alone')).toBe(false);
+    });
+
+    test('editing twice still matches the ENGINE original', () => {
+        // The engine only ever re-proposes what IT wrote, so the first recorded
+        // original is the one that matters — a later edit must not overwrite it
+        // with the user's own intermediate wording.
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'confront Jaimie', trigger: 'when alone',
+        }, 'day 1', 3);
+        updateLedgerEntry(entry.id, { action: 'confront James' });
+        updateLedgerEntry(entry.id, { action: 'confront James privately' });
+
+        expect(hasDuplicateIntention('Mara', 'confront Jaimie', 'when alone')).toBe(true);
+        expect(hasDuplicateIntention('Mara', 'confront James privately', 'when alone')).toBe(true);
+    });
+
+    test('an edited trigger is matched on its original too', () => {
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'confront James', trigger: 'when they are alonr',
+        }, 'day 1', 3);
+        updateLedgerEntry(entry.id, { trigger: 'when they are alone' });
+
+        expect(hasDuplicateIntention('Mara', 'confront James', 'when they are alonr')).toBe(true);
+    });
+});
 
 describe('restoreLedgerSnapshot (existing behaviour — the reference)', () => {
 

@@ -1,6 +1,6 @@
 {
   "name": "merged-world-tracker",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Unified extension combining World State, Session Chronicle, Knowledge Tracker, Story Planner, and Interiority into a single modular system.",
   "license": "MIT",
   "scripts": {
