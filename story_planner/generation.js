@@ -133,7 +133,7 @@ function validateOutput(text, expectHeader = true) {
     }
 
     // Roleplay narration leaked in instead of a structured plan.
-    if (/\b(you see|you notice|before you|you feel)\b/i.test(trimmed)) {
+    if (/\b(you see|you notice|you feel)\b/i.test(trimmed)) {
         return { ok: false, reason: 'second-person narration detected — model continued the story instead of planning' };
     }
 

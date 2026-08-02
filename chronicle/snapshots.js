@@ -47,10 +47,21 @@ function updateWorldStateFromChronicle(text) {
     let newWs = currentWs;
     if (timeMatch) {
         const inferred = timeMatch[1].trim();
-        const dateMatch = inferred.match(/(.+?),\s*(.+)/) || inferred.match(/(.+)/);
-        if (dateMatch) {
-            const datePart = dateMatch.length > 2 ? dateMatch[1].trim() : dateMatch[1].trim();
-            const timePart = dateMatch.length > 2 ? dateMatch[2].trim() : '';
+        // Match a trailing time pattern at the END of the string (e.g.
+        // "2:30pm", "14:30", "2:30 PM"). The previous non-greedy
+        // `(.+?),\s*(.+)` split on the FIRST comma, so "June 4, 2024 2:30pm"
+        // was parsed as date="June 4", time="2024 2:30pm" — corrupting both
+        // fields and self-perpetuating via generateSnapshot's read-back.
+        const trailingTime = inferred.match(/\s+(\d{1,2}:\d{2}(?:\s*[apAP]\.?[mM]\.?)?)$/);
+        let datePart, timePart;
+        if (trailingTime) {
+            timePart = trailingTime[1].trim();
+            datePart = inferred.slice(0, trailingTime.index).trim();
+        } else {
+            datePart = inferred;
+            timePart = '';
+        }
+        if (datePart) {
             newWs = newWs.replace(/^Date:\s*.*$/m, `Date: ${datePart}`);
             if (timePart && /\d/.test(timePart)) {
                 if (/^Time:/m.test(newWs)) newWs = newWs.replace(/^Time:\s*.*$/m, `Time: ${timePart}`);

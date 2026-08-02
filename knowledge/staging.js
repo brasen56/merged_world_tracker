@@ -223,17 +223,33 @@ export async function importNpcs() {
 
             // When a uid is present, verify it against the local lorebook.
             // An exported uid from another install may point at a different
-            // (or non-existent) entry here. If it can't be verified, drop it
-            // so the entry is either written as new (if content is available)
-            // or registered as an orphan (uid: null).
+            // (or non-existent) entry here. Previously this only checked that
+            // *some* entry existed at that uid — not that it matched the
+            // exported NPC. Two NPCs could silently end up sharing the wrong
+            // dossier content because the content-write branch only fires
+            // when `incomingUid == null`.
+            //
+            // Now we also compare the existing entry's content against the
+            // exported content. If they differ significantly, the uid points
+            // at a different NPC's entry — drop it so the correct content is
+            // written as a new entry instead.
             if (incomingUid != null && state.wiScript) {
                 let verified = false;
                 try {
                     const existing = await loadEntryContent(incomingUid);
-                    verified = existing !== null;
+                    if (existing !== null) {
+                        if (entry.content && existing.trim() !== entry.content.trim()) {
+                            console.warn(
+                                `[MWT:Knowledge] Import uid ${incomingUid} for "${name}" exists in local lorebook ` +
+                                `but content does not match the export — dropping uid to avoid identity corruption.`
+                            );
+                            verified = false;
+                        } else {
+                            verified = true;
+                        }
+                    }
                 } catch { /* assume not found */ }
                 if (!verified) {
-                    console.warn(`[MWT:Knowledge] Import uid ${incomingUid} for "${name}" not found in local lorebook — dropping uid.`);
                     incomingUid = null;
                 }
             }

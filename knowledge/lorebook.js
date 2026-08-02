@@ -798,25 +798,48 @@ export async function runNpcUpdate(name, uid) {
     const settings = getSettings();
     const useDossier = isDossierEntry(currentContent) || settings.dossierMode === true;
     const systemPrompt = useDossier ? DOSSIER_UPDATE_PROMPT : NPC_UPDATE_PROMPT;
-    const raw = await ktFetchFromApi(systemPrompt, userContent);
-    const cleaned = normaliseOutput(raw);
-    const result = parseJsonLenient(cleaned);
 
-    // Slice 2 guardrail: if this NPC has an evidence file (growth profile
-    // exists), the personality field is OWNED by the growth profile system,
-    // not DOSSIER_UPDATE_PROMPT. Null it out here so the two systems never
-    // touch the same field — the hard structural partition from
-    // NPC_GROWTH_BLUEPRINT.md §"The split-brain resolution". This prevents
-    // DOSSIER_UPDATE_PROMPT from re-deriving personality from its own prior
-    // prose (the telephone loop) for profiled NPCs.
-    if (useDossier && result.fields && hasEvidenceFile(name)) {
-        result.fields.personality = null;
+    // Retry loop — mirrors runStateUpdate's 2-attempt pattern. A single
+    // truncated response (max_tokens cut off) would throw from
+    // parseJsonLenient with no recovery; the retry gives the model a second
+    // chance to produce valid JSON.
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        let raw, cleaned, result;
+        try {
+            const fetchContent = attempt === 1
+                ? userContent
+                : userContent + `\n\n[REMINDER: Your previous response was truncated or invalid JSON. Output ONLY valid JSON, no prose.]`;
+            raw = await ktFetchFromApi(systemPrompt, fetchContent);
+            cleaned = normaliseOutput(raw);
+            result = parseJsonLenient(cleaned);
+        } catch (err) {
+            lastError = err;
+            console.warn(`[MWT:Knowledge] runNpcUpdate JSON parse failed (attempt ${attempt}): ${err.message}`);
+            if (attempt < 2) continue;
+            throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
+        }
+
+        // Slice 2 guardrail: if this NPC has an evidence file (growth profile
+        // exists), the personality field is OWNED by the growth profile system,
+        // not DOSSIER_UPDATE_PROMPT. Null it out here so the two systems never
+        // touch the same field — the hard structural partition from
+        // NPC_GROWTH_BLUEPRINT.md §"The split-brain resolution". This prevents
+        // DOSSIER_UPDATE_PROMPT from re-deriving personality from its own prior
+        // prose (the telephone loop) for profiled NPCs.
+        //
+        // Guard against `result.fields` being a truthy non-object (e.g. a
+        // string) before assigning to it — a truthiness check alone would
+        // throw a TypeError on a primitive.
+        if (useDossier && result.fields && typeof result.fields === 'object' && !Array.isArray(result.fields) && hasEvidenceFile(name)) {
+            result.fields.personality = null;
+        }
+
+        const merged = useDossier
+            ? buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || [])
+            : buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);
+        return { currentContent, merged, fields: result.fields || {}, newKnowledge: result.new_knowledge || [], dossierMode: useDossier };
     }
-
-    const merged = useDossier
-        ? buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || [])
-        : buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);
-    return { currentContent, merged, fields: result.fields || {}, newKnowledge: result.new_knowledge || [], dossierMode: useDossier };
 }
 
 // ─── Dossier enrichment ──────────────────────────────────────────────────────
@@ -859,20 +882,38 @@ export async function runNpcEnrich(name, uid) {
         `Write a COMPLETE dossier for ${name}. Fill every field. Output only JSON.`,
     ].filter(Boolean).join('\n');
 
-    const raw = await ktFetchFromApi(DOSSIER_ENRICH_PROMPT, userContent);
-    const cleaned = normaliseOutput(raw);
-    const result = parseJsonLenient(cleaned);
+    // Retry loop — mirrors runNpcUpdate and runStateUpdate's 2-attempt pattern.
+    // A truncated response (max_tokens cut off) would throw from
+    // parseJsonLenient with no recovery; the retry gives the model a second
+    // chance to produce valid JSON.
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        let raw, cleaned, result;
+        try {
+            const fetchContent = attempt === 1
+                ? userContent
+                : userContent + `\n\n[REMINDER: Your previous response was truncated or invalid JSON. Output ONLY valid JSON, no prose.]`;
+            raw = await ktFetchFromApi(DOSSIER_ENRICH_PROMPT, fetchContent);
+            cleaned = normaliseOutput(raw);
+            result = parseJsonLenient(cleaned);
+        } catch (err) {
+            lastError = err;
+            console.warn(`[MWT:Knowledge] runNpcEnrich JSON parse failed (attempt ${attempt}): ${err.message}`);
+            if (attempt < 2) continue;
+            throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
+        }
 
-    // Build the complete dossier content from the enrich result. We use the
-    // dossier merger which will replace existing fields and add missing ones.
-    const merged = buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || []);
-    return {
-        currentContent,
-        merged,
-        fields: result.fields || {},
-        newKnowledge: result.new_knowledge || [],
-        dossierMode: true,
-    };
+        // Build the complete dossier content from the enrich result. We use the
+        // dossier merger which will replace existing fields and add missing ones.
+        const merged = buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || []);
+        return {
+            currentContent,
+            merged,
+            fields: result.fields || {},
+            newKnowledge: result.new_knowledge || [],
+            dossierMode: true,
+        };
+    }
 }
 
 /**

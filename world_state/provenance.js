@@ -322,13 +322,45 @@ function nameIsGrounded(label, haystacks) {
     });
 }
 
-/** Drop every line whose bolded name is in `labels` (exact, case-insensitive). Conservative — single-line only, mirrors extractBoldNames' one-line-per-entry assumption. */
+/**
+ * Drop every entry whose bolded name is in `labels` (exact, case-insensitive),
+ * INCLUDING the indented subfield lines that belong to that entry.
+ *
+ * Previously this only stripped the bolded name line itself, leaving orphaned
+ * subfields (e.g. `  - Mood: ...`) behind as contextless fragments. The fix
+ * tracks "strip mode": once a matching bold line is found, subsequent indented
+ * lines (subfields) are also removed until the next top-level line (a new bold
+ * entry, a heading, or a non-indented line) resets the state.
+ */
 function stripNameLines(text, labels) {
     const labelSet = new Set(labels.map(l => l.toLowerCase()));
-    const kept = text.split('\n').filter(line => {
+    const lines = text.split('\n');
+    const kept = [];
+    let stripping = false;
+    for (const line of lines) {
         const label = matchBoldLine(line);
-        return !(label && labelSet.has(label.toLowerCase()));
-    });
+        if (label) {
+            // This is a bold entry line — decide whether to strip it AND its subfields
+            stripping = labelSet.has(label.toLowerCase());
+            if (stripping) continue;
+            kept.push(line);
+            continue;
+        }
+        // A heading always resets the strip state
+        if (/^#{1,6}\s/.test(line)) {
+            stripping = false;
+            kept.push(line);
+            continue;
+        }
+        // While in strip mode, remove indented subfield lines (belong to the
+        // stripped entry). A non-indented, non-bold, non-heading line ends the
+        // strip context — it's standalone content, not a subfield.
+        if (stripping) {
+            if (/^\s+[-*]?/.test(line)) continue; // indented subfield
+            stripping = false;
+        }
+        kept.push(line);
+    }
     return kept.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 

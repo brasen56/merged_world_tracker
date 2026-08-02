@@ -97,7 +97,7 @@ function validateOutput(text) {
     const FIELD_LABELS = 'Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn';
     const rpMarkers = [
         { pattern: new RegExp(`^(?!(?:${FIELD_LABELS})\\b)[A-Z][a-z]+:\\s*["\u201C\u201D]`, 'm'), label: 'dialogue formatting (Name: "...)' },
-        { pattern: /\b(you see|you notice|before you|you feel)\b/i, label: 'second-person narration' },
+        { pattern: /\b(you see|you notice|you feel)\b/i, label: 'second-person narration' },
         { pattern: /^(Meanwhile|Suddenly|As you|The (?:air|room|silence|darkness))\b/im, label: 'narrative prose opener' },
     ];
     for (const { pattern, label } of rpMarkers) {

@@ -31,10 +31,13 @@ function currentHeader() {
  *
  * Mirrors chronicle/injection.js's getEntriesForInjection(). Dropped arcs are
  * excluded in every mode — dropping is the user saying "not this one", so it
- * should hold regardless of which mode is selected.
+ * should hold regardless of which mode is selected. Resolved arcs are also
+ * excluded in every mode: resolving means the arc has already paid off, so
+ * injecting it again would treat it as actionable, contradicting the UI's
+ * promise that resolving "stops it being suggested again."
  */
 export function getArcsForInjection() {
-    const arcs = getArcs().filter(a => a.status !== 'dropped');
+    const arcs = getArcs().filter(a => a.status !== 'dropped' && a.status !== 'resolved');
     const mode = getInjectMode();
     if (mode === 'pinned') return arcs.filter(a => a.pinned);
     if (mode === 'active') return arcs.filter(a => a.status === 'active');

@@ -98,7 +98,7 @@ function validateSectionOutput(text, sectionName) {
     }
 
     const rpMarkers = [
-        { pattern: /\b(you see|you notice|before you|you feel)\b/i, label: 'second-person narration' },
+        { pattern: /\b(you see|you notice|you feel)\b/i, label: 'second-person narration' },
     ];
     for (const { pattern, label } of rpMarkers) {
         if (pattern.test(text)) return { ok: false, reason: `RP marker detected: ${label}` };
