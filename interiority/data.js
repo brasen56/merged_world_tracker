@@ -343,9 +343,17 @@ export function updateLedgerEntry(id, patch) {
     if (patch.trigger !== undefined) entry.trigger = String(patch.trigger).trim();
     if (patch.since !== undefined) entry.since = String(patch.since).trim();
 
+    // The text is now user-authored, whoever first wrote it. This is what tells
+    // restoreLedgerSnapshot to keep the correction instead of reverting to the
+    // engine's pre-edit wording held in the snapshot.
+    entry.manual = true;
+
     saveInteriorityData(data);
     return entry;
 }
+
+/** Fields the user can edit from the panel — the ones their edit owns. */
+const USER_EDITED_FIELDS = ['npc', 'action', 'trigger', 'since', 'originalAction', 'originalTrigger'];
 
 /**
  * Remove ledger entries by id.
@@ -502,22 +510,44 @@ export function incrementLedgerAges() {
  * user-authored state — they must survive rollback so the user's intentions
  * don't silently vanish.
  *
- * Entries from the snapshot that have the same id as a current manual entry
- * are skipped (the manual entry wins, since it may have been edited).
+ * For an entry present in BOTH, the user's edited text wins and the engine's
+ * lifecycle fields (status, wakeHint, age) are still rolled back. This is what
+ * the comment here always claimed; until now the code replaced the entry
+ * wholesale, so a correction made to an auto-generated intention was silently
+ * reverted by the next swipe.
  *
  * @param {Array<object>} snapshot - the ledger snapshot to restore
  */
 export function restoreLedgerSnapshot(snapshot) {
     const current = getLedger();
     const snapIds = new Set((snapshot || []).map(e => e.id));
-
-    // Manual entries that aren't already in the snapshot survive the rollback.
-    const manualSurvivors = current.filter(
-        e => e.manual === true && !snapIds.has(e.id)
+    const manualById = new Map(
+        current.filter(e => e.manual === true).map(e => [e.id, e]),
     );
 
-    const restored = [...(snapshot || []), ...manualSurvivors];
-    setLedger(restored);
+    // An entry the user EDITED keeps its id, so it is present in the snapshot —
+    // and the snapshot holds the pre-edit text. Restoring wholesale therefore
+    // undid the correction silently. Field-level merge instead: the user owns
+    // the text they edited, the engine still owns the lifecycle fields, so a
+    // dormancy or age change made in the timeline being discarded is still
+    // rolled back rather than surviving on the back of an old hand-edit.
+    const restored = (snapshot || []).map((snapEntry) => {
+        const edited = manualById.get(snapEntry.id);
+        if (!edited) return snapEntry;
+        const merged = { ...snapEntry, manual: true };
+        for (const field of USER_EDITED_FIELDS) {
+            if (edited[field] !== undefined) merged[field] = edited[field];
+        }
+        return merged;
+    });
+
+    // Manual entries that aren't in the snapshot at all survive too — they were
+    // authored after it was taken, so the rollback knows nothing about them.
+    const manualSurvivors = current.filter(
+        e => e.manual === true && !snapIds.has(e.id),
+    );
+
+    setLedger([...restored, ...manualSurvivors]);
 }
 
 // ─── Dormant intentions (v2 §20 — scheduling) ─────────────────────────────────

@@ -121,6 +121,45 @@ describe('restoreLedgerSnapshot (existing behaviour — the reference)', () => {
 
         expect(getLedger().map(e => e.id)).toEqual(['e1']);
     });
+
+    test('an edit to an entry the snapshot contains is not reverted', () => {
+        // Editing keeps the entry's id, so the entry IS in the snapshot — and
+        // the snapshot holds the pre-edit text. Restoring it wholesale silently
+        // undid the user's correction. The doc comment always claimed the manual
+        // version wins here; now the code does too.
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'confront Jaimie', trigger: 'when alone',
+        }, 'day 1', 3);
+        const snapshot = structuredClone(getLedger());
+
+        updateLedgerEntry(entry.id, { action: 'confront James' });
+        restoreLedgerSnapshot(snapshot);
+
+        expect(getLedger()).toHaveLength(1);
+        expect(getLedger()[0].action).toBe('confront James');
+    });
+
+    test('rollback still reverts engine-owned lifecycle fields on an edited entry', () => {
+        // The user owns the TEXT they edited; the engine still owns status,
+        // wakeHint and age. A dormancy change made in the timeline being thrown
+        // away must not survive just because the entry was once hand-edited.
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'confront Jaimie', trigger: 'when alone',
+            status: 'dormant', wakeHint: 'after the festival',
+        }, 'day 1', 3);
+        const snapshot = structuredClone(getLedger());
+
+        updateLedgerEntry(entry.id, { action: 'confront James' });
+        // Engine wakes it in the turn that is about to be swiped away.
+        setLedger(getLedger().map(e => ({ ...e, status: 'active', turnsOpen: 9 })));
+
+        restoreLedgerSnapshot(snapshot);
+
+        const [restored] = getLedger();
+        expect(restored.action).toBe('confront James');   // user's text kept
+        expect(restored.status).toBe('dormant');          // engine state rolled back
+        expect(restored.turnsOpen).toBe(0);
+    });
 });
 
 describe('restoreInnerStatesSnapshot', () => {
