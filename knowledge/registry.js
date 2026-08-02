@@ -195,3 +195,30 @@ export function bumpStateTrackerTimestamp(name) {
         saveStateRegistry(reg);
     }
 }
+
+/**
+ * Decrement every state tracker's `lastUpdatedMsg` by `removed`, clamped to >= 0.
+ *
+ * `lastUpdatedMsg` is stored as a raw chat length (`getChat()?.length`) at the
+ * time of the last update. After a bulk delete shrinks the chat, that stored
+ * length points past the end of the new (shorter) chat. The cooldown check
+ * (`currentMsgIdx - lastUpdatedMsg < cooldownMsgs`) then keeps skipping the
+ * tracker forever — the chat has to re-grow past the stale length before the
+ * tracker runs again. This keeps the stored watermark aligned with the
+ * shorter chat so the cooldown math stays meaningful.
+ *
+ * @param {number} removed — how many messages were deleted
+ */
+export function adjustStateTrackerLastUpdatedMsg(removed) {
+    if (!Number.isFinite(removed) || removed <= 0) return;
+    const reg = getStateRegistry();
+    let changed = false;
+    for (const name of Object.keys(reg)) {
+        const cur = reg[name]?.lastUpdatedMsg;
+        if (typeof cur === 'number' && cur > 0) {
+            reg[name].lastUpdatedMsg = Math.max(0, cur - removed);
+            changed = true;
+        }
+    }
+    if (changed) saveStateRegistry(reg);
+}

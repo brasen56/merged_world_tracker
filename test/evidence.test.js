@@ -154,6 +154,37 @@ describe('appendRawObservations', () => {
         expect(result.added).toBe(1);
         expect(result.skipped).toBe(2);
     });
+
+    test('dedups against archivedRaw after consolidation (Tier 2 fix #6)', () => {
+        // Regression test for BUG_REPORTS/VERIFICATION_RESULTS.md Tier 2 bug #6.
+        // After consolidation moves observations to archivedRaw, a capture pass
+        // that overlaps those same messages must NOT re-add them to raw[].
+        // Previously the dedup set only scanned raw[], so re-worded claims
+        // (same quote, slightly different wording) slipped through and piled up.
+        //
+        // ARRANGE: capture one observation, then move it to archivedRaw
+        // (simulating what applyConsolidation does to consumed raws).
+        appendRawObservations('Kira', [obs('Brave', '"she charged in"')]);
+        const file = getEvidenceFile('Kira', false);
+        const rawId = file.raw[0].id;
+        file.archivedRaw.push(file.raw[0]);
+        file.raw = [];
+
+        // ACT: try to re-capture the SAME observation (exact match).
+        const result = appendRawObservations('Kira', [obs('Brave', '"she charged in"')]);
+
+        // ASSERT: the observation was recognized as a duplicate of the archived
+        // entry and skipped — it did not re-enter raw[].
+        expect(result.added).toBe(0);
+        expect(result.skipped).toBe(1);
+        const fileAfter = getEvidenceFile('Kira', false);
+        expect(fileAfter.raw).toHaveLength(0);
+        expect(fileAfter.archivedRaw).toHaveLength(1);
+
+        // A genuinely NEW observation is still admitted.
+        const result2 = appendRawObservations('Kira', [obs('Calm', '"she breathed slowly"')]);
+        expect(result2.added).toBe(1);
+    });
 });
 
 describe('applyConsolidation (REVIEW_TODO items 1 & 2)', () => {

@@ -589,32 +589,25 @@ export async function runGrowthProfile(name) {
         throw new Error(`"${name}" has no lorebook entry (orphan UID).`);
     }
 
-    // Step 1: capture fresh evidence
-    const observations = await captureEvidence(name, uid);
-    if (observations.length === 0 && !hasEvidenceFile(name)) {
+    // Step 1: capture fresh evidence.
+    //
+    // Delegate to runCaptureOnly so the Growth button uses the SAME delta-
+    // gating as the manual Capture button and the continuous-capture cadence.
+    // Previously this called captureEvidence() directly, which always re-
+    // scanned the full 80-message window — so pressing "Growth" twice re-fed
+    // the same messages, and re-worded claims slipped past the string-based
+    // dedup and piled up in raw[].
+    //
+    // runCaptureOnly handles both paths: a full bootstrap scan for an NPC's
+    // first-ever capture, and a watermark-gated delta scan thereafter. Its
+    // `deltaTooSmall` outcome is a valid non-error here too — the profile is
+    // still generated from whatever evidence already exists.
+    const { observations: allEvidence, captureStats } = await runCaptureOnly(name);
+    if (allEvidence.length === 0) {
         throw new Error(
             `No behavioral observations found for "${name}" in recent messages. ` +
             `The NPC may not appear enough in the last ${EVIDENCE_MESSAGE_WINDOW} messages.`
         );
-    }
-
-    // Step 2: append fresh observations to the raw tier (persisted).
-    // Append-only — never overwrites. Duplicate observations are skipped.
-    const captureStats = appendRawObservations(name, observations);
-
-    // Seed the capture watermark so the first continuous pass doesn't re-scan
-    // these same messages (Minor fix from the capture review). The initial
-    // scan covers the most recent EVIDENCE_MESSAGE_WINDOW messages; stamp the
-    // watermark at the newest send_date in that span.
-    {
-        const chatArr = getChat() || [];
-        const scanStart = Math.max(0, chatArr.length - EVIDENCE_MESSAGE_WINDOW);
-        let maxScanTs = 0;
-        for (let i = scanStart; i < chatArr.length; i++) {
-            const t = normalizeSendDate(chatArr[i]?.send_date);
-            if (t > maxScanTs) maxScanTs = t;
-        }
-        if (maxScanTs > 0) setCaptureWatermark(name, maxScanTs);
     }
 
     // Extract canon from the existing entry (NOT the Personality: line)
@@ -624,15 +617,10 @@ export async function runGrowthProfile(name) {
         canon = extractCanonFromEntry(content);
     } catch { /* ignore */ }
 
-    // Step 3: generate profile from ALL accumulated evidence, not just the
+    // Step 2: generate profile from ALL accumulated evidence, not just the
     // fresh capture. This means re-running growth on an NPC with existing
     // evidence incorporates older observations too. Consolidated entries
     // (Slice 3) are read first when present.
-    const allEvidence = getEvidenceForProfile(name);
-    if (allEvidence.length === 0) {
-        throw new Error(`No evidence available to generate a profile for "${name}".`);
-    }
-
     const profile = await generateProfile(name, allEvidence, canon);
 
     // If user overrides exist, append them to the generated profile so hand-

@@ -505,6 +505,14 @@ export async function runBatchedCall(roster) {
 export async function runSplitCall(roster, { force = false } = {}) {
     const settings = getSettings();
 
+    // Respect the feature toggles. Split mode runs two specialized calls, but
+    // each call is still gated by the user's "generate thoughts" / "generate
+    // intentions" panel setting. Forcing the flags into _runCall (which it
+    // uses to pick a prompt) previously bypassed these toggles entirely,
+    // burning API calls and grace-period budget on features the user turned off.
+    const wantThoughts = settings.generateThoughts !== false;
+    const wantIntentions = settings.generateIntentions !== false;
+
     // §21: thoughtsInterval — skip the thoughts call on off-turns (auto only).
     const interval = Math.max(1, Number(settings.thoughtsInterval) || 1);
     const turn = getTurnCounter();
@@ -517,20 +525,22 @@ export async function runSplitCall(roster, { force = false } = {}) {
 
     // §21: thoughtsProfiledOnly — filter the thoughts roster to profiled NPCs.
     let thoughtsRoster = roster;
-    if (!skipThoughtsThisTurn && settings.thoughtsProfiledOnly === true) {
+    if (!skipThoughtsThisTurn && wantThoughts && settings.thoughtsProfiledOnly === true) {
         // _filterToProfiledNpcs logs a detailed diagnostic when it empties the
         // roster — the bare "nobody has a profile" message can't distinguish
         // "no profiles saved yet" from "roster names don't match the registry".
         thoughtsRoster = await _filterToProfiledNpcs(roster);
     }
-    const runThoughts = !skipThoughtsThisTurn && thoughtsRoster.length > 0;
+    const runThoughts = wantThoughts && !skipThoughtsThisTurn && thoughtsRoster.length > 0;
 
     const [intentionsRes, thoughtsRes] = await Promise.all([
-        _runCall(roster, { thoughts: false, intentions: true, label: 'intentions' })
-            .catch(err => {
-                console.error('[MWT:Interiority] Intentions call failed:', err);
-                return null;
-            }),
+        wantIntentions
+            ? _runCall(roster, { thoughts: false, intentions: true, label: 'intentions' })
+                .catch(err => {
+                    console.error('[MWT:Interiority] Intentions call failed:', err);
+                    return null;
+                })
+            : Promise.resolve(null),
         runThoughts
             ? _runCall(thoughtsRoster, { thoughts: true, intentions: false, label: 'thoughts', useRichThoughtsContext: true })
                 .catch(err => {

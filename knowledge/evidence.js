@@ -250,8 +250,13 @@ export function nextObsId(file, tier) {
 export function appendRawObservations(name, observations) {
     const file = getEvidenceFile(name);
     const chat = getChat() || [];
+    // Dedup against BOTH raw[] and archivedRaw[]. After consolidation moves
+    // observations to archivedRaw, a capture pass that overlaps those same
+    // messages would re-add them to raw[] — re-worded claims slip past the
+    // string-based key and pile up as near-duplicates. Including the archive
+    // in the dedup set prevents that resurrection.
     const existing = new Set(
-        (file.raw || []).map(o => normalizeKey(o.claim, o.quote))
+        [...(file.raw || []), ...(file.archivedRaw || [])].map(o => normalizeKey(o.claim, o.quote))
     );
 
     let added = 0;

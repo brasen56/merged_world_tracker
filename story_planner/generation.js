@@ -94,13 +94,18 @@ function buildUserPrompt(recentText, reminderReason = '') {
         ? `<direction>\n[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n${hint}\n</direction>`
         : '';
 
+    // Use replacement FUNCTIONS (not strings) so that `$` sequences in the
+    // replacement text are treated literally. With a replacement string,
+    // `String.prototype.replace` interprets `$&`, `$1`, `$$`, etc. as special
+    // patterns — so chat text containing "$100" would become "$1" (empty
+    // capture group) + "0" = "0", corrupting the user's history.
     let out = template
-        .replace(/\{\{chatHistory\}\}/g, recentText || 'No recent messages.')
-        .replace(/\{\{previousPlan\}\}/g, prevBlock)
-        .replace(/\{\{worldState\}\}/g, wsBlock)
-        .replace(/\{\{lastChronicle\}\}/g, chronBlock)
-        .replace(/\{\{directionHint\}\}/g, hintBlock)
-        .replace(/\{\{arcCount\}\}/g, String(getArcCount()));
+        .replace(/\{\{chatHistory\}\}/g, () => recentText || 'No recent messages.')
+        .replace(/\{\{previousPlan\}\}/g, () => prevBlock)
+        .replace(/\{\{worldState\}\}/g, () => wsBlock)
+        .replace(/\{\{lastChronicle\}\}/g, () => chronBlock)
+        .replace(/\{\{directionHint\}\}/g, () => hintBlock)
+        .replace(/\{\{arcCount\}\}/g, () => String(getArcCount()));
 
     if (reminderReason) {
         out += `\n\n[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;

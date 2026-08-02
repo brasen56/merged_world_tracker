@@ -9,7 +9,7 @@ import { getChat, escapeRegex, estimateTokens, getContextSafe, getChatMeta, patc
 
 import { state, getNpcsContentEl, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
-import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp } from './registry.js';
+import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
 import { resetStoreCache, hydrateCurrentBooks } from './store.js';
@@ -402,6 +402,19 @@ export function onMessageDeleted(deletedIndex) {
         changed = true;
         console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — growth counter adjusted to ${state.growthMessageCounter}`);
     }
+
+    // The state registry's `lastUpdatedMsg` is stored as a raw chat length.
+    // After a bulk delete the stored length points past the end of the shorter
+    // chat, freezing every tracker whose cooldown check now sees a negative
+    // delta. Adjust those watermarks in lock-step with the counters.
+    if (settings.autoTriggerEnabled) {
+        try {
+            adjustStateTrackerLastUpdatedMsg(removed);
+        } catch (err) {
+            console.warn('[MWT:Knowledge] Could not adjust state tracker lastUpdatedMsg after delete:', err?.message || err);
+        }
+    }
+
     if (changed) persistCounters();
 }
 
