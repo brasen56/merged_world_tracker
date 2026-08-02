@@ -667,10 +667,18 @@ export function getInnerState(npcName) {
  * Used by manual ✎ edits (which must bypass the drift backstop) and by
  * {@link setInnerStateGuarded} after it has decided whether to keep the prior.
  *
+ * `manual` is provenance, and it is what lets {@link restoreInnerStatesSnapshot}
+ * tell a user's hand-edit apart from engine output. It deliberately defaults to
+ * false rather than being sticky: once the engine legitimately moves an NPC's
+ * mood on, that line is engine state again, so one hand-edit must not pin the
+ * NPC against every future rollback.
+ *
  * @param {string} npcName
  * @param {string} line - the new line (empty string clears the state)
+ * @param {object} [opts]
+ * @param {boolean} [opts.manual=false] - true when the user authored this line
  */
-export function setInnerState(npcName, line) {
+export function setInnerState(npcName, line, { manual = false } = {}) {
     if (!npcName) return;
     const trimmed = String(line || '').slice(0, MAX_INNER_STATE_LENGTH);
     const data = getInteriorityData();
@@ -680,7 +688,7 @@ export function setInnerState(npcName, line) {
     // Preserve an existing key's casing if present, else use the given name.
     const key = _findInnerStateKey(npcName, data.innerStates) ?? npcName.trim();
     if (trimmed) {
-        data.innerStates[key] = { line: trimmed, updatedAt: Date.now() };
+        data.innerStates[key] = { line: trimmed, updatedAt: Date.now(), manual: !!manual };
     } else {
         delete data.innerStates[key];
     }
@@ -734,14 +742,43 @@ export function getInnerStatesSnapshot() {
 }
 
 /**
- * Restore an inner-state snapshot taken by {@link getInnerStatesSnapshot}.
+ * Restore an inner-state snapshot taken by {@link getInnerStatesSnapshot},
+ * preserving hand-edited lines the snapshot never contained.
+ *
+ * This used to full-replace the map, which quietly destroyed user work: a mood
+ * the user edited by hand at message 20 was wiped by swiping message 10, because
+ * the message-10 snapshot predates the edit and knows nothing about it. A
+ * snapshot records what the ENGINE produced, so restoring one must not revert
+ * what the USER did outside it.
+ *
+ * The survivor rule deliberately mirrors {@link restoreLedgerSnapshot}: only
+ * manual entries the snapshot does NOT contain are rescued. An NPC present in
+ * the snapshot is engine state that the rollback exists to restore, so the
+ * snapshot wins there. Keeping the two rollback paths identical is the point —
+ * their divergence is what produced this bug.
  *
  * @param {object|null} snapshot - the snapshot to restore (null/undefined → no-op)
  */
 export function restoreInnerStatesSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return;
     const data = getInteriorityData();
-    data.innerStates = JSON.parse(JSON.stringify(snapshot));
+    const current = (data.innerStates && typeof data.innerStates === 'object')
+        ? data.innerStates
+        : {};
+    const restored = JSON.parse(JSON.stringify(snapshot));
+
+    // Names are matched case-insensitively here for the same reason
+    // _findInnerStateKey does it: "Mara"/"mara" are one NPC, and a casing
+    // difference between the snapshot and the live map must not resurrect a
+    // duplicate entry alongside the restored one.
+    const snapKeys = new Set(Object.keys(restored).map(k => k.toLowerCase().trim()));
+    for (const [key, entry] of Object.entries(current)) {
+        if (entry?.manual === true && !snapKeys.has(key.toLowerCase().trim())) {
+            restored[key] = entry;
+        }
+    }
+
+    data.innerStates = restored;
     saveInteriorityData(data);
 }
 

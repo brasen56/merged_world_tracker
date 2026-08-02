@@ -247,7 +247,9 @@ function handleInnerStateEditSave(npc) {
     if (!entryEl) return;
     const line = entryEl.querySelector('.mwt-int-state-edit-line')?.value?.trim() || '';
     // setInnerState with empty string clears the state (deletes the key).
-    setInnerState(npc, line);
+    // `manual` marks this as user-authored so a later rollback to a snapshot
+    // taken BEFORE this edit doesn't silently revert it.
+    setInnerState(npc, line, { manual: true });
     setIntStatus(line ? 'Inner state updated.' : 'Inner state cleared.', 'success');
     renderContent();
 }
