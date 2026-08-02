@@ -90,8 +90,40 @@ export function updateRelationship(from, to, type, notes) {
     saveRelationships(rels);
 }
 
+// ─── Stance toward {{user}} ──────────────────────────────────────────────────
+//
+// A per-NPC scalar rather than an edge: {{user}} has no Knowledge entry to point
+// at, and stance is disposition ("wary") where relationship types are structural
+// ("employer") — an NPC can be a friend who has turned wary. Stored beside the
+// edges in the same book store and emitted into the same managed block, so one
+// sync writes both.
+
+export function getStances() {
+    return readField(getLorebookName(), 'stances', {});
+}
+
+export function saveStances(stances) {
+    writeField(getLorebookName(), 'stances', stances);
+}
+
+export function getStance(name) { return getStances()[name] || ''; }
+
+/** Passing an empty stance clears it, which drops the line from the block. */
+export function setStance(name, stance) {
+    const stances = getStances();
+    if (stance) stances[name] = stance;
+    else delete stances[name];
+    saveStances(stances);
+}
+
 export function rekeyRelationships(oldName, newName) {
     if (oldName === newName) return;
+    const stances = getStances();
+    if (stances[oldName] !== undefined) {
+        stances[newName] = stances[oldName];
+        delete stances[oldName];
+        saveStances(stances);
+    }
     const rels = getRelationships();
     if (!rels) return;
     // 1) Re-point outgoing edges: oldName -> * becomes newName -> *
@@ -148,13 +180,23 @@ export function injectRelationshipBlock(content, blockText) {
 }
 
 export function formatRelationshipBlock(name) {
+    const lines = [];
+
+    // Fixed label — presets match on this exact prefix to gate NPC behaviour,
+    // so it must not be reworded or merged into the Relationships line.
+    const stance = getStance(name);
+    if (stance) lines.push(`Stance toward {{user}}: ${stance}.`);
+
     const rels = getNpcRelationships(name);
-    if (!rels.length) return '';
-    const lines = rels.map(r => {
-        const note = r.notes ? ` (${r.notes})` : '';
-        return `${r.type} of ${r.target}${note}`;
-    });
-    return `Relationships: ${lines.join('; ')}.`;
+    if (rels.length) {
+        const edges = rels.map(r => {
+            const note = r.notes ? ` (${r.notes})` : '';
+            return `${r.type} of ${r.target}${note}`;
+        });
+        lines.push(`Relationships: ${edges.join('; ')}.`);
+    }
+
+    return lines.join('\n');
 }
 
 export async function syncRelationshipsToLorebook(name) {

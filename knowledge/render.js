@@ -9,7 +9,7 @@ import {
 } from '../core/index.js';
 
 import {
-    RELATIONSHIP_TYPES, TRACKER_SENTINEL,
+    RELATIONSHIP_TYPES, USER_STANCES, TRACKER_SENTINEL,
     state, getNpcsContentEl, ktSetStatus,
 } from './state.js';
 import { getSettings, hasValidSettings, showKnowledgeSettings } from './settings.js';
@@ -29,6 +29,7 @@ import {
 import {
     getRelationships, updateRelationship, removeRelationship,
     removeAllRelationshipsFor,
+    getStances, setStance,
     syncRelationshipsToLorebook, syncAllRelationshipsToLorebooks,
 } from './relationships.js';
 import {
@@ -587,6 +588,7 @@ function wireNpcListEvents(el, type) {
             delete reg[name];
             saveRegistry(reg);
             removeAllRelationshipsFor(name);
+            setStance(name, '');
             // Clean up the evidence file (Slice 2) so chat metadata doesn't
             // accumulate orphaned evidence for removed NPCs.
             import('./evidence.js').then(({ deleteEvidenceFile }) => deleteEvidenceFile(name));
@@ -1519,6 +1521,8 @@ function renderRelationshipContent() {
 
     const npcOptions = npcNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
     const typeOptions = RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join('') + '<option value="__other__">Other…</option>';
+    const stanceOptions = USER_STANCES.map(s => `<option value="${s}">${s}</option>`).join('');
+    const stanceEntries = Object.entries(getStances()).sort((a, b) => a[0].localeCompare(b[0]));
 
     const viewMode = state.relViewMode || 'graph';
 
@@ -1543,6 +1547,19 @@ function renderRelationshipContent() {
                <input id="kt-rel-notes" class="mwt-input" type="text" placeholder="Notes (optional)" style="flex:1;min-width:120px" />
                <button id="kt-rel-add" class="mwt-btn mwt-btn-primary">+ Add</button>
             </div>
+           <div class="kt-rel-add-row">
+               <span style="font-size:12px;color:var(--mwt-text-dim)">Stance toward {{user}}:</span>
+               <select id="kt-stance-npc" class="mwt-input" style="min-width:120px"><option value="">NPC…</option>${npcOptions}</select>
+               <select id="kt-stance-value" class="mwt-input" style="min-width:100px">${stanceOptions}</select>
+               <button id="kt-stance-set" class="mwt-btn mwt-btn-primary">Set</button>
+               <span style="flex:1;min-width:160px;font-size:11px;color:var(--mwt-text-dim)">How far this NPC pushes before backing off. Unset NPCs fall back to persona.</span>
+            </div>
+            ${stanceEntries.length ? `<div class="kt-rel-list">${stanceEntries.map(([n, s]) => `<div class="kt-rel-row">
+                     <span class="kt-rel-from">${escapeHtml(n)}</span>
+                     <span class="kt-rel-type">${escapeHtml(s)}</span>
+                     <span class="kt-rel-notes">toward {{user}}</span>
+                     <button class="kt-stance-clear" data-name="${escapeHtml(n)}" title="Clear stance">✕</button>
+                 </div>`).join('')}</div>` : ''}
             ${allEdges.length === 0 ? '<div class="kt-empty">No relationships tracked yet.</div>' : (viewMode === 'graph' ? `
                 <div class="kt-rel-graph-wrap">
                     <svg id="kt-rel-graph" class="kt-rel-graph" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -2042,6 +2059,31 @@ function wireRelationshipEvents(el) {
             ktSetStatus(`Relationship added but sync failed: ${err.message}`, 'warning');
         }
         renderNpcsSubTab();
+    });
+
+    el.querySelector('#kt-stance-set')?.addEventListener('click', async () => {
+        const name = el.querySelector('#kt-stance-npc')?.value;
+        const stance = el.querySelector('#kt-stance-value')?.value;
+        if (!name || !stance) { ktSetStatus('Select an NPC and a stance.', 'error'); return; }
+        if (!getAllNpcNames().includes(name)) { ktSetStatus(`"${name}" is not a known NPC.`, 'error'); return; }
+        setStance(name, stance);
+        try {
+            const result = await syncRelationshipsToLorebook(name);
+            if (result.success) ktSetStatus(`"${name}" is now ${stance} toward {{user}}.`, 'success');
+            else ktSetStatus(`Stance saved but lorebook sync failed: ${result.error}`, 'warning');
+        } catch (err) {
+            ktSetStatus(`Stance saved but sync failed: ${err.message}`, 'warning');
+        }
+        renderNpcsSubTab();
+    });
+
+    el.querySelectorAll('.kt-stance-clear').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const name = btn.dataset.name;
+            setStance(name, '');
+            try { await syncRelationshipsToLorebook(name); } catch (err) { /* entry may be gone */ }
+            renderNpcsSubTab();
+        });
     });
 
     el.querySelectorAll('.kt-rel-remove').forEach(btn => {

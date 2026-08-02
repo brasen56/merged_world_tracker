@@ -28,6 +28,11 @@ export const RELATIONSHIP_TYPES = [
     'employer', 'employee',
 ];
 
+/** How an NPC currently regards {{user}}, ordered warmest → most adversarial.
+ *  Distinct from RELATIONSHIP_TYPES, which are structural ("employer") and say
+ *  nothing about current disposition. Presets gate NPC yielding on this. */
+export const USER_STANCES = ['caring', 'friendly', 'neutral', 'wary', 'hostile'];
+
 export const RELATIONSHIP_BLOCK_START = '<!-- mwt:relationships:start -->';
 export const RELATIONSHIP_BLOCK_END = '<!-- mwt:relationships:end -->';
 

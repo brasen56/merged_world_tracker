@@ -1501,7 +1501,8 @@
     white-space: nowrap;
 }
 
-.kt-rel-remove {
+.kt-rel-remove,
+.kt-stance-clear {
     background: transparent;
     color: var(--sc-text-mid);
     border: none;
@@ -1512,7 +1513,8 @@
     transition: color 0.15s, background 0.15s;
 }
 
-.kt-rel-remove:hover {
+.kt-rel-remove:hover,
+.kt-stance-clear:hover {
     color: var(--sc-danger);
     background: rgba(248, 113, 113, 0.1);
 }
