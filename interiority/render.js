@@ -16,7 +16,7 @@ import {
     state, getSettings, saveSettings,
     getInteriorityData, getLedger, getPerMessage, getPerMessageKeys,
     getMsgKeyForIndex, buildKeyToIndexMap,
-    removeLedgerEntries, setLedger, updateLedgerEntry,
+    removeLedgerEntries, updateLedgerEntry,
     addManualLedgerEntry, hasDuplicateIntention,
     getInnerStates, setInnerState, MAX_INNER_STATE_LENGTH,
     getDormantLedger, wakeLedgerEntry, setLedgerEntryDormant,
@@ -488,7 +488,9 @@ function wireEvents(el) {
     // Clear ledger button
     el.querySelector('#mwt-int-clear-ledger')?.addEventListener('click', () => {
         if (!confirm('Remove all ledger entries? This cannot be undone.')) return;
-        setLedger([]);
+        // Same tombstoning as the per-entry ✕ — a bulk clear that the next
+        // generation immediately undoes is worse than no button at all.
+        removeLedgerEntries(getLedger().map(e => e.id), { tombstone: true });
         renderContent();
         document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
     });
@@ -605,7 +607,10 @@ function handleLedgerListClick(e) {
     if (removeBtn) {
         const id = removeBtn.dataset.id;
         if (id) {
-            removeLedgerEntries([id]);
+            // tombstone: this is the USER saying no. Without it the engine
+            // re-proposes the same intention next turn from unchanged story
+            // context, and a swipe restores it outright from the snapshot.
+            removeLedgerEntries([id], { tombstone: true });
             renderContent();
             document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
         }

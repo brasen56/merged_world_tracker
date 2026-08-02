@@ -16,11 +16,159 @@ import { resetCoreStubs } from './stubs/core.js';
 import {
     getLedger, setLedger, restoreLedgerSnapshot,
     addLedgerEntry, updateLedgerEntry, hasDuplicateIntention,
+    removeLedgerEntries, isIntentionDeleted, clearDeletedIntentions,
     getInnerState, getInnerStates, setInnerState,
     getInnerStatesSnapshot, restoreInnerStatesSnapshot,
 } from '../interiority/data.js';
+import { assembleNpcBlocks } from '../interiority/generation.js';
+import { buildUserContent, buildSystemPrompt } from '../interiority/prompts.js';
 
 beforeEach(() => resetCoreStubs());
+
+describe('a deleted intention stays deleted', () => {
+
+    // THE BUG (reported from live use): scheduled intentions came back after
+    // being deleted. Two independent routes brought them back, and both had to
+    // be closed:
+    //
+    //   1. hasDuplicateIntention only consulted the LIVE ledger, so once the
+    //      entry was gone the next generation re-proposed it from unchanged
+    //      story context and it landed as brand new.
+    //   2. restoreLedgerSnapshot restored the snapshot verbatim, so a swipe
+    //      whose snapshot predated the deletion resurrected it instantly.
+
+    test('a re-proposal after deletion is rejected as a duplicate', () => {
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
+            status: 'dormant',
+        }, 'day 1', 3);
+
+        expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(true);
+        removeLedgerEntries([entry.id], { tombstone: true });
+        expect(getLedger()).toHaveLength(0);
+
+        // The model proposes it again from story context that has not changed.
+        expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(true);
+    });
+
+    test('a rollback does not resurrect it', () => {
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
+        }, 'day 1', 3);
+        // Snapshot taken while the entry was still live — a swipe restores this.
+        const snapshot = JSON.parse(JSON.stringify(getLedger()));
+
+        removeLedgerEntries([entry.id], { tombstone: true });
+        restoreLedgerSnapshot(snapshot);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('a deleted-then-re-proposed clone with a fresh id is still blocked on rollback', () => {
+        // The tombstone matches on text as well as id, so a re-proposal that
+        // slipped in before this fix cannot ride back in on an old snapshot.
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
+        }, 'day 1', 3);
+        removeLedgerEntries([entry.id], { tombstone: true });
+
+        restoreLedgerSnapshot([{
+            id: 'i-different', npc: 'Ezra',
+            action: 'call Dorothy', trigger: 'Monday morning',
+        }]);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('the engine executing an intention does NOT tombstone it', () => {
+        // An executed intention is a lifecycle event, not a refusal. Ezra may
+        // decide to call Dorothy again next week; tombstoning that would make
+        // the intention unrepeatable for the rest of the chat.
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
+        }, 'day 1', 3);
+        removeLedgerEntries([entry.id]); // engine path — no tombstone
+
+        expect(isIntentionDeleted('Ezra', 'call Dorothy', 'Monday morning')).toBe(false);
+        expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(false);
+    });
+
+    test('deleting an edited entry blocks both the correction and the original', () => {
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorthy', trigger: 'Monday morning',
+        }, 'day 1', 3);
+        updateLedgerEntry(entry.id, { action: 'call Dorothy' });
+        removeLedgerEntries([entry.id], { tombstone: true });
+
+        expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(true);
+        expect(hasDuplicateIntention('Ezra', 'call Dorthy', 'Monday morning')).toBe(true);
+    });
+
+    test('a genuinely different intention is not suppressed', () => {
+        // The tombstone must not become "this NPC may never plan anything again".
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
+        }, 'day 1', 3);
+        removeLedgerEntries([entry.id], { tombstone: true });
+
+        expect(hasDuplicateIntention('Ezra', 'leave town', 'at dawn')).toBe(false);
+        // Another NPC is unaffected.
+        expect(hasDuplicateIntention('Alex', 'call Dorothy', 'Monday morning')).toBe(false);
+    });
+
+    test('clearing tombstones lets a deleted intention be proposed again', () => {
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
+        }, 'day 1', 3);
+        removeLedgerEntries([entry.id], { tombstone: true });
+
+        expect(clearDeletedIntentions()).toBe(1);
+        expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(false);
+    });
+});
+
+describe('the intentions call can see scheduled intentions', () => {
+
+    // THE ROOT CAUSE of the duplicate-scheduled-intention reports: dormant
+    // entries were dropped from the intentions call entirely. That call both
+    // evaluates existing intentions AND proposes new ones — correct for the
+    // first job, wrong for the second. The model could not see that Ezra
+    // already planned to call Dorothy, so it re-proposed the plan every turn,
+    // and only word-for-word repeats were caught by exact-string dedup.
+
+    test('scheduled entries are separated from the evaluation list', async () => {
+        addLedgerEntry({ npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning', status: 'dormant', wakeHint: 'Monday' }, 'day 1', 1);
+        addLedgerEntry({ npc: 'Ezra', action: 'watch Alex', trigger: 'when alone' }, 'day 1', 1);
+
+        const [block] = await assembleNpcBlocks(['Ezra']);
+
+        // §20 intact: dormant entries are still not evaluable.
+        expect(block.openIntentions.map(e => e.action)).toEqual(['watch Alex']);
+        expect(block.scheduledIntentions.map(e => e.action)).toEqual(['call Dorothy']);
+    });
+
+    test('the prompt shows scheduled plans but gives them no ids', async () => {
+        addLedgerEntry({ npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning', status: 'dormant', wakeHint: 'Monday' }, 'day 1', 1);
+        const npcBlocks = await assembleNpcBlocks(['Ezra']);
+
+        const content = buildUserContent({ npcBlocks, recentMessages: '...' });
+
+        expect(content).toContain('<already_scheduled>');
+        expect(content).toContain('call Dorothy');
+        expect(content).toContain('watching for: Monday');
+        // No id on the line — the model must not be able to mark it
+        // executed/dropped, which is what dormancy means.
+        const line = content.split('\n').find(l => l.includes('call Dorothy'));
+        expect(line).not.toMatch(/\[i-/);
+    });
+
+    test('the system prompt tells the model not to restate them', () => {
+        expect(buildSystemPrompt({ intentions: true })).toContain('<already_scheduled>');
+        // Thoughts-only calls never propose intentions, so the rule is omitted.
+        expect(buildSystemPrompt({ thoughts: true, intentions: false }))
+            .not.toContain('<already_scheduled>');
+    });
+});
 
 describe('dedup survives a user edit', () => {
 

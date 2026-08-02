@@ -17,6 +17,9 @@
  *           ↑ 'active'|'dormant' (§20)   ↑ free-text wake condition
  *     ],
  *     turnCounter: 0,           ↑ incremented each generation (§20 lazy poll)
+ *     deletedIntentions: [      ↑ tombstones for USER-deleted intentions
+ *       { id, npc, actions: [...], triggers: [...], at }
+ *     ],
  *     perMessage: {
  *       'mu-<uuid>': {
  *         reactions: [ { npc, re, thought } ],
@@ -228,6 +231,9 @@ export function getInteriorityData() {
     if (!meta[META_KEY].perMessage || typeof meta[META_KEY].perMessage !== 'object') {
         meta[META_KEY].perMessage = {};
     }
+    if (!Array.isArray(meta[META_KEY].deletedIntentions)) {
+        meta[META_KEY].deletedIntentions = [];
+    }
     return meta[META_KEY];
 }
 
@@ -357,14 +363,128 @@ const USER_EDITED_FIELDS = ['npc', 'action', 'trigger', 'since', 'originalAction
 
 /**
  * Remove ledger entries by id.
+ *
  * @param {string[]} ids
+ * @param {object} [opts]
+ * @param {boolean} [opts.tombstone=false] - record a tombstone so the entry
+ *   cannot come back. Set ONLY for user-initiated deletions — see
+ *   {@link getDeletedIntentions} for why the engine's own removals must not.
  */
-export function removeLedgerEntries(ids) {
+export function removeLedgerEntries(ids, { tombstone = false } = {}) {
     if (!ids || !ids.length) return;
     const idSet = new Set(ids);
     const data = getInteriorityData();
+    const removed = data.ledger.filter(e => idSet.has(e.id));
     data.ledger = data.ledger.filter(e => !idSet.has(e.id));
+    if (tombstone && removed.length > 0) _tombstone(data, removed);
     saveInteriorityData(data);
+}
+
+// ─── Deletion tombstones ─────────────────────────────────────────────────────
+//
+// Deleting an intention used to leave no trace, and two things brought it
+// straight back:
+//
+//   1. hasDuplicateIntention only ever consulted the LIVE ledger. Once the
+//      entry was gone there was nothing left to match, so the next generation
+//      re-proposed it from story context that had not changed and it landed as
+//      a brand-new entry. Scheduled entries showed it worst — they sit in the
+//      ledger for many turns, so they get many more chances.
+//   2. restoreLedgerSnapshot restored every entry in the snapshot verbatim. A
+//      swipe or message edit whose snapshot predated the deletion resurrected
+//      the entry immediately, id, `since` and all — no new generation needed.
+//
+// This module already holds the principle that user-authored state survives a
+// rollback: `manual` entries survive, and USER_EDITED_FIELDS win the merge. A
+// deletion is the same kind of statement and was the one that did not stick.
+//
+// Only USER deletions are tombstoned. The engine's own removals (executed,
+// dropped) are lifecycle events, not refusals — an NPC who calls Dorothy today
+// may well decide to call her again next week, and tombstoning that would
+// quietly make the intention unrepeatable for the rest of the chat.
+
+/** Cap on retained tombstones. Oldest are dropped first. */
+const MAX_TOMBSTONES = 200;
+
+const _normIntent = v => String(v ?? '').trim().toLowerCase();
+
+/**
+ * The action/trigger strings an entry should be matched on: its current text
+ * plus, if the user edited it, the text the engine originally wrote. Mirrors
+ * {@link hasDuplicateIntention} so a deletion blocks exactly what a live entry
+ * would have blocked.
+ */
+function _intentionKeys(entry) {
+    const actions = new Set([_normIntent(entry.action)]);
+    const triggers = new Set([_normIntent(entry.trigger)]);
+    if (entry.originalAction !== undefined) actions.add(_normIntent(entry.originalAction));
+    if (entry.originalTrigger !== undefined) triggers.add(_normIntent(entry.originalTrigger));
+    return { actions: [...actions], triggers: [...triggers] };
+}
+
+/** Record tombstones for `entries` into `data` (does not save). */
+function _tombstone(data, entries) {
+    if (!Array.isArray(data.deletedIntentions)) data.deletedIntentions = [];
+    for (const entry of entries) {
+        const { actions, triggers } = _intentionKeys(entry);
+        data.deletedIntentions.push({
+            id: entry.id,
+            npc: _normIntent(entry.npc),
+            actions,
+            triggers,
+            at: Date.now(),
+        });
+    }
+    if (data.deletedIntentions.length > MAX_TOMBSTONES) {
+        data.deletedIntentions = data.deletedIntentions.slice(-MAX_TOMBSTONES);
+    }
+}
+
+/**
+ * Every tombstone recorded in this chat.
+ * @returns {Array<object>}
+ */
+export function getDeletedIntentions() {
+    return getInteriorityData().deletedIntentions;
+}
+
+/**
+ * Has the user deleted this intention?
+ *
+ * Exact-string match on the same keys as {@link hasDuplicateIntention}, which
+ * bounds the suppression usefully: a tombstone blocks the wording the user
+ * rejected, not the idea. If the story genuinely moves and the model proposes a
+ * materially different intention, it still gets through.
+ *
+ * @param {string} npc
+ * @param {string} action
+ * @param {string} trigger
+ * @returns {boolean}
+ */
+export function isIntentionDeleted(npc, action, trigger) {
+    const name = _normIntent(npc);
+    const a = _normIntent(action);
+    const t = _normIntent(trigger);
+    return getDeletedIntentions().some(d =>
+        d.npc === name
+        && Array.isArray(d.actions) && d.actions.includes(a)
+        && Array.isArray(d.triggers) && d.triggers.includes(t)
+    );
+}
+
+/**
+ * Forget every tombstone, so previously deleted intentions may be proposed
+ * again. The escape hatch for a deletion the user changes their mind about.
+ *
+ * @returns {number} how many tombstones were cleared
+ */
+export function clearDeletedIntentions() {
+    const data = getInteriorityData();
+    const count = data.deletedIntentions.length;
+    if (count === 0) return 0;
+    data.deletedIntentions = [];
+    saveInteriorityData(data);
+    return count;
 }
 
 /**
@@ -427,7 +547,7 @@ export function hasDuplicateIntention(npc, action, trigger) {
     // Both fields fall back to the current value when no edit was recorded, so
     // this stays an exact-string match — an unedited entry behaves exactly as
     // before, and no genuinely new intention is suppressed.
-    return getLedger().some((e) => {
+    const live = getLedger().some((e) => {
         if (String(e.npc).toLowerCase() !== lower) return false;
         const actions = new Set([norm(e.action)]);
         const triggers = new Set([norm(e.trigger)]);
@@ -435,6 +555,10 @@ export function hasDuplicateIntention(npc, action, trigger) {
         if (e.originalTrigger !== undefined) triggers.add(norm(e.originalTrigger));
         return actions.has(a) && triggers.has(t);
     });
+    // A deleted intention is not in the ledger to match against, so without
+    // this the next generation re-proposes it as brand new. The user already
+    // said no once.
+    return live || isIntentionDeleted(npc, action, trigger);
 }
 
 // ─── Manual entries (user-authored intentions) ───────────────────────────────
@@ -547,7 +671,18 @@ export function restoreLedgerSnapshot(snapshot) {
         e => e.manual === true && !snapIds.has(e.id),
     );
 
-    setLedger([...restored, ...manualSurvivors]);
+    // A snapshot taken BEFORE the user deleted an entry still contains it, so
+    // restoring wholesale resurrected it verbatim — id, `since` and all — on
+    // the next swipe or message edit. A deletion is user-authored state and
+    // survives a rollback for the same reason a manual entry does. Matched on
+    // id first (the snapshot keeps it) and on text as a fallback, so a
+    // re-proposed clone that picked up a fresh id is caught too.
+    const tombstonedIds = new Set(getDeletedIntentions().map(d => d.id));
+    const kept = [...restored, ...manualSurvivors].filter(
+        e => !tombstonedIds.has(e.id) && !isIntentionDeleted(e.npc, e.action, e.trigger),
+    );
+
+    setLedger(kept);
 }
 
 // ─── Dormant intentions (v2 §20 — scheduling) ─────────────────────────────────

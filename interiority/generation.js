@@ -177,23 +177,36 @@ async function loadNpcKnowledge(npcName) {
 /**
  * Assemble the per-NPC context blocks for the API call.
  *
- * Dormant entries (§20) are excluded from `openIntentions` — the
- * intentions call never evaluates them (executed/dropped checks), so
- * there is no reason to send them. The thoughts call uses
- * {@link _assembleThoughtsNpcBlocks}, which DOES include dormant entries
- * as anticipation material.
+ * Dormant entries (§20) stay out of `openIntentions`: that list is the
+ * EVALUATION list, and the whole point of dormancy is that a scheduled
+ * intention is not evaluated per turn.
+ *
+ * They are still sent, separately, as `scheduledIntentions`. The intentions
+ * call does two jobs — it evaluates existing intentions AND proposes new ones —
+ * and dropping dormant entries entirely was only correct for the first. For the
+ * second it meant the model could not see that Ezra already plans to call
+ * Dorothy on Monday, so it re-proposed that plan from unchanged story context
+ * every single turn. Exact-string dedup caught the re-proposals that came back
+ * word for word and nothing else, so the ledger accumulated near-duplicate
+ * paraphrases of one intention — and deleting them just freed the slot to be
+ * filled again next turn.
+ *
+ * The scheduled list carries NO ids, which is what keeps §20 intact: the model
+ * can see these intentions but has no handle to mark them executed or dropped.
+ * It is a "you already know about these" list, not an evaluable one.
  *
  * @param {string[]} roster
- * @returns {Promise<Array<{name, knowledgeEntry, openIntentions}>>}
+ * @returns {Promise<Array<{name, knowledgeEntry, openIntentions, scheduledIntentions}>>}
  */
 export async function assembleNpcBlocks(roster) {
     const blocks = [];
     for (const name of roster) {
         const knowledgeEntry = await loadNpcKnowledge(name);
+        const entries = getLedgerEntriesForNpc(name);
         // §20: only active entries go to the intentions evaluation list.
-        const openIntentions = getLedgerEntriesForNpc(name)
-            .filter(e => e.status !== 'dormant');
-        blocks.push({ name, knowledgeEntry, openIntentions });
+        const openIntentions = entries.filter(e => e.status !== 'dormant');
+        const scheduledIntentions = entries.filter(e => e.status === 'dormant');
+        blocks.push({ name, knowledgeEntry, openIntentions, scheduledIntentions });
     }
     return blocks;
 }

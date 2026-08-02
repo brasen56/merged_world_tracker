@@ -35,7 +35,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
     })();
 
     const contextLine = wantIntentions
-        ? 'You will receive, for each NPC: their knowledge ledger / dossier entry, their current open intentions, and a window of recent story messages.'
+        ? 'You will receive, for each NPC: their knowledge ledger / dossier entry, their current open intentions, any plans they have already scheduled, and a window of recent story messages.'
         : 'You will receive, for each NPC: their knowledge ledger / dossier entry and a window of recent story messages.';
 
     // ── Rules ──
@@ -61,6 +61,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
         rules.push(`   - "event": the trigger is tied to a specific upcoming event that is near (within a turn or two).`);
         rules.push(`   - "scheduled": the trigger is tied to a specific future date, festival, or scheduled occasion that is far off (many turns away). Requires a "wake_hint" — the event/date the scan should watch for (e.g. "harvest festival", "Day 12").`);
         rules.push(`   - When unsure or the horizon is unclear, use "immediate". Event-conditional triggers ("next time X") CANNOT be scheduled — you can't predict when they fire.`);
+        rules.push(`${++n}. <already_scheduled> lists plans this NPC has ALREADY made. Do NOT propose a new intention that restates one of them, even in different words — a rephrasing of an existing plan is not a new plan. These have no ids on purpose: you cannot mark them executed or dropped. Treat them as settled and propose only genuinely NEW intentions.`);
         rules.push(`${++n}. SHARED PLANS are not intentions. A public, shared appointment ("we'll all go to the festival") is a calendar item — it belongs in world state, NOT the ledger. Only PRIVATE plans — an NPC's hidden intention to act — are intentions.`);
     }
 
@@ -122,7 +123,7 @@ ${notes.join('\n')}`;
  *
  * @param {object} opts
  * @param {Array<object>} opts.npcBlocks - per-NPC assembled context blocks
- *   [{ name, knowledgeEntry, openIntentions }]
+ *   [{ name, knowledgeEntry, openIntentions, scheduledIntentions }]
  * @param {string} opts.recentMessages - stripped recent message window
  * @param {string} [opts.worldTime] - in-world time label from world state
  * @param {string} [opts.playerName] - the human user's persona name, so the
@@ -152,6 +153,16 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
                 parts.push(`<open_intentions>\n${lines.join('\n')}\n</open_intentions>`);
             } else {
                 parts.push(`<open_intentions>\n(None.)\n</open_intentions>`);
+            }
+            // Scheduled intentions, deliberately WITHOUT ids: the model needs
+            // to know these plans already exist so it stops re-proposing them,
+            // but it must not be able to mark them executed or dropped — a
+            // scheduled intention is evaluated when it wakes, not every turn.
+            if (npc.scheduledIntentions && npc.scheduledIntentions.length > 0) {
+                const lines = npc.scheduledIntentions.map(e =>
+                    `- ${e.action} → trigger: ${e.trigger}${e.wakeHint ? ` (watching for: ${e.wakeHint})` : ''}`
+                );
+                parts.push(`<already_scheduled>\n${lines.join('\n')}\n</already_scheduled>`);
             }
         }
         parts.push('</npc>');

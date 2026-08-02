@@ -1068,7 +1068,36 @@ try {
         },
     };
 
-    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}');
+    // ── Interiority deletion tombstones ─────────────────────────────────────
+    //
+    // Deleting an intention records a tombstone so the engine cannot re-propose
+    // it and a swipe cannot restore it. That is deliberately sticky, so there
+    // has to be a way back for a deletion the user regrets.
+    const interiorityData = await import('./interiority/data.js');
+
+    window.MWT.interiority = {
+        deletions: () => {
+            const rows = interiorityData.getDeletedIntentions().map(d => ({
+                npc: d.npc,
+                action: (d.actions || [])[0] || '',
+                trigger: (d.triggers || [])[0] || '',
+                deletedAt: d.at ? new Date(d.at).toLocaleString() : '(unknown)',
+            }));
+            if (rows.length === 0) { console.log('[MWT] No deleted intentions recorded in this chat.'); return []; }
+            console.table(rows);
+            console.log('[MWT] These will not be re-proposed. MWT.interiority.clearDeletions() forgets them all.');
+            return rows;
+        },
+        clearDeletions: () => {
+            const count = interiorityData.clearDeletedIntentions();
+            console.log(count > 0
+                ? `[MWT] Cleared ${count} deletion record(s) — these intentions may be proposed again.`
+                : '[MWT] Nothing to clear.');
+            return count;
+        },
+    };
+
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.interiority.{deletions,clearDeletions}');
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }
