@@ -18,7 +18,7 @@ import {
     STORE_SENTINEL, STORE_COMMENT, isStoreEntry,
     hydrateBook, isHydrated, assertHydrated,
     readField, writeField,
-    applyStoreToWorldInfo, flushBook, hydrateCurrentBooks,
+    applyStoreToWorldInfo, flushBook, flushAll, hydrateCurrentBooks,
     _clearCacheForTests, _setCacheForTests,
 } from '../knowledge/store.js';
 import { saveSettings } from '../knowledge/settings.js';
@@ -462,5 +462,72 @@ describe('flushBook', () => {
 
     test('returns false for a book with no cached store', async () => {
         expect(await flushBook('Nothing Cached')).toBe(false);
+    });
+});
+
+describe('a failed save must stay dirty', () => {
+
+    // THE PROPERTY: the registry is only "clean" once it is actually on disk.
+    //
+    // applyStoreToWorldInfo() folds the store into the caller's world-info
+    // object and used to clear `dirty` right there — synchronously, BEFORE the
+    // caller's await on saveWorldInfo could possibly have succeeded. A save
+    // that then threw left the cache marked clean while nothing had persisted,
+    // so flushAll() skipped the book and the write was gone with a console
+    // warning as its only trace. Losing registry uids is the exact failure the
+    // duplicate-entry guards exist to prevent.
+
+    test('flushBook reports failure and a later flushAll still retries', async () => {
+        _setCacheForTests('Book A', {});
+        writeField('Book A', 'registry', { Mara: { uid: 7 } });
+
+        // The disk is unavailable for this attempt.
+        const boom = vi.spyOn(wiFake, 'saveWorldInfo')
+            .mockRejectedValueOnce(new Error('disk full'));
+
+        expect(await flushBook('Book A')).toBe(false);
+        expect(boom).toHaveBeenCalledTimes(1);
+        // flushBook creates the book before saving, so the book itself may
+        // exist — what must NOT exist is the store entry the save would have
+        // written.
+        expect(storeEntryOf('Book A')).toBeNull();
+
+        // Disk is back. The book is still dirty, so this must write it out.
+        await flushAll();
+
+        expect(JSON.parse(storeEntryOf('Book A').content).registry)
+            .toEqual({ Mara: { uid: 7 } });
+    });
+
+    test('a successful save does clear dirty, so flushAll does not rewrite', async () => {
+        // The other half of the property — "stay dirty on failure" must not
+        // become "always dirty", or every chat change would rewrite every book.
+        _setCacheForTests('Book A', {});
+        writeField('Book A', 'registry', { Mara: { uid: 7 } });
+
+        expect(await flushBook('Book A')).toBe(true);
+
+        const after = vi.spyOn(wiFake, 'saveWorldInfo');
+        await flushAll();
+        expect(after).not.toHaveBeenCalled();
+    });
+
+    test('writeToLorebook leaves the store dirty when its save fails', async () => {
+        // Same hazard on the NPC-write path: applyStoreToWorldInfo is called
+        // just before saveWorldInfo there too.
+        saveSettings({ scope: 'global' });
+        const book = 'Knowledge Tracker';
+        await hydrateBook(book, { registry: {} });
+        writeField(book, 'registry', { Mara: { uid: 7 } });
+
+        vi.spyOn(wiFake, 'saveWorldInfo')
+            .mockRejectedValueOnce(new Error('disk full'));
+
+        const res = await writeToLorebook('Mara', 'dossier', ['Mara'], null);
+        expect(res.success).toBe(false);
+
+        await flushAll();
+        expect(JSON.parse(storeEntryOf(book).content).registry)
+            .toEqual({ Mara: { uid: 7 } });
     });
 });

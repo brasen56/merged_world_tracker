@@ -24,7 +24,7 @@ import { getRegistry } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
-import { applyStoreToWorldInfo, assertHydrated, isStoreEntry, STORE_SENTINEL } from './store.js';
+import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, STORE_SENTINEL } from './store.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
 
@@ -108,6 +108,8 @@ export async function writeStateTracker(uid, name, content) {
         entry.content = content;
         applyStoreToWorldInfo(book, wi);
         await state.wiScript.saveWorldInfo(book, wi);
+        // Only now has the folded-in store actually reached disk.
+        markStoreClean(book);
         pushHistory(uid, previousContent, book);
         return { success: true, uid };
     } catch (err) { return { success: false, error: err.message }; }
@@ -155,6 +157,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             entries[existingUid].comment = name;
             applyStoreToWorldInfo(book, wi);
             await state.wiScript.saveWorldInfo(book, wi);
+            markStoreClean(book);
             return { success: true, uid: existingUid };
         } else {
             // Creating an entry against an un-hydrated store is the duplicate
@@ -174,6 +177,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             };
             applyStoreToWorldInfo(book, wi);
             await state.wiScript.saveWorldInfo(book, wi);
+            markStoreClean(book);
             return { success: true, uid: newUid };
         }
     } catch (err) { return { success: false, content, keywords, error: err.message }; }

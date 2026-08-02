@@ -392,9 +392,33 @@ export function applyStoreToWorldInfo(bookName, wi) {
         entry.comment = STORE_COMMENT;
     }
 
-    s.dirty = false;
+    // Cancel the pending debounced flush but do NOT clear `dirty` — that is
+    // the caller's job, AFTER its save resolves (see markStoreClean).
+    //
+    // Cancelling the timer here is still correct and must stay eager: the whole
+    // point of folding the store into the caller's save is to remove the second
+    // writer, so a debounced flush firing alongside it would reintroduce the
+    // interleaving this function exists to prevent. Clearing `dirty` is a
+    // different claim entirely — it asserts the data reached disk, which cannot
+    // be true yet, because this function is synchronous and the save it is
+    // being folded into has not been awaited.
     if (s.timer) { clearTimeout(s.timer); s.timer = null; }
     return true;
+}
+
+/**
+ * Mark a book's store as persisted. Call ONLY after the `saveWorldInfo` that
+ * carried it has resolved successfully.
+ *
+ * A book that stays dirty is retried by the next {@link flushAll} (chat change,
+ * reload) and re-armed by the next {@link writeField}, so a transient failure
+ * costs a retry rather than the data.
+ *
+ * @param {string} bookName
+ */
+export function markStoreClean(bookName) {
+    const s = _cache.get(bookName);
+    if (s) s.dirty = false;
 }
 
 /**
@@ -431,10 +455,13 @@ export async function flushBook(bookName) {
 
     try {
         await wi$.saveWorldInfo(bookName, wi);
-        s.dirty = false;
+        markStoreClean(bookName);
         return true;
     } catch (err) {
-        console.warn(`[MWT:Knowledge] store: save of "${bookName}" failed:`, err?.message || err);
+        // `dirty` deliberately stays set: flushAll() retries on the next chat
+        // change, and any writeField() re-arms the debounce. Marking it clean
+        // here would strand the write in memory with only this warning.
+        console.warn(`[MWT:Knowledge] store: save of "${bookName}" failed (will retry):`, err?.message || err);
         return false;
     }
 }
