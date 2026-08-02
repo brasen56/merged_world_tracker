@@ -1026,7 +1026,18 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             btn.disabled = true; btn.textContent = '⏳ Saving…';
             const { saveProfile } = await import('./growth.js');
             const result = await saveProfile(name, text);
-            if (result.success) {
+            if (result.success && result.uidRecorded === false) {
+                // The entry is on disk but nothing points at it: the profile
+                // will read as "never saved" everywhere (including the
+                // Interiority "Profiled NPCs only" filter) and the next save
+                // will create a duplicate. Reporting a plain success here hid
+                // exactly that state. setProfileUid logged the details.
+                flash(
+                    `Saved to the lorebook (UID ${result.uid}), but the NPC registry could not ` +
+                    `record the pointer — see the console.`,
+                    'error'
+                );
+            } else if (result.success) {
                 flash(`Profile saved to "NPC Profiles" lorebook (UID ${result.uid}).`, 'success');
             } else {
                 flash(`Save failed: ${result.error}`, 'error');

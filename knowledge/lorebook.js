@@ -24,7 +24,7 @@ import { getRegistry } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
-import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, STORE_SENTINEL } from './store.js';
+import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
 
@@ -107,7 +107,7 @@ export async function writeStateTracker(uid, name, content) {
         const previousContent = entry.content || '';
         entry.content = content;
         applyStoreToWorldInfo(book, wi);
-        await state.wiScript.saveWorldInfo(book, wi);
+        await saveBookNow(state.wiScript, book, wi);
         // Only now has the folded-in store actually reached disk.
         markStoreClean(book);
         pushHistory(uid, previousContent, book);
@@ -156,7 +156,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             entries[existingUid].key = keywords;
             entries[existingUid].comment = name;
             applyStoreToWorldInfo(book, wi);
-            await state.wiScript.saveWorldInfo(book, wi);
+            await saveBookNow(state.wiScript, book, wi);
             markStoreClean(book);
             return { success: true, uid: existingUid };
         } else {
@@ -176,7 +176,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
                 displayIndex: newUid,
             };
             applyStoreToWorldInfo(book, wi);
-            await state.wiScript.saveWorldInfo(book, wi);
+            await saveBookNow(state.wiScript, book, wi);
             markStoreClean(book);
             return { success: true, uid: newUid };
         }
@@ -234,7 +234,7 @@ export async function writeProfileToLorebook(name, content, existingUid) {
             entries[existingUid].content = content;
             entries[existingUid].comment = name;
             entries[existingUid].key = []; // no keywords → never injected
-            await state.wiScript.saveWorldInfo(book, wi);
+            await saveBookNow(state.wiScript, book, wi);
             return { success: true, uid: existingUid };
         } else {
             const existingUids = Object.keys(entries).map(Number).filter(n => !isNaN(n));
@@ -255,7 +255,7 @@ export async function writeProfileToLorebook(name, content, existingUid) {
                 useGroupScoring: null, automationId: '', role: null, vectorized: false,
                 displayIndex: newUid,
             };
-            await state.wiScript.saveWorldInfo(book, wi);
+            await saveBookNow(state.wiScript, book, wi);
             return { success: true, uid: newUid };
         }
     } catch (err) { return { success: false, error: err.message }; }
@@ -331,7 +331,7 @@ export async function deleteProfileEntries(uids) {
                 deleted.push(uid);
             }
         }
-        if (deleted.length > 0) await state.wiScript.saveWorldInfo(book, wi);
+        if (deleted.length > 0) await saveBookNow(state.wiScript, book, wi);
         return { success: true, deleted };
     } catch (err) {
         return { success: false, deleted: [], error: err.message };

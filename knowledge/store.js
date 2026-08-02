@@ -422,6 +422,43 @@ export function markStoreClean(bookName) {
 }
 
 /**
+ * Save a world-info book and wait for it to actually reach disk.
+ *
+ * ST's `saveWorldInfo(name, data)` does NOT write when called with two
+ * arguments. It refreshes `worldInfoCache` synchronously, hands the write to a
+ * module-level `saveWorldDebounced`, and returns — so awaiting it proves only
+ * that a timer was armed. Two consequences follow, and both silently lose
+ * writes:
+ *
+ *   1. `saveWorldDebounced` is ONE debounced function shared by every book, and
+ *      ST's `debounce()` closes over a single timer that each call clears. Save
+ *      book A and then book B inside the 1s window and A's write is discarded —
+ *      never retried, never logged. `flushAll()` does exactly that: it awaits
+ *      the Knowledge book and then the State book back to back.
+ *   2. Any immediate save anywhere in ST runs `cancelDebounce(saveWorldDebounced)`
+ *      first, which drops a pending write belonging to any book. So does a page
+ *      reload inside the window.
+ *
+ * Meanwhile `worldInfoCache` already holds the new data, so every read for the
+ * rest of the session looks correct and nothing appears wrong until a reload.
+ * That is what "the profile is in the NPC Profiles lorebook but the registry
+ * forgot its profileUid" looks like from the outside.
+ *
+ * The third argument makes ST await the actual POST. That is precisely what
+ * {@link markStoreClean} and every `{ success: true }` in this module already
+ * claim, so it is the only call form either of them is entitled to. Forks
+ * predating the flag ignore the extra argument harmlessly.
+ *
+ * @param {object} wi$ — ST's world-info module
+ * @param {string} bookName
+ * @param {object} wi — the world-info object to write
+ * @returns {Promise<void>}
+ */
+export async function saveBookNow(wi$, bookName, wi) {
+    return wi$.saveWorldInfo(bookName, wi, true);
+}
+
+/**
  * Write a book's store back into its lorebook entry, creating the book if it
  * does not exist yet.
  *
@@ -454,7 +491,7 @@ export async function flushBook(bookName) {
     applyStoreToWorldInfo(bookName, wi);
 
     try {
-        await wi$.saveWorldInfo(bookName, wi);
+        await saveBookNow(wi$, bookName, wi);
         markStoreClean(bookName);
         return true;
     } catch (err) {

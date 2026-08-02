@@ -30,16 +30,39 @@ import { writeToLorebook } from '../knowledge/lorebook.js';
  * `loadWorldInfo` returns a deep copy, exactly like the real one does — that is
  * what forces every writer into read-modify-write and makes the interleaving
  * this store guards against actually reproducible in a test.
+ *
+ * `saveWorldInfo` models the part of ST that this module gets wrong if it is
+ * ever forgotten: without `immediately`, the write does NOT happen. ST hands it
+ * to `saveWorldDebounced`, a SINGLE module-level debounced function shared by
+ * every book, whose one timer each new call clears. Saving book A and then book
+ * B discards A's write outright. An immediate save additionally cancels any
+ * pending debounced write, exactly as ST's `_save` does.
+ *
+ * `books` therefore represents the DISK. A non-immediate save leaves it
+ * untouched, so any call site that drops the flag fails its own assertions.
  */
 function makeFakeWorldInfo() {
     const books = new Map();
+    let pending = null;
     return {
         books,
         async loadWorldInfo(name) {
             return books.has(name) ? structuredClone(books.get(name)) : null;
         },
-        async saveWorldInfo(name, wi) {
+        async saveWorldInfo(name, wi, immediately = false) {
+            if (!immediately) {
+                // Arms the shared debounce, dropping whatever was pending.
+                pending = { name, wi: structuredClone(wi) };
+                return;
+            }
+            pending = null; // ST's _save() cancels the shared debounce first
             books.set(name, structuredClone(wi));
+        },
+        /** Fire the one pending debounced write, if any. */
+        flushDebounce() {
+            if (!pending) return;
+            books.set(pending.name, pending.wi);
+            pending = null;
         },
         async createNewWorldInfo(name) {
             books.set(name, { entries: {} });
@@ -165,7 +188,7 @@ describe('store entry shape', () => {
         entry.vectorized = true;
         entry.disable = false;
         entry.enabled = true;
-        await wiFake.saveWorldInfo('Book A', wi);
+        await wiFake.saveWorldInfo('Book A', wi, true);
 
         writeField('Book A', 'registry', { Mara: { uid: 1 } });
         await flushBook('Book A');
@@ -367,7 +390,7 @@ describe('applyStoreToWorldInfo', () => {
         wi.entries[0] = { uid: 0, comment: 'Mara', key: ['Mara'], content: 'dossier' };
         writeField('Book A', 'registry', { Mara: { uid: 0 } });
         applyStoreToWorldInfo('Book A', wi);
-        await wiFake.saveWorldInfo('Book A', wi);
+        await wiFake.saveWorldInfo('Book A', wi, true);
 
         const saved = wiFake.books.get('Book A');
         const names = Object.values(saved.entries).map(e => e.comment);
@@ -510,6 +533,37 @@ describe('a failed save must stay dirty', () => {
         const after = vi.spyOn(wiFake, 'saveWorldInfo');
         await flushAll();
         expect(after).not.toHaveBeenCalled();
+    });
+
+    test('flushAll persists EVERY dirty book, not just the last one', async () => {
+        // THE PROPERTY: two books flushed back to back both reach disk.
+        //
+        // This is the bug that lost profileUid. saveWorldInfo() without
+        // `immediately` only arms ST's saveWorldDebounced — one debounced
+        // function shared by every book, holding one timer. flushAll() awaits
+        // the Knowledge book and then the State book, and the second call
+        // cleared the first's timer, so the Knowledge registry never reached
+        // disk. markStoreClean() had already run, so nothing ever retried it.
+        //
+        // In-session reads still looked right (ST serves them from
+        // worldInfoCache), so the loss only appeared after a reload: the
+        // profile entry survived in the NPC Profiles lorebook while the
+        // registry pointer at it was gone, which is what made Interiority's
+        // "Profiled NPCs only" filter report no profiled NPC on the roster.
+        _setCacheForTests('Knowledge Tracker', {});
+        _setCacheForTests('State Tracker', {});
+        writeField('Knowledge Tracker', 'registry', { Mara: { uid: 7, profileUid: 3 } });
+        writeField('State Tracker', 'stateRegistry', { Weather: { uid: 1 } });
+
+        await flushAll();
+
+        // Nothing may be left sitting in the debounce.
+        wiFake.flushDebounce();
+
+        expect(JSON.parse(storeEntryOf('Knowledge Tracker').content).registry)
+            .toEqual({ Mara: { uid: 7, profileUid: 3 } });
+        expect(JSON.parse(storeEntryOf('State Tracker').content).stateRegistry)
+            .toEqual({ Weather: { uid: 1 } });
     });
 
     test('writeToLorebook leaves the store dirty when its save fails', async () => {

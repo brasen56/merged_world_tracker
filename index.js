@@ -993,9 +993,82 @@ try {
             console.log(`[MWT] Deleted ${result.deleted.length} duplicate profile entr${result.deleted.length === 1 ? 'y' : 'ies'}: uids ${result.deleted.join(', ')}.`);
             return result.deleted;
         },
+        relink: async (confirm) => {
+            // Recovery for pointers lost BEFORE saves became durable: the
+            // profile entry sits in the "NPC Profiles" lorebook while the
+            // registry has no profileUid for it, so the profile reads as
+            // "never generated" everywhere — the growth modal shows an empty
+            // box, and Interiority's "Profiled NPCs only" filters the NPC out.
+            // Nothing regenerates it, because the evidence is intact and the
+            // lorebook entry is right there; only the pointer is missing.
+            const reg = registryApi.getRegistry();
+            if (Object.keys(reg).length === 0) {
+                console.warn(
+                    '[MWT] The NPC registry is empty for this scope — nothing to relink against. ' +
+                    'Run MWT.scope.diagnose() to check which books this chat resolves to.'
+                );
+                return [];
+            }
+
+            const grouped = new Map();
+            for (const e of await profileLorebookApi.listProfileEntries()) {
+                const key = e.name.toLowerCase().trim();
+                if (!key) continue; // unnamed entries can't be matched to an NPC
+                if (!grouped.has(key)) grouped.set(key, []);
+                grouped.get(key).push(e);
+            }
+
+            const planned = [];
+            for (const [, list] of grouped) {
+                const npc = list[0].name;
+                const regKey = registryApi.resolveRegistryKey(reg, npc);
+                if (regKey == null) {
+                    console.warn(
+                        `[MWT] Profile entry "${npc}" has no matching NPC registry entry — skipped. ` +
+                        `Scan that NPC into the Knowledge book first, then re-run.`
+                    );
+                    continue;
+                }
+                const current = reg[regKey]?.profileUid;
+                // Already pointing at an entry that really exists: leave it be.
+                if (current != null && list.some(e => e.uid === current)) continue;
+                // Largest first, newest to break ties — same heuristic as
+                // pruneDuplicates, for the same reason: a truncated generation
+                // is the likelier orphan.
+                const pick = [...list].sort((a, b) => b.chars - a.chars || b.uid - a.uid)[0];
+                planned.push({
+                    npc, registryKey: regKey, linkUid: pick.uid, chars: pick.chars,
+                    was: current == null ? '(none)' : `${current} (dangling)`,
+                    otherCandidates: list.length - 1,
+                });
+            }
+
+            if (planned.length === 0) {
+                console.log('[MWT] Every named profile entry is already linked to its registry entry.');
+                return [];
+            }
+            if (confirm !== true) {
+                console.table(planned);
+                console.warn(
+                    `[MWT] DRY RUN — nothing written. The ${planned.length} link(s) above would be recorded ` +
+                    `in the NPC registry. Check "otherCandidates" is 0: anything higher means duplicates ` +
+                    `exist and MWT.profiles.duplicates() is worth a look first. ` +
+                    `Call MWT.profiles.relink(true) to apply.`
+                );
+                return planned;
+            }
+
+            const applied = planned.filter(p => registryApi.setProfileUid(p.npc, p.linkUid));
+            await storeApi.flushBook(scopeApi.getLorebookName());
+            console.log(
+                `[MWT] Relinked ${applied.length} profile(s): ` +
+                `${applied.map(p => `${p.npc} → uid ${p.linkUid}`).join(', ')}.`
+            );
+            return applied;
+        },
     };
 
-    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates}');
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}');
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }
