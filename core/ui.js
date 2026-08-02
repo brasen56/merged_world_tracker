@@ -577,20 +577,41 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 }
             }
 
-            // Update auto-plan countdown on Story Planner floating button
+            // Story Planner badge — shares one slot between the auto-plan
+            // countdown and the waiting-setup-beat count.
+            //
+            // Priority is overdue beats > countdown > waiting beats. An overdue
+            // beat outranks the countdown because it is the only one of the
+            // three the user can act on: a countdown just reports that a timer
+            // is running, whereas an overdue beat means an arc has stalled and
+            // is waiting on a decision only they can make.
             const spCountdownEl = document.getElementById('mwt-float-story-planner-countdown');
             if (spCountdownEl) {
                 const spStatus = StoryPlanner.getAutoPlanStatus?.();
-                if (spStatus) {
-                    const remaining = spStatus.interval - spStatus.counter;
-                    spCountdownEl.textContent = `${remaining}`;
-                    spCountdownEl.style.display = 'block';
-                    spCountdownEl.title = `Auto-plan in ${remaining} message${remaining !== 1 ? 's' : ''} (${spStatus.counter}/${spStatus.interval})`;
+                const beats = StoryPlanner.getBeatStatus?.() || { awaiting: 0, overdue: 0 };
+                const countdownText = spStatus
+                    ? `Auto-plan in ${spStatus.interval - spStatus.counter} message${(spStatus.interval - spStatus.counter) !== 1 ? 's' : ''} (${spStatus.counter}/${spStatus.interval})`
+                    : '';
+                const beatText = beats.awaiting
+                    ? `${beats.awaiting} setup beat${beats.awaiting !== 1 ? 's' : ''} waiting`
+                      + (beats.overdue ? `, ${beats.overdue} overdue — /wt-beat to review` : '')
+                    : '';
+
+                spCountdownEl.classList.toggle('mwt-float-badge--overdue', beats.overdue > 0);
+
+                if (beats.overdue > 0) {
+                    spCountdownEl.textContent = `${beats.overdue}`;
+                } else if (spStatus) {
+                    spCountdownEl.textContent = `${spStatus.interval - spStatus.counter}`;
+                } else if (beats.awaiting > 0) {
+                    spCountdownEl.textContent = `${beats.awaiting}`;
                 } else {
                     spCountdownEl.textContent = '';
-                    spCountdownEl.style.display = 'none';
-                    spCountdownEl.title = '';
                 }
+
+                const show = !!spCountdownEl.textContent;
+                spCountdownEl.style.display = show ? 'block' : 'none';
+                spCountdownEl.title = [beatText, countdownText].filter(Boolean).join(' · ');
             }
 
             // Classic button dynamic state classes

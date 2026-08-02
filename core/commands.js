@@ -79,6 +79,34 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                 }
             }, ['mwt-plan'], 'Generate a Story Planner plan');
 
+            // /wt-beat [n] — Review or advance Story Planner setup beats.
+            //
+            // The point of this command is that marking a beat planted should
+            // not require opening the modal: the user notices the setup land in
+            // the narration and confirms it right where they are reading.
+            registerSlashCommand('wt-beat', async (args, _command) => {
+                try {
+                    if (typeof StoryPlanner.listBeats !== 'function') {
+                        return 'Story Planner not available.';
+                    }
+                    const arg = (args || '').toString().trim();
+
+                    if (arg) {
+                        const result = StoryPlanner.markBeatPlanted(Number(arg));
+                        return result.message;
+                    }
+
+                    const beats = StoryPlanner.listBeats();
+                    if (!beats.length) return 'No arcs are waiting on a setup beat.';
+                    const lines = beats.map(b =>
+                        `${b.n}. [${b.step}, ${b.waited} turn${b.waited === 1 ? '' : 's'}] ${b.title} — ${b.beat}`,
+                    );
+                    return `Setup beats waiting:\n${lines.join('\n')}\n\nMark one planted with /wt-beat <number>.`;
+                } catch (err) {
+                    return `Error: ${err.message}`;
+                }
+            }, ['mwt-beat'], 'List Story Planner setup beats, or mark one planted: /wt-beat 2');
+
             // /wt-thoughts — Generate interiority (NPC thoughts)
             registerSlashCommand('wt-thoughts', async (_args, _command) => {
                 try {

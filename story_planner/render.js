@@ -23,6 +23,7 @@ import {
     setPlanData, getPlanText,
     getArcs, setArcs, addArc, updateArc, removeArc, toggleArcPinned,
     isArcReady, getCurrentBeat, advanceBeat, retreatBeat,
+    getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
     getPlanHistory, pushPlanToHistory, historyEntryToText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta,
@@ -151,7 +152,7 @@ function renderBeatStrip(arc) {
     }
 
     const beat = getCurrentBeat(arc);
-    const overdue = waited >= 12 ? ' sp-beat-badge--overdue' : '';
+    const overdue = waited >= getNudgeTurns() ? ' sp-beat-badge--overdue' : '';
     return `
         <div class="sp-beats">
             <div class="sp-beat-line">
@@ -328,6 +329,21 @@ export function render() {
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When auto-generate is ON, a new plan is generated every N messages (counted on AI replies).</p>
                 </div>
 
+                <label class="mwt-label">Beat Reminder</label>
+                <div>
+                    <label class="sp-mode-label">
+                        <input id="sp-nudge-enabled" type="checkbox" ${isNudgeEnabled() ? 'checked' : ''}> Remind me after
+                    </label>
+                    <input id="sp-nudge-turns" class="mwt-input" type="number" value="${getNudgeTurns()}" min="3" max="60" style="max-width:80px">
+                    <span class="mwt-text-dim mwt-text-sm">turns</span>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">
+                        Uses no API calls. When a setup beat has gone this many turns without being marked planted,
+                        you get a toast — type <code>/wt-beat</code> in chat to see the waiting beats and
+                        <code>/wt-beat 2</code> to mark one planted, without opening this panel. The same threshold
+                        marks a beat overdue on its card and tells the AI it has been waiting.
+                    </p>
+                </div>
+
                 <div></div>
                 <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                     <button id="sp-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
@@ -343,6 +359,10 @@ export function render() {
             being told to vaguely "build toward" something. When you see that setup land in the story, click
             <strong>✓ planted</strong> to move to the next beat. Once every beat is planted the arc becomes
             <strong>Ready</strong> and is offered to the AI as usable immediately.
+            <br><br>
+            You do not have to come back here to do that: <code>/wt-beat</code> lists the waiting beats in chat and
+            <code>/wt-beat 2</code> marks one planted. If a beat sits unmarked too long you get a reminder, and the
+            🗺️ floating button shows how many are waiting (amber once any is overdue).
             <br><br>
             Edit any arc directly; changes save automatically. <strong>Pin</strong> an arc to keep it through regeneration
             (arcs with planted beats are kept automatically). Mark one <strong>Resolved</strong> or <strong>Dropped</strong>
@@ -650,10 +670,14 @@ export function wireEvents() {
             customUserPrompt: state.modal.querySelector('#sp-custom-user-prompt')?.value || '',
             injectionDepth: isNaN(depth) ? 4 : depth,
         });
+        const nudgeTurnsRaw = state.modal.querySelector('#sp-nudge-turns')?.value;
+        const nudgeTurns = nudgeTurnsRaw === '' ? OVERDUE_TURNS : Number(nudgeTurnsRaw);
         setPlanData({
             autoInterval: isNaN(autoInterval) ? 10 : Math.max(1, autoInterval),
             directionHint: state.modal.querySelector('#sp-direction-hint')?.value || '',
             arcCount: isNaN(arcCount) ? 10 : Math.min(30, Math.max(3, arcCount)),
+            nudgeEnabled: state.modal.querySelector('#sp-nudge-enabled')?.checked !== false,
+            nudgeTurns: isNaN(nudgeTurns) ? OVERDUE_TURNS : Math.min(60, Math.max(3, nudgeTurns)),
         });
         refreshDisplay();
         applyPlanInjection();
