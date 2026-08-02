@@ -295,6 +295,23 @@ export const notify = notImplemented('notify');
 export const downloadBlob = notImplemented('downloadBlob');
 export const downloadJson = notImplemented('downloadJson');
 export const pickTextFile = notImplemented('pickTextFile');
-export const renderApiSettingsFields = notImplemented('renderApiSettingsFields');
-export const readApiSettingsValues = notImplemented('readApiSettingsValues');
+/**
+ * Minimal stand-in for the real API-settings field renderer.
+ *
+ * A module's render() calls this to fill in the shared connection block. Tests
+ * that render a module are checking that module's OWN markup, so the block only
+ * needs to be a string with the right field ids in it — reproducing the real
+ * inputs would just couple these tests to core/ui.js's layout.
+ */
+export function renderApiSettingsFields(s = {}, opts = {}) {
+    const ids = Object.entries(opts)
+        .filter(([k, v]) => k.endsWith('Id') && typeof v === 'string')
+        .map(([, v]) => `<input id="${v}" value="">`)
+        .join('');
+    return `<div class="mwt-stub-api-fields">${ids}</div>`;
+}
+
+export function readApiSettingsValues() {
+    return {};
+}
 export const createFloatingButtonBar = notImplemented('createFloatingButtonBar');

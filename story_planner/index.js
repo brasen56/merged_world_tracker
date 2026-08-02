@@ -21,6 +21,7 @@ import {
     getArcs, serializeArcsToText, incrementArcTurns,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
+    getArcsAwaitingBeat, takeDueNudges, advanceBeat, getCurrentBeat, getNudgeTurns,
 } from './data.js';
 import { applyPlanInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
@@ -64,8 +65,18 @@ export async function onMessageReceived() {
     // early-return on purpose: beat ages drive the "still waiting after N
     // turns" nudge in the injection, and that has to work whether or not
     // auto-generate is enabled (it is off by default).
-    incrementArcTurns();
+    //
+    // Re-applying the injection when an age changed is what makes that nudge
+    // real. The injected payload is a snapshot string handed to ST's
+    // setExtensionPrompt (core/injection.js), so it is frozen until something
+    // calls applyPlanInjection() again — and nothing on the plain message path
+    // used to. The overdue line was being computed from ages the model never saw.
+    if (incrementArcTurns()) applyPlanInjection();
     if (state.modal) refreshDisplay();
+
+    // Remind the user about beats that have been waiting too long, so tracking
+    // progress does not depend on them remembering to open the modal.
+    notifyDueBeats();
 
     if (!isAutoEnabled() || !hasValidSettings()) return;
 
@@ -165,6 +176,101 @@ export function onMessageDeleted(deletedIndex) {
         console.log(`[MWT:StoryPlanner] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoCounter}`);
     }
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+// ─── Beat reminders + chat-side confirmation ─────────────────────────────────
+
+/** Trim a beat to something that fits in a toast without wrapping forever. */
+function shortBeat(text, max = 90) {
+    const s = String(text || '').trim();
+    return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
+}
+
+/**
+ * Toast the user about beats that have been waiting too long.
+ *
+ * Deliberately does NOT open the modal or advance anything by itself — the
+ * reminder exists so the user can decide, and `/wt-beat` lets them act on it
+ * without leaving the chat.
+ */
+function notifyDueBeats() {
+    let due = [];
+    try {
+        due = takeDueNudges();
+    } catch (err) {
+        console.warn('[MWT:StoryPlanner] Beat reminder check failed:', err.message);
+        return;
+    }
+    if (!due.length) return;
+
+    const [first] = due;
+    const extra = due.length > 1 ? ` (and ${due.length - 1} more)` : '';
+    notify(
+        'Story Planner',
+        `Waiting ${first.turnsSinceAdvance} turns: "${shortBeat(getCurrentBeat(first))}"${extra}. `
+        + 'Type /wt-beat to review, /wt-beat <n> to mark one planted.',
+        'info',
+    );
+}
+
+/**
+ * Beat progress summary for the floating button badge.
+ * @returns {{awaiting: number, overdue: number}}
+ */
+export function getBeatStatus() {
+    const awaiting = getArcsAwaitingBeat();
+    const threshold = getNudgeTurns();
+    return {
+        awaiting: awaiting.length,
+        overdue: awaiting.filter(a => (a.turnsSinceAdvance || 0) >= threshold).length,
+    };
+}
+
+/**
+ * The numbered beat list `/wt-beat` shows. The index is the number the user
+ * types, so it must match the order {@link markBeatPlanted} resolves against —
+ * both derive from getArcsAwaitingBeat() for exactly that reason.
+ */
+export function listBeats() {
+    return getArcsAwaitingBeat().map((arc, i) => ({
+        n: i + 1,
+        id: arc.id,
+        title: arc.title || '(untitled arc)',
+        beat: getCurrentBeat(arc),
+        waited: arc.turnsSinceAdvance || 0,
+        step: `${(arc.beatIndex || 0) + 1}/${arc.beats?.length || 0}`,
+    }));
+}
+
+/**
+ * Mark the nth waiting beat planted, from the chat rather than the modal.
+ *
+ * @param {number} n — 1-based, as shown by {@link listBeats}
+ * @returns {{ok: boolean, message: string}}
+ */
+export function markBeatPlanted(n) {
+    const beats = listBeats();
+    if (!beats.length) return { ok: false, message: 'No arcs are waiting on a setup beat.' };
+
+    const idx = Number(n);
+    if (!Number.isInteger(idx) || idx < 1 || idx > beats.length) {
+        return { ok: false, message: `Pick a number between 1 and ${beats.length}.` };
+    }
+
+    const target = beats[idx - 1];
+    const updated = advanceBeat(target.id);
+    if (!updated) return { ok: false, message: 'That arc no longer exists.' };
+
+    applyPlanInjection();
+    if (state.modal) refreshDisplay();
+
+    const done = (updated.beatIndex || 0) >= (updated.beats?.length || 0);
+    return {
+        ok: true,
+        message: done
+            ? `"${target.title}" — all setup planted. It is now Ready.`
+            : `"${target.title}" — planted. Next: ${shortBeat(getCurrentBeat(updated))}`,
+    };
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────────

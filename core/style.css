@@ -353,6 +353,15 @@ a:focus-visible {
     display: none;
 }
 
+/* Overdue setup beats — amber rather than the green "timer running" pill, so
+   "something is waiting on you" never reads as "a countdown is ticking".
+   Matches the amber the arc card already uses for an overdue beat badge. */
+.mwt-float-btn .mwt-float-btn-countdown.mwt-float-badge--overdue {
+    background: #f59e0b;
+    color: #000;
+    border: none;
+}
+
 /* ─── Token count display in injection panels ──────────────────────────── */
 
 .mwt-token-info {
@@ -711,6 +720,16 @@ body.mwt-buttons--classic .mwt-float-btn.mwt-btn--refreshing {
 body.mwt-buttons--classic .mwt-float-btn.mwt-btn--refreshing .mwt-float-btn-countdown {
     color: #f59e0b;
     animation: mwt-pulse 1s ease-in-out infinite;
+}
+
+/* Classic mode strips the pill to inline text, so the overdue badge has to be
+   re-expressed as a colour. Declared AFTER the --active / --inactive rules on
+   purpose: it carries the same specificity as they do, so source order is what
+   makes it win. Moving it above them silently restores the green. */
+body.mwt-buttons--classic .mwt-float-btn .mwt-float-btn-countdown.mwt-float-badge--overdue {
+    color: #f59e0b;
+    background: transparent;
+    font-weight: 700;
 }
 
 @keyframes mwt-pulse {

@@ -84,6 +84,16 @@ export const ENFORCEMENT_MODES = [
     { key: 'assertive', label: 'Assertive', blurb: 'Advance an arc every response; create the opening if needed' },
 ];
 
+/**
+ * Turns a beat may sit as CURRENT before it is treated as overdue.
+ *
+ * ONE OWNER: the injection's "still waiting after N turns" nudge, the amber
+ * badge on the arc card, and the user-facing reminder all read this. It used to
+ * be a const in injection.js duplicated as a bare `12` in render.js — two
+ * sources for one number is exactly the drift SECTIONS exists to prevent.
+ */
+export const OVERDUE_TURNS = 12;
+
 const SECTION_KEYS = new Set(SECTIONS.map(s => s.key));
 
 // ─── Mutable shared state ────────────────────────────────────────────────────
@@ -220,7 +230,7 @@ export function retreatBeat(id) {
  */
 export function incrementArcTurns() {
     const arcs = getArcs();
-    if (!arcs.length) return;
+    if (!arcs.length) return false;
     let changed = false;
     const next = arcs.map(a => {
         if (a.status !== 'active') return a;
@@ -228,6 +238,33 @@ export function incrementArcTurns() {
         return { ...a, turnsSinceAdvance: (a.turnsSinceAdvance || 0) + 1 };
     });
     if (changed) setArcs(next);
+    // Reported so the caller can re-apply the injection. The injected payload is
+    // a snapshot string (core/injection.js hands it to setExtensionPrompt), so
+    // an age that changes without a re-apply never reaches the model.
+    return changed;
+}
+
+/**
+ * Active arcs currently waiting on a specific beat — the ones a user could
+ * plausibly mark planted right now.
+ *
+ * Excludes ready arcs (no current beat left) and Immediate Hooks (no beats at
+ * all), so the count means "things you can action", not "arcs you have".
+ */
+export function getArcsAwaitingBeat() {
+    return getArcs().filter(a =>
+        a.status === 'active' && !isArcReady(a) && !!getCurrentBeat(a),
+    );
+}
+
+/**
+ * Arcs whose current beat has been waiting long enough to be worth a reminder.
+ * Sorted longest-waiting first so a truncated list shows the worst offenders.
+ */
+export function getOverdueArcs(threshold = getNudgeTurns()) {
+    return getArcsAwaitingBeat()
+        .filter(a => (a.turnsSinceAdvance || 0) >= threshold)
+        .sort((x, y) => (y.turnsSinceAdvance || 0) - (x.turnsSinceAdvance || 0));
 }
 
 // ─── Parsing / serialising ───────────────────────────────────────────────────
@@ -594,6 +631,71 @@ export function getDirectionHint() {
 export function getArcCount() {
     const v = Number(getPlanData().arcCount);
     return Number.isFinite(v) ? Math.min(30, Math.max(3, v)) : 10;
+}
+
+// ─── Beat reminders (zero-API progress tracking) ─────────────────────────────
+
+/** Turns a beat waits before the user is reminded to check on it. */
+export function getNudgeTurns() {
+    const v = Number(getPlanData().nudgeTurns);
+    return Number.isFinite(v) ? Math.min(60, Math.max(3, v)) : OVERDUE_TURNS;
+}
+
+export function isNudgeEnabled() {
+    return getPlanData().nudgeEnabled !== false;
+}
+
+/**
+ * Arcs due for a reminder right now, recording that they were reminded.
+ *
+ * NOT a pure query — it writes the nudge marks, so call it once per turn from
+ * the message hook and nowhere else. Use {@link getOverdueArcs} for display.
+ *
+ * An arc nudges each time its wait crosses another multiple of the threshold
+ * (12, 24, 36 turns…). Nudging once and never again lets an ignored beat stall
+ * silently, which is the failure this whole feature exists to prevent; nudging
+ * every turn once overdue is spam the user would rightly disable. Crossing a
+ * multiple repeats at a rate that stays proportionate to how stale the beat is.
+ *
+ * @returns {object[]} arcs to remind about (empty when nothing is due)
+ */
+export function takeDueNudges() {
+    if (!isNudgeEnabled()) return [];
+    const threshold = getNudgeTurns();
+    const stored = getPlanData().nudgeMarks || {};
+    const marks = { ...stored };
+    const due = [];
+
+    // A mark belongs to a BEAT, not to an arc — hence the composite key. Keying
+    // it by arc id alone means advancing to the next beat inherits the previous
+    // beat's high-water mark, and the new beat stays silent until it is twice as
+    // stale as the threshold. That is a silent stall, which is the failure this
+    // whole feature exists to catch.
+    const keyFor = arc => `${arc.id}#${arc.beatIndex || 0}`;
+    const awaiting = getArcsAwaitingBeat();
+
+    // Reconcile BEFORE deciding what is due, so the result never depends on how
+    // often this ran. Two ways a mark dies: its beat is gone (advanced, resolved,
+    // deleted), or its wait fell back below the multiple it was recorded at
+    // (a retreat, or an edit).
+    const live = new Map(awaiting.map(a => [keyFor(a), a.turnsSinceAdvance || 0]));
+    for (const key of Object.keys(marks)) {
+        if (!live.has(key) || Math.floor(live.get(key) / threshold) < marks[key]) delete marks[key];
+    }
+
+    for (const arc of awaiting) {
+        const key = keyFor(arc);
+        const mult = Math.floor((arc.turnsSinceAdvance || 0) / threshold);
+        if (mult >= 1 && mult > (marks[key] || 0)) {
+            marks[key] = mult;
+            due.push(arc);
+        }
+    }
+
+    const changed = due.length > 0
+        || Object.keys(marks).length !== Object.keys(stored).length;
+    if (changed) setPlanData({ nudgeMarks: marks });
+    return due;
 }
 
 // ─── History (snapshots for Revert / History) ────────────────────────────────

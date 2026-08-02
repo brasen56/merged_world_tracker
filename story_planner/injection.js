@@ -13,7 +13,7 @@ import { STORY_PLAN_INJECTION_HEADER, buildStoryPlanHeader } from './prompts.js'
 import {
     EXTENSION_PROMPT_KEY, SECTIONS,
     getArcs, getInjectMode, isInjectionEnabled, getEnforcement,
-    isArcReady, getCurrentBeat,
+    isArcReady, getCurrentBeat, getNudgeTurns,
 } from './data.js';
 import { getSettings } from './settings.js';
 
@@ -40,12 +40,6 @@ export function getArcsForInjection() {
     if (mode === 'active') return arcs.filter(a => a.status === 'active');
     return arcs;
 }
-
-/**
- * Turns after which a waiting beat is called out as overdue in the injection.
- * Purely presentational nudging — nothing branches on it.
- */
-const OVERDUE_TURNS = 12;
 
 /**
  * The exact markdown body that will be injected (also used for token counts).
@@ -87,7 +81,7 @@ export function buildInjectionBody() {
                 continue;
             }
             const waited = arc.turnsSinceAdvance || 0;
-            const overdue = waited >= OVERDUE_TURNS ? ` — still waiting after ${waited} turns; look for an opening` : '';
+            const overdue = waited >= getNudgeTurns() ? ` — still waiting after ${waited} turns; look for an opening` : '';
             out.push(`- ${title}${overdue}`);
             out.push(`  NOW: ${beat}`);
             if (arc.body) out.push(`  (building toward: ${arc.body})`);
