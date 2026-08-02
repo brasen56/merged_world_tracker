@@ -291,7 +291,18 @@ export function scheduleAutoRefresh(reason = 'scheduled') {
         state.autoRefreshQueued = false;
 
         try {
-            const editorEl = state.modal?.querySelector('#ws-editor');
+            // Capture an in-progress edit before the refresh overwrites the
+            // editor — but ONLY during a live edit session in THIS chat.
+            //
+            // Without the editSessionActive guard this reads whatever is sitting
+            // in the textarea, which after a chat change is still the PREVIOUS
+            // chat's text: hideModal() only sets display:none, so the element and
+            // its stale value survive both closing the modal and switching chats.
+            // The result was chat A's world state being written into chat B.
+            // onChatChanged() clears this flag for exactly this reason, and it is
+            // only set when the user actually types (render.js), so the case this
+            // capture exists for is unaffected.
+            const editorEl = state.editSessionActive ? state.modal?.querySelector('#ws-editor') : null;
             if (editorEl && editorEl.value && editorEl.value !== getWorldStateText()) {
                 setWorldStateData({ text: editorEl.value });
             }
