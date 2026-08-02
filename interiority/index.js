@@ -34,7 +34,7 @@ import {
 
 import {
     buildSceneRoster, runBatchedCall, runStrictCalls, validateAndApply,
-    runSplitCall, mergeSplitResults, runDormantPoll,
+    runSplitCall, mergeSplitResults, runDormantPoll, resolveUserNames,
 } from './generation.js';
 
 import { applyIntentionsInjection } from './injection.js';
@@ -58,12 +58,31 @@ export function init(parentModal) {
     // positions that no longer match the (possibly shrunk) chat array.
     // migrateIndexKeys is now async (defers on sparse-chat forks until hydrated)
     queueWork(migrateIndexKeys);
-    // Clean up any stale user-owned ledger entries from before the roster fix.
-    purgeUserLedgerEntries();
+    // Clean up any user-owned ledger entries the roster filter let through.
+    purgeLeakedUserEntries();
     applyIntentionsInjection();
     // Render any existing thought blocks for the current chat
     setTimeout(() => renderAllThoughtBlocks(), 100);
     console.log('[MWT:Interiority] Module initialized');
+}
+
+/**
+ * Purge ledger entries owned by the player character.
+ *
+ * Fire-and-forget: resolving the user's name forms needs the knowledge
+ * registry, which is a dynamic import. The injection is re-applied only when
+ * something was actually removed, so the common case costs nothing.
+ *
+ * A leaked entry is self-sustaining — `getActiveLedger()` seeds the roster from
+ * the ledger every turn, so the PC would be re-admitted to the roster for the
+ * rest of the chat. Purging it is what breaks that loop.
+ */
+function purgeLeakedUserEntries() {
+    resolveUserNames()
+        .then(names => {
+            if (purgeUserLedgerEntries(names)) applyIntentionsInjection();
+        })
+        .catch(err => console.warn('[MWT:Interiority] User-entry purge failed:', err?.message || err));
 }
 
 export function render() {
@@ -288,7 +307,7 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         }
 
         // 3-4. Validate and apply
-        const { reactions, ledgerChanged } = validateAndApply(result, roster, msgIdx);
+        const { reactions, ledgerChanged } = await validateAndApply(result, roster, msgIdx);
         console.log(`[MWT:Interiority] Applied: ${reactions.length} reaction(s), ledger ${ledgerChanged ? 'changed' : 'unchanged'}.`);
 
         // 5. Render thought block on the message DOM
@@ -322,8 +341,8 @@ export function onChatChanged() {
     clearAllThoughtBlocks();
     // Re-render thought blocks for the new chat
     setTimeout(() => renderAllThoughtBlocks(), 200);
-    // Purge stale user-owned ledger entries before re-injecting this chat's ledger
-    purgeUserLedgerEntries();
+    // Purge leaked user-owned ledger entries before re-injecting this chat's ledger
+    purgeLeakedUserEntries();
     // Re-apply injection from the new chat's ledger
     applyIntentionsInjection();
     // Re-render the tab content

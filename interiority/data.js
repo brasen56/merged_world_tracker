@@ -496,24 +496,31 @@ export function setLedger(newLedger) {
 }
 
 /**
- * Remove any ledger entries owned by the human user ({{user}} / name1).
+ * Remove any ledger entries owned by the human user.
  *
- * Migration/cleanup for chats created before the getUserNames roster fix,
- * where the porous getPlayerNames filter could let a player-named intention
- * into the ledger. Such entries are excluded from the roster now, so they
- * would never be evaluated (executed/dropped) again — they'd linger in the
- * injection forever. This purges them once, at chat load.
+ * Cleanup for entries the roster filter let through. A leaked entry is worse
+ * than inert: `getActiveLedger()` seeds the roster from the ledger every turn,
+ * so the entry re-admits the player character to the roster indefinitely and
+ * the injection keeps demanding the narrator act for the player.
  *
+ * `userNames` should come from `generation.resolveUserNames()`, which widens
+ * {{user}} through the knowledge registry. Called without it, this falls back
+ * to the bare {{user}} name and will miss a leak that arrived under the user's
+ * canonical registry name — which is exactly how they leaked in the first
+ * place. This module is a leaf and cannot import the registry itself, so the
+ * caller supplies the resolved set.
+ *
+ * @param {Set<string>|Iterable<string>} [userNames] - lower-cased user name forms
  * @returns {boolean} true if any entries were removed
  */
-export function purgeUserLedgerEntries() {
-    const userNames = getUserNames({ lower: true });
-    if (userNames.size === 0) return false;
+export function purgeUserLedgerEntries(userNames = getUserNames({ lower: true })) {
+    const names = userNames instanceof Set ? userNames : new Set(userNames || []);
+    if (names.size === 0) return false;
 
     const data = getInteriorityData();
     const before = data.ledger.length;
     data.ledger = data.ledger.filter(
-        e => !userNames.has(String(e.npc).toLowerCase().trim())
+        e => !names.has(String(e.npc).toLowerCase().trim())
     );
 
     const removed = before - data.ledger.length;

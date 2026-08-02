@@ -11,8 +11,10 @@
  * for both so the two paths can't drift apart again.
  */
 
-import { describe, test, expect, beforeEach } from 'vitest';
-import { resetCoreStubs } from './stubs/core.js';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
+import {
+    resetCoreStubs, setFakeContextExtras, getFakeMeta, WORLD_STATE_METADATA_KEY,
+} from './stubs/core.js';
 import {
     getLedger, setLedger, restoreLedgerSnapshot,
     addLedgerEntry, updateLedgerEntry, hasDuplicateIntention,
@@ -20,7 +22,10 @@ import {
     getInnerState, getInnerStates, setInnerState,
     getInnerStatesSnapshot, restoreInnerStatesSnapshot,
 } from '../interiority/data.js';
-import { assembleNpcBlocks } from '../interiority/generation.js';
+import { assembleNpcBlocks, buildSceneRoster, resolveUserNames } from '../interiority/generation.js';
+import { purgeUserLedgerEntries } from '../interiority/data.js';
+import { _setCacheForTests, _clearCacheForTests } from '../knowledge/store.js';
+import { saveSettings as saveKnowledgeSettings } from '../knowledge/settings.js';
 import { buildUserContent, buildSystemPrompt } from '../interiority/prompts.js';
 
 beforeEach(() => resetCoreStubs());
@@ -124,6 +129,70 @@ describe('a deleted intention stays deleted', () => {
 
         expect(clearDeletedIntentions()).toBe(1);
         expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(false);
+    });
+});
+
+describe('the player character never reaches the roster', () => {
+
+    // THE BUG (reported from live use): the main character appeared in the
+    // intentions ledger, so the injection started demanding the narrator act
+    // for the player. The narrator model broke character to ask if that was a
+    // mistake.
+    //
+    // buildSceneRoster canonicalized each candidate through the knowledge
+    // registry BEFORE testing it against {{user}}. The registry is keyed on
+    // whatever the knowledge tracker first recorded, often a fuller name — so
+    // with {{user}} = "Alex" and a registry entry "Alex Blackwell",
+    // canonicalize("Alex") returned "Alex Blackwell", which matched nothing in
+    // the exclusion set. The PC walked onto the roster under their own
+    // canonical name.
+
+    beforeEach(() => {
+        _clearCacheForTests();
+        saveKnowledgeSettings({ scope: 'global' });
+        // The knowledge tracker has recorded the player under a fuller name.
+        _setCacheForTests('Knowledge Tracker', {
+            registry: {
+                'Alex Blackwell': { uid: 0 },
+                'Ezra Blackwell': { uid: 1 },
+            },
+        });
+        setFakeContextExtras({ name1: 'Alex', name2: 'Ezra Blackwell' });
+        // The scene names the player, which is how they became a candidate.
+        getFakeMeta()[WORLD_STATE_METADATA_KEY] = {
+            text: 'Present: Alex, Ezra Blackwell',
+        };
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    test('the user is excluded even when the registry knows them by a fuller name', async () => {
+        const roster = await buildSceneRoster();
+        expect(roster).not.toContain('Alex Blackwell');
+        expect(roster).not.toContain('Alex');
+    });
+
+    test('resolveUserNames covers both the persona name and the registry name', async () => {
+        const names = await resolveUserNames();
+        expect(names.has('alex')).toBe(true);
+        expect(names.has('alex blackwell')).toBe(true);
+    });
+
+    test('a leaked ledger entry does not re-admit the PC to the roster', async () => {
+        // The self-sustaining half of the bug: getActiveLedger() seeds the
+        // roster from the ledger, so one leaked entry keeps the PC on the
+        // roster for the rest of the chat.
+        addLedgerEntry({ npc: 'Alex Blackwell', action: 'confess', trigger: 'at dinner' }, 'day 1', 1);
+
+        expect(await buildSceneRoster()).not.toContain('Alex Blackwell');
+        // ...and the cleanup path removes it, given the widened name set.
+        expect(purgeUserLedgerEntries(await resolveUserNames())).toBe(true);
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('a real NPC sharing the scene is still rostered', async () => {
+        // The filter must not become "exclude anyone named like the user".
+        const roster = await buildSceneRoster();
+        expect(roster).toContain('Ezra Blackwell');
     });
 });
 

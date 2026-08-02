@@ -54,19 +54,18 @@ import {
  *
  * @returns {Promise<string[]>} NPC names
  */
-export async function buildSceneRoster() {
-    const settings = getSettings();
-    const maxNpcs = Math.max(1, settings.maxNpcs || 4);
-    // Only exclude the human user. {{char}} and other AI characters are valid
-    // NPC targets for interiority generation.
-    const userNames = getUserNames({ lower: true });
-    const exclude = (name) => !name || userNames.has(name.toLowerCase().trim());
-
-    // Resolve the knowledge registry for name canonicalization (item 2 fix).
-    // Roster names from `Present:` and the model can use different name forms
-    // ("Mara" vs "Mara Vance"). Canonicalizing to the registry key at roster-
-    // build time prevents forking the NPC's inner-state, recent-thoughts, and
-    // ledger stores — each form would otherwise get its own independent line.
+/**
+ * Load the knowledge registry's name canonicalizer, or a pass-through when the
+ * knowledge module is unavailable.
+ *
+ * Roster names from `Present:` and from the model use different name forms
+ * ("Mara" vs "Mara Vance"). Canonicalizing to the registry key at roster-build
+ * time prevents forking the NPC's inner-state, recent-thoughts, and ledger
+ * stores — each form would otherwise get its own independent line.
+ *
+ * @returns {Promise<(name: string) => string>}
+ */
+async function _getCanonicalizer() {
     let reg = null;
     let resolveKey = null;
     try {
@@ -75,17 +74,73 @@ export async function buildSceneRoster() {
         resolveKey = knowledgeRegistry.resolveRegistryKey;
     } catch { /* knowledge module unavailable — names stay as-is */ }
 
-    const canonicalize = (name) => {
+    return (name) => {
         const n = String(name || '').trim();
         if (!n || !reg || !resolveKey) return n;
         const key = resolveKey(reg, n);
         return key || n; // fall back to raw name when no registry entry
     };
+}
+
+/**
+ * Every name form that refers to the human user, lower-cased.
+ *
+ * {{user}} alone is not enough. The roster canonicalizes each candidate through
+ * the knowledge registry BEFORE testing it, and the registry is keyed on
+ * whatever the knowledge tracker first recorded — often a fuller name. With
+ * {{user}} = "Alex" and a registry entry "Alex Blackwell", `canonicalize("Alex")`
+ * returned "Alex Blackwell", which matched nothing in the exclusion set, and
+ * the player character walked onto the roster under their own canonical name.
+ * From there they got intentions, and the injection started demanding the
+ * narrator act for the player — which is exactly the hijack this filter exists
+ * to prevent.
+ *
+ * Widening it through the SAME resolver the roster uses keeps the match
+ * precise: it is not first-name guessing, it is "whatever entry the registry
+ * says this person is". `resolveRegistryKey` already refuses ambiguous
+ * given-name matches, so a different NPC who happens to share the user's given
+ * name resolves to null and is left alone.
+ *
+ * @returns {Promise<Set<string>>} lower-cased user name forms
+ */
+export async function resolveUserNames() {
+    const names = getUserNames({ lower: true });
+    const canonicalize = await _getCanonicalizer();
+    for (const n of [...names]) {
+        const canon = canonicalize(n);
+        if (canon) names.add(canon.toLowerCase().trim());
+    }
+    return names;
+}
+
+export async function buildSceneRoster() {
+    const settings = getSettings();
+    const maxNpcs = Math.max(1, settings.maxNpcs || 4);
+    // Only exclude the human user. {{char}} and other AI characters are valid
+    // NPC targets for interiority generation.
+    const userNames = await resolveUserNames();
+    const canonicalize = await _getCanonicalizer();
+
+    // Test BOTH forms. Canonicalization can map a name INTO the user's registry
+    // identity ("Alex" → "Alex Blackwell") or the scene can name the user in a
+    // form the persona field never used; testing only one of them lets the
+    // other through.
+    const excluded = [];
+    const exclude = (raw, canon) => {
+        const a = String(raw || '').toLowerCase().trim();
+        const b = String(canon || '').toLowerCase().trim();
+        if (!a && !b) return true;
+        if (userNames.has(a) || userNames.has(b)) {
+            if (!excluded.includes(canon || raw)) excluded.push(canon || raw);
+            return true;
+        }
+        return false;
+    };
 
     const roster = [];
     const addUnique = (name) => {
         const n = canonicalize(name);
-        if (exclude(n)) return;
+        if (exclude(name, n)) return;
         if (!roster.some(r => r.toLowerCase() === n.toLowerCase())) roster.push(n);
     };
 
@@ -120,7 +175,7 @@ export async function buildSceneRoster() {
                 const recent = getRecentMessages({ maxMessages: 10, maxChars: 50000 });
                 if (recent) {
                     for (const name of Object.keys(registry)) {
-                        if (exclude(name)) continue;
+                        if (exclude(name, canonicalize(name))) continue;
                         const re = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
                         if (re.test(recent)) sceneNames.push(name);
                     }
@@ -139,6 +194,15 @@ export async function buildSceneRoster() {
     for (const n of sceneNames) {
         if (roster.length - ledgerCount >= maxNpcs) break;
         addUnique(n);
+    }
+
+    // Say so when the player character was filtered out. This used to be
+    // silent, so when the filter missed a name form there was nothing in the
+    // log to explain how the PC ended up with intentions.
+    if (excluded.length > 0) {
+        console.log(
+            `[MWT:Interiority] Excluded the player character from the roster: ${excluded.join(', ')}.`
+        );
     }
 
     return roster;
@@ -762,9 +826,9 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
  * @param {string[]} roster - the NPC roster for this turn
  * @param {number} msgIdx - chat-array index of the message (for ledger
  *   entries' declaredMsgIdx metadata)
- * @returns {object} { reactions: [], ledgerChanged: boolean }
+ * @returns {Promise<object>} { reactions: [], ledgerChanged: boolean }
  */
-export function validateAndApply(result, roster, msgIdx) {
+export async function validateAndApply(result, roster, msgIdx) {
     const data = getInteriorityData();
     const settings = getSettings();
     const wantThoughts = settings.generateThoughts !== false;
@@ -789,9 +853,10 @@ export function validateAndApply(result, roster, msgIdx) {
     // Normalize roster for case-insensitive matching
     const rosterLower = new Set(roster.map(n => n.toLowerCase().trim()));
 
-    // Defense-in-depth: also reject {{user}} even if it somehow made it into
-    // the roster (e.g. stale ledger entry from before the getUserNames fix).
-    const userNamesLower = getUserNames({ lower: true });
+    // Defense-in-depth: also reject the user even if they somehow made it into
+    // the roster (e.g. a stale ledger entry from before this fix, which is
+    // seeded back into the roster every turn by getActiveLedger).
+    const userNamesLower = await resolveUserNames();
 
     const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
 
@@ -861,7 +926,14 @@ export function validateAndApply(result, roster, msgIdx) {
             continue;
         }
         if (userNamesLower.has(name.toLowerCase())) {
-            // {{user}} must never get thoughts or ledger entries — discard
+            // The player character must never get thoughts or ledger entries.
+            // Reaching here means the roster filter let them through, which is
+            // worth saying out loud — an intention for the PC makes the
+            // injection demand the narrator act for the player.
+            console.warn(
+                `[MWT:Interiority] Discarding block for "${name}" — that is the player character. ` +
+                `They should not have been on the roster; please report this.`
+            );
             continue;
         }
         if (seenNpcs.has(name.toLowerCase())) {
