@@ -109,6 +109,16 @@ export const state = {
     autoCounter: 0,
     /** Last persisted chat length, used by onMessageDeleted */
     lastChatLength: 0,
+    /**
+     * STORY-PLANNER-03: Single cancellable auto-generate timer.
+     *
+     * Every qualifying MESSAGE_RECEIVED previously called setTimeout
+     * independently — timers raced, and a rejected run had already reset the
+     * counter. Storing one timer here lets us clear the previous one before
+     * scheduling a new one, so cadence stays aligned and chat-switch /
+     * generation-busy cancels are guaranteed to catch it.
+     */
+    autoTimer: null,
 };
 
 // ─── Chat data helpers ───────────────────────────────────────────────────────

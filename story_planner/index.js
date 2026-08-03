@@ -99,8 +99,16 @@ export async function onMessageReceived() {
     // guard (getCurrentChatId + epoch) instead of the old weak key.
     const scopeBefore = captureScope();
     try {
+        // STORY-PLANNER-03: Use a single stored, cancellable timer instead of
+        // a fire-and-forget setTimeout. Every qualifying MESSAGE_RECEIVED used
+        // to call setTimeout independently — timers raced, a rejected run had
+        // already reset the counter, and a chat-switch cancel had no handle to
+        // clear. Clearing the previous timer before scheduling a new one keeps
+        // the cadence aligned and guarantees only one generation can be queued.
+        if (state.autoTimer) clearTimeout(state.autoTimer);
         // Delay slightly so ST finishes saving the chat first.
-        setTimeout(async () => {
+        state.autoTimer = setTimeout(async () => {
+            state.autoTimer = null;
             try {
                 if (!isAutoEnabled() || !hasValidSettings()) {
                     console.log('[MWT:StoryPlanner] Deferred auto-generate aborted — Auto disabled or API unset.');
@@ -135,6 +143,11 @@ export function onChatChanged() {
     // the new chat (double API calls, interleaved busy notifications). The
     // generate path also discards cross-chat results, so leaving the flag is
     // safe.
+    // STORY-PLANNER-03: Cancel any pending auto-generate timer. The timer's
+    // own scope check would discard its result, but leaving it running wastes
+    // the API call and risks a generation kicking off for the new chat while
+    // the old one's counter was just restored.
+    if (state.autoTimer) { clearTimeout(state.autoTimer); state.autoTimer = null; }
     // Restore the per-chat auto counter (each chat tracks its own progress)
     const saved = getPlanData()?.autoCounter;
     state.autoCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
