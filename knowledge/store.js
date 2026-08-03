@@ -178,10 +178,25 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
     }
 
     let wi = null;
+    let loadFailed = false;
     try {
         wi = await wi$.loadWorldInfo(bookName);
     } catch (err) {
+        loadFailed = true;
         console.warn(`[MWT:Knowledge] store: could not load "${bookName}":`, err?.message || err);
+    }
+
+    // KNOWLEDGE-02: A failed load must NOT fall through to the "no store entry
+    // yet" branch — that would set hydrated=true against an empty registry and
+    // rebuild the whole book as duplicates beside entries still on disk.
+    // Mirror the corrupt-JSON stance below: stay un-hydrated and shout, so
+    // assertHydrated() blocks writes until the load succeeds.
+    if (loadFailed) {
+        console.error(
+            `[MWT:Knowledge] store: load of "${bookName}" failed — refusing to ` +
+            `treat it as empty. Writes are blocked until this is resolved.`
+        );
+        return s.data;
     }
 
     const entry = findStoreEntry(wi);
