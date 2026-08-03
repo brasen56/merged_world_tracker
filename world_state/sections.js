@@ -6,6 +6,7 @@
 
 import {
     resolveApiCall, normaliseOutput, escapeRegex,
+    captureScope, assertSameScope,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -120,6 +121,11 @@ export async function regenerateSection(sectionName, variety = 2) {
         throw new Error('World State is already refreshing.');
     }
 
+    // WORLD-STATE-01: Section regeneration had NO chat guard at all — a stale
+    // section result from Chat A could overwrite Chat B's section after a
+    // chat switch during the API call.
+    const scopeBefore = captureScope();
+
     state.wstIsRefreshing = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
@@ -143,6 +149,18 @@ export async function regenerateSection(sectionName, variety = 2) {
         const check = validateSectionOutput(text, sectionName);
         if (!check.ok) {
             throw new Error(`Section regen validation failed: ${check.reason}`);
+        }
+
+        // WORLD-STATE-01: Assert scope before any writes. A chat switch during
+        // the API call must discard the result to prevent cross-chat
+        // contamination — same guard as full refresh.
+        const scopeResult = assertSameScope(scopeBefore);
+        if (!scopeResult.ok) {
+            console.warn(
+                `[MWT:WorldState] Chat switched during section regeneration (${scopeResult.reason}) — ` +
+                `discarding result to avoid cross-chat contamination.`
+            );
+            return null;
         }
 
         let cleaned = extractOnlySection(text, sectionName) || text.trim();

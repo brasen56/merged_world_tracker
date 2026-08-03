@@ -8,6 +8,7 @@
 import {
     getContextSafe, getChat,
     resolveApiCall, normaliseOutput, stripNonNarrative,
+    captureScope, assertSameScope,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -147,8 +148,11 @@ export async function refreshWorldState(isAuto = false) {
         return null;
     }
 
-    const ctxBefore = getContextSafe();
-    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
+    // WORLD-STATE-01: Capture the scope before any async operation. The old
+    // weak key `${characterId}|${groupId}|${chatId}` collapsed two different
+    // chats on the same character when chatId was absent. The scope guard uses
+    // getCurrentChatId() + epoch for a reliable check.
+    const scopeBefore = captureScope();
     const chatLenBefore = getChat()?.length;
     state.wstIsRefreshing = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -182,10 +186,15 @@ export async function refreshWorldState(isAuto = false) {
             }
         }
 
-        const ctxAfter = getContextSafe();
-        const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
-        if (chatKeyAfter !== chatKeyBefore) {
-            console.warn('[MWT:WorldState] Chat/character switched during generation — discarding result to avoid cross-chat contamination.');
+        // WORLD-STATE-01: Assert scope immediately before any writes. A chat
+        // switch during the API call must discard the result to prevent
+        // cross-chat contamination.
+        const scopeResult = assertSameScope(scopeBefore);
+        if (!scopeResult.ok) {
+            console.warn(
+                `[MWT:WorldState] Chat switched during generation (${scopeResult.reason}) — ` +
+                `discarding result to avoid cross-chat contamination.`
+            );
             return null;
         }
 
