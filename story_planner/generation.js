@@ -9,6 +9,7 @@ import {
     resolveApiCall, normaliseOutput, notify,
     getCurrentWorldState, getLatestChronicleEntry,
     stripNonNarrative,
+    captureScope, assertSameScope,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
@@ -173,8 +174,10 @@ export async function generatePlan(isAuto = false) {
         return null;
     }
 
-    const ctxBefore = getContextSafe();
-    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
+    // STORY-PLANNER-01: Capture scope before any async operation. The old
+    // weak key collapsed two different chats on the same character when
+    // chatId was absent. The scope guard uses getCurrentChatId() + epoch.
+    const scopeBefore = captureScope();
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
@@ -216,10 +219,13 @@ export async function generatePlan(isAuto = false) {
             }
         }
 
-        const ctxAfter = getContextSafe();
-        const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
-        if (chatKeyAfter !== chatKeyBefore) {
-            console.warn('[MWT:StoryPlanner] Chat switched during generation — discarding result.');
+        // STORY-PLANNER-01: Assert scope before any writes.
+        const scopeResult = assertSameScope(scopeBefore);
+        if (!scopeResult.ok) {
+            console.warn(
+                `[MWT:StoryPlanner] Chat switched during generation (${scopeResult.reason}) — ` +
+                `discarding result to avoid cross-chat contamination.`
+            );
             return null;
         }
 

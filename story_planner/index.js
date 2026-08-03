@@ -13,7 +13,7 @@
  *   render.js     — UI rendering, event wiring
  */
 
-import { syncSharedConnectionSettings, notify, getChat, getContextSafe } from '../core/index.js';
+import { syncSharedConnectionSettings, notify, getChat, captureScope, assertSameScope } from '../core/index.js';
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
@@ -94,13 +94,10 @@ export async function onMessageReceived() {
 
     console.log(`[MWT:StoryPlanner] Auto-generate at ${state.autoCounter} messages`);
     resetAutoCounter();
-    // Capture the conditions at schedule time so the deferred closure can
-    // detect if Auto was toggled off or the chat changed during the 1.5s delay
-    // — otherwise a generatePlan(true) fires against the wrong chat (or after
-    // the user disabled auto-generation). Mirrors the chat-key guard in
-    // generation.js.
-    const ctxBefore = getContextSafe();
-    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
+    // STORY-PLANNER-01: Capture scope at schedule time so the deferred closure
+    // can detect if the chat changed during the 1.5s delay. Uses the scope
+    // guard (getCurrentChatId + epoch) instead of the old weak key.
+    const scopeBefore = captureScope();
     try {
         // Delay slightly so ST finishes saving the chat first.
         setTimeout(async () => {
@@ -109,10 +106,9 @@ export async function onMessageReceived() {
                     console.log('[MWT:StoryPlanner] Deferred auto-generate aborted — Auto disabled or API unset.');
                     return;
                 }
-                const ctxAtRun = getContextSafe();
-                const chatKeyAtRun = `${ctxAtRun?.characterId ?? ''}|${ctxAtRun?.groupId ?? ''}|${ctxAtRun?.chatId ?? ''}`;
-                if (chatKeyAtRun !== chatKeyBefore) {
-                    console.log('[MWT:StoryPlanner] Deferred auto-generate aborted — chat changed during delay.');
+                const scopeResult = assertSameScope(scopeBefore);
+                if (!scopeResult.ok) {
+                    console.log(`[MWT:StoryPlanner] Deferred auto-generate aborted — chat changed during delay (${scopeResult.reason}).`);
                     return;
                 }
                 const arcs = await generatePlan(true);
