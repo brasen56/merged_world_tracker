@@ -10,6 +10,7 @@
 
 import { getContextSafe } from './core/context.js';
 import { escapeHtml } from './core/diff.js';
+import { bumpEpoch } from './core/scope.js';
 import { createSettingsManager } from './core/settings.js';
 import { createModal, showModal, setStatus } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
@@ -522,6 +523,7 @@ function openMwtModal(tabId) {
 
 if (eventSource && event_types?.CHAT_CHANGED) {
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        bumpEpoch(); // Tier 0.2 — invalidate all in-flight scope tokens BEFORE module handlers
         console.log('[MWT] Chat changed — resetting state.');
         WorldState.onChatChanged();
         Chronicle.onChatChanged();
