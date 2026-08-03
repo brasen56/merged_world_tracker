@@ -9,11 +9,14 @@
 
 import {
     RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
+    RELATIONSHIP_TYPES, USER_STANCES,
 } from './state.js';
-import { getRegistry, getRegistryEntry } from './registry.js';
+import { getRegistry, getRegistryEntry, getAllNpcNames } from './registry.js';
 import { getLorebookName } from './scope.js';
 import { readField, writeField } from './store.js';
-import { captureScope, assertSameScope } from '../core/index.js';
+import { getRecentMessages, normaliseOutput, parseJsonLenient, captureScope, assertSameScope } from '../core/index.js';
+import { hasValidSettings } from './settings.js';
+import { RELATIONSHIP_EXTRACT_SYSTEM_PROMPT } from './prompts.js';
 
 // ─── Relationship data CRUD ──────────────────────────────────────────────────
 //
@@ -241,4 +244,157 @@ export async function syncAllRelationshipsToLorebooks() {
         } catch (err) { console.warn(`[MWT:Knowledge] Sync relationships for "${name}" failed:`, err); failed++; }
     }
     return { synced, failed };
+}
+
+// ─── Automatic relationship extraction ───────────────────────────────────────
+//
+// Reads recent messages and proposes relationship edges (between tracked NPCs)
+// plus each NPC's stance toward {{user}}, then applies them via the existing
+// CRUD helpers. The caller (knowledge/index.js) re-syncs the affected lorebook
+// entries afterwards.
+//
+// Design invariants:
+// - Only ADDs or UPDATEs. It never deletes an edge or clears a stance, so manual
+//   edits (and the "remove" actions in the relationship editor) always survive.
+// - Both endpoints of an edge must resolve to a KNOWN registry entry (via
+//   getRegistryEntry), so name variants ("Mara" vs "Mara Vance") canonicalize
+//   and we never create an edge to an entity with no lorebook entry.
+// - type/stance are validated against the canonical enums (RELATIONSHIP_TYPES /
+//   USER_STANCES); anything outside is dropped, so the managed block format
+//   stays stable and presets keep matching the stance label.
+
+/** The "nothing happened" result shape, shared by every no-op exit path. */
+function emptyExtractResult() {
+    return { affectedNpcs: new Set(), edgesAdded: 0, edgesUpdated: 0, stancesSet: 0, skipped: 0 };
+}
+
+/**
+ * Extract relationships + stances from recent messages and apply them.
+ *
+ * @returns {Promise<{affectedNpcs:Set<string>, edgesAdded:number, edgesUpdated:number, stancesSet:number, skipped:number}>}
+ */
+export async function runRelationshipExtract() {
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+
+    // KNOWLEDGE-04: Capture scope before the API round-trip. See the assert
+    // below for why this one matters more than the caller's own check.
+    const scopeBefore = captureScope();
+
+    const knownNames = getAllNpcNames();
+    if (knownNames.length < 1) {
+        // Nothing to relate. Returning a no-op (rather than throwing) lets the
+        // cadence fire harmlessly before the user has scanned any NPCs.
+        return emptyExtractResult();
+    }
+
+    const recentMessages = getRecentMessages({ maxMessages: 50 });
+    if (!recentMessages) throw new Error('No recent messages to scan for relationships.');
+
+    const rosterSection = `<known_npcs>\n${knownNames.map(n => `- ${n}`).join('\n')}\n</known_npcs>`;
+    const userContent = [
+        rosterSection, '',
+        '<recent_messages>', recentMessages, '</recent_messages>', '',
+        '='.repeat(60),
+        'Extract relationships. Output only JSON.',
+    ].join('\n');
+
+    // Dynamic import avoids a circular dependency with lorebook.js (which imports
+    // stripRelationshipBlock from here).
+    const { ktFetchFromApi } = await import('./lorebook.js');
+
+    // Retry once on parse failure (mirrors runScan's two-attempt loop).
+    let lastErr = null;
+    let lastPreview = '';
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const raw = await ktFetchFromApi(RELATIONSHIP_EXTRACT_SYSTEM_PROMPT, userContent);
+        // KNOWLEDGE-04: Assert scope BEFORE applying, not just in the caller.
+        // applyExtractedRelationships writes through writeField(getLorebookName(),
+        // …), and getLorebookName() resolves per chat/character under non-global
+        // scope — so a chat switch during the API call would read-merge-and-write
+        // this chat's edges into a DIFFERENT chat's book. The caller re-checks
+        // scope too, but that check runs after these writes have already landed,
+        // so it can only discard the return value, not undo the contamination.
+        // Abort outright rather than retrying: the results belong to the old chat.
+        if (!assertSameScope(scopeBefore).ok) {
+            console.log('[MWT:Knowledge] Relationship extract discarded — chat changed during API call.');
+            return emptyExtractResult();
+        }
+        const cleaned = normaliseOutput(raw);
+        try {
+            const result = parseJsonLenient(cleaned);
+            return applyExtractedRelationships(result);
+        } catch (err) {
+            lastErr = err;
+            lastPreview = cleaned.slice(0, 120);
+            console.warn(`[MWT:Knowledge] Relationship extract parse failed (attempt ${attempt}): ${err.message}. Preview: "${lastPreview}"`);
+            if (attempt < 2) continue;
+        }
+    }
+    throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastErr?.message || 'unknown'}. Preview: "${lastPreview}"`);
+}
+
+/**
+ * Validate and apply a parsed extraction result. Exported separately so it can be
+ * unit-tested without an API call.
+ *
+ * @param {{edges?:Array, stances?:Array}} result
+ * @returns {{affectedNpcs:Set<string>, edgesAdded:number, edgesUpdated:number, stancesSet:number, skipped:number}}
+ */
+export function applyExtractedRelationships(result) {
+    const affected = new Set();
+    const typeSet = new Set(RELATIONSHIP_TYPES);
+    const stanceSet = new Set(USER_STANCES);
+    let edgesAdded = 0, edgesUpdated = 0, stancesSet = 0, skipped = 0;
+
+    // ── Edges ──
+    const edges = Array.isArray(result?.edges) ? result.edges : [];
+    for (const e of edges) {
+        if (!e || typeof e !== 'object') { skipped++; continue; }
+        const from = typeof e.from === 'string' ? e.from.trim() : '';
+        const to = typeof e.to === 'string' ? e.to.trim() : '';
+        const type = typeof e.type === 'string' ? e.type.trim().toLowerCase() : '';
+        if (!from || !to) { skipped++; continue; }
+        if (!typeSet.has(type)) { skipped++; continue; }
+        // Both endpoints must be known NPCs. Canonicalize through the resolver so
+        // given-name variants match the full registry key.
+        const fromEntry = getRegistryEntry(from);
+        const toEntry = getRegistryEntry(to);
+        if (!fromEntry || !toEntry) { skipped++; continue; }
+        const fromName = fromEntry.key;
+        const toName = toEntry.key;
+        const notes = (typeof e.notes === 'string' ? e.notes.trim() : '').slice(0, 280);
+
+        const existing = getNpcRelationships(fromName).find(r => r.target === toName);
+        if (existing) {
+            // Only mutate + count when something actually changes.
+            if (existing.type !== type || existing.notes !== notes) {
+                updateRelationship(fromName, toName, type, notes);
+                edgesUpdated++;
+                affected.add(fromName);
+            }
+        } else {
+            addRelationship(fromName, toName, type, notes);
+            edgesAdded++;
+            affected.add(fromName);
+        }
+    }
+
+    // ── Stances toward {{user}} ──
+    const stances = Array.isArray(result?.stances) ? result.stances : [];
+    for (const s of stances) {
+        if (!s || typeof s !== 'object') { skipped++; continue; }
+        const npc = typeof s.npc === 'string' ? s.npc.trim() : '';
+        const stance = typeof s.stance === 'string' ? s.stance.trim().toLowerCase() : '';
+        if (!npc || !stanceSet.has(stance)) { skipped++; continue; }
+        const entry = getRegistryEntry(npc);
+        if (!entry) { skipped++; continue; }
+        const name = entry.key;
+        if (getStance(name) !== stance) {
+            setStance(name, stance);
+            stancesSet++;
+            affected.add(name);
+        }
+    }
+
+    return { affectedNpcs: affected, edgesAdded, edgesUpdated, stancesSet, skipped };
 }

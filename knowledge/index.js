@@ -14,6 +14,7 @@ import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queue
 import { buildStagingItems, mergeScanResults } from './staging.js';
 import { resetStoreCache, hydrateCurrentBooks } from './store.js';
 import { runContinuousCaptureAll } from './growth.js';
+import { runRelationshipExtract, syncRelationshipsToLorebook } from './relationships.js';
 import {
     renderNpcsSubTab,
     addNotificationEntry, removeNotificationEntry,
@@ -34,6 +35,7 @@ export function persistCounters() {
         messageCounter: state.messageCounter,
         npcMessageCounter: state.npcMessageCounter,
         growthMessageCounter: state.growthMessageCounter,
+        relationshipMessageCounter: state.relationshipMessageCounter,
     });
 }
 
@@ -76,7 +78,8 @@ export function onMessageReceived() {
     const stateAuto = !!settings.autoTriggerEnabled;
     const npcAuto = !!settings.npcAutoScanEnabled;
     const growthAuto = !!settings.growthAutoCaptureEnabled;
-    if (!stateAuto && !npcAuto && !growthAuto) return;
+    const relAuto = !!settings.relationshipAutoExtractEnabled;
+    if (!stateAuto && !npcAuto && !growthAuto && !relAuto) return;
     if (!hasValidSettings()) return;
 
     // Track chat length so onMessageDeleted can compute the number of removed
@@ -111,6 +114,16 @@ export function onMessageReceived() {
         if (state.growthMessageCounter >= everyN) {
             state.growthMessageCounter = 0;
             doGrowth = true;
+        }
+    }
+
+    let doRel = false;
+    if (relAuto) {
+        const everyN = Math.max(1, Number(settings.relationshipAutoExtractEveryN) || 10);
+        state.relationshipMessageCounter++;
+        if (state.relationshipMessageCounter >= everyN) {
+            state.relationshipMessageCounter = 0;
+            doRel = true;
         }
     }
 
@@ -191,7 +204,7 @@ export function onMessageReceived() {
         });
     }
 
-    if (!doState && !doNpc) return;
+    if (!doState && !doNpc && !doRel) return;
 
     const cooldownMsgs = Math.max(0, Number(settings.trackerCooldownMsgs) || 3);
 
@@ -311,6 +324,55 @@ export function onMessageReceived() {
                     console.warn('[MWT:Knowledge] Auto-scan failed:', err.message);
                 }
             }
+
+            // ── Relationship auto-extract ──
+            // Serialized inside queueTrackerWork so the per-entry lorebook re-sync
+            // can't race a concurrent scan writing the same entry content. The
+            // extract itself only writes the relationship/stance FIELDS (synchronous
+            // store writes); the sync then injects the managed block into each
+            // affected NPC's entry.
+            if (doRel) {
+                try {
+                    const extract = await runRelationshipExtract();
+                    // Re-check scope after the API round-trip.
+                    if (!assertSameScope(scopeBefore).ok) {
+                        console.log('[MWT:Knowledge] Relationship extract discarded — chat changed during API call.');
+                        return;
+                    }
+                    const { affectedNpcs, edgesAdded, edgesUpdated, stancesSet } = extract;
+                    // Re-sync only the affected NPCs so the managed block reflects the
+                    // new edges/stances. Skips entries whose content didn't change.
+                    let synced = 0;
+                    for (const name of affectedNpcs) {
+                        if (!assertSameScope(scopeBefore).ok) {
+                            console.log('[MWT:Knowledge] Relationship sync aborted — chat changed mid-loop.');
+                            break;
+                        }
+                        try {
+                            const r = await syncRelationshipsToLorebook(name);
+                            if (r.success && !r.unchanged) synced++;
+                        } catch (err) { console.warn(`[MWT:Knowledge] Relationship sync for "${name}" failed:`, err.message); }
+                    }
+                    const changes = edgesAdded + edgesUpdated + stancesSet;
+                    console.log(`[MWT:Knowledge] Auto-relationships: +${edgesAdded} edge(s), ~${edgesUpdated} updated, ${stancesSet} stance(s); synced ${synced}/${affectedNpcs.size} entr(ies).`);
+                    if (changes > 0) {
+                        // Refresh the open sub-tab so the Relationships list and
+                        // graph show the new edges instead of going stale until
+                        // the user navigates away and back.
+                        renderNpcsSubTab();
+                        const { notify } = await import('../core/index.js');
+                        const parts = [];
+                        if (edgesAdded) parts.push(`+${edgesAdded} relationship(s)`);
+                        if (edgesUpdated) parts.push(`~${edgesUpdated} updated`);
+                        if (stancesSet) parts.push(`${stancesSet} stance(s) toward {{user}}`);
+                        notify('Knowledge Tracker', `🔗 Relationships logged: ${parts.join(', ')}.`, 'success');
+                    }
+                } catch (err) {
+                    console.warn('[MWT:Knowledge] Relationship extract failed:', err.message);
+                    const { notify } = await import('../core/index.js');
+                    notify('Knowledge Tracker', `🔗 Relationship logging failed: ${err.message}`, 'error');
+                }
+            }
         } finally { state.isRunning = false; document.dispatchEvent(new CustomEvent('mwt:busy-changed')); }
     });
 }
@@ -322,6 +384,7 @@ export function onChatChanged() {
     state.messageCounter = (typeof saved?.messageCounter === 'number' && Number.isFinite(saved.messageCounter)) ? saved.messageCounter : 0;
     state.npcMessageCounter = (typeof saved?.npcMessageCounter === 'number' && Number.isFinite(saved.npcMessageCounter)) ? saved.npcMessageCounter : 0;
     state.growthMessageCounter = (typeof saved?.growthMessageCounter === 'number' && Number.isFinite(saved.growthMessageCounter)) ? saved.growthMessageCounter : 0;
+    state.relationshipMessageCounter = (typeof saved?.relationshipMessageCounter === 'number' && Number.isFinite(saved.relationshipMessageCounter)) ? saved.relationshipMessageCounter : 0;
     state.lastChatLength = getChat()?.length || 0;
     state.isRunning = false;
     state.stagingItems = [];
@@ -384,7 +447,7 @@ export async function reloadStores(reason = 'reload') {
  */
 export function onMessageDeleted(deletedIndex) {
     const settings = getSettings();
-    if (!settings.autoTriggerEnabled && !settings.npcAutoScanEnabled && !settings.growthAutoCaptureEnabled) return;
+    if (!settings.autoTriggerEnabled && !settings.npcAutoScanEnabled && !settings.growthAutoCaptureEnabled && !settings.relationshipAutoExtractEnabled) return;
     if (typeof deletedIndex !== 'number') return;
 
     // Compute how many messages were removed. After a delete, getChat() reflects
@@ -412,6 +475,11 @@ export function onMessageDeleted(deletedIndex) {
         state.growthMessageCounter = Math.max(0, state.growthMessageCounter - removed);
         changed = true;
         console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — growth counter adjusted to ${state.growthMessageCounter}`);
+    }
+    if (settings.relationshipAutoExtractEnabled && state.relationshipMessageCounter > 0) {
+        state.relationshipMessageCounter = Math.max(0, state.relationshipMessageCounter - removed);
+        changed = true;
+        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — relationship counter adjusted to ${state.relationshipMessageCounter}`);
     }
 
     // The state registry's `lastUpdatedMsg` is stored as a raw chat length.

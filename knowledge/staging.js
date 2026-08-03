@@ -6,7 +6,7 @@
  * render.js (which calls staging functions from event handlers).
  */
 
-import { getPlayerNames, notify, downloadJson, pickTextFile } from '../core/index.js';
+import { getPlayerNames, getUserNames, notify, downloadJson, pickTextFile } from '../core/index.js';
 
 import {
     TRACKER_SENTINEL,
@@ -332,7 +332,10 @@ export async function importFromLorebooks() {
         const ktWi = await state.wiScript.loadWorldInfo(getLorebookName());
         if (ktWi?.entries) {
             const registry = getRegistry();
-            const playerSet = getPlayerNames();
+            // Respect the trackMainCharAsNpc setting: when ON, only the human
+            // user is excluded so the AI cast ({{char}} and group members) can
+            // be imported as tracked NPCs too.
+            const playerSet = getSettings().trackMainCharAsNpc ? getUserNames() : getPlayerNames();
 
             for (const [uidStr, entry] of Object.entries(ktWi.entries)) {
                 // The module's own bookkeeping entry is not an NPC.

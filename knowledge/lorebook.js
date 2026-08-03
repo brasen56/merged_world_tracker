@@ -7,13 +7,13 @@
  */
 
 import {
-    getChat, getChatMeta, getPlayerNames,
+    getChat, getChatMeta, getPlayerNames, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, getLatestChronicleEntry,
     escapeRegex, stripNonNarrative,
 } from '../core/index.js';
 
-import { SCAN_SYSTEM_PROMPT, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
+import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
     TRACKER_SENTINEL,
@@ -757,10 +757,20 @@ export async function runScan() {
         knownSection = '<already_tracked_npcs>\nNone yet.\n</already_tracked_npcs>';
     }
 
-    const playerNames = getPlayerNames({ lower: false, includeFirstChat: true });
+    // trackMainCharAsNpc: when ON, exclude only the human user ({{user}}) so the
+    // AI-played cast ({{char}} and any group members) becomes a valid NPC target
+    // — letting non-scenario cards flow into the registry (growth + relationships
+    // then apply to them). When OFF, legacy behaviour excludes the whole main cast.
+    const trackMain = settings.trackMainCharAsNpc === true;
+    const playerNames = trackMain
+        ? getUserNames({ lower: false })
+        : getPlayerNames({ lower: false, includeFirstChat: true });
     const playerSection = playerNames.size > 0 ? `<player_names_exclude>\n${[...playerNames].map(n => `- ${n}`).join('\n')}\n</player_names_exclude>` : '';
     const userContent = [knownSection, '', playerSection, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), 'Scan for NPCs. Output only JSON.'].filter(s => s !== null && s !== '').join('\n');
-    const systemPrompt = dossierMode ? DOSSIER_SCAN_SYSTEM_PROMPT : SCAN_SYSTEM_PROMPT;
+    // The cast rule is composed into the SYSTEM prompt rather than added as a
+    // user-turn note — the rule it replaces is categorical, and a contradicting
+    // note in the user turn loses to it. See buildScanSystemPrompt.
+    const systemPrompt = buildScanSystemPrompt({ dossier: dossierMode, trackMainCharAsNpc: trackMain });
 
     // Attempt the scan up to two times. If the first response fails to parse
     // (typically because it was truncated by max_tokens), retry once — the

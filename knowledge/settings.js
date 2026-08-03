@@ -49,6 +49,24 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // addition to the completion toast. Off by default (noisy in normal
         // roleplay). Completion toasts for actual results/errors always fire.
         growthDebugToasts: false,
+        // When ON, the AI-played cast is treated as trackable NPCs rather than
+        // excluded as "player names". Lets non-scenario cards flow into the
+        // registry so growth profiles and relationships apply to them. Only the
+        // human user ({{user}} / name1) stays excluded.
+        //
+        // Scope note: this swaps getPlayerNames() for getUserNames(), and
+        // getPlayerNames covers the whole cast — {{char}} / name2 AND every
+        // group-chat member. So in a group chat this unlocks every member, not
+        // just the card in focus. That is the intent (relationships between AI
+        // cast members are the point), and the UI label says so.
+        trackMainCharAsNpc: false,
+        // Continuous relationship extraction (auto-log + auto-save). On a message
+        // cadence, reads recent messages, proposes edges + stances toward {{user}},
+        // applies them to the relationship store, and re-syncs the affected NPC
+        // lorebook entries. Manual edits are preserved: extraction only ADDS or
+        // UPDATES edges/stances; it never deletes.
+        relationshipAutoExtractEnabled: false,
+        relationshipAutoExtractEveryN: 10,
     },
     logPrefix: '[MWT:Knowledge]',
 });
@@ -110,6 +128,17 @@ export function showKnowledgeSettings() {
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, the auto-capture cadence fires a toast when it starts (useful for testing). Off by default — completion toasts for results/errors always fire regardless.</p>
             </div>
         </div>
+        <div style="margin-top:12px">
+            <label><input type="checkbox" id="kt-cfg-track-mainchar" ${s.trackMainCharAsNpc ? 'checked' : ''}> 🎭 Track AI characters ({{char}} + group members) as NPCs</label>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, the AI-played cast is no longer excluded from scans — the character card ({{char}}), <em>and every member of a group chat</em>, flow into the NPC registry like any other character, so growth profiles and relationships apply to them too. Only {{user}} stays excluded. Useful for non-scenario cards where the character itself is the focus, and for group chats where you want relationships tracked between the cast.</p>
+        </div>
+        <div style="margin-top:12px">
+            <label><input type="checkbox" id="kt-cfg-rel-auto" ${s.relationshipAutoExtractEnabled ? 'checked' : ''}> 🔗 Auto-log relationships (extract + save)</label>
+            <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                <label style="font-size:12px;color:var(--mwt-text-dim)">Every <input type="number" id="kt-cfg-rel-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.relationshipAutoExtractEveryN || 10}" min="1" max="100"> messages</label>
+            </div>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, scans recent messages on a cadence, extracts relationship edges (between tracked NPCs) and each NPC's stance toward {{user}}, saves them to the relationship store, and re-syncs the affected lorebook entries. Manual edits are preserved — extraction only adds or updates, never deletes.</p>
+        </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8" style="margin-top:12px">
             <button id="kt-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
             <button id="kt-cancel-settings" class="mwt-btn">Cancel</button>
@@ -137,6 +166,9 @@ export function showKnowledgeSettings() {
             growthAutoCaptureEnabled: el.querySelector('#kt-cfg-growth-auto')?.checked ?? false,
             growthAutoCaptureEveryN: Number(el.querySelector('#kt-cfg-growth-every')?.value) || 15,
             growthDebugToasts: el.querySelector('#kt-cfg-growth-debug')?.checked ?? false,
+            trackMainCharAsNpc: el.querySelector('#kt-cfg-track-mainchar')?.checked ?? false,
+            relationshipAutoExtractEnabled: el.querySelector('#kt-cfg-rel-auto')?.checked ?? false,
+            relationshipAutoExtractEveryN: Number(el.querySelector('#kt-cfg-rel-every')?.value) || 10,
         });
         state.activeSubTab = 'staging';
         // A scope change points the module at different lorebooks, so the

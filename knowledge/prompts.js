@@ -33,8 +33,7 @@ Classification guide:
 - An NPC name MUST appear in the "Already Tracked NPCs" section to be classified as update. If not listed, classify as new.
 - Only include NPCs who actually appeared or were meaningfully referenced.
 - For update entries: only include NPCs whose information actually changed.
-- If no NPCs qualify for a category, use an empty array [].
-- The player character / protagonist is NOT an NPC — do not include them.`;
+- If no NPCs qualify for a category, use an empty array [].`;
 
 export const STATE_UPDATE_PROMPT = `You are a state tracker for an ongoing roleplay. Your sole job is to output an updated version of the entry inside <current_entry>.
 
@@ -143,8 +142,41 @@ Classification guide:
 - SECRETS ARE NOT PERMANENT: a disclosed, resolved, or obsolete secret is a change worth an update_major. If a Tier's premise hinges on an in-world event that has clearly passed (compare against current in-world dates), retire that Tier rather than carrying it forward.
 - CRITICAL — FILL MISSING FIELDS: If the "Already Tracked NPCs" section includes an entry's current content (inside <existing_entry> tags) and a dossier field is MISSING or EMPTY, FILL IT IN by inferring from the messages and established facts. Only output null for a field that already has a real value and has genuinely not changed.
 - For new_major, leave a field as an empty string "" rather than inventing if truly unknown — but prefer concrete inference from the scene.
-- If no NPCs qualify for a category, use an empty array [].
-- The player character / protagonist is NOT an NPC — do not include them.`;
+- If no NPCs qualify for a category, use an empty array [].`;
+
+// ─── Scan cast rule ──────────────────────────────────────────────────────────
+//
+// Which characters count as trackable NPCs is the one scan rule that changes
+// with a setting, so it is appended here rather than baked into the two scan
+// prompts. Both prompts end with their rule list, and this line closes it.
+//
+// It has to live in the SYSTEM prompt: the rule it replaces ("the protagonist
+// is NOT an NPC") is categorical, and a contradicting note in the user turn
+// loses to it often enough to make the setting look broken.
+
+/** Default cast rule: neither {{user}} nor the AI cast is trackable. */
+export const SCAN_RULE_EXCLUDE_MAIN_CAST =
+    '- The player character / protagonist is NOT an NPC — do not include them.';
+
+/** trackMainCharAsNpc rule: only the human is off-limits. */
+export const SCAN_RULE_INCLUDE_MAIN_CAST =
+    '- The human player ({{user}}) is NOT an NPC — do not include them. ' +
+    'Every AI-played character IS a valid NPC, including the main character card and any group-chat members — ' +
+    'track them exactly like anyone else in the scene. Only the names listed in <player_names_exclude> are off-limits.';
+
+/**
+ * Compose a scan system prompt with the cast rule that matches the settings.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.dossier=false] — use the dossier-mode scan prompt
+ * @param {boolean} [opts.trackMainCharAsNpc=false] — treat the AI cast as trackable NPCs
+ * @returns {string}
+ */
+export function buildScanSystemPrompt({ dossier = false, trackMainCharAsNpc = false } = {}) {
+    const base = dossier ? DOSSIER_SCAN_SYSTEM_PROMPT : SCAN_SYSTEM_PROMPT;
+    const castRule = trackMainCharAsNpc ? SCAN_RULE_INCLUDE_MAIN_CAST : SCAN_RULE_EXCLUDE_MAIN_CAST;
+    return `${base}\n${castRule}`;
+}
 
 export const DOSSIER_UPDATE_PROMPT = `You are a continuity tracker for an ongoing roleplay. Your job is to identify new information about a specific NPC from recent messages and update their dossier.
 
@@ -379,3 +411,37 @@ Quality bar:
 - Aim to reduce the total count by 40-60%. If there are 10 raw observations, 4-6 consolidated claims is typical.
 - Confidence reflects how strongly the sources support the claim: "high" = 3+ consistent observations; "medium" = 2 observations or some ambiguity; "low" = 1 observation or contradictory evidence.
 - Do NOT consolidate ALL observations into 1-2 mega-claims — that loses granularity. Each consolidated claim should represent ONE clear behavioral theme.`;
+
+// ─── Relationship extraction prompt ──────────────────────────────────────────
+// Used by the auto-relationship cadence. Reads recent messages plus the
+// known-NPC roster and emits the edges between tracked NPCs plus each NPC's
+// stance toward {{user}}. Type/stance are constrained to the canonical enums
+// (RELATIONSHIP_TYPES / USER_STANCES); the caller validates and drops anything
+// outside them so the managed block format stays stable.
+
+export const RELATIONSHIP_EXTRACT_SYSTEM_PROMPT = `You are a relationship tracker for an ongoing roleplay. Your sole job is to output a single JSON object describing the relationships between the characters listed in <known_npcs>, as evidenced by <recent_messages>.
+
+ABSOLUTE RULES:
+- Output ONLY valid JSON. Nothing before or after it. No code fences.
+- Do NOT write narration, dialogue, or roleplay continuation.
+- Only report relationships that are EVIDENT in <recent_messages>. Never invent, infer from genre, or assume.
+- Every name you output MUST match (exactly or as a recognizable given-name/short form) one of the names in <known_npcs>. If you cannot place a name on the roster, omit that relationship.
+- "edges" describe STRUCTURAL relationships between two tracked NPCs (family, employer, ally, rival, lover, etc.). "stances" describe how each tracked NPC currently DISPOSITIONS toward the human user ({{user}}) — one scalar per NPC.
+- Do not include {{user}} as the target of an "edge" — the human's relationship to an NPC is captured by that NPC's "stance".
+- If nothing qualifies, return empty arrays.
+
+OUTPUT FORMAT:
+{
+  "edges": [
+    { "from": "Full NPC name", "to": "Full NPC name", "type": "one of: ally, enemy, neutral, friend, rival, family, lover, subordinate, superior, acquaintance, mentor, student, employer, employee", "notes": "short context (optional, max ~20 words)" }
+  ],
+  "stances": [
+    { "npc": "Full NPC name", "stance": "one of: caring, friendly, neutral, wary, hostile" }
+  ]
+}
+
+Guidance:
+- "type" is the structural role, not a mood. An NPC can be "family" while currently "hostile".
+- "stance" is ordered warmest to most adversarial: caring, friendly, neutral, wary, hostile.
+- Only emit a stance when recent messages show a clear disposition toward {{user}}. If unclear, omit it.
+- Use each NPC's name exactly as it appears in <known_npcs> when possible.`;
