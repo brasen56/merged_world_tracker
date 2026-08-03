@@ -484,9 +484,85 @@ function repairTruncatedJson(text) {
 /**
  * Remove trailing commas that appear immediately before } or ] — a common
  * model output error that strict JSON.parse rejects.
+ *
+ * **CORE-01 fix:** The previous implementation was a single regex
+ * (`/,\s*([}\]])/g`) that operated on the raw text with no string-state
+ * tracking. A generated *value* containing `,}` or `,]` (e.g. dialogue text
+ * `"she said,}"`) was silently edited — the parse succeeded, so no downstream
+ * validation could ever catch the corruption.
+ *
+ * This scanner walks the text character by character, tracking whether we are
+ * inside a string literal and whether the current character is escaped. Only
+ * commas found at structural depth (outside any string) followed by optional
+ * whitespace and then `}` or `]` are removed.
+ *
+ * Regression cases handled:
+ * - `",}"` — comma inside a string value → preserved
+ * - `",]"` — comma inside a string value → preserved
+ * - escaped quotes inside a value (`"he said \"hi,}\""`) → preserved
+ * - genuine trailing commas (`{"a":1,}`) → stripped
+ * - truncated input (`{"a":1,`) → no false match (no closing brace)
+ * - nested structures (`{"a":[1,2,],}`) → both trailing commas stripped
  */
 function removeTrailingCommas(text) {
-    return text.replace(/,\s*([}\]])/g, '$1');
+    let out = '';
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+
+        if (escaped) {
+            // Previous char was a backslash inside a string — copy this char
+            // verbatim and clear the escape flag.
+            out += ch;
+            escaped = false;
+            continue;
+        }
+
+        if (inString) {
+            if (ch === '\\') {
+                out += ch;
+                escaped = true;
+                continue;
+            }
+            if (ch === '"') {
+                inString = false;
+                out += ch;
+                continue;
+            }
+            // Any other character inside a string — copy verbatim. This
+            // includes commas and braces, which must NOT be treated as
+            // structural.
+            out += ch;
+            continue;
+        }
+
+        // --- Structural context (outside any string) ---
+
+        if (ch === '"') {
+            inString = true;
+            out += ch;
+            continue;
+        }
+
+        if (ch === ',') {
+            // Look ahead: if the next non-whitespace character is } or ],
+            // this is a genuine trailing comma — skip it. Otherwise keep it.
+            let j = i + 1;
+            while (j < text.length && /\s/.test(text[j])) j++;
+            if (j < text.length && (text[j] === '}' || text[j] === ']')) {
+                // Trailing comma — omit it from the output.
+                continue;
+            }
+            out += ch;
+            continue;
+        }
+
+        out += ch;
+    }
+
+    return out;
 }
 
 /**

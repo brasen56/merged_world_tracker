@@ -238,6 +238,36 @@ export function getCurrentWorldState() {
 export { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from '../../core/diff.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from '../../core/strip.js';
 
+// Tier 0 shared primitives — pure modules, safe to re-export directly.
+export {
+    getEpoch,
+    bumpEpoch,
+    _resetEpoch,
+    getCharacterIdentity as getScopeCharacterIdentity,
+    getChatIdentity,
+    captureScope,
+    assertSameScope,
+    getChatScopeKey,
+} from '../../core/scope.js';
+export {
+    defaultNormalize,
+    captureRevision,
+    sameRevision,
+    createRevisionClock,
+    decideCommit,
+} from '../../core/revision.js';
+export {
+    escapePromptText,
+    escapePromptAttr,
+    buildTag,
+    wrapTag,
+    truncateText,
+    truncateTail,
+    truncateArray,
+    fitBudget,
+    TRUNCATION_MARKER,
+} from '../../core/prompt.js';
+
 // ─── Not-implemented stubs for the remaining barrel exports ──────────────────
 // These cover functions that tests could import but the current starter tests
 // don't exercise. If a future test needs one, implement it here. Importing them

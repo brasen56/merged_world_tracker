@@ -22,3 +22,33 @@ export { notify } from './notifications.js';
 export { downloadBlob, downloadJson, pickTextFile } from './file.js';
 export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from './strip.js';
+
+// Tier 0 shared primitives (scope, revision, prompt helpers).
+export {
+    getEpoch,
+    bumpEpoch,
+    _resetEpoch,
+    getCharacterIdentity as getScopeCharacterIdentity,
+    getChatIdentity,
+    captureScope,
+    assertSameScope,
+    getChatScopeKey,
+} from './scope.js';
+export {
+    defaultNormalize,
+    captureRevision,
+    sameRevision,
+    createRevisionClock,
+    decideCommit,
+} from './revision.js';
+export {
+    escapePromptText,
+    escapePromptAttr,
+    buildTag,
+    wrapTag,
+    truncateText,
+    truncateTail,
+    truncateArray,
+    fitBudget,
+    TRUNCATION_MARKER,
+} from './prompt.js';
