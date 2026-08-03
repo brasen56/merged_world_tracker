@@ -17,7 +17,8 @@
  */
 
 import {
-    syncSharedConnectionSettings, estimateTokens, notify, getChat, getContextSafe,
+    syncSharedConnectionSettings, estimateTokens, notify, getChat,
+    captureScope, assertSameScope,
 } from '../core/index.js';
 
 import {
@@ -96,10 +97,10 @@ export async function onMessageReceived() {
     }
 
     console.log(`[MWT:Chronicle] Auto-snapshot at ${state.msgSinceSnapshot} messages`);
-    // Capture chat identity so the failure-reset below can tell a genuine
-    // failure apart from a mid-generation chat switch.
-    const ctxBefore = getContextSafe();
-    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
+    // CHRONICLE-02: Capture scope so the failure-reset below can tell a genuine
+    // failure apart from a mid-generation chat switch. Uses the scope guard
+    // (getCurrentChatId + epoch) instead of the old weak key.
+    const scopeBefore = captureScope();
     const snapshot = await generateSnapshot();
     // On failure, reset the counter (success resets inside generateSnapshot).
     // Without this, a persistent failure (API down, empty output) left the
@@ -110,9 +111,7 @@ export async function onMessageReceived() {
     // counter — resetting here would wipe it and persist 0 into the wrong
     // chat's metadata, so only reset when we're still on the same chat.
     if (!snapshot) {
-        const ctxAfter = getContextSafe();
-        const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
-        if (chatKeyAfter === chatKeyBefore) {
+        if (assertSameScope(scopeBefore).ok) {
             state.msgSinceSnapshot = 0;
             persistMsgSinceSnapshot();
         }

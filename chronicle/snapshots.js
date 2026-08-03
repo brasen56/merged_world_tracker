@@ -12,6 +12,7 @@ import {
     getCurrentWorldState,
     WORLD_STATE_METADATA_KEY,
     patchChatMeta,
+    captureScope, assertSameScope,
 } from '../core/index.js';
 
 import { applyWorldStateInjection } from '../world_state/index.js';
@@ -151,9 +152,10 @@ export async function generateSnapshot() {
     const { text, lastMsg, toIndex } = buildMessageWindow(actualFrom, undefined);
     if (!text.trim()) { scSetStatus('No filterable messages to chronicle.', 'error'); return null; }
 
-    // Capture chat identity before async API call to detect mid-generation chat switches
-    const ctxBefore = getContextSafe();
-    const chatKeyBefore = `${ctxBefore?.characterId ?? ''}|${ctxBefore?.groupId ?? ''}|${ctxBefore?.chatId ?? ''}`;
+    // CHRONICLE-01/02: Capture scope before async API call. The old weak key
+    // collapsed two different chats on the same character when chatId was
+    // absent. The scope guard uses getCurrentChatId() + epoch.
+    const scopeBefore = captureScope();
 
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -181,12 +183,15 @@ export async function generateSnapshot() {
         const validation = validateSnapshotOutput(raw);
         if (!validation.valid) { console.warn('[MWT:Chronicle] Validation:', validation.reason); scSetStatus(`May need review: ${validation.reason}`, 'error'); }
 
-        // If the user switched chat/character mid-generation, the result belongs to
-        // the *previous* chat — saving now would write it into the wrong chat's data.
-        const ctxAfter = getContextSafe();
-        const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
-        if (chatKeyAfter !== chatKeyBefore) {
-            console.warn('[MWT:Chronicle] Chat/character switched during generation — discarding result to avoid cross-chat contamination.');
+        // CHRONICLE-01/02: Assert scope before any writes. A chat switch during
+        // the API call must discard the result to prevent cross-chat
+        // contamination.
+        const scopeResult = assertSameScope(scopeBefore);
+        if (!scopeResult.ok) {
+            console.warn(
+                `[MWT:Chronicle] Chat switched during generation (${scopeResult.reason}) — ` +
+                `discarding result to avoid cross-chat contamination.`
+            );
             scSetStatus('Chat changed during generation — result discarded.', 'warning');
             return null;
         }
@@ -248,6 +253,9 @@ export async function regenerateSnapshot(snapshotId) {
     const worldState = getCurrentWorldState().trim();
     const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
 
+    // CHRONICLE-01: Regeneration needs the same scope guard as generation.
+    const scopeBefore = captureScope();
+
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     scSetStatus('Regenerating…', 'info');
@@ -262,8 +270,30 @@ export async function regenerateSnapshot(snapshotId) {
         // date/time, not the "at end of this period:" prefix.
         const timeMatch = raw.match(/## Time Anchor[\s\S]*?In-world date and time at end of this period:\s*(.+)/i);
         const newWorldDate = timeMatch ? timeMatch[1].trim() : snapshot.worldDate;
+
+        // CHRONICLE-01: Assert scope before showing the diff preview. A chat
+        // switch during the API call must discard the result.
+        const scopeResult = assertSameScope(scopeBefore);
+        if (!scopeResult.ok) {
+            console.warn(
+                `[MWT:Chronicle] Chat switched during regeneration (${scopeResult.reason}) — ` +
+                `discarding result to avoid cross-chat contamination.`
+            );
+            scSetStatus('Chat changed during regeneration — result discarded.', 'warning');
+            return;
+        }
+
         _render.showRegenerateDiff(originalText, raw, async (acceptNew) => {
             if (acceptNew) {
+                // CHRONICLE-01: Re-assert scope inside the accept callback too.
+                // The diff preview stays open while the user decides; a chat
+                // switch during that time must not commit old-chat data.
+                if (!assertSameScope(scopeBefore).ok) {
+                    console.warn('[MWT:Chronicle] Chat switched during regen preview — discarding result.');
+                    scSetStatus('Chat changed during preview — result discarded.', 'warning');
+                    _render.renderContent();
+                    return;
+                }
                 // Re-fetch the snapshot list at accept time. The `snapshots`
                 // array captured before the preview is stale: the busy lock is
                 // released while the preview waits, so the user may have
@@ -350,8 +380,23 @@ export async function consolidateEntries(ids, baseId = null) {
     // Pass entries to the preview in base-first order so the preview's
     // index-0-is-BASE labelling matches the actual consolidation intent.
     const previewEntries = [base, ...deltas];
+    // CHRONICLE-01: Capture scope before the preview callback. The consolidation
+    // preview callback outlives onChatChanged() — it fires when the user clicks
+    // accept, which can be much later. The callback must check scope before
+    // committing anything.
+    const scopeBefore = captureScope();
+
     _render.showConsolidationPreview(previewEntries, userContent, async (editedResult) => {
         if (state.isGenerating) return;
+        // CHRONICLE-01: Assert scope at callback entry. A chat switch since the
+        // preview was shown means the consolidation result would be written
+        // into the wrong chat.
+        if (!assertSameScope(scopeBefore).ok) {
+            console.warn('[MWT:Chronicle] Chat changed during consolidation preview — discarding result.');
+            scSetStatus('Chat changed during consolidation — result discarded.', 'warning');
+            _render.renderContent();
+            return;
+        }
         state.isGenerating = true;
         scSetStatus('Consolidating…', 'info');
         try {
