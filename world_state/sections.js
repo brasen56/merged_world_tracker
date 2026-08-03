@@ -169,15 +169,49 @@ export async function regenerateSection(sectionName, variety = 2) {
 
         // Grounding gate only (§7) — expiry is a whole-document concern and
         // does not run on a single-section regen.
+        // WORLD-STATE-04: Both retry and strict/soft policy mirror the full
+        // refresh path so the two agree.
         if (s.groundingEnabled) {
-            const grounding = groundingGate(cleaned, {
+            let grounding = groundingGate(cleaned, {
                 scanText: getRecentMessagesForScan(),
                 priorText: currentText,
                 pinned: getPinnedEntities(s),
                 mode: s.groundingMode,
             });
             if (!grounding.ok) {
-                throw new Error(`Grounding gate rejected section: ${grounding.reason}`);
+                console.warn(`[MWT:WorldState] Grounding gate rejected section "${sectionName}": ${grounding.reason} — retrying once`);
+                const _wsApiRetry = resolveApiCall({ moduleSettings: sectionSettings });
+                const rawRetry = await _wsApiRetry.fetchFn({
+                    systemPrompt: buildSectionSystemPrompt(sectionName, variety),
+                    userContent: buildSectionUserMessage(sectionName) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
+                    settings: _wsApiRetry.settings,
+                    retries: 1,
+                });
+                const textRetry = normaliseOutput(rawRetry);
+                const checkRetry = validateSectionOutput(textRetry, sectionName);
+                if (!checkRetry.ok) throw new Error(`Section regen validation failed after grounding retry: ${checkRetry.reason}`);
+                cleaned = extractOnlySection(textRetry, sectionName) || textRetry.trim();
+                grounding = groundingGate(cleaned, {
+                    scanText: getRecentMessagesForScan(),
+                    priorText: currentText,
+                    pinned: getPinnedEntities(s),
+                    mode: s.groundingMode,
+                });
+                if (!grounding.ok) {
+                    // WORLD-STATE-04: Strict mode fails closed with a visible
+                    // status. Soft mode strips and commits.
+                    if (s.groundingMode === 'strict') {
+                        console.warn(`[MWT:WorldState] Grounding gate still rejected section after retry (${grounding.reason}) — strict mode, discarding.`);
+                        return null;
+                    }
+                    console.warn(`[MWT:WorldState] Grounding gate still rejected section after retry (${grounding.reason}) — soft mode, stripping.`);
+                    grounding = groundingGate(cleaned, {
+                        scanText: getRecentMessagesForScan(),
+                        priorText: currentText,
+                        pinned: getPinnedEntities(s),
+                        mode: 'soft',
+                    });
+                }
             }
             for (const { label } of grounding.stripped) {
                 console.warn(`[MWT:WorldState] Grounding gate stripped ungrounded name from "${sectionName}": "${label}"`);

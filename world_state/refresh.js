@@ -224,9 +224,16 @@ export async function refreshWorldState(isAuto = false) {
                 if (!validation.ok) throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
                 grounding = groundingGate(text, { scanText, priorText: oldText, pinned, mode: gateSettings.groundingMode });
                 if (!grounding.ok) {
-                    // Strict mode gave the model one honest chance; don't discard an
-                    // otherwise-valid refresh over it — fall back to a soft strip.
-                    console.warn(`[MWT:WorldState] Grounding gate still rejected after retry (${grounding.reason}) — falling back to soft strip.`);
+                    // WORLD-STATE-04: Strict mode fails closed — the model had
+                    // two honest chances and still produced ungrounded names.
+                    // Discard rather than silently downgrading to soft.
+                    if (gateSettings.groundingMode === 'strict') {
+                        console.warn(`[MWT:WorldState] Grounding gate still rejected after retry (${grounding.reason}) — strict mode, discarding.`);
+                        scSetStatus(`Grounding gate rejected: ${grounding.reason}. Refresh discarded (strict mode).`, 'warning');
+                        return null;
+                    }
+                    // Soft mode strips the offending names and commits.
+                    console.warn(`[MWT:WorldState] Grounding gate still rejected after retry (${grounding.reason}) — soft mode, stripping.`);
                     grounding = groundingGate(text, { scanText, priorText: oldText, pinned, mode: 'soft' });
                 }
             }
