@@ -10,6 +10,7 @@ import {
     getCurrentWorldState, getLatestChronicleEntry,
     stripNonNarrative,
     captureScope, assertSameScope,
+    captureRevision, sameRevision,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
@@ -178,6 +179,15 @@ export async function generatePlan(isAuto = false) {
     // weak key collapsed two different chats on the same character when
     // chatId was absent. The scope guard uses getCurrentChatId() + epoch.
     const scopeBefore = captureScope();
+
+    // STORY-PLANNER-02: Capture the arc revision at START so we can detect
+    // user edits/pins/deletes made during the API call. The old code read
+    // `getArcs()` AFTER the call returned, which meant user changes during
+    // the call were silently overwritten and the history snapshot recorded
+    // the already-modified state as "previous."
+    const arcsBeforeCall = getArcs();
+    const arcRevision = captureRevision(arcsBeforeCall);
+
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
@@ -236,15 +246,27 @@ export async function generatePlan(isAuto = false) {
             throw new Error('Could not parse any arcs out of the model response.');
         }
 
-        // Snapshot the plan we're about to replace so a regeneration is
-        // recoverable via History/Revert.
-        const previous = getArcs();
-        if (previous.length) pushPlanToHistory(previous);
+        // STORY-PLANNER-02: Snapshot the PRE-OPERATION arcs for history, not
+        // whatever is current after the API returned. This is what makes
+        // Revert restore the pre-generation plan.
+        if (arcsBeforeCall.length) pushPlanToHistory(arcsBeforeCall);
+
+        // STORY-PLANNER-02: Detect same-chat edits. If the user changed the
+        // plan during the API call, the current arcs differ from the revision
+        // captured at start. Rebase against the CURRENT state (which includes
+        // user changes) rather than the stale snapshot, so pins/edits/deletes
+        // made during the call survive.
+        const currentArcs = getArcs();
+        const arcsUnchanged = sameRevision(arcRevision, currentArcs);
+        const mergeBase = arcsUnchanged ? arcsBeforeCall : currentArcs;
+        if (!arcsUnchanged) {
+            console.log('[MWT:StoryPlanner] Plan changed during generation — rebasing against current state.');
+        }
 
         // Merge rather than replace: arcs matched by name keep their id and
         // their planted-beat progress, and pinned / part-planted arcs the model
         // dropped are carried forward rather than lost.
-        const { arcs: newArcs, carried, matched, added } = mergeRegeneratedArcs(previous, parsed);
+        const { arcs: newArcs, carried, matched, added } = mergeRegeneratedArcs(mergeBase, parsed);
 
         setArcs(newArcs);
         applyPlanInjection();

@@ -225,7 +225,12 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         if (isDormantPollDue()) {
             try {
                 const woken = await runDormantPoll();
-                if (woken > 0) {
+                // INTERIORITY-02: The dormant poll awaits an API call. Assert
+                // scope after it returns so a chat switch during the poll does
+                // not commit woken entries to the wrong chat's ledger.
+                if (!assertSameScope(scopeBefore).ok) {
+                    console.log('[MWT:Interiority] Dormant poll results discarded — chat changed during API call.');
+                } else if (woken > 0) {
                     console.log(`[MWT:Interiority] Dormant poll woke ${woken} intention(s) — they are now active.`);
                     // Re-apply injection immediately so woken entries appear
                     // in this turn's narrator prompt.
@@ -308,17 +313,23 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
             msgIdx = msgIdxAfter;
         }
 
-        // 3-4. Validate and apply
-        const { reactions, ledgerChanged } = await validateAndApply(result, roster, msgIdx);
+        // 3-4. Validate and apply.
+        // INTERIORITY-02: Pass the scope token into validateAndApply so it can
+        // assert scope immediately after its own `resolveUserNames()` await,
+        // BEFORE any persistent mutation. If the chat changed during that
+        // await, it returns null and we bail without a second write attempt.
+        const applyResult = await validateAndApply(result, roster, msgIdx, scopeBefore);
 
-        // INTERIORITY-02: Re-assert scope AFTER validateAndApply, which itself
-        // awaits resolveUserNames(). The old code checked identity only before
-        // that await, never after — so a chat switch during name resolution
-        // would commit thoughts/intentions/ledger to the wrong chat.
-        if (!assertSameScope(scopeBefore).ok) {
+        // INTERIORITY-02: Re-assert scope AFTER validateAndApply as a
+        // belt-and-suspenders guard. The in-function check covers the
+        // resolveUserNames() gap; this covers any drift between the return
+        // and the render/injection calls below.
+        if (!applyResult || !assertSameScope(scopeBefore).ok) {
             console.log('[MWT:Interiority] Results discarded — chat changed during validateAndApply.');
             return null;
         }
+
+        const { reactions, ledgerChanged } = applyResult;
 
         console.log(`[MWT:Interiority] Applied: ${reactions.length} reaction(s), ledger ${ledgerChanged ? 'changed' : 'unchanged'}.`);
 

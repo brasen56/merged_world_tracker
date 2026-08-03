@@ -450,10 +450,18 @@ export function applyConsolidation(name, consolidated, sourceIds) {
             .map(n => numericToId.get(n))
             .filter(id => id != null);
         if (sourceIds.length === 0) continue; // a consolidated claim with no valid sources is inadmissible
-        sourceIds.forEach(id => consumedRawIds.add(id));
+        // KNOWLEDGE-08: Verify every source still exists in file.raw before
+        // committing. A concurrent delete during the API round-trip would
+        // leave dangling provenance — a consolidated claim pointing at a
+        // source that no longer exists anywhere in the evidence file.
+        const validSourceIds = sourceIds.filter(id => file.raw.some(o => o.id === id));
+        if (validSourceIds.length === 0) continue; // all sources deleted during the call — inadmissible
+        validSourceIds.forEach(id => consumedRawIds.add(id));
 
         // Compute firstSeen/lastSeen from the source observations.
-        const sourceObs = sourceIds
+        // KNOWLEDGE-08: use validSourceIds (filtered above) so timestamps
+        // aren't computed from deleted observations.
+        const sourceObs = validSourceIds
             .map(id => file.raw.find(o => o.id === id))
             .filter(Boolean);
         const timestamps = sourceObs.map(o => o.ts).filter(t => typeof t === 'number');
@@ -464,7 +472,7 @@ export function applyConsolidation(name, consolidated, sourceIds) {
             id: nextConsolidatedId(),
             category: validCategory(con.category),
             claim: String(con.claim).trim(),
-            sources: sourceIds,
+            sources: validSourceIds,
             firstSeen,
             lastSeen,
             confidence: ['high', 'medium', 'low'].includes(con.confidence) ? con.confidence : 'medium',

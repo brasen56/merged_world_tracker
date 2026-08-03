@@ -9,6 +9,7 @@ import {
     getContextSafe, getChat,
     resolveApiCall, normaliseOutput, stripNonNarrative,
     captureScope, assertSameScope,
+    captureRevision, sameRevision,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -153,6 +154,9 @@ export async function refreshWorldState(isAuto = false) {
     // chats on the same character when chatId was absent. The scope guard uses
     // getCurrentChatId() + epoch for a reliable check.
     const scopeBefore = captureScope();
+    // WORLD-STATE-02: Capture the document revision at start so we can detect
+    // same-chat edits made during the API call.
+    const wsRevision = captureRevision(getWorldStateText());
     const chatLenBefore = getChat()?.length;
     state.wstIsRefreshing = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -222,6 +226,17 @@ export async function refreshWorldState(isAuto = false) {
                 text = normaliseOutput(result);
                 validation = validateOutput(text);
                 if (!validation.ok) throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
+                // WORLD-STATE-01: Re-assert scope after the grounding retry await.
+                // A chat switch during the retry must discard the result before
+                // any write — the initial check does not cover this gap.
+                const scopeAfterRetry = assertSameScope(scopeBefore);
+                if (!scopeAfterRetry.ok) {
+                    console.warn(
+                        `[MWT:WorldState] Chat switched during grounding retry (${scopeAfterRetry.reason}) — ` +
+                        `discarding result to avoid cross-chat contamination.`
+                    );
+                    return null;
+                }
                 grounding = groundingGate(text, { scanText, priorText: oldText, pinned, mode: gateSettings.groundingMode });
                 if (!grounding.ok) {
                     // WORLD-STATE-04: Strict mode fails closed — the model had
@@ -252,6 +267,16 @@ export async function refreshWorldState(isAuto = false) {
                 currentMsgIndex: getChat()?.length || 0,
             });
             text = expiry.text;
+        }
+
+        // WORLD-STATE-02: Verify the document wasn't edited during the API
+        // call. If the user changed the world state text while generation was
+        // in flight, discard the result rather than clobbering their edit.
+        const currentWs = getWorldStateText();
+        if (!sameRevision(wsRevision, currentWs)) {
+            console.warn('[MWT:WorldState] Document was edited during generation — discarding result to preserve user changes.');
+            scSetStatus('World State was edited during generation — refresh discarded.', 'warning');
+            return null;
         }
 
         if (oldText?.trim()) pushToHistory(oldText);

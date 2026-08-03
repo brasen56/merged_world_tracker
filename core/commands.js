@@ -15,7 +15,7 @@
  * @param {object} deps.modules — { WorldState, Chronicle, Knowledge }
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
-export function createCommands({ registerSlashCommand, macroRegistry, modules, resetFloatPositions }) {
+export function createCommands({ registerSlashCommand, macroRegistry, modules, resetFloatPositions, saveSettings }) {
     const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
@@ -121,7 +121,12 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                 }
             }, ['mwt-thoughts'], 'Generate NPC interiority (thoughts and intentions)');
 
-            // /wt-inject on|off — Toggle injection for all modules
+            // /wt-inject on|off — Toggle injection for ALL modules
+            // CORE-02: Previously only called WorldState and Chronicle, missing
+            // Story Planner and Interiority entirely, and never set
+            // injectionMasterOff. Now calls all five modules that inject AND
+            // sets the master flag so Interiority/Knowledge are gated too —
+            // matching the right-click panic switch on the ⚙️ floating button.
             registerSlashCommand('wt-inject', async (args, _command) => {
                 const mode = (args || '').trim().toLowerCase();
                 if (mode !== 'on' && mode !== 'off') {
@@ -133,6 +138,27 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                 }
                 if (typeof Chronicle.setInjectionEnabled === 'function') {
                     Chronicle.setInjectionEnabled(enabled);
+                }
+                if (typeof StoryPlanner.setInjectionEnabled === 'function') {
+                    StoryPlanner.setInjectionEnabled(enabled);
+                }
+                // CORE-02: Set the master injection flag so Interiority and
+                // Knowledge are also gated. Interiority's injection is driven
+                // by the ledger and Knowledge uses SillyTavern's own World Info;
+                // both are gated at the root level by injectionMasterOff (see
+                // core/settings.js#injectionAllowed and index.js MESSAGE_RECEIVED).
+                // Without this, /wt-inject off left Interiority/Knowledge
+                // injecting — the UI panic switch and the command disagreed.
+                if (typeof saveSettings === 'function') {
+                    saveSettings({ injectionMasterOff: !enabled });
+                    // Re-apply injection state immediately so the toggle takes
+                    // effect without requiring a new message.
+                    try {
+                        WorldState.applyWorldStateInjection?.();
+                        Chronicle.applyInjection?.();
+                        StoryPlanner.applyPlanInjection?.();
+                        Interiority.applyIntentionsInjection?.();
+                    } catch { /* modules may not be initialized yet */ }
                 }
                 return `Injection ${mode} for all modules.`;
             }, ['mwt-inject'], 'Toggle injection for all MWT modules (on/off)');

@@ -223,6 +223,14 @@ export function onMessageReceived() {
                         const nameRe = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
                         if (!nameRe.test(recent || '')) continue;
                     }
+                    // KNOWLEDGE-04: Re-check scope before each NPC update. The
+                    // state-update loop straddles multiple awaits, and a chat
+                    // switch mid-loop must not stage results from the old chat
+                    // into the new chat's staging area.
+                    if (!assertSameScope(scopeBefore).ok) {
+                        console.log('[MWT:Knowledge] State-update loop aborted — chat changed mid-loop.');
+                        return;
+                    }
                     try {
                         const result = await runStateUpdate(name, info.uid);
                         if (result.unchanged) { bumpStateTrackerTimestamp(name); continue; }
@@ -284,6 +292,14 @@ export function onMessageReceived() {
                     const added = mergeScanResults(newItems, removeNotificationEntry);
                     // Enrich non-edited update proposals; edited ones keep their text.
                     await Promise.all(added.filter(it => it.action === 'update' && !it.edited).map(it => enrichStagingItem(it)));
+                    // KNOWLEDGE-04: Re-check scope after the enrichment awaits.
+                    // enrichStagingItem performs async lorebook reads; a chat
+                    // switch during those reads could mix old-chat content into
+                    // the new chat's staging proposals.
+                    if (!assertSameScope(scopeBefore).ok) {
+                        console.log('[MWT:Knowledge] Auto-scan results discarded — chat changed during enrichment.');
+                        return;
+                    }
                     added.forEach(item => addNotificationEntry(item));
                     if (added.length > 0) {
                         console.log(`[MWT:Knowledge] Auto-scan: ${added.length} NPC proposal(s) staged.`);

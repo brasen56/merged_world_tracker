@@ -13,6 +13,7 @@ import {
 import { getRegistry } from './registry.js';
 import { getLorebookName } from './scope.js';
 import { readField, writeField } from './store.js';
+import { captureScope, assertSameScope } from '../core/index.js';
 
 // ─── Relationship data CRUD ──────────────────────────────────────────────────
 //
@@ -203,7 +204,20 @@ export async function syncRelationshipsToLorebook(name) {
     const { loadEntryContent, writeToLorebook } = await import('./lorebook.js');
     const reg = getRegistry()[name];
     if (!reg || reg.uid === null || reg.uid === undefined) return { success: false, error: 'No lorebook entry' };
+    // KNOWLEDGE-04: Capture scope before the loadEntryContent await. The read
+    // → await → write sequence straddles an async boundary, and the write
+    // resolves the book dynamically — a chat/scope change between read and
+    // write can target a different book, writing one character's relationship
+    // block into another character's entry.
+    const scopeBefore = captureScope();
     const currentContent = await loadEntryContent(reg.uid);
+    // KNOWLEDGE-04: Assert scope after the await and before the write. If the
+    // chat changed during loadEntryContent, discard rather than risking a
+    // cross-chat/cross-book write.
+    if (!assertSameScope(scopeBefore).ok) {
+        console.log(`[MWT:Knowledge] syncRelationshipsToLorebook("${name}") aborted — chat changed during loadEntryContent().`);
+        return { success: false, error: 'chat changed during sync' };
+    }
     if (currentContent === null) return { success: false, error: 'Could not load entry' };
     const blockText = formatRelationshipBlock(name);
     const newContent = blockText ? injectRelationshipBlock(currentContent, blockText) : stripRelationshipBlock(currentContent);

@@ -584,7 +584,11 @@ if (eventSource && event_types?.MESSAGE_DELETED) {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_DELETED (index: ${idx}) — adjusting counters.`);
         const s = getSettings();
-        if (s.injectionMasterOff) return;
+        // INTERIORITY-04: Cleanup must keep running while injection is off.
+        // The old code returned early on injectionMasterOff, which meant a
+        // swipe/delete while injection was off left orphaned thought metadata
+        // and un-rolled-back ledger state. Only generation is gated; cleanup
+        // must always run.
         if (s.enableWorldState !== false) WorldState.onMessageDeleted(idx);
         if (s.enableChronicle  !== false) Chronicle.onMessageDeleted(idx);
         if (s.enableKnowledge  !== false) Knowledge.onMessageDeleted(idx);
@@ -598,7 +602,8 @@ if (eventSource && event_types?.MESSAGE_SWIPED) {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_SWIPED (index: ${idx}) — checking anchor / scheduling refresh.`);
         const s = getSettings();
-        if (s.injectionMasterOff) return;
+        // INTERIORITY-04: Same as MESSAGE_DELETED — cleanup must keep running
+        // while injection is off.
         if (s.enableWorldState !== false) WorldState.onMessageSwiped(idx);
         if (s.enableChronicle  !== false) Chronicle.onMessageSwiped(idx);
         if (s.enableInteriority !== false) Interiority.onMessageSwiped(idx);
@@ -622,7 +627,8 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_EDITED (index: ${idx}) — checking anchor / scheduling refresh.`);
         const s = getSettings();
-        if (s.injectionMasterOff) return;
+        // INTERIORITY-04: Same as MESSAGE_DELETED — cleanup must keep running
+        // while injection is off.
         if (s.enableWorldState !== false) WorldState.onMessageEdited(idx);
         if (s.enableChronicle  !== false) Chronicle.onMessageEdited(idx);
         if (s.enableInteriority !== false) Interiority.onMessageEdited(idx);
@@ -656,6 +662,7 @@ const commands = createCommands({
     macroRegistry,
     modules: { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority },
     resetFloatPositions: ui.resetFloatPositions,
+    saveSettings,
 });
 
 // ─── Initialize ──────────────────────────────────────────────────────────────

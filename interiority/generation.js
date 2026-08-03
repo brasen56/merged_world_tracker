@@ -12,6 +12,7 @@ import {
     getChatMeta, getContextSafe, getRecentMessages, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, escapeRegex,
+    assertSameScope,
 } from '../core/index.js';
 
 import { REGISTRY_KEY } from '../knowledge/state.js';
@@ -836,9 +837,14 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
  * @param {string[]} roster - the NPC roster for this turn
  * @param {number} msgIdx - chat-array index of the message (for ledger
  *   entries' declaredMsgIdx metadata)
- * @returns {Promise<object>} { reactions: [], ledgerChanged: boolean }
+ * @param {object} [scopeToken] - optional scope token captured before the API
+ *   call. When provided, the validator asserts scope immediately after its
+ *   `resolveUserNames()` await and before any persistent mutation (INTERIORITY-02).
+ *   The caller still asserts after the return; this covers the gap inside.
+ * @returns {Promise<object|null>} { reactions: [], ledgerChanged: boolean }, or
+ *   null when the scope changed during the await (caller should discard).
  */
-export async function validateAndApply(result, roster, msgIdx) {
+export async function validateAndApply(result, roster, msgIdx, scopeToken) {
     const data = getInteriorityData();
     const settings = getSettings();
     const wantThoughts = settings.generateThoughts !== false;
@@ -867,6 +873,16 @@ export async function validateAndApply(result, roster, msgIdx) {
     // the roster (e.g. a stale ledger entry from before this fix, which is
     // seeded back into the roster every turn by getActiveLedger).
     const userNamesLower = await resolveUserNames();
+
+    // INTERIORITY-02: The resolveUserNames() await above can cross a chat
+    // switch (it resolves the knowledge registry via dynamic import). Assert
+    // scope immediately after it and BEFORE any persistent mutation. If the
+    // chat changed, return null so the caller discards the result without
+    // committing thoughts/intentions/ledger/inner-state to the wrong chat.
+    if (scopeToken && !assertSameScope(scopeToken).ok) {
+        console.log('[MWT:Interiority] validateAndApply aborted — chat changed during resolveUserNames().');
+        return null;
+    }
 
     const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
 

@@ -7,6 +7,7 @@
 import {
     resolveApiCall, normaliseOutput, escapeRegex,
     captureScope, assertSameScope,
+    captureRevision, sameRevision,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -126,6 +127,12 @@ export async function regenerateSection(sectionName, variety = 2) {
     // chat switch during the API call.
     const scopeBefore = captureScope();
 
+    // WORLD-STATE-02: Capture the target SECTION's revision at start so we can
+    // detect same-chat edits to that section during the API call.
+    const sectionRevision = captureRevision(
+        extractOnlySection(getWorldStateText(), sectionName) || ''
+    );
+
     state.wstIsRefreshing = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
@@ -163,6 +170,15 @@ export async function regenerateSection(sectionName, variety = 2) {
             return null;
         }
 
+        // WORLD-STATE-02: Verify the target section wasn't edited during the
+        // API call. If the user changed this section while regen was in flight,
+        // discard the result rather than clobbering their edit.
+        const sectionNow = extractOnlySection(getWorldStateText(), sectionName) || '';
+        if (!sameRevision(sectionRevision, sectionNow)) {
+            console.warn(`[MWT:WorldState] Section "${sectionName}" was edited during regeneration — discarding result to preserve user changes.`);
+            return null;
+        }
+
         let cleaned = extractOnlySection(text, sectionName) || text.trim();
 
         const currentText = getWorldStateText();
@@ -190,6 +206,22 @@ export async function regenerateSection(sectionName, variety = 2) {
                 const textRetry = normaliseOutput(rawRetry);
                 const checkRetry = validateSectionOutput(textRetry, sectionName);
                 if (!checkRetry.ok) throw new Error(`Section regen validation failed after grounding retry: ${checkRetry.reason}`);
+                // WORLD-STATE-01/02: Re-assert scope AND section revision after
+                // the grounding retry await. A chat switch or same-chat edit
+                // during the retry must discard the result before any write.
+                const scopeAfterRetry = assertSameScope(scopeBefore);
+                if (!scopeAfterRetry.ok) {
+                    console.warn(
+                        `[MWT:WorldState] Chat switched during section grounding retry (${scopeAfterRetry.reason}) — ` +
+                        `discarding result to avoid cross-chat contamination.`
+                    );
+                    return null;
+                }
+                const sectionAfterRetry = extractOnlySection(getWorldStateText(), sectionName) || '';
+                if (!sameRevision(sectionRevision, sectionAfterRetry)) {
+                    console.warn(`[MWT:WorldState] Section "${sectionName}" was edited during grounding retry — discarding result to preserve user changes.`);
+                    return null;
+                }
                 cleaned = extractOnlySection(textRetry, sectionName) || textRetry.trim();
                 grounding = groundingGate(cleaned, {
                     scanText: getRecentMessagesForScan(),
