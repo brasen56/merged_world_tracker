@@ -21,6 +21,7 @@ import {
     state, getWorldStateData, getWorldStateText, setWorldStateData,
     persistAutoRefreshCounter, resetAutoRefreshCounter,
     isAutoRefreshEnabled, getAutoRefreshInterval,
+    setProvenance,
 } from './data.js';
 import {
     WORLD_STATE_INJECTION_HEADER, applyWorldStateInjection,
@@ -93,6 +94,23 @@ export function onMessageDeleted(deletedIndex) {
         persistAutoRefreshCounter();
         console.log(`[MWT:WorldState] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoRefreshCounter}`);
     }
+
+    // WORLD-STATE-05: Provenance `lastTouchedMsg` is a chat-array index. A
+    // deletion before a tracked mention shifts everything left, so stored
+    // indices now point at the wrong message — entries look older than they
+    // are and get quarantined/removed early by the expiry pass. The cheapest
+    // correct fix is to invalidate provenance after any non-append mutation
+    // and require a rebuild before expiry runs. The next buildProvenance()
+    // (on refresh or section regen) reconstructs from the current chat array.
+    if (removed > 0) {
+        try {
+            setProvenance({ entities: {}, lastBuiltAtMsgIndex: 0, schemaVersion: 1 });
+            console.log('[MWT:WorldState] Provenance invalidated by message deletion — will rebuild on next refresh.');
+        } catch (err) {
+            console.warn('[MWT:WorldState] Could not invalidate provenance after delete:', err?.message || err);
+        }
+    }
+
     // Refresh the floating button countdown badge
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 }

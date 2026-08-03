@@ -4,7 +4,7 @@
  * Depends on data.js and settings.js (leaf modules).
  */
 
-import { applyExtensionPromptInjection, getGlobalSettings, wrapInTag, injectionAllowed } from '../core/index.js';
+import { applyExtensionPromptInjection, getGlobalSettings, wrapInTag, injectionAllowed, truncateText } from '../core/index.js';
 
 import { getSettings } from './settings.js';
 import {
@@ -35,6 +35,16 @@ Deliver the hook as an interruption, arrival, message, or complication. Do not a
 };
 
 export const EXTENSION_PROMPT_KEY = 'mwt_world_state_injection';
+
+/**
+ * WORLD-STATE-03: Maximum character budget for the injected world-state body
+ * (after the header, before the plot seeds). The recent-messages scan is
+ * already capped at 20k chars, but the *entire* saved document went into the
+ * injection with no cap — so a large imported state made every narrator turn
+ * oversized. 30k chars (~7.5k tokens) is generous for a full state document
+ * while preventing pathological bloat from dominating the context window.
+ */
+const INJECTION_BODY_BUDGET = 30000;
 
 // ─── Hook mode helpers ───────────────────────────────────────────────────────
 
@@ -93,7 +103,12 @@ function splitWorldState(text) {
  * @returns {string}      — the fully assembled payload (headers + body + tags)
  */
 export function buildInjectionPayload(text) {
-    const { worldStateBody, seedsText } = splitWorldState(text);
+    const { worldStateBody: rawBody, seedsText } = splitWorldState(text);
+    // WORLD-STATE-03: Cap the injected body so a large imported state doesn't
+    // dominate the narrator context window every turn. truncateText keeps the
+    // beginning (the most structured/important sections) and appends a clear
+    // truncation marker so the model knows it received a slice.
+    const worldStateBody = truncateText(rawBody, INJECTION_BODY_BUDGET);
     const useTags = structuralBoundariesEnabled();
     const seedsHeader = getPlotSeedsHeader();
 

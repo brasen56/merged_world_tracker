@@ -8,6 +8,7 @@ import {
     resolveApiCall, normaliseOutput, escapeRegex,
     captureScope, assertSameScope,
     captureRevision, sameRevision,
+    truncateText,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -73,8 +74,13 @@ OVERRIDE FOR THIS GENERATION:
     return baseSystem + override;
 }
 
+// WORLD-STATE-03: Maximum character budget for the full world-state context
+// fed into a section regeneration prompt. Same rationale as the refresh
+// prompt's PREV_STATE_BUDGET.
+const SECTION_CONTEXT_BUDGET = 30000;
+
 function buildSectionUserMessage(sectionName) {
-    const fullState = getWorldStateText().trim() || 'None yet.';
+    const fullState = truncateText(getWorldStateText().trim() || 'None yet.', SECTION_CONTEXT_BUDGET);
     const recent = getRecentMessagesForScan() || 'No recent messages.';
     return [
         '### Full Current World State (for context only — do not include in output)',

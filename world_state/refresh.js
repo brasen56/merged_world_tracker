@@ -10,6 +10,7 @@ import {
     resolveApiCall, normaliseOutput, stripNonNarrative,
     captureScope, assertSameScope,
     captureRevision, sameRevision,
+    truncateText,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -109,8 +110,14 @@ function validateOutput(text) {
     return { ok: true };
 }
 
+// WORLD-STATE-03: Maximum character budget for the prior world state fed into
+// the refresh prompt. The recent-messages scan is already capped at 20k chars,
+// but the entire saved document went in as <previous> with no cap — a large
+// imported state made every refresh oversized.
+const PREV_STATE_BUDGET = 30000;
+
 function buildUserMessage(reminderReason = '') {
-    const prev = getWorldStateText().trim();
+    const prev = truncateText(getWorldStateText().trim(), PREV_STATE_BUDGET);
     const recent = getRecentMessagesForScan() || 'No recent messages.';
     const isFirstRun = !prev;
     const lines = [
