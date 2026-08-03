@@ -150,6 +150,22 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             existingUid = null;
         }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
+            // KNOWLEDGE-01: Verify the entry's identity before overwriting it.
+            // A stale uid can point at an unrelated NPC's entry (imported
+            // registry, uid reuse after a hand-delete, etc.). The import path
+            // already content-verifies; normal updates were LESS protected.
+            const existingComment = (entries[existingUid].comment || '').trim();
+            const expectedName = String(name || '').trim();
+            if (existingComment && existingComment !== expectedName) {
+                console.warn(
+                    `[MWT:Knowledge] Registry uid ${existingUid} for "${expectedName}" points at ` +
+                    `an entry labelled "${existingComment}" in "${book}" — the uid is stale (wrong NPC). ` +
+                    `Detaching the stale uid and creating a new entry instead.`
+                );
+                existingUid = null;
+            }
+        }
+        if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
             pushHistory(existingUid, previousContent);
             entries[existingUid].content = content;
@@ -230,6 +246,21 @@ export async function writeProfileToLorebook(name, content, existingUid) {
             }
         }
         const entries = wi.entries;
+        // KNOWLEDGE-01: Verify the entry's identity before overwriting it.
+        // Same fix as writeToLorebook — a stale profileUid can point at an
+        // unrelated NPC's profile entry.
+        if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
+            const existingComment = (entries[existingUid].comment || '').trim();
+            const expectedName = String(name || '').trim();
+            if (existingComment && existingComment !== expectedName) {
+                console.warn(
+                    `[MWT:Knowledge] Profile uid ${existingUid} for "${expectedName}" points at ` +
+                    `an entry labelled "${existingComment}" in "${book}" — the uid is stale (wrong NPC). ` +
+                    `Detaching the stale uid and creating a new entry instead.`
+                );
+                existingUid = null;
+            }
+        }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             entries[existingUid].content = content;
             entries[existingUid].comment = name;
