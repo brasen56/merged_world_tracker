@@ -78,10 +78,14 @@ export function getModuleWireEvents() {
 }
 
 export async function onMessageReceived() {
-    if (state.isGenerating) return;
-
-    // Track chat length so onMessageDeleted can compute the number of removed
-    // messages during bulk deletes (e.g. "delete above/below").
+    // CHRONICLE-03: Messages arriving while a snapshot is being generated
+    // must still increment the counter and update lastChatLength. The old
+    // early-return on isGenerating meant those messages were never counted,
+    // and generateSnapshot()'s success path resets the counter — so they were
+    // permanently lost from the auto-snapshot cadence.
+    //
+    // Only the snapshot trigger itself should be suppressed during generation
+    // (otherwise two concurrent generations could fire).
     state.lastChatLength = getChat()?.length || 0;
 
     state.msgSinceSnapshot++;
@@ -91,6 +95,11 @@ export async function onMessageReceived() {
     const threshold = settings.autoSnapshotThreshold || 40;
 
     console.log(`[MWT:Chronicle] MESSAGE_RECEIVED — counter ${state.msgSinceSnapshot}/${threshold}`);
+
+    if (state.isGenerating) {
+        console.log('[MWT:Chronicle] Snapshot generation in progress — deferring trigger.');
+        return;
+    }
 
     if (!settings.autoSnapshot || !hasValidSettings() || state.msgSinceSnapshot < threshold) {
         return;
