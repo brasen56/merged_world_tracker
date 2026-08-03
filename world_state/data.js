@@ -57,10 +57,19 @@ const SECTION_NAME_BOUNDARY = '(?![A-Za-z0-9_])';
 /**
  * Pull out exactly one "## Section\n...body..." block from a larger text.
  * Stops at the next "## " header or end of text.
+ *
+ * WORLD-STATE-06: The `## Section` pattern is now line-anchored (`^` / multiline)
+ * so a body line containing that sequence is NOT read as a section boundary.
+ * Without the anchor, a body line like "We discussed ## Plot Seeds in the
+ * meeting" would be treated as a section header and truncate the extraction.
  */
 export function extractOnlySection(text, sectionName) {
     const escaped = escapeRegex(sectionName);
-    const pattern = new RegExp(`(## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?)${NEXT_SECTION_LOOKAHEAD}`);
+    // WORLD-STATE-06: Anchor with `(?:^|\n)` so a body line containing the
+    // section name mid-sentence is NOT read as a section header. We do NOT
+    // use the `m` flag — that would make `$` in NEXT_SECTION_LOOKAHEAD match
+    // at every line end, truncating sections to just their header line.
+    const pattern = new RegExp(`(?:^|\\n)(## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?)${NEXT_SECTION_LOOKAHEAD}`);
     const match = text.match(pattern);
     return match ? match[1].trim() : null;
 }
@@ -68,13 +77,18 @@ export function extractOnlySection(text, sectionName) {
 /**
  * Replace one "## Section" block in the document with newContent.
  * If the section doesn't already exist, append it.
+ *
+ * WORLD-STATE-06: Line-anchored so only a header line (not a body line
+ * containing the section name) is replaced.
  */
 export function replaceSection(text, sectionName, newContent) {
     const escaped = escapeRegex(sectionName);
-    const pattern = new RegExp(`## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
+    // WORLD-STATE-06: Same `(?:^|\n)` anchor as extractOnlySection.
+    const pattern = new RegExp(`(?:^|\\n)## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
     const trimmed = newContent.trim();
     if (pattern.test(text)) {
-        return text.replace(pattern, () => trimmed);
+        // Replace including the leading newline so we don't leave a blank line.
+        return text.replace(pattern, () => '\n' + trimmed);
     }
     return (text.trim() + '\n\n' + trimmed).trim();
 }
@@ -110,6 +124,81 @@ export function getWorldStateData() {
 
 export function setWorldStateData(patch) {
     patchChatMeta(CHAT_DATA_KEY, patch);
+}
+
+// ─── Import validation (WORLD-STATE-07) ──────────────────────────────────────
+
+/**
+ * Maximum size (characters) of an imported world-state document. Applied to
+ * BOTH plain-text and JSON imports so an enormous blob can't bloat chat
+ * metadata and future prompts.
+ */
+export const MAX_IMPORT_CHARS = 200000;
+
+const WS_ARCHIVE_TYPE = 'world-state-archive';
+const WS_SETTINGS_TYPE = 'world-state-tracker-settings';
+
+/**
+ * Parse and validate imported world-state content.
+ *
+ * WORLD-STATE-07: the old importer accepted `data.data || data` with no shape
+ * check, wrote `wsData.text || ''` with no type/size guard, and only capped
+ * JSON imports — so a truthy non-string `text`, an unrelated archive that
+ * merely happened to carry a string `text`, or an arbitrarily large plain-text
+ * file could all land in metadata. This pure helper centralizes validation so
+ * it is unit-testable; `render.js` consumes the result.
+ *
+ * Result shapes:
+ *   { ok: true,  kind: 'text',     text }   — world-state text (capped), from
+ *                                            a recognized archive or plain text
+ *   { ok: true,  kind: 'settings', settings } — settings archive
+ *   { ok: false, reason }                     — rejected with a reason string
+ *
+ * @param {string} rawText — the raw file contents
+ * @returns {{ ok: boolean, kind?: string, text?: string, settings?: object, reason?: string }}
+ */
+export function parseWorldStateImport(rawText) {
+    if (typeof rawText !== 'string' || !rawText.trim()) {
+        return { ok: false, reason: 'File is empty.' };
+    }
+
+    const looksJson = rawText.trim().startsWith('{');
+    if (!looksJson) {
+        // Plain-text import. Previously plain text bypassed the size cap that
+        // only JSON imports received — apply it here too.
+        const text = rawText.slice(0, MAX_IMPORT_CHARS);
+        if (!text.trim()) return { ok: false, reason: 'File has no world state text.' };
+        return { ok: true, kind: 'text', text };
+    }
+
+    let data;
+    try {
+        data = JSON.parse(rawText);
+    } catch (err) {
+        return { ok: false, reason: `Invalid JSON: ${err.message}` };
+    }
+    if (data == null || typeof data !== 'object') {
+        return { ok: false, reason: 'JSON is not an object.' };
+    }
+
+    // Settings archive — handled separately by the caller.
+    if (data._meta?.type === WS_SETTINGS_TYPE && data.settings) {
+        return { ok: true, kind: 'settings', settings: data.settings };
+    }
+
+    // When an archive _meta is present, require a recognized type/version.
+    // This stops an unrelated archive (a character card, preset, etc.) that
+    // merely happens to carry a string `text` from silently wiping the state.
+    if (data._meta && data._meta.type && data._meta.type !== WS_ARCHIVE_TYPE) {
+        return { ok: false, reason: `Unrecognized archive type "${data._meta.type}".` };
+    }
+
+    const wsData = (data.data && typeof data.data === 'object' && data.data !== null) ? data.data : data;
+    const importText = (wsData && typeof wsData.text === 'string') ? wsData.text : '';
+    if (!importText.trim()) {
+        return { ok: false, reason: 'File has no valid world state text.' };
+    }
+    return { ok: true, kind: 'text', text: importText.slice(0, MAX_IMPORT_CHARS) };
 }
 
 export function getWorldStateText() {

@@ -154,14 +154,23 @@ export function resolveAnchor(anchor) {
         const idx = chat.findIndex(m => m.id === anchor.id);
         if (idx !== -1) return { index: idx + 1, found: true };
     }
-    // Fallback: content-based lookup (fragile — breaks on reload)
+    // Fallback: content-based lookup. CHRONICLE-05: find the LAST matching
+    // message, not the first. Duplicate messages (common in roleplay when the
+    // model repeats a line) caused the anchor to resume before the wrong
+    // instance — the earliest duplicate rather than the latest. The anchor
+    // points at the boundary message (the last one already chronicled), so
+    // finding the last match is correct.
     if (anchor.start || anchor.end || anchor.length) {
-        const idx = chat.findIndex(m => {
-            const mes = String(m.mes || '');
-            const name = m.name || (m.is_user ? 'User' : 'Assistant');
-            return name === anchor.name && mes.length === anchor.length && (!anchor.start || mes.slice(0, 80) === anchor.start) && (!anchor.end || mes.slice(-80) === anchor.end);
-        });
-        if (idx !== -1) return { index: idx + 1, found: true };
+        let lastIdx = -1;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const mes = String(chat[i].mes || '');
+            const name = chat[i].name || (chat[i].is_user ? 'User' : 'Assistant');
+            if (name === anchor.name && mes.length === anchor.length && (!anchor.start || mes.slice(0, 80) === anchor.start) && (!anchor.end || mes.slice(-80) === anchor.end)) {
+                lastIdx = i;
+                break;
+            }
+        }
+        if (lastIdx !== -1) return { index: lastIdx + 1, found: true };
     }
     return { index: 0, found: false };
 }

@@ -109,16 +109,26 @@ export function deriveBookNames(suffix) {
  * display name — see `resolveBookNames`. Not a security hash; it just needs to
  * be deterministic so the same card resolves to the same book every time.
  *
+ * KNOWLEDGE-09: The previous 4-char base-36 hash (1.6M possible values) had a
+ * meaningful collision probability across a large card collection — two cards
+ * sharing a display name could resolve to the same discriminator and still
+ * share a book. Increased to 8 chars (2.8 trillion values) so the collision
+ * probability is negligible for any realistic card count, while staying
+ * filename-safe and short enough for a readable book name.
+ *
  * @param {string} str
- * @returns {string} 1–4 base-36 characters
+ * @returns {string} up to 8 base-36 characters
  */
 export function shortHash(str) {
-    let h = 0;
+    let h1 = 0, h2 = 0;
     const s = String(str ?? '');
     for (let i = 0; i < s.length; i++) {
-        h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+        const c = s.charCodeAt(i);
+        h1 = ((h1 << 5) - h1 + c) | 0;
+        h2 = ((h2 << 7) - h2 + c * 31) | 0;
     }
-    return Math.abs(h).toString(36).slice(0, 4) || '0';
+    const combined = (Math.abs(h1).toString(36) + Math.abs(h2).toString(36)).slice(0, 8);
+    return combined || '0';
 }
 
 // ─── Identity resolution (reads the live ST context) ────────────────────────

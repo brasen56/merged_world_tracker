@@ -114,7 +114,16 @@ export function readApiSettingsValues(el, opts = {}) {
     // input (value === '') passed through as `Number('') === 0` and got
     // persisted as 0. Treat the raw value as missing when it's an empty
     // string so the default applies. (maxTokens already used `||`.)
-    const numericOr = (raw, fallback) => (raw === '' || raw == null ? fallback : Number(raw));
+    //
+    // CORE-05: `Number(raw)` also persists NaN for non-numeric input (e.g.
+    // letters pasted into the field), which JSON.stringify then serializes as
+    // `null` — silently dropping the param from the API payload. The helper
+    // now returns the fallback for any non-finite result, not just empty/null.
+    const numericOr = (raw, fallback) => {
+        if (raw === '' || raw == null) return fallback;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : fallback;
+    };
     const tempRaw = el.querySelector(`#${tempId}`)?.value;
     const topPRaw = el.querySelector(`#${topPId}`)?.value;
     const freqRaw = el.querySelector(`#${freqId}`)?.value;

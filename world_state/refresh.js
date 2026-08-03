@@ -307,7 +307,12 @@ export async function refreshWorldState(isAuto = false) {
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         if (state.autoRefreshQueued) {
             state.autoRefreshQueued = false;
-            setTimeout(() => {
+            // WORLD-STATE-08/09: store this follow-up in autoRefreshDeferTimer
+            // (previously a raw, untracked setTimeout) so a chat switch or a
+            // subsequent scheduleAutoRefresh can cancel it instead of leaving a
+            // dangling timer that re-arms a refresh after the user left.
+            state.autoRefreshDeferTimer = setTimeout(() => {
+                state.autoRefreshDeferTimer = null;
                 scheduleAutoRefresh('follow-up-from-finally');
             }, 500);
         }
@@ -326,9 +331,33 @@ export function scheduleAutoRefresh(reason = 'scheduled') {
 
     state.autoRefreshQueued = true;
 
+    // WORLD-STATE-08/09: Capture the scope (epoch + chat identity) at schedule
+    // time. The deferred callback asserts it is unchanged BEFORE any write, so
+    // a chat switch (or any bumpEpoch) between scheduling and the 2.5s callback
+    // cannot fire a stale refresh — and critically cannot persist a stale
+    // editor value into the now-current chat. onChatChanged() clears this timer
+    // and bumps the epoch; this assert is the guard for any path that does not.
+    const scopeAtSchedule = captureScope();
+
     state.autoRefreshDeferTimer = setTimeout(async () => {
         state.autoRefreshDeferTimer = null;
 
+        // WORLD-STATE-08: Re-check that auto-refresh is still enabled at
+        // callback time. The timer may have been queued before the user
+        // disabled auto-refresh (or switched chats), in which case the
+        // queued follow-up must NOT fire. The old code only checked the
+        // `autoRefreshQueued` flag, which onChatChanged() does clear — but
+        // a settings change between scheduling and callback left it set.
+        if (!isAutoRefreshEnabled()) {
+            state.autoRefreshQueued = false;
+            return;
+        }
+        // WORLD-STATE-08/09: scope/epoch guard — discard if the chat changed
+        // (or any other bumpEpoch) since this refresh was scheduled.
+        if (!assertSameScope(scopeAtSchedule).ok) {
+            state.autoRefreshQueued = false;
+            return;
+        }
         if (!state.autoRefreshQueued) return;
         if (state.wstIsRefreshing) {
             console.log('[MWT:WorldState] Auto-refresh deferred — still refreshing.');

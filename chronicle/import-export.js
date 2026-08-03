@@ -67,7 +67,18 @@ function importChronicle(jsonString) {
                 skipped++;
                 continue;
             }
-            if (!existingIds.has(snap.id)) { merged.push({ ...snap, id: snap.id || `imp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }); added++; }
+            if (!existingIds.has(snap.id)) {
+                // CHRONICLE-04: Add the accepted id to the set so a file
+                // containing two identical ids does not append both. The old
+                // code built `existingIds` once and never updated it in the
+                // loop, so duplicates within a single import file were
+                // silently accepted — making selection/deletion/undo
+                // ambiguous later.
+                const newId = snap.id || `imp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                existingIds.add(newId);
+                merged.push({ ...snap, id: newId });
+                added++;
+            }
         }
         merged.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 

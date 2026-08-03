@@ -17,6 +17,7 @@ import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntitie
 import {
     state, SECTIONS, VARIETY_LABELS,
     getWorldStateText, getWorldStateData, setWorldStateData,
+    parseWorldStateImport,
     getAutoSaveHistory, pushToHistory,
     isInjectionEnabled, isAutoRefreshEnabled, getAutoRefreshInterval,
     getMaxScanMessages, setProvenance, getProvenance,
@@ -148,41 +149,30 @@ function downloadWorldStateArchive() {
 async function importWorldState() {
     const text = await pickTextFile('.json,.md,.txt');
     if (!text) return;
-    try {
-        const ext = text.trim().startsWith('{') ? 'json' : 'txt';
-
-        if (ext === 'txt') {
-            if (!confirm('Import this file as world state text? It will replace the current one.')) return;
-            const oldText = getWorldStateText();
-            if (oldText) pushToHistory(oldText);
-            setWorldStateData({ text });
-            applyWorldStateInjection();
-            renderModalContent();
-            setStatus(state.modal, 'Imported text.', 'success', 3000);
-            return;
-        }
-
-        const data = JSON.parse(text);
-
-        if (data._meta?.type === 'world-state-tracker-settings' && data.settings) {
-            if (!confirm('Import world state settings? This will overwrite current API/model settings.')) return;
-            saveSettings({ ...getSettings(), ...data.settings });
-            renderModalContent();
-            setStatus(state.modal, 'Settings imported.', 'success', 3000);
-            return;
-        }
-
-        const wsData = data.data || data;
-        if (!confirm('Import this world state? It will replace the current one.')) return;
-        const oldText = getWorldStateText();
-        if (oldText) pushToHistory(oldText);
-        setWorldStateData({ text: wsData.text || '' });
-        applyWorldStateInjection();
-        renderModalContent();
-        setStatus(state.modal, 'Imported.', 'success', 3000);
-    } catch (err) {
-        setStatus(state.modal, `Import failed: ${err.message}`, 'error');
+    // WORLD-STATE-07: all shape/type/version/size validation now lives in the
+    // pure parseWorldStateImport() helper (unit-tested in tier3_fixes.test.js).
+    const result = parseWorldStateImport(text);
+    if (!result.ok) {
+        setStatus(state.modal, `Import failed: ${result.reason}`, 'error');
+        return;
     }
+
+    if (result.kind === 'settings') {
+        if (!confirm('Import world state settings? This will overwrite current API/model settings.')) return;
+        saveSettings({ ...getSettings(), ...result.settings });
+        renderModalContent();
+        setStatus(state.modal, 'Settings imported.', 'success', 3000);
+        return;
+    }
+
+    // kind === 'text' (from a recognized JSON archive or plain text).
+    if (!confirm('Import this world state? It will replace the current one.')) return;
+    const oldText = getWorldStateText();
+    if (oldText) pushToHistory(oldText);
+    setWorldStateData({ text: result.text });
+    applyWorldStateInjection();
+    renderModalContent();
+    setStatus(state.modal, 'Imported.', 'success', 3000);
 }
 
 function clearWorldState() {

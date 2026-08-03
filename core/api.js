@@ -10,9 +10,18 @@ import { getGlobalSettings } from './settings.js';
 
 /**
  * Strip trailing slashes and an accidental /chat/completions suffix.
+ *
+ * CORE-04: The previous version did not strip query strings or fragments, so
+ * a URL like `https://api.example.com/v1?x=1` survived intact and the endpoint
+ * became `https://api.example.com/v1?x=1/chat/completions`. Strip the query
+ * and fragment before the suffix check so the endpoint is assembled correctly.
  */
 export function normalizeApiBase(url) {
-    return String(url || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
+    let clean = String(url || '');
+    // CORE-04: Drop query string and fragment before suffix checks.
+    const qIdx = clean.search(/[?#]/);
+    if (qIdx !== -1) clean = clean.slice(0, qIdx);
+    return clean.replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
 }
 
 /**

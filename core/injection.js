@@ -3,6 +3,7 @@
  */
 
 import { getSetExtensionPrompt } from './context.js';
+import { escapePromptText } from './prompt.js';
 
 export function roleToNumber(role) {
     switch (role) {
@@ -20,13 +21,22 @@ export function roleToNumber(role) {
  * Frontier-class models don't need it, but 24–70B models bleed less when
  * each block has explicit delimiters.
  *
+ * NEW-01: The body is escaped before interpolation. Without this, a chat
+ * message, lorebook entry, imported chronicle entry, or generated state
+ * containing a closing tag like `</mwt_world_state>` breaks the structural
+ * boundary for every module that injects — the tag closes early and the
+ * rest of the content leaks into the prompt as unstructured text. The body
+ * is already-assembled plain text (markdown headers, bracket headers, body
+ * text) and never carries raw XML, so escaping `<` and `&` is both safe and
+ * correct.
+ *
  * @param {string} tag  — tag name without angle brackets (e.g. 'mwt_world_state')
  * @param {string} body — inner content
  * @returns {string}    `<tag>\nbody\n</tag>`
  */
 export function wrapInTag(tag, body) {
     if (!tag || !body?.trim()) return body || '';
-    return `<${tag}>\n${body}\n</${tag}>`;
+    return `<${tag}>\n${escapePromptText(body)}\n</${tag}>`;
 }
 
 /**

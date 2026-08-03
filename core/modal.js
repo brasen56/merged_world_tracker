@@ -125,9 +125,16 @@ export function setStatus(modalIdOrEl, message, type = 'info', clearAfterMs = 0)
     statusEl.className = `mwt-status mwt-status-${type}`;
     statusEl.style.opacity = '1';
 
+    // CORE-03: Always cancel any previous auto-clear timer, even when the new
+    // message is persistent (clearAfterMs = 0). The old code only cleared
+    // inside the `if (clearAfterMs > 0)` branch, so a stale 3s timer from a
+    // previous transient message would still fire and fade out the newer
+    // persistent message.
+    if (statusEl._clearTimer) {
+        clearTimeout(statusEl._clearTimer);
+        statusEl._clearTimer = null;
+    }
     if (clearAfterMs > 0) {
-        // Cancel any previous auto-clear timer so it can't fade out a newer message
-        if (statusEl._clearTimer) clearTimeout(statusEl._clearTimer);
         statusEl._clearTimer = setTimeout(() => {
             statusEl.style.opacity = '0';
             statusEl._clearTimer = null;

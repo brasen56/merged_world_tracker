@@ -171,7 +171,13 @@ export function expandIlsSummaries(chat, chatMeta, opts = {}) {
             for (const orig of originals) {
                 if (!orig || !orig.mes) continue;
                 const ts = normalizeSendDate(orig.send_date);
-                if (sinceTs != null && ts <= sinceTs) continue;
+                // KNOWLEDGE-06: normalizeSendDate documents `0` as "ancient,
+                // always included" but the old `ts <= sinceTs` filter excluded
+                // any entry with ts 0 when sinceTs was also 0 (the default
+                // watermark). Use strict `<` so a `0`-watermark does not
+                // exclude `0`-timestamp entries, and explicitly include
+                // unresolvable dates (ts 0) as "ancient" per the contract.
+                if (sinceTs != null && ts !== 0 && ts < sinceTs) continue;
                 out.push({
                     msg: orig,
                     idx: i,          // synthetic — points at the summary, not the original
@@ -182,7 +188,8 @@ export function expandIlsSummaries(chat, chatMeta, opts = {}) {
         } else {
             if (!msg.mes) continue;
             const ts = normalizeSendDate(msg.send_date);
-            if (sinceTs != null && ts <= sinceTs) continue;
+            // KNOWLEDGE-06: same fix — strict `<` and always-include ts 0.
+            if (sinceTs != null && ts !== 0 && ts < sinceTs) continue;
             out.push({
                 msg,
                 idx: i,

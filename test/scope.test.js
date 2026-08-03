@@ -97,7 +97,8 @@ describe('shortHash', () => {
 
     test('is short and filename-safe', () => {
         const h = shortHash('char:mara.png');
-        expect(h.length).toBeLessThanOrEqual(4);
+        // KNOWLEDGE-09: increased from 4 to 8 chars for collision resistance.
+        expect(h.length).toBeLessThanOrEqual(8);
         expect(h).toMatch(/^[a-z0-9]+$/);
     });
 });

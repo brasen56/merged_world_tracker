@@ -307,8 +307,27 @@ export function updateRawObservation(name, id, patch) {
     if (!file) return false;
     const obs = (file.raw || []).find(o => o.id === id);
     if (!obs) return false;
-    if (patch.claim != null) obs.claim = String(patch.claim).trim();
-    if (patch.quote != null) obs.quote = String(patch.quote).trim();
+    // KNOWLEDGE-07: Compute the COMPLETE proposed observation BEFORE mutating,
+    // so a failed validation (empty field or collision) leaves the stored
+    // observation untouched. The previous implementation set obs.claim first
+    // and then returned false on an invalid quote/collision, leaving a
+    // partial mutation behind.
+    const proposedClaim = patch.claim != null ? String(patch.claim).trim() : obs.claim;
+    const proposedQuote = patch.quote != null ? String(patch.quote).trim() : obs.quote;
+    if (!proposedClaim) return false; // empty claim rejected
+    if (!proposedQuote) return false; // empty quote rejected
+    // Check the combined proposed claim+quote against every OTHER raw
+    // observation (and the archive) so an edit can't shadow a different entry.
+    const collides = [...(file.raw || []), ...(file.archivedRaw || [])].some(o =>
+        o.id !== id && normalizeKey(o.claim, o.quote) === normalizeKey(proposedClaim, proposedQuote)
+    );
+    if (collides) {
+        console.warn(`[MWT:Knowledge] updateRawObservation rejected: claim+quote collides with an existing observation.`);
+        return false;
+    }
+    // All checks passed — commit the mutation now.
+    obs.claim = proposedClaim;
+    obs.quote = proposedQuote;
     if (patch.category != null) obs.category = validCategory(patch.category);
     touch(file);
     return true;

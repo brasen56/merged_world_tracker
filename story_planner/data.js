@@ -10,6 +10,68 @@
 
 import { getChatMeta, patchChatMeta } from '../core/index.js';
 
+// ─── STORY-PLANNER-04 / -09: Arc sanitizer ──────────────────────────────────
+//
+// `updateArc()` and `setArcs()` used to spread an arbitrary patch into an arc
+// with no validation: unbounded `title`/`body`/`beats`, non-number `beatIndex`,
+// non-boolean `pinned`, NaN counters, and even foreign keys could land in
+// metadata. History restore / import can persist non-canonical arcs that later
+// can't be removed. The sanitizer below is the single validation seam: it is
+// called from `makeArc`, `updateArc`, `setArcs`, and the legacy migration path,
+// so every write to chat metadata runs through it.
+
+/**
+ * Maximum character lengths for user/model-authored arc fields. Keeps a
+ * runaway generation or a pasted wall of text from bloating metadata and the
+ * injected payload.
+ */
+const MAX_ARC_TITLE = 200;
+const MAX_ARC_BODY = 2000;
+const MAX_BEAT_LENGTH = 1000;
+
+/**
+ * Sanitize a single arc object, returning a canonical arc that satisfies the
+ * ARC SHAPE contract. Non-finite numbers, wrong types, and oversized strings
+ * are repaired to safe defaults; foreign keys are dropped.
+ *
+ * @param {object} raw — the arc to sanitize
+ * @param {boolean} [preserveId=true] — keep the incoming id (used by updateArc)
+ * @returns {object} a canonical arc object
+ */
+export function sanitizeArc(raw, { preserveId = true } = {}) {
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    const now = Date.now();
+    const beats = (Array.isArray(src.beats) ? src.beats : [])
+        .map(b => String(b ?? '').trim().slice(0, MAX_BEAT_LENGTH))
+        .filter(Boolean);
+    const beatCount = beats.length;
+    return {
+        id: preserveId && src.id ? String(src.id) : newArcId(),
+        title: String(src.title ?? '').trim().slice(0, MAX_ARC_TITLE),
+        body: String(src.body ?? '').trim().slice(0, MAX_ARC_BODY),
+        section: SECTION_KEYS.has(src.section) ? src.section : DEFAULT_SECTION,
+        status: ARC_STATUSES.includes(src.status) ? src.status : 'active',
+        pinned: src.pinned === true,
+        beats,
+        beatIndex: clampBeatIndex(src.beatIndex, beatCount),
+        turnsSinceAdvance: Number.isFinite(Number(src.turnsSinceAdvance))
+            ? Math.max(0, Math.floor(Number(src.turnsSinceAdvance)))
+            : 0,
+        createdAt: Number.isFinite(Number(src.createdAt)) ? Number(src.createdAt) : now,
+        updatedAt: Number.isFinite(Number(src.updatedAt)) ? Number(src.updatedAt) : now,
+    };
+}
+
+/**
+ * Sanitize an array of arcs (used by setArcs, import, and history restore).
+ * @param {Array} arcs
+ * @returns {object[]}
+ */
+export function sanitizeArcs(arcs) {
+    if (!Array.isArray(arcs)) return [];
+    return arcs.map(a => sanitizeArc(a, { preserveId: true }));
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const CHAT_DATA_KEY = 'story_planner_data';
@@ -168,27 +230,14 @@ export function newArcId() {
  * that is the whole point: the narrator gets one actionable instruction per
  * arc per turn instead of a destination it cannot act on yet.
  */
-export function makeArc({
-    title = '', body = '', section = DEFAULT_SECTION, status = 'active',
-    pinned = false, beats = [], beatIndex = 0,
-} = {}) {
-    const now = Date.now();
-    const cleanBeats = (Array.isArray(beats) ? beats : [])
-        .map(b => String(b).trim())
-        .filter(Boolean);
-    return {
-        id: newArcId(),
-        title: String(title).trim(),
-        body: String(body).trim(),
-        section: SECTION_KEYS.has(section) ? section : DEFAULT_SECTION,
-        status: ARC_STATUSES.includes(status) ? status : 'active',
-        pinned: !!pinned,
-        beats: cleanBeats,
-        beatIndex: clampBeatIndex(beatIndex, cleanBeats.length),
-        turnsSinceAdvance: 0,
-        createdAt: now,
-        updatedAt: now,
-    };
+export function makeArc(partial = {}) {
+    // STORY-PLANNER-04/-09: Route every arc creation through the single
+    // sanitizer so makeArc can never return a non-canonical arc. Direct
+    // callers (addArc, parsePlanTextToArcs/migration, import) used to bypass
+    // validation, so a pasted or migrated arc could carry unbounded
+    // title/body/beats, non-number beatIndex, non-boolean pinned, NaN
+    // counters, or foreign keys. preserveId:false mints a fresh id.
+    return sanitizeArc(partial, { preserveId: false });
 }
 
 /** Beat index is allowed to equal beats.length — that is the READY state. */
@@ -424,8 +473,15 @@ export function parsePlanTextToArcs(text) {
 
         // A wrapped continuation line beneath a bullet — fold it into that
         // arc's body so multi-line descriptions survive the round-trip.
-        if (last && /^[ \t]+\S/.test(rawLine) && last.beats.length === 0) {
-            last.body = last.body ? `${last.body} ${line.trim()}` : line.trim();
+        // STORY-PLANNER-06: The old `last.beats.length === 0` guard dropped
+        // wrapped prose that appeared AFTER a beat list, silently losing the
+        // continuation. Fold into the body regardless of whether beats exist.
+        if (last && /^[ \t]+\S/.test(rawLine)) {
+            const continuation = line.trim();
+            // Don't fold beat-like lines (numbered or already handled above).
+            if (!numbered && !indentedBullet) {
+                last.body = last.body ? `${last.body} ${continuation}` : continuation;
+            }
         }
     }
     return arcs;
@@ -477,9 +533,25 @@ export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all
 
 // ─── Regeneration merge ──────────────────────────────────────────────────────
 
-/** Loose title key for matching a regenerated arc to the one it replaces. */
+/**
+ * Loose title key for matching a regenerated arc to the one it replaces.
+ *
+ * STORY-PLANNER-05: The previous implementation stripped ALL non-alphanumeric
+ * characters (`/[^a-z0-9]/g`), so titles that differ only in punctuation
+ * collided — `"A/B"` and `"AB"` became the same key, and progress from one
+ * arc transferred to an unrelated arc during regeneration. We now preserve
+ * meaningful structural punctuation (slash, colon, dash, parentheses, quote
+ * marks) while still normalizing whitespace and case. Only cosmetic
+ * punctuation (periods, commas, exclamation marks, etc.) is stripped.
+ */
 function titleKey(title) {
-    return String(title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return String(title || '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim()
+        // Strip ONLY cosmetic punctuation, not structural delimiters.
+        // Preserved: / : - ( ) ' " — anything that distinguishes titles.
+        .replace(/[.!?,;_*#]/g, '');
 }
 
 /**
@@ -575,7 +647,9 @@ export function getArcs() {
 }
 
 export function setArcs(arcs) {
-    setPlanData({ arcs: Array.isArray(arcs) ? arcs : [] });
+    // STORY-PLANNER-09: Sanitize every arc so history restore / import cannot
+    // persist non-canonical arcs that later can't be removed.
+    setPlanData({ arcs: sanitizeArcs(arcs) });
 }
 
 /** Full plan as markdown — used by the `{{storyplan}}` macro and diff views. */
@@ -595,13 +669,30 @@ export function updateArc(id, patch = {}) {
     const arcs = getArcs();
     const idx = arcs.findIndex(a => a.id === id);
     if (idx === -1) return null;
-    const next = { ...arcs[idx], ...patch, id: arcs[idx].id, updatedAt: Date.now() };
-    if (!SECTION_KEYS.has(next.section)) next.section = DEFAULT_SECTION;
-    if (!ARC_STATUSES.includes(next.status)) next.status = 'active';
+    // STORY-PLANNER-04: Validate patch fields rather than blindly spreading.
+    // An arbitrary patch could inject unbounded title/body/beats, non-number
+    // beatIndex, non-boolean pinned, NaN counters, or foreign keys. The spread
+    // is now followed by per-field clamping/coercion, and setArcs() runs the
+    // full sanitizer as the final safety net.
+    const base = arcs[idx];
+    const merged = { ...base, ...patch, id: base.id, updatedAt: Date.now() };
+    // Clamp/clean the mutable fields a patch may set.
+    merged.title = String(merged.title ?? '').trim().slice(0, MAX_ARC_TITLE);
+    merged.body = String(merged.body ?? '').trim().slice(0, MAX_ARC_BODY);
+    merged.beats = Array.isArray(merged.beats)
+        ? merged.beats.map(b => String(b ?? '').trim().slice(0, MAX_BEAT_LENGTH)).filter(Boolean)
+        : base.beats;
+    merged.beatIndex = clampBeatIndex(merged.beatIndex, merged.beats.length);
+    merged.pinned = merged.pinned === true;
+    merged.turnsSinceAdvance = Number.isFinite(Number(merged.turnsSinceAdvance))
+        ? Math.max(0, Math.floor(Number(merged.turnsSinceAdvance)))
+        : (base.turnsSinceAdvance || 0);
+    if (!SECTION_KEYS.has(merged.section)) merged.section = DEFAULT_SECTION;
+    if (!ARC_STATUSES.includes(merged.status)) merged.status = 'active';
     const copy = [...arcs];
-    copy[idx] = next;
+    copy[idx] = merged;
     setArcs(copy);
-    return next;
+    return merged;
 }
 
 export function removeArc(id) {
