@@ -150,6 +150,28 @@ describe('hydrateBook', () => {
         await hydrateBook('Book A', {});
         expect(isHydrated('Book A')).toBe(false);
     });
+
+    test('KNOWLEDGE-02: a failed loadWorldInfo stays un-hydrated (no false empty)', async () => {
+        // A book that exists but whose load throws must NOT be treated as a
+        // brand-new book with no store. That would set hydrated=true against
+        // an empty registry and rebuild the whole book as duplicates.
+        wiFake.books.set('Book A', {
+            entries: {
+                0: { uid: 0, comment: STORE_SENTINEL, key: [], disable: true,
+                     content: JSON.stringify({ version: 1, registry: { Mara: { uid: 1 } } }) },
+                1: { uid: 1, comment: 'Mara', key: ['Mara'], content: 'dossier' },
+            },
+        });
+
+        // Make loadWorldInfo throw on first call.
+        const boom = vi.spyOn(wiFake, 'loadWorldInfo')
+            .mockRejectedValueOnce(new Error('disk read error'));
+
+        await hydrateBook('Book A', {});
+        expect(isHydrated('Book A')).toBe(false);
+        // assertHydrated must still throw — writes are blocked.
+        expect(() => assertHydrated('Book A')).toThrow(/not loaded/);
+    });
 });
 
 // ─── The store entry must never inject ──────────────────────────────────────
@@ -462,6 +484,78 @@ describe('writeToLorebook stale-uid guard', () => {
         expect(mara).toBeTruthy();
         expect(mara.content).toBe('dossier text');
         expect(mara.uid).not.toBe(store.uid);
+    });
+});
+
+describe('writeToLorebook KNOWLEDGE-01 identity guard', () => {
+    test('refuses to overwrite a different NPC and creates a new entry', async () => {
+        // KNOWLEDGE-01: a stale registry uid can point at an unrelated NPC's
+        // entry. The write must NOT clobber the wrong entry — it detaches the
+        // stale uid and creates a new one instead.
+        saveSettings({ scope: 'global' });
+        // Pre-populate the book with two real NPC entries.
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                0: { uid: 0, comment: 'Mara', key: ['Mara'], content: 'mara old' },
+                1: { uid: 1, comment: 'Bren', key: ['Bren'], content: 'bren old' },
+            },
+        });
+        // Hydrate the store directly (avoids the seed/flush round-trip).
+        _setCacheForTests('Knowledge Tracker', {
+            registry: { Mara: { uid: 0 }, Bren: { uid: 1 } },
+        });
+
+        // The registry says Mara→0, but suppose it went stale and points
+        // Mara→1 (Bren's slot).
+        const result = await writeToLorebook('Mara', 'mara dossier', ['Mara'], 1);
+
+        expect(result.success).toBe(true);
+        // A new uid was assigned — not uid 1.
+        expect(result.uid).not.toBe(1);
+
+        const saved = wiFake.books.get('Knowledge Tracker');
+        // Bren's entry (uid 1) is intact, not overwritten.
+        expect(saved.entries[1].comment).toBe('Bren');
+        expect(saved.entries[1].content).not.toBe('mara dossier');
+        // Mara got her own new entry at a different uid.
+        expect(saved.entries[result.uid]).toBeTruthy();
+        expect(saved.entries[result.uid].comment).toBe('Mara');
+        expect(saved.entries[result.uid].content).toBe('mara dossier');
+        expect(result.uid).not.toBe(1);
+    });
+
+    test('allows overwrite when the comment matches (normal update)', async () => {
+        saveSettings({ scope: 'global' });
+        await hydrateBook('Knowledge Tracker', {
+            registry: { Mara: { uid: 0 } },
+        });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                0: { uid: 0, comment: 'Mara', key: ['Mara'], content: 'old dossier' },
+            },
+        });
+
+        const result = await writeToLorebook('Mara', 'updated dossier', ['Mara'], 0);
+        expect(result.success).toBe(true);
+        expect(result.uid).toBe(0);
+        expect(wiFake.books.get('Knowledge Tracker').entries[0].content).toBe('updated dossier');
+    });
+
+    test('allows overwrite when the existing comment is empty', async () => {
+        // An entry with no comment (edge case) should not trigger the
+        // identity guard — it might be a legitimately blank entry being
+        // claimed for the first time.
+        saveSettings({ scope: 'global' });
+        await hydrateBook('Knowledge Tracker', { registry: {} });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                0: { uid: 0, comment: '', key: ['x'], content: 'blank' },
+            },
+        });
+
+        const result = await writeToLorebook('Mara', 'mara dossier', ['Mara'], 0);
+        expect(result.success).toBe(true);
+        expect(result.uid).toBe(0);
     });
 });
 

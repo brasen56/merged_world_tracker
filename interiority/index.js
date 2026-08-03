@@ -17,6 +17,7 @@
 
 import {
     getChat, getContextSafe, estimateTokens,
+    captureScope, assertSameScope,
 } from '../core/index.js';
 
 import {
@@ -200,8 +201,11 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         resolvedKey = getOrCreateMsgKeyForIndex(msgIdx);
     }
 
-    // Capture chat identity for cross-chat guard
-    const chatKeyBefore = `${ctx?.characterId ?? ''}|${ctx?.groupId ?? ''}|${ctx?.chatId ?? ''}`;
+    // INTERIORITY-02: Capture scope using the guard (getCurrentChatId + epoch)
+    // instead of the weak key that collapsed same-character chats. Assert
+    // before every commit point — after each API call AND after
+    // validateAndApply (which itself awaits resolveUserNames).
+    const scopeBefore = captureScope();
 
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -257,11 +261,9 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         if (useSplit) {
             console.log('[MWT:Interiority] Split mode ON — running parallel intentions + thoughts calls.');
             const { intentionsResult, thoughtsResult } = await runSplitCall(roster, { force });
-            // Cross-chat guard after the parallel pair completes.
-            const ctxAfter = getContextSafe();
-            const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
-            if (chatKeyAfter !== chatKeyBefore) {
-                console.log('[MWT:Interiority] Results discarded — chat changed during API call.');
+            // INTERIORITY-02: Cross-chat guard after the parallel pair completes.
+            if (!assertSameScope(scopeBefore).ok) {
+                console.log('[MWT:Interiority] Results discarded — chat changed during split API call.');
                 return null;
             }
             // Both null = total failure; bail like v1 does.
@@ -277,10 +279,10 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
                 result = await runBatchedCall(roster);
             }
 
-            // Cross-chat guard: discard if the user switched chats during the API call
-            const ctxAfter = getContextSafe();
-            const chatKeyAfter = `${ctxAfter?.characterId ?? ''}|${ctxAfter?.groupId ?? ''}|${ctxAfter?.chatId ?? ''}`;
-            if (chatKeyAfter !== chatKeyBefore) {
+            // INTERIORITY-02: Cross-chat guard: discard if the user switched
+            // chats during the API call. Uses the scope guard instead of the
+            // old weak key.
+            if (!assertSameScope(scopeBefore).ok) {
                 console.log('[MWT:Interiority] Results discarded — chat changed during API call.');
                 return null;
             }
@@ -308,6 +310,16 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
 
         // 3-4. Validate and apply
         const { reactions, ledgerChanged } = await validateAndApply(result, roster, msgIdx);
+
+        // INTERIORITY-02: Re-assert scope AFTER validateAndApply, which itself
+        // awaits resolveUserNames(). The old code checked identity only before
+        // that await, never after — so a chat switch during name resolution
+        // would commit thoughts/intentions/ledger to the wrong chat.
+        if (!assertSameScope(scopeBefore).ok) {
+            console.log('[MWT:Interiority] Results discarded — chat changed during validateAndApply.');
+            return null;
+        }
+
         console.log(`[MWT:Interiority] Applied: ${reactions.length} reaction(s), ledger ${ledgerChanged ? 'changed' : 'unchanged'}.`);
 
         // 5. Render thought block on the message DOM
