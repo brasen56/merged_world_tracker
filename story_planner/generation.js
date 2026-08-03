@@ -11,6 +11,7 @@ import {
     stripNonNarrative,
     captureScope, assertSameScope,
     captureRevision, sameRevision,
+    wrapTag, escapePromptText,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
@@ -53,7 +54,7 @@ function buildSystemPrompt() {
     return custom || STORY_PLAN_SYSTEM_PROMPT;
 }
 
-function buildUserPrompt(recentText, reminderReason = '') {
+export function buildUserPrompt(recentText, reminderReason = '') {
     const custom = getSettings().customUserPrompt?.trim();
     const template = custom || STORY_PLAN_USER_PROMPT;
 
@@ -73,7 +74,7 @@ function buildUserPrompt(recentText, reminderReason = '') {
           + `- [PINNED] — matters to the user; keep it unless the story has made it impossible.\n`
           + `- [RESOLVED] — already paid off; do not resurface it.\n`
           + `- [SETUP COMPLETE] — ready to happen; do not add more setup to it.\n`
-          + `- Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress.]\n${prevPlan}\n</previous_plan>`
+          + `- Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress.]\n${escapePromptText(prevPlan)}\n</previous_plan>`
         : '';
 
     // Cross-module grounding. Both getters return '' when the user isn't using
@@ -81,19 +82,22 @@ function buildUserPrompt(recentText, reminderReason = '') {
     // case the block is simply omitted — generation still proceeds normally.
     const ws = getCurrentWorldState().trim();
     const wsBlock = ws
-        ? `<current_world_state>\n[The current tracked state of the story. Ground your arcs in these threads, pressures, obligations, and character states.]\n${ws}\n</current_world_state>`
+        ? wrapTag('current_world_state',
+            '[The current tracked state of the story. Ground your arcs in these threads, pressures, obligations, and character states.]\n' + ws)
         : '';
 
     const chron = getLatestChronicleEntry().trim();
     const chronBlock = chron
-        ? `<recent_chronicle>\n[The most recent chronicle summary of events so far. Use it for longer-range continuity than the recent messages alone provide.]\n${chron}\n</recent_chronicle>`
+        ? wrapTag('recent_chronicle',
+            '[The most recent chronicle summary of events so far. Use it for longer-range continuity than the recent messages alone provide.]\n' + chron)
         : '';
 
     // User steering — free-text nudge ("more political intrigue", "ease off the
     // romance"). Omitted entirely when blank.
     const hint = getDirectionHint().trim();
     const hintBlock = hint
-        ? `<direction>\n[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n${hint}\n</direction>`
+        ? wrapTag('direction',
+            '[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n' + hint)
         : '';
 
     // Use replacement FUNCTIONS (not strings) so that `$` sequences in the
@@ -101,8 +105,16 @@ function buildUserPrompt(recentText, reminderReason = '') {
     // `String.prototype.replace` interprets `$&`, `$1`, `$$`, etc. as special
     // patterns — so chat text containing "$100" would become "$1" (empty
     // capture group) + "0" = "0", corrupting the user's history.
+    // STORY-PLANNER-07: Escape user/model content before interpolation. The
+    // recent story and previous plan are the two blocks still interpolated
+    // raw into <recent_story>/<previous_plan>, and both can contain `<`,
+    // `&`, or closing-tag sequences that would break the structural boundary.
+    // (The world-state/chronicle/direction blocks above already go through
+    // wrapTag().) Replacement FUNCTIONS are still used so `$` sequences in the
+    // content are treated literally rather than interpreted by replace().
+    const recentBlock = escapePromptText(recentText || 'No recent messages.');
     let out = template
-        .replace(/\{\{chatHistory\}\}/g, () => recentText || 'No recent messages.')
+        .replace(/\{\{chatHistory\}\}/g, () => recentBlock)
         .replace(/\{\{previousPlan\}\}/g, () => prevBlock)
         .replace(/\{\{worldState\}\}/g, () => wsBlock)
         .replace(/\{\{lastChronicle\}\}/g, () => chronBlock)

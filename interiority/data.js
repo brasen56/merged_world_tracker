@@ -1318,7 +1318,32 @@ export async function migrateIndexKeys() {
             // Stamp a UUID on the message and rewrite the key
             const newKey = getOrCreateMsgKeyForIndex(msgIdx);
             if (newKey) {
-                newPerMessage[newKey] = val;
+                // INTERIORITY-05: Detect a collision — two legacy keys
+                // (e.g. two send_date keys pointing at the same message)
+                // resolve to one UUID. The old code silently overwrote the
+                // first entry with the second, losing data. Merge instead:
+                // keep the newer `val` (higher generatedAt) as the primary
+                // entry but preserve the displaced one under a collision key.
+                if (newPerMessage[newKey]) {
+                    const existing = newPerMessage[newKey];
+                    const existingTs = existing.generatedAt || 0;
+                    const newTs = val.generatedAt || 0;
+                    if (newTs > existingTs) {
+                        // Newer one wins; keep the older under a collision suffix
+                        let suffix = 2;
+                        while (newPerMessage[`${newKey}#col${suffix}`]) suffix++;
+                        newPerMessage[`${newKey}#col${suffix}`] = existing;
+                        newPerMessage[newKey] = val;
+                    } else {
+                        // Existing is newer; keep the new one under a collision suffix
+                        let suffix = 2;
+                        while (newPerMessage[`${newKey}#col${suffix}`]) suffix++;
+                        newPerMessage[`${newKey}#col${suffix}`] = val;
+                    }
+                    console.warn(`[MWT:Interiority] Key migration collision: two legacy keys resolved to "${newKey}" — both entries preserved.`);
+                } else {
+                    newPerMessage[newKey] = val;
+                }
                 migrated++;
                 continue;
             }

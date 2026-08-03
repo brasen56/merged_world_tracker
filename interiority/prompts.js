@@ -4,6 +4,24 @@
  * Leaf module — no interiority imports.
  */
 
+import { buildTag, wrapTag, truncateText } from '../core/prompt.js';
+
+/**
+ * INTERIORITY-06: Maximum character caps for ledger fields used in injection
+ * and prompt contexts. Thoughts already have MAX_THOUGHT_LENGTH; the ledger
+ * fields (npc name, action, trigger, since, wakeHint) had no caps at all,
+ * so an unbounded model-generated or user-edited entry made the
+ * `<mwt_npc_intentions>` payload grow without limit every turn.
+ */
+const MAX_LEDGER_NAME = 120;
+const MAX_LEDGER_FIELD = 500;
+const MAX_LEDGER_SINCE = 100;
+
+/** Cap a string to a maximum length, trimming if needed. */
+function cap(text, max) {
+    return truncateText(String(text ?? ''), max);
+}
+
 /**
  * Build the system prompt for the interiority generation call.
  *
@@ -121,6 +139,11 @@ ${notes.join('\n')}`;
 /**
  * Build the user-content message for the interiority API call.
  *
+ * INTERIORITY-07: NPC names interpolated into tag *attributes* and all body
+ * content interpolated into tag *content* are now escaped via the shared
+ * `core/prompt.js` helpers (`buildTag` / `wrapTag`). Without this, a name or
+ * body containing `<`, `&`, or `"` could close the structural boundary early.
+ *
  * @param {object} opts
  * @param {Array<object>} opts.npcBlocks - per-NPC assembled context blocks
  *   [{ name, knowledgeEntry, openIntentions, scheduledIntentions }]
@@ -134,25 +157,27 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
     const parts = [];
 
     if (playerName) {
-        parts.push(`<player_character>${playerName}</player_character>`);
+        parts.push(wrapTag('player_character', playerName));
         parts.push('');
     }
 
     for (const npc of npcBlocks) {
-        parts.push(`<npc name="${npc.name}">`);
+        parts.push(buildTag('npc', { name: npc.name }));
         if (npc.knowledgeEntry) {
-            parts.push(`<knowledge_entry>\n${npc.knowledgeEntry}\n</knowledge_entry>`);
+            parts.push(wrapTag('knowledge_entry', npc.knowledgeEntry));
         } else {
-            parts.push(`<knowledge_entry>\n(No knowledge tracker entry for this NPC.)\n</knowledge_entry>`);
+            parts.push(wrapTag('knowledge_entry', '(No knowledge tracker entry for this NPC.)'));
         }
         if (includeIntentions !== false) {
             if (npc.openIntentions && npc.openIntentions.length > 0) {
                 const lines = npc.openIntentions.map(e =>
-                    `- [${e.id}] ${e.action} → trigger: ${e.trigger} (since ${e.since || 'unknown'})`
+                    // INTERIORITY-06: cap every prompt path, not just the
+                    // narrator injection / dormant poll.
+                    `- [${e.id}] ${cap(e.action, MAX_LEDGER_FIELD)} → trigger: ${cap(e.trigger, MAX_LEDGER_FIELD)} (since ${e.since ? cap(e.since, MAX_LEDGER_SINCE) : 'unknown'})`
                 );
-                parts.push(`<open_intentions>\n${lines.join('\n')}\n</open_intentions>`);
+                parts.push(wrapTag('open_intentions', lines.join('\n')));
             } else {
-                parts.push(`<open_intentions>\n(None.)\n</open_intentions>`);
+                parts.push(wrapTag('open_intentions', '(None.)'));
             }
             // Scheduled intentions, deliberately WITHOUT ids: the model needs
             // to know these plans already exist so it stops re-proposing them,
@@ -160,18 +185,16 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
             // scheduled intention is evaluated when it wakes, not every turn.
             if (npc.scheduledIntentions && npc.scheduledIntentions.length > 0) {
                 const lines = npc.scheduledIntentions.map(e =>
-                    `- ${e.action} → trigger: ${e.trigger}${e.wakeHint ? ` (watching for: ${e.wakeHint})` : ''}`
+                    `- ${cap(e.action, MAX_LEDGER_FIELD)} → trigger: ${cap(e.trigger, MAX_LEDGER_FIELD)}${e.wakeHint ? ` (watching for: ${cap(e.wakeHint, MAX_LEDGER_FIELD)})` : ''}`
                 );
-                parts.push(`<already_scheduled>\n${lines.join('\n')}\n</already_scheduled>`);
+                parts.push(wrapTag('already_scheduled', lines.join('\n')));
             }
         }
         parts.push('</npc>');
         parts.push('');
     }
 
-    parts.push(`<recent_messages>`);
-    parts.push(recentMessages);
-    parts.push(`</recent_messages>`);
+    parts.push(wrapTag('recent_messages', recentMessages));
     parts.push('');
     parts.push('='.repeat(60));
     parts.push('Generate interiority for each NPC. Output only JSON per the contract.');
@@ -269,6 +292,8 @@ Notes:
  * <knowledge_entry>, <relationships>, <recent_thoughts>, <inner_state>,
  * <open_intentions>. Each block is omitted when empty so the prompt stays lean.
  *
+ * INTERIORITY-07: All interpolated values are escaped via `buildTag`/`wrapTag`.
+ *
  * @param {object} opts
  * @param {Array<object>} opts.npcBlocks - per-NPC assembled rich blocks:
  *   [{ name, characterCore, knowledgeEntry, relationships, recentThoughts,
@@ -282,59 +307,58 @@ export function buildThoughtsUserContent({ npcBlocks, recentMessages, worldTime,
     const parts = [];
 
     if (playerName) {
-        parts.push(`<player_character>${playerName}</player_character>`);
+        parts.push(wrapTag('player_character', playerName));
         parts.push('');
     }
     if (worldTime) {
-        parts.push(`<world_time>${worldTime}</world_time>`);
+        parts.push(wrapTag('world_time', worldTime));
         parts.push('');
     }
 
     for (const npc of npcBlocks) {
-        parts.push(`<npc name="${npc.name}">`);
+        parts.push(buildTag('npc', { name: npc.name }));
 
         // <character_core> — who they are (profile or identity fields)
         if (npc.characterCore) {
-            parts.push(`<character_core>\n${npc.characterCore}\n</character_core>`);
+            parts.push(wrapTag('character_core', npc.characterCore));
         }
 
         // <knowledge_entry> — what they know (remainder after identity split)
         if (npc.knowledgeEntry) {
-            parts.push(`<knowledge_entry>\n${npc.knowledgeEntry}\n</knowledge_entry>`);
+            parts.push(wrapTag('knowledge_entry', npc.knowledgeEntry));
         } else {
-            parts.push(`<knowledge_entry>\n(No knowledge tracker entry for this NPC.)\n</knowledge_entry>`);
+            parts.push(wrapTag('knowledge_entry', '(No knowledge tracker entry for this NPC.)'));
         }
 
         // <relationships> — outbound edges filtered to roster (sealed minds)
         if (npc.relationships) {
-            parts.push(`<relationships>\n${npc.relationships}\n</relationships>`);
+            parts.push(wrapTag('relationships', npc.relationships));
         }
 
         // <recent_thoughts> — interior memory (continue, don't repeat)
         if (npc.recentThoughts) {
-            parts.push(`<recent_thoughts>\n${npc.recentThoughts}\n</recent_thoughts>`);
+            parts.push(wrapTag('recent_thoughts', npc.recentThoughts));
         }
 
         // <inner_state> — prior mood line (when available)
         if (npc.innerState) {
-            parts.push(`<inner_state>\n${npc.innerState}\n</inner_state>`);
+            parts.push(wrapTag('inner_state', npc.innerState));
         }
 
         // <open_intentions> — anticipation material
         if (npc.openIntentions && npc.openIntentions.length > 0) {
             const lines = npc.openIntentions.map(e =>
-                `- ${e.action} → trigger: ${e.trigger} (since ${e.since || 'unknown'})`
+                // INTERIORITY-06: cap every prompt path (same as buildUserContent).
+                `- ${cap(e.action, MAX_LEDGER_FIELD)} → trigger: ${cap(e.trigger, MAX_LEDGER_FIELD)} (since ${e.since ? cap(e.since, MAX_LEDGER_SINCE) : 'unknown'})`
             );
-            parts.push(`<open_intentions>\n${lines.join('\n')}\n</open_intentions>`);
+            parts.push(wrapTag('open_intentions', lines.join('\n')));
         }
 
         parts.push('</npc>');
         parts.push('');
     }
 
-    parts.push(`<recent_messages>`);
-    parts.push(recentMessages);
-    parts.push(`</recent_messages>`);
+    parts.push(wrapTag('recent_messages', recentMessages));
     parts.push('');
     parts.push('='.repeat(60));
     parts.push('Write each NPC\'s thought and inner_state. Output only JSON per the contract.');
@@ -354,6 +378,10 @@ export const INJECTION_HEADER = `[NPC intentions ledger — live, hidden NPC pla
  * Dormant entries (§20) are filtered out — the narrator never spends
  * attention on a trigger that cannot be met yet.
  *
+ * INTERIORITY-06: Each field is capped to a maximum character length so a
+ * runaway model-generated or user-edited entry cannot make the
+ * `<mwt_npc_intentions>` payload grow without limit every turn.
+ *
  * Example output:
  *   - Mara → search the study drawer → next time Jonah leaves the house (since Tue evening)
  *   - Tomas → move the ledger → tonight (since Wed noon)
@@ -367,8 +395,13 @@ export function formatLedgerForInjection(ledger) {
     const active = ledger.filter(e => e.status !== 'dormant');
     if (active.length === 0) return '';
     const lines = active.map(e => {
-        const since = e.since ? ` (since ${e.since})` : '';
-        return `- ${e.npc} → ${e.action} → ${e.trigger}${since}`;
+        // INTERIORITY-06: Cap each field so unbounded entries don't bloat
+        // the narrator injection every turn.
+        const npc = cap(e.npc, MAX_LEDGER_NAME);
+        const action = cap(e.action, MAX_LEDGER_FIELD);
+        const trigger = cap(e.trigger, MAX_LEDGER_FIELD);
+        const since = e.since ? ` (since ${cap(e.since, MAX_LEDGER_SINCE)})` : '';
+        return `- ${npc} → ${action} → ${trigger}${since}`;
     });
     return lines.join('\n');
 }
@@ -417,6 +450,9 @@ OUTPUT CONTRACT (JSON only):
 /**
  * Build the user-content message for the dormant poll.
  *
+ * INTERIORITY-06: Ledger fields are capped via `cap()` and INTERIORITY-07:
+ * interpolated content is escaped via `wrapTag`.
+ *
  * @param {Array<object>} dormantEntries - ledger entries with status 'dormant'
  * @param {string} recentMessages - stripped recent message window
  * @param {string} [worldTime] - current in-world time
@@ -426,24 +462,23 @@ export function buildDormantPollUserContent({ dormantEntries, recentMessages, wo
     const parts = [];
 
     if (worldTime) {
-        parts.push(`<world_time>${worldTime}</world_time>`);
+        parts.push(wrapTag('world_time', worldTime));
         parts.push('');
     }
 
     const lines = dormantEntries.map(e => {
-        const lineParts = [`- [${e.id}] ${e.npc} → ${e.action} → trigger: ${e.trigger}`];
-        if (e.wakeHint) lineParts.push(`  wake_hint: ${e.wakeHint}`);
-        if (e.since) lineParts.push(`  since: ${e.since}`);
+        const npc = cap(e.npc, MAX_LEDGER_NAME);
+        const action = cap(e.action, MAX_LEDGER_FIELD);
+        const trigger = cap(e.trigger, MAX_LEDGER_FIELD);
+        const lineParts = [`- [${e.id}] ${npc} → ${action} → trigger: ${trigger}`];
+        if (e.wakeHint) lineParts.push(`  wake_hint: ${cap(e.wakeHint, MAX_LEDGER_FIELD)}`);
+        if (e.since) lineParts.push(`  since: ${cap(e.since, MAX_LEDGER_SINCE)}`);
         return lineParts.join('\n');
     });
-    parts.push(`<dormant_intentions>`);
-    parts.push(lines.join('\n'));
-    parts.push(`</dormant_intentions>`);
+    parts.push(wrapTag('dormant_intentions', lines.join('\n')));
     parts.push('');
 
-    parts.push(`<recent_messages>`);
-    parts.push(recentMessages);
-    parts.push(`</recent_messages>`);
+    parts.push(wrapTag('recent_messages', recentMessages));
     parts.push('');
     parts.push('='.repeat(60));
     parts.push('For each dormant intention, decide wake or sleep. Output only JSON per the contract.');
