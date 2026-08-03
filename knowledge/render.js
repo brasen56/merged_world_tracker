@@ -17,6 +17,7 @@ import {
     getRegistry, saveRegistry, getAllNpcNames,
     getStateRegistry, registerStateTracker, unregisterStateTracker,
     setStateTrackerEnabled, setStateTrackerAlwaysUpdate, bumpStateTrackerTimestamp,
+    resolveRegistryKey,
 } from './registry.js';
 import {
     loadEntryContent, loadStateTrackerEntry,
@@ -56,13 +57,21 @@ async function handleAccept(item, text, keywords, el) {
         } else {
             const result = await writeToLorebook(item.name, text, keywords, item.uid);
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
-            getRegistry()[item.name] = {
+            // KNOWLEDGE-03: If this is an update (item.uid != null), resolve
+            // the canonical registry key so the model's spelling doesn't create
+            // a duplicate entry beside the real one. For creates, use the
+            // model's name as-is (the NPC is genuinely new).
+            const reg = getRegistry();
+            const regKey = item.uid != null
+                ? (resolveRegistryKey(reg, item.name) ?? item.name)
+                : item.name;
+            reg[regKey] = {
                 uid: result.uid,
                 type: item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
                 keywords,
                 lastUpdated: Date.now(),
             };
-            saveRegistry(getRegistry());
+            saveRegistry(reg);
         }
         state.stagingItems = state.stagingItems.filter(i => i.id !== item.id);
         if (state.activeItemId === item.id) state.activeItemId = null;

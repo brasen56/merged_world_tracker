@@ -10,7 +10,7 @@
 import {
     RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
 } from './state.js';
-import { getRegistry } from './registry.js';
+import { getRegistry, getRegistryEntry } from './registry.js';
 import { getLorebookName } from './scope.js';
 import { readField, writeField } from './store.js';
 import { captureScope, assertSameScope } from '../core/index.js';
@@ -202,8 +202,12 @@ export function formatRelationshipBlock(name) {
 
 export async function syncRelationshipsToLorebook(name) {
     const { loadEntryContent, writeToLorebook } = await import('./lorebook.js');
-    const reg = getRegistry()[name];
-    if (!reg || reg.uid === null || reg.uid === undefined) return { success: false, error: 'No lorebook entry' };
+    // KNOWLEDGE-03: Use getRegistryEntry so a given-name or alternate spelling
+    // resolves to the canonical registry key instead of silently missing.
+    const entry = getRegistryEntry(name);
+    if (!entry || entry.info.uid == null) return { success: false, error: 'No lorebook entry' };
+    const reg = entry.info;
+    const canonicalName = entry.key;
     // KNOWLEDGE-04: Capture scope before the loadEntryContent await. The read
     // → await → write sequence straddles an async boundary, and the write
     // resolves the book dynamically — a chat/scope change between read and

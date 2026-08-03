@@ -36,7 +36,37 @@ export function registerEntry(name, uid, type, keywords) {
     saveRegistry(reg);
 }
 
-export function isKnown(name) { return !!getRegistry()[name]; }
+export function isKnown(name) {
+    // KNOWLEDGE-03: Route through the resolver so isKnown respects case/
+    // given-name matching instead of requiring an exact key hit.
+    const reg = getRegistry();
+    const key = resolveRegistryKey(reg, name);
+    return key != null && !!reg[key];
+}
+
+/**
+ * KNOWLEDGE-03: The single accessor for looking up an NPC's registry info.
+ *
+ * Every boundary that needs an NPC's uid/type/keywords must go through here.
+ * Direct `getRegistry()[name]` lookups silently miss when the model uses a
+ * given name ("Mara") and the registry stores the full name ("Mara Vance"),
+ * producing false "new NPC" proposals and duplicate lorebook entries.
+ *
+ * This function resolves the name through {@link resolveRegistryKey} (exact,
+ * case-insensitive, then unambiguous given-name) and returns the info object
+ * plus the canonical registry key it matched on.
+ *
+ * @param {string} name — the name to look up (model output, user input, etc.)
+ * @returns {{key: string, info: object}|null} the registry entry, or null if
+ *   no match (including when the name is ambiguous — fail closed)
+ */
+export function getRegistryEntry(name) {
+    const reg = getRegistry();
+    const key = resolveRegistryKey(reg, name);
+    if (key == null) return null;
+    const info = reg[key];
+    return info ? { key, info } : null;
+}
 
 /**
  * Resolve an NPC name to its registry key.

@@ -9,7 +9,7 @@ import { getChat, escapeRegex, estimateTokens, getContextSafe, getChatMeta, patc
 
 import { state, getNpcsContentEl, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
-import { getRegistry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg } from './registry.js';
+import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
 import { resetStoreCache, hydrateCurrentBooks } from './store.js';
@@ -543,8 +543,10 @@ export function getGrowthEvidenceCount() {
 }
 
 export async function getNpcContent(name) {
-    const reg = getRegistry()[name];
-    if (!reg || reg.uid == null) return '';
-    const content = await loadEntryContent(reg.uid);
+    // KNOWLEDGE-03: Use getRegistryEntry so given-name ("Mara") resolves to
+    // the full registry key ("Mara Vance") instead of silently missing.
+    const entry = getRegistryEntry(name);
+    if (!entry || entry.info.uid == null) return '';
+    const content = await loadEntryContent(entry.info.uid);
     return content || '';
 }

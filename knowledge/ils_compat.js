@@ -93,6 +93,14 @@ export function resolveIlsOriginals(msg, chatMeta, visited = new Set()) {
             console.warn(`[MWT:ILS] Cycle detected at Ref "${ilsData.Ref}" — skipping to prevent infinite recursion.`);
             return [];
         }
+        // KNOWLEDGE-05: Clone the visited set before mutating so sibling
+        // branches don't share state. The old code added the current Ref to a
+        // single shared Set, so when one sibling branch visited Ref "X", every
+        // subsequent sibling saw "X" as already visited and was silently
+        // skipped — dropping valid originals from the expansion. Each branch
+        // now gets its own copy, so a Ref visited in one subtree does not
+        // block the same Ref from being expanded in a parallel subtree.
+        visited = new Set(visited);
         visited.add(ilsData.Ref);
         const stored = store[ilsData.Ref];
         candidates = Array.isArray(stored) ? stored : [];
@@ -101,6 +109,18 @@ export function resolveIlsOriginals(msg, chatMeta, visited = new Set()) {
     // Old chats store the originals directly inside the summary message's
     // extra data, before the metadata-store migration.
     else if (Array.isArray(ilsData.OriginalMessages)) {
+        // KNOWLEDGE-05: Legacy embedded arrays had no cycle guard at all, so
+        // a corrupt chat whose OriginalMessages reference each other (directly
+        // or transitively) caused unbounded recursion. Use object identity —
+        // the array itself — as the visited key, cloned per-branch just like
+        // the Ref path. This catches the "A contains B, B contains A" loop
+        // without relying on string Refs that legacy messages don't have.
+        if (visited.has(ilsData.OriginalMessages)) {
+            console.warn('[MWT:ILS] Cycle detected in legacy OriginalMessages array — skipping to prevent infinite recursion.');
+            return [];
+        }
+        visited = new Set(visited);
+        visited.add(ilsData.OriginalMessages);
         candidates = ilsData.OriginalMessages;
     }
 

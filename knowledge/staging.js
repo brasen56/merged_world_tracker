@@ -16,6 +16,7 @@ import { hasValidSettings, getSettings, saveSettings } from './settings.js';
 import {
     getRegistry, saveRegistry, getAllNpcNames,
     getStateRegistry, saveStateRegistry, registerStateTracker,
+    resolveRegistryKey,
 } from './registry.js';
 import {
     formatMinorEntry, formatMajorEntry,
@@ -48,7 +49,10 @@ export function buildStagingItems(scanResult) {
         items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name], dossierMode });
     });
     scanResult.update_minor.forEach(data => {
-        const reg = registry[data.name];
+        // KNOWLEDGE-03: Resolve the name through resolveRegistryKey so "Mara"
+        // matches "Mara Vance" instead of creating a false orphan.
+        const regKey = resolveRegistryKey(registry, data.name);
+        const reg = regKey ? registry[regKey] : null;
         const orphan = !reg || reg.uid === null || reg.uid === undefined;
         if (orphan) {
             misclassifiedCount++;
@@ -59,7 +63,10 @@ export function buildStagingItems(scanResult) {
         items.push({ id: makeId(), type: 'minor', action: 'update', name: data.name, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords: reg.keywords || [data.name], uid: reg.uid, fields: data.fields });
     });
     scanResult.update_major.forEach(data => {
-        const reg = registry[data.name];
+        // KNOWLEDGE-03: Resolve the name through resolveRegistryKey so "Mara"
+        // matches "Mara Vance" instead of creating a false orphan.
+        const regKey = resolveRegistryKey(registry, data.name);
+        const reg = regKey ? registry[regKey] : null;
         const orphan = !reg || reg.uid === null || reg.uid === undefined;
         if (orphan) {
             misclassifiedCount++;
