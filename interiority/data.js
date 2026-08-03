@@ -819,7 +819,13 @@ export function getDormantPollInterval() {
 export function isDormantPollDue() {
     if (getDormantLedger().length === 0) return false;
     const interval = getDormantPollInterval();
-    return getTurnCounter() % interval === 0;
+    // INTERIORITY-03: Look ahead by 1. The counter now increments only after
+    // a *successful* generation, so the upcoming turn is (counter + 1). If
+    // that upcoming turn lands on a poll interval, the poll fires at the
+    // start of this turn so woken entries join the roster before the main
+    // call. A failed/empty/dropped turn does not advance the counter, so the
+    // poll simply re-checks on the next successful turn.
+    return (getTurnCounter() + 1) % interval === 0;
 }
 
 // ─── Inner state (v2 §18 — persistent affective line) ────────────────────────

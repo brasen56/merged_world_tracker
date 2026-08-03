@@ -877,22 +877,23 @@ export function renderThoughtBlockForMessage(msgIdx) {
     // perMessage is keyed by UUID (mu-*) or send_date (sd-*), so the lookup
     // survives chat shifts.
     const msgKey = getMsgKeyForIndex(msgIdx);
+
+    // INTERIORITY-01: Find the message element and remove any existing thought
+    // block BEFORE checking perMessage metadata. If a swipe/edit/empty-
+    // regeneration left stale metadata, the old block must be cleaned up
+    // regardless of whether new data exists to render. Returning early (as the
+    // old code did) left the stale private-state UI visible on the changed
+    // message.
+    const chat = document.getElementById('chat');
+    if (!chat) return;
+    const msgEl = chat.querySelector(`.mes[mesid="${msgIdx}"]`);
+    if (!msgEl) return;
+    const existing = msgEl.querySelector('.mwt-int-msg-thoughts');
+    if (existing) existing.remove();
+
     if (!msgKey) return;
     const pm = getPerMessage(msgKey);
     if (!pm || !pm.reactions || pm.reactions.length === 0) return;
-
-    // Find the message element in the DOM. ST stamps each message element
-    // with its chat-array index in the `mesid` attribute — positional
-    // indexing breaks because ST only renders a window of recent messages.
-    const chat = document.getElementById('chat');
-    if (!chat) return;
-
-    const msgEl = chat.querySelector(`.mes[mesid="${msgIdx}"]`);
-    if (!msgEl) return;
-
-    // Remove any existing thought block
-    const existing = msgEl.querySelector('.mwt-int-msg-thoughts');
-    if (existing) existing.remove();
 
     // Build the thought block
     const block = document.createElement('div');

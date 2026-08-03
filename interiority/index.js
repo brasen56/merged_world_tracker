@@ -211,12 +211,13 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
     try {
-        // §20: increment the generation turn counter BEFORE the main call so
-        // the dormant poll scheduler sees the correct turn number. The poll
-        // fires when counter % DORMANT_POLL_INTERVAL === 0 and there are
-        // dormant entries — it runs after generation, waking any entries
-        // whose trigger is near so they're active for the NEXT turn.
-        incrementTurnCounter();
+        // INTERIORITY-03: The turn counter used to increment BEFORE the API
+        // call, so empty rosters, API failures, and discarded stale targets
+        // all consumed a turn — shifting dormant-poll scheduling during an
+        // outage. It now increments only after a result is successfully
+        // applied (see below). isDormantPollDue() has been updated to look
+        // ahead by 1 so the poll still fires at the *start* of the right
+        // turn.
 
         // §20: Dormant poll (lazy wake). Runs BEFORE the main call so woken
         // entries are included in this turn's roster + injection. Fires only
@@ -332,6 +333,13 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         const { reactions, ledgerChanged } = applyResult;
 
         console.log(`[MWT:Interiority] Applied: ${reactions.length} reaction(s), ledger ${ledgerChanged ? 'changed' : 'unchanged'}.`);
+
+        // INTERIORITY-03: Increment the turn counter only now — after a result
+        // has been successfully validated and applied. Empty rosters, API
+        // failures, and discarded stale targets all bail earlier and never
+        // reach this line, so they no longer consume a turn. This keeps the
+        // dormant-poll schedule aligned with actual successful generations.
+        incrementTurnCounter();
 
         // 5. Render thought block on the message DOM
         renderThoughtBlockForMessage(msgIdx);
