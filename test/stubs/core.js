@@ -48,6 +48,7 @@ let _pickTextFileImpl = null;
 let _apiImpl = null;
 let _promptCalls = [];
 let _notifications = [];
+let _statusCalls = [];
 
 /**
  * Wipe all fake state. Call this in `beforeEach` so every test starts clean.
@@ -60,6 +61,7 @@ export function resetCoreStubs() {
     _pickTextFileImpl = null;
     _apiImpl = null;
     _promptCalls = [];
+    _statusCalls = [];
 }
 
 /**
@@ -354,7 +356,16 @@ export function injectionAllowed(moduleKey) {
 export const createModal = notImplemented('createModal');
 export const showModal = notImplemented('showModal');
 export const hideModal = notImplemented('hideModal');
-export const setStatus = notImplemented('setStatus');
+/**
+ * Records status messages instead of touching the DOM. The real setStatus
+ * returns early when the modal is null, so calling it with a closed modal is
+ * legitimate — tests still see the call here, which is what lets them assert
+ * that a discard path reported itself to the user.
+ */
+export function setStatus(modalIdOrEl, message, type = 'info', clearAfterMs = 0) {
+    _statusCalls.push({ message, type, clearAfterMs });
+}
+export function getFakeStatusCalls() { return _statusCalls; }
 export const formatDate = notImplemented('formatDate');
 export function applyExtensionPromptInjection({
     key, header = '', body = '', enabled, globalDepth, fallbackDepth,
