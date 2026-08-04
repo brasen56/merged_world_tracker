@@ -32,8 +32,10 @@ import { getLorebookName } from '../knowledge/scope.js';
 import { saveSettings } from '../knowledge/settings.js';
 import {
     applyExtractedRelationships, runRelationshipExtract,
-    getNpcRelationships, addRelationship, getRelationships,
+    getNpcRelationships, addRelationship, updateRelationship, getRelationships,
     getStance, setStance, getStances,
+    isEdgeAutoManaged, isStanceAutoManaged, toggleEdgeSource, toggleStanceSource,
+    SOURCE_AUTO, SOURCE_MANUAL,
 } from '../knowledge/relationships.js';
 
 // runRelationshipExtract pulls ktFetchFromApi off lorebook.js via a dynamic
@@ -71,7 +73,9 @@ describe('applyExtractedRelationships — edges', () => {
         expect([...r.affectedNpcs]).toEqual(['Mara']);
         const edges = getNpcRelationships('Mara');
         expect(edges).toHaveLength(1);
-        expect(edges[0]).toEqual({ target: 'Jonah', type: 'friend', notes: 'childhood' });
+        // Extractor-created edges are stamped `auto`, which is what makes them
+        // eligible for a later pass to update. See the provenance suite below.
+        expect(edges[0]).toEqual({ target: 'Jonah', type: 'friend', notes: 'childhood', source: SOURCE_AUTO });
     });
 
     test('skips an edge with an unknown endpoint', () => {
@@ -94,18 +98,20 @@ describe('applyExtractedRelationships — edges', () => {
         // canonical key "Mara Vance" and point at the canonical "Jonah".
         const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'rival' }] });
         expect(r.edgesAdded).toBe(1);
-        expect(getNpcRelationships('Mara Vance')).toEqual([{ target: 'Jonah', type: 'rival', notes: '' }]);
+        expect(getNpcRelationships('Mara Vance')).toEqual([{ target: 'Jonah', type: 'rival', notes: '', source: SOURCE_AUTO }]);
         expect(getNpcRelationships('Mara')).toHaveLength(0);
     });
 
     test('updates an existing edge without duplicating it', () => {
-        addRelationship('Mara', 'Jonah', 'friend', '');
+        // Seeded as `auto` so the extractor owns it — a manual edge is locked,
+        // which is the subject of the provenance suite below rather than this one.
+        addRelationship('Mara', 'Jonah', 'friend', '', SOURCE_AUTO);
         const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'rival', notes: 'they fell out' }] });
         expect(r.edgesAdded).toBe(0);
         expect(r.edgesUpdated).toBe(1);
         const edges = getNpcRelationships('Mara');
         expect(edges).toHaveLength(1);
-        expect(edges[0]).toEqual({ target: 'Jonah', type: 'rival', notes: 'they fell out' });
+        expect(edges[0]).toEqual({ target: 'Jonah', type: 'rival', notes: 'they fell out', source: SOURCE_AUTO });
     });
 
     test('preserves a manually-added edge that is absent from the extract', () => {
@@ -145,7 +151,8 @@ describe('applyExtractedRelationships — stances toward {{user}}', () => {
     });
 
     test('updates an existing stance to a new value', () => {
-        setStance('Mara', 'friendly');
+        // Seeded as `auto` for the same reason as the edge case above.
+        setStance('Mara', 'friendly', SOURCE_AUTO);
         applyExtractedRelationships({ stances: [{ npc: 'Mara', stance: 'hostile' }] });
         expect(getStance('Mara')).toBe('hostile');
     });
@@ -159,6 +166,123 @@ describe('applyExtractedRelationships — stances toward {{user}}', () => {
     test('skips a stance for an unknown NPC', () => {
         applyExtractedRelationships({ stances: [{ npc: 'Ghost', stance: 'wary' }] });
         expect(getStances()).not.toHaveProperty('Ghost');
+    });
+});
+
+describe('applyExtractedRelationships — manual records are protected', () => {
+    // Guard A. The old "only adds or updates, never deletes" invariant protected
+    // an edge's EXISTENCE but not its VALUE, so a model reading a quiet scene
+    // could rewrite a hand-curated "family" to something else and it counted as
+    // a legal update.
+    test('will not overwrite a hand-entered edge', () => {
+        addRelationship('Mara', 'Jonah', 'family', 'her brother'); // defaults to manual
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'rival', notes: 'guessed' }] });
+        expect(r.edgesUpdated).toBe(0);
+        expect(r.skippedManual).toBe(1);
+        expect(getNpcRelationships('Mara')[0]).toMatchObject({ type: 'family', notes: 'her brother' });
+    });
+
+    test('will not overwrite a hand-set stance', () => {
+        setStance('Mara', 'caring');
+        const r = applyExtractedRelationships({ stances: [{ npc: 'Mara', stance: 'hostile' }] });
+        expect(r.stancesSet).toBe(0);
+        expect(r.skippedManual).toBe(1);
+        expect(getStance('Mara')).toBe('caring');
+    });
+
+    test('DOES update an edge it created itself', () => {
+        applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'friend' }] });
+        expect(isEdgeAutoManaged(getNpcRelationships('Mara')[0])).toBe(true);
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'rival' }] });
+        expect(r.edgesUpdated).toBe(1);
+        expect(r.skippedManual).toBe(0);
+        expect(getNpcRelationships('Mara')[0].type).toBe('rival');
+    });
+
+    test('fills an UNSET stance — nothing of the user\'s is at stake', () => {
+        const r = applyExtractedRelationships({ stances: [{ npc: 'Mara', stance: 'wary' }] });
+        expect(r.stancesSet).toBe(1);
+        expect(isStanceAutoManaged('Mara')).toBe(true);
+    });
+
+    test('legacy records with no source are treated as MANUAL, not auto', () => {
+        // The migration case that matters: auto-extraction shipped off by default,
+        // so every pre-existing record was hand-entered. Reading absent-as-auto
+        // would let the first run after upgrading wipe exactly what this protects.
+        _setCacheForTests(getLorebookName(), {
+            registry: seedRegistry(['Mara', 'Jonah']),
+            relationships: { Mara: [{ target: 'Jonah', type: 'lover' }] }, // no `source`
+            stances: { Mara: 'caring' },                                    // no stanceSources
+        });
+        const r = applyExtractedRelationships({
+            edges: [{ from: 'Mara', to: 'Jonah', type: 'acquaintance' }],
+            stances: [{ npc: 'Mara', stance: 'wary' }],
+        });
+        expect(r.skippedManual).toBe(2);
+        expect(getNpcRelationships('Mara')[0].type).toBe('lover');
+        expect(getStance('Mara')).toBe('caring');
+    });
+
+    test('a human editing an auto edge claims it, locking out future extraction', () => {
+        applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'friend' }] });
+        updateRelationship('Mara', 'Jonah', 'family', 'actually her brother'); // manual edit
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'friend' }] });
+        expect(r.skippedManual).toBe(1);
+        expect(getNpcRelationships('Mara')[0].type).toBe('family');
+    });
+
+    test('the lock is releasable — a released edge becomes writable again', () => {
+        addRelationship('Mara', 'Jonah', 'family', '');
+        expect(toggleEdgeSource('Mara', 'Jonah')).toBe(SOURCE_AUTO);
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'rival' }] });
+        expect(r.edgesUpdated).toBe(1);
+        expect(getNpcRelationships('Mara')[0].type).toBe('rival');
+        // …and re-locking holds it again.
+        expect(toggleEdgeSource('Mara', 'Jonah')).toBe(SOURCE_MANUAL);
+        expect(applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'enemy' }] }).skippedManual).toBe(1);
+    });
+
+    test('a released stance becomes writable, and re-locking holds', () => {
+        setStance('Mara', 'caring');
+        expect(toggleStanceSource('Mara')).toBe(SOURCE_AUTO);
+        expect(applyExtractedRelationships({ stances: [{ npc: 'Mara', stance: 'wary' }] }).stancesSet).toBe(1);
+        expect(getStance('Mara')).toBe('wary');
+        expect(toggleStanceSource('Mara')).toBe(SOURCE_MANUAL);
+        expect(applyExtractedRelationships({ stances: [{ npc: 'Mara', stance: 'hostile' }] }).skippedManual).toBe(1);
+    });
+});
+
+describe('applyExtractedRelationships — "neutral" is not a finding', () => {
+    // Guard B. `neutral` is a legal enum member and it is what a model emits when
+    // it has nothing to report, which is how a quiet scene flattens a graph.
+    test('drops a neutral edge type instead of writing it', () => {
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'neutral' }] });
+        expect(r.edgesAdded).toBe(0);
+        expect(r.skippedNeutral).toBe(1);
+        expect(getNpcRelationships('Mara')).toHaveLength(0);
+    });
+
+    test('drops a neutral stance instead of writing it', () => {
+        const r = applyExtractedRelationships({ stances: [{ npc: 'Mara', stance: 'neutral' }] });
+        expect(r.stancesSet).toBe(0);
+        expect(r.skippedNeutral).toBe(1);
+        expect(getStances()).not.toHaveProperty('Mara');
+    });
+
+    test('a neutral cannot flatten an edge the extractor itself owns', () => {
+        applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'lover' }] });
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'neutral' }] });
+        expect(r.edgesUpdated).toBe(0);
+        expect(r.skippedNeutral).toBe(1);
+        expect(getNpcRelationships('Mara')[0].type).toBe('lover');
+    });
+
+    test('the manual editor may still set neutral deliberately', () => {
+        // Only the extractor treats neutral as noise; a human choosing it means it.
+        updateRelationship('Mara', 'Jonah', 'neutral', 'they barely speak');
+        expect(getNpcRelationships('Mara')[0].type).toBe('neutral');
+        setStance('Mara', 'neutral');
+        expect(getStance('Mara')).toBe('neutral');
     });
 });
 
@@ -209,7 +333,7 @@ describe('runRelationshipExtract — chat-switch guard', () => {
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(result.edgesAdded).toBe(1);
         expect(result.stancesSet).toBe(1);
-        expect(getNpcRelationships('Mara')).toEqual([{ target: 'Jonah', type: 'friend', notes: 'childhood' }]);
+        expect(getNpcRelationships('Mara')).toEqual([{ target: 'Jonah', type: 'friend', notes: 'childhood', source: SOURCE_AUTO }]);
         expect(getStance('Beck')).toBe('wary');
     });
 

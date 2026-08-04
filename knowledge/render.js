@@ -31,6 +31,7 @@ import {
     getRelationships, updateRelationship, removeRelationship,
     removeAllRelationshipsFor,
     getStances, setStance,
+    isEdgeAutoManaged, isStanceAutoManaged, toggleEdgeSource, toggleStanceSource,
     syncRelationshipsToLorebook, syncAllRelationshipsToLorebooks,
 } from './relationships.js';
 import {
@@ -1535,7 +1536,7 @@ function renderRelationshipContent() {
     const allEdges = [];
     for (const [from, targets] of Object.entries(rels)) {
         for (const r of targets) {
-            allEdges.push({ from, to: r.target, type: r.type, notes: r.notes || '' });
+            allEdges.push({ from, to: r.target, type: r.type, notes: r.notes || '', source: r.source });
         }
     }
 
@@ -1574,12 +1575,16 @@ function renderRelationshipContent() {
                <button id="kt-stance-set" class="mwt-btn mwt-btn-primary">Set</button>
                <span style="flex:1;min-width:160px;font-size:11px;color:var(--mwt-text-dim)">How far this NPC pushes before backing off. Unset NPCs fall back to persona.</span>
             </div>
-            ${stanceEntries.length ? `<div class="kt-rel-list">${stanceEntries.map(([n, s]) => `<div class="kt-rel-row">
+            ${stanceEntries.length ? `<div class="kt-rel-list">${stanceEntries.map(([n, s]) => {
+                     const locked = !isStanceAutoManaged(n);
+                     return `<div class="kt-rel-row">
                      <span class="kt-rel-from">${escapeHtml(n)}</span>
                      <span class="kt-rel-type">${escapeHtml(s)}</span>
                      <span class="kt-rel-notes">toward {{user}}</span>
+                     <button class="kt-stance-lock ${locked ? 'locked' : ''}" data-name="${escapeHtml(n)}" title="${locked ? 'Locked — you set this, so auto-extraction will not change it. Click to hand it back to auto-updating.' : 'Auto-managed — extraction may update this. Click to lock it.'}">${locked ? '🔒' : '🔓'}</button>
                      <button class="kt-stance-clear" data-name="${escapeHtml(n)}" title="Clear stance">✕</button>
-                 </div>`).join('')}</div>` : ''}
+                 </div>`;
+                 }).join('')}</div>` : ''}
             ${allEdges.length === 0 ? '<div class="kt-empty">No relationships tracked yet.</div>' : (viewMode === 'graph' ? `
                 <div class="kt-rel-graph-wrap">
                     <svg id="kt-rel-graph" class="kt-rel-graph" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -1593,12 +1598,14 @@ function renderRelationshipContent() {
                  ${allEdges.map(e => {
                      const reverse = (rels[e.to] || []).find(r => r.target === e.from);
                      const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${escapeHtml(reverse.type)}">↩ ${escapeHtml(reverse.type)}</span>` : '';
+                     const locked = !isEdgeAutoManaged(e);
                      return `<div class="kt-rel-row" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}">
                        <span class="kt-rel-from">${escapeHtml(e.from)}</span>
                        <span class="kt-rel-type">${escapeHtml(e.type)}</span>
                        <span class="kt-rel-to">${escapeHtml(e.to)}</span>
                          ${e.notes ? `<span class="kt-rel-notes">${escapeHtml(e.notes)}</span>` : ''}
                          ${reverseLabel}
+                       <button class="kt-rel-lock ${locked ? 'locked' : ''}" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="${locked ? 'Locked — you entered this, so auto-extraction will not change it. Click to hand it back to auto-updating.' : 'Auto-managed — extraction may update this. Click to lock it.'}">${locked ? '🔒' : '🔓'}</button>
                        <button class="kt-rel-remove" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="Remove">✕</button>
                      </div>`;
                  }).join('')}
@@ -2095,6 +2102,22 @@ function wireRelationshipEvents(el) {
             ktSetStatus(`Stance saved but sync failed: ${err.message}`, 'warning');
         }
         renderNpcsSubTab();
+    });
+
+    // Provenance toggles. Purely a store flag — no lorebook re-sync needed,
+    // since the rendered relationship block doesn't carry the lock state.
+    el.querySelectorAll('.kt-rel-lock').forEach(btn => {
+        btn.addEventListener('click', () => {
+            toggleEdgeSource(btn.dataset.from, btn.dataset.to);
+            renderNpcsSubTab();
+        });
+    });
+
+    el.querySelectorAll('.kt-stance-lock').forEach(btn => {
+        btn.addEventListener('click', () => {
+            toggleStanceSource(btn.dataset.name);
+            renderNpcsSubTab();
+        });
     });
 
     el.querySelectorAll('.kt-stance-clear').forEach(btn => {

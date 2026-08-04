@@ -339,7 +339,7 @@ export function onMessageReceived() {
                         console.log('[MWT:Knowledge] Relationship extract discarded — chat changed during API call.');
                         return;
                     }
-                    const { affectedNpcs, edgesAdded, edgesUpdated, stancesSet } = extract;
+                    const { affectedNpcs, edgesAdded, edgesUpdated, stancesSet, skippedManual, skippedNeutral } = extract;
                     // Re-sync only the affected NPCs so the managed block reflects the
                     // new edges/stances. Skips entries whose content didn't change.
                     let synced = 0;
@@ -354,7 +354,11 @@ export function onMessageReceived() {
                         } catch (err) { console.warn(`[MWT:Knowledge] Relationship sync for "${name}" failed:`, err.message); }
                     }
                     const changes = edgesAdded + edgesUpdated + stancesSet;
-                    console.log(`[MWT:Knowledge] Auto-relationships: +${edgesAdded} edge(s), ~${edgesUpdated} updated, ${stancesSet} stance(s); synced ${synced}/${affectedNpcs.size} entr(ies).`);
+                    console.log(
+                        `[MWT:Knowledge] Auto-relationships: +${edgesAdded} edge(s), ~${edgesUpdated} updated, ` +
+                        `${stancesSet} stance(s); synced ${synced}/${affectedNpcs.size} entr(ies). ` +
+                        `Protected ${skippedManual} hand-entered record(s); dropped ${skippedNeutral} "neutral" non-finding(s).`
+                    );
                     if (changes > 0) {
                         // Refresh the open sub-tab so the Relationships list and
                         // graph show the new edges instead of going stale until

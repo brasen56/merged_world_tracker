@@ -36,11 +36,31 @@ export function saveRelationships(rels) {
 
 export function getNpcRelationships(name) { return getRelationships()[name] || []; }
 
-export function addRelationship(from, to, type, notes) {
+// ─── Provenance ──────────────────────────────────────────────────────────────
+//
+// Auto-extraction and the manual editor write through the same CRUD helpers, so
+// every record records who wrote it. The extractor may only modify what it owns:
+// a hand-entered edge is the user's statement about their story, and a model
+// that reads a quiet scene must not be able to overwrite it.
+//
+// The fail-safe DIRECTION is the part that matters. Only the exact string
+// 'auto' counts as auto-managed. A record with no `source` predates provenance —
+// and because auto-extraction shipped off by default, everything already sitting
+// in a store was entered by hand. Missing therefore reads as MANUAL (locked),
+// never as auto. Getting this backwards would let the first run after upgrading
+// wipe exactly the data this guard exists to protect.
+
+export const SOURCE_AUTO = 'auto';
+export const SOURCE_MANUAL = 'manual';
+
+/** True only when the extractor owns this edge and may overwrite it. */
+export function isEdgeAutoManaged(edge) { return edge?.source === SOURCE_AUTO; }
+
+export function addRelationship(from, to, type, notes, source = SOURCE_MANUAL) {
     const rels = getRelationships();
     if (!rels[from]) rels[from] = [];
     if (!rels[from].some(r => r.target === to)) {
-        rels[from].push({ target: to, type, notes: notes || '' });
+        rels[from].push({ target: to, type, notes: notes || '', source });
         saveRelationships(rels);
     }
 }
@@ -81,17 +101,30 @@ export function removeAllRelationshipsFor(name) {
     if (changed) saveRelationships(rels);
 }
 
-export function updateRelationship(from, to, type, notes) {
+export function updateRelationship(from, to, type, notes, source = SOURCE_MANUAL) {
     const rels = getRelationships();
     if (!rels[from]) rels[from] = [];
     const existing = rels[from].find(r => r.target === to);
     if (existing) {
         existing.type = type;
         existing.notes = notes || '';
+        // An edit re-stamps ownership: a human touching an auto edge claims it
+        // (locking it), and the extractor re-confirming its own stays auto.
+        existing.source = source;
     } else {
-        rels[from].push({ target: to, type, notes: notes || '' });
+        rels[from].push({ target: to, type, notes: notes || '', source });
     }
     saveRelationships(rels);
+}
+
+/** Flip one edge between locked (manual) and auto-managed. Returns the new source. */
+export function toggleEdgeSource(from, to) {
+    const rels = getRelationships();
+    const edge = (rels[from] || []).find(r => r.target === to);
+    if (!edge) return null;
+    edge.source = isEdgeAutoManaged(edge) ? SOURCE_MANUAL : SOURCE_AUTO;
+    saveRelationships(rels);
+    return edge.source;
 }
 
 // ─── Stance toward {{user}} ──────────────────────────────────────────────────
@@ -112,12 +145,47 @@ export function saveStances(stances) {
 
 export function getStance(name) { return getStances()[name] || ''; }
 
+// Stance provenance rides in a PARALLEL map rather than turning each stance into
+// an object. `getStance` returning a bare string is load-bearing — the managed
+// block builder and the whole editor read it that way — so widening the value
+// would ripple through every consumer to record one bit that only two callers
+// care about. Same fail-safe rule as edges: absent means manual.
+
+export function getStanceSources() { return readField(getLorebookName(), 'stanceSources', {}); }
+
+export function saveStanceSources(sources) { writeField(getLorebookName(), 'stanceSources', sources); }
+
+/** True only when the extractor owns this NPC's stance and may overwrite it. */
+export function isStanceAutoManaged(name) { return getStanceSources()[name] === SOURCE_AUTO; }
+
 /** Passing an empty stance clears it, which drops the line from the block. */
-export function setStance(name, stance) {
+export function setStance(name, stance, source = SOURCE_MANUAL) {
     const stances = getStances();
-    if (stance) stances[name] = stance;
-    else delete stances[name];
+    const sources = getStanceSources();
+    if (stance) {
+        stances[name] = stance;
+        sources[name] = source;
+    } else {
+        delete stances[name];
+        delete sources[name];
+    }
     saveStances(stances);
+    saveStanceSources(sources);
+}
+
+/** Flip one NPC's stance between locked (manual) and auto-managed. */
+export function toggleStanceSource(name) {
+    const sources = getStanceSources();
+    if (!getStances()[name]) return null;
+    sources[name] = isStanceAutoManaged(name) ? SOURCE_MANUAL : SOURCE_AUTO;
+    saveStanceSources(sources);
+    return sources[name];
+}
+
+/** Two edges collapsing into one stay auto-managed only if BOTH were. A rename
+ *  must not be a laundering path that turns a locked edge back into a loose one. */
+function mergedSource(a, b) {
+    return (isEdgeAutoManaged(a) && isEdgeAutoManaged(b)) ? SOURCE_AUTO : SOURCE_MANUAL;
 }
 
 export function rekeyRelationships(oldName, newName) {
@@ -127,6 +195,14 @@ export function rekeyRelationships(oldName, newName) {
         stances[newName] = stances[oldName];
         delete stances[oldName];
         saveStances(stances);
+    }
+    // Carry provenance across the rename too — a lock that silently evaporated
+    // when an NPC was renamed would hand the entry straight back to the model.
+    const stanceSources = getStanceSources();
+    if (stanceSources[oldName] !== undefined) {
+        stanceSources[newName] = stanceSources[oldName];
+        delete stanceSources[oldName];
+        saveStanceSources(stanceSources);
     }
     const rels = getRelationships();
     if (!rels) return;
@@ -138,6 +214,7 @@ export function rekeyRelationships(oldName, newName) {
             if (existing) {
                 existing.type = edge.type;
                 if (edge.notes) existing.notes = edge.notes;
+                existing.source = mergedSource(existing, edge);
             } else {
                 rels[newName].push({ ...edge });
             }
@@ -152,6 +229,7 @@ export function rekeyRelationships(oldName, newName) {
                 if (existing) {
                     existing.type = targets[i].type;
                     if (targets[i].notes) existing.notes = targets[i].notes;
+                    existing.source = mergedSource(existing, targets[i]);
                     targets.splice(i, 1);
                 } else {
                     targets[i].target = newName;
@@ -263,9 +341,21 @@ export async function syncAllRelationshipsToLorebooks() {
 //   USER_STANCES); anything outside is dropped, so the managed block format
 //   stays stable and presets keep matching the stance label.
 
+// "neutral" is a legal enum member but it is not a FINDING — it is the shape a
+// model produces when it has nothing to report, and the prompt telling it to
+// omit unclear entries is a request, not a constraint. Writing it back is how a
+// quiet scene silently flattens a relationship graph, so the extractor treats it
+// as no signal. The manual editor still offers it: a human choosing neutral is
+// making a real statement.
+const NO_SIGNAL = 'neutral';
+
 /** The "nothing happened" result shape, shared by every no-op exit path. */
 function emptyExtractResult() {
-    return { affectedNpcs: new Set(), edgesAdded: 0, edgesUpdated: 0, stancesSet: 0, skipped: 0 };
+    return {
+        affectedNpcs: new Set(),
+        edgesAdded: 0, edgesUpdated: 0, stancesSet: 0,
+        skipped: 0, skippedManual: 0, skippedNeutral: 0,
+    };
 }
 
 /**
@@ -344,7 +434,8 @@ export function applyExtractedRelationships(result) {
     const affected = new Set();
     const typeSet = new Set(RELATIONSHIP_TYPES);
     const stanceSet = new Set(USER_STANCES);
-    let edgesAdded = 0, edgesUpdated = 0, stancesSet = 0, skipped = 0;
+    let edgesAdded = 0, edgesUpdated = 0, stancesSet = 0;
+    let skipped = 0, skippedManual = 0, skippedNeutral = 0;
 
     // ── Edges ──
     const edges = Array.isArray(result?.edges) ? result.edges : [];
@@ -355,6 +446,7 @@ export function applyExtractedRelationships(result) {
         const type = typeof e.type === 'string' ? e.type.trim().toLowerCase() : '';
         if (!from || !to) { skipped++; continue; }
         if (!typeSet.has(type)) { skipped++; continue; }
+        if (type === NO_SIGNAL) { skippedNeutral++; continue; }
         // Both endpoints must be known NPCs. Canonicalize through the resolver so
         // given-name variants match the full registry key.
         const fromEntry = getRegistryEntry(from);
@@ -366,14 +458,18 @@ export function applyExtractedRelationships(result) {
 
         const existing = getNpcRelationships(fromName).find(r => r.target === toName);
         if (existing) {
+            // The extractor may only overwrite what it wrote. A hand-entered edge
+            // is the user's statement about their story; the model re-reading a
+            // scene does not get to overrule it.
+            if (!isEdgeAutoManaged(existing)) { skippedManual++; continue; }
             // Only mutate + count when something actually changes.
             if (existing.type !== type || existing.notes !== notes) {
-                updateRelationship(fromName, toName, type, notes);
+                updateRelationship(fromName, toName, type, notes, SOURCE_AUTO);
                 edgesUpdated++;
                 affected.add(fromName);
             }
         } else {
-            addRelationship(fromName, toName, type, notes);
+            addRelationship(fromName, toName, type, notes, SOURCE_AUTO);
             edgesAdded++;
             affected.add(fromName);
         }
@@ -386,15 +482,20 @@ export function applyExtractedRelationships(result) {
         const npc = typeof s.npc === 'string' ? s.npc.trim() : '';
         const stance = typeof s.stance === 'string' ? s.stance.trim().toLowerCase() : '';
         if (!npc || !stanceSet.has(stance)) { skipped++; continue; }
+        if (stance === NO_SIGNAL) { skippedNeutral++; continue; }
         const entry = getRegistryEntry(npc);
         if (!entry) { skipped++; continue; }
         const name = entry.key;
-        if (getStance(name) !== stance) {
-            setStance(name, stance);
+        // An unset stance is not a user statement, so the extractor may fill it.
+        // An existing hand-set one is, and is off-limits.
+        const current = getStance(name);
+        if (current && !isStanceAutoManaged(name)) { skippedManual++; continue; }
+        if (current !== stance) {
+            setStance(name, stance, SOURCE_AUTO);
             stancesSet++;
             affected.add(name);
         }
     }
 
-    return { affectedNpcs: affected, edgesAdded, edgesUpdated, stancesSet, skipped };
+    return { affectedNpcs: affected, edgesAdded, edgesUpdated, stancesSet, skipped, skippedManual, skippedNeutral };
 }

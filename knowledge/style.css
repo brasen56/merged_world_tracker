@@ -1519,6 +1519,32 @@
     background: rgba(248, 113, 113, 0.1);
 }
 
+/* Provenance toggle. Locked (hand-entered) is the emphasised state — it is the
+   one that changes what auto-extraction is allowed to do, so it should read at
+   a glance; auto-managed sits back at the same weight as the remove button. */
+.kt-rel-lock,
+.kt-stance-lock {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    opacity: 0.45;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.kt-rel-lock:hover,
+.kt-stance-lock:hover {
+    opacity: 1;
+    background: var(--mwt-hover, rgba(255, 255, 255, 0.06));
+}
+
+.kt-rel-lock.locked,
+.kt-stance-lock.locked {
+    opacity: 1;
+}
+
 /* ── Relationship graph view ────────────────────────────────────────────── */
 
 .kt-rel-view-toggle {

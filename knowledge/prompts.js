@@ -428,20 +428,22 @@ ABSOLUTE RULES:
 - Every name you output MUST match (exactly or as a recognizable given-name/short form) one of the names in <known_npcs>. If you cannot place a name on the roster, omit that relationship.
 - "edges" describe STRUCTURAL relationships between two tracked NPCs (family, employer, ally, rival, lover, etc.). "stances" describe how each tracked NPC currently DISPOSITIONS toward the human user ({{user}}) — one scalar per NPC.
 - Do not include {{user}} as the target of an "edge" — the human's relationship to an NPC is captured by that NPC's "stance".
+- NEVER output "neutral" as a type or a stance. Neutral is not a finding, it is the absence of one. If a relationship or disposition is unclear, weak, or not evidenced in the messages, OMIT that entry entirely.
+- Omitting is always correct and costs nothing. An entry you are unsure about is worse than no entry: existing records are preserved when you stay silent, and corrupted when you guess.
 - If nothing qualifies, return empty arrays.
 
 OUTPUT FORMAT:
 {
   "edges": [
-    { "from": "Full NPC name", "to": "Full NPC name", "type": "one of: ally, enemy, neutral, friend, rival, family, lover, subordinate, superior, acquaintance, mentor, student, employer, employee", "notes": "short context (optional, max ~20 words)" }
+    { "from": "Full NPC name", "to": "Full NPC name", "type": "one of: ally, enemy, friend, rival, family, lover, subordinate, superior, acquaintance, mentor, student, employer, employee", "notes": "short context (optional, max ~20 words)" }
   ],
   "stances": [
-    { "npc": "Full NPC name", "stance": "one of: caring, friendly, neutral, wary, hostile" }
+    { "npc": "Full NPC name", "stance": "one of: caring, friendly, wary, hostile" }
   ]
 }
 
 Guidance:
 - "type" is the structural role, not a mood. An NPC can be "family" while currently "hostile".
-- "stance" is ordered warmest to most adversarial: caring, friendly, neutral, wary, hostile.
+- "stance" is ordered warmest to most adversarial: caring, friendly, wary, hostile.
 - Only emit a stance when recent messages show a clear disposition toward {{user}}. If unclear, omit it.
 - Use each NPC's name exactly as it appears in <known_npcs> when possible.`;
