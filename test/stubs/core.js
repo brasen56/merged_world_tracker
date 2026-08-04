@@ -45,6 +45,9 @@ let _meta = {};
 let _contextExtras = {};
 let _extSettings = {};
 let _pickTextFileImpl = null;
+let _apiImpl = null;
+let _promptCalls = [];
+let _notifications = [];
 
 /**
  * Wipe all fake state. Call this in `beforeEach` so every test starts clean.
@@ -55,6 +58,8 @@ export function resetCoreStubs() {
     _contextExtras = {};
     _extSettings = {};
     _pickTextFileImpl = null;
+    _apiImpl = null;
+    _promptCalls = [];
 }
 
 /**
@@ -181,7 +186,10 @@ export function getUserNames({ lower = true } = {}) {
 }
 
 export function getSetExtensionPrompt() {
-    return null;
+    const ctx = buildFakeContext();
+    return typeof ctx.setExtensionPrompt === 'function'
+        ? ctx.setExtensionPrompt.bind(ctx)
+        : null;
 }
 
 export function escapeRegex(s) {
@@ -282,10 +290,33 @@ function notImplemented(name) {
 export const normalizeApiBase = notImplemented('normalizeApiBase');
 export const fetchFromApi = notImplemented('fetchFromApi');
 export const fetchViaConnectionProfile = notImplemented('fetchViaConnectionProfile');
-export const resolveApiCall = notImplemented('resolveApiCall');
-export const normaliseOutput = notImplemented('normaliseOutput');
+/**
+ * Install a fake module API for integration-style tests. The implementation
+ * receives the same request object a real module would pass to fetchFn.
+ */
+export function setFakeApi(fn) {
+    _apiImpl = fn;
+}
+export function resolveApiCall({ moduleSettings = {} } = {}) {
+    return {
+        mode: 'custom',
+        settings: moduleSettings,
+        fetchFn: async (request) => {
+            if (typeof _apiImpl !== 'function') {
+                throw new Error('[test/stubs/core.js] No fake API installed. Call setFakeApi().');
+            }
+            return _apiImpl(request);
+        },
+    };
+}
+export function normaliseOutput(value) {
+    return typeof value === 'string' ? value : JSON.stringify(value ?? '');
+}
 export const retryAsync = notImplemented('retryAsync');
-export const parseJsonLenient = notImplemented('parseJsonLenient');
+export function parseJsonLenient(value) {
+    if (value && typeof value === 'object') return value;
+    try { return JSON.parse(String(value)); } catch { return null; }
+}
 /**
  * In-memory stand-in for core/settings.js's factory.
  *
@@ -313,17 +344,43 @@ export function createSettingsManager({ settingsKey, defaults = {} }) {
     return { getSettings, saveSettings, hasValidSettings, getExtSettingsRef };
 }
 export const syncSharedConnectionSettings = notImplemented('syncSharedConnectionSettings');
-export const getGlobalSettings = notImplemented('getGlobalSettings');
-export const injectionAllowed = notImplemented('injectionAllowed');
+export function getGlobalSettings() {
+    return buildFakeContext().globalSettings || {};
+}
+export function injectionAllowed(moduleKey) {
+    const settings = getGlobalSettings();
+    return settings.injectionMasterOff !== true && settings[`enable${moduleKey}`] !== false;
+}
 export const createModal = notImplemented('createModal');
 export const showModal = notImplemented('showModal');
 export const hideModal = notImplemented('hideModal');
 export const setStatus = notImplemented('setStatus');
 export const formatDate = notImplemented('formatDate');
-export const applyExtensionPromptInjection = notImplemented('applyExtensionPromptInjection');
+export function applyExtensionPromptInjection({
+    key, header = '', body = '', enabled, globalDepth, fallbackDepth,
+    globalRole = 'system', wrapperTag, useTags = true,
+}) {
+    const depth = globalDepth != null ? Number(globalDepth) : fallbackDepth;
+    const role = globalRole === 'user' ? 1 : globalRole === 'assistant' ? 2 : 0;
+    const payload = enabled && body?.trim()
+        ? `${header?.trim() ? `${header}\n\n` : ''}${body}`
+        : '';
+    _promptCalls.push({ key, payload, enabled: !!enabled, depth, role, wrapperTag, useTags });
+    const ctx = buildFakeContext();
+    ctx.setExtensionPrompt?.(key, payload, 1, depth, undefined, role);
+    return !!(enabled && body?.trim());
+}
 export const roleToNumber = notImplemented('roleToNumber');
-export const wrapInTag = notImplemented('wrapInTag');
-export const notify = notImplemented('notify');
+export function wrapInTag(tag, body) {
+    if (!tag || !body?.trim()) return body || '';
+    const escaped = String(body).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    return `<${tag}>\n${escaped}\n</${tag}>`;
+}
+export function notify(title, message, level = 'info') {
+    _notifications.push({ title, message, level });
+}
+export function getFakePromptCalls() { return _promptCalls; }
+export function getFakeNotifications() { return _notifications; }
 export const downloadBlob = notImplemented('downloadBlob');
 export const downloadJson = notImplemented('downloadJson');
 /**
