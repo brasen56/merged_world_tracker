@@ -11,6 +11,7 @@ import {
     downloadJson, pickTextFile,
     renderApiSettingsFields, readApiSettingsValues,
     getChat,
+    captureScope, assertSameScope,
 } from '../core/index.js';
 
 import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntities, EXPIRY_SECTIONS_DEFAULT } from './settings.js';
@@ -72,9 +73,28 @@ const EDITOR_PERSIST_DELAY_MS = 1000;
 
 export function scheduleEditorPersist() {
     if (state.editorPersistTimer) clearTimeout(state.editorPersistTimer);
+
+    // WORLD-STATE-09: Capture the scope at schedule time. The callback used to
+    // check only that the modal still existed — but the modal survives a chat
+    // switch, and `editor.value` still holds the PREVIOUS chat's text until
+    // renderModalContent() runs. onChatChanged() clearing this timer is the
+    // happy path; this assert is the guard for any path that changes chat
+    // without that handler running in time (bulk load, programmatic switch,
+    // handler ordering). Every other deferred write in the module captures and
+    // asserts — this one was the last holdout.
+    const scopeAtSchedule = captureScope();
+
     state.editorPersistTimer = setTimeout(() => {
         state.editorPersistTimer = null;
         if (!state.modal) return;
+        const scopeResult = assertSameScope(scopeAtSchedule);
+        if (!scopeResult.ok) {
+            console.warn(
+                `[MWT:WorldState] Editor persist skipped (${scopeResult.reason}) — ` +
+                `the pending edit belongs to a different chat.`
+            );
+            return;
+        }
         const editor = state.modal.querySelector('#ws-editor');
         if (!editor) return;
         const val = editor.value;
