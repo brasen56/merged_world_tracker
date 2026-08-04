@@ -37,14 +37,29 @@ export function normalizeApiBase(url) {
  * @returns {Promise<T>}
  */
 export async function retryAsync(attempts, fn, { onRetry } = {}) {
+    // CORE-06: Validate `attempts` at the boundary. A negative or non-finite
+    // value used to run zero loop iterations and then fall through to
+    // `throw lastErr`, where `lastErr` was `undefined` — so the caller got a
+    // useless throw of `undefined` instead of the original rejection (or a
+    // useful input error). Coerce to a finite non-negative integer; an invalid
+    // value becomes 0 so the function makes exactly one attempt and surfaces
+    // the real error.
+    const rawAttempts = Number(attempts);
+    const maxAttempts = Number.isFinite(rawAttempts) && rawAttempts >= 0
+        ? Math.floor(rawAttempts)
+        : 0;
     let lastErr;
-    for (let attempt = 0; attempt <= attempts; attempt++) {
+    for (let attempt = 0; attempt <= maxAttempts; attempt++) {
         try {
             return await fn(attempt);
         } catch (err) {
             lastErr = err;
-            if (attempt >= attempts) throw err;
-            if (err._noRetry) throw err;
+            if (attempt >= maxAttempts) throw err;
+            // CORE-06: A non-object rejection (a string, null, number, etc.)
+            // made `err._noRetry` itself throw a TypeError, masking the
+            // original rejection. Inspect the no-retry marker safely so the
+            // real error always propagates.
+            if (err && typeof err === 'object' && err._noRetry) throw err;
             const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
             onRetry?.(err, attempt, delay);
             await new Promise(r => setTimeout(r, delay));

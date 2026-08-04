@@ -69,7 +69,18 @@ export function sanitizeArc(raw, { preserveId = true } = {}) {
  */
 export function sanitizeArcs(arcs) {
     if (!Array.isArray(arcs)) return [];
-    return arcs.map(a => sanitizeArc(a, { preserveId: true }));
+    // STORY-PLANNER-09: A duplicate id (a hand-edited import or a legacy
+    // snapshot) makes two arcs alias the same key — removeArc/updateArc would
+    // then hit both, and the user could not remove them independently. Mint a
+    // fresh id for any repeat so every arc is independently addressable,
+    // without silently dropping data.
+    const seen = new Set();
+    return arcs.map(a => {
+        const arc = sanitizeArc(a, { preserveId: true });
+        if (seen.has(arc.id)) arc.id = newArcId();
+        seen.add(arc.id);
+        return arc;
+    });
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -700,11 +711,26 @@ export function removeArc(id) {
     const remaining = arcs.filter(a => a.id !== id);
     if (remaining.length === arcs.length) return false;
     setArcs(remaining);
+    // STORY-PLANNER-08: clear this arc's nudge marks immediately rather than
+    // waiting for takeDueNudges() to reconcile them lazily on its next call.
+    cleanNudgeMarksForArc(id);
     return true;
 }
 
 export function setArcStatus(id, status) {
-    return updateArc(id, { status: ARC_STATUSES.includes(status) ? status : 'active' });
+    const next = ARC_STATUSES.includes(status) ? status : 'active';
+    const arc = getArcs().find(a => a.id === id);
+    if (!arc) return null;
+    // STORY-PLANNER-08: Reactivating a resolved/dropped arc starts its beat-age
+    // countdown over — the old turnsSinceAdvance and nudge high-water mark
+    // belong to the arc's previous life and would otherwise suppress or
+    // mis-time the next reminder. Clearing marks on resolve/drop too means a
+    // stale high-water mark never lingers in metadata.
+    const patch = { status: next };
+    if (next === 'active' && arc.status !== 'active') patch.turnsSinceAdvance = 0;
+    const updated = updateArc(id, patch);
+    if (arc.status !== next) cleanNudgeMarksForArc(id);
+    return updated;
 }
 
 export function toggleArcPinned(id) {
@@ -744,6 +770,33 @@ export function getNudgeTurns() {
 
 export function isNudgeEnabled() {
     return getPlanData().nudgeEnabled !== false;
+}
+
+/**
+ * STORY-PLANNER-08: Remove every nudge mark belonging to an arc id.
+ *
+ * Marks are keyed `arcId#beatIndex`. `removeArc()` and `setArcStatus()` used to
+ * leave the corresponding marks behind; `takeDueNudges()` only reconciles them
+ * lazily on its next call. In the meantime a reopened arc would inherit its old
+ * beat-age high-water mark and the reminder the feature exists to fire would be
+ * suppressed — the silent stall this feature was built to prevent. Clearing the
+ * marks immediately on any arc ID/beat transition keeps metadata honest.
+ */
+function cleanNudgeMarksForArc(arcId) {
+    if (!arcId) return;
+    const stored = getPlanData().nudgeMarks;
+    if (!stored || typeof stored !== 'object') return;
+    let changed = false;
+    const marks = { ...stored };
+    for (const key of Object.keys(marks)) {
+        // Marks use the `arcId#beatIndex` composite key (see takeDueNudges).
+        // Arc ids never contain '#', so this prefix match is unambiguous.
+        if (key.startsWith(`${arcId}#`)) {
+            delete marks[key];
+            changed = true;
+        }
+    }
+    if (changed) setPlanData({ nudgeMarks: marks });
 }
 
 /**

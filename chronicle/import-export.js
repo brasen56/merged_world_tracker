@@ -44,7 +44,18 @@ export function exportMarkdown() {
 }
 
 export async function triggerImport() {
-    const text = await pickTextFile('.json');
+    // CHRONICLE-07: pickTextFile() can reject on a real file-read/picker
+    // failure (its onchange handler rethrows). The caller in render.js invokes
+    // this without awaiting, so an unhandled rejection would surface with no
+    // Chronicle status message. Catch it here, set an error status, and keep
+    // cancellation (the helper resolves '') as a quiet no-op.
+    let text;
+    try {
+        text = await pickTextFile('.json');
+    } catch (err) {
+        scSetStatus(`Import failed: could not read file (${err?.message || err}).`, 'error');
+        return;
+    }
     if (text) importChronicle(text);
 }
 

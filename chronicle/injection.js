@@ -33,7 +33,23 @@ export function getEntriesForInjection() {
     if (mode === 'all') return [...snapshots];
     if (mode === 'range') {
         const { injectFromDate, injectToDate } = data;
-        if (injectFromDate && injectToDate) return snapshots.filter(s => new Date(s.createdAt) >= new Date(injectFromDate) && new Date(s.createdAt) <= new Date(injectToDate));
+        // CHRONICLE-06: Open-ended range semantics. A single bound now filters
+        // one direction instead of silently returning nothing (the old code
+        // required BOTH dates or injected zero entries while still reporting
+        // Range mode as active). `from` only → everything after it; `to` only →
+        // everything before it; neither → unbounded (all). A reversed pair is
+        // normalised rather than producing an empty injection.
+        const from = injectFromDate ? new Date(injectFromDate) : null;
+        const to = injectToDate ? new Date(injectToDate) : null;
+        let lo = from;
+        let hi = to;
+        if (from && to && from > to) { lo = to; hi = from; }
+        return snapshots.filter(s => {
+            const created = new Date(s.createdAt);
+            if (lo && created < lo) return false;
+            if (hi && created > hi) return false;
+            return true;
+        });
     }
     return [];
 }

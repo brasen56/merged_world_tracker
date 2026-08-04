@@ -44,6 +44,7 @@ let _chat = [];
 let _meta = {};
 let _contextExtras = {};
 let _extSettings = {};
+let _pickTextFileImpl = null;
 
 /**
  * Wipe all fake state. Call this in `beforeEach` so every test starts clean.
@@ -53,6 +54,7 @@ export function resetCoreStubs() {
     _meta = {};
     _contextExtras = {};
     _extSettings = {};
+    _pickTextFileImpl = null;
 }
 
 /**
@@ -324,7 +326,19 @@ export const wrapInTag = notImplemented('wrapInTag');
 export const notify = notImplemented('notify');
 export const downloadBlob = notImplemented('downloadBlob');
 export const downloadJson = notImplemented('downloadJson');
-export const pickTextFile = notImplemented('pickTextFile');
+/**
+ * Install a fake implementation of pickTextFile() for the duration of one test.
+ * Pass a function (sync or async) that returns the file text, returns '' for a
+ * quiet cancellation, or throws/rejects to simulate a read failure. Pass `null`
+ * to restore the default not-implemented stub.
+ */
+export function setPickTextFileStub(fn) {
+    _pickTextFileImpl = fn;
+}
+export async function pickTextFile(accept) {
+    if (typeof _pickTextFileImpl === 'function') return _pickTextFileImpl(accept);
+    return notImplemented('pickTextFile')();
+}
 /**
  * Minimal stand-in for the real API-settings field renderer.
  *
