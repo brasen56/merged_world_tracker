@@ -187,7 +187,11 @@ export async function regenerateSection(sectionName, variety = 2) {
 
         let cleaned = extractOnlySection(text, sectionName) || text.trim();
 
-        const currentText = getWorldStateText();
+        // The grounding gate's `priorText` is the pre-operation document — it
+        // answers "was this name already known before this regen?", so it must
+        // NOT be re-read after the retry. The document used for the actual
+        // WRITE is re-read separately below (see WORLD-STATE-02 note).
+        const priorText = getWorldStateText();
 
         // Grounding gate only (§7) — expiry is a whole-document concern and
         // does not run on a single-section regen.
@@ -196,7 +200,7 @@ export async function regenerateSection(sectionName, variety = 2) {
         if (s.groundingEnabled) {
             let grounding = groundingGate(cleaned, {
                 scanText: getRecentMessagesForScan(),
-                priorText: currentText,
+                priorText,
                 pinned: getPinnedEntities(s),
                 mode: s.groundingMode,
             });
@@ -231,7 +235,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                 cleaned = extractOnlySection(textRetry, sectionName) || textRetry.trim();
                 grounding = groundingGate(cleaned, {
                     scanText: getRecentMessagesForScan(),
-                    priorText: currentText,
+                    priorText,
                     pinned: getPinnedEntities(s),
                     mode: s.groundingMode,
                 });
@@ -245,7 +249,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                     console.warn(`[MWT:WorldState] Grounding gate still rejected section after retry (${grounding.reason}) — soft mode, stripping.`);
                     grounding = groundingGate(cleaned, {
                         scanText: getRecentMessagesForScan(),
-                        priorText: currentText,
+                        priorText,
                         pinned: getPinnedEntities(s),
                         mode: 'soft',
                     });
@@ -257,9 +261,17 @@ export async function regenerateSection(sectionName, variety = 2) {
             cleaned = grounding.cleanedText;
         }
 
-        const updated = replaceSection(currentText, sectionName, cleaned);
+        // WORLD-STATE-02: Re-read the document immediately before the write.
+        // The grounding-retry branch above contains an `await`, so a document
+        // captured before it is stale by the time we get here — splicing the
+        // new section into that stale copy would silently revert any edit the
+        // user made to a DIFFERENT section during the retry. The revision guard
+        // deliberately only protects the target section, so it cannot catch
+        // this; re-reading is what makes the write surgical.
+        const docNow = getWorldStateText();
+        const updated = replaceSection(docNow, sectionName, cleaned);
 
-        if (currentText?.trim()) pushToHistory(currentText);
+        if (docNow?.trim()) pushToHistory(docNow);
         setWorldStateData({ text: updated });
         applyWorldStateInjection();
         try { setProvenance(buildProvenance()); } catch (err) {
