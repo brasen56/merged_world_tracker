@@ -11,6 +11,7 @@ import {
     captureScope, assertSameScope,
     captureRevision, sameRevision,
     truncateText,
+    setStatus,
 } from '../core/index.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
@@ -251,7 +252,7 @@ export async function refreshWorldState(isAuto = false) {
                     // Discard rather than silently downgrading to soft.
                     if (gateSettings.groundingMode === 'strict') {
                         console.warn(`[MWT:WorldState] Grounding gate still rejected after retry (${grounding.reason}) — strict mode, discarding.`);
-                        scSetStatus(`Grounding gate rejected: ${grounding.reason}. Refresh discarded (strict mode).`, 'warning');
+                        setStatus(state.modal, `Grounding gate rejected: ${grounding.reason}. Refresh discarded (strict mode).`, 'warning', 6000);
                         return null;
                     }
                     // Soft mode strips the offending names and commits.
@@ -282,7 +283,7 @@ export async function refreshWorldState(isAuto = false) {
         const currentWs = getWorldStateText();
         if (!sameRevision(wsRevision, currentWs)) {
             console.warn('[MWT:WorldState] Document was edited during generation — discarding result to preserve user changes.');
-            scSetStatus('World State was edited during generation — refresh discarded.', 'warning');
+            setStatus(state.modal, 'World State was edited during generation — refresh discarded.', 'warning', 6000);
             return null;
         }
 
