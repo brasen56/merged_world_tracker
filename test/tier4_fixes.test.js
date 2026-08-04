@@ -13,8 +13,8 @@
  * - STORY-PLANNER-09: duplicate arc ids are de-duplicated so every arc stays
  *   independently removable
  *
- * (CORE-07 is intentionally omitted — it needs validation against upstream ST
- * and the Aikobots fork first.)
+ * (CORE-07 is intentionally omitted — upstream source validation found no
+ * production change to cover; Aikobots is out of scope.)
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
