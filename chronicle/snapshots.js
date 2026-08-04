@@ -152,6 +152,15 @@ export async function generateSnapshot() {
     const { text, lastMsg, toIndex } = buildMessageWindow(actualFrom, undefined);
     if (!text.trim()) { scSetStatus('No filterable messages to chronicle.', 'error'); return null; }
 
+    // CHRONICLE-03 (part 2): Record what the counter was when the message
+    // window was cut. onMessageReceived() now keeps counting while a snapshot
+    // generates (part 1), but this function used to reset the counter to 0 on
+    // success — which threw those messages away again. They are past `toIndex`
+    // and therefore NOT in this snapshot, so they must still count toward the
+    // next one. Subtracting the consumed amount instead of zeroing keeps the
+    // auto-snapshot cadence honest across a long generation.
+    const counterAtWindow = state.msgSinceSnapshot;
+
     // CHRONICLE-01/02: Capture scope before async API call. The old weak key
     // collapsed two different chats on the same character when chatId was
     // absent. The scope guard uses getCurrentChatId() + epoch.
@@ -207,7 +216,12 @@ export async function generateSnapshot() {
         const snapshots = [...getSnapshots(), snapshot];
         setChronicleData({ snapshots, lastAnchor: newAnchor, suggestSent: true, anchorStale: false });
         applyInjection();
-        state.msgSinceSnapshot = 0;
+        // CHRONICLE-03 (part 2): Consume only the messages this snapshot
+        // actually covers. Anything that arrived after the window was cut is
+        // still uncounted work, so it carries over. Clamped at 0 because a
+        // deletion during generation can lower the counter below the captured
+        // value.
+        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - counterAtWindow);
         persistMsgSinceSnapshot();
         state.selectedSnapshotId = snapshot.id;
         // Only update the UI when the Chronicle tab is actually visible —
