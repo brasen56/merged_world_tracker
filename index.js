@@ -15,6 +15,7 @@ import { createSettingsManager } from './core/settings.js';
 import { createModal, showModal, setStatus } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
 import { createCommands } from './core/commands.js';
+import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
 
 // ─── Feature module imports ─────────────────────────────────────────────────
 
@@ -519,6 +520,10 @@ function openMwtModal(tabId) {
     }
 }
 
+// ─── Shared module registry (used by the message-event routers below) ───────
+
+const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority };
+
 // ─── Event hooks ─────────────────────────────────────────────────────────────
 
 if (eventSource && event_types?.CHAT_CHANGED) {
@@ -535,18 +540,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
 
 if (eventSource && event_types?.MESSAGE_RECEIVED) {
     eventSource.on(event_types.MESSAGE_RECEIVED, (...args) => {
-        const s = getSettings();
-        // Gate per-module: disabled trackers stop scanning / counting toward
-        // auto-refresh & auto-snapshot thresholds (no silent background API calls).
-        if (s.injectionMasterOff) return;
-        if (s.enableWorldState !== false) WorldState.onMessageReceived();
-        if (s.enableChronicle  !== false) Chronicle.onMessageReceived();
-        if (s.enableKnowledge  !== false) Knowledge.onMessageReceived();
-        if (s.enableStoryPlanner !== false) StoryPlanner.onMessageReceived();
-        // Interiority gets the message index so the generation targets the
-        // message that fired the event, not whatever is last when the queued
-        // work eventually runs.
-        if (s.enableInteriority !== false) Interiority.onMessageReceived(extractMessageIndex(args[0]));
+        routeMessageReceived(modules, getSettings(), extractMessageIndex(args[0]));
     });
 }
 
@@ -568,32 +562,14 @@ onAnyEvent(['GENERATION_STOPPED', 'GENERATION_ENDED'], () => Chronicle.onGenerat
 // history, so tracking doesn't drift after edits/deletes/swipes.
 //
 // SillyTavern's event signatures vary across versions, so we normalize the
-// argument to a chat-array index (number) before delegating to modules.
-
-function extractMessageIndex(arg) {
-    if (typeof arg === 'number') return arg;
-    if (arg && typeof arg === 'object') {
-        if (typeof arg.messageId === 'number') return arg.messageId;
-        if (typeof arg.index === 'number') return arg.index;
-    }
-    return null;
-}
+// argument to a chat-array index (number) before delegating to modules. The
+// normalization + per-module dispatch lives in core/event_router.js.
 
 if (eventSource && event_types?.MESSAGE_DELETED) {
     eventSource.on(event_types.MESSAGE_DELETED, (...args) => {
         const idx = extractMessageIndex(args[0]);
-        console.log(`[MWT] MESSAGE_DELETED (index: ${idx}) — adjusting counters.`);
-        const s = getSettings();
-        // INTERIORITY-04: Cleanup must keep running while injection is off.
-        // The old code returned early on injectionMasterOff, which meant a
-        // swipe/delete while injection was off left orphaned thought metadata
-        // and un-rolled-back ledger state. Only generation is gated; cleanup
-        // must always run.
-        if (s.enableWorldState !== false) WorldState.onMessageDeleted(idx);
-        if (s.enableChronicle  !== false) Chronicle.onMessageDeleted(idx);
-        if (s.enableKnowledge  !== false) Knowledge.onMessageDeleted(idx);
-        if (s.enableStoryPlanner !== false) StoryPlanner.onMessageDeleted(idx);
-        if (s.enableInteriority !== false) Interiority.onMessageDeleted(idx);
+        console.log(`[MWT] MESSAGE_DELETED (index: ${idx}) — routing to modules.`);
+        routeMessageDeleted(modules, getSettings(), idx);
     });
 }
 
@@ -601,12 +577,7 @@ if (eventSource && event_types?.MESSAGE_SWIPED) {
     eventSource.on(event_types.MESSAGE_SWIPED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_SWIPED (index: ${idx}) — checking anchor / scheduling refresh.`);
-        const s = getSettings();
-        // INTERIORITY-04: Same as MESSAGE_DELETED — cleanup must keep running
-        // while injection is off.
-        if (s.enableWorldState !== false) WorldState.onMessageSwiped(idx);
-        if (s.enableChronicle  !== false) Chronicle.onMessageSwiped(idx);
-        if (s.enableInteriority !== false) Interiority.onMessageSwiped(idx);
+        routeMessageSwiped(modules, getSettings(), idx);
     });
 }
 
@@ -626,12 +597,7 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
     eventSource.on(event_types.MESSAGE_EDITED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_EDITED (index: ${idx}) — checking anchor / scheduling refresh.`);
-        const s = getSettings();
-        // INTERIORITY-04: Same as MESSAGE_DELETED — cleanup must keep running
-        // while injection is off.
-        if (s.enableWorldState !== false) WorldState.onMessageEdited(idx);
-        if (s.enableChronicle  !== false) Chronicle.onMessageEdited(idx);
-        if (s.enableInteriority !== false) Interiority.onMessageEdited(idx);
+        routeMessageEdited(modules, getSettings(), idx);
     });
 }
 
@@ -652,7 +618,7 @@ const ui = createFloatingButtonBar({
     getSettings,
     saveSettings,
     openModal: openMwtModal,
-    modules: { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority },
+    modules,
 });
 
 // ─── Slash commands & macros (via core/commands.js) ──────────────────────────
@@ -660,7 +626,7 @@ const ui = createFloatingButtonBar({
 const commands = createCommands({
     registerSlashCommand,
     macroRegistry,
-    modules: { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority },
+    modules,
     resetFloatPositions: ui.resetFloatPositions,
     saveSettings,
 });

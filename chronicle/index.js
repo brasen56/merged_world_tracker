@@ -164,8 +164,10 @@ export function onChatChanged() {
  * deleted message.
  *
  * @param {number} deletedIndex - The chat-array index of the removed message.
+ * @param {{ adjustCounters?: boolean }} [opts] - When false (panic switch on),
+ *   the counter decrement is skipped but bookkeeping + integrity still run.
  */
-export function onMessageDeleted(deletedIndex) {
+export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     if (typeof deletedIndex !== 'number') return;
 
     // SillyTavern fires a single MESSAGE_DELETED event for bulk deletes
@@ -175,15 +177,17 @@ export function onMessageDeleted(deletedIndex) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    // Bookkeeping — ALWAYS live
     state.lastChatLength = currentLen;
 
-    if (state.msgSinceSnapshot > 0) {
+    if (adjustCounters && state.msgSinceSnapshot > 0) {
         state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - removed);
         persistMsgSinceSnapshot();
         console.log(`[MWT:Chronicle] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.msgSinceSnapshot}`);
     }
-    // If the anchor referenced the deleted message (or something after it),
-    // mark it stale so the next snapshot re-anchors against the live chat.
+    // Integrity — ALWAYS live. If the anchor referenced the deleted message (or
+    // something after it), mark it stale so the next snapshot re-anchors against
+    // the live chat.
     const data = getChronicleData();
     if (data.lastAnchor && typeof data.lastAnchor.msgIndex === 'number') {
         if (data.lastAnchor.msgIndex >= deletedIndex) {

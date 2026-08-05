@@ -72,12 +72,14 @@ export function onChatChanged() {
 
 /**
  * A message was deleted. Decrement the auto-refresh counter so the countdown
- * to the next refresh stays aligned with the (now shorter) chat.
+ * to the next refresh stays aligned with the (now shorter) chat, and invalidate
+ * provenance (WORLD-STATE-05).
  *
  * @param {number} deletedIndex - The chat-array index of the removed message.
+ * @param {{ adjustCounters?: boolean }} [opts] - When false (panic switch on),
+ *   the counter decrement is skipped but bookkeeping + integrity still run.
  */
-export function onMessageDeleted(deletedIndex) {
-    if (!isAutoRefreshEnabled()) return;
+export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     if (typeof deletedIndex !== 'number') return;
 
     // SillyTavern fires a single MESSAGE_DELETED event for bulk deletes
@@ -87,9 +89,13 @@ export function onMessageDeleted(deletedIndex) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    // Bookkeeping — ALWAYS live. If this freezes during a panic window the real
+    // chat keeps shrinking while lastChatLength stays put, so the first
+    // post-panic delete computes a lumped `removed` and the drift is magnified
+    // instead of avoided.
     state.lastChatLength = currentLen;
 
-    if (state.autoRefreshCounter > 0) {
+    if (adjustCounters && isAutoRefreshEnabled() && state.autoRefreshCounter > 0) {
         state.autoRefreshCounter = Math.max(0, state.autoRefreshCounter - removed);
         persistAutoRefreshCounter();
         console.log(`[MWT:WorldState] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoRefreshCounter}`);
@@ -98,10 +104,9 @@ export function onMessageDeleted(deletedIndex) {
     // WORLD-STATE-05: Provenance `lastTouchedMsg` is a chat-array index. A
     // deletion before a tracked mention shifts everything left, so stored
     // indices now point at the wrong message — entries look older than they
-    // are and get quarantined/removed early by the expiry pass. The cheapest
-    // correct fix is to invalidate provenance after any non-append mutation
-    // and require a rebuild before expiry runs. The next buildProvenance()
-    // (on refresh or section regen) reconstructs from the current chat array.
+    // are and get quarantined/removed early by the expiry pass. This integrity
+    // work runs ALWAYS — even when auto-refresh is off or the panic switch is
+    // on — otherwise stale-index expiry bugs reopen inside those windows.
     if (removed > 0) {
         try {
             setProvenance({ entities: {}, lastBuiltAtMsgIndex: 0, schemaVersion: 1 });

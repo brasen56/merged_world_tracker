@@ -165,9 +165,10 @@ export function onChatChanged() {
  * "every N messages" cadence stays aligned with the shorter chat.
  *
  * @param {number} deletedIndex - chat-array index of the removed message
+ * @param {{ adjustCounters?: boolean }} [opts] - When false (panic switch on),
+ *   the counter decrement is skipped but bookkeeping still runs.
  */
-export function onMessageDeleted(deletedIndex) {
-    if (!isAutoEnabled()) return;
+export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     if (typeof deletedIndex !== 'number') return;
 
     // SillyTavern fires a single MESSAGE_DELETED event for bulk deletes
@@ -177,9 +178,10 @@ export function onMessageDeleted(deletedIndex) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    // Bookkeeping — ALWAYS live
     state.lastChatLength = currentLen;
 
-    if (state.autoCounter > 0) {
+    if (adjustCounters && isAutoEnabled() && state.autoCounter > 0) {
         state.autoCounter = Math.max(0, state.autoCounter - removed);
         persistAutoCounter();
         console.log(`[MWT:StoryPlanner] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoCounter}`);

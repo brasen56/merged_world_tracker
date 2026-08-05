@@ -448,10 +448,12 @@ export async function reloadStores(reason = 'reload') {
  * @param {number} deletedIndex - The chat-array index of the removed message
  *   (from the event payload). For bulk deletes this is typically the boundary
  *   index; the actual count removed is derived from `state.lastChatLength`.
+ * @param {{ adjustCounters?: boolean }} [opts] - When false (panic switch on),
+ *   the counter decrements are skipped but bookkeeping + registry-timestamp
+ *   integrity still run.
  */
-export function onMessageDeleted(deletedIndex) {
+export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     const settings = getSettings();
-    if (!settings.autoTriggerEnabled && !settings.npcAutoScanEnabled && !settings.growthAutoCaptureEnabled && !settings.relationshipAutoExtractEnabled) return;
     if (typeof deletedIndex !== 'number') return;
 
     // Compute how many messages were removed. After a delete, getChat() reflects
@@ -462,34 +464,38 @@ export function onMessageDeleted(deletedIndex) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    // Bookkeeping — ALWAYS live
     state.lastChatLength = currentLen;
 
     let changed = false;
-    if (settings.autoTriggerEnabled && state.messageCounter > 0) {
-        state.messageCounter = Math.max(0, state.messageCounter - removed);
-        changed = true;
-        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — state counter adjusted to ${state.messageCounter}`);
-    }
-    if (settings.npcAutoScanEnabled && state.npcMessageCounter > 0) {
-        state.npcMessageCounter = Math.max(0, state.npcMessageCounter - removed);
-        changed = true;
-        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — NPC counter adjusted to ${state.npcMessageCounter}`);
-    }
-    if (settings.growthAutoCaptureEnabled && state.growthMessageCounter > 0) {
-        state.growthMessageCounter = Math.max(0, state.growthMessageCounter - removed);
-        changed = true;
-        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — growth counter adjusted to ${state.growthMessageCounter}`);
-    }
-    if (settings.relationshipAutoExtractEnabled && state.relationshipMessageCounter > 0) {
-        state.relationshipMessageCounter = Math.max(0, state.relationshipMessageCounter - removed);
-        changed = true;
-        console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — relationship counter adjusted to ${state.relationshipMessageCounter}`);
+    if (adjustCounters) {
+        if (settings.autoTriggerEnabled && state.messageCounter > 0) {
+            state.messageCounter = Math.max(0, state.messageCounter - removed);
+            changed = true;
+            console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — state counter adjusted to ${state.messageCounter}`);
+        }
+        if (settings.npcAutoScanEnabled && state.npcMessageCounter > 0) {
+            state.npcMessageCounter = Math.max(0, state.npcMessageCounter - removed);
+            changed = true;
+            console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — NPC counter adjusted to ${state.npcMessageCounter}`);
+        }
+        if (settings.growthAutoCaptureEnabled && state.growthMessageCounter > 0) {
+            state.growthMessageCounter = Math.max(0, state.growthMessageCounter - removed);
+            changed = true;
+            console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — growth counter adjusted to ${state.growthMessageCounter}`);
+        }
+        if (settings.relationshipAutoExtractEnabled && state.relationshipMessageCounter > 0) {
+            state.relationshipMessageCounter = Math.max(0, state.relationshipMessageCounter - removed);
+            changed = true;
+            console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — relationship counter adjusted to ${state.relationshipMessageCounter}`);
+        }
     }
 
     // The state registry's `lastUpdatedMsg` is stored as a raw chat length.
     // After a bulk delete the stored length points past the end of the shorter
     // chat, freezing every tracker whose cooldown check now sees a negative
-    // delta. Adjust those watermarks in lock-step with the counters.
+    // delta. Adjust those watermarks in lock-step with the counters. This is
+    // integrity work, so it runs ALWAYS — not gated by adjustCounters.
     if (settings.autoTriggerEnabled) {
         try {
             adjustStateTrackerLastUpdatedMsg(removed);
