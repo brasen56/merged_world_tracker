@@ -1,0 +1,46 @@
+# GitHub Actions CI for the Merged World Tracker extension.
+#
+# Runs on every push to a default branch and on every pull request. Two gates:
+#   1. `npm run lint` — the ESLint correctness pass (eslint.config.mjs).
+#   2. `npm test`     — the full Vitest suite.
+#
+# Both must pass for a PR to be mergeable. The matrix runs Node 20 and 22 (the
+# two active LTS lines) so a syntax/runtime regression on either is caught early.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Cancel in-progress runs for the same ref when a new commit is pushed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (ESLint — correctness rules)
+        run: npm run lint
+
+      - name: Test (Vitest)
+        run: npm test

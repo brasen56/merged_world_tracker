@@ -20,6 +20,21 @@ npm run test:watch   # re-run tests automatically when files change
 
 ---
 
+## Linting
+
+The project lints with ESLint for **correctness only** — deliberately no style/formatting rules, so the check stays small and reviewable. Configuration lives in `eslint.config.mjs` and enables exactly: undefined variables (`no-undef`), unused vars/imports (`no-unused-vars`), duplicate object keys (`no-dupe-keys`), unreachable code (`no-unreachable`), switch fall-through (`no-fallthrough`), and importing a name a module doesn't actually export (`import/named`).
+
+```bash
+npm run lint      # check the whole project
+npm run lint:fix  # auto-fix where possible (rare for these rules)
+```
+
+Both `npm run lint` and `npm test` run automatically on every push and pull request via the GitHub Actions workflow in `.github/workflows/ci.yml` (matrix: Node 20 and 22). A change is only green when both pass.
+
+> Tip: the codebase is currently lint-clean. If `npm run lint` reports anything, it's flagging a real issue (a typo'd variable, a leftover import after a refactor, an import of an export that was renamed/removed) — not a style nit.
+
+---
+
 ## What's here
 
 | Path | Tests for | Why it's a good first read |

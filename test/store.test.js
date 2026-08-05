@@ -164,7 +164,7 @@ describe('hydrateBook', () => {
         });
 
         // Make loadWorldInfo throw on first call.
-        const boom = vi.spyOn(wiFake, 'loadWorldInfo')
+        vi.spyOn(wiFake, 'loadWorldInfo')
             .mockRejectedValueOnce(new Error('disk read error'));
 
         await hydrateBook('Book A', {});

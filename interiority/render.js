@@ -19,7 +19,7 @@ import {
     removeLedgerEntries, updateLedgerEntry,
     addManualLedgerEntry, hasDuplicateIntention,
     getInnerStates, setInnerState, MAX_INNER_STATE_LENGTH,
-    getDormantLedger, wakeLedgerEntry, setLedgerEntryDormant,
+    wakeLedgerEntry, setLedgerEntryDormant,
     DORMANT_POLL_INTERVAL, getDormantPollInterval,
 } from './data.js';
 
@@ -33,7 +33,7 @@ export function renderContent() {
     const el = getContentEl();
     if (!el) return;
 
-    const data = getInteriorityData();
+    getInteriorityData(); // ensure the interiority meta structure is initialized
     const ledger = getLedger();
     const msgKeys = getPerMessageKeys();
 
@@ -767,7 +767,7 @@ function findLedgerEntryEl(id) {
  * Cancel the inline edit — re-render to restore the display view.
  * @param {string} id - ledger entry id
  */
-function cancelInlineEdit(id) {
+function cancelInlineEdit(_id) {
     renderContent();
 }
 

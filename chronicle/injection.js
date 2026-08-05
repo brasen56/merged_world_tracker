@@ -7,14 +7,14 @@
 
 import {
     getGlobalSettings, estimateTokens,
-    applyExtensionPromptInjection, wrapInTag, injectionAllowed,
+    applyExtensionPromptInjection, injectionAllowed,
 } from '../core/index.js';
 
 import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
 
 import {
-    state, EXTENSION_PROMPT_KEY,
-    getChronicleData, getSnapshots, getSettings,
+    EXTENSION_PROMPT_KEY,
+    getChronicleData, getSnapshots,
 } from './data.js';
 
 // ─── Injection ───────────────────────────────────────────────────────────────

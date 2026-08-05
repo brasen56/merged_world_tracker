@@ -44,10 +44,10 @@ import { buildUserPrompt } from '../story_planner/generation.js';
 import { formatLedgerForInjection, buildUserContent } from '../interiority/prompts.js';
 
 // Knowledge ILS compat
-import { expandIlsSummaries, normalizeSendDate } from '../knowledge/ils_compat.js';
+import { expandIlsSummaries } from '../knowledge/ils_compat.js';
 
 // Knowledge evidence — needs test stubs for metadata
-import { resetCoreStubs, getFakeMeta } from './stubs/core.js';
+import { resetCoreStubs } from './stubs/core.js';
 import {
     getEvidenceFile, appendRawObservations, updateRawObservation,
 } from '../knowledge/evidence.js';

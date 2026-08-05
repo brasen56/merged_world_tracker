@@ -7,17 +7,17 @@
  */
 
 import {
-    getChat, getChatMeta, getPlayerNames, getUserNames,
+    getChat, getPlayerNames, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, getLatestChronicleEntry,
-    escapeRegex, stripNonNarrative,
+    stripNonNarrative,
 } from '../core/index.js';
 
 import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
     TRACKER_SENTINEL,
-    HISTORY_KEY_PREFIX, RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
+    HISTORY_KEY_PREFIX,
     state,
 } from './state.js';
 import { getRegistry, normalizeRegistryName } from './registry.js';
@@ -211,7 +211,7 @@ export async function loadEntryContent(uid) {
     try {
         const wi = await state.wiScript.loadWorldInfo(getLorebookName());
         return wi?.entries?.[uid]?.content ?? null;
-    } catch (err) { return null; }
+    } catch { return null; }
 }
 
 // ─── NPC Profiles lorebook (Slice 2 — non-injected growth profiles) ──────────
@@ -316,7 +316,7 @@ export async function loadProfileContent(uid) {
     try {
         const wi = await state.wiScript.loadWorldInfo(getProfileLorebookName());
         return wi?.entries?.[uid]?.content ?? null;
-    } catch (err) { return null; }
+    } catch { return null; }
 }
 
 /**

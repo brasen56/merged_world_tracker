@@ -5,7 +5,7 @@
  */
 
 import {
-    getContextSafe, getChat,
+    getChat,
     resolveApiCall, normaliseOutput, notify,
     getCurrentWorldState, getLatestChronicleEntry,
     stripNonNarrative,

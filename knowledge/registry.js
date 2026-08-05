@@ -13,7 +13,6 @@
 
 import { getChat } from '../core/index.js';
 
-import { state } from './state.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { readField, writeField } from './store.js';
 

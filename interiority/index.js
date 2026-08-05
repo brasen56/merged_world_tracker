@@ -42,7 +42,7 @@ import { applyIntentionsInjection } from './injection.js';
 
 import {
     renderContent, renderAllThoughtBlocks, clearAllThoughtBlocks,
-    renderThoughtBlockForMessage, setIntStatus,
+    renderThoughtBlockForMessage,
 } from './render.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────

@@ -326,7 +326,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             }
 
             // Click to open modal on that tab
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', () => {
                 if (btn._dragged) { btn._dragged = false; return; }
                 openModal(cfg.tab);
             });

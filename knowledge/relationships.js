@@ -304,10 +304,10 @@ export async function syncRelationshipsToLorebook(name) {
         return { success: false, error: 'chat changed during sync' };
     }
     if (currentContent === null) return { success: false, error: 'Could not load entry' };
-    const blockText = formatRelationshipBlock(name);
+    const blockText = formatRelationshipBlock(canonicalName);
     const newContent = blockText ? injectRelationshipBlock(currentContent, blockText) : stripRelationshipBlock(currentContent);
     if (newContent === currentContent) return { success: true, unchanged: true };
-    return writeToLorebook(name, newContent, reg.keywords || [name], reg.uid);
+    return writeToLorebook(canonicalName, newContent, reg.keywords || [canonicalName], reg.uid);
 }
 
 export async function syncAllRelationshipsToLorebooks() {

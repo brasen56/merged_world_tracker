@@ -5,9 +5,9 @@
  * consumed by the root index.js.  All implementation lives in sub-files.
  */
 
-import { getChat, escapeRegex, estimateTokens, getContextSafe, getChatMeta, patchChatMeta, captureScope, assertSameScope } from '../core/index.js';
+import { getChat, escapeRegex, estimateTokens, getChatMeta, patchChatMeta, captureScope, assertSameScope } from '../core/index.js';
 
-import { state, getNpcsContentEl, COUNTERS_META_KEY } from './state.js';
+import { state, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
 import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
@@ -19,7 +19,6 @@ import {
     renderNpcsSubTab,
     addNotificationEntry, removeNotificationEntry,
     initNotificationPanel, hideNotificationPanel,
-    importNpcs, importFromLorebooks,
 } from './render.js';
 
 // ─── Per-chat counter persistence ────────────────────────────────────────────
@@ -519,7 +518,7 @@ export async function refreshTotalTokens() {
     try {
         const registry = getRegistry();
         let total = 0;
-        for (const [name, info] of Object.entries(registry)) {
+        for (const [, info] of Object.entries(registry)) {
             if (info.uid === null || info.uid === undefined) continue;
             try {
                 const content = await loadEntryContent(info.uid);
@@ -527,7 +526,7 @@ export async function refreshTotalTokens() {
             } catch { /* skip */ }
         }
         const stateReg = getStateRegistry();
-        for (const [name, info] of Object.entries(stateReg)) {
+        for (const [, info] of Object.entries(stateReg)) {
             if (info.uid === null || info.uid === undefined) continue;
             try {
                 const loaded = await loadStateTrackerEntry(info.uid);

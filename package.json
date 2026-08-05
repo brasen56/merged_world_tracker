@@ -5,9 +5,14 @@
   "license": "MIT",
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^17.9.0",
     "vitest": "^3.0.0"
   }
 }

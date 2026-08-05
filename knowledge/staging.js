@@ -12,17 +12,17 @@ import {
     TRACKER_SENTINEL,
     HISTORY_KEY_PREFIX, state, ktSetStatus,
 } from './state.js';
-import { hasValidSettings, getSettings, saveSettings } from './settings.js';
+import { getSettings, saveSettings } from './settings.js';
 import {
-    getRegistry, saveRegistry, getAllNpcNames,
-    getStateRegistry, saveStateRegistry, registerStateTracker,
+    getRegistry, saveRegistry,
+    getStateRegistry, saveStateRegistry,
     resolveRegistryKey,
 } from './registry.js';
 import {
     formatMinorEntry, formatMajorEntry,
     synthesizeMinorFromUpdate, synthesizeMajorFromUpdate,
     formatDossierEntry, synthesizeDossierFromUpdate,
-    enrichStagingItem, writeToLorebook,
+    writeToLorebook,
     loadEntryContent, getHistory,
 } from './lorebook.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';

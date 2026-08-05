@@ -27,7 +27,6 @@ import * as Interiority from './interiority/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const EXT_PREFIX = 'mwt';                     // CSS / DOM id prefix
 const SETTINGS_KEY = 'merged_world_tracker';   // localStorage key
 
 // ID opts for shared API settings helpers (renderApiSettingsFields / readApiSettingsValues)
@@ -104,7 +103,7 @@ if (!macroRegistry) {
 
 // ─── Shared settings ────────────────────────────────────────────────────────
 
-const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
+const { getSettings, saveSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
     defaults: {
         apiUrl: '',

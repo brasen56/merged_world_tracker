@@ -6,7 +6,7 @@
  */
 
 import {
-    getContextSafe, getChat,
+    getChat,
     resolveApiCall, normaliseOutput, stripNonNarrative,
     captureScope, assertSameScope,
     captureRevision, sameRevision,
@@ -17,7 +17,7 @@ import {
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL, getPinnedEntities } from './settings.js';
 import {
-    state, getWorldStateText, setWorldStateData, getWorldStateData,
+    state, getWorldStateText, setWorldStateData,
     pushToHistory, pushAutoSave,
     isAutoRefreshEnabled, getAutoRefreshInterval,
     persistAutoRefreshCounter,

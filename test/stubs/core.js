@@ -223,7 +223,7 @@ export function persistChatMeta() { /* no-op in tests */ }
 
 export async function persistChatMetaNow() { /* no-op in tests */ }
 
-export function patchChatMeta(key, patch, persist = true, stamp = false) {
+export function patchChatMeta(key, patch, _persist = true, stamp = false) {
     if (!_meta[key]) _meta[key] = {};
     const next = stamp
         ? { ..._meta[key], ...patch, lastUpdated: Date.now() }
@@ -419,7 +419,7 @@ export async function pickTextFile(accept) {
  * needs to be a string with the right field ids in it — reproducing the real
  * inputs would just couple these tests to core/ui.js's layout.
  */
-export function renderApiSettingsFields(s = {}, opts = {}) {
+export function renderApiSettingsFields(_s = {}, opts = {}) {
     const ids = Object.entries(opts)
         .filter(([k, v]) => k.endsWith('Id') && typeof v === 'string')
         .map(([, v]) => `<input id="${v}" value="">`)

@@ -160,6 +160,17 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
         parts.push(wrapTag('player_character', playerName));
         parts.push('');
     }
+    // The <open_intentions> block below shows each entry's `since` label and
+    // asks the model to judge whether the trigger has fired *now*. Without the
+    // current in-world time there is no "now" to compare against, so those
+    // labels are uninterpretable. buildThoughtsUserContent and
+    // buildDormantPollUserContent both emit this; this builder accepted
+    // worldTime and dropped it, so the batched/strict paths reasoned about
+    // elapsed in-world time strictly worse than the split-thoughts path.
+    if (worldTime) {
+        parts.push(wrapTag('world_time', worldTime));
+        parts.push('');
+    }
 
     for (const npc of npcBlocks) {
         parts.push(buildTag('npc', { name: npc.name }));

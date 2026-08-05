@@ -27,13 +27,11 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import {
     resetCoreStubs,
     setFakeChat,
-    getFakeMeta,
 } from './stubs/core.js';
 
 // The module under test. Because of the vitest alias, its internal
 // `import ... from '../core/index.js'` resolves to the stub.
 import {
-    getEvidenceMap,
     getEvidenceFile,
     hasEvidenceFile,
     appendRawObservations,
@@ -166,7 +164,6 @@ describe('appendRawObservations', () => {
         // (simulating what applyConsolidation does to consumed raws).
         appendRawObservations('Kira', [obs('Brave', '"she charged in"')]);
         const file = getEvidenceFile('Kira', false);
-        const rawId = file.raw[0].id;
         file.archivedRaw.push(file.raw[0]);
         file.raw = [];
 

@@ -25,7 +25,6 @@ import {
     buildUpdatedMinorContent,
     buildPromotedContent, buildDemotedContent,
     enrichStagingItem, writeToLorebook, writeStateTracker,
-    isDossierEntry, countDossierFields, DOSSIER_FIELDS,
 } from './lorebook.js';
 import {
     getRelationships, updateRelationship, removeRelationship,
@@ -49,7 +48,7 @@ function sortEntries(obj, key) {
 
 // ─── Accept / reject staging item ────────────────────────────────────────────
 
-async function handleAccept(item, text, keywords, el) {
+async function handleAccept(item, text, keywords, _el) {
     try {
         if (item.type === 'state') {
             const result = await writeStateTracker(item.uid, item.name, text);
@@ -460,7 +459,7 @@ function renderNpcListContent(type, entries) {
     }).join('')}</div>`;
 }
 
-function wireNpcListEvents(el, type) {
+function wireNpcListEvents(el, _type) {
     el.querySelectorAll('.kt-npc-update').forEach(btn => {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
@@ -503,7 +502,6 @@ function wireNpcListEvents(el, type) {
     el.querySelectorAll('.kt-npc-enrich').forEach(btn => {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
-            const uid = parseInt(btn.dataset.uid, 10);
             const reg = getRegistry()[name];
             if (!reg?.uid && reg?.uid !== 0) { ktSetStatus(`No UID for "${name}".`, 'error'); return; }
             try {
@@ -1242,7 +1240,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             btn.disabled = true; btn.textContent = '⏳ Capturing…';
             flash('Capturing behavioral evidence from recent messages…', 'info');
             const { runCaptureOnly } = await import('./growth.js');
-            const { observations, captureStats } = await runCaptureOnly(name);
+            const { captureStats } = await runCaptureOnly(name);
 
             let addedText;
             if (captureStats.deltaTooSmall) {
@@ -1879,7 +1877,6 @@ function renderRelationshipGraph() {
 }
 
 function wireRelationshipGraphInteractions(svg, data) {
-    const ns = 'http://www.w3.org/2000/svg';
     let viewBox = svg.viewBox.baseVal;
     // Clone to make mutable if baseVal is read-only (some engines)
     const vbState = { x: viewBox.x, y: viewBox.y, w: viewBox.w, h: viewBox.h };
@@ -2124,7 +2121,7 @@ function wireRelationshipEvents(el) {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
             setStance(name, '');
-            try { await syncRelationshipsToLorebook(name); } catch (err) { /* entry may be gone */ }
+            try { await syncRelationshipsToLorebook(name); } catch { /* entry may be gone */ }
             renderNpcsSubTab();
         });
     });
@@ -2136,7 +2133,7 @@ function wireRelationshipEvents(el) {
             if (!confirm(`Remove relationship: ${from} → ${to}?`)) return;
             removeRelationship(from, to);
             state._graphData = null; // invalidate cached layout
-            try { await syncRelationshipsToLorebook(from); } catch (err) { /* ignore */ }
+            try { await syncRelationshipsToLorebook(from); } catch { /* ignore */ }
             renderNpcsSubTab();
         });
     });

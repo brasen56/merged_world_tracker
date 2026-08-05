@@ -10,8 +10,8 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
-    resetCoreStubs, setFakeChat, setFakeContextExtras, setFakeApi,
-    getFakeMeta, getFakePromptCalls, getFakeNotifications,
+    resetCoreStubs, setFakeChat, setFakeApi,
+    getFakeMeta,
 } from './stubs/core.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 

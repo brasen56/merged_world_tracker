@@ -11,7 +11,7 @@
  * regex assertions.
  */
 
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import { stripNonNarrative, stripNonNarrativeFromFormatted } from '../core/strip.js';
 
 // A module-level `describe` with a `beforeEach` inside it. The beforeEach runs

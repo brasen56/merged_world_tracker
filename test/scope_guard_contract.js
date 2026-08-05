@@ -227,8 +227,8 @@ describe('CORE-02 — /wt-inject command contract', () => {
             Interiority: { applyIntentionsInjection: () => {} },
         };
 
-        let savedPatch = null;
-        const saveSettings = (patch) => { savedPatch = patch; };
+        let _savedPatch = null;
+        const saveSettings = (patch) => { _savedPatch = patch; };
 
         const cmds = createCommands({
             registerSlashCommand: null, // no ST available in test
