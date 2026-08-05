@@ -69,6 +69,27 @@ export function getRegistryEntry(name) {
 }
 
 /**
+ * The registry accessor's name normalization: lowercase + trim.
+ *
+ * Single source of truth for "do these two NPC names refer to the same entity
+ * after the accessor normalizes them?" resolveRegistryKey() compares
+ * normalized forms for its case-insensitive step, and the lorebook identity
+ * check (KNOWLEDGE-01) must compare the same way — otherwise a case or
+ * leading/trailing-whitespace difference between a lorebook entry's comment
+ * and the registry key reads as a stale uid, detaches a *valid* uid, and
+ * creates the exact duplicate the guard exists to prevent.
+ *
+ * Internal whitespace is intentionally not collapsed here; that is a separate
+ * matching concern handled by the given-name step of resolveRegistryKey().
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+export function normalizeRegistryName(name) {
+    return String(name ?? '').toLowerCase().trim();
+}
+
+/**
  * Resolve an NPC name to its registry key.
  *
  * Registry keys and the names other modules hold are written by different
@@ -95,7 +116,7 @@ export function getRegistryEntry(name) {
  */
 export function resolveRegistryKey(reg, name) {
     if (!reg) return null;
-    const wanted = String(name || '').toLowerCase().trim();
+    const wanted = normalizeRegistryName(name);
     if (!wanted) return null;
 
     // 1. Exact hit — cheap path. hasOwnProperty, not `reg[name] !== undefined`:
@@ -104,9 +125,10 @@ export function resolveRegistryKey(reg, name) {
 
     const keys = Object.keys(reg);
 
-    // 2. Case-insensitive exact match.
+    // 2. Case-insensitive exact match (same normalization as the lorebook
+    // identity check — see normalizeRegistryName).
     for (const key of keys) {
-        if (key.toLowerCase().trim() === wanted) return key;
+        if (normalizeRegistryName(key) === wanted) return key;
     }
 
     // 3. Given-name match, both directions:

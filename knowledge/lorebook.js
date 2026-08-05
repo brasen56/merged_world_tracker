@@ -20,7 +20,7 @@ import {
     HISTORY_KEY_PREFIX, RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
     state,
 } from './state.js';
-import { getRegistry } from './registry.js';
+import { getRegistry, normalizeRegistryName } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
@@ -154,12 +154,19 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             // A stale uid can point at an unrelated NPC's entry (imported
             // registry, uid reuse after a hand-delete, etc.). The import path
             // already content-verifies; normal updates were LESS protected.
-            const existingComment = (entries[existingUid].comment || '').trim();
-            const expectedName = String(name || '').trim();
-            if (existingComment && existingComment !== expectedName) {
+            const existingComment = entries[existingUid].comment || '';
+            const expectedName = String(name || '');
+            // KNOWLEDGE-01 (follow-up): compare through the registry accessor's
+            // normalization, not exact string. A case or leading/trailing-
+            // whitespace gap between the lorebook comment and the registry key
+            // is the same NPC; the old exact check detached a valid uid and
+            // created the duplicate this guard exists to prevent.
+            const commentN = normalizeRegistryName(existingComment);
+            const expectedN = normalizeRegistryName(expectedName);
+            if (commentN && commentN !== expectedN) {
                 console.warn(
-                    `[MWT:Knowledge] Registry uid ${existingUid} for "${expectedName}" points at ` +
-                    `an entry labelled "${existingComment}" in "${book}" — the uid is stale (wrong NPC). ` +
+                    `[MWT:Knowledge] Registry uid ${existingUid} for "${expectedName.trim()}" points at ` +
+                    `an entry labelled "${existingComment.trim()}" in "${book}" — the uid is stale (wrong NPC). ` +
                     `Detaching the stale uid and creating a new entry instead.`
                 );
                 existingUid = null;
@@ -250,12 +257,18 @@ export async function writeProfileToLorebook(name, content, existingUid) {
         // Same fix as writeToLorebook — a stale profileUid can point at an
         // unrelated NPC's profile entry.
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
-            const existingComment = (entries[existingUid].comment || '').trim();
-            const expectedName = String(name || '').trim();
-            if (existingComment && existingComment !== expectedName) {
+            const existingComment = entries[existingUid].comment || '';
+            const expectedName = String(name || '');
+            // KNOWLEDGE-01 (follow-up): same normalized comparison as
+            // writeToLorebook — a case/whitespace-only difference between the
+            // profile comment and the registry key is the same NPC, not a
+            // stale uid.
+            const commentN = normalizeRegistryName(existingComment);
+            const expectedN = normalizeRegistryName(expectedName);
+            if (commentN && commentN !== expectedN) {
                 console.warn(
-                    `[MWT:Knowledge] Profile uid ${existingUid} for "${expectedName}" points at ` +
-                    `an entry labelled "${existingComment}" in "${book}" — the uid is stale (wrong NPC). ` +
+                    `[MWT:Knowledge] Profile uid ${existingUid} for "${expectedName.trim()}" points at ` +
+                    `an entry labelled "${existingComment.trim()}" in "${book}" — the uid is stale (wrong NPC). ` +
                     `Detaching the stale uid and creating a new entry instead.`
                 );
                 existingUid = null;

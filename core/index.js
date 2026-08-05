@@ -44,6 +44,7 @@ export {
 export {
     escapePromptText,
     escapePromptAttr,
+    escapePromptBoundary,
     buildTag,
     wrapTag,
     truncateText,

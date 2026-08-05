@@ -271,6 +271,7 @@ export {
 export {
     escapePromptText,
     escapePromptAttr,
+    escapePromptBoundary,
     buildTag,
     wrapTag,
     truncateText,
@@ -384,7 +385,10 @@ export function applyExtensionPromptInjection({
 export const roleToNumber = notImplemented('roleToNumber');
 export function wrapInTag(tag, body) {
     if (!tag || !body?.trim()) return body || '';
-    const escaped = String(body).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    // Boundary-only escape: '<' is neutralized so a body cannot inject a
+    // closing tag; '&' is preserved as legitimate prose. Mirrors the real
+    // core/injection.js wrapInTag (escapePromptBoundary).
+    const escaped = String(body).replace(/</g, '&lt;');
     return `<${tag}>\n${escaped}\n</${tag}>`;
 }
 export function notify(title, message, level = 'info') {

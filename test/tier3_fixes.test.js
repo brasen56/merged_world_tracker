@@ -65,11 +65,12 @@ describe('NEW-01: wrapInTag escaping', () => {
         expect(result.endsWith('</mwt_world_state>')).toBe(true);
     });
 
-    test('escapes ampersands in the body', () => {
+    test('passes ampersands through unchanged (boundary safety only needs <)', () => {
         const result = wrapInTag('tag', 'Tom & Jerry');
-        // The ampersand must be entity-encoded, not passed through raw.
-        expect(result).toContain('&amp;');
-        expect(result).not.toContain('Tom & Jerry');
+        // '&' is legitimate prose in narrator-facing blocks; escaping it would
+        // deliver '&amp;' to the model on every turn. Only '<' is neutralized.
+        expect(result).toContain('Tom & Jerry');
+        expect(result).not.toContain('&amp;');
     });
 
     test('passes through safe content unchanged (structurally)', () => {

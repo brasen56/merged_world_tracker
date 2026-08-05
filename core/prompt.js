@@ -99,6 +99,25 @@ export function wrapTag(tag, content) {
     return `<${tag}>${escapePromptText(content)}</${tag}>`;
 }
 
+/**
+ * Escape only the structural boundary character (`<`) for narrator-facing text.
+ *
+ * wrapInTag() wraps reference blocks (world state, plot seeds, chronicle) that
+ * reach the narrator as prose, not as XML. The structural-boundary threat is a
+ * body that contains a closing tag like `</mwt_world_state>` and breaks the
+ * wrapper; neutralizing `<` closes that hole. `&` is intentionally NOT escaped
+ * here — unlike escapePromptText (for XML tag content), these bodies carry
+ * legitimate ampersands in prose ("Tom & Jerry"), and escaping `&` would
+ * deliver `&amp;` to the model on every turn.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+const BOUNDARY_SPECIAL = /</g;
+export function escapePromptBoundary(text) {
+    return String(text ?? '').replace(BOUNDARY_SPECIAL, AMP_LT);
+}
+
 // ─── 2. Bounded text / array helpers ─────────────────────────────────────────
 
 /**

@@ -557,6 +557,26 @@ describe('writeToLorebook KNOWLEDGE-01 identity guard', () => {
         expect(result.success).toBe(true);
         expect(result.uid).toBe(0);
     });
+
+    test('allows overwrite when the comment differs only by case/whitespace (KNOWLEDGE-01 follow-up)', async () => {
+        // The identity guard now routes through normalizeRegistryName, so a
+        // case or leading/trailing-whitespace gap between the lorebook comment
+        // and the name is the SAME NPC — not a stale uid. The old exact-string
+        // check detached a valid uid here and created a duplicate.
+        saveSettings({ scope: 'global' });
+        await hydrateBook('Knowledge Tracker', { registry: { Mara: { uid: 0 } } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                0: { uid: 0, comment: '  mara  ', key: ['mara'], content: 'old dossier' },
+            },
+        });
+
+        const result = await writeToLorebook('Mara', 'updated dossier', ['Mara'], 0);
+        expect(result.success).toBe(true);
+        // Reused uid 0 instead of detaching and creating a new entry.
+        expect(result.uid).toBe(0);
+        expect(wiFake.books.get('Knowledge Tracker').entries[0].content).toBe('updated dossier');
+    });
 });
 
 describe('flushBook', () => {

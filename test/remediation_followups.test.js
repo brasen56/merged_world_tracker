@@ -8,12 +8,13 @@
  * on the strict-grounding path survived review (WORLD-STATE-04, INTERIORITY-01).
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
     resetCoreStubs, setFakeChat, setFakeApi, getFakeStatusCalls,
 } from './stubs/core.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
+import { finiteNumber, fetchFromApi } from '../core/api.js';
 
 // ─── CHRONICLE-03 (part 2) ────────────────────────────────────────────────────
 
@@ -363,5 +364,100 @@ describe('INTERIORITY-01 — stale thought blocks are removed from the DOM', () 
 
         expect(removed).toEqual([]);
         expect(msgEl._appended).toHaveLength(0);
+    });
+});
+
+// ─── Follow-up review (small, previously open) ───────────────────────────────
+//
+// Three items the first follow-up pass left open. KNOWLEDGE-01's case/whitespace
+// case lives in store.test.js (it reuses the lorebook fake there) and the
+// wrapInTag ampersand case lives in tier3_fixes.test.js; the CORE-05 read
+// boundary is covered here.
+
+function fakeOkFetch(captureBody) {
+    return vi.fn(async (_endpoint, init) => {
+        captureBody(init.body);
+        return {
+            ok: true,
+            status: 200,
+            text: async () => '',
+            json: async () => ({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }),
+        };
+    });
+}
+
+describe('CORE-05 (read boundary) — finiteNumber + fetchFromApi payload', () => {
+    let origFetch;
+    beforeEach(() => {
+        origFetch = globalThis.fetch;
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+    });
+
+    test('finiteNumber returns the value when finite, else the fallback', () => {
+        expect(finiteNumber(0.9, 1.0)).toBe(0.9);
+        expect(finiteNumber('0.5', 1.0)).toBe(0.5);
+        expect(finiteNumber(0, 1.0)).toBe(0); // 0 is a valid finite value
+        expect(finiteNumber(NaN, 1.0)).toBe(1.0);
+        expect(finiteNumber('abc', 0)).toBe(0);
+        expect(finiteNumber(Infinity, 1.0)).toBe(1.0);
+        // The production call site gates null/undefined with `!= null` before
+        // finiteNumber runs, so these document the JS-coercion edge for
+        // completeness rather than a path the payload ever takes:
+        expect(finiteNumber(undefined, 1.0)).toBe(1.0); // Number(undefined) === NaN
+        expect(finiteNumber(null, 1.0)).toBe(0);        // Number(null) === 0
+    });
+
+    test('a NaN topP persisted before the fix is recovered to 1.0, never serialized to null', async () => {
+        let sentBody = null;
+        globalThis.fetch = fakeOkFetch((b) => { sentBody = b; });
+        await fetchFromApi({
+            systemPrompt: 'sys',
+            userContent: 'hi',
+            settings: {
+                apiUrl: 'https://example.test/v1',
+                modelName: 'm',
+                maxTokens: 2000,
+                temperature: 0.3,
+                topP: NaN,               // persisted before the write-boundary fix
+                frequencyPenalty: NaN,
+                presencePenalty: NaN,
+            },
+            retries: 0,
+        });
+
+        const payload = JSON.parse(sentBody);
+        // Recovered to documented defaults — not null.
+        expect(payload.top_p).toBe(1.0);
+        expect(payload.frequency_penalty).toBe(0);
+        expect(payload.presence_penalty).toBe(0);
+        // JSON.stringify(NaN) would have produced `null`; assert it never did.
+        expect(sentBody).not.toContain('null');
+    });
+
+    test('valid optional values pass through unchanged', async () => {
+        let sentBody = null;
+        globalThis.fetch = fakeOkFetch((b) => { sentBody = b; });
+        await fetchFromApi({
+            systemPrompt: 'sys',
+            userContent: 'hi',
+            settings: {
+                apiUrl: 'https://example.test/v1',
+                modelName: 'm',
+                maxTokens: 2000,
+                temperature: 0.3,
+                topP: 0.8,
+                frequencyPenalty: 0.5,
+                presencePenalty: -0.5,
+            },
+            retries: 0,
+        });
+
+        const payload = JSON.parse(sentBody);
+        expect(payload.top_p).toBe(0.8);
+        expect(payload.frequency_penalty).toBe(0.5);
+        expect(payload.presence_penalty).toBe(-0.5);
     });
 });

@@ -12,6 +12,7 @@ import { describe, test, expect } from 'vitest';
 import {
     escapePromptText,
     escapePromptAttr,
+    escapePromptBoundary,
     buildTag,
     wrapTag,
     truncateText,
@@ -56,6 +57,23 @@ describe('escapePromptText (tag content)', () => {
         const input = AMP + ' ' + LT + ' text';
         const expected = E_AMP + ' ' + E_LT + ' text';
         expect(escapePromptText(input)).toBe(expected);
+    });
+});
+
+describe('escapePromptBoundary (wrapInTag body — narrator-facing prose)', () => {
+    test('escapes less-than so a closing tag cannot break the wrapper', () => {
+        expect(escapePromptBoundary('a' + LT + 'b')).toBe('a' + E_LT + 'b');
+    });
+
+    test('does NOT escape ampersands (legitimate prose)', () => {
+        // wrapInTag bodies are narrator-facing prose; '&' reaches the model
+        // verbatim, not as '&amp;'. Only '<' is neutralized.
+        expect(escapePromptBoundary('Tom ' + AMP + ' Jerry')).toBe('Tom ' + AMP + ' Jerry');
+    });
+
+    test('handles null and undefined as empty string', () => {
+        expect(escapePromptBoundary(null)).toBe('');
+        expect(escapePromptBoundary(undefined)).toBe('');
     });
 });
 

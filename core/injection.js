@@ -3,7 +3,7 @@
  */
 
 import { getSetExtensionPrompt } from './context.js';
-import { escapePromptText } from './prompt.js';
+import { escapePromptBoundary } from './prompt.js';
 
 export function roleToNumber(role) {
     switch (role) {
@@ -25,10 +25,13 @@ export function roleToNumber(role) {
  * message, lorebook entry, imported chronicle entry, or generated state
  * containing a closing tag like `</mwt_world_state>` breaks the structural
  * boundary for every module that injects — the tag closes early and the
- * rest of the content leaks into the prompt as unstructured text. The body
- * is already-assembled plain text (markdown headers, bracket headers, body
- * text) and never carries raw XML, so escaping `<` and `&` is both safe and
- * correct.
+ * rest of the content leaks into the prompt as unstructured text.
+ *
+ * Boundary safety only needs `<`: neutralizing it stops any closing tag in
+ * the body from closing the wrapper early. `&` is intentionally NOT escaped —
+ * these blocks are narrator-facing prose where a literal ampersand is correct
+ * ("Tom & Jerry"), and escaping it would deliver `&amp;` to the model on every
+ * turn. (Uses escapePromptBoundary, not escapePromptText.)
  *
  * @param {string} tag  — tag name without angle brackets (e.g. 'mwt_world_state')
  * @param {string} body — inner content
@@ -36,7 +39,7 @@ export function roleToNumber(role) {
  */
 export function wrapInTag(tag, body) {
     if (!tag || !body?.trim()) return body || '';
-    return `<${tag}>\n${escapePromptText(body)}\n</${tag}>`;
+    return `<${tag}>\n${escapePromptBoundary(body)}\n</${tag}>`;
 }
 
 /**

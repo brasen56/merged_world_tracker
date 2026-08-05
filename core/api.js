@@ -25,6 +25,27 @@ export function normalizeApiBase(url) {
 }
 
 /**
+ * Coerce a value to a finite number, falling back when it is not.
+ *
+ * CORE-05 (read boundary): the write boundary in core/ui.js
+ * (readApiSettingsValues) now guards non-numeric input, but settings persisted
+ * as NaN *before* that fix survive on disk. `JSON.stringify(NaN)` emits `null`,
+ * so a bare `Number(settings.topP)` sent `top_p: null` to the API on every call
+ * until the user re-opened and re-saved settings. This is the read-side safety
+ * net: any non-finite optional generation value is replaced with the same
+ * default the write boundary uses, so pre-fix NaN data behaves like a fresh
+ * save rather than reaching the wire as `null`.
+ *
+ * @param {*} value
+ * @param {number} fallback
+ * @returns {number}
+ */
+export function finiteNumber(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+/**
  * Generic async retry with exponential backoff.
  *
  * The inner function should throw errors as normal. To prevent retry on
@@ -109,10 +130,13 @@ export async function fetchFromApi({
         stream: false,
     };
 
-    // Optional params — only include if the settings object provides them
-    if (settings.topP != null) payload.top_p = Number(settings.topP);
-    if (settings.frequencyPenalty != null) payload.frequency_penalty = Number(settings.frequencyPenalty);
-    if (settings.presencePenalty != null) payload.presence_penalty = Number(settings.presencePenalty);
+    // Optional params — only include if the settings object provides them.
+    // CORE-05 (read boundary): recover non-finite values (NaN persisted before
+    // the write-boundary fix) to the documented default instead of letting
+    // JSON.stringify serialize them to `null` in the payload.
+    if (settings.topP != null) payload.top_p = finiteNumber(settings.topP, 1.0);
+    if (settings.frequencyPenalty != null) payload.frequency_penalty = finiteNumber(settings.frequencyPenalty, 0);
+    if (settings.presencePenalty != null) payload.presence_penalty = finiteNumber(settings.presencePenalty, 0);
 
     return retryAsync(retries, async (attempt) => {
         console.log(`[MWT API] POST ${endpoint} model=${settings.modelName} attempt=${attempt}`);
