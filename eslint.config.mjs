@@ -82,6 +82,14 @@ export default [
             'no-dupe-keys': 'error',
             'no-unreachable': 'error',
             'no-fallthrough': 'error',
+            'eqeqeq': ['error', 'always', { null: 'ignore' }],
+            'no-var': 'error',
+            'no-prototype-builtins': 'error',
+            'no-self-assign': 'error',
+            'no-self-compare': 'error',
+            'no-constant-binary-expression': 'error',
+            'no-unsafe-negation': 'error',
+            'no-cond-assign': 'error',
 
             // ── Import correctness ─────────────────────────────────────────
             // Flags a named import whose name is not actually exported by the
