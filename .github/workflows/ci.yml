@@ -10,7 +10,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, testing]
   pull_request:
 
 # Cancel in-progress runs for the same ref when a new commit is pushed.

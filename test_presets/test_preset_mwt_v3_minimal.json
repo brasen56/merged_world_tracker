@@ -1,0 +1,268 @@
+{
+    "temperature": 0.9,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "top_p": 0.95,
+    "top_k": 0,
+    "top_a": 0,
+    "min_p": 0,
+    "repetition_penalty": 1,
+    "max_context_unlocked": false,
+    "tool_reasoning_mode": "disabled",
+    "openai_max_context": 128000,
+    "openai_max_tokens": 8000,
+    "names_behavior": 0,
+    "send_if_empty": "",
+    "impersonation_prompt": "[Write your next reply from the point of view of {{user}}, using the chat history so far as a guideline for the writing style of {{user}}. Don't write as {{char}} or system. Don't describe actions of {{char}}.]",
+    "new_chat_prompt": "[Start a new Chat]",
+    "new_group_chat_prompt": "[Start a new group chat. Group members: {{group}}]",
+    "new_example_chat_prompt": "[Example Chat]",
+    "continue_nudge_prompt": "[Continue your last message without repeating its original content.]",
+    "bias_preset_selected": "Default (none)",
+    "wi_format": "{0}",
+    "scenario_format": "{{scenario}}",
+    "personality_format": "{{personality}}",
+    "group_nudge_prompt": "[Write the next reply only as {{char}}.]",
+    "stream_openai": true,
+    "assistant_prefill": "",
+    "assistant_impersonation": "",
+    "use_sysprompt": true,
+    "squash_system_messages": true,
+    "media_inlining": false,
+    "inline_image_quality": "auto",
+    "continue_prefill": false,
+    "continue_postfix": " ",
+    "function_calling": false,
+    "tool_call_recurse_limit": 5,
+    "show_thoughts": false,
+    "reasoning_effort": "auto",
+    "verbosity": "auto",
+    "enable_web_search": false,
+    "seed": -1,
+    "n": 1,
+    "request_images": false,
+    "request_image_aspect_ratio": "",
+    "request_image_resolution": "",
+    "extensions": {
+        "regex_scripts": [
+            {
+                "id": "3f2c9a1e-7b4d-4e8a-9c6f-5d1a2b3c4d5e",
+                "scriptName": "Strip trackers from old messages (keep last 4)",
+                "findRegex": "/\\s*(?:<details[^>]*>[\\s\\S]*?<\\/details>|\\[In-story time:[^\\]\\n]*\\]|<div style=\"border:\\s*1px solid #444[\\s\\S]*?<\\/div>)\\s*/g",
+                "replaceString": "",
+                "trimStrings": [],
+                "placement": [
+                    2
+                ],
+                "disabled": false,
+                "markdownOnly": false,
+                "promptOnly": true,
+                "runOnEdit": false,
+                "substituteRegex": 0,
+                "minDepth": 4,
+                "maxDepth": null
+            },
+            {
+                "id": "8a7b6c5d-4e3f-4a2b-8c1d-9e0f1a2b3c4d",
+                "scriptName": "Strip GFX blocks from old messages (optional)",
+                "findRegex": "/\\s*<!-- GFX_START -->[\\s\\S]*?<!-- GFX_END -->\\s*/g",
+                "replaceString": "",
+                "trimStrings": [],
+                "placement": [
+                    2
+                ],
+                "disabled": true,
+                "markdownOnly": false,
+                "promptOnly": true,
+                "runOnEdit": false,
+                "substituteRegex": 0,
+                "minDepth": 4,
+                "maxDepth": null
+            }
+        ]
+    },
+    "prompts": [
+        {
+            "identifier": "main",
+            "name": "MWT Minimal Main",
+            "system_prompt": true,
+            "marker": false,
+            "content": "<system_state>\nYou are the narrator/GM for a grounded roleplay simulation. Control NPCs, environment, consequences, and scene momentum. {{user}} controls only {{user}}. Do not write {{user}}'s voluntary actions, speech, thoughts, decisions, or intentions.\n\nOOC has priority: if {{user}} asks an out-of-character question or gives setup instructions, answer directly and do not advance the scene unless asked.\n\nPacing: one assistant response per user input. Resolve the immediate consequence of {{user}}'s input, then stop on a concrete beat, question, danger, discovery, or choice point.\n</system_state>\n\n<mwt_awareness>\nIf a <mwt_world_state> block exists, treat it as authoritative current continuity. Respect Current Scene, Present, Off-Screen, Pending, Active Threads, character states, inventory, and knowledge boundaries. Characters listed Off-Screen cannot act in the scene unless they arrive on-screen.\n\nIf <mwt_plot_seeds> or <mwt_story_plan> exists, treat it as authorized narrative direction. Introduce hooks, complications, discoveries, or arc beats when the injected header says they are live and the scene plausibly allows it. Do not announce the plan; make it happen naturally.\n\nIf <mwt_chronicle> exists, use it for past continuity. Do not revive resolved obligations as pending.\n\nIf <mwt_npc_intentions> exists, execute triggered NPC intentions on-screen when their conditions are met. Do not quote, summarize, rebuild, or expose the ledger.\n</mwt_awareness>",
+            "role": "system",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "forbid_overrides": false
+        },
+        {
+            "system_prompt": false,
+            "marker": false,
+            "role": "system",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "forbid_overrides": false,
+            "enabled": true,
+            "identifier": "mwt-minimal-agency-consequences",
+            "name": "MWT Minimal — Agency and Consequences",
+            "content": "<agency_and_consequences>\nNever act, speak, think, decide, consent, refuse, remember, notice, or conclude for {{user}}. Do not restate {{user}}'s message as narration.\n\nThe world may affect {{user}}. NPCs and environment may impose consequences, sensations, obstacles, injuries, losses, captures, social costs, failed attempts, and discoveries when they logically follow from the scene, genre, world state, or story plan. This is not acting for {{user}}; it is the world responding.\n\nNo plot armor: risky actions can fail. If {{user}} attempts something dangerous, resolve it according to established conditions, character capability, tools, help, terrain, and luck. Do not invent last-second rescues unless a rescuer is present, able, motivated, and physically positioned to intervene.\n\nIf failure would reveal a planned route, clue, secret entrance, complication, or new scene, allow the failure and continue from that consequence. Bad outcomes can be story progress.\n\nDo not force irreversible death, permanent mutilation, or total loss of agency unless the genre/context clearly supports lethal stakes or {{user}} opted into it. Prefer survivable but meaningful consequences when stakes are ambiguous.\n</agency_and_consequences>"
+        },
+        {
+            "system_prompt": false,
+            "marker": false,
+            "role": "system",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "forbid_overrides": false,
+            "enabled": true,
+            "identifier": "mwt-minimal-continuity-knowledge",
+            "name": "MWT Minimal — Continuity and Knowledge",
+            "content": "<continuity_and_knowledge>\nUse physical continuity. Characters, objects, injuries, clothing, doors, light, weather, distances, and positions persist until changed on-screen or by a clear time skip / scene change. No teleporting, vanishing objects, sudden reset of posture, or unexplained arrivals.\n\nUse <mwt_world_state> as the saved continuity checkpoint when present. Extend it; do not contradict it. If recent chat has moved beyond the last world-state update, prefer the newer chat events for elapsed time, positions, and immediate consequences while still preserving the saved world-state facts. Do not freeze time or rewind the scene merely because the injected checkpoint is older than the latest messages.\n\nNPC knowledge is limited to what they witnessed, were told, can infer from evidence, or plausibly know from background. They cannot read {{user}}'s thoughts or know off-screen events without information transfer. Keep secrets secret until revealed through observable action, dialogue, evidence, or MWT injection that explicitly authorizes use.\n</continuity_and_knowledge>"
+        },
+        {
+            "system_prompt": false,
+            "marker": false,
+            "role": "system",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "forbid_overrides": false,
+            "enabled": true,
+            "identifier": "mwt-minimal-prose",
+            "name": "MWT Minimal — Prose",
+            "content": "<prose_rules>\nWrite concise, concrete, sensory prose. Show what can be seen, heard, felt, smelled, tasted, or physically inferred. Avoid meta-commentary, moralizing, summaries of meaning, and repetitive description.\n\nDo not repeat the same sensory detail or character beat from recent messages unless it changed. Use fresh action, dialogue, environmental response, or consequence to move the scene.\n\nNPCs should pursue goals consistent with their persona and current knowledge. They may disagree, hesitate, pressure, retreat, make mistakes, help, harm, or fail as the situation warrants.\n</prose_rules>"
+        },
+        {
+            "system_prompt": false,
+            "marker": false,
+            "role": "system",
+            "injection_position": 1,
+            "injection_depth": 2,
+            "forbid_overrides": false,
+            "enabled": true,
+            "identifier": "mwt-minimal-output-contract",
+            "name": "MWT Minimal — Output Contract",
+            "content": "<output_contract>\nDefault narrative reply order:\n1. Immediate NPC/world/environment response to {{user}}.\n2. Consequences, movement, dialogue, or discovery that logically follows.\n3. Stop on a concrete image, line of dialogue, hazard, question, or choice point.\n\nDo not output status trackers, inner-chatter blocks, work-progress blocks, hidden ledgers, JSON, analysis, or explanations unless {{user}} explicitly asks OOC.\n\nTimestamp: end every narrative reply with exactly one line:\n[In-story time: HH:MM AM/PM, Weekday, Month D, YYYY]\nIf <mwt_world_state> gives a current date/time, use it as the timestamp checkpoint, then advance from there only as much as recent chat and the current response logically advanced. If recent chat clearly moved past the checkpoint, do not snap back to the old time. If no MWT time exists, infer conservatively from chat context.\n</output_contract>"
+        },
+        {
+            "identifier": "worldInfoBefore",
+            "name": "Lorebook Before",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "personaDescription",
+            "name": "Persona Description",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "charDescription",
+            "name": "Char Description",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "charPersonality",
+            "name": "Char Personality",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "scenario",
+            "name": "Scenario",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "worldInfoAfter",
+            "name": "Lorebook After",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "dialogueExamples",
+            "name": "Chat Examples",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "chatHistory",
+            "name": "Chat History",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "system_prompt": false,
+            "marker": false,
+            "role": "system",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "forbid_overrides": false,
+            "enabled": false,
+            "identifier": "mwt-minimal-optional-combat",
+            "name": "MWT Minimal — Optional Higher-Stakes Adventure/Combat",
+            "content": "<higher_stakes_adventure>\nUse this only for adventure, combat, survival, horror, dungeon, or similarly dangerous campaigns.\n\nHostile forces act to win. Physical danger is real. {{user}} can be wounded, trapped, separated, robbed, captured, knocked unconscious, forced to retreat, or killed if the genre and established stakes support it. Track injuries and resource loss across scenes until treated or resolved.\n\nDo not soften every danger into a near miss. Failed rolls, bad footing, poor tools, hostile terrain, enemy tactics, and risky choices can produce direct consequences.\n</higher_stakes_adventure>"
+        }
+    ],
+    "prompt_order": [
+        {
+            "character_id": 100001,
+            "order": [
+                {
+                    "identifier": "main",
+                    "enabled": true
+                },
+                {
+                    "identifier": "mwt-minimal-agency-consequences",
+                    "enabled": true
+                },
+                {
+                    "identifier": "mwt-minimal-continuity-knowledge",
+                    "enabled": true
+                },
+                {
+                    "identifier": "mwt-minimal-prose",
+                    "enabled": true
+                },
+                {
+                    "identifier": "mwt-minimal-output-contract",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoBefore",
+                    "enabled": true
+                },
+                {
+                    "identifier": "personaDescription",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charDescription",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charPersonality",
+                    "enabled": true
+                },
+                {
+                    "identifier": "scenario",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoAfter",
+                    "enabled": true
+                },
+                {
+                    "identifier": "dialogueExamples",
+                    "enabled": false
+                },
+                {
+                    "identifier": "chatHistory",
+                    "enabled": true
+                },
+                {
+                    "identifier": "mwt-minimal-optional-combat",
+                    "enabled": false
+                }
+            ]
+        }
+    ]
+}
