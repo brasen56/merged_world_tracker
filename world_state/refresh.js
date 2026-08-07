@@ -408,12 +408,18 @@ export function scheduleAutoRefresh(reason = 'scheduled') {
     }, 2500);
 }
 
-export function onMessageReceived() {
-    if (!isAutoRefreshEnabled()) return;
-
+export function onMessageReceived({ countMessage = true } = {}) {
     // Track chat length so onMessageDeleted can compute the number of removed
-    // messages during bulk deletes (e.g. "delete above/below").
+    // messages during bulk deletes (e.g. "delete above/below"). This must run
+    // every turn — it is NOT gated by the panic switch (countMessage) or by the
+    // auto-refresh setting — so onMessageDeleted always computes `removed` from
+    // a live length instead of a frozen one. (Hoisted above the early returns
+    // for PANIC-COUNTER-SYMMETRY.)
     state.lastChatLength = getChat()?.length || 0;
+
+    // Counting toward the auto-refresh threshold, and the refresh itself, are
+    // gated: by the per-module auto setting and by the panic flag (countMessage).
+    if (!isAutoRefreshEnabled() || !countMessage) return;
 
     state.autoRefreshCounter++;
     const interval = getAutoRefreshInterval();

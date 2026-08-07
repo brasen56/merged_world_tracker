@@ -73,14 +73,23 @@ function makeStubModules() {
 // ─── PANIC-COUNTER-SYMMETRY: MESSAGE_RECEIVED ────────────────────────────────
 
 describe('PANIC-COUNTER-SYMMETRY — MESSAGE_RECEIVED gating', () => {
-    test('panic ON: no counter module (or Interiority) receives the event', () => {
-        const { modules, called } = makeStubModules();
+    test('panic ON: counter modules are still CALLED with countMessage:false; Interiority is skipped', () => {
+        // Mirror of the MESSAGE_DELETED contract: the panic switch is threaded
+        // as a flag ({ countMessage: false }), not by skipping the call, so
+        // each counter module still runs and can do lastChatLength bookkeeping.
+        // Only Interiority — which only generates, with no bookkeeping to
+        // preserve — is genuinely skipped during a panic window.
+        const { modules, called, calls } = makeStubModules();
         routeMessageReceived(modules, { injectionMasterOff: true }, 5);
-        expect(called('ws.recv')).toBe(0);
-        expect(called('ch.recv')).toBe(0);
-        expect(called('kn.recv')).toBe(0);
-        expect(called('sp.recv')).toBe(0);
+        expect(called('ws.recv')).toBe(1);
+        expect(called('ch.recv')).toBe(1);
+        expect(called('kn.recv')).toBe(1);
+        expect(called('sp.recv')).toBe(1);
         expect(called('in.recv')).toBe(0); // generation gated too
+        expect(calls['ws.recv'][0]).toEqual([{ countMessage: false }]);
+        expect(calls['ch.recv'][0]).toEqual([{ countMessage: false }]);
+        expect(calls['kn.recv'][0]).toEqual([{ countMessage: false }]);
+        expect(calls['sp.recv'][0]).toEqual([{ countMessage: false }]);
     });
 
     test('panic OFF: every enabled module receives the event', () => {
@@ -93,12 +102,21 @@ describe('PANIC-COUNTER-SYMMETRY — MESSAGE_RECEIVED gating', () => {
         expect(called('in.recv')).toBe(1);
     });
 
+    test('panic OFF: counter modules receive countMessage: true', () => {
+        const { modules, calls } = makeStubModules();
+        routeMessageReceived(modules, {}, 5); // injectionMasterOff is falsey
+        expect(calls['ws.recv'][0]).toEqual([{ countMessage: true }]);
+        expect(calls['ch.recv'][0]).toEqual([{ countMessage: true }]);
+        expect(calls['kn.recv'][0]).toEqual([{ countMessage: true }]);
+        expect(calls['sp.recv'][0]).toEqual([{ countMessage: true }]);
+    });
+
     test('Interiority onMessageReceived receives the message index; the others do not', () => {
         const { modules, calls } = makeStubModules();
         routeMessageReceived(modules, {}, 42);
         expect(calls['in.recv'][0]).toEqual([42]);
-        expect(calls['ws.recv'][0]).toEqual([]);
-        expect(calls['sp.recv'][0]).toEqual([]);
+        expect(calls['ws.recv'][0]).toEqual([{ countMessage: true }]);
+        expect(calls['sp.recv'][0]).toEqual([{ countMessage: true }]);
     });
 });
 
@@ -198,7 +216,7 @@ describe('swipe/edit are never gated by the panic switch', () => {
 // core), not spies.
 
 describe('CONSEQUENCE — lastChatLength stays live during a panic window', () => {
-    let chronicleState, chronicleDelete, chronicleGetData, chronicleSetData;
+    let chronicleState, chronicleRecv, chronicleDelete, chronicleGetData, chronicleSetData;
 
     beforeEach(async () => {
         resetCoreStubs();
@@ -206,6 +224,7 @@ describe('CONSEQUENCE — lastChatLength stays live during a panic window', () =
         const chronicle = await import('../chronicle/index.js');
         const chronicleData = await import('../chronicle/data.js');
         chronicleState = chronicleData.state;
+        chronicleRecv = chronicle.onMessageReceived;
         chronicleDelete = chronicle.onMessageDeleted;
         chronicleGetData = chronicleData.getChronicleData;
         chronicleSetData = chronicleData.setChronicleData;
@@ -214,6 +233,23 @@ describe('CONSEQUENCE — lastChatLength stays live during a panic window', () =
     });
 
     const chatOf = (n) => Array.from({ length: n }, () => ({ mes: 'x' }));
+
+    test('a panic-window RECEIVE updates lastChatLength but leaves the counter alone', async () => {
+        // The router now threads { countMessage: false } during a panic window
+        // instead of skipping the call, so lastChatLength bookkeeping stays
+        // live while counting + generation are suppressed. This is the receive
+        // mirror of the delete test below it.
+        setFakeChat(chatOf(100));
+        chronicleState.lastChatLength = 50; // deliberately stale
+        chronicleState.msgSinceSnapshot = 5;
+
+        await chronicleRecv({ countMessage: false });
+
+        // Bookkeeping ran → lastChatLength tracks the live chat (100), and the
+        // counter was NOT incremented (still 5).
+        expect(chronicleState.lastChatLength).toBe(100);
+        expect(chronicleState.msgSinceSnapshot).toBe(5);
+    });
 
     test('a panic-window delete updates lastChatLength but leaves the counter alone', () => {
         // Chat at 100, counter at 5, lastChatLength in sync.

@@ -60,7 +60,21 @@ export function getModuleWireEvents() {
 
 // ─── Event hooks ─────────────────────────────────────────────────────────────
 
-export async function onMessageReceived() {
+export async function onMessageReceived({ countMessage = true } = {}) {
+    // Track chat length so onMessageDeleted can compute the number of removed
+    // messages during bulk deletes (e.g. "delete above/below"). This must run
+    // every turn — it is NOT gated by the panic switch (countMessage) or by the
+    // auto-generate setting — so onMessageDeleted always computes `removed`
+    // from a live length instead of a frozen one. (Hoisted above the early
+    // returns for PANIC-COUNTER-SYMMETRY.)
+    state.lastChatLength = getChat()?.length || 0;
+
+    // Beat aging, due-beat nudges, counting, and generation are all gated by
+    // the panic switch. Before the router started threading countMessage, these
+    // never ran during a panic window anyway (the router bailed before calling
+    // us), so gating them here preserves that behaviour exactly.
+    if (!countMessage) return;
+
     // Age every active arc's current beat. This runs BEFORE the auto-generate
     // early-return on purpose: beat ages drive the "still waiting after N
     // turns" nudge in the injection, and that has to work whether or not
@@ -79,10 +93,6 @@ export async function onMessageReceived() {
     notifyDueBeats();
 
     if (!isAutoEnabled() || !hasValidSettings()) return;
-
-    // Track chat length so onMessageDeleted can compute the number of removed
-    // messages during bulk deletes (e.g. "delete above/below").
-    state.lastChatLength = getChat()?.length || 0;
 
     state.autoCounter++;
     persistAutoCounter();

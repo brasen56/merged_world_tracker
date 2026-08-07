@@ -72,18 +72,23 @@ export function getModuleWireEvents() {
 
 // ─── Event hooks ─────────────────────────────────────────────────────────────
 
-export function onMessageReceived() {
+export function onMessageReceived({ countMessage = true } = {}) {
+    // Track chat length so onMessageDeleted can compute the number of removed
+    // messages during bulk deletes (e.g. "delete above/below"). This must run
+    // every turn — it is NOT gated by the panic switch (countMessage) or by
+    // which auto-triggers are enabled — so onMessageDeleted always computes
+    // `removed` from a live length instead of a frozen one. (Hoisted above the
+    // early returns for PANIC-COUNTER-SYMMETRY.)
+    state.lastChatLength = getChat()?.length || 0;
+
     const settings = getSettings();
     const stateAuto = !!settings.autoTriggerEnabled;
     const npcAuto = !!settings.npcAutoScanEnabled;
     const growthAuto = !!settings.growthAutoCaptureEnabled;
     const relAuto = !!settings.relationshipAutoExtractEnabled;
+    if (!countMessage) return;
     if (!stateAuto && !npcAuto && !growthAuto && !relAuto) return;
     if (!hasValidSettings()) return;
-
-    // Track chat length so onMessageDeleted can compute the number of removed
-    // messages during bulk deletes (e.g. "delete above/below").
-    state.lastChatLength = getChat()?.length || 0;
 
     let doState = false;
     let doNpc = false;

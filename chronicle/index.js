@@ -77,7 +77,7 @@ export function getModuleWireEvents() {
     };
 }
 
-export async function onMessageReceived() {
+export async function onMessageReceived({ countMessage = true } = {}) {
     // CHRONICLE-03: Messages arriving while a snapshot is being generated
     // must still increment the counter and update lastChatLength. The old
     // early-return on isGenerating meant those messages were never counted,
@@ -87,6 +87,14 @@ export async function onMessageReceived() {
     // Only the snapshot trigger itself should be suppressed during generation
     // (otherwise two concurrent generations could fire).
     state.lastChatLength = getChat()?.length || 0;
+
+    // PANIC-COUNTER-SYMMETRY (receive side): counting toward the auto-snapshot
+    // threshold and the snapshot generation are gated by the panic flag
+    // (countMessage). lastChatLength bookkeeping above runs every turn — even
+    // during a panic window — so onMessageDeleted always computes `removed`
+    // from a live length, not a frozen one. Mirrors the MESSAGE_DELETED
+    // adjustCounters gate.
+    if (!countMessage) return;
 
     state.msgSinceSnapshot++;
     persistMsgSinceSnapshot();

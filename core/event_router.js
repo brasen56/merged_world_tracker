@@ -11,14 +11,16 @@
  * Two contract guarantees this module enforces:
  *
  *  1. PANIC-COUNTER-SYMMETRY — when the panic switch (injectionMasterOff) is
- *     on, the counter DECREMENT in MESSAGE_DELETED is suppressed by threading
- *     an `adjustCounters: false` flag into each module's onMessageDeleted (not
- *     by skipping the call). MESSAGE_RECEIVED skips the call entirely (it only
- *     does counting + generation, both of which should stop). MESSAGE_DELETED
- *     does three jobs — counter decrement, lastChatLength bookkeeping, and
- *     integrity work — and only the decrement is gated. This keeps the cadence
- *     symmetric (un-counted messages aren't un-counted on delete) WITHOUT
- *     freezing lastChatLength or skipping provenance/anchor invalidation
+ *     on, the counter INCREMENT in MESSAGE_RECEIVED and the counter DECREMENT
+ *     in MESSAGE_DELETED are BOTH suppressed by threading a flag into each
+ *     module's handler — { countMessage } on receive, { adjustCounters } on
+ *     delete — NOT by skipping the call. Both events always call through, so
+ *     lastChatLength bookkeeping (and provenance / anchor invalidation on
+ *     delete) stay live on both sides. This keeps the cadence symmetric
+ *     (panic-window messages aren't counted on receive, un-counted messages
+ *     aren't un-counted on delete) WITHOUT freezing lastChatLength or skipping
+ *     integrity. Interiority is the exception on receive: it only generates,
+ *     with no bookkeeping to preserve, so it stays gated by the panic switch.
  *
  *  2. INTERIORITY-04 — Interiority cleanup (delete/swipe/edit) is NEVER gated
  *     by the panic switch: rolling back the ledger and dropping orphaned
@@ -48,6 +50,18 @@ export function extractMessageIndex(arg) {
 /**
  * Dispatch a MESSAGE_RECEIVED event to the modules that should react to it.
  *
+ * PANIC-COUNTER-SYMMETRY: the decision is THREADED as a flag (`countMessage`),
+ * not made by skipping the call. Each counter module's onMessageReceived does
+ * at least two jobs — lastChatLength bookkeeping (so onMessageDeleted can
+ * compute the bulk-delete `removed` count from a live length) and counting +
+ * generation. Only the counting + generation is gated by the panic switch;
+ * bookkeeping must stay live, otherwise lastChatLength freezes during a panic
+ * window and the first post-panic delete computes a lumped `removed`. This is
+ * the mirror of routeMessageDeleted's `adjustCounters` flag.
+ *
+ * Interiority is the exception: it only generates on receive (no bookkeeping to
+ * preserve), so it stays gated by the panic switch rather than receiving a flag.
+ *
  * @param {object} modules — { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority }
  * @param {object} settings — the global settings object (read-only here)
  * @param {number|null} messageIndex — resolved index of the received message
@@ -55,14 +69,16 @@ export function extractMessageIndex(arg) {
 export function routeMessageReceived(modules, settings, messageIndex) {
     // Gate per-module: disabled trackers stop scanning / counting toward
     // auto-refresh & auto-snapshot thresholds (no silent background API calls).
-    if (settings.injectionMasterOff) return;
-    if (settings.enableWorldState !== false) modules.WorldState.onMessageReceived();
-    if (settings.enableChronicle  !== false) modules.Chronicle.onMessageReceived();
-    if (settings.enableKnowledge  !== false) modules.Knowledge.onMessageReceived();
-    if (settings.enableStoryPlanner !== false) modules.StoryPlanner.onMessageReceived();
+    const countMessage = !settings.injectionMasterOff;
+    if (settings.enableWorldState !== false) modules.WorldState.onMessageReceived({ countMessage });
+    if (settings.enableChronicle  !== false) modules.Chronicle.onMessageReceived({ countMessage });
+    if (settings.enableKnowledge  !== false) modules.Knowledge.onMessageReceived({ countMessage });
+    if (settings.enableStoryPlanner !== false) modules.StoryPlanner.onMessageReceived({ countMessage });
     // Interiority gets the message index so the generation targets the message
-    // that fired the event, not whatever is last when the queued work runs.
-    if (settings.enableInteriority !== false) modules.Interiority.onMessageReceived(messageIndex);
+    // that fired the event, not whatever is last when the queued work runs. It
+    // owns no counter and no lastChatLength bookkeeping, so it is the one
+    // receive handler that genuinely SHOULD be skipped during a panic window.
+    if (countMessage && settings.enableInteriority !== false) modules.Interiority.onMessageReceived(messageIndex);
 }
 
 /**
