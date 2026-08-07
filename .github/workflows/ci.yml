@@ -1,21 +1,23 @@
 # GitHub Actions CI for the Merged World Tracker extension.
 #
-# Runs on every push to a default branch and on every pull request. Two gates:
+# Runs on every push to main and testing and on every pull request. Two gates:
 #   1. `npm run lint` — the ESLint correctness pass (eslint.config.mjs).
 #   2. `npm test`     — the full Vitest suite.
 #
-# Both must pass for a PR to be mergeable. The matrix runs Node 20 and 22 (the
-# two active LTS lines) so a syntax/runtime regression on either is caught early.
+# Both must pass for a PR to be mergeable. The matrix runs Node 22 and 24 (the
+# current Maintenance LTS and Active LTS lines) so a syntax/runtime regression on
+# either is caught early.
 name: CI
 
 on:
   push:
     branches: [main, testing]
   pull_request:
+    branches: [main, testing]
 
 # Cancel in-progress runs for the same ref when a new commit is pushed.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
+        node-version: [22, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
