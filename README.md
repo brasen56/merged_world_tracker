@@ -2,8 +2,6 @@
 
 **A unified SillyTavern extension combining World State tracking, Session Chronicle, NPC Knowledge management, Story Planning, and NPC Interiority into a single modular system.**
 
-Credits/Inspirations:
-Id like to take a moment and thank dptgreg for inpsiration and use of his Freaky Frankenstein presets. I have modifed his to incorporate MWT. I would also like to thank KazumaONIISAN for the inspiration behind the Story Planner, though theirs is much more advanced than mine at this time!
 ---
 
 ## 📋 Table of Contents
@@ -592,6 +590,9 @@ If you open a Knowledge Tracker or State Tracker lorebook in the World Info edit
 
 **If you share or export a book.** The store travels with the book by design — that's what keeps a shared book working out of the box. What it carries is the same kind of chat-derived information as the visible NPC entries (names, keywords, relationship summaries) — never credentials or chat logs. If you'd rather share a clean book, just delete the `[MWT:store]` entry from the exported copy; the recipient's MWT will simply rebuild a fresh registry.
 
+
+**Credits/Inspirations:**
+Id like to take a moment and thank dptgreg for inspiration and use of his Freaky Frankenstein presets. I have modified his to incorporate MWT. I would also like to thank KazumaONIISAN for the inspiration behind the Story Planner, though theirs is much more advanced than mine at this time!
 ---
 
 ## License
