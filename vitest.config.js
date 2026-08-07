@@ -34,6 +34,13 @@ export default defineConfig({
             // '../core/index.js') match.
             './core/index.js': fileURLToPath(new URL('./test/stubs/core.js', import.meta.url)),
             '../core/index.js': fileURLToPath(new URL('./test/stubs/core.js', import.meta.url)),
+            // SillyTavern's `world-info.js` host module. lorebook.js (top-level
+            // await) and store.js (lazy) import it as '../../../../world-info.js'.
+            // It doesn't exist under Node/Vitest, so without this alias the
+            // import throws and every worker logs a console.warn on startup.
+            // The stub satisfies the import; tests that exercise real behavior
+            // inject their own state.wiScript in beforeEach.
+            '../../../../world-info.js': fileURLToPath(new URL('./test/stubs/world-info.js', import.meta.url)),
         },
     },
 });

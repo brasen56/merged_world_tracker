@@ -94,8 +94,11 @@ export const state = {
     _lastKtStatusMsg: '',
     _lastKtStatusLevel: '',
 
-    // ── World-info script reference (loaded in lorebook.js) ──
-    wiScript: null,
+    /** ST's world-info module (loaded as a side-effect in lorebook.js).
+     *  Tri-state: `undefined` = not yet attempted; an object = loaded;
+     *  `null` = attempted and failed. store.js's getWiScript() uses this
+     *  to decide whether to attempt its own fallback import. */
+    wiScript: undefined,
 };
 
 // ─── Content helpers (used by settings.js and render.js) ─────────────────────

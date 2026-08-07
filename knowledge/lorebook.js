@@ -32,6 +32,7 @@ try {
     state.wiScript = await import('../../../../world-info.js');
     console.log('[MWT:Knowledge] world-info.js loaded.');
 } catch (err) {
+    state.wiScript = null; // explicit "tried and failed" — see store.js getWiScript tri-state
     console.warn('[MWT:Knowledge] Could not import world-info.js:', err?.message || err);
 }
 

@@ -103,16 +103,32 @@ function slot(bookName) {
 }
 
 /**
- * Resolve ST's world-info module. `lorebook.js` imports it as a side-effect and
- * parks it on `state.wiScript`; if this module is used before that happens we
- * import it ourselves rather than failing.
+ * Resolve ST's world-info module.
+ *
+ * state.wiScript is a TRI-STATE:
+ *  - `undefined` — nobody has tried to load world-info.js yet.
+ *  - an object   — lorebook.js's top-level import (or our fallback below)
+ *                  succeeded; this is the live module namespace.
+ *  - `null`      — an import was ATTEMPTED and FAILED.
+ *
+ * lorebook.js loads world-info.js as a side-effect (top-level await) and parks
+ * the result on state.wiScript. But store.js cannot import lorebook.js —
+ * lorebook.js already imports store.js, so the reverse would be a circular
+ * dependency. A future caller that imports store.js (plus registry.js / scope.js,
+ * neither of which pull in lorebook.js) without going through the knowledge
+ * barrel would otherwise find state.wiScript === undefined and silently get null
+ * from every hydration. The fallback below keeps store.js self-sufficient.
+ *
+ * Tests that want to simulate "world-info unavailable" set state.wiScript = null
+ * (tried-and-failed), which this function returns directly without retrying.
  */
 async function getWiScript() {
-    if (state.wiScript) return state.wiScript;
+    if (state.wiScript !== undefined) return state.wiScript;
     try {
         state.wiScript = await import('../../../../world-info.js');
         return state.wiScript;
     } catch (err) {
+        state.wiScript = null;
         console.warn('[MWT:Knowledge] store: world-info.js unavailable:', err?.message || err);
         return null;
     }
@@ -173,7 +189,11 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
     const wi$ = await getWiScript();
     if (!wi$) {
         // No world-info module: stay un-hydrated so write paths refuse to run
-        // rather than creating duplicates against an empty registry.
+        // rather than creating duplicates against an empty registry. This is
+        // reachable if ST's world-info.js is genuinely absent (both the
+        // top-level import in lorebook.js and our own fallback failed) — log
+        // it so the failure is never silent.
+        console.warn(`[MWT:Knowledge] store: world-info.js not loaded — "${bookName}" stays un-hydrated (writes blocked).`);
         return s.data;
     }
 
