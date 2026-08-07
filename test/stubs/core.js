@@ -47,7 +47,7 @@ let _extSettings = {};
 let _pickTextFileImpl = null;
 let _apiImpl = null;
 let _promptCalls = [];
-let _notifications = [];
+const _notifications = [];
 let _statusCalls = [];
 
 /**

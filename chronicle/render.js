@@ -248,7 +248,7 @@ function showInjectionSelector() {
     });
     el.querySelector('#sc-apply-injection')?.addEventListener('click', () => {
         const mode = el.querySelector('input[name="sc-inject-mode"]:checked')?.value || 'recent';
-        let newData = { injectMode: mode };
+        const newData = { injectMode: mode };
         if (mode === 'recent') { newData.injectCount = parseInt(el.querySelector('#sc-inject-count')?.value) || 2; newData.selectedForInjection = []; }
         else if (mode === 'selected') { const sel = []; el.querySelectorAll('.sc-inject-select-cb:checked').forEach(cb => sel.push(cb.dataset.id)); newData.selectedForInjection = sel; }
         else if (mode === 'range') { newData.injectFromDate = el.querySelector('#sc-inject-from')?.value || ''; newData.injectToDate = el.querySelector('#sc-inject-to')?.value || ''; }

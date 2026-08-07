@@ -91,6 +91,7 @@ export default [
             'no-unsafe-negation': 'error',
             'no-cond-assign': 'error',
             'no-shadow': 'error',
+            'prefer-const': 'error',
 
             // ── Import correctness ─────────────────────────────────────────
             // Flags a named import whose name is not actually exported by the

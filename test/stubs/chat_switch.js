@@ -38,7 +38,7 @@ import { captureScope, assertSameScope, bumpEpoch, _resetEpoch, getEpoch } from 
 export function createChatSwitchHarness() {
     let _chatId = 'test-chat-default';
     let _characterId = 0;
-    let _characters = [{ name: 'TestChar', avatar: 'test.png' }];
+    const _characters = [{ name: 'TestChar', avatar: 'test.png' }];
     let _writeCount = 0;
 
     /** All writes recorded by `recordWrite()`, in order. */

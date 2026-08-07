@@ -1673,9 +1673,9 @@ function computeGraphLayout(edges) {
         for (let a = 0; a < posArr.length; a++) {
             for (let b = 0; b < posArr.length; b++) {
                 if (a === b) continue;
-                let dx = posArr[a].x - posArr[b].x;
-                let dy = posArr[a].y - posArr[b].y;
-                let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+                const dx = posArr[a].x - posArr[b].x;
+                const dy = posArr[a].y - posArr[b].y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
                 const force = (k * k) / dist;
                 disp[a].x += (dx / dist) * force;
                 disp[a].y += (dy / dist) * force;
@@ -1687,9 +1687,9 @@ function computeGraphLayout(edges) {
             const aIdx = nodeIndex.get(p.a);
             const bIdx = nodeIndex.get(p.b);
             if (aIdx == null || bIdx == null) continue;
-            let dx = posArr[aIdx].x - posArr[bIdx].x;
-            let dy = posArr[aIdx].y - posArr[bIdx].y;
-            let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            const dx = posArr[aIdx].x - posArr[bIdx].x;
+            const dy = posArr[aIdx].y - posArr[bIdx].y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
             const force = (dist * dist) / k;
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
@@ -1702,8 +1702,8 @@ function computeGraphLayout(edges) {
         // Apply displacement with cooling and frame clamping
         const maxDisp = Math.max(4, 40 * t);
         for (let a = 0; a < posArr.length; a++) {
-            let dx = disp[a].x, dy = disp[a].y;
-            let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            const dx = disp[a].x, dy = disp[a].y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
             const limited = Math.min(dist, maxDisp);
             posArr[a].x += (dx / dist) * limited;
             posArr[a].y += (dy / dist) * limited;
@@ -1877,7 +1877,7 @@ function renderRelationshipGraph() {
 }
 
 function wireRelationshipGraphInteractions(svg, data) {
-    let viewBox = svg.viewBox.baseVal;
+    const viewBox = svg.viewBox.baseVal;
     // Clone to make mutable if baseVal is read-only (some engines)
     const vbState = { x: viewBox.x, y: viewBox.y, w: viewBox.w, h: viewBox.h };
 

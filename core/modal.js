@@ -20,7 +20,7 @@ import { escapeHtml } from './diff.js';
  * @returns {HTMLElement}
  */
 export function createModal({ id, title, content, cssClass = '', onClose = null }) {
-    let existing = document.getElementById(id);
+    const existing = document.getElementById(id);
     if (existing) {
         // Clean up escape key handler before removing to prevent memory leaks
         if (existing._cleanupKeyHandler) existing._cleanupKeyHandler();

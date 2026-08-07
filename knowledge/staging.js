@@ -323,8 +323,8 @@ export async function importFromLorebooks() {
         return;
     }
 
-    let imported = { npcs: 0, states: 0 };
-    let skipped  = { npcs: 0, states: 0 };
+    const imported = { npcs: 0, states: 0 };
+    const skipped  = { npcs: 0, states: 0 };
     const errors = [];
 
     // ── Knowledge Tracker ───────────────────────────────────────────────

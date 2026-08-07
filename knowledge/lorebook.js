@@ -830,7 +830,7 @@ export async function runStateUpdate(name, uid) {
             ? [`<entity>${name}</entity>`, '', '<current_entry>', loaded.content, '</current_entry>', '', '<recent_messages>', recentMessages, '</recent_messages>', '', 'Output the updated entry.'].join('\n')
             : [`<entity>${name}</entity>`, '', '<current_entry>', loaded.content, '</current_entry>', '', '<recent_messages>', recentMessages, '</recent_messages>', '', `<previous_attempt_rejected>Reason: ${lastError}</previous_attempt_rejected>`, '', 'Try again. Output ONLY the updated entry.'].join('\n');
         const raw = await ktFetchFromApi(STATE_UPDATE_PROMPT, userContent);
-        let cleaned = normaliseOutput(raw);
+        const cleaned = normaliseOutput(raw);
         const validation = validateStateOutput(loaded.content, cleaned);
         if (validation.ok) return { currentContent: loaded.content, merged: cleaned, unchanged: cleaned.trim() === loaded.content.trim(), attempts: attempt };
         lastError = validation.reason;
