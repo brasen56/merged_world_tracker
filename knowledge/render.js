@@ -1135,12 +1135,12 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             container.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } catch (err) {
             flash(`Psychoanalyze failed: ${err.message}`, 'error');
-            const contentDiv = modal.querySelector('.kt-growth-psychoanalyze-content');
-            if (contentDiv) {
-                contentDiv.innerHTML = `<div class="kt-growth-error">❌ ${escapeHtml(err.message)}</div>`;
+            const innerContentDiv = modal.querySelector('.kt-growth-psychoanalyze-content');
+            if (innerContentDiv) {
+                innerContentDiv.innerHTML = `<div class="kt-growth-error">❌ ${escapeHtml(err.message)}</div>`;
             }
-            const container = modal.querySelector('#kt-growth-psychoanalyze-container');
-            if (container) container.style.display = '';
+            const panelContainer = modal.querySelector('#kt-growth-psychoanalyze-container');
+            if (panelContainer) panelContainer.style.display = '';
         } finally {
             btn.disabled = false; btn.textContent = '🧠 Psychoanalyze';
         }

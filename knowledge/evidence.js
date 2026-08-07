@@ -465,15 +465,15 @@ export function applyConsolidation(name, consolidated, sourceIds) {
     const consumedRawIds = new Set();
     for (const con of consolidated) {
         if (!con || !con.claim) continue;
-        const sourceIds = (Array.isArray(con.sources) ? con.sources : [])
+        const resolvedSourceIds = (Array.isArray(con.sources) ? con.sources : [])
             .map(n => numericToId.get(n))
             .filter(id => id != null);
-        if (sourceIds.length === 0) continue; // a consolidated claim with no valid sources is inadmissible
+        if (resolvedSourceIds.length === 0) continue; // a consolidated claim with no valid sources is inadmissible
         // KNOWLEDGE-08: Verify every source still exists in file.raw before
         // committing. A concurrent delete during the API round-trip would
         // leave dangling provenance — a consolidated claim pointing at a
         // source that no longer exists anywhere in the evidence file.
-        const validSourceIds = sourceIds.filter(id => file.raw.some(o => o.id === id));
+        const validSourceIds = resolvedSourceIds.filter(id => file.raw.some(o => o.id === id));
         if (validSourceIds.length === 0) continue; // all sources deleted during the call — inadmissible
         validSourceIds.forEach(id => consumedRawIds.add(id));
 

@@ -567,19 +567,19 @@ export async function scanAndAccept() {
         const keywords = item.keywords || [item.name];
         // Minimal el stub for handleAccept
         const { writeToLorebook, writeStateTracker } = await import('./lorebook.js');
-        const { getRegistry, saveRegistry } = await import('./registry.js');
+        const { localRegistry, saveRegistry } = await import('./registry.js');
         if (item.type === 'state') {
             await writeStateTracker(item.uid, item.name, merged);
         } else {
             const result = await writeToLorebook(item.name, merged, keywords, item.uid);
             if (result.success) {
-                getRegistry()[item.name] = {
+                localRegistry()[item.name] = {
                     uid: result.uid,
                     type: item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
                     keywords,
                     lastUpdated: Date.now(),
                 };
-                saveRegistry(getRegistry());
+                saveRegistry(localRegistry());
             }
         }
     }
