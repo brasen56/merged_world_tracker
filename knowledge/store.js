@@ -89,6 +89,81 @@ const FLUSH_DEBOUNCE_MS = 1200;
  */
 const _cache = new Map();
 
+// ─── Serialization lock ─────────────────────────────────────────────────────
+//
+// A restore commit (capture → flush → metadata persist → rollback) and a chat-
+// change cache reset both touch the same dirty slots. JS is single-threaded,
+// but an `await` in the middle of one hands the event loop to the other:
+// resetStoreCache() → flushAll() can flush the restore's half-written store,
+// or _cache.clear() can run between a restore's flush and its rollback, leaving
+// the rollback a no-op and the cancelled restore persisted on disk
+// This promise chain makes those operations strictly
+// sequential. `flushBook` stays a non-locking leaf so a held lock does not
+// re-enter; callers that need atomicity across several flushes (flushAll,
+// resetStoreCache, the restore commit) acquire the lock around their whole
+// critical section.
+let _storeChain = Promise.resolve();
+
+// While a restore transaction owns the store, background
+// writeField() calls are deferred so they cannot join the restore's flush
+// (persisted as if they were part of it) or be erased by its rollback. The
+// restore's own writes go through _writeFieldDirect, which bypasses this buffer.
+// Buffered writes are applied once the lock's critical section ends
+// (withStoreLock's finally), so they flush on their own afterwards.
+let _storeTransaction = false;
+const _deferredWrites = [];
+
+/**
+ * Mark that the current lock holder is a restore transaction. Background
+ * writeField() calls are then buffered until the transaction settles. Called by
+ * the restore path (backup/index.js flushKnowledgeStore).
+ */
+export function beginStoreTransaction() {
+    _storeTransaction = true;
+}
+
+/** Apply writes buffered while a restore transaction owned the store. */
+function applyDeferredWrites() {
+    if (_deferredWrites.length === 0) return;
+    const pending = _deferredWrites.splice(0);
+    for (const { bookName, field, value } of pending) {
+        const s = slot(bookName);
+        s.data[field] = value;
+        s.dirty = true;
+        scheduleFlush(bookName);
+    }
+}
+
+/**
+ * Run `fn` once all prior lock holders have settled. `fn` may be async; its
+ * returned promise is what the caller awaits. Rejections never break the chain
+ * so one failed operation cannot wedge every later one.
+ *
+ * When the critical section ends, any restore transaction is closed and
+ * background writes buffered during it are applied.
+ *
+ * @template T
+ * @param {() => (T | Promise<T>)} fn
+ * @returns {Promise<T>}
+ */
+function _withTransactionFinally(fn) {
+    return async () => {
+        try {
+            return await fn();
+        } finally {
+            _storeTransaction = false;
+            applyDeferredWrites();
+        }
+    };
+}
+
+export function withStoreLock(fn) {
+    const wrapped = _withTransactionFinally(fn);
+    const run = _storeChain.then(wrapped, wrapped);
+    _storeChain = run.then(() => undefined, () => undefined);
+    return run;
+}
+
 function blankStore() {
     return { version: STORE_VERSION };
 }
@@ -321,12 +396,68 @@ export function readField(bookName, field, fallback = {}) {
 /**
  * Write a field into a book's store and schedule a flush.
  * The in-memory value updates synchronously so sync callers see it immediately.
+ *
+ * While a restore transaction owns the store (beginStoreTransaction), this is
+ * deferred: the write is buffered and applied once the transaction settles, so
+ * it cannot join the restore's flush or be erased by its rollback
+ * The restore's own writes use _writeFieldDirect.
  */
 export function writeField(bookName, field, value) {
+    if (_storeTransaction) {
+        _deferredWrites.push({ bookName, field, value });
+        return;
+    }
     const s = slot(bookName);
     s.data[field] = value;
     s.dirty = true;
     scheduleFlush(bookName);
+}
+
+/**
+ * Write a field bypassing the transaction buffer. Used by the restore path so
+ * its own writes apply to the live cache immediately while background writes are
+ * deferred. @internal
+ */
+export function _writeFieldDirect(bookName, field, value) {
+    const s = slot(bookName);
+    s.data[field] = value;
+    s.dirty = true;
+    scheduleFlush(bookName);
+}
+
+/**
+ * Capture complete cache slots before a multi-book operation. The restore path
+ * uses this to ensure a failed transaction cannot be retried later by flushAll
+ * with data it already reported as not committed.
+ */
+export function captureStoreState(bookNames) {
+    const snapshot = new Map();
+    for (const bookName of bookNames) {
+        const s = _cache.get(bookName);
+        if (!s) continue;
+        snapshot.set(bookName, {
+            data: JSON.parse(JSON.stringify(s.data)),
+            dirty: s.dirty,
+        });
+    }
+    return snapshot;
+}
+
+/**
+ * Restore slots captured by captureStoreState(), including their dirty state.
+ * `flushBooks` marks selected restored slots dirty so callers can durably undo
+ * a preceding successful write without leaking the failed transaction later.
+ */
+export function restoreStoreState(snapshot, { flushBooks = [] } = {}) {
+    const toFlush = new Set(flushBooks);
+    for (const [bookName, saved] of snapshot || []) {
+        const s = _cache.get(bookName);
+        if (!s) continue;
+        if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+        s.data = JSON.parse(JSON.stringify(saved.data));
+        s.dirty = saved.dirty || toFlush.has(bookName);
+        if (s.dirty) scheduleFlush(bookName);
+    }
 }
 
 // ─── Flushing ───────────────────────────────────────────────────────────────
@@ -336,7 +467,10 @@ function scheduleFlush(bookName) {
     if (s.timer) clearTimeout(s.timer);
     s.timer = setTimeout(() => {
         s.timer = null;
-        flushBook(bookName).catch(err => {
+        // Serialize the debounced flush with restore transactions and cache
+        // resets an unguarded flush could interleave with
+        // a restore's flush/rollback and re-persist cancelled data.
+        withStoreLock(() => flushBook(bookName)).catch(err => {
             console.warn(`[MWT:Knowledge] store: flush of "${bookName}" failed:`, err?.message || err);
         });
     }, FLUSH_DEBOUNCE_MS);
@@ -539,9 +673,12 @@ export async function flushBook(bookName) {
 }
 
 /** Flush every dirty book. Await this before anything that could lose state. */
-export async function flushAll() {
-    const names = [..._cache.keys()].filter(name => _cache.get(name)?.dirty);
-    for (const name of names) await flushBook(name);
+export function flushAll() {
+    // Serialize with restore transactions and cache resets.
+    return withStoreLock(async () => {
+        const names = [..._cache.keys()].filter(name => _cache.get(name)?.dirty);
+        for (const name of names) await flushBook(name);
+    });
 }
 
 /**
@@ -551,12 +688,20 @@ export async function flushAll() {
  * stale cache would serve one book's registry for another. Flushes pending
  * writes first so nothing is lost on the way out.
  */
-export async function resetStoreCache() {
-    try { await flushAll(); } catch { /* best effort — still clear below */ }
-    for (const s of _cache.values()) {
-        if (s.timer) clearTimeout(s.timer);
-    }
-    _cache.clear();
+export function resetStoreCache() {
+    // Serialize with restore transactions: a reset that
+    // interleaves a restore's flush/rollback can re-persist cancelled data or
+    // clear the cache mid-rollback.
+    return withStoreLock(async () => {
+        try {
+            const names = [..._cache.keys()].filter(name => _cache.get(name)?.dirty);
+            for (const name of names) await flushBook(name);
+        } catch { /* best effort — still clear below */ }
+        for (const s of _cache.values()) {
+            if (s.timer) clearTimeout(s.timer);
+        }
+        _cache.clear();
+    });
 }
 
 // ─── Orchestration ──────────────────────────────────────────────────────────

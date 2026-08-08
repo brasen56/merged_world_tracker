@@ -287,7 +287,7 @@ function validateInteriority(data) {
     return { data: accepted, ...result };
 }
 
-function validateNameMap(map, label) {
+function validateNameMap(map, label, check) {
     const result = summary();
     if (!isObject(map)) {
         skip(result, label, `${label} must be an object map.`);
@@ -295,10 +295,38 @@ function validateNameMap(map, label) {
     }
     const accepted = {};
     for (const [name, value] of Object.entries(map)) {
-        if (!nonEmptyString(name) || !isObject(value)) skip(result, name, `${label} entries must be objects.`);
+        if (!nonEmptyString(name)) {
+            skip(result, name, `${label} keys must be non-empty strings.`);
+            continue;
+        }
+        // When no record-level check is supplied, fall back to the original
+        // shape guard so non-map callers keep their permissive behaviour.
+        const reason = check ? check(value) : (isObject(value) ? null : `${label} entry must be an object.`);
+        if (reason) skip(result, name, reason);
         else { accepted[name] = value; result.added++; }
     }
     return { data: accepted, ...result };
+}
+
+// A registry/state-registry record's load-bearing field is `uid`. A null uid is
+// an intentional orphan (the destination entry was deleted but the name is
+// retained); a negative or fractional uid is never valid live state. Destination
+// resolution later decides whether a record can actually be restored.
+function validateRegistryRecord(record) {
+    if (!isObject(record)) return 'Registry entry must be an object.';
+    if (record.uid !== null && (!Number.isInteger(record.uid) || record.uid < 0)) {
+        return 'Registry entry uid must be null or a non-negative integer.';
+    }
+    return null;
+}
+
+// Relationship edges are rendered by their `target` and `type`; an edge missing
+// either cannot be displayed or reconciled, so it is quarantined.
+function validateRelationshipEdge(edge) {
+    if (!isObject(edge)) return 'Relationship edge must be an object.';
+    if (!nonEmptyString(edge.target)) return 'Relationship edge target must be a non-empty string.';
+    if (!nonEmptyString(edge.type)) return 'Relationship edge type must be a non-empty string.';
+    return null;
 }
 
 function validateKnowledgeStore(data) {
@@ -310,7 +338,7 @@ function validateKnowledgeStore(data) {
     const accepted = {};
     for (const key of ['registry', 'stateRegistry']) {
         if (data[key] === undefined) continue;
-        const checked = validateNameMap(data[key], key);
+        const checked = validateNameMap(data[key], key, validateRegistryRecord);
         accepted[key] = checked.data;
         result.added += checked.added;
         result.skipped.push(...checked.skipped);
@@ -324,8 +352,9 @@ function validateKnowledgeStore(data) {
                 else {
                     accepted.relationships[name] = [];
                     for (const edge of edges) {
-                        if (!isObject(edge)) {
-                            skip(result, name, 'Relationship edge must be an object.');
+                        const reason = validateRelationshipEdge(edge);
+                        if (reason) {
+                            skip(result, name, reason);
                         } else {
                             accepted.relationships[name].push(edge);
                             result.added++;
@@ -334,6 +363,14 @@ function validateKnowledgeStore(data) {
                 }
             }
         }
+    }
+    for (const [key, label] of [['stances', 'Stance'], ['stanceSources', 'Stance source']]) {
+        if (data[key] === undefined) continue;
+        const checked = validateNameMap(data[key], label, value =>
+            typeof value === 'string' ? null : `${label} value must be a string.`);
+        accepted[key] = checked.data;
+        result.added += checked.added;
+        result.skipped.push(...checked.skipped);
     }
     return { data: accepted, ...result };
 }
@@ -373,6 +410,10 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
         result.errors.push('Backup formatVersion must be an integer.');
         return result;
     }
+    if (meta.formatVersion < 1) {
+        result.errors.push(`Backup formatVersion ${meta.formatVersion} is not a positive integer; the earliest supported version is 1.`);
+        return result;
+    }
     if (meta.formatVersion > maxFormatVersion) {
         result.errors.push(`Backup formatVersion ${meta.formatVersion} is newer than the supported version ${maxFormatVersion}.`);
         return result;
@@ -394,6 +435,10 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
         const maxVersion = name === 'knowledgeStore' ? KNOWLEDGE_STORE_VERSION : SECTION_SCHEMA_VERSION;
         if (!Number.isInteger(version)) {
             result.errors.push(`Section "${name}" has no valid version field.`);
+            continue;
+        }
+        if (version < 1) {
+            result.errors.push(`Section "${name}" version ${version} is not a positive integer; the earliest supported version is 1.`);
             continue;
         }
         if (version > maxVersion) {

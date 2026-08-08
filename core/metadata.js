@@ -31,15 +31,29 @@ export function persistChatMeta() {
  *
  * @returns {Promise<void>}
  */
-export async function persistChatMetaNow() {
+export async function persistChatMetaNow({ strict = false } = {}) {
     const ctx = getContextSafe();
-    try {
-        if (typeof ctx?.saveMetadata === 'function') {
+    if (typeof ctx?.saveMetadata === 'function') {
+        try {
             await ctx.saveMetadata();
             return;
+        } catch (err) {
+            // A transactional caller (e.g. a backup restore) MUST learn that the
+            // durable write failed so it can roll back. High-frequency pointer
+            // writers keep the resilient fallback by default.
+            if (strict) throw err;
+            console.warn('[MWT] Immediate metadata save failed — falling back to debounced save.', err);
         }
-    } catch (err) {
-        console.warn('[MWT] Immediate metadata save failed — falling back to debounced save.', err);
+    } else if (strict) {
+        // The durable API is unavailable. A strict caller's correctness depends on
+        // the write being awaited before it proceeds — the whole store-before-
+        // metadata ordering in a backup restore exists precisely to guarantee
+        // this. A missing `saveMetadata` does not throw, so without this guard the
+        // call falls through to the debounced save and returns normally, leaving a
+        // strict caller to believe the write is durable when it is only queued —
+        // and `restoreBackup` to report `committed: true` on a restore a reload
+        // could still lose. Refuse rather than silently downgrading the guarantee.
+        throw new Error('Strict metadata persistence is not available: the host does not expose an immediate saveMetadata API.');
     }
     persistChatMeta();
 }

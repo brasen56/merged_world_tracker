@@ -22,7 +22,7 @@ import {
     getRegistry,
     getStateRegistry,
 } from '../knowledge/registry.js';
-import { getRelationships } from '../knowledge/relationships.js';
+import { getRelationships, getStances, getStanceSources } from '../knowledge/relationships.js';
 import {
     getLorebookName,
     getStateLorebookName,
@@ -115,6 +115,8 @@ export async function collectBackup({
             version: STORE_VERSION,
             registry: getRegistry(),
             relationships: getRelationships(),
+            stances: getStances(),
+            stanceSources: getStanceSources(),
             stateRegistry: getStateRegistry(),
         };
     }

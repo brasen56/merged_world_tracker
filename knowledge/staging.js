@@ -27,6 +27,7 @@ import {
 } from './lorebook.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { isStoreEntry } from './store.js';
+import { reconcileImportedUid } from './reconcile.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
 
@@ -241,23 +242,13 @@ export async function importNpcs() {
             // at a different NPC's entry — drop it so the correct content is
             // written as a new entry instead.
             if (incomingUid != null && state.wiScript) {
-                let verified = false;
-                try {
-                    const existing = await loadEntryContent(incomingUid);
-                    if (existing !== null) {
-                        if (entry.content && existing.trim() !== entry.content.trim()) {
-                            console.warn(
-                                `[MWT:Knowledge] Import uid ${incomingUid} for "${name}" exists in local lorebook ` +
-                                `but content does not match the export — dropping uid to avoid identity corruption.`
-                            );
-                            verified = false;
-                        } else {
-                            verified = true;
-                        }
-                    }
-                } catch { /* assume not found */ }
-                if (!verified) {
-                    incomingUid = null;
+                const originalUid = incomingUid;
+                incomingUid = await reconcileImportedUid(incomingUid, entry.content, loadEntryContent);
+                if (incomingUid === null) {
+                    console.warn(
+                        `[MWT:Knowledge] Import uid ${originalUid} for "${name}" could not be verified in the local ` +
+                        'lorebook — dropping it to avoid identity corruption.'
+                    );
                 }
             }
 

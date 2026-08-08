@@ -24,7 +24,7 @@ import * as Chronicle from './chronicle/index.js';
 import * as Knowledge from './knowledge/index.js';
 import * as StoryPlanner from './story_planner/index.js';
 import * as Interiority from './interiority/index.js';
-import { exportBackup, previewRestore, restoreBackup, undoLastRestore } from './backup/index.js';
+import { exportBackup, previewRestore, restoreBackup, undoLastRestore, fingerprintPreview } from './backup/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -1078,13 +1078,15 @@ try {
 }
 
 // Phase 2b binds preview and commit to the live metadata/identity/message UUIDs.
-// Lorebook-store writes remain deliberately unavailable until Phase 3.
+// Phase 3 adds the lorebook-store section; hardening adds a
+// preview fingerprint (confirm→commit reconfirmation) and the identity policy.
 window.MWT = window.MWT || {};
 window.MWT.backup = {
     export: exportBackup,
     preview: previewRestore,
     restore: restoreBackup,
     undo: undoLastRestore,
+    fingerprintPreview,
 };
 
 console.log('[MWT] Merged World Tracker extension loaded.');

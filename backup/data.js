@@ -84,12 +84,18 @@ export function buildBackupEnvelope({
         }
     }
     if (knowledgeStore !== undefined) {
-        const storeVersion = Number.isInteger(knowledgeStore?.version)
-            ? knowledgeStore.version
-            : KNOWLEDGE_STORE_VERSION;
+        const storeInput = knowledgeStore && typeof knowledgeStore === 'object' ? knowledgeStore : {};
+        const storeVersion = Number.isInteger(storeInput.version) ? storeInput.version : KNOWLEDGE_STORE_VERSION;
+        // The store version is carried by the section wrapper (storeVersion) only.
+        // Carrying it a second time inside `data` left an unchanged exact Knowledge
+        // restore reporting "replaced": current-state comparison retained the inner
+        // version while validation dropped it, so two equal stores compared unequal
+        // The wrapper is now the sole backup version field,
+        // as the design document specifies.
+        const { version: _omittedVersion, ...storeData } = storeInput;
         sections.knowledgeStore = {
             storeVersion,
-            data: cloneBackupData(knowledgeStore && typeof knowledgeStore === 'object' ? knowledgeStore : {}),
+            data: cloneBackupData(storeData),
         };
     }
 
@@ -109,4 +115,29 @@ export function buildBackupEnvelope({
 
 export function getBackupSection(envelope, name) {
     return envelope?.sections?.[name] || null;
+}
+
+/**
+ * Order-insensitive deep equality for backup-shaped data.
+ *
+ * `JSON.stringify` is key-order sensitive, so two semantically identical
+ * records whose properties were serialised in a different order (e.g. an entry
+ * re-imported through a different writer) compare unequal. Restore summaries
+ * built on such a comparison then report "replaced" for unchanged data.
+ * This walks the structure instead.
+ */
+export function backupDataEqual(a, b) {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return a === b;
+    const aArr = Array.isArray(a);
+    const bArr = Array.isArray(b);
+    if (aArr || bArr) {
+        if (!aArr || !bArr) return false;
+        if (a.length !== b.length) return false;
+        return a.every((item, i) => backupDataEqual(item, b[i]));
+    }
+    const ak = Object.keys(a);
+    const bk = Object.keys(b);
+    if (ak.length !== bk.length) return false;
+    return ak.every(k => Object.prototype.hasOwnProperty.call(b, k) && backupDataEqual(a[k], b[k]));
 }

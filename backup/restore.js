@@ -183,6 +183,26 @@ function mergeRelationshipMap(current, incoming) {
 }
 
 /**
+ * Merge a per-NPC scalar map (stances / stanceSources). Current names win — a
+ * hand-set stance or its provenance lock must survive an import — and new
+ * names are added. Same current-wins rule as the registry name reconciler.
+ */
+function mergeStanceMap(current, incoming) {
+    const summary = emptySummary();
+    const result = cloneBackupData(objectOrEmpty(current));
+    for (const [name, value] of Object.entries(objectOrEmpty(incoming))) {
+        if (Object.prototype.hasOwnProperty.call(result, name)) {
+            summary.conflicts++;
+            addSkip(summary, name, 'Stance already exists; current value was preserved.');
+        } else {
+            result[name] = cloneBackupData(value);
+            summary.added++;
+        }
+    }
+    return { data: result, summary };
+}
+
+/**
  * Shared name-keyed reconciler seam for the lorebook registry and state
  * registry. The current name wins, which preserves local pointers and user
  * edits. Phase 3 can supply `resolveUid` to re-resolve an imported name in the
@@ -234,7 +254,34 @@ function mergeKnowledgeStore(current, incoming, options = {}) {
         summary.conflicts += merged.summary.conflicts;
         summary.skipped.push(...merged.summary.skipped);
     }
+    for (const key of ['stances', 'stanceSources']) {
+        if (incoming?.[key] === undefined) continue;
+        const merged = mergeStanceMap(current?.[key], incoming[key]);
+        result[key] = merged.data;
+        summary.added += merged.summary.added;
+        summary.conflicts += merged.summary.conflicts;
+        summary.skipped.push(...merged.summary.skipped);
+    }
     return { data: result, summary };
+}
+
+/**
+ * Exact (non-merge) knowledge-store plan for session-local undo. The incoming
+ * snapshot REPLACES the current store — current-only records are dropped, which
+ * is how undo removes records the original restore added. UIDs are reset to
+ * null because they are source-local; resolveKnowledgeStorePlan re-resolves
+ * them against the destination lorebook before commit.
+ */
+function exactKnowledgeStore(incoming) {
+    const data = cloneBackupData(objectOrEmpty(incoming));
+    for (const key of ['registry', 'stateRegistry']) {
+        for (const record of Object.values(data[key] || {})) {
+            if (record && typeof record === 'object' && Object.prototype.hasOwnProperty.call(record, 'uid')) {
+                record.uid = null;
+            }
+        }
+    }
+    return { data, summary: emptySummary() };
 }
 
 function replaceSection(current, incoming, mode, name) {
@@ -284,6 +331,43 @@ function sameChatIdentity(backupIdentity, currentIdentity) {
         && String(backupId) === String(currentId);
 }
 
+/**
+ * Resolve the unknown-identity compatibility policy.
+ *
+ * Two regimes:
+ *  - Known identity (or a pure plan with no identity supplied): ordinary merge
+ *    restore; perMessage/exact only when the backup is the same chat; world
+ *    state may be replaced.
+ *  - Unknown identity (the build cannot identify the chat, isUnknown === true):
+ *    merge restore is permitted (the epoch guard still applies), but perMessage
+ *    is always skipped, exact/replace is disabled, and world state defaults to
+ *    "keep current" so the merge-only fallback never contains a destructive
+ *    whole-document overwrite. A prominent warning is surfaced for the UI.
+ */
+function resolveIdentityPolicy(identityUnknown, sameChat) {
+    if (!identityUnknown) {
+        return {
+            identityKnown: true,
+            sameChat,
+            worldStateDefault: 'replace',
+            perMessageAllowed: sameChat,
+            exactAllowed: sameChat,
+            restrictions: sameChat ? [] : ['perMessage and exact restore require the same chat'],
+            warning: sameChat ? null
+                : 'The backup is from a different chat; per-message interiority and exact replacement are not available.',
+        };
+    }
+    return {
+        identityKnown: false,
+        sameChat: false,
+        worldStateDefault: 'keep',
+        perMessageAllowed: false,
+        exactAllowed: false,
+        restrictions: ['perMessage skipped', 'exact/replace disabled', 'world state defaults to keep current'],
+        warning: 'This SillyTavern build cannot verify chat identity. Only non-destructive merge restore is available; per-message interiority and exact replacement are disabled, and world state defaults to keep current.',
+    };
+}
+
 function sectionMode(modes, name, fallback = 'merge') {
     return modes?.[name] || fallback;
 }
@@ -297,11 +381,14 @@ export function planRestore(envelope, current = {}, {
     currentIdentity = null,
     currentMessageIds = [],
     maxFormatVersion,
+    exact = false,
 } = {}) {
     const validation = validateBackupEnvelope(envelope, maxFormatVersion === undefined ? {} : { maxFormatVersion });
     if (!validation.ok) return { ok: false, validation, summary: {}, plan: null };
 
     const sameChat = sameChatIdentity(envelope._meta.identity, currentIdentity);
+    const identityUnknown = isObject(currentIdentity) && currentIdentity.isUnknown === true;
+    const identityPolicy = resolveIdentityPolicy(identityUnknown, sameChat);
     const sections = {};
     const summary = {};
     const imported = validation.sections;
@@ -323,8 +410,10 @@ export function planRestore(envelope, current = {}, {
             sameChat,
             restoreSessionConfig: restoreInterioritySettings,
         });
-        else if (name === 'knowledgeStore') planned = mergeKnowledgeStore(currentData, data, modes.knowledgeStore || {});
-        else if (name === 'worldState') planned = replaceSection(currentData, data, sectionMode(modes, name, 'replace'), name);
+        else if (name === 'knowledgeStore') planned = exact
+            ? exactKnowledgeStore(data)
+            : mergeKnowledgeStore(currentData, data, modes.knowledgeStore || {});
+        else if (name === 'worldState') planned = replaceSection(currentData, data, sectionMode(modes, name, identityPolicy.worldStateDefault), name);
         else planned = { data: cloneBackupData(data), summary: emptySummary() };
         sections[name] = planned.data;
         summary[name] = planned.summary;
@@ -348,6 +437,7 @@ export function planRestore(envelope, current = {}, {
         ok: true,
         validation,
         sameChat,
+        identityPolicy,
         summary,
         plan: { sections, identity: envelope._meta.identity },
     };

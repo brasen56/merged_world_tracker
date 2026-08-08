@@ -1,10 +1,10 @@
 /**
- * test/stubs/core.js — Fake SillyTavern runtime for tests.
+ * test/stubs/core.js â€” Fake SillyTavern runtime for tests.
  *
  * WHY THIS EXISTS
  * ---------------
  * Most modules in this extension import helpers from `../core/index.js` (the
- * "barrel" file). Those helpers read from the live SillyTavern context — the
+ * "barrel" file). Those helpers read from the live SillyTavern context â€” the
  * current chat array, chat metadata, the context object, etc. None of that
  * exists when running tests in Node.
  *
@@ -35,7 +35,7 @@
  * no-op or a stub that throws "not implemented".
  */
 
-// ─── In-memory fake state ────────────────────────────────────────────────────
+// â”€â”€â”€ In-memory fake state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These three variables ARE the "SillyTavern runtime" for our tests. The
 // functions below are thin accessors over them. `resetCoreStubs()` clears
 // them so tests don't leak state into one another.
@@ -103,7 +103,7 @@ export function setFakeContextExtras(extras) {
     _contextExtras = { ..._contextExtras, ...extras };
 }
 
-// ─── Fake context object ─────────────────────────────────────────────────────
+// â”€â”€â”€ Fake context object â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Several real helpers read from `getContextSafe()`. We build a minimal stand-in
 // every time it's called, layering the in-memory chat + meta + extras on top.
 
@@ -120,7 +120,7 @@ function buildFakeContext() {
     };
 }
 
-// ─── Mirrors of core/context.js ──────────────────────────────────────────────
+// â”€â”€â”€ Mirrors of core/context.js â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function getContextSafe() {
     return buildFakeContext();
@@ -217,16 +217,32 @@ export function estimateTokens(text) {
     return Math.ceil(text.length / 4.5);
 }
 
-// ─── Mirrors of core/metadata.js ─────────────────────────────────────────────
+// â”€â”€â”€ Mirrors of core/metadata.js â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const WORLD_STATE_METADATA_KEY = 'world_state_tracker_metadata';
 
 export function persistChatMeta() { /* no-op in tests */ }
 
-export async function persistChatMetaNow() {
+export async function persistChatMetaNow({ strict = false } = {}) {
     const ctx = buildFakeContext();
-    if (typeof ctx.saveMetadata === 'function') await ctx.saveMetadata();
-    else persistChatMeta();
+    if (typeof ctx?.saveMetadata === 'function') {
+        try {
+            await ctx.saveMetadata();
+            return;
+        } catch (err) {
+            // Mirrors core/metadata.js: strict callers must learn the durable
+            // write failed; non-strict callers get the debounced fallback.
+            if (strict) throw err;
+        }
+    } else if (strict) {
+        // Mirrors core/metadata.js: a strict caller's
+        // correctness depends on the write being awaited before it proceeds, so a
+        // missing saveMetadata must refuse rather than silently downgrading to the
+        // debounced fallback. Without this the stub diverged from production and a
+        // restore could report committed:true on metadata a reload could still lose.
+        throw new Error('Strict metadata persistence is not available: the host does not expose an immediate saveMetadata API.');
+    }
+    persistChatMeta();
 }
 
 export function patchChatMeta(key, patch, _persist = true, stamp = false) {
@@ -249,14 +265,14 @@ export function getCurrentWorldState() {
     return _meta[WORLD_STATE_METADATA_KEY]?.text || '';
 }
 
-// ─── Re-exports of pure modules (so tests importing them via the barrel
-//     still work without pulling in the ST-dependent originals) ───────────────
+// â”€â”€â”€ Re-exports of pure modules (so tests importing them via the barrel
+//     still work without pulling in the ST-dependent originals) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These ARE safe to use as-is because they have no ST dependencies.
 
 export { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from '../../core/diff.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from '../../core/strip.js';
 
-// Tier 0 shared primitives — pure modules, safe to re-export directly.
+// Tier 0 shared primitives â€” pure modules, safe to re-export directly.
 export {
     getEpoch,
     bumpEpoch,
@@ -287,10 +303,10 @@ export {
     TRUNCATION_MARKER,
 } from '../../core/prompt.js';
 
-// ─── Not-implemented stubs for the remaining barrel exports ──────────────────
+// â”€â”€â”€ Not-implemented stubs for the remaining barrel exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These cover functions that tests could import but the current starter tests
 // don't exercise. If a future test needs one, implement it here. Importing them
-// won't fail — but calling them will throw, making it obvious what to fill in.
+// won't fail â€” but calling them will throw, making it obvious what to fill in.
 
 function notImplemented(name) {
     return () => { throw new Error(`[test/stubs/core.js] "${name}" is not implemented in the test stub. Add it to test/stubs/core.js.`); };
@@ -366,7 +382,7 @@ export const hideModal = notImplemented('hideModal');
 /**
  * Records status messages instead of touching the DOM. The real setStatus
  * returns early when the modal is null, so calling it with a closed modal is
- * legitimate — tests still see the call here, which is what lets them assert
+ * legitimate â€” tests still see the call here, which is what lets them assert
  * that a discard path reported itself to the user.
  */
 export function setStatus(modalIdOrEl, message, type = 'info', clearAfterMs = 0) {
@@ -425,7 +441,7 @@ export async function pickTextFile(accept) {
  *
  * A module's render() calls this to fill in the shared connection block. Tests
  * that render a module are checking that module's OWN markup, so the block only
- * needs to be a string with the right field ids in it — reproducing the real
+ * needs to be a string with the right field ids in it â€” reproducing the real
  * inputs would just couple these tests to core/ui.js's layout.
  */
 export function renderApiSettingsFields(_s = {}, opts = {}) {
