@@ -1,0 +1,110 @@
+/**
+ * backup/data.js — Pure unified chat-backup data model.
+ *
+ * This module deliberately has no SillyTavern or browser dependencies. Runtime
+ * collection belongs to Phase 2a; this file only defines the versioned envelope
+ * and the safe, explicit list of chat-metadata sections that may be exported.
+ */
+
+export const BACKUP_TYPE = 'mwt-chat-backup';
+export const FORMAT_VERSION = 1;
+export const SECTION_SCHEMA_VERSION = 1;
+export const KNOWLEDGE_STORE_VERSION = 1;
+export const MAX_TRASH_SIZE = 50;
+
+export const SECTION_KEYS = Object.freeze([
+    'worldState',
+    'chronicle',
+    'knowledgeEvidence',
+    'knowledgeCounters',
+    'storyPlanner',
+    'interiority',
+    'knowledgeStore',
+]);
+
+/** The six chat_metadata keys. Settings and other global/localStorage data are not included. */
+export const METADATA_KEYS = Object.freeze({
+    worldState: 'world_state_tracker_metadata',
+    chronicle: 'session_chronicle_data',
+    knowledgeEvidence: 'knowledge_growth_evidence',
+    knowledgeCounters: 'knowledge_tracker_counters',
+    storyPlanner: 'story_planner_data',
+    interiority: 'mwt_interiority',
+});
+
+const METADATA_SECTION_KEYS = Object.freeze(Object.keys(METADATA_KEYS));
+
+/**
+ * Clone JSON-shaped data without relying on structuredClone (which is not
+ * available in every SillyTavern browser target). Unsupported values are not
+ * expected at this boundary; functions and symbols are omitted like JSON.
+ */
+export function cloneBackupData(value, seen = new WeakMap()) {
+    if (value === null || typeof value !== 'object') {
+        return (typeof value === 'function' || typeof value === 'symbol') ? undefined : value;
+    }
+    if (seen.has(value)) throw new TypeError('Backup data must not contain circular references.');
+    seen.set(value, true);
+    const result = Array.isArray(value) ? [] : {};
+    for (const [key, child] of Object.entries(value)) {
+        const cloned = cloneBackupData(child, seen);
+        if (cloned !== undefined) result[key] = cloned;
+    }
+    seen.delete(value);
+    return result;
+}
+
+function section(data, schemaVersion = SECTION_SCHEMA_VERSION) {
+    return { schemaVersion, data: cloneBackupData(data && typeof data === 'object' ? data : {}) };
+}
+
+/**
+ * Build an envelope from already-collected plain objects.
+ *
+ * `metadata` is intentionally whitelisted. Passing a complete metadata object
+ * cannot accidentally export settings, legacy pointers, or unrelated keys.
+ * `knowledgeStore` is optional because its runtime collection is Phase 2a.
+ */
+export function buildBackupEnvelope({
+    metadata = {},
+    knowledgeStore,
+    identity = null,
+    createdAt = new Date().toISOString(),
+    mwtVersion = null,
+    source = 'manual',
+    chatName = null,
+    messageCount = null,
+} = {}) {
+    const sections = {};
+    for (const key of METADATA_SECTION_KEYS) {
+        sections[key] = section(metadata[key]);
+    }
+    if (knowledgeStore !== undefined) {
+        sections.knowledgeStore = {
+            storeVersion: KNOWLEDGE_STORE_VERSION,
+            data: cloneBackupData(knowledgeStore && typeof knowledgeStore === 'object' ? knowledgeStore : {}),
+        };
+    }
+
+    const meta = {
+        type: BACKUP_TYPE,
+        formatVersion: FORMAT_VERSION,
+        createdAt,
+        mwtVersion,
+        source,
+        chatName,
+        messageCount,
+        identity: cloneBackupData(identity),
+    };
+
+    return { _meta: meta, sections };
+}
+
+// Descriptive aliases make the pure builder convenient to consume without
+// coupling Phase 2's collector to one particular verb.
+export const createBackupEnvelope = buildBackupEnvelope;
+export const makeBackupEnvelope = buildBackupEnvelope;
+
+export function getBackupSection(envelope, name) {
+    return envelope?.sections?.[name] || null;
+}
