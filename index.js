@@ -24,7 +24,7 @@ import * as Chronicle from './chronicle/index.js';
 import * as Knowledge from './knowledge/index.js';
 import * as StoryPlanner from './story_planner/index.js';
 import * as Interiority from './interiority/index.js';
-import { exportBackup } from './backup/index.js';
+import { exportBackup, previewRestore, restoreBackup, undoLastRestore } from './backup/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -1077,13 +1077,14 @@ try {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }
 
-// Backup export is intentionally the only restore-related console hook in
-// Phase 2a. Restore planning needs runtime-bound current metadata, identity,
-// and message UUIDs; exposing the pure planner directly would produce a false
-// preview when called with only an envelope.
+// Phase 2b binds preview and commit to the live metadata/identity/message UUIDs.
+// Lorebook-store writes remain deliberately unavailable until Phase 3.
 window.MWT = window.MWT || {};
 window.MWT.backup = {
     export: exportBackup,
+    preview: previewRestore,
+    restore: restoreBackup,
+    undo: undoLastRestore,
 };
 
 console.log('[MWT] Merged World Tracker extension loaded.');

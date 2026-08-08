@@ -49,6 +49,7 @@ let _apiImpl = null;
 let _promptCalls = [];
 const _notifications = [];
 let _statusCalls = [];
+let _downloadJsonCalls = [];
 
 /**
  * Wipe all fake state. Call this in `beforeEach` so every test starts clean.
@@ -62,6 +63,7 @@ export function resetCoreStubs() {
     _apiImpl = null;
     _promptCalls = [];
     _statusCalls = [];
+    _downloadJsonCalls = [];
 }
 
 /**
@@ -221,7 +223,11 @@ export const WORLD_STATE_METADATA_KEY = 'world_state_tracker_metadata';
 
 export function persistChatMeta() { /* no-op in tests */ }
 
-export async function persistChatMetaNow() { /* no-op in tests */ }
+export async function persistChatMetaNow() {
+    const ctx = buildFakeContext();
+    if (typeof ctx.saveMetadata === 'function') await ctx.saveMetadata();
+    else persistChatMeta();
+}
 
 export function patchChatMeta(key, patch, _persist = true, stamp = false) {
     if (!_meta[key]) _meta[key] = {};
@@ -397,7 +403,10 @@ export function notify(title, message, level = 'info') {
 export function getFakePromptCalls() { return _promptCalls; }
 export function getFakeNotifications() { return _notifications; }
 export const downloadBlob = notImplemented('downloadBlob');
-export const downloadJson = notImplemented('downloadJson');
+export function downloadJson(filename, data) {
+    _downloadJsonCalls.push({ filename, data });
+}
+export function getFakeDownloadJsonCalls() { return _downloadJsonCalls; }
 /**
  * Install a fake implementation of pickTextFile() for the duration of one test.
  * Pass a function (sync or async) that returns the file text, returns '' for a

@@ -11,14 +11,16 @@ import {
     reconcileNameMap,
 } from '../backup/restore.js';
 import { collectBackup, getBackupChatName } from '../backup/collect.js';
-import { exportBackup, getBackupFilename } from '../backup/index.js';
+import { exportBackup, getBackupFilename, previewRestore, restoreBackup, undoLastRestore } from '../backup/index.js';
 import { beforeEach, afterEach } from 'vitest';
 import {
     resetCoreStubs,
     setFakeChat,
     setFakeContextExtras,
     getFakeMeta,
+    getFakeDownloadJsonCalls,
 } from './stubs/core.js';
+import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
 
 function arc(id, title = id) {
@@ -171,6 +173,7 @@ describe('unified backup Phase 1 pure core', () => {
 describe('unified backup Phase 2a collection/export', () => {
     beforeEach(() => {
         resetCoreStubs();
+        _resetEpoch();
         _clearCacheForTests();
         globalThis.SillyTavern = {
             getContext: () => ({ getCurrentChatId: () => 'chat-a' }),
@@ -191,6 +194,7 @@ describe('unified backup Phase 2a collection/export', () => {
 
     afterEach(() => {
         _clearCacheForTests();
+        _resetEpoch();
         delete globalThis.SillyTavern;
     });
 
@@ -226,5 +230,97 @@ describe('unified backup Phase 2a collection/export', () => {
         expect(result.sections.worldState.data.text).toBe('before');
         expect(getBackupChatName({ chatName: '  Named chat  ' }, { chatId: 'id' })).toBe('Named chat');
         expect(getBackupFilename(result, 123)).toBe('mwt_backup_A_Quiet_Evening_123.json');
+    });
+});
+
+describe('unified backup Phase 2b metadata restore', () => {
+    beforeEach(() => {
+        resetCoreStubs();
+        _resetEpoch();
+        _clearCacheForTests();
+        globalThis.SillyTavern = {
+            getContext: () => ({ getCurrentChatId: () => 'chat-a' }),
+        };
+        setFakeContextExtras({ getCurrentChatId: () => 'chat-a' });
+        setFakeChat([{ mes: 'hello', extra: { mwt_uuid: '2' } }]);
+        _setCacheForTests('Knowledge Tracker', { registry: {}, relationships: {} });
+        _setCacheForTests('State Tracker', { stateRegistry: {} });
+    });
+
+    afterEach(() => {
+        _clearCacheForTests();
+        _resetEpoch();
+        delete globalThis.SillyTavern;
+    });
+
+    test('previews against live metadata and resolves current per-message UUIDs', () => {
+        getFakeMeta().mwt_interiority = { ledger: [], deletedIntentions: [], perMessage: {} };
+        const result = previewRestore(backup());
+
+        expect(result.ok).toBe(true);
+        expect(result.sameChat).toBe(true);
+        expect(result.summary.interiority.perMessage).toMatchObject({
+            imported: 1, resolved: 1, sameChat: true,
+        });
+    });
+
+    test('requires confirmation and makes no download or metadata change before it', async () => {
+        getFakeMeta().world_state_tracker_metadata = { text: 'current state' };
+
+        const result = await restoreBackup(backup({ metadata: { worldState: { text: 'restored state' } } }));
+
+        expect(result).toMatchObject({ ok: false, committed: false, reason: 'confirmation-required' });
+        expect(getFakeMeta().world_state_tracker_metadata).toEqual({ text: 'current state' });
+        expect(getFakeDownloadJsonCalls()).toEqual([]);
+    });
+
+    test('downloads a pre-restore snapshot, commits only metadata sections, and supports undo', async () => {
+        let saveCount = 0;
+        setFakeContextExtras({ saveMetadata: async () => { saveCount++; } });
+        getFakeMeta().world_state_tracker_metadata = { text: 'current state' };
+        getFakeMeta().unrelated_settings = { apiKey: 'must remain' };
+        const file = backup({ metadata: { worldState: { text: 'restored state' } } });
+
+        const result = await restoreBackup(file, { confirm: true });
+
+        expect(result).toMatchObject({ ok: true, committed: true });
+        expect(saveCount).toBe(1);
+        expect(getFakeMeta().world_state_tracker_metadata).toEqual({ text: 'restored state' });
+        expect(getFakeMeta().unrelated_settings).toEqual({ apiKey: 'must remain' });
+        expect(getFakeDownloadJsonCalls()).toHaveLength(1);
+        expect(getFakeDownloadJsonCalls()[0].data.sections.worldState.data).toEqual({ text: 'current state' });
+        expect(getFakeDownloadJsonCalls()[0].data.sections.knowledgeStore).toBeDefined();
+
+        const undo = await undoLastRestore({ confirm: true });
+        expect(undo).toMatchObject({ ok: true, committed: true });
+        expect(getFakeMeta().world_state_tracker_metadata).toEqual({ text: 'current state' });
+        expect(getFakeDownloadJsonCalls()).toHaveLength(2);
+    });
+
+    test('refuses an invalid file without downloading or writing metadata', async () => {
+        getFakeMeta().world_state_tracker_metadata = { text: 'current state' };
+
+        const result = await restoreBackup({ _meta: { type: 'wrong', formatVersion: 1 }, sections: {} }, { confirm: true });
+
+        expect(result).toMatchObject({ ok: false, committed: false, reason: 'invalid-backup' });
+        expect(getFakeMeta().world_state_tracker_metadata).toEqual({ text: 'current state' });
+        expect(getFakeDownloadJsonCalls()).toEqual([]);
+    });
+
+    test('abandons the commit if the chat changes while creating the recovery backup', async () => {
+        getFakeMeta().world_state_tracker_metadata = { text: 'current state' };
+        const originalGetCurrentChatId = () => 'chat-a';
+        setFakeContextExtras({
+            getCurrentChatId: originalGetCurrentChatId,
+            saveMetadata: async () => { throw new Error('must not save'); },
+        });
+        const pending = restoreBackup(backup({ metadata: { worldState: { text: 'restored state' } } }), { confirm: true });
+        bumpEpoch();
+
+        const result = await pending;
+
+        expect(result).toMatchObject({ ok: false, committed: false, reason: 'stale-scope' });
+        expect(getFakeMeta().world_state_tracker_metadata).toEqual({ text: 'current state' });
+        expect(getFakeDownloadJsonCalls()).toHaveLength(1);
     });
 });
