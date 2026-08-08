@@ -17,9 +17,30 @@ const objectOrEmpty = value => (isObject(value) ? value : {});
 function emptySummary() {
     return { added: 0, updated: 0, skipped: [], conflicts: 0 };
 }
-
 function addSkip(summary, record, reason) {
     summary.skipped.push({ record, reason });
+}
+
+function isEmptyObject(value) {
+    return isObject(value) && Object.keys(value).length === 0;
+}
+
+function mergeSafeScalars(result, current, incoming, keys, summary) {
+    for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(incoming || {}, key)) continue;
+        const value = cloneBackupData(incoming[key]);
+        if (JSON.stringify(current?.[key]) !== JSON.stringify(value)) summary.updated++;
+        result[key] = value;
+    }
+    return result;
+}
+
+function skipProtectedScalars(summary, incoming, keys, label, restore) {
+    for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(incoming || {}, key)) continue;
+        if (restore) continue;
+        addSkip(summary, key, `${label} session setting was preserved; explicit restore confirmation is required.`);
+    }
 }
 
 function mergeUnique(current, incoming, key, label) {
@@ -32,6 +53,7 @@ function mergeUnique(current, incoming, key, label) {
             addSkip(summary, record, `${label} has no merge key "${key}".`);
         } else if (seen.has(String(id))) {
             summary.conflicts++;
+            summary.updated++;
             addSkip(summary, String(id), `${label} already exists; current record was preserved.`);
         } else {
             seen.add(String(id));
@@ -79,13 +101,21 @@ function mergeEvidenceFile(current, incoming, name) {
     return { data: result, summary };
 }
 
-function mergeChronicle(current, incoming) {
-    const result = { ...cloneBackupData(objectOrEmpty(current)), ...cloneBackupData(objectOrEmpty(incoming)) };
+function mergeChronicle(current, incoming, { restoreSessionConfig = false } = {}) {
+    const result = cloneBackupData(objectOrEmpty(current));
     const summary = emptySummary();
-    const snapshots = mergeUnique(current?.snapshots, incoming?.snapshots, 'id', 'Chronicle snapshot');
-    const trash = mergeUnique(current?._deletedBin, incoming?._deletedBin, 'id', 'Chronicle trash entry');
+    const snapshots = Object.prototype.hasOwnProperty.call(incoming || {}, 'snapshots')
+        ? mergeUnique(current?.snapshots, incoming.snapshots, 'id', 'Chronicle snapshot')
+        : { data: cloneBackupData(current?.snapshots || []), summary: emptySummary() };
+    const trash = Object.prototype.hasOwnProperty.call(incoming || {}, '_deletedBin')
+        ? mergeUnique(current?._deletedBin, incoming._deletedBin, 'id', 'Chronicle trash entry')
+        : { data: cloneBackupData(current?._deletedBin || []), summary: emptySummary() };
     result.snapshots = snapshots.data;
     result._deletedBin = trash.data.slice(-MAX_TRASH_SIZE);
+    mergeSafeScalars(result, current, incoming, ['lastAnchor', 'msgSinceSnapshot'], summary);
+    const sessionSettings = ['injectEnabled', 'injectMode', 'injectCount', 'injectDepth', 'injectFromDate', 'injectToDate', 'selectedForInjection'];
+    skipProtectedScalars(summary, incoming, sessionSettings, 'Chronicle', restoreSessionConfig);
+    if (restoreSessionConfig) mergeSafeScalars(result, current, incoming, sessionSettings, summary);
     for (const part of [snapshots.summary, trash.summary]) {
         summary.added += part.added;
         summary.updated += part.updated;
@@ -95,13 +125,23 @@ function mergeChronicle(current, incoming) {
     return { data: result, summary };
 }
 
-function mergeInteriority(current, incoming, { sameChat }) {
-    const result = { ...cloneBackupData(objectOrEmpty(current)), ...cloneBackupData(objectOrEmpty(incoming)) };
+function mergeInteriority(current, incoming, { sameChat, restoreSessionConfig = false }) {
+    const result = cloneBackupData(objectOrEmpty(current));
     const summary = emptySummary();
-    const ledger = mergeUnique(current?.ledger, incoming?.ledger, 'id', 'Interiority ledger entry');
-    const tombstones = mergeUnique(current?.deletedIntentions, incoming?.deletedIntentions, 'id', 'Interiority tombstone');
+    const ledger = Object.prototype.hasOwnProperty.call(incoming || {}, 'ledger')
+        ? mergeUnique(current?.ledger, incoming.ledger, 'id', 'Interiority ledger entry')
+        : { data: cloneBackupData(current?.ledger || []), summary: emptySummary() };
+    const tombstones = Object.prototype.hasOwnProperty.call(incoming || {}, 'deletedIntentions')
+        ? mergeUnique(current?.deletedIntentions, incoming.deletedIntentions, 'id', 'Interiority tombstone')
+        : { data: cloneBackupData(current?.deletedIntentions || []), summary: emptySummary() };
     result.ledger = ledger.data;
     result.deletedIntentions = tombstones.data;
+    // These scalar values are part of the current session/configuration state;
+    // do not silently replace them during an append-only merge.
+    skipProtectedScalars(summary, incoming, ['enabled', 'turnCounter'], 'Interiority', restoreSessionConfig);
+    if (restoreSessionConfig) {
+        mergeSafeScalars(result, current, incoming, ['enabled', 'turnCounter'], summary);
+    }
     for (const part of [ledger.summary, tombstones.summary]) {
         summary.added += part.added;
         summary.updated += part.updated;
@@ -171,11 +211,10 @@ export function reconcileNameMap(current, incoming, { resolveUid = null, label =
     return { data: result, summary };
 }
 
-export const reconcileNameUidMap = reconcileNameMap;
-
 function mergeKnowledgeStore(current, incoming, options = {}) {
-    const result = { ...cloneBackupData(objectOrEmpty(current)), ...cloneBackupData(objectOrEmpty(incoming)) };
+    const result = cloneBackupData(objectOrEmpty(current));
     const summary = emptySummary();
+    mergeSafeScalars(result, current, incoming, ['version'], summary);
     for (const [key, label] of [['registry', 'NPC registry'], ['stateRegistry', 'state registry']]) {
         if (incoming?.[key] === undefined) continue;
         const merged = reconcileNameMap(current?.[key], incoming[key], {
@@ -204,9 +243,35 @@ function replaceSection(current, incoming, mode, name) {
         addSkip(summary, name, `Section was not replaced (${mode}).`);
         return { data: cloneBackupData(current || {}), summary };
     }
+    if (isEmptyObject(incoming)) {
+        addSkip(summary, name, 'Empty replace payload was ignored; current section was preserved.');
+        return { data: cloneBackupData(current || {}), summary };
+    }
     summary.updated = current === undefined ? 0 : 1;
     summary.added = current === undefined ? 1 : 0;
     return { data: cloneBackupData(incoming || {}), summary };
+}
+
+function mergeStoryPlanner(current, incoming) {
+    const summary = emptySummary();
+    if (isEmptyObject(incoming)) {
+        addSkip(summary, 'storyPlanner', 'Empty merge payload was ignored; current section was preserved.');
+        return { data: cloneBackupData(current || {}), summary };
+    }
+    const result = current === undefined
+        ? cloneBackupData(objectOrEmpty(incoming))
+        : cloneBackupData(objectOrEmpty(current));
+    const arcs = Object.prototype.hasOwnProperty.call(incoming || {}, 'arcs')
+        ? mergeUnique(current?.arcs, incoming.arcs, 'id', 'Story Planner arc')
+        : { data: cloneBackupData(current?.arcs || []), summary: emptySummary() };
+    if (Object.prototype.hasOwnProperty.call(incoming || {}, 'arcs') || current?.arcs !== undefined) {
+        result.arcs = arcs.data;
+    }
+    summary.added += arcs.summary.added;
+    summary.updated += arcs.summary.updated;
+    summary.conflicts += arcs.summary.conflicts;
+    summary.skipped.push(...arcs.summary.skipped);
+    return { data: result, summary };
 }
 
 function sameChatIdentity(backupIdentity, currentIdentity) {
@@ -240,15 +305,24 @@ export function planRestore(envelope, current = {}, {
     const sections = {};
     const summary = {};
     const imported = validation.sections;
+    const restoreChronicleSettings = modes.restoreSessionConfig === true
+        || modes.chronicle?.restoreSessionConfig === true;
+    const restoreInterioritySettings = modes.restoreSessionConfig === true
+        || modes.interiority?.restoreSessionConfig === true;
 
     for (const [name, data] of Object.entries(imported)) {
         const currentData = current[name];
         let planned;
-        if (name === 'chronicle') planned = mergeChronicle(currentData, data);
+        if (name === 'chronicle') planned = mergeChronicle(currentData, data, {
+            restoreSessionConfig: restoreChronicleSettings,
+        });
         else if (name === 'knowledgeEvidence') planned = mergeNamedFiles(currentData, data, mergeEvidenceFile);
         else if (name === 'knowledgeCounters') planned = replaceSection(currentData, data, sectionMode(modes, name, 'replace'), name);
-        else if (name === 'storyPlanner') planned = replaceSection(currentData, data, sectionMode(modes, name, 'replace'), name);
-        else if (name === 'interiority') planned = mergeInteriority(currentData, data, { sameChat });
+        else if (name === 'storyPlanner') planned = mergeStoryPlanner(currentData, data);
+        else if (name === 'interiority') planned = mergeInteriority(currentData, data, {
+            sameChat,
+            restoreSessionConfig: restoreInterioritySettings,
+        });
         else if (name === 'knowledgeStore') planned = mergeKnowledgeStore(currentData, data, modes.knowledgeStore || {});
         else if (name === 'worldState') planned = replaceSection(currentData, data, sectionMode(modes, name, 'replace'), name);
         else planned = { data: cloneBackupData(data), summary: emptySummary() };
@@ -278,6 +352,3 @@ export function planRestore(envelope, current = {}, {
         plan: { sections, identity: envelope._meta.identity },
     };
 }
-
-export const previewRestore = planRestore;
-export const createRestorePlan = planRestore;

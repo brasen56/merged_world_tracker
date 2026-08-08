@@ -12,6 +12,7 @@ import {
     SECTION_SCHEMA_VERSION,
     KNOWLEDGE_STORE_VERSION,
 } from './data.js';
+import { sanitizeArcs } from '../story_planner/data.js';
 
 const STORY_SECTIONS = new Set(['immediate', 'emerging', 'horizon', 'character', 'unresolved']);
 const STORY_STATUSES = new Set(['active', 'resolved', 'dropped']);
@@ -49,6 +50,25 @@ function validateList(list, label, check, key = 'id') {
             skip(result, identity, `Duplicate ${key} in ${label}.`);
         } else {
             if (identity !== null) seen.add(identity);
+            records.push(record);
+            result.added++;
+        }
+    }
+    return { records, ...result };
+}
+
+function validateUniqueList(list, label, check) {
+    const result = summary();
+    const records = [];
+    if (list === undefined) return { records, ...result };
+    if (!Array.isArray(list)) {
+        skip(result, label, `${label} must be an array.`);
+        return { records, ...result };
+    }
+    for (const record of list) {
+        const reason = check(record);
+        if (reason) skip(result, record?.id ?? record, reason);
+        else {
             records.push(record);
             result.added++;
         }
@@ -200,8 +220,8 @@ function validateStoryPlanner(data) {
     }
     const accepted = { ...data };
     if (data.arcs !== undefined) {
-        const arcs = validateList(data.arcs, 'arcs', validateArc);
-        accepted.arcs = arcs.records;
+        const arcs = validateUniqueList(data.arcs, 'arcs', validateArc);
+        accepted.arcs = sanitizeArcs(arcs.records);
         result.added += arcs.added;
         result.skipped.push(...arcs.skipped);
         result.conflicts += arcs.conflicts;
@@ -393,5 +413,4 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
     return result;
 }
 
-export const validateBackup = validateBackupEnvelope;
 export { validateWorldState, validateChronicle, validateKnowledgeEvidence, validateCounters as validateKnowledgeCounters, validateStoryPlanner, validateInteriority, validateKnowledgeStore };

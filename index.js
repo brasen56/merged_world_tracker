@@ -24,6 +24,7 @@ import * as Chronicle from './chronicle/index.js';
 import * as Knowledge from './knowledge/index.js';
 import * as StoryPlanner from './story_planner/index.js';
 import * as Interiority from './interiority/index.js';
+import { exportBackup } from './backup/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -1075,5 +1076,14 @@ try {
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }
+
+// Backup export is intentionally the only restore-related console hook in
+// Phase 2a. Restore planning needs runtime-bound current metadata, identity,
+// and message UUIDs; exposing the pure planner directly would produce a false
+// preview when called with only an envelope.
+window.MWT = window.MWT || {};
+window.MWT.backup = {
+    export: exportBackup,
+};
 
 console.log('[MWT] Merged World Tracker extension loaded.');

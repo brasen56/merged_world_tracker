@@ -77,11 +77,18 @@ export function buildBackupEnvelope({
 } = {}) {
     const sections = {};
     for (const key of METADATA_SECTION_KEYS) {
-        sections[key] = section(metadata[key]);
+        if (Object.prototype.hasOwnProperty.call(metadata, key)
+            && metadata[key] !== undefined
+            && metadata[key] !== null) {
+            sections[key] = section(metadata[key]);
+        }
     }
     if (knowledgeStore !== undefined) {
+        const storeVersion = Number.isInteger(knowledgeStore?.version)
+            ? knowledgeStore.version
+            : KNOWLEDGE_STORE_VERSION;
         sections.knowledgeStore = {
-            storeVersion: KNOWLEDGE_STORE_VERSION,
+            storeVersion,
             data: cloneBackupData(knowledgeStore && typeof knowledgeStore === 'object' ? knowledgeStore : {}),
         };
     }
@@ -99,11 +106,6 @@ export function buildBackupEnvelope({
 
     return { _meta: meta, sections };
 }
-
-// Descriptive aliases make the pure builder convenient to consume without
-// coupling Phase 2's collector to one particular verb.
-export const createBackupEnvelope = buildBackupEnvelope;
-export const makeBackupEnvelope = buildBackupEnvelope;
 
 export function getBackupSection(envelope, name) {
     return envelope?.sections?.[name] || null;
