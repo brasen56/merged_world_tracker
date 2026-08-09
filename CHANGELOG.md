@@ -12,10 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [1.5.0]
 
-_Nothing yet. New work lands here first, then moves under a version heading when
-you tag a release._
+### Added
+- CHANGELOG.md
+- Phase 1 - 3 of unified backup/restore
+- **Phase 4 — unified backup/restore UI** (`backup/render.js`): a "Backup /
+  Restore" panel in the Settings tab plus a dry-run summary modal. Export
+  downloads a versioned backup; Restore runs the two-step preview → confirm flow
+  (with per-section added/updated/skipped/conflict counts, identity warnings, and
+  per-message resolve counts), auto-downloads a pre-restore backup before
+  writing, and supports merge vs exact (replace) modes and undo-last-restore.
+  Backed by new pure-presenter unit tests (`test/backup_ui.test.js`). Phases
+  2–3 of the engine (`collect.js`, `restore.js` lorebook-store round trip,
+  preview fingerprint) are now user-reachable rather than console-only.
+
+### Changed
+- Added more lint rules: eqeqeq; prefer-const; no-shadow
+
+### Fixed
+- world-info.js warning in Vitest
+- Intention resurection: tightened a guard to prevent deleted intentions from reappearing
 
 ## [1.4.23] - 2026-08-07
 
@@ -129,7 +146,7 @@ and the shared core. Summarized here by theme rather than by individual commit.
 
 ---
 
-[Unreleased]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.23...HEAD
+[1.5.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.23...HEAD
 [1.4.23]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.7...v1.4.23
 [1.4.7]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.0...v1.4.7
 [1.4.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.3.0...v1.4.0
