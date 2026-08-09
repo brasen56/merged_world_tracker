@@ -56,6 +56,23 @@ describe('a deleted intention stays deleted', () => {
         expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(true);
     });
 
+    test('a re-proposal that rewords only the trigger is still rejected', () => {
+        // The trigger is free-form "when/why" prose. The engine keeps the same
+        // NPC + action (the parts the story context drives) but rewords the
+        // trigger when re-proposing, so the tombstone must key on NPC + action
+        // alone — not NPC + action + trigger. This is the regression for the bug
+        // that had deleted intentions keep coming back.
+        const entry = addLedgerEntry({
+            npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
+        }, 'day 1', 3);
+        removeLedgerEntries([entry.id], { tombstone: true });
+
+        // Same NPC + action, different trigger wording — still a duplicate.
+        expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'next week')).toBe(true);
+        // And a direct tombstone hit ignores the trigger entirely.
+        expect(isIntentionDeleted('Ezra', 'call Dorothy')).toBe(true);
+    });
+
     test('a rollback does not resurrect it', () => {
         const entry = addLedgerEntry({
             npc: 'Ezra', action: 'call Dorothy', trigger: 'Monday morning',
@@ -94,7 +111,7 @@ describe('a deleted intention stays deleted', () => {
         }, 'day 1', 3);
         removeLedgerEntries([entry.id]); // engine path — no tombstone
 
-        expect(isIntentionDeleted('Ezra', 'call Dorothy', 'Monday morning')).toBe(false);
+        expect(isIntentionDeleted('Ezra', 'call Dorothy')).toBe(false);
         expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(false);
     });
 

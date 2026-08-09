@@ -410,9 +410,10 @@ const _normIntent = v => String(v ?? '').trim().toLowerCase();
 
 /**
  * The action/trigger strings an entry should be matched on: its current text
- * plus, if the user edited it, the text the engine originally wrote. Mirrors
- * {@link hasDuplicateIntention} so a deletion blocks exactly what a live entry
- * would have blocked.
+ * plus, if the user edited it, the text the engine originally wrote. Triggers
+ * are still recorded for completeness, but {@link isIntentionDeleted} now keys
+ * only on NPC + action, so a deletion blocks the substantive intention the user
+ * rejected even if the engine rewords the trigger when re-proposing it.
  */
 function _intentionKeys(entry) {
     const actions = new Set([_normIntent(entry.action)]);
@@ -451,24 +452,24 @@ export function getDeletedIntentions() {
 /**
  * Has the user deleted this intention?
  *
- * Exact-string match on the same keys as {@link hasDuplicateIntention}, which
- * bounds the suppression usefully: a tombstone blocks the wording the user
- * rejected, not the idea. If the story genuinely moves and the model proposes a
- * materially different intention, it still gets through.
+ * Matched on the SAME NPC + action only — deliberately broader than the live
+ * {@link hasDuplicateIntention} check, which also keys on the trigger. The
+ * trigger is free-form "when/why" prose, so the engine tends to re-propose a
+ * rejected intention with the same NPC and action but a reworded trigger, and
+ * the old three-way (npc + action + trigger) match let those slip straight back
+ * in. The action is still the substantive part: a genuinely different action
+ * for the same NPC is a different intention and still gets through.
  *
  * @param {string} npc
  * @param {string} action
- * @param {string} trigger
  * @returns {boolean}
  */
-export function isIntentionDeleted(npc, action, trigger) {
+export function isIntentionDeleted(npc, action) {
     const name = _normIntent(npc);
     const a = _normIntent(action);
-    const t = _normIntent(trigger);
     return getDeletedIntentions().some(d =>
         d.npc === name
         && Array.isArray(d.actions) && d.actions.includes(a)
-        && Array.isArray(d.triggers) && d.triggers.includes(t)
     );
 }
 
@@ -565,7 +566,7 @@ export function hasDuplicateIntention(npc, action, trigger) {
     // A deleted intention is not in the ledger to match against, so without
     // this the next generation re-proposes it as brand new. The user already
     // said no once.
-    return live || isIntentionDeleted(npc, action, trigger);
+    return live || isIntentionDeleted(npc, action);
 }
 
 // ─── Manual entries (user-authored intentions) ───────────────────────────────
@@ -686,7 +687,7 @@ export function restoreLedgerSnapshot(snapshot) {
     // re-proposed clone that picked up a fresh id is caught too.
     const tombstonedIds = new Set(getDeletedIntentions().map(d => d.id));
     const kept = [...restored, ...manualSurvivors].filter(
-        e => !tombstonedIds.has(e.id) && !isIntentionDeleted(e.npc, e.action, e.trigger),
+        e => !tombstonedIds.has(e.id) && !isIntentionDeleted(e.npc, e.action),
     );
 
     setLedger(kept);
