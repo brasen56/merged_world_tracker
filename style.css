@@ -12,6 +12,7 @@
      knowledge/style.css    — .kt-* (Knowledge Tracker + NPC Growth Profile)
      interiority/style.css  — .mwt-int-* (Interiority thoughts & intentions)
      story_planner/style.css — .sp-* (Story Planner arc cards)
+     backup/style.css       — .mwt-backup-* (unified backup/restore UI)
    ────────────────────────────────────────────────────────────────────────── */
 
 @import url('core/style.css');
@@ -19,3 +20,4 @@
 @import url('knowledge/style.css');
 @import url('interiority/style.css');
 @import url('story_planner/style.css');
+@import url('backup/style.css');

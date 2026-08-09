@@ -25,6 +25,7 @@ import * as Knowledge from './knowledge/index.js';
 import * as StoryPlanner from './story_planner/index.js';
 import * as Interiority from './interiority/index.js';
 import { exportBackup, previewRestore, restoreBackup, undoLastRestore, fingerprintPreview } from './backup/index.js';
+import { renderBackupPanel, wireBackupEvents } from './backup/render.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -335,6 +336,7 @@ function renderSettingsTab() {
             <strong>Module-specific settings</strong> are available in each tab's ⚙ Settings button.
             Use "Sync to Modules" above to push the global API URL/Key/Model to all modules at once.
         </p>
+        ${renderBackupPanel()}
     `;
 }
 
@@ -405,6 +407,10 @@ function renderModal() {
         }
         if (mod.getModuleWireEvents) mod.getModuleWireEvents()();
     }
+
+    // Wire the Backup/Restore control (lives in the Settings tab). The body is
+    // rebuilt on every open, so rebind each render like the module wire-events.
+    wireBackupEvents(modal);
 
     // Wire connection profile toggle (hide API fields when a profile is selected)
     const profileSelect = modal.querySelector('#mwt-s-connection-profile');

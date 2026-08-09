@@ -1,0 +1,70 @@
+/*
+    backup/style.css — Backup / Restore UI (Phase 4)
+    ──────────────────────────────────────────────────────────────────────────
+    .mwt-backup-* classes for the Settings-tab panel and the dry-run summary
+    modal. Scoped to the backup modal so the wider panel override does not leak
+    into other MWT modals.
+*/
+
+/* ─── Settings-tab panel ──────────────────────────────────────────────────── */
+
+.mwt-backup-panel {
+    padding: 4px 0;
+}
+
+/* ─── Dry-run summary modal ──────────────────────────────────────────────── */
+
+.mwt-backup-summary-modal .mwt-modal-panel {
+    max-width: 640px;
+    max-height: 85vh;
+}
+
+.mwt-backup-summary-modal .mwt-modal-body {
+    overflow-y: auto;
+}
+
+.mwt-backup-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mwt-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 4px 0 6px;
+}
+
+.mwt-backup-summary-table {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mwt-backup-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 5px 8px;
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    background: var(--mwt-bg-light);
+}
+
+.mwt-backup-row-label {
+    font-size: 13px;
+}
+
+.mwt-backup-row-change {
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.mwt-backup-footer {
+    /* The footer sits above the status bar; keep it sticky to the body bottom
+       so the Confirm/Cancel buttons stay reachable while the table scrolls. */
+    position: sticky;
+    bottom: 0;
+    background: var(--mwt-bg);
+    padding-top: 8px;
+}
