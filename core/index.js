@@ -22,6 +22,7 @@ export { notify } from './notifications.js';
 export { downloadBlob, downloadJson, pickTextFile } from './file.js';
 export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from './strip.js';
+export { MWT_VERSION } from './version.js';
 
 // Tier 0 shared primitives (scope, revision, prompt helpers).
 export {

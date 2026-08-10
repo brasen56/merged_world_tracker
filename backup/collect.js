@@ -18,6 +18,9 @@ import {
     captureScope,
     assertSameScope,
 } from '../core/index.js';
+// Imported from version.js directly (not the barrel): it is a pure constant,
+// and the test stub replaces the barrel wholesale.
+import { MWT_VERSION } from '../core/version.js';
 import {
     getRegistry,
     getStateRegistry,
@@ -75,7 +78,7 @@ export async function collectBackup({
     identity = null,
     chatName = null,
     messageCount = null,
-    mwtVersion = null,
+    mwtVersion = MWT_VERSION,
     source = 'manual',
     includeKnowledgeStore = true,
 } = {}) {

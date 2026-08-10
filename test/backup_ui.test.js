@@ -15,6 +15,8 @@ import {
     summarizePreview,
     buildRestoreModes,
     readRestoreControlValues,
+    formatSectionChangeBits,
+    describePreviewFailure,
     SECTION_ORDER,
     SECTION_LABELS,
 } from '../backup/render.js';
@@ -200,6 +202,73 @@ describe('readRestoreControlValues', () => {
 
     test('returns {} when no root is available (modal not in DOM)', () => {
         expect(readRestoreControlValues(null)).toEqual({});
+    });
+});
+
+describe('formatSectionChangeBits', () => {
+    test('exact-mode removal surfaces as "will be removed", never "0 replaced"', () => {
+        const desc = describeSectionSummary('chronicle', {
+            mode: 'exact', action: 'removed', replaced: 0, removed: 1, unchanged: 0, skipped: [], conflicts: 0,
+        });
+        expect(formatSectionChangeBits(desc)).toEqual([{ text: 'will be removed', tone: 'danger' }]);
+    });
+
+    test('exact-mode replaced/unchanged keep their labels', () => {
+        const replaced = describeSectionSummary('worldState', {
+            mode: 'exact', action: 'replaced', replaced: 1, removed: 0, unchanged: 0, skipped: [], conflicts: 0,
+        });
+        expect(formatSectionChangeBits(replaced)).toEqual([{ text: '1 replaced', tone: 'normal' }]);
+        const unchanged = describeSectionSummary('worldState', {
+            mode: 'exact', action: 'unchanged', replaced: 0, removed: 0, unchanged: 1, skipped: [], conflicts: 0,
+        });
+        expect(formatSectionChangeBits(unchanged)).toEqual([{ text: 'unchanged', tone: 'normal' }]);
+    });
+
+    test('merge-mode counts, skips, and conflicts carry their tones', () => {
+        const desc = describeSectionSummary('chronicle', mergeSummary({
+            added: 3, updated: 1, skipped: [{ record: 'x', reason: 'bad' }], conflicts: 2,
+        }));
+        expect(formatSectionChangeBits(desc)).toEqual([
+            { text: '+3', tone: 'normal' },
+            { text: '~1', tone: 'normal' },
+            { text: '1 skipped', tone: 'warning' },
+            { text: '2 conflicts', tone: 'warning' },
+        ]);
+    });
+
+    test('a merge section with nothing to do reads "no change"', () => {
+        const desc = describeSectionSummary('chronicle', mergeSummary());
+        expect(formatSectionChangeBits(desc)).toEqual([{ text: 'no change', tone: 'normal' }]);
+    });
+});
+
+describe('describePreviewFailure', () => {
+    test('an unavailable knowledge store is an environment problem, not a bad file', () => {
+        const failure = describePreviewFailure({ ok: false, reason: 'knowledge-store-unavailable' });
+        expect(failure.kind).toBe('environment');
+        expect(failure.message).not.toContain('not a valid');
+        expect(failure.message).toContain('lorebook store');
+    });
+
+    test('a stale scope reports the chat change, not the file', () => {
+        const failure = describePreviewFailure({ ok: false, reason: 'stale-scope', staleReason: 'epoch-changed' });
+        expect(failure.kind).toBe('environment');
+        expect(failure.message).toContain('epoch-changed');
+    });
+
+    test('validation failures surface the validator\'s own errors', () => {
+        const failure = describePreviewFailure({
+            ok: false,
+            validation: { errors: ['Unrecognized backup type; expected "mwt-chat-backup".'] },
+        });
+        expect(failure.kind).toBe('invalid');
+        expect(failure.message).toContain('Unrecognized backup type');
+    });
+
+    test('falls back to the reason code when no validation detail exists', () => {
+        const failure = describePreviewFailure({ ok: false, reason: 'weird' });
+        expect(failure.kind).toBe('invalid');
+        expect(failure.message).toContain('weird');
     });
 });
 

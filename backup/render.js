@@ -142,6 +142,61 @@ export function summarizePreview(preview, envelope) {
 }
 
 /**
+ * Turn a described section (describeSectionSummary output) into display
+ * "change bits": [{text, tone}] with tone 'normal' | 'warning' | 'danger'.
+ * Pure so the destructive cases are unit-testable — in exact mode a section
+ * absent from the backup is DELETED at commit, and that must surface as
+ * "will be removed", never as "0 replaced".
+ */
+export function formatSectionChangeBits(desc) {
+    const bits = [];
+    if (desc.kind === 'exact') {
+        if (desc.action === 'removed') bits.push({ text: 'will be removed', tone: 'danger' });
+        else if (desc.action === 'unchanged') bits.push({ text: 'unchanged', tone: 'normal' });
+        else bits.push({ text: `${desc.added} replaced`, tone: 'normal' });
+    } else {
+        if (desc.added) bits.push({ text: `+${desc.added}`, tone: 'normal' });
+        if (desc.updated) bits.push({ text: `~${desc.updated}`, tone: 'normal' });
+        if (!desc.added && !desc.updated && !desc.skippedCount) bits.push({ text: 'no change', tone: 'normal' });
+    }
+    if (desc.skippedCount) bits.push({ text: `${desc.skippedCount} skipped`, tone: 'warning' });
+    if (desc.conflicts) bits.push({ text: `${desc.conflicts} conflict${desc.conflicts === 1 ? '' : 's'}`, tone: 'warning' });
+    return bits;
+}
+
+/**
+ * Explain a failed preview. Environment problems (lorebook store not loaded,
+ * chat switched mid-preview) must not be reported as "invalid backup file" —
+ * the file is fine and the user needs to fix the environment, not the backup.
+ * Validation failures surface the validator's own error sentences.
+ *
+ * @returns {{kind: 'environment'|'invalid', message: string}}
+ */
+export function describePreviewFailure(preview) {
+    const reason = preview?.reason;
+    if (reason === 'knowledge-store-unavailable') {
+        return {
+            kind: 'environment',
+            message: 'The Knowledge lorebook store is not loaded, so the registry cannot be previewed. '
+                + 'The backup file itself may be fine — reopen the chat, check the console for a '
+                + 'store-load error, then try again.',
+        };
+    }
+    if (reason === 'stale-scope') {
+        return {
+            kind: 'environment',
+            message: `The chat changed while previewing (${preview?.staleReason || 'scope changed'}). `
+                + 'Reopen the restore dialog in the target chat.',
+        };
+    }
+    const errors = preview?.validation?.errors;
+    if (Array.isArray(errors) && errors.length) {
+        return { kind: 'invalid', message: `This file is not a valid MWT backup: ${errors.join(' ')}` };
+    }
+    return { kind: 'invalid', message: `This file is not a valid MWT backup (${reason || 'rejected'}).` };
+}
+
+/**
  * Translate the summary-modal control values into the `modes` object the
  * planner/commit APIs expect. Pure: takes plain values, returns a plain object.
  *
@@ -352,22 +407,22 @@ function formatBackupMeta(summary) {
     return bits.length ? `<p class="mwt-text-dim mwt-text-sm" style="margin:0 0 8px">${bits.join(' · ')}</p>` : '';
 }
 
+const CHANGE_BIT_STYLES = Object.freeze({
+    warning: 'color:var(--mwt-warning)',
+    danger: 'color:var(--mwt-danger);font-weight:600',
+});
+
 function renderSummaryTable(container, sections) {
     if (!sections.length) {
         container.innerHTML = '<p class="mwt-text-dim mwt-text-sm">No sections in this backup.</p>';
         return;
     }
     const rows = sections.map(s => {
-        const changeBits = [];
-        if (s.kind === 'exact') {
-            changeBits.push(s.action === 'unchanged' ? 'unchanged' : `${s.added} replaced`);
-        } else {
-            if (s.added) changeBits.push(`+${s.added}`);
-            if (s.updated) changeBits.push(`~${s.updated}`);
-            if (!s.added && !s.updated && !s.skippedCount) changeBits.push('no change');
-        }
-        if (s.skippedCount) changeBits.push(`<span style="color:var(--mwt-warning)">${s.skippedCount} skipped</span>`);
-        if (s.conflicts) changeBits.push(`<span style="color:var(--mwt-warning)">${s.conflicts} conflict${s.conflicts === 1 ? '' : 's'}</span>`);
+        const changeBits = formatSectionChangeBits(s).map(bit => {
+            const style = CHANGE_BIT_STYLES[bit.tone];
+            const text = escapeHtml(bit.text);
+            return style ? `<span style="${style}">${text}</span>` : text;
+        });
         let pm = '';
         if (s.perMessage) {
             const note = s.perMessage.sameChat
@@ -468,6 +523,23 @@ async function refreshSummary() {
             return refreshSummary();
         }
     }
+
+    if (!preview.ok) {
+        // Environment failures (store not loaded, chat switched) are not file
+        // problems; validation failures surface the validator's own errors.
+        // Written into the table container (not inserted before it) so repeated
+        // refreshes never stack duplicate error paragraphs.
+        const failure = describePreviewFailure(preview);
+        modal.querySelector('#mwt-bk-summary-meta').innerHTML = '';
+        modal.querySelector('#mwt-bk-summary-warning').innerHTML = '';
+        modal.querySelector('#mwt-bk-summary-skipped').innerHTML = '';
+        if (exactNote) exactNote.style.display = 'none';
+        tableEl.innerHTML = `<p style="color:var(--mwt-danger)">${escapeHtml(failure.message)}</p>`;
+        setStatus(modal, failure.kind === 'environment'
+            ? 'Preview unavailable — fix the issue above, then try again.'
+            : 'Cannot restore this file.', 'error');
+        return;
+    }
     if (exactNote) {
         exactNote.style.display = exact ? 'block' : 'none';
         exactNote.textContent = exact
@@ -487,12 +559,6 @@ async function refreshSummary() {
     renderSummaryTable(tableEl, summary.sections);
     renderSkipped(modal.querySelector('#mwt-bk-summary-skipped'), summary.sections);
 
-    if (!preview.ok) {
-        tableEl.insertAdjacentHTML('beforebegin',
-            `<p style="color:var(--mwt-danger)">This file is not a valid MWT backup: ${escapeHtml(preview.reason || 'rejected')}.</p>`);
-        setStatus(modal, 'Cannot restore this file.', 'error');
-        return;
-    }
     setStatus(modal, 'Preview ready. Review the plan above, then confirm.', 'info');
     if (confirmBtn) confirmBtn.disabled = false;
 }
@@ -566,6 +632,10 @@ async function commitRestore() {
     }
     if (reason === 'confirmation-required') {
         setStatus(modal, 'Restore was not confirmed.', 'warning');
+        return;
+    }
+    if (reason === 'knowledge-store-unavailable') {
+        setStatus(modal, describePreviewFailure(result).message, 'error');
         return;
     }
     const detail = result.warning || result.error || reason || 'unknown error';

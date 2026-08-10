@@ -22,6 +22,7 @@ import {
     getFakeDownloadJsonCalls,
 } from './stubs/core.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
+import { MWT_VERSION } from '../core/version.js';
 import { _clearCacheForTests, _setCacheForTests, resetStoreCache, STORE_SENTINEL, withStoreLock, writeField } from '../knowledge/store.js';
 import { getRegistry, getStateRegistry } from '../knowledge/registry.js';
 import { getRelationships, getStance, getStances, getStanceSources, saveRelationships } from '../knowledge/relationships.js';
@@ -320,6 +321,9 @@ describe('unified backup Phase 2a collection/export', () => {
 
         getFakeMeta().world_state_tracker_metadata.text = 'after';
         expect(result.sections.worldState.data.text).toBe('before');
+        // Production exports must identify their writer; only explicit callers
+        // (tests, console) may override the version.
+        expect(result._meta.mwtVersion).toBe(MWT_VERSION);
         expect(getBackupChatName({ chatName: '  Named chat  ' }, { chatId: 'id' })).toBe('Named chat');
         expect(getBackupFilename(result, 123)).toBe('mwt_backup_A_Quiet_Evening_123.json');
     });

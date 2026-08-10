@@ -456,3 +456,6 @@ export function readApiSettingsValues() {
     return {};
 }
 export const createFloatingButtonBar = notImplemented('createFloatingButtonBar');
+// Pure constant — re-exported from the real module so barrel consumers see the
+// same version under tests as in production.
+export { MWT_VERSION } from '../../core/version.js';
