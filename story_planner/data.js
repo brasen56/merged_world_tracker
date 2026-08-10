@@ -9,6 +9,7 @@
  */
 
 import { getChatMeta, patchChatMeta } from '../core/index.js';
+import { getSettings, saveSettings } from './settings.js';
 
 // ─── STORY-PLANNER-04 / -09: Arc sanitizer ──────────────────────────────────
 //
@@ -203,6 +204,56 @@ export function getPlanData() {
 
 export function setPlanData(patch) {
     patchChatMeta(CHAT_DATA_KEY, patch);
+}
+
+const GLOBAL_SETTING_KEYS = ['injectMode', 'enforcement', 'arcCount', 'autoInterval', 'injectEnabled', 'autoEnabled'];
+
+// Historical per-chat defaults. Legacy records may contain only settings the
+// user changed, so missing keys must not inherit later global changes.
+const LEGACY_LOCAL_DEFAULTS = {
+    injectMode: 'all', enforcement: 'proactive', arcCount: 10,
+    autoInterval: 10, injectEnabled: true, autoEnabled: false,
+};
+
+export function usesGlobalDefaults() {
+    const data = getPlanData();
+    if (typeof data.useGlobalDefaults === 'boolean') return data.useGlobalDefaults;
+    return !GLOBAL_SETTING_KEYS.some(key => Object.prototype.hasOwnProperty.call(data, key));
+}
+
+export function setUsesGlobalDefaults(useGlobal) {
+    if (useGlobal === true) {
+        setPlanData({ useGlobalDefaults: true });
+        return;
+    }
+    // This only ever fires while the chat is currently on global defaults (the
+    // checkbox can't be unchecked from an already-unchecked state), so the
+    // snapshot must come from what's live right now — not from a stale
+    // settingsOverride left by an earlier local session, or a stale top-level
+    // field left by a pre-this-feature per-chat record. Preferring either of
+    // those would silently resurrect a value the user isn't currently seeing.
+    const globalSettings = getSettings();
+    const overrides = {};
+    for (const key of GLOBAL_SETTING_KEYS) {
+        overrides[key] = globalSettings[key] ?? LEGACY_LOCAL_DEFAULTS[key];
+    }
+    setPlanData({ useGlobalDefaults: false, settingsOverride: overrides });
+}
+
+export function getEffectivePlanSetting(key, fallback) {
+    const data = getPlanData();
+    if (!usesGlobalDefaults()) {
+        const override = data.settingsOverride?.[key];
+        if (override !== undefined) return override;
+        if (data[key] !== undefined) return data[key];
+        return LEGACY_LOCAL_DEFAULTS[key] ?? fallback;
+    }
+    return getSettings()[key] ?? fallback;
+}
+
+export function setPlanSetting(key, value) {
+    if (usesGlobalDefaults()) saveSettings({ [key]: value });
+    else setPlanData({ settingsOverride: { ...(getPlanData().settingsOverride || {}), [key]: value } });
 }
 
 // ─── Arc identity ────────────────────────────────────────────────────────────
@@ -739,15 +790,15 @@ export function toggleArcPinned(id) {
     return updateArc(id, { pinned: !arc.pinned });
 }
 
-// ─── Injection mode / steering settings (per chat) ───────────────────────────
+// ─── Injection mode / steering settings (global defaults or chat override) ────
 
 export function getInjectMode() {
-    const mode = getPlanData().injectMode;
+    const mode = getEffectivePlanSetting('injectMode', 'all');
     return INJECT_MODES.some(m => m.key === mode) ? mode : 'all';
 }
 
 export function getEnforcement() {
-    const mode = getPlanData().enforcement;
+    const mode = getEffectivePlanSetting('enforcement', 'proactive');
     return ENFORCEMENT_MODES.some(m => m.key === mode) ? mode : 'proactive';
 }
 
@@ -756,7 +807,7 @@ export function getDirectionHint() {
 }
 
 export function getArcCount() {
-    const v = Number(getPlanData().arcCount);
+    const v = Number(getEffectivePlanSetting('arcCount', 10));
     return Number.isFinite(v) ? Math.min(30, Math.max(3, v)) : 10;
 }
 
@@ -895,18 +946,18 @@ export function pushPlanToHistory(arcs) {
 }
 
 export function isInjectionEnabled() {
-    return getPlanData().injectEnabled !== false;
+    return getEffectivePlanSetting('injectEnabled', true) !== false;
 }
 
 // ─── Auto-trigger helpers ────────────────────────────────────────────────────
 
 export function getAutoInterval() {
-    const v = getPlanData().autoInterval;
+    const v = getEffectivePlanSetting('autoInterval', 10);
     return Number.isFinite(Number(v)) ? Math.max(1, Number(v)) : 10;
 }
 
 export function isAutoEnabled() {
-    return getPlanData().autoEnabled === true;
+    return getEffectivePlanSetting('autoEnabled', false) === true;
 }
 
 export function persistAutoCounter() {

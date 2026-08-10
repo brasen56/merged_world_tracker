@@ -27,6 +27,7 @@ import {
     getPlanHistory, pushPlanToHistory, historyEntryToText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta,
+    usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
 } from './data.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody } from './injection.js';
 import { generatePlan } from './generation.js';
@@ -106,6 +107,27 @@ function refreshButtonLabels() {
     }
 }
 
+/** Synchronize controls whose values come from the global/local scope layer. */
+function refreshScopedControls() {
+    if (!state.modal) return;
+    const mode = getInjectMode();
+    state.modal.querySelectorAll('input[name="sp-inject-mode"]').forEach(radio => {
+        radio.checked = radio.value === mode;
+    });
+    const enforcement = getEnforcement();
+    const push = state.modal.querySelector('#sp-enforcement');
+    if (push) push.value = enforcement;
+    const blurb = state.modal.querySelector('#sp-enforcement-blurb');
+    if (blurb) blurb.textContent = ENFORCEMENT_MODES.find(m => m.key === enforcement)?.blurb || '';
+
+    const arcCount = state.modal.querySelector('#sp-arc-count');
+    if (arcCount) arcCount.value = String(getArcCount());
+    const interval = state.modal.querySelector('#sp-auto-interval');
+    if (interval) interval.value = String(getAutoInterval());
+    const scope = state.modal.querySelector('#sp-use-global-defaults');
+    if (scope) scope.checked = usesGlobalDefaults();
+}
+
 /** Enable/disable the Revert button based on whether history exists. */
 function refreshRevertButton() {
     if (!state.modal) return;
@@ -122,6 +144,7 @@ export function refreshDisplay() {
     updateToolbarStats();
     updateAutoBanner();
     refreshButtonLabels();
+    refreshScopedControls();
     refreshRevertButton();
 }
 
@@ -297,6 +320,12 @@ export function render() {
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">⚙️ Story Planner Settings</summary>
             <div class="mwt-settings-grid mwt-mt-8">
                 ${renderApiSettingsFields(s, { ...SP_API_FIELD_IDS, includeAdvanced: true, includeHeaders: true })}
+
+                <label class="mwt-label">Settings Scope</label>
+                <div>
+                    <label class="sp-mode-label"><input id="sp-use-global-defaults" type="checkbox" ${usesGlobalDefaults() ? 'checked' : ''}> Use global defaults</label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When checked, Inject, Push, Arcs Per Generation, Auto, and its interval are shared by new and existing chats. Uncheck to override them for this chat.</p>
+                </div>
 
                 <label class="mwt-label">Direction Hint</label>
                 <div>
@@ -604,7 +633,7 @@ export function wireEvents() {
     state.modal.querySelectorAll('input[name="sp-inject-mode"]').forEach(radio => {
         radio.addEventListener('change', () => {
             if (!radio.checked) return;
-            setPlanData({ injectMode: radio.value });
+            setPlanSetting('injectMode', radio.value);
             applyPlanInjection();
             renderArcs();
         });
@@ -612,7 +641,7 @@ export function wireEvents() {
 
     // Enforcement ("Push") — applies immediately, like the inject-mode radios.
     state.modal.querySelector('#sp-enforcement')?.addEventListener('change', (e) => {
-        setPlanData({ enforcement: e.target.value });
+        setPlanSetting('enforcement', e.target.value);
         applyPlanInjection();
         const blurb = state.modal.querySelector('#sp-enforcement-blurb');
         if (blurb) blurb.textContent = ENFORCEMENT_MODES.find(m => m.key === getEnforcement())?.blurb || '';
@@ -672,10 +701,10 @@ export function wireEvents() {
         });
         const nudgeTurnsRaw = state.modal.querySelector('#sp-nudge-turns')?.value;
         const nudgeTurns = nudgeTurnsRaw === '' ? OVERDUE_TURNS : Number(nudgeTurnsRaw);
+        setPlanSetting('autoInterval', isNaN(autoInterval) ? 10 : Math.max(1, autoInterval));
+        setPlanSetting('arcCount', isNaN(arcCount) ? 10 : Math.min(30, Math.max(3, arcCount)));
         setPlanData({
-            autoInterval: isNaN(autoInterval) ? 10 : Math.max(1, autoInterval),
             directionHint: state.modal.querySelector('#sp-direction-hint')?.value || '',
-            arcCount: isNaN(arcCount) ? 10 : Math.min(30, Math.max(3, arcCount)),
             nudgeEnabled: state.modal.querySelector('#sp-nudge-enabled')?.checked !== false,
             nudgeTurns: isNaN(nudgeTurns) ? OVERDUE_TURNS : Math.min(60, Math.max(3, nudgeTurns)),
         });
@@ -686,7 +715,7 @@ export function wireEvents() {
 
     // Toggle injection
     state.modal.querySelector('#sp-toggle-inject')?.addEventListener('click', () => {
-        setPlanData({ injectEnabled: !isInjectionEnabled() });
+        setPlanSetting('injectEnabled', !isInjectionEnabled());
         applyPlanInjection();
         refreshDisplay();
     });
@@ -694,12 +723,19 @@ export function wireEvents() {
     // Toggle auto-generate
     state.modal.querySelector('#sp-toggle-auto')?.addEventListener('click', () => {
         const now = !isAutoEnabled();
-        setPlanData({ autoEnabled: now });
+        setPlanSetting('autoEnabled', now);
         if (now) {
             state.autoCounter = 0;
             setPlanData({ autoCounter: 0 });
         }
         refreshDisplay();
+    });
+
+    state.modal.querySelector('#sp-use-global-defaults')?.addEventListener('change', (e) => {
+        setUsesGlobalDefaults(e.target.checked);
+        refreshDisplay();
+        applyPlanInjection();
+        notify('Story Planner', e.target.checked ? 'Using global defaults.' : 'Using settings for this chat.', 'info');
     });
 }
 

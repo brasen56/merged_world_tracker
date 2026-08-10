@@ -21,6 +21,7 @@ import {
     parseWorldStateImport,
     getAutoSaveHistory, pushToHistory,
     isInjectionEnabled, isAutoRefreshEnabled, getAutoRefreshInterval,
+    usesGlobalDefaults, setUsesGlobalDefaults, setWorldSetting,
     getMaxScanMessages, setProvenance, getProvenance,
 } from './data.js';
 import {
@@ -477,6 +478,12 @@ export function render() {
             <div class="mwt-settings-grid mwt-mt-8">
                 ${renderApiSettingsFields(s, { urlId: 'ws-api-url', keyId: 'ws-api-key', modelId: 'ws-model', maxTokensId: 'ws-max-tokens', tempId: 'ws-temp', includeAdvanced: false, includeHeaders: false })}
 
+                <label class="mwt-label">Settings Scope</label>
+                <div>
+                    <label class="mwt-text-sm"><input id="ws-use-global-defaults" type="checkbox" ${usesGlobalDefaults() ? 'checked' : ''}> Use global defaults</label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When checked, Injection, Auto, and its interval are shared across chats. Uncheck to override them for this chat.</p>
+                </div>
+
                 <label class="mwt-label">Injection Depth</label>
                 <input id="ws-injection-depth" class="mwt-input" type="number" value="${s.injectionDepth ?? 1}" min="0" max="999">
 
@@ -763,7 +770,7 @@ export function wireEvents() {
     // Toggle injection
     state.modal.querySelector('#ws-toggle-inject')?.addEventListener('click', () => {
         const next = !isInjectionEnabled();
-        setWorldStateData({ injectEnabled: next });
+        setWorldSetting('injectEnabled', next);
         applyWorldStateInjection();
         refreshButtonLabels();
         setStatus(state.modal, `Injection ${next ? 'enabled' : 'disabled'}.`, 'info', 3000);
@@ -808,13 +815,22 @@ export function wireEvents() {
             state.autoRefreshCounter = 0;
             // Persist the reset counter together with the auto-refresh flags
             // so a stale value isn't restored on the next chat change.
-            setWorldStateData({ autoRefresh: true, autoRefreshInterval: interval, autoRefreshCounter: 0 });
+            setWorldSetting('autoRefresh', true);
+            setWorldSetting('autoRefreshInterval', interval);
+            setWorldStateData({ autoRefreshCounter: 0 });
             if (n <= maxScan) setStatus(state.modal, `Auto-refresh: every ${interval} messages.`, 'success', 3000);
         } else {
-            setWorldStateData({ autoRefresh: false });
+            setWorldSetting('autoRefresh', false);
             setStatus(state.modal, 'Auto-refresh disabled.', 'info', 3000);
         }
         refreshButtonLabels();
+    });
+
+    state.modal.querySelector('#ws-use-global-defaults')?.addEventListener('change', (e) => {
+        setUsesGlobalDefaults(e.target.checked);
+        renderModalContent();
+        applyWorldStateInjection();
+        setStatus(state.modal, e.target.checked ? 'Using global defaults.' : 'Using settings for this chat.', 'info', 3000);
     });
 
     // Reset prompt

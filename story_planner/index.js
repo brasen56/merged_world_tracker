@@ -17,7 +17,7 @@ import { syncSharedConnectionSettings, notify, getChat, captureScope, assertSame
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
-    state, getPlanData, setPlanData,
+    state, getPlanData, setPlanSetting,
     getArcs, serializeArcsToText, incrementArcTurns,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
@@ -323,7 +323,7 @@ export async function triggerGenerate() {
 }
 
 export function setInjectionEnabled(enabled) {
-    setPlanData({ injectEnabled: !!enabled });
+    setPlanSetting('injectEnabled', !!enabled);
     applyPlanInjection();
 }
 

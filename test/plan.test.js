@@ -9,10 +9,86 @@
  * duplicates the arc instead of matching it.
  */
 
-import { describe, test, expect } from 'vitest';
+import { beforeEach, describe, test, expect } from 'vitest';
 import {
     makeArc, parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
 } from '../story_planner/data.js';
+import {
+    getInjectMode, getArcCount, getAutoInterval, isInjectionEnabled, isAutoEnabled,
+    usesGlobalDefaults,
+    setUsesGlobalDefaults, setPlanSetting,
+} from '../story_planner/data.js';
+import { resetCoreStubs, getFakeMeta, getFakeExtSettings } from './stubs/core.js';
+
+describe('story planner settings scope', () => {
+    beforeEach(() => resetCoreStubs());
+
+    test('new chats resolve global defaults', () => {
+        getFakeExtSettings().mwt_story_planner = {
+            injectMode: 'pinned', arcCount: 6, autoInterval: 14,
+        };
+        expect(usesGlobalDefaults()).toBe(true);
+        expect(getInjectMode()).toBe('pinned');
+        expect(getArcCount()).toBe(6);
+        expect(getAutoInterval()).toBe(14);
+    });
+
+    test('chat overrides remain isolated from global defaults', () => {
+        getFakeExtSettings().mwt_story_planner = { injectMode: 'pinned', arcCount: 6 };
+        setUsesGlobalDefaults(false);
+        setPlanSetting('injectMode', 'active');
+        setPlanSetting('arcCount', 18);
+        expect(getInjectMode()).toBe('active');
+        expect(getArcCount()).toBe(18);
+        expect(getFakeExtSettings().mwt_story_planner.injectMode).toBe('pinned');
+        expect(getFakeMeta().story_planner_data.settingsOverride).toMatchObject({ injectMode: 'active', arcCount: 18 });
+    });
+
+    test('entering local mode snapshots every effective setting', () => {
+        getFakeExtSettings().mwt_story_planner = {
+            injectMode: 'pinned', enforcement: 'assertive', arcCount: 6,
+            autoInterval: 14, injectEnabled: false, autoEnabled: true,
+        };
+        setUsesGlobalDefaults(false);
+        const overrides = getFakeMeta().story_planner_data.settingsOverride;
+        expect(overrides).toEqual({
+            injectMode: 'pinned', enforcement: 'assertive', arcCount: 6,
+            autoInterval: 14, injectEnabled: false, autoEnabled: true,
+        });
+        getFakeExtSettings().mwt_story_planner.autoEnabled = false;
+        expect(isAutoEnabled()).toBe(true);
+        expect(isInjectionEnabled()).toBe(false);
+    });
+
+    test('legacy local records use historical defaults for missing keys', () => {
+        getFakeExtSettings().mwt_story_planner = { autoEnabled: true, arcCount: 4 };
+        getFakeMeta().story_planner_data = { useGlobalDefaults: false, autoEnabled: false };
+        expect(isAutoEnabled()).toBe(false);
+        expect(getInjectMode()).toBe('all');
+        expect(getAutoInterval()).toBe(10);
+    });
+
+    test('re-entering local mode snapshots the current global value, not a stale one', () => {
+        // A pre-existing chat left over from before this feature: it already
+        // carries a per-chat injectMode from the old all-local-only storage.
+        getFakeMeta().story_planner_data = { injectMode: 'pinned' };
+        getFakeExtSettings().mwt_story_planner = { injectMode: 'all' };
+        expect(usesGlobalDefaults()).toBe(false); // legacy heuristic
+        expect(getInjectMode()).toBe('pinned');
+
+        // Switch the chat to global defaults, then let the global value change
+        // (e.g. edited from the Settings tab, or by another chat).
+        setUsesGlobalDefaults(true);
+        expect(getInjectMode()).toBe('all');
+        getFakeExtSettings().mwt_story_planner.injectMode = 'active';
+        expect(getInjectMode()).toBe('active');
+
+        // Opt this chat back out of global defaults. The starting point must
+        // be what was just in effect ('active'), not the old buried 'pinned'.
+        setUsesGlobalDefaults(false);
+        expect(getInjectMode()).toBe('active');
+    });
+});
 
 describe('arc flag round-trip', () => {
 

@@ -7,6 +7,7 @@
 import {
     getChatMeta, patchChatMeta, escapeRegex,
 } from '../core/index.js';
+import { getSettings, saveSettings } from './settings.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -126,6 +127,52 @@ export function setWorldStateData(patch) {
     patchChatMeta(CHAT_DATA_KEY, patch);
 }
 
+const GLOBAL_SETTING_KEYS = ['injectEnabled', 'autoRefresh', 'autoRefreshInterval'];
+
+// Historical per-chat defaults for legacy local records.
+const LEGACY_LOCAL_DEFAULTS = { injectEnabled: true, autoRefresh: false, autoRefreshInterval: 5 };
+
+export function usesGlobalDefaults() {
+    const data = getWorldStateData();
+    if (typeof data.useGlobalDefaults === 'boolean') return data.useGlobalDefaults;
+    return !GLOBAL_SETTING_KEYS.some(key => Object.prototype.hasOwnProperty.call(data, key));
+}
+
+export function setUsesGlobalDefaults(useGlobal) {
+    if (useGlobal === true) {
+        setWorldStateData({ useGlobalDefaults: true });
+        return;
+    }
+    // This only ever fires while the chat is currently on global defaults (the
+    // checkbox can't be unchecked from an already-unchecked state), so the
+    // snapshot must come from what's live right now — not from a stale
+    // settingsOverride left by an earlier local session, or a stale top-level
+    // field left by a pre-this-feature per-chat record. Preferring either of
+    // those would silently resurrect a value the user isn't currently seeing.
+    const globalSettings = getSettings();
+    const overrides = {};
+    for (const key of GLOBAL_SETTING_KEYS) {
+        overrides[key] = globalSettings[key] ?? LEGACY_LOCAL_DEFAULTS[key];
+    }
+    setWorldStateData({ useGlobalDefaults: false, settingsOverride: overrides });
+}
+
+export function getEffectiveWorldSetting(key, fallback) {
+    const data = getWorldStateData();
+    if (!usesGlobalDefaults()) {
+        const override = data.settingsOverride?.[key];
+        if (override !== undefined) return override;
+        if (data[key] !== undefined) return data[key];
+        return LEGACY_LOCAL_DEFAULTS[key] ?? fallback;
+    }
+    return getSettings()[key] ?? fallback;
+}
+
+export function setWorldSetting(key, value) {
+    if (usesGlobalDefaults()) saveSettings({ [key]: value });
+    else setWorldStateData({ settingsOverride: { ...(getWorldStateData().settingsOverride || {}), [key]: value } });
+}
+
 // ─── Import validation (WORLD-STATE-07) ──────────────────────────────────────
 
 /**
@@ -228,11 +275,11 @@ export function pushAutoSave(text) {
 // ─── Auto-refresh data queries ──────────────────────────────────────────────
 
 export function isAutoRefreshEnabled() {
-    return getWorldStateData().autoRefresh === true;
+    return getEffectiveWorldSetting('autoRefresh', false) === true;
 }
 
 export function getAutoRefreshInterval() {
-    return getWorldStateData().autoRefreshInterval || 5;
+    return getEffectiveWorldSetting('autoRefreshInterval', 5) || 5;
 }
 
 export function persistAutoRefreshCounter() {
@@ -247,7 +294,7 @@ export function resetAutoRefreshCounter() {
 // ─── Injection flags ─────────────────────────────────────────────────────────
 
 export function isInjectionEnabled() {
-    return getWorldStateData().injectEnabled !== false;
+    return getEffectiveWorldSetting('injectEnabled', true) !== false;
 }
 
 // ─── Scan helpers ────────────────────────────────────────────────────────────

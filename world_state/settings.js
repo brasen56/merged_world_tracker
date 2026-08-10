@@ -42,6 +42,9 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
         // Comma-separated names that never expire and are never flagged as
         // ungrounded (e.g. the protagonist/POV character).
         pinnedEntities: '',
+        injectEnabled: true,
+        autoRefresh: false,
+        autoRefreshInterval: 5,
     },
     logPrefix: '[MWT:WorldState]',
 });

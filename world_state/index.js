@@ -18,10 +18,11 @@ import { syncSharedConnectionSettings, estimateTokens, getChat } from '../core/i
 
 import { getSettings, saveSettings } from './settings.js';
 import {
-    state, getWorldStateData, getWorldStateText, setWorldStateData,
+    state, getWorldStateData, getWorldStateText,
     persistAutoRefreshCounter, resetAutoRefreshCounter,
     isAutoRefreshEnabled, getAutoRefreshInterval,
     setProvenance,
+    setWorldSetting,
 } from './data.js';
 import {
     WORLD_STATE_INJECTION_HEADER, applyWorldStateInjection,
@@ -188,6 +189,6 @@ export async function triggerRefresh() {
 
 /** Slash command / macro: set injection enabled/disabled */
 export function setInjectionEnabled(enabled) {
-    setWorldStateData({ injectEnabled: !!enabled });
+    setWorldSetting('injectEnabled', !!enabled);
     applyWorldStateInjection();
 }

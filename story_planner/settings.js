@@ -26,6 +26,12 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
         customSystemPrompt: '',
         customUserPrompt: '',
         injectionDepth: 4,
+        injectMode: 'all',
+        enforcement: 'proactive',
+        arcCount: 10,
+        autoInterval: 10,
+        injectEnabled: true,
+        autoEnabled: false,
     },
     logPrefix: '[MWT:StoryPlanner]',
 });

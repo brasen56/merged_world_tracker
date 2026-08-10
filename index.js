@@ -536,11 +536,16 @@ if (eventSource && event_types?.CHAT_CHANGED) {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         bumpEpoch(); // Tier 0.2 — invalidate all in-flight scope tokens BEFORE module handlers
         console.log('[MWT] Chat changed — resetting state.');
+        const activeTab = modal?.querySelector('.mwt-tab-btn.active')?.dataset.tab;
         WorldState.onChatChanged();
         Chronicle.onChatChanged();
         Knowledge.onChatChanged();
         StoryPlanner.onChatChanged();
         Interiority.onChatChanged();
+        if (modal?.style.display === 'flex') {
+            renderModal();
+            if (activeTab) modal.querySelector(`.mwt-tab-btn[data-tab="${activeTab}"]`)?.click();
+        }
     });
 }
 
