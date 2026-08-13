@@ -7,6 +7,44 @@
 
 import { getContextSafe } from './context.js';
 import { getGlobalSettings } from './settings.js';
+import { recordApiCall } from './diagnostics.js';
+
+function apiModule(settings) {
+    return settings?.module || settings?.moduleKey || 'api';
+}
+
+function usageSummary(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    return {
+        prompt_tokens: usage.prompt_tokens ?? null,
+        completion_tokens: usage.completion_tokens ?? null,
+        total_tokens: usage.total_tokens ?? null,
+    };
+}
+
+function errorClass(err) {
+    if (err?._isHtmlResponse) return 'HTML-response';
+    if (err?._isNoContent) return 'no-content';
+    if (err?._isLengthError) return '_isLengthError';
+    if (err?._noRetry) return '_noRetry';
+    return err ? (err.name || 'Error') : 'Error';
+}
+
+function captureApiCall({ startedAt, settings, mode, name, attempts, status, finishReason, usage, error }) {
+    recordApiCall({
+        module: apiModule(settings),
+        mode,
+        model: name,
+        durationMs: Date.now() - startedAt,
+        retries: Math.max(0, attempts - 1),
+        status,
+        finish_reason: finishReason,
+        usage: usageSummary(usage),
+        ...(error ? { errorClass: errorClass(error) } : {}),
+        ok: !error,
+        at: Date.now(),
+    });
+}
 
 /**
  * Strip trailing slashes and an accidental /chat/completions suffix.
@@ -105,6 +143,11 @@ export async function fetchFromApi({
     settings,
     retries = 2,
 }) {
+    const startedAt = Date.now();
+    let attempts = 0;
+    let status = null;
+    let finishReason = null;
+    let usage = null;
     const base = normalizeApiBase(settings.apiUrl);
     const endpoint = `${base}/chat/completions`;
 
@@ -138,13 +181,16 @@ export async function fetchFromApi({
     if (settings.frequencyPenalty != null) payload.frequency_penalty = finiteNumber(settings.frequencyPenalty, 0);
     if (settings.presencePenalty != null) payload.presence_penalty = finiteNumber(settings.presencePenalty, 0);
 
-    return retryAsync(retries, async (attempt) => {
+    try {
+        const apiContent = await retryAsync(retries, async (attempt) => {
+        attempts = attempt + 1;
         console.log(`[MWT API] POST ${endpoint} model=${settings.modelName} attempt=${attempt}`);
         const response = await fetch(endpoint, {
             method: 'POST',
             headers,
             body: JSON.stringify(payload),
         });
+        status = response.status ?? null;
 
         if (!response.ok) {
             const errText = await response.text().catch(() => response.statusText);
@@ -157,6 +203,7 @@ export async function fetchFromApi({
                     `For OpenAI-compatible APIs, use a base URL like https://api.openai.com/v1`
                 );
                 err._noRetry = true;
+                err._isHtmlResponse = true;
                 throw err;
             }
 
@@ -169,10 +216,12 @@ export async function fetchFromApi({
         }
 
         const data = await response.json();
+        usage = data?.usage ?? null;
         const message = data?.choices?.[0]?.message;
         let content = message?.content;
-        const finishReason = data?.choices?.[0]?.finish_reason
+        const detectedFinishReason = data?.choices?.[0]?.finish_reason
             ?? data?.finish_reason ?? data?.finishReason ?? null;
+        finishReason = detectedFinishReason;
 
         // Truncation detection. finish_reason="length" means the model hit the
         // max_tokens cap mid-generation, so any returned content is a partial,
@@ -181,7 +230,7 @@ export async function fetchFromApi({
         // returning the broken text. This is especially common with reasoning
         // models (which spend part of the token budget on thinking) and with
         // large outputs such as Knowledge Tracker Dossier Mode scans.
-        if (finishReason === 'length') {
+        if (detectedFinishReason === 'length') {
             const err = new Error(
                 `Response truncated — the model hit the Max Tokens limit (${settings.maxTokens}) ` +
                 `before finishing (finish_reason="length"). ` +
@@ -204,6 +253,7 @@ export async function fetchFromApi({
             } else {
                 const err = new Error('API returned no content. Response: ' + JSON.stringify(data).slice(0, 300));
                 err._noRetry = true;
+                err._isNoContent = true;
                 throw err;
             }
         }
@@ -214,7 +264,13 @@ export async function fetchFromApi({
         }
 
         return content;
-    });
+        });
+        captureApiCall({ startedAt, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage });
+        return apiContent;
+    } catch (error) {
+        captureApiCall({ startedAt, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage, error });
+        throw error;
+    }
 }
 
 /**
@@ -230,8 +286,13 @@ export async function fetchFromApi({
  * @returns {Promise<string>} the raw content string
  */
 export async function fetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2 }) {
+    const startedAt = Date.now();
+    let attempts = 0;
+    let status = null;
+    let finishReason = null;
+    let usage = null;
     // Lazy-load ConnectionManagerRequestService from ST's shared.js
-    const sharedModule = await import('../../../shared.js');
+    const sharedModule = await import('../../../../shared.js');
     const ConnectionManagerRequestService = sharedModule.ConnectionManagerRequestService;
 
     if (!ConnectionManagerRequestService) {
@@ -267,7 +328,9 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
         : messages;
     const maxTokens = Number(settings.maxTokens) || 2000;
 
-    return retryAsync(retries, async (attempt) => {
+    try {
+        const cmText = await retryAsync(retries, async (attempt) => {
+        attempts = attempt + 1;
         console.log(`[MWT API] Using Connection Profile: ${profileId}, attempt=${attempt}`);
         const result = await ConnectionManagerRequestService.sendRequest(
             profileId,
@@ -279,6 +342,8 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
                 includeInstruct: true,
             },
         );
+        status = result?.status ?? result?.statusCode ?? null;
+        usage = result?.usage ?? null;
 
         // Truncation detection — see fetchFromApi for rationale. finish_reason
         // can surface in several shapes depending on ST version and extractData:
@@ -289,6 +354,7 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
         // e.g. a connection profile whose own preset caps below `maxTokens`.
         const cmFinishReason = result?.choices?.[0]?.finish_reason
             ?? result?.finish_reason ?? result?.finishReason ?? null;
+        finishReason = cmFinishReason;
         const cmCompletionTokens = result?.usage?.completion_tokens
             ?? result?.completion_tokens ?? null;
         console.log(
@@ -336,11 +402,17 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
         }
 
         return text;
-    }, {
+        }, {
         onRetry: (err, attempt, delay) => {
             console.warn(`[MWT API] Connection profile request failed (attempt ${attempt + 1}): ${err.message}. Retrying in ${delay}ms...`);
         },
-    });
+        });
+        captureApiCall({ startedAt, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage });
+        return cmText;
+    } catch (error) {
+        captureApiCall({ startedAt, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage, error });
+        throw error;
+    }
 }
 
 /**

@@ -16,6 +16,11 @@ import { createModal, showModal, setStatus } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
 import { createCommands } from './core/commands.js';
 import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
+// Diagnostics accessors (Phases 0–1). Read-only peek at the in-memory capture,
+// exposed to testers as window.MWT.diagnostics near the bottom of this file.
+// Imported directly (not via the core/index.js barrel) so the namespace reads
+// the real singleton regardless of the test-only barrel→stub alias.
+import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastRuns, clearEvents, clearApiCalls, clearLastRuns } from './core/diagnostics.js';
 
 // ─── Feature module imports ─────────────────────────────────────────────────
 
@@ -1099,5 +1104,112 @@ window.MWT.backup = {
     undo: undoLastRestore,
     fingerprintPreview,
 };
+
+// ── Diagnostics console namespace (Phases 0–1) ──────────────────────────────
+//
+// Read-only, in-memory peek at the capture the diagnostics panel will later
+// show. See upcoming_work_misc/DIAGNOSTICS_CONSOLE_GUIDE.md for the tester
+// guide. Captures TELEMETRY ONLY — no prompts, API keys, custom headers, or
+// response bodies — and nothing here writes to chat_metadata, localStorage, or
+// settings. The buffer resets on page reload.
+//
+// Usage examples:
+//   MWT.diagnostics.events()                    // event ring, newest first
+//   MWT.diagnostics.events({ level: 'error' })  // only errors
+//   MWT.diagnostics.events({ module: 'api' })   // only one module
+//   MWT.diagnostics.apiCalls()                  // last ~20 API calls, newest first
+//   MWT.diagnostics.lastApiCall('world_state')  // most recent call for one module
+//   MWT.diagnostics.lastApiCalls()              // last call per module
+//   MWT.diagnostics.lastRuns()                  // per-module last-run stamps
+//   MWT.diagnostics.clear()                     // wipe the in-memory buffer
+//
+// Each method prints a console.table(...) and RETURNS the full data, so the
+// return value can be copied for the complete JSON (the table hides nested
+// fields like usage/detail).
+window.MWT.diagnostics = {
+    events: (filter = {}) => {
+        const events = getEvents(filter);
+        console.table(events.map(e => ({
+            time: new Date(e.ts).toLocaleTimeString(),
+            level: e.level,
+            module: e.module,
+            event: e.event,
+        })));
+        console.log(events.length
+            ? `[MWT] ${events.length} event(s) shown (newest first). The return value carries full detail for copy-paste.`
+            : '[MWT] No diagnostics events captured yet — the buffer is in-memory and resets on reload.');
+        return events;
+    },
+
+    apiCalls: () => {
+        const calls = getApiCalls();
+        console.table(calls.map(c => ({
+            time: new Date(c.at).toLocaleTimeString(),
+            module: c.module,
+            mode: c.mode,
+            model: c.model,
+            status: c.status,
+            ok: c.ok,
+            durationMs: c.durationMs,
+            retries: c.retries,
+            errorClass: c.errorClass ?? null,
+            finish_reason: c.finish_reason ?? null,
+        })));
+        console.log(calls.length
+            ? `[MWT] ${calls.length} API call(s) shown (newest first). The return value carries full usage for copy-paste.`
+            : '[MWT] No API calls captured yet.');
+        return calls;
+    },
+
+    lastApiCall: (module = 'api') => {
+        const call = getLastApiCall(module);
+        if (!call) { console.log(`[MWT] No API call captured for module "${module}".`); return undefined; }
+        console.log(`[MWT] Last API call (${module}):`, call);
+        return call;
+    },
+
+    lastApiCalls: () => {
+        const byModule = getAllLastApiCalls();
+        const rows = Object.entries(byModule).map(([module, c]) => ({
+            module,
+            mode: c.mode,
+            model: c.model,
+            status: c.status,
+            ok: c.ok,
+            durationMs: c.durationMs,
+            errorClass: c.errorClass ?? null,
+            time: new Date(c.at).toLocaleTimeString(),
+        }));
+        console.table(rows);
+        if (rows.length === 0) console.log('[MWT] No API calls captured yet.');
+        return byModule;
+    },
+
+    lastRuns: () => {
+        const runs = getAllLastRuns();
+        const rows = Object.entries(runs).map(([module, r]) => ({
+            module,
+            startedAt: r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : null,
+            finishedAt: r.finishedAt ? new Date(r.finishedAt).toLocaleTimeString() : null,
+            ok: r.ok,
+            error: r.error,
+            tokensIn: r.tokensIn,
+            tokensOut: r.tokensOut,
+            trigger: r.trigger,
+        }));
+        console.table(rows);
+        if (rows.length === 0) console.log('[MWT] No module runs recorded yet.');
+        return runs;
+    },
+
+    clear: () => {
+        clearEvents();
+        clearApiCalls();
+        clearLastRuns();
+        console.log('[MWT] Diagnostics buffer cleared (events + API calls + last runs). In-memory only — nothing persisted.');
+    },
+};
+
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

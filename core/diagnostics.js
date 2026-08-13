@@ -35,6 +35,9 @@ export const RING_CAPACITY = 200;
 /** Severity levels, low → high. Used for validation and filtering. */
 export const LEVELS = ['debug', 'info', 'warn', 'error'];
 
+/** Maximum number of API call summaries retained separately from log events. */
+export const API_CALL_CAPACITY = 20;
+
 // ─── State ───────────────────────────────────────────────────────────────────
 // Module-level (singleton) state, mirroring the pattern in core/scope.js
 // (_epoch). Cleared on page reload; reset between tests via
@@ -51,6 +54,12 @@ let _events = [];
  * "__proto__" could never collide with inherited properties.
  */
 const _lastRuns = Object.create(null);
+
+/** API call summaries, oldest first. The event ring also receives each summary. */
+let _apiCalls = [];
+
+/** Most recent API call per module key. Values are copies of entries in _apiCalls. */
+const _lastApiCalls = Object.create(null);
 
 /**
  * Resolver for the chat-identity key stamped on every record(). Defaults to
@@ -135,6 +144,56 @@ export function getEvents({ level, module, since } = {}) {
  */
 export function clearEvents() {
     _events = [];
+}
+
+/**
+ * Record a completed API call summary. This intentionally stores telemetry only;
+ * callers must redact or omit prompts, keys, headers, and response bodies.
+ *
+ * @param {object} [call]
+ * @param {string} [call.module] feature/module key, defaulting to "api"
+ * @returns {object|undefined} the stored summary
+ */
+export function recordApiCall(call = {}) {
+    if (!call || typeof call !== 'object') return undefined;
+    const module = typeof call.module === 'string' && call.module ? call.module : 'api';
+    const summary = { ...call, module };
+    _apiCalls.push(summary);
+    if (_apiCalls.length > API_CALL_CAPACITY) {
+        _apiCalls.splice(0, _apiCalls.length - API_CALL_CAPACITY);
+    }
+    _lastApiCalls[module] = { ...summary };
+    record({
+        level: summary.errorClass ? 'error' : 'info',
+        module: 'api',
+        event: 'api_call',
+        detail: summary,
+    });
+    return { ...summary };
+}
+
+/** @returns {object[]} API calls newest first */
+export function getApiCalls() {
+    return _apiCalls.slice().reverse().map(call => ({ ...call }));
+}
+
+/** @param {string} [module] @returns {object|undefined} */
+export function getLastApiCall(module = 'api') {
+    const call = _lastApiCalls[module];
+    return call ? { ...call } : undefined;
+}
+
+/** @returns {object} per-module last API call copies */
+export function getAllLastApiCalls() {
+    const out = {};
+    for (const key of Object.keys(_lastApiCalls)) out[key] = { ..._lastApiCalls[key] };
+    return out;
+}
+
+/** Clear API call summaries without affecting ordinary log events. */
+export function clearApiCalls() {
+    _apiCalls = [];
+    for (const key of Object.keys(_lastApiCalls)) delete _lastApiCalls[key];
 }
 
 // ─── Last-run map ────────────────────────────────────────────────────────────
@@ -229,6 +288,7 @@ export function _setScopeKeyResolver(fn) {
  */
 export function _resetDiagnostics() {
     _events = [];
+    clearApiCalls();
     clearLastRuns();
     _resolveScopeKey = defaultResolveScopeKey;
 }

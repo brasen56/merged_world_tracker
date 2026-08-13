@@ -483,4 +483,9 @@ export {
     getLastRun,
     getAllLastRuns,
     clearLastRuns,
+    recordApiCall,
+    getApiCalls,
+    getLastApiCall,
+    getAllLastApiCalls,
+    clearApiCalls,
 } from '../../core/diagnostics.js';

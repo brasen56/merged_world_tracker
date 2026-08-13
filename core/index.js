@@ -32,6 +32,11 @@ export {
     getLastRun,
     getAllLastRuns,
     clearLastRuns,
+    recordApiCall,
+    getApiCalls,
+    getLastApiCall,
+    getAllLastApiCalls,
+    clearApiCalls,
 } from './diagnostics.js';
 export { downloadBlob, downloadJson, pickTextFile } from './file.js';
 export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
