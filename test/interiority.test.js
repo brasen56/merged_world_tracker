@@ -268,6 +268,33 @@ describe('the roster unions registry NPCs missing from Present:', () => {
         expect(roster).not.toContain('Alex');
         expect(roster).toContain('Mara');
     });
+
+    test('parenthetical location/status annotations are stripped from Present:', async () => {
+        // THE BUG (reported from live use): the world-state model annotates
+        // each name with a parenthetical — "Simon (living room, unpacking)".
+        // Splitting on the parenthetical's INNER comma shattered names into
+        // garbage roster tokens ("Simon (living room", "unpacking)",
+        // "Charlotte ", "asleep)"), inflating the roster to five junk entries.
+        _setCacheForTests('Knowledge Tracker', {
+            registry: { 'Simon': { uid: 1 }, 'Charlotte': { uid: 2 }, 'Sophie': { uid: 3 } },
+        });
+        getFakeMeta()[REGISTRY_KEY] = {
+            'Simon': { uid: 1 }, 'Charlotte': { uid: 2 }, 'Sophie': { uid: 3 },
+        };
+        setFakeContextExtras({ name1: 'Alex', name2: 'Simon' });
+        getFakeMeta()[WORLD_STATE_METADATA_KEY] = {
+            text: 'Present: Simon (living room, unpacking), Charlotte (bedroom, asleep), Sophie (bedroom, in bed)',
+        };
+        // No recent messages — the Present line alone must parse to clean
+        // names, so this isolates the parser from the registry union.
+        setFakeChat([]);
+
+        const roster = await buildSceneRoster();
+        expect(roster).toEqual(expect.arrayContaining(['Simon', 'Charlotte', 'Sophie']));
+        // No garbage tokens and no leftover bracketed fragments.
+        expect(roster).not.toContain('unpacking)');
+        expect(roster.every(n => !/[()[\]]/.test(n))).toBe(true);
+    });
 });
 
 describe('the intentions call can see scheduled intentions', () => {

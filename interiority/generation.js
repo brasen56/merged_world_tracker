@@ -162,6 +162,14 @@ export async function buildSceneRoster() {
         const presentMatch = worldState.match(/^Present:\s*(.+)$/im);
         if (presentMatch) {
             sceneNames = presentMatch[1]
+                // The template asks for names only, but the model routinely
+                // annotates each name with a parenthetical location/status —
+                // "Simon (living room, unpacking)". Those parentheticals
+                // contain commas, so strip every bracketed group BEFORE
+                // splitting on commas; otherwise each annotation shatters into
+                // garbage roster tokens ("Simon (living room", "unpacking)",
+                // "Charlotte ", "asleep)", ...).
+                .replace(/\s*[([][^)\]]*[)\]]/g, '')
                 .split(/[,;]|\band\b/i)
                 .map(s => s.trim())
                 .filter(Boolean);
