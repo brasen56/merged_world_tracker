@@ -41,7 +41,7 @@ export default defineConfig({
             // The stub satisfies the import; tests that exercise real behavior
             // inject their own state.wiScript in beforeEach.
             '../../../../world-info.js': fileURLToPath(new URL('./test/stubs/world-info.js', import.meta.url)),
-            '../../../../shared.js': fileURLToPath(new URL('./test/stubs/shared.js', import.meta.url)),
+            '../../../shared.js': fileURLToPath(new URL('./test/stubs/shared.js', import.meta.url)),
         },
     },
 });

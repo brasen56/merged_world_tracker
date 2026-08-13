@@ -292,7 +292,7 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
     let finishReason = null;
     let usage = null;
     // Lazy-load ConnectionManagerRequestService from ST's shared.js
-    const sharedModule = await import('../../../../shared.js');
+    const sharedModule = await import('../../../shared.js');
     const ConnectionManagerRequestService = sharedModule.ConnectionManagerRequestService;
 
     if (!ConnectionManagerRequestService) {
