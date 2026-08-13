@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.5.1]
+
+### Added
+- Diagnostics (partial; Phase 1 no UI);  please see DIAGNOSTICS_CONSOLE_GUIDE.md to use it!
+
+### Fixed
+- Potential bug with Intentions/Thoughts not picking up second NPC Card (changed the fallback to include last few messages instead of only Present field in World State (commit ccd72239b74ff5999147deae9b46fac07b51423e))
+
+
 ## [1.5.0]
 
 ### Added
