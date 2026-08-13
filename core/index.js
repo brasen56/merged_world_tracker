@@ -19,6 +19,20 @@ export {
     WORLD_STATE_METADATA_KEY,
 } from './metadata.js';
 export { notify } from './notifications.js';
+// Phase 0 diagnostics — in-memory ring buffer + last-run map
+// (core/diagnostics.js). Pure module; re-exported through the barrel so feature
+// code can import it alongside the other core helpers. Mirrored in
+// test/stubs/core.js for the barrel→stub alias.
+export {
+    record,
+    getEvents,
+    clearEvents,
+    setRunStart,
+    setRunResult,
+    getLastRun,
+    getAllLastRuns,
+    clearLastRuns,
+} from './diagnostics.js';
 export { downloadBlob, downloadJson, pickTextFile } from './file.js';
 export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from './strip.js';

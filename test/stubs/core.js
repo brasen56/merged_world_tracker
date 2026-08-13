@@ -40,6 +40,12 @@
 // functions below are thin accessors over them. `resetCoreStubs()` clears
 // them so tests don't leak state into one another.
 
+// Direct import (NOT a re-export): resetCoreStubs() must clear the real
+// diagnostics singleton so events/last-runs don't leak between tests once later
+// phases call record() through the barrel. _resetDiagnostics stays out of the
+// production barrel — only this test stub reaches it.
+import { _resetDiagnostics } from '../../core/diagnostics.js';
+
 let _chat = [];
 let _meta = {};
 let _contextExtras = {};
@@ -64,6 +70,10 @@ export function resetCoreStubs() {
     _promptCalls = [];
     _statusCalls = [];
     _downloadJsonCalls = [];
+    // Clear the real diagnostics singleton (events + last-runs), since the stub
+    // now re-exports it from core/diagnostics.js. Without this, record() calls
+    // made through the barrel by later phases would leak across tests.
+    _resetDiagnostics();
 }
 
 /**
@@ -459,3 +469,18 @@ export const createFloatingButtonBar = notImplemented('createFloatingButtonBar')
 // Pure constant — re-exported from the real module so barrel consumers see the
 // same version under tests as in production.
 export { MWT_VERSION } from '../../core/version.js';
+// Diagnostics accessors (Phase 0). Re-exported from the REAL module so feature
+// code reaching record()/getEvents()/... through the barrel sees the SAME
+// singleton state under test as in production (the barrel→stub alias trap —
+// see DIAGNOSTICS_PANEL_PHASES.md "Repo-specific traps"). diagnostics.js is a
+// pure in-memory module with no SillyTavern dependency, so no faking is needed.
+export {
+    record,
+    getEvents,
+    clearEvents,
+    setRunStart,
+    setRunResult,
+    getLastRun,
+    getAllLastRuns,
+    clearLastRuns,
+} from '../../core/diagnostics.js';

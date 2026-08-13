@@ -176,7 +176,7 @@ export async function buildSceneRoster() {
     //    the roster, so they never get thoughts/intentions. Appended AFTER the
     //    `Present:` names so that if the cap is hit the authoritative
     //    world-state names win the slots.
-    let registryPresent = [];
+    const registryPresent = [];
     try {
         const registry = getChatMeta(REGISTRY_KEY);
         if (registry && Object.keys(registry).length > 0) {
