@@ -168,33 +168,54 @@ export async function buildSceneRoster() {
         }
     }
 
-    // 2. Fallback: Knowledge Tracker registry names in recent messages
-    if (sceneNames.length === 0) {
-        try {
-            const registry = getChatMeta(REGISTRY_KEY);
-            if (registry && Object.keys(registry).length > 0) {
-                const recent = getRecentMessages({ maxMessages: 10, maxChars: 50000 });
-                if (recent) {
-                    for (const name of Object.keys(registry)) {
-                        if (exclude(name, canonicalize(name))) continue;
-                        const re = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
-                        if (re.test(recent)) sceneNames.push(name);
-                    }
+    // 2. UNION in Knowledge Tracker registry names that appear in recent
+    //    messages. This now runs ALWAYS, not only when `Present:` is empty.
+    //    The world-state tracker regularly writes an INCOMPLETE `Present:`
+    //    line (e.g. names only the card's primary NPC), which used to strand
+    //    every other in-scene NPC: they have a knowledge record but never make
+    //    the roster, so they never get thoughts/intentions. Appended AFTER the
+    //    `Present:` names so that if the cap is hit the authoritative
+    //    world-state names win the slots.
+    let registryPresent = [];
+    try {
+        const registry = getChatMeta(REGISTRY_KEY);
+        if (registry && Object.keys(registry).length > 0) {
+            const recent = getRecentMessages({ maxMessages: 10, maxChars: 50000 });
+            if (recent) {
+                for (const name of Object.keys(registry)) {
+                    const re = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
+                    if (re.test(recent)) registryPresent.push(name);
                 }
             }
-        } catch { /* knowledge module data unavailable */ }
-    }
+        }
+    } catch { /* knowledge module data unavailable */ }
 
-    // 3. Fallback: {{char}} name only
-    if (sceneNames.length === 0) {
+    // 3. Fallback: {{char}} name only — used only when nothing else resolved.
+    if (sceneNames.length === 0 && registryPresent.length === 0) {
         const ctx = getContextSafe();
         if (ctx?.name2) sceneNames.push(ctx.name2);
     }
 
     // Scene NPCs fill the capped slots (cap counts scene additions only).
-    for (const n of sceneNames) {
+    // Order: `Present:` names first (authoritative), then registry-derived
+    // names (gap-fill). addUnique() dedupes case-insensitively and applies the
+    // player-character exclusion, so overlap between the two lists is harmless.
+    const presentCanonLower = new Set(sceneNames.map(s => canonicalize(s).toLowerCase()));
+    for (const n of [...sceneNames, ...registryPresent]) {
         if (roster.length - ledgerCount >= maxNpcs) break;
         addUnique(n);
+    }
+
+    // Diagnostic: name the NPCs the registry union rescued from an incomplete
+    // `Present:` line — this is exactly the failure this union addresses, so
+    // make it visible in the log instead of silently working.
+    if (sceneNames.length > 0) {
+        const rescued = roster
+            .slice(ledgerCount)
+            .filter(r => !presentCanonLower.has(r.toLowerCase()));
+        if (rescued.length > 0) {
+            console.log(`[MWT:Interiority] Roster union rescued ${rescued.join(', ')} — present in the scene (knowledge registry + recent messages) but missing from the world-state Present: line.`);
+        }
     }
 
     // Say so when the player character was filtered out. This used to be

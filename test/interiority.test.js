@@ -13,8 +13,10 @@
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
-    resetCoreStubs, setFakeContextExtras, getFakeMeta, WORLD_STATE_METADATA_KEY,
+    resetCoreStubs, setFakeContextExtras, getFakeMeta, setFakeChat,
+    WORLD_STATE_METADATA_KEY,
 } from './stubs/core.js';
+import { REGISTRY_KEY } from '../knowledge/state.js';
 import {
     getLedger, setLedger, restoreLedgerSnapshot,
     addLedgerEntry, updateLedgerEntry, hasDuplicateIntention,
@@ -210,6 +212,61 @@ describe('the player character never reaches the roster', () => {
         // The filter must not become "exclude anyone named like the user".
         const roster = await buildSceneRoster();
         expect(roster).toContain('Ezra Blackwell');
+    });
+});
+
+describe('the roster unions registry NPCs missing from Present:', () => {
+
+    // THE BUG (reported from live use): a scene with two card NPCs gave
+    // thoughts/intentions to only the first — "the first one named in the
+    // card". The world-state tracker wrote a `Present:` line naming only the
+    // primary NPC, and the knowledge-registry fallback was gated behind
+    // `if (sceneNames.length === 0)`. A non-empty but INCOMPLETE Present line
+    // therefore stranded every other in-scene NPC: they had a knowledge record
+    // but never joined the roster, so they never got interiority. The fix
+    // unions registry names found in recent messages WITH the Present line
+    // instead of using them only as an all-or-nothing fallback.
+
+    beforeEach(() => {
+        _clearCacheForTests();
+        saveKnowledgeSettings({ scope: 'global' });
+        // Both NPCs are known to the knowledge tracker (canonicalizer source).
+        _setCacheForTests('Knowledge Tracker', {
+            registry: { 'Ezra Blackwell': { uid: 1 }, 'Mara': { uid: 2 } },
+        });
+        // The chat-metadata registry — what buildSceneRoster's union reads.
+        getFakeMeta()[REGISTRY_KEY] = {
+            'Ezra Blackwell': { uid: 1 }, 'Mara': { uid: 2 },
+        };
+        setFakeContextExtras({ name1: 'Alex', name2: 'Ezra Blackwell' });
+        // The world-state tracker named ONLY the first NPC — the incomplete
+        // line that reproduces the bug.
+        getFakeMeta()[WORLD_STATE_METADATA_KEY] = { text: 'Present: Ezra Blackwell' };
+        // ...but both NPCs actually appear in recent messages.
+        setFakeChat([
+            { mes: 'Ezra leaned against the doorframe.', name: 'Ezra Blackwell', is_user: false },
+            { mes: 'Mara looked up from her book and frowned.', name: 'Mara', is_user: false },
+        ]);
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    test('an NPC omitted from Present: is rescued via the registry union', async () => {
+        const roster = await buildSceneRoster();
+        expect(roster).toContain('Ezra Blackwell'); // from Present:
+        expect(roster).toContain('Mara');           // rescued by the union
+    });
+
+    test('the player character is still excluded from the union', async () => {
+        // The union must not become a back door for the PC: even when the
+        // user's name is in the registry and recent messages, they stay out.
+        getFakeMeta()[REGISTRY_KEY]['Alex'] = { uid: 3 };
+        setFakeChat([
+            { mes: 'Alex crossed the room toward Mara.', name: 'Alex', is_user: true },
+            { mes: 'Mara looked up.', name: 'Mara', is_user: false },
+        ]);
+        const roster = await buildSceneRoster();
+        expect(roster).not.toContain('Alex');
+        expect(roster).toContain('Mara');
     });
 });
 
