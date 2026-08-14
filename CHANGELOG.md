@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.6.0] - Unreleased
+
+### Fixed
+- Trackers should now ignore last 2 messages (except interiority)
+- Swipes advancing the dormant-poll schedule
+- Wake-survival leak for intentions
+
+## [1.5.2] - 2026-08-13
+
+### Fixed
+- Interiority roster: strip parenthetical location/status annotations from the
+  World State `Present:` line before parsing, so names like
+  `Simon (living room, unpacking)` are no longer shattered into garbage NPC
+  tokens (`Simon (living room`, `unpacking)`, …) (commit eb345fb).
+- Corrected shared-module import paths in `core/api.js` and the Vitest config
+  (commit 2fadb30).
+
 ## [1.5.1]
 
 ### Added
@@ -155,7 +172,10 @@ and the shared core. Summarized here by theme rather than by individual commit.
 
 ---
 
-[1.5.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.23...HEAD
+[1.6.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/brasen56/merged_world_tracker/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/brasen56/merged_world_tracker/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.23...v1.5.0
 [1.4.23]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.7...v1.4.23
 [1.4.7]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.0...v1.4.7
 [1.4.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.3.0...v1.4.0
