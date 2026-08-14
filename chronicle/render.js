@@ -507,7 +507,8 @@ function bindMainEvents() {
     el.querySelector('#sc-reset-btn')?.addEventListener('click', () => {
         showConfirm('Clear all chronicle data?', 'Everything will be deleted.', () => {
             state.msgSinceSnapshot = 0;
-            setChronicleData({ snapshots: [], _deletedBin: [], injectEnabled: false, injectCount: 2, injectDepth: 2, msgSinceSnapshot: 0 });
+            state.countedReceiptEvents.clear();
+            setChronicleData({ snapshots: [], _deletedBin: [], injectEnabled: false, injectCount: 2, injectDepth: 2, msgSinceSnapshot: 0, countedReceiptEvents: [] });
             applyInjection();
             renderContent();
             scSetStatus('Chronicle cleared.', 'success');

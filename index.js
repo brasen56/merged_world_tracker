@@ -123,6 +123,9 @@ const { getSettings, saveSettings } = createSettingsManager({
         presencePenalty: 0,
         customHeaders: '',
         connectionProfileId: '',
+        // Newest messages to defer from ordinary tracker history scans. The
+        // current user/assistant exchange can still be swiped or discarded.
+        recentHistoryExclude: 2,
         // Per-module injection settings
         worldStateDepth: 4,
         worldStateRole: 'system',
@@ -214,6 +217,16 @@ function renderSettingsTab() {
                 <button id="mwt-s-save" class="mwt-btn mwt-btn-primary">Save Settings</button>
                 <button id="mwt-s-sync" class="mwt-btn" title="Copy these API settings to all module-specific configs">↓ Sync to Modules</button>
             </div>
+        </div>
+
+        <hr style="border-color:var(--mwt-border);margin:16px 0">
+        <h3 style="margin-bottom:8px">🕒 Stable History</h3>
+        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
+            Defer the newest chat messages from World State, Chronicle, Knowledge, Relationships, Growth, and Story Planner scans. They are included on a later refresh instead of discarded. <strong>2</strong> usually means the latest user/assistant exchange. Interiority is intentionally excluded because it evaluates the current turn.
+        </p>
+        <div class="mwt-settings-grid">
+            <label class="mwt-label" for="mwt-s-recent-history-exclude">Messages to defer</label>
+            <input id="mwt-s-recent-history-exclude" class="mwt-input" type="number" value="${s.recentHistoryExclude ?? 2}" min="0" max="10" step="1">
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -437,9 +450,14 @@ function renderModal() {
                 const n = parseInt(modal.querySelector(sel)?.value, 10);
                 return Number.isFinite(n) && n >= 0 ? n : fallback;
             };
+            const rawRecentHistoryExclude = Number(modal.querySelector('#mwt-s-recent-history-exclude')?.value);
+            const recentHistoryExclude = Number.isFinite(rawRecentHistoryExclude)
+                ? Math.min(10, Math.max(0, Math.round(rawRecentHistoryExclude)))
+                : 2;
             const patch = {
                 ...apiValues,
                 connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
+                recentHistoryExclude,
                 // Per-module injection settings
                 worldStateDepth: depthOr('#mwt-s-ws-depth', 4),
                 worldStateRole: modal.querySelector('#mwt-s-ws-role')?.value || 'system',

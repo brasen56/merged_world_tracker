@@ -794,6 +794,27 @@ export function incrementTurnCounter() {
 }
 
 /**
+ * Restore the turn counter to a rollback value (§9 swipe/edit/delete).
+ *
+ * The counter increments once per applied generation — and swipes cause
+ * generations, so without a rollback every swipe cycle consumed a phantom
+ * turn and dragged the dormant poll forward ahead of real story time. The
+ * rollback paths restore the counter captured before the invalidated turn;
+ * the regeneration then re-increments it, so a swipe cycle nets to zero.
+ * Because {@link isDormantPollDue} looks ahead by one, a poll that fired on
+ * the discarded turn fires again on the regenerated one and re-decides its
+ * wakes against the surviving content.
+ *
+ * @param {number} value - counter value captured before the rolled-back turn
+ */
+export function restoreTurnCounter(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return;
+    const data = getInteriorityData();
+    data.turnCounter = Math.floor(value);
+    saveInteriorityData(data);
+}
+
+/**
  * Get the effective dormant-poll interval (turns).
  *
  * §21 makes the poll interval the only dormancy knob: it is user-configurable

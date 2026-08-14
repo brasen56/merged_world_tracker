@@ -32,6 +32,9 @@ describe('CHRONICLE-03 — messages arriving during generation survive the reset
         setFakeChat([
             { id: 'm0', name: 'User', is_user: true, mes: 'The first scene.' },
             { id: 'm1', name: 'Mara', mes: 'The second scene.' },
+            { id: 'm2', name: 'User', is_user: true, mes: 'The third scene.' },
+            { id: 'm3', name: 'Mara', mes: 'The fourth scene.' },
+            { id: 'm4', name: 'User', is_user: true, mes: 'The fifth scene.' },
         ]);
         const { state } = await import('../chronicle/data.js');
         state.isGenerating = false;
@@ -59,8 +62,11 @@ describe('CHRONICLE-03 — messages arriving during generation survive the reset
         release('## Summary\nA valid generated summary.\n\n## Time Anchor\nIn-world date and time at end of this period: 2026-01-01 10:00');
         await pending;
 
-        expect(state.msgSinceSnapshot).toBe(3);
-        expect(getChronicleData().msgSinceSnapshot).toBe(3);
+        // The window ends before the excluded in-flight tail (2 messages), so
+        // MESSAGE_RECEIVED counts arrivals, not raw chat entries. The excluded
+        // pair preserves one assistant receipt alongside the 3 arrivals: 4.
+        expect(state.msgSinceSnapshot).toBe(4);
+        expect(getChronicleData().msgSinceSnapshot).toBe(4);
     });
 
     test('a deletion during generation cannot drive the counter negative', async () => {

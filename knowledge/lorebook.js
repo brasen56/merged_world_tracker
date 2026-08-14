@@ -10,7 +10,7 @@ import {
     getChat, getPlayerNames, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, getLatestChronicleEntry,
-    stripNonNarrative,
+    stripNonNarrative, getStableHistoryEnd,
 } from '../core/index.js';
 
 import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
@@ -63,7 +63,8 @@ export function getHistory(uid, lorebook = getLorebookName()) {
 export function getRecentMessages(count = 50) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
-    const slice = chat.slice(-count);
+    const end = getStableHistoryEnd(chat);
+    const slice = chat.slice(Math.max(0, end - count), end);
     const filtered = slice.filter(m => m.mes && !m.is_system);
     if (!filtered.length) return null;
     // Strip non-narrative blocks (preset trackers, old chatter, time tags)

@@ -140,6 +140,15 @@ export function getChat() {
     return _chat;
 }
 
+export function getOrCreateReceiptIdentity(message) {
+    if (!message || typeof message !== 'object') return null;
+    if (message.id != null && String(message.id).trim()) return `id:${message.id}`;
+    if (message.extra?.mesid != null && String(message.extra.mesid).trim()) return `mesid:${message.extra.mesid}`;
+    if (!message.extra || typeof message.extra !== 'object') message.extra = {};
+    if (!message.extra.mwt_uuid) message.extra.mwt_uuid = 'test-' + Math.random().toString(36).slice(2);
+    return `uuid:${message.extra.mwt_uuid}`;
+}
+
 export function getChatMeta(key) {
     if (key !== undefined) return _meta[key];
     return _meta;
@@ -154,8 +163,11 @@ export function getRecentMessages({
     maxMessages = 50,
     maxChars = 500000,
     filterSystem = false,
+    excludeLast = 0,
+    stableHistory = false,
 } = {}) {
-    let slice = _chat.slice(-maxMessages);
+    const end = stableHistory ? getStableHistoryEnd(_chat) : Math.max(0, _chat.length - excludeLast);
+    let slice = _chat.slice(Math.max(0, end - maxMessages), end);
     if (filterSystem) {
         slice = slice.filter(m => !m?.is_system && m?.extra?.type !== 'narrator');
     }
@@ -172,6 +184,18 @@ export function getRecentMessages({
         total += line.length + 1;
     }
     return lines.reverse().join('\n');
+}
+
+/** Mirror core/context.js's configurable stable-history cutoff for modules that
+ * import the test-only core barrel. */
+export function getRecentHistoryExclude() {
+    const parsed = Number(getGlobalSettings().recentHistoryExclude);
+    if (!Number.isFinite(parsed)) return 2;
+    return Math.min(10, Math.max(0, Math.round(parsed)));
+}
+
+export function getStableHistoryEnd(chat = _chat) {
+    return Math.max(0, (chat?.length || 0) - getRecentHistoryExclude());
 }
 
 export function getPlayerNames({ lower = true, includeFirstChat = false } = {}) {
@@ -466,8 +490,9 @@ export function readApiSettingsValues() {
     return {};
 }
 export const createFloatingButtonBar = notImplemented('createFloatingButtonBar');
-// Pure constant — re-exported from the real module so barrel consumers see the
-// same version under tests as in production.
+// Pure shared bounds — re-exported from the real module so production and test
+// barrel consumers agree on the supported setting range.
+export { DEFAULT_RECENT_HISTORY_EXCLUDE, MAX_RECENT_HISTORY_EXCLUDE } from '../../core/context.js';
 export { MWT_VERSION } from '../../core/version.js';
 // Diagnostics accessors (Phase 0). Re-exported from the REAL module so feature
 // code reaching record()/getEvents()/... through the barrel sees the SAME

@@ -8,7 +8,7 @@ import {
     getChat,
     resolveApiCall, normaliseOutput, notify,
     getCurrentWorldState, getLatestChronicleEntry,
-    stripNonNarrative,
+    stripNonNarrative, getStableHistoryEnd,
     captureScope, assertSameScope,
     captureRevision, sameRevision,
     wrapTag, escapePromptText,
@@ -25,11 +25,12 @@ import { applyPlanInjection } from './injection.js';
 
 // ─── Message scan helper ─────────────────────────────────────────────────────
 
-function getRecentMessagesForPlan() {
+export function getRecentMessagesForPlan() {
     const chat = getChat();
     if (!chat || !chat.length) return '';
     const max = 40;
-    const slice = chat.slice(-max);
+    const end = getStableHistoryEnd(chat);
+    const slice = chat.slice(Math.max(0, end - max), end);
     const lines = [];
     let total = 0;
     const maxChars = 30000;

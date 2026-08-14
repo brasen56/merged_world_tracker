@@ -5,7 +5,7 @@
  * consumed by the root index.js.  All implementation lives in sub-files.
  */
 
-import { getChat, escapeRegex, estimateTokens, getChatMeta, patchChatMeta, captureScope, assertSameScope } from '../core/index.js';
+import { getChat, escapeRegex, estimateTokens, getChatMeta, patchChatMeta, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
 
 import { state, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
@@ -35,6 +35,7 @@ export function persistCounters() {
         npcMessageCounter: state.npcMessageCounter,
         growthMessageCounter: state.growthMessageCounter,
         relationshipMessageCounter: state.relationshipMessageCounter,
+        countedReceiptEvents: [...state.countedReceiptEvents.entries()],
     });
 }
 
@@ -79,7 +80,8 @@ export function onMessageReceived({ countMessage = true } = {}) {
     // which auto-triggers are enabled — so onMessageDeleted always computes
     // `removed` from a live length instead of a frozen one. (Hoisted above the
     // early returns for PANIC-COUNTER-SYMMETRY.)
-    state.lastChatLength = getChat()?.length || 0;
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
 
     const settings = getSettings();
     const stateAuto = !!settings.autoTriggerEnabled;
@@ -128,6 +130,27 @@ export function onMessageReceived({ countMessage = true } = {}) {
         if (state.relationshipMessageCounter >= everyN) {
             state.relationshipMessageCounter = 0;
             doRel = true;
+        }
+    }
+
+    const receipt = [...chat].reverse().find(msg => msg && !msg.is_user && !msg.is_system);
+    if (receipt) {
+        const key = getReceiptIdentity(receipt);
+        const counts = state.countedReceiptEvents.get(key) || {};
+        if (stateAuto && !doState) counts.state = (counts.state || 0) + 1;
+        if (npcAuto && !doNpc) counts.npc = (counts.npc || 0) + 1;
+        if (growthAuto && !doGrowth) counts.growth = (counts.growth || 0) + 1;
+        if (relAuto && !doRel) counts.relationship = (counts.relationship || 0) + 1;
+        if (Object.keys(counts).length) state.countedReceiptEvents.set(key, counts);
+    }
+    // Each counter that reached its interval starts a new cadence. Drop only
+    // that cadence's provenance; the other independently configured counters
+    // may still have active work on the same receipt.
+    for (const type of [doState && 'state', doNpc && 'npc', doGrowth && 'growth', doRel && 'relationship'].filter(Boolean)) {
+        for (const [key, counts] of state.countedReceiptEvents) {
+            delete counts[type];
+            if (Object.keys(counts).length) state.countedReceiptEvents.set(key, counts);
+            else state.countedReceiptEvents.delete(key);
         }
     }
 
@@ -393,7 +416,10 @@ export function onChatChanged() {
     state.npcMessageCounter = (typeof saved?.npcMessageCounter === 'number' && Number.isFinite(saved.npcMessageCounter)) ? saved.npcMessageCounter : 0;
     state.growthMessageCounter = (typeof saved?.growthMessageCounter === 'number' && Number.isFinite(saved.growthMessageCounter)) ? saved.growthMessageCounter : 0;
     state.relationshipMessageCounter = (typeof saved?.relationshipMessageCounter === 'number' && Number.isFinite(saved.relationshipMessageCounter)) ? saved.relationshipMessageCounter : 0;
-    state.lastChatLength = getChat()?.length || 0;
+    state.countedReceiptEvents = new Map((Array.isArray(saved?.countedReceiptEvents) ? saved.countedReceiptEvents : [])
+        .filter(([key, counts]) => typeof key === 'string' && key && counts && typeof counts === 'object'));
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
     state.isRunning = false;
     state.stagingItems = [];
     state.activeItemId = null;
@@ -468,28 +494,38 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    const liveReceiptKeys = new Set((getChat() || []).filter(msg => msg && !msg.is_user && !msg.is_system).map(getReceiptIdentity));
+    const removedReceipts = { state: 0, npc: 0, growth: 0, relationship: 0 };
+    let provenanceChanged = false;
+    for (const [key, counts] of state.countedReceiptEvents) {
+        if (!liveReceiptKeys.has(key)) {
+            for (const type of Object.keys(removedReceipts)) removedReceipts[type] += Number.isInteger(counts[type]) ? counts[type] : 0;
+            state.countedReceiptEvents.delete(key);
+            provenanceChanged = true;
+        }
+    }
     // Bookkeeping — ALWAYS live
     state.lastChatLength = currentLen;
 
     let changed = false;
     if (adjustCounters) {
         if (settings.autoTriggerEnabled && state.messageCounter > 0) {
-            state.messageCounter = Math.max(0, state.messageCounter - removed);
+            state.messageCounter = Math.max(0, state.messageCounter - removedReceipts.state);
             changed = true;
             console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — state counter adjusted to ${state.messageCounter}`);
         }
         if (settings.npcAutoScanEnabled && state.npcMessageCounter > 0) {
-            state.npcMessageCounter = Math.max(0, state.npcMessageCounter - removed);
+            state.npcMessageCounter = Math.max(0, state.npcMessageCounter - removedReceipts.npc);
             changed = true;
             console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — NPC counter adjusted to ${state.npcMessageCounter}`);
         }
         if (settings.growthAutoCaptureEnabled && state.growthMessageCounter > 0) {
-            state.growthMessageCounter = Math.max(0, state.growthMessageCounter - removed);
+            state.growthMessageCounter = Math.max(0, state.growthMessageCounter - removedReceipts.growth);
             changed = true;
             console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — growth counter adjusted to ${state.growthMessageCounter}`);
         }
         if (settings.relationshipAutoExtractEnabled && state.relationshipMessageCounter > 0) {
-            state.relationshipMessageCounter = Math.max(0, state.relationshipMessageCounter - removed);
+            state.relationshipMessageCounter = Math.max(0, state.relationshipMessageCounter - removedReceipts.relationship);
             changed = true;
             console.log(`[MWT:Knowledge] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — relationship counter adjusted to ${state.relationshipMessageCounter}`);
         }
@@ -508,7 +544,11 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
         }
     }
 
-    if (changed) persistCounters();
+    if (changed || provenanceChanged) persistCounters();
+}
+
+function getReceiptIdentity(message) {
+    return getOrCreateReceiptIdentity(message);
 }
 
 // ─── Token tracking ──────────────────────────────────────────────────────────

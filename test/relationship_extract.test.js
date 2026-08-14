@@ -315,7 +315,11 @@ describe('runRelationshipExtract — chat-switch guard', () => {
     beforeEach(() => {
         mockFetch.mockReset();
         _resetEpoch();
-        setFakeChat([{ mes: 'Mara greets Jonah warmly.', name: 'Narrator', is_user: false }]);
+        setFakeChat([
+            { mes: 'An earlier scene.', name: 'Narrator', is_user: false },
+            { mes: 'Beck lingers by the door.', name: 'Narrator', is_user: false },
+            { mes: 'Mara greets Jonah warmly.', name: 'Narrator', is_user: false },
+        ]);
         saveSettings({ apiUrl: 'https://example.invalid/v1', modelName: 'test-model' });
         // core/scope.js reads the chat id straight off the SillyTavern global,
         // not through the core stub. Without a resolvable id every identity is
@@ -331,6 +335,13 @@ describe('runRelationshipExtract — chat-switch guard', () => {
         mockFetch.mockResolvedValue(PAYLOAD);
         const result = await runRelationshipExtract();
         expect(mockFetch).toHaveBeenCalledTimes(1);
+        // The in-flight tail (the two most recent messages) must not reach the
+        // model — it can still be swiped/discarded. Only the settled history
+        // (here, the first of three messages) is sent in the prompt.
+        const userContent = mockFetch.mock.calls[0][1];
+        expect(userContent).toContain('An earlier scene.');
+        expect(userContent).not.toContain('Beck lingers by the door.');
+        expect(userContent).not.toContain('Mara greets Jonah warmly.');
         expect(result.edgesAdded).toBe(1);
         expect(result.stancesSet).toBe(1);
         expect(getNpcRelationships('Mara')).toEqual([{ target: 'Jonah', type: 'friend', notes: 'childhood', source: SOURCE_AUTO }]);

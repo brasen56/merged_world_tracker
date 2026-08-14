@@ -8,6 +8,9 @@
 
 import { stripNonNarrative } from './strip.js';
 
+/** Global settings key, kept here to avoid a context ↔ settings import cycle. */
+const GLOBAL_SETTINGS_KEY = 'merged_world_tracker';
+
 /**
  * Returns the SillyTavern context object, or null if unavailable.
  * Tries both the modern namespace and the legacy global.
@@ -37,12 +40,53 @@ export function getChat() {
 }
 
 /**
+ * Number of trailing chat messages to exclude from tracker "recent message"
+ * scans. The final user + assistant pair is usually still in flight when a
+ * refresh fires (it can be swiped, edited, or discarded), so feeding it into
+ * world-state / knowledge / story-planner scans makes trackers stale or
+ * misrepresent the current scene. Set to 0 to disable.
+ */
+export const DEFAULT_RECENT_HISTORY_EXCLUDE = 2;
+export const MAX_RECENT_HISTORY_EXCLUDE = 10;
+
+/**
+ * Read and clamp the global number of newest messages that are considered
+ * in-flight rather than stable history. This is intentionally global: World
+ * State, Chronicle, Knowledge, Relationships, Growth, and Story Planner must
+ * agree on the same cutoff. Interiority evaluates the current turn and does
+ * not call this helper.
+ *
+ * @returns {number} integer in the inclusive range 0–10
+ */
+export function getRecentHistoryExclude() {
+    const raw = getContextSafe()?.extensionSettings?.[GLOBAL_SETTINGS_KEY]?.recentHistoryExclude;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return DEFAULT_RECENT_HISTORY_EXCLUDE;
+    return Math.min(MAX_RECENT_HISTORY_EXCLUDE, Math.max(0, Math.round(parsed)));
+}
+
+/**
+ * Return the exclusive end index of settled chat history. Messages at or after
+ * this index are the configurable in-flight tail and must be deferred for a
+ * later scan, never treated as consumed. This is the single definition of
+ * "stable history" for tracker refreshes.
+ *
+ * @param {Array} [chat=getChat()]
+ * @returns {number}
+ */
+export function getStableHistoryEnd(chat = getChat()) {
+    return Math.max(0, (chat?.length || 0) - getRecentHistoryExclude());
+}
+
+/**
  * Retrieve recent chat messages as formatted text.
  *
  * @param {object} [opts]
  * @param {number} [opts.maxMessages=50]  — max messages to include
  * @param {number} [opts.maxChars=500000] — character budget
  * @param {boolean} [opts.filterSystem=false] — exclude system messages
+ * @param {number} [opts.excludeLast=0] — trailing messages to skip (in-flight/swipe safety)
+ * @param {boolean} [opts.stableHistory=false] — use the global settled-history cutoff
  * @returns {string} newline-separated "Name: text" lines, oldest-first
  */
 export function getRecentMessages({
@@ -50,9 +94,16 @@ export function getRecentMessages({
     maxChars = 500000,
     filterSystem = false,
     strip = false,
+    excludeLast = 0,
+    stableHistory = false,
 } = {}) {
     const chat = getChat();
-    let slice = chat.slice(-maxMessages);
+    // Skip the trailing messages that may still be in flight (swiped, edited,
+    // or discarded) so tracker refreshes don't capture stale/misrepresented
+    // turns. Defaults to 0; stable-history tracker helpers use
+    // getStableHistoryEnd() instead.
+    const end = stableHistory ? getStableHistoryEnd(chat) : Math.max(0, chat.length - excludeLast);
+    let slice = chat.slice(Math.max(0, end - maxMessages), end);
     if (filterSystem) {
         slice = slice.filter(m => !m?.is_system && m?.extra?.type !== 'narrator');
     }

@@ -15,7 +15,7 @@
  * circular deps with refresh.js / sections.js, which import this instead.
  */
 
-import { getChat } from '../core/index.js';
+import { getChat, getStableHistoryEnd } from '../core/index.js';
 import {
     getWorldStateText, getProvenance, getMaxScanMessages,
     extractOnlySection, replaceSection,
@@ -75,9 +75,13 @@ function sanitizeLastTouchedMsg(lastTouchedMsg, currentMsgIndex) {
 function getScanWindowWithIndices() {
     const max = getMaxScanMessages(getSettings());
     const chat = getChat() || [];
-    const start = Math.max(0, chat.length - max);
+    // Align with getRecentMessagesForScan(): only settled history can mark an
+    // entity as touched, so a swiped/discarded turn is deferred rather than
+    // recorded as provenance.
+    const end = getStableHistoryEnd(chat);
+    const start = Math.max(0, end - max);
     const out = [];
-    for (let i = start; i < chat.length; i++) {
+    for (let i = start; i < end; i++) {
         const text = String(chat[i]?.mes || '');
         if (text.trim()) out.push({ index: i, text });
     }

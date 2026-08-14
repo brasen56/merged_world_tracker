@@ -83,6 +83,8 @@ export const state = {
     /** Last observed chat length, used by onMessageDeleted to compute how many
      *  messages were removed during bulk deletes (e.g. "delete above/below"). */
     lastChatLength: 0,
+    /** Counted receipt events by stable message identity and cadence. */
+    countedReceiptEvents: new Map(),
     isRunning: false,
     trackerQueue: Promise.resolve(),
 

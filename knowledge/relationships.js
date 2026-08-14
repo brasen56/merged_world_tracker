@@ -377,7 +377,7 @@ export async function runRelationshipExtract() {
         return emptyExtractResult();
     }
 
-    const recentMessages = getRecentMessages({ maxMessages: 50 });
+    const recentMessages = getRecentMessages({ maxMessages: 50, stableHistory: true });
     if (!recentMessages) throw new Error('No recent messages to scan for relationships.');
 
     const rosterSection = `<known_npcs>\n${knownNames.map(n => `- ${n}`).join('\n')}\n</known_npcs>`;

@@ -32,6 +32,7 @@
 import {
     getChat, getChatMeta, stripNonNarrative, getCurrentWorldState,
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
+    getStableHistoryEnd,
 } from '../core/index.js';
 import { hasValidSettings } from './settings.js';
 import { getRegistry, getProfileUid, setProfileUid } from './registry.js';
@@ -208,13 +209,16 @@ function findQuoteMatch(quote, msgIdx, chat) {
  * @param {number} count — max messages to include (from the end of the chat)
  * @returns {string|null} formatted messages, or null if the chat is empty
  */
-function getIndexedMessages(count = EVIDENCE_MESSAGE_WINDOW) {
+export function getIndexedMessages(count = EVIDENCE_MESSAGE_WINDOW) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
 
-    const startIdx = Math.max(0, chat.length - count);
+    // A quote from an in-flight message that is then swiped/discarded would be
+    // a phantom receipt pointing at content that no longer exists.
+    const end = getStableHistoryEnd(chat);
+    const startIdx = Math.max(0, end - count);
     const lines = [];
-    for (let i = startIdx; i < chat.length; i++) {
+    for (let i = startIdx; i < end; i++) {
         const msg = chat[i];
         if (!msg || !msg.mes || msg.is_system) continue;
         // Skip ILS summary messages — they contain paraphrased text, not
@@ -734,9 +738,10 @@ export async function runCaptureOnly(name) {
     // same messages. Same logic as runGrowthProfile.
     {
         const chatArr = getChat() || [];
-        const scanStart = Math.max(0, chatArr.length - EVIDENCE_MESSAGE_WINDOW);
+        const eligibleEnd = getEligibleChatEnd(chatArr);
+        const scanStart = Math.max(0, eligibleEnd - EVIDENCE_MESSAGE_WINDOW);
         let maxScanTs = 0;
-        for (let i = scanStart; i < chatArr.length; i++) {
+        for (let i = scanStart; i < eligibleEnd; i++) {
             const t = normalizeSendDate(chatArr[i]?.send_date);
             if (t > maxScanTs) maxScanTs = t;
         }
@@ -899,6 +904,10 @@ const DELTA_MIN_MESSAGES = 4;
  *  was offline for a while), we process the most recent DELTA_MAX_MESSAGES. */
 const DELTA_MAX_MESSAGES = 40;
 
+function getEligibleChatEnd(chat = getChat() || []) {
+    return getStableHistoryEnd(chat);
+}
+
 /**
  * Build a formatted message string from a delta window — only messages newer
  * than the watermark. Skips ILS summary messages (they are not verbatim text)
@@ -916,7 +925,8 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
 
     // Collect live (non-summary) messages newer than the watermark.
     const candidates = [];
-    for (let i = 0; i < chat.length; i++) {
+    const eligibleEnd = getEligibleChatEnd(chat);
+    for (let i = 0; i < eligibleEnd; i++) {
         const msg = chat[i];
         if (!msg || !msg.mes || msg.is_system) continue;
         // Skip ILS summaries on the continuous path — they contain paraphrased

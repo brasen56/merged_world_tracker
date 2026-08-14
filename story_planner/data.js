@@ -183,6 +183,8 @@ export const state = {
     autoCounter: 0,
     /** Last persisted chat length, used by onMessageDeleted */
     lastChatLength: 0,
+    /** Counted receipt events by stable message identity. */
+    countedReceiptEvents: new Map(),
     /**
      * STORY-PLANNER-03: Single cancellable auto-generate timer.
      *
@@ -961,10 +963,11 @@ export function isAutoEnabled() {
 }
 
 export function persistAutoCounter() {
-    setPlanData({ autoCounter: state.autoCounter });
+    setPlanData({ autoCounter: state.autoCounter, countedReceiptEvents: [...state.countedReceiptEvents.entries()] });
 }
 
 export function resetAutoCounter() {
     state.autoCounter = 0;
+    state.countedReceiptEvents.clear();
     persistAutoCounter();
 }

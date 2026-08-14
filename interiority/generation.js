@@ -30,7 +30,7 @@ import {
     getOrCreateMsgKeyForIndex,
     getRecentThoughtsForNpc,
     getInnerState, setInnerStateGuarded, getInnerStatesSnapshot,
-    getActiveLedger, getDormantLedger, wakeLedgerEntry,
+    getLedger, getDormantLedger, wakeLedgerEntry,
     getTurnCounter,
     MAX_THOUGHT_LENGTH, getWorldTime, incrementLedgerAges,
 } from './data.js';
@@ -114,7 +114,7 @@ export async function resolveUserNames() {
     return names;
 }
 
-export async function buildSceneRoster() {
+export async function buildSceneRoster(virtuallyActiveIds = []) {
     const settings = getSettings();
     const maxNpcs = Math.max(1, settings.maxNpcs || 4);
     // Only exclude the human user. {{char}} and other AI characters are valid
@@ -145,12 +145,17 @@ export async function buildSceneRoster() {
         if (!roster.some(r => r.toLowerCase() === n.toLowerCase())) roster.push(n);
     };
 
-    // Active ledger NPCs first — always included, never capped. Dormant-only
+    // Active ledger NPCs first — always included, never capped. A dormant entry
+    // proposed by this turn's poll is virtually active too: it must be present
+    // in the intentions request before the proposal can be committed.
     // NPCs are exempt from injection and evaluation (§20), so they should not
     // consume a roster slot every turn (item 3 fix). They still join normally
     // via `Present:` when actually in scene, and the dormant poll wakes their
     // intentions on schedule regardless of roster membership.
-    for (const entry of getActiveLedger()) addUnique(entry.npc);
+    const virtualIds = new Set(virtuallyActiveIds);
+    for (const entry of getLedger()) {
+        if (entry.status !== 'dormant' || virtualIds.has(entry.id)) addUnique(entry.npc);
+    }
     const ledgerCount = roster.length;
 
     // 1. Parse `Present:` from world state. The world-state template emits
@@ -290,16 +295,23 @@ async function loadNpcKnowledge(npcName) {
  * It is a "you already know about these" list, not an evaluable one.
  *
  * @param {string[]} roster
+ * @param {Iterable<string>} [virtuallyActiveIds] - dormant IDs proposed by the
+ *   current poll. They are evaluable for this call without becoming persistent
+ *   until validation accepts the whole turn.
  * @returns {Promise<Array<{name, knowledgeEntry, openIntentions, scheduledIntentions}>>}
  */
-export async function assembleNpcBlocks(roster) {
+export async function assembleNpcBlocks(roster, virtuallyActiveIds = []) {
+    const virtualIds = new Set(virtuallyActiveIds);
     const blocks = [];
     for (const name of roster) {
         const knowledgeEntry = await loadNpcKnowledge(name);
         const entries = getLedgerEntriesForNpc(name);
-        // §20: only active entries go to the intentions evaluation list.
-        const openIntentions = entries.filter(e => e.status !== 'dormant');
-        const scheduledIntentions = entries.filter(e => e.status === 'dormant');
+        // §20: dormant entries stay out of normal evaluation, except for a
+        // wake proposed by THIS turn's poll. That proposal is virtual until the
+        // main result passes validation, but the model must be able to resolve
+        // it in the same turn rather than receiving a stale demand next turn.
+        const openIntentions = entries.filter(e => e.status !== 'dormant' || virtualIds.has(e.id));
+        const scheduledIntentions = entries.filter(e => e.status === 'dormant' && !virtualIds.has(e.id));
         blocks.push({ name, knowledgeEntry, openIntentions, scheduledIntentions });
     }
     return blocks;
@@ -425,7 +437,10 @@ function _formatRelationshipsForRoster(npcName, roster, getNpcRelationships) {
  * @param {string} [opts.label] - log label for the call
  * @returns {Promise<object|null>} parsed JSON result, or null on failure
  */
-async function _runCall(roster, { thoughts = null, intentions = null, label = 'batched', useRichThoughtsContext = false } = {}) {
+async function _runCall(roster, {
+    thoughts = null, intentions = null, label = 'batched', useRichThoughtsContext = false,
+    virtuallyActiveIds = [],
+} = {}) {
     if (!hasValidSettings()) {
         console.warn(`[MWT:Interiority] No API connection configured (${label}).`);
         return null;
@@ -453,7 +468,7 @@ async function _runCall(roster, { thoughts = null, intentions = null, label = 'b
     // stay on the lean blocks + unified prompt.
     const npcBlocks = useRichThoughtsContext
         ? await _assembleThoughtsNpcBlocks(roster)
-        : await assembleNpcBlocks(roster);
+        : await assembleNpcBlocks(roster, virtuallyActiveIds);
     const windowSize = Math.max(1, settings.messageWindow || 8);
 
     // Get stripped recent messages
@@ -496,8 +511,8 @@ async function _runCall(roster, { thoughts = null, intentions = null, label = 'b
  * @param {string[]} roster
  * @returns {Promise<object|null>} parsed JSON result, or null on failure
  */
-export async function runBatchedCall(roster) {
-    return _runCall(roster);
+export async function runBatchedCall(roster, { virtuallyActiveIds = [] } = {}) {
+    return _runCall(roster, { virtuallyActiveIds });
 }
 
 // ─── Split-call mode (v2 §16) ────────────────────────────────────────────────
@@ -532,7 +547,7 @@ export async function runBatchedCall(roster) {
  *   which NPCs get rich thoughts, not a cost throttle.
  * @returns {Promise<{intentionsResult: object|null, thoughtsResult: object|null}>}
  */
-export async function runSplitCall(roster, { force = false } = {}) {
+export async function runSplitCall(roster, { force = false, virtuallyActiveIds = [] } = {}) {
     const settings = getSettings();
 
     // Respect the feature toggles. Split mode runs two specialized calls, but
@@ -565,7 +580,9 @@ export async function runSplitCall(roster, { force = false } = {}) {
 
     const [intentionsRes, thoughtsRes] = await Promise.all([
         wantIntentions
-            ? _runCall(roster, { thoughts: false, intentions: true, label: 'intentions' })
+            ? _runCall(roster, {
+                thoughts: false, intentions: true, label: 'intentions', virtuallyActiveIds,
+            })
                 .catch(err => {
                     console.error('[MWT:Interiority] Intentions call failed:', err);
                     return null;
@@ -697,7 +714,7 @@ export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
  * @param {string[]} roster
  * @returns {Promise<object|null>}
  */
-export async function runStrictCalls(roster) {
+export async function runStrictCalls(roster, virtuallyActiveIds = []) {
     if (!hasValidSettings()) {
         console.warn('[MWT:Interiority] No API connection configured.');
         return null;
@@ -721,10 +738,11 @@ export async function runStrictCalls(roster) {
     const worldTime = getWorldTime();
     const playerName = [...getUserNames({ lower: false })][0] || '';
     const allNpcs = [];
+    const intentionsEvaluatedRoster = [];
     const systemPrompt = buildSystemPrompt({ thoughts: wantThoughts, intentions: wantIntentions });
 
     for (const name of roster) {
-        const npcBlocks = await assembleNpcBlocks([name]);
+        const npcBlocks = await assembleNpcBlocks([name], virtuallyActiveIds);
         const userContent = buildUserContent({
             npcBlocks,
             recentMessages,
@@ -736,10 +754,13 @@ export async function runStrictCalls(roster) {
         const result = await fetchAndParse(systemPrompt, userContent, settings);
         if (result && Array.isArray(result.npcs)) {
             allNpcs.push(...result.npcs);
+            if (wantIntentions && result.npcs.some(npc => String(npc?.name || '').trim().toLowerCase() === name.toLowerCase())) {
+                intentionsEvaluatedRoster.push(name);
+            }
         }
     }
 
-    return { npcs: allNpcs };
+    return { npcs: allNpcs, intentionsEvaluatedRoster };
 }
 
 // ─── Dormant poll (v2 §20) ────────────────────────────────────────────────────
@@ -758,21 +779,22 @@ export async function runStrictCalls(roster) {
  * Failure isolation: the poll never blocks the main generation. A parse
  * failure or API error is logged and swallowed.
  *
- * @returns {Promise<number>} count of entries woken (0 if poll didn't fire)
+ * @returns {Promise<string[]>} IDs proposed for waking; proposals are committed
+ *   by the orchestrator only after the main generation validates successfully.
  */
 export async function runDormantPoll() {
     const dormant = getDormantLedger();
-    if (dormant.length === 0) return 0;
+    if (dormant.length === 0) return [];
 
     if (!hasValidSettings()) {
         console.warn('[MWT:Interiority] Dormant poll skipped — no API connection configured.');
-        return 0;
+        return [];
     }
 
     const settings = getSettings();
     const windowSize = Math.max(1, settings.messageWindow || 8);
     const recentMessages = getStrippedRecentMessages(windowSize);
-    if (!recentMessages) return 0;
+    if (!recentMessages) return [];
 
     const worldTime = getWorldTime();
     const systemPrompt = buildDormantPollSystemPrompt();
@@ -785,28 +807,26 @@ export async function runDormantPoll() {
     const result = await fetchAndParse(systemPrompt, userContent, settings);
     if (!result || !Array.isArray(result.intentions)) {
         console.warn('[MWT:Interiority] Dormant poll returned no valid result.');
-        return 0;
+        return [];
     }
 
-    const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
     const validIds = new Set(dormant.map(e => e.id));
-    let woken = 0;
+    const proposedIds = [];
 
     for (const item of result.intentions) {
         if (!item || typeof item.wake !== 'boolean') continue;
         const id = String(item.id || '').trim();
         if (!id || !validIds.has(id)) continue; // unknown id — ignore
         if (item.wake) {
-            wakeLedgerEntry(id, gracePeriod);
-            woken++;
-            console.log(`[MWT:Interiority] Dormant intention ${id} woken by poll.`);
+            proposedIds.push(id);
+            console.log(`[MWT:Interiority] Dormant intention ${id} proposed for wake by poll.`);
         }
     }
 
-    if (woken > 0) {
-        console.log(`[MWT:Interiority] Dormant poll woke ${woken} intention(s).`);
+    if (proposedIds.length > 0) {
+        console.log(`[MWT:Interiority] Dormant poll proposed ${proposedIds.length} intention wake(s).`);
     }
-    return woken;
+    return proposedIds;
 }
 
 // ─── Core fetch + parse with retry-once ──────────────────────────────────────
@@ -870,10 +890,16 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
  *   call. When provided, the validator asserts scope immediately after its
  *   `resolveUserNames()` await and before any persistent mutation (INTERIORITY-02).
  *   The caller still asserts after the return; this covers the gap inside.
+ * @param {Array<object>} [preTurnLedgerSnapshot] - rollback snapshot captured
+ *   by the caller BEFORE this turn's dormant poll ran. The poll's wakes are
+ *   part of this turn's ledger mutations, so a swipe must roll them back too;
+ *   a snapshot taken here (after the poll) would bake the woken state into
+ *   the rollback record and the wake would survive the swipe. Callers that
+ *   run no poll may omit it — the validator captures its own.
  * @returns {Promise<object|null>} { reactions: [], ledgerChanged: boolean }, or
  *   null when the scope changed during the await (caller should discard).
  */
-export async function validateAndApply(result, roster, msgIdx, scopeToken) {
+export async function validateAndApply(result, roster, msgIdx, scopeToken, preTurnLedgerSnapshot, confirmedWakeIds = []) {
     const data = getInteriorityData();
     const settings = getSettings();
     const wantThoughts = settings.generateThoughts !== false;
@@ -887,8 +913,13 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken) {
     // like Inline Summary.
     const msgKey = getOrCreateMsgKeyForIndex(msgIdx);
 
-    // Take a snapshot of the ledger BEFORE mutations (for rollback)
-    const ledgerSnapshot = JSON.parse(JSON.stringify(data.ledger));
+    // Take a snapshot of the ledger BEFORE mutations (for rollback). When the
+    // caller ran the dormant poll this turn it passes the snapshot it captured
+    // before the poll, so a wake justified by a message that is then swiped
+    // away rolls back to dormant with everything else.
+    const ledgerSnapshot = Array.isArray(preTurnLedgerSnapshot)
+        ? preTurnLedgerSnapshot
+        : JSON.parse(JSON.stringify(data.ledger));
 
     // Snapshot the inner-state store BEFORE this turn's thoughts call
     // rewrites it (§18 rollback). Without this, a swipe would roll back
@@ -941,11 +972,19 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken) {
                 reactions: [],
                 ledgerSnapshot,
                 innerStatesSnapshot,
+                // Pre-turn value: the caller increments only after this returns.
+                turnCounterAtSnapshot: getTurnCounter(),
                 generatedAt: Date.now(),
             });
         }
         return { reactions: [], ledgerChanged: false };
     }
+
+    // Commit only proposals whose owning NPC was actually presented to a
+    // successful intentions call. A syntactically-valid thoughts-only result,
+    // an empty strict result for a failed NPC, or a disabled intentions feature
+    // must never promote an unreviewed dormant demand into the injection.
+    for (const id of new Set(confirmedWakeIds)) wakeLedgerEntry(id, gracePeriod);
 
     // Increment the age of every open intention — AFTER the shape check so a
     // garbage parse doesn't burn a turn of grace period off every open
@@ -1153,11 +1192,14 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken) {
     // (keyed by stable msgKey). Both snapshots enable swipe/edit/delete
     // rollback — without innerStatesSnapshot, a swipe would roll back
     // Mara's intentions but leave her mood from the abandoned timeline.
+    // turnCounterAtSnapshot is the pre-turn counter (the caller increments
+    // only after this returns) so the same rollback can un-consume the turn.
     if (msgKey) {
         setPerMessage(msgKey, {
             reactions,
             ledgerSnapshot,
             innerStatesSnapshot,
+            turnCounterAtSnapshot: getTurnCounter(),
             generatedAt: Date.now(),
         });
     }

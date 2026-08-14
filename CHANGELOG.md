@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.6.0] - Unreleased
 
+### Added
+- Setting to change how many recent messages to ignore (Does NOT apply to interiority)
+
 ### Fixed
 - Trackers should now ignore last 2 messages (except interiority)
 - Swipes advancing the dormant-poll schedule

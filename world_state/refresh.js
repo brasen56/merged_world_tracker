@@ -7,9 +7,11 @@
 
 import {
     getChat,
+    getStableHistoryEnd,
     resolveApiCall, normaliseOutput, stripNonNarrative,
     captureScope, assertSameScope,
     captureRevision, sameRevision,
+    getOrCreateReceiptIdentity,
     truncateText,
     setStatus,
 } from '../core/index.js';
@@ -46,7 +48,8 @@ function applyMessageFilter(text) {
 export function getRecentMessagesForScan() {
     const max = getMaxScanMessages(getSettings());
     const chat = getChat();
-    const slice = chat.slice(-max);
+    const end = getStableHistoryEnd(chat);
+    const slice = chat.slice(Math.max(0, end - max), end);
     const lines = [];
     let total = 0;
     const maxChars = 20000;
@@ -415,13 +418,19 @@ export function onMessageReceived({ countMessage = true } = {}) {
     // auto-refresh setting — so onMessageDeleted always computes `removed` from
     // a live length instead of a frozen one. (Hoisted above the early returns
     // for PANIC-COUNTER-SYMMETRY.)
-    state.lastChatLength = getChat()?.length || 0;
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
 
     // Counting toward the auto-refresh threshold, and the refresh itself, are
     // gated: by the per-module auto setting and by the panic flag (countMessage).
     if (!isAutoRefreshEnabled() || !countMessage) return;
 
     state.autoRefreshCounter++;
+    const receipt = [...chat].reverse().find(msg => msg && !msg.is_user && !msg.is_system);
+    if (receipt) {
+        const key = getOrCreateReceiptIdentity(receipt);
+        state.countedReceiptEvents.set(key, (state.countedReceiptEvents.get(key) || 0) + 1);
+    }
     const interval = getAutoRefreshInterval();
 
     console.log(`[MWT:WorldState] MESSAGE_RECEIVED — counter ${state.autoRefreshCounter}/${interval}`);
@@ -429,6 +438,7 @@ export function onMessageReceived({ countMessage = true } = {}) {
     if (state.autoRefreshCounter < interval) { persistAutoRefreshCounter(); return; }
 
     state.autoRefreshCounter = 0;
+    state.countedReceiptEvents.clear();
     persistAutoRefreshCounter();
 
     scheduleAutoRefresh('message-interval');

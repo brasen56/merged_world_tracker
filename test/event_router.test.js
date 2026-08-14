@@ -18,7 +18,7 @@
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { resetCoreStubs, setFakeChat } from './stubs/core.js';
+import { resetCoreStubs, setFakeChat, getFakeChat } from './stubs/core.js';
 import {
     routeMessageReceived,
     routeMessageDeleted,
@@ -230,6 +230,7 @@ describe('CONSEQUENCE — lastChatLength stays live during a panic window', () =
         chronicleSetData = chronicleData.setChronicleData;
         chronicleState.msgSinceSnapshot = 0;
         chronicleState.lastChatLength = 0;
+        chronicleState.countedReceiptEvents = new Map();
     });
 
     const chatOf = (n) => Array.from({ length: n }, () => ({ mes: 'x' }));
@@ -267,6 +268,25 @@ describe('CONSEQUENCE — lastChatLength stays live during a panic window', () =
         expect(chronicleState.msgSinceSnapshot).toBe(5);
     });
 
+    test('deleting a user/assistant pair reverses one received-message counter unit', () => {
+        // MESSAGE_RECEIVED fires for the assistant reply only. A bulk delete of
+        // its user prompt plus reply removes two raw entries but only one unit
+        // from the Chronicle cadence.
+        setFakeChat([
+            { is_user: true, mes: 'prompt' },
+            { mes: 'reply' },
+        ]);
+        chronicleState.lastChatLength = 2;
+        chronicleState.countedReceiptEvents = new Map([['fallback::reply:1', 1]]);
+        chronicleState.msgSinceSnapshot = 1;
+
+        setFakeChat([]);
+        chronicleDelete(0);
+
+        expect(chronicleState.msgSinceSnapshot).toBe(0);
+        expect(chronicleState.countedReceiptEvents.size).toBe(0);
+    });
+
     test('the first post-panic delete computes removed from the LIVE length, not a frozen one', () => {
         // Start: chat 100, lastChatLength 100, counter 5.
         setFakeChat(chatOf(100));
@@ -282,8 +302,83 @@ describe('CONSEQUENCE — lastChatLength stays live during a panic window', () =
         setFakeChat(chatOf(79));
         chronicleDelete(78, { adjustCounters: true });
 
-        // removed must be 1 (80→79), NOT 21 (100→79). No lumped drift.
-        expect(chronicleState.msgSinceSnapshot).toBe(4);
+        // The removed message was never recorded as a counted receipt (it was
+        // received/deleted during panic), so it must not subtract from a
+        // counter whose provenance is unknown. No lumped or false reversal.
+        expect(chronicleState.msgSinceSnapshot).toBe(5);
+    });
+
+    test('deleting an old receipt that predates this cadence does not decrement it', () => {
+        setFakeChat([{ id: 'old', mes: 'old reply' }, { id: 'new', mes: 'new reply' }]);
+        chronicleState.lastChatLength = 2;
+        chronicleState.msgSinceSnapshot = 1;
+        chronicleState.countedReceiptEvents = new Map([['id:new', 1]]);
+
+        setFakeChat([{ id: 'new', mes: 'new reply' }]);
+        chronicleDelete(0);
+
+        expect(chronicleState.msgSinceSnapshot).toBe(1);
+    });
+
+    test('an edited receipt keeps its UUID provenance when an earlier message is deleted', () => {
+        setFakeChat([
+            { mes: 'old reply', name: 'Mara', send_date: '2026-01-01T00:00:00.000Z' },
+            { mes: 'current reply', name: 'Mara', send_date: '2026-01-01T00:01:00.000Z' },
+        ]);
+        // Record a real receipt so the test covers UUID stamping rather than a
+        // hand-constructed key, then mutate its content as a swipe/edit would.
+        chronicleState.msgSinceSnapshot = 0;
+        chronicleState.lastChatLength = 0;
+        chronicleState.countedReceiptEvents = new Map();
+        return chronicleRecv().then(() => {
+            const retained = getFakeChat()[1];
+            const key = [...chronicleState.countedReceiptEvents.keys()][0];
+            retained.mes = 'swiped replacement reply';
+            chronicleState.lastChatLength = 2;
+            setFakeChat([retained]);
+            chronicleDelete(0);
+
+            expect(chronicleState.msgSinceSnapshot).toBe(1);
+            expect(chronicleState.countedReceiptEvents).toEqual(new Map([[key, 1]]));
+            expect(retained.extra.mwt_uuid).toBeTruthy();
+        });
+    });
+
+    test('persists receipt provenance with its counter for reload restoration', async () => {
+        setFakeChat([{ id: 'reply', mes: 'current reply' }]);
+        await chronicleRecv();
+        chronicleState.countedReceiptEvents = new Map(); // emulate a fresh runtime
+        const { onChatChanged } = await import('../chronicle/index.js');
+        onChatChanged();
+
+        expect(chronicleState.msgSinceSnapshot).toBe(1);
+        expect(chronicleState.countedReceiptEvents).toEqual(new Map([['id:reply', 1]]));
+    });
+
+    test('multiple received events for one regenerated receipt reverse together', async () => {
+        setFakeChat([{ id: 'reply', mes: 'first generation' }]);
+        await chronicleRecv();
+        // SillyTavern can emit another receipt event while replacing the same
+        // message object with a regenerated reply.
+        setFakeChat([{ id: 'reply', mes: 'regenerated reply' }]);
+        await chronicleRecv();
+        expect(chronicleState.msgSinceSnapshot).toBe(2);
+
+        setFakeChat([]);
+        chronicleDelete(0);
+        expect(chronicleState.msgSinceSnapshot).toBe(0);
+    });
+
+    test('the first deletion after initialization does not guess from raw history', async () => {
+        setFakeChat([{ id: 'old', mes: 'existing assistant reply' }]);
+        chronicleState.msgSinceSnapshot = 1;
+        chronicleState.lastChatLength = 1;
+        chronicleState.countedReceiptEvents = new Map();
+
+        setFakeChat([]);
+        chronicleDelete(0);
+
+        expect(chronicleState.msgSinceSnapshot).toBe(1);
     });
 
     test('anchor staleness is flagged during a panic-window delete (integrity stays live)', () => {

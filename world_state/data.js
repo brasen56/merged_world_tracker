@@ -114,6 +114,8 @@ export const state = {
     /** Last observed chat length, used by onMessageDeleted to compute how many
      *  messages were removed during bulk deletes (e.g. "delete above/below"). */
     lastChatLength: 0,
+    /** Counted receipt events by stable message identity. */
+    countedReceiptEvents: new Map(),
 };
 
 // ─── Chat data helpers ───────────────────────────────────────────────────────
@@ -283,11 +285,15 @@ export function getAutoRefreshInterval() {
 }
 
 export function persistAutoRefreshCounter() {
-    setWorldStateData({ autoRefreshCounter: state.autoRefreshCounter });
+    setWorldStateData({
+        autoRefreshCounter: state.autoRefreshCounter,
+        countedReceiptEvents: [...state.countedReceiptEvents.entries()],
+    });
 }
 
 export function resetAutoRefreshCounter() {
     state.autoRefreshCounter = 0;
+    state.countedReceiptEvents.clear();
     persistAutoRefreshCounter();
 }
 

@@ -6,4 +6,4 @@
  * synchronous and dependency-free; the release checklist owns the sync.
  */
 
-export const MWT_VERSION = '1.5.0';
+export const MWT_VERSION = '1.6.0';

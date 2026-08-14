@@ -14,7 +14,7 @@
  *   render.js    — UI rendering, event wiring, archive/import/clear, revert/diff
  */
 
-import { syncSharedConnectionSettings, estimateTokens, getChat } from '../core/index.js';
+import { syncSharedConnectionSettings, estimateTokens, getChat, getOrCreateReceiptIdentity } from '../core/index.js';
 
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -58,9 +58,12 @@ export function onChatChanged() {
     state.editSessionActive = false;
     const saved = getWorldStateData()?.autoRefreshCounter;
     state.autoRefreshCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
+    state.countedReceiptEvents = new Map((Array.isArray(getWorldStateData()?.countedReceiptEvents) ? getWorldStateData().countedReceiptEvents : [])
+        .filter(([key, count]) => typeof key === 'string' && key && Number.isInteger(count) && count > 0));
     persistAutoRefreshCounter();
     // Track chat length for bulk-delete counter adjustment
-    state.lastChatLength = getChat()?.length || 0;
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
     applyWorldStateInjection();
     console.log('[MWT:WorldState] Chat changed — state reset.');
 }
@@ -90,6 +93,16 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    const liveReceiptKeys = new Set((getChat() || []).filter(msg => msg && !msg.is_user && !msg.is_system).map(getReceiptIdentity));
+    let removedReceipts = 0;
+    let provenanceChanged = false;
+    for (const [key, count] of state.countedReceiptEvents) {
+        if (!liveReceiptKeys.has(key)) {
+            removedReceipts += count;
+            state.countedReceiptEvents.delete(key);
+            provenanceChanged = true;
+        }
+    }
     // Bookkeeping — ALWAYS live. If this freezes during a panic window the real
     // chat keeps shrinking while lastChatLength stays put, so the first
     // post-panic delete computes a lumped `removed` and the drift is magnified
@@ -97,10 +110,11 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     state.lastChatLength = currentLen;
 
     if (adjustCounters && isAutoRefreshEnabled() && state.autoRefreshCounter > 0) {
-        state.autoRefreshCounter = Math.max(0, state.autoRefreshCounter - removed);
+        state.autoRefreshCounter = Math.max(0, state.autoRefreshCounter - removedReceipts);
         persistAutoRefreshCounter();
-        console.log(`[MWT:WorldState] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoRefreshCounter}`);
+        console.log(`[MWT:WorldState] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed} entries / ${removedReceipts} receipts) — counter adjusted to ${state.autoRefreshCounter}`);
     }
+    else if (provenanceChanged) persistAutoRefreshCounter();
 
     // WORLD-STATE-05: Provenance `lastTouchedMsg` is a chat-array index. A
     // deletion before a tracked mention shifts everything left, so stored
@@ -119,6 +133,10 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
 
     // Refresh the floating button countdown badge
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+function getReceiptIdentity(message) {
+    return getOrCreateReceiptIdentity(message);
 }
 
 /**

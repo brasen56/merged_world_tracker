@@ -30,7 +30,7 @@ import {
     restoreLedgerSnapshot, restoreInnerStatesSnapshot,
     migrateIndexKeys,
     isChatHydrated,
-    incrementTurnCounter, isDormantPollDue,
+    incrementTurnCounter, restoreTurnCounter, isDormantPollDue,
 } from './data.js';
 
 import {
@@ -219,23 +219,35 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         // ahead by 1 so the poll still fires at the *start* of the right
         // turn.
 
+        // Capture the rollback ledger snapshot BEFORE the dormant poll runs.
+        // The poll commits its wakes straight to the live ledger, and
+        // validateAndApply used to capture the snapshot after that — so the
+        // rollback record held the entry already woken, and a swipe could
+        // never put it back to sleep. A wake justified by a message that then
+        // gets swiped out of existence survived the swipe. The snapshot must
+        // predate every ledger mutation of this turn, wakes included.
+        // (Manual panel edits made mid-generation still survive rollback —
+        // restoreLedgerSnapshot preserves manual entries and user-edited
+        // fields regardless of what the snapshot contains.)
+        const preTurnLedgerSnapshot = JSON.parse(JSON.stringify(getLedger()));
+
         // §20: Dormant poll (lazy wake). Runs BEFORE the main call so woken
         // entries are included in this turn's roster + injection. Fires only
         // when isDormantPollDue() is true (every DORMANT_POLL_INTERVAL turns
         // with dormant entries present).
-        if (isDormantPollDue()) {
+        let proposedWakeIds = [];
+        const settings = getSettings();
+        const wantThoughts = settings.generateThoughts !== false;
+        const wantIntentions = settings.generateIntentions !== false;
+        if (wantIntentions && isDormantPollDue()) {
             try {
-                const woken = await runDormantPoll();
+                proposedWakeIds = await runDormantPoll();
                 // INTERIORITY-02: The dormant poll awaits an API call. Assert
-                // scope after it returns so a chat switch during the poll does
-                // not commit woken entries to the wrong chat's ledger.
+                // scope after it returns. The poll is proposal-only, so there
+                // is no ledger write to leak if the chat changed.
                 if (!assertSameScope(scopeBefore).ok) {
                     console.log('[MWT:Interiority] Dormant poll results discarded — chat changed during API call.');
-                } else if (woken > 0) {
-                    console.log(`[MWT:Interiority] Dormant poll woke ${woken} intention(s) — they are now active.`);
-                    // Re-apply injection immediately so woken entries appear
-                    // in this turn's narrator prompt.
-                    applyIntentionsInjection();
+                    proposedWakeIds = [];
                 }
             } catch (err) {
                 console.warn('[MWT:Interiority] Dormant poll failed (non-blocking):', err);
@@ -243,7 +255,7 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         }
 
         // 1. Build roster
-        const roster = await buildSceneRoster();
+        const roster = await buildSceneRoster(proposedWakeIds);
         if (roster.length === 0) {
             console.log('[MWT:Interiority] No NPCs in scene — skipping.');
             return null;
@@ -258,15 +270,13 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         // thoughts — then merge the results into a single object that the
         // unchanged validateAndApply can process. When OFF, or when only one
         // feature is enabled, run a single unified call (v1 behavior).
-        const settings = getSettings();
-        const wantThoughts = settings.generateThoughts !== false;
-        const wantIntentions = settings.generateIntentions !== false;
         const useSplit = settings.splitThoughts === true && wantThoughts && wantIntentions;
 
         let result;
+        let intentionsEvaluatedRoster = [];
         if (useSplit) {
             console.log('[MWT:Interiority] Split mode ON — running parallel intentions + thoughts calls.');
-            const { intentionsResult, thoughtsResult } = await runSplitCall(roster, { force });
+            const { intentionsResult, thoughtsResult } = await runSplitCall(roster, { force, virtuallyActiveIds: proposedWakeIds });
             // INTERIORITY-02: Cross-chat guard after the parallel pair completes.
             if (!assertSameScope(scopeBefore).ok) {
                 console.log('[MWT:Interiority] Results discarded — chat changed during split API call.');
@@ -278,11 +288,12 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
                 return null;
             }
             result = mergeSplitResults(intentionsResult, thoughtsResult, roster);
+            intentionsEvaluatedRoster = getEvaluatedNpcNames(intentionsResult, roster);
         } else {
             if (settings.mode === 'strict') {
-                result = await runStrictCalls(roster);
+                result = await runStrictCalls(roster, proposedWakeIds);
             } else {
-                result = await runBatchedCall(roster);
+                result = await runBatchedCall(roster, { virtuallyActiveIds: proposedWakeIds });
             }
 
             // INTERIORITY-02: Cross-chat guard: discard if the user switched
@@ -297,6 +308,7 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
                 console.warn('[MWT:Interiority] Generation returned no result (API/parse failure). Skipping silently.');
                 return null;
             }
+            if (wantIntentions) intentionsEvaluatedRoster = getEvaluatedNpcNames(result, roster, result.intentionsEvaluatedRoster);
         }
 
         // Re-resolve the message index AFTER the API call(s). The await can
@@ -319,7 +331,12 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         // assert scope immediately after its own `resolveUserNames()` await,
         // BEFORE any persistent mutation. If the chat changed during that
         // await, it returns null and we bail without a second write attempt.
-        const applyResult = await validateAndApply(result, roster, msgIdx, scopeBefore);
+        const evaluatedNpcNames = new Set(intentionsEvaluatedRoster.map(name => String(name).toLowerCase().trim()));
+        const confirmedWakeIds = proposedWakeIds.filter(id => {
+            const entry = getLedger().find(candidate => candidate.id === id);
+            return entry && evaluatedNpcNames.has(String(entry.npc).toLowerCase().trim());
+        });
+        const applyResult = await validateAndApply(result, roster, msgIdx, scopeBefore, preTurnLedgerSnapshot, confirmedWakeIds);
 
         // INTERIORITY-02: Re-assert scope AFTER validateAndApply as a
         // belt-and-suspenders guard. The in-function check covers the
@@ -355,6 +372,14 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         state.isGenerating = false;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
+}
+
+function getEvaluatedNpcNames(result, roster, reportedNames) {
+    const rosterByLower = new Map(roster.map(name => [String(name).toLowerCase().trim(), name]));
+    const responseNames = new Set((Array.isArray(result?.npcs) ? result.npcs : [])
+        .map(npc => String(npc?.name || '').toLowerCase().trim()).filter(Boolean));
+    const candidates = Array.isArray(reportedNames) ? reportedNames : responseNames;
+    return [...new Set(candidates.map(name => rosterByLower.get(String(name).toLowerCase().trim())).filter(Boolean))];
 }
 
 // ─── Chat lifecycle ──────────────────────────────────────────────────────────
@@ -441,19 +466,28 @@ export async function onMessageDeleted(deletedIndex) {
         console.log(`[MWT:Interiority] MESSAGE_DELETED: ${orphaned.length} orphaned perMessage entries found — cleaning up all.`);
     }
 
-    // Capture the newest orphan's snapshots BEFORE deleting (needed for
-    // rollback of both ledger and inner states). allKeys is sorted by
-    // generatedAt descending, so the first orphan matching allKeys[0] is
-    // the newest generation.
+    // Roll back the complete deleted generation suffix. allKeys is newest
+    // first: if its newest entry is orphaned, every consecutive orphan after it
+    // belongs to abandoned turns, and the OLDEST snapshot in that suffix is the
+    // state from before all of them. A later surviving generation is a boundary
+    // that must never be crossed.
     let snapshotToRestore = null;
     let innerStatesSnapshotToRestore = null;
-    const newestKey = allKeys[0];
+    let turnCounterToRestore = null;
+    const orphanedSet = new Set(orphaned);
+    const rollbackKeys = [];
+    for (const key of allKeys) {
+        if (!orphanedSet.has(key)) break;
+        rollbackKeys.push(key);
+    }
+    const rollbackKey = rollbackKeys.at(-1);
 
     for (const keyToDelete of orphaned) {
         const deleted = deletePerMessage(keyToDelete);
-        if (keyToDelete === newestKey && deleted) {
+        if (keyToDelete === rollbackKey && deleted) {
             if (Array.isArray(deleted.ledgerSnapshot)) snapshotToRestore = deleted.ledgerSnapshot;
             if (deleted.innerStatesSnapshot) innerStatesSnapshotToRestore = deleted.innerStatesSnapshot;
+            if (typeof deleted.turnCounterAtSnapshot === 'number') turnCounterToRestore = deleted.turnCounterAtSnapshot;
         }
     }
 
@@ -466,6 +500,11 @@ export async function onMessageDeleted(deletedIndex) {
     // but leaves her mood from the abandoned timeline.
     if (innerStatesSnapshotToRestore) {
         restoreInnerStatesSnapshot(innerStatesSnapshotToRestore);
+    }
+    // Un-consume the deleted turn (see restoreTurnCounter) so the dormant-poll
+    // schedule tracks generations that still exist in the timeline.
+    if (turnCounterToRestore !== null) {
+        restoreTurnCounter(turnCounterToRestore);
     }
     if (snapshotToRestore || innerStatesSnapshotToRestore) {
         console.log(`[MWT:Interiority] MESSAGE_DELETED — snapshots restored (manual ledger entries preserved).`);
@@ -501,6 +540,13 @@ function invalidateAndMaybeRegenerate(msgIdx, eventName) {
         }
         if (deleted.innerStatesSnapshot) {
             restoreInnerStatesSnapshot(deleted.innerStatesSnapshot);
+        }
+        // Un-consume the invalidated turn (see restoreTurnCounter): without
+        // this, every swipe cycle advanced the dormant-poll schedule by one
+        // phantom turn, so intentions woke ahead of real story time. Absent
+        // on records from before this field existed — skip, don't guess.
+        if (typeof deleted.turnCounterAtSnapshot === 'number') {
+            restoreTurnCounter(deleted.turnCounterAtSnapshot);
         }
         if (Array.isArray(deleted.ledgerSnapshot) || deleted.innerStatesSnapshot) {
             console.log(`[MWT:Interiority] ${eventName} at index ${msgIdx} — snapshots restored (manual ledger entries preserved).`);

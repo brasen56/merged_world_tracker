@@ -10,6 +10,8 @@ import {
     createSettingsManager,
     patchChatMeta,
     stripNonNarrative,
+    getStableHistoryEnd,
+    getOrCreateReceiptIdentity,
 } from '../core/index.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -71,6 +73,10 @@ export const state = {
     /** Last observed chat length, used by onMessageDeleted to compute how many
      *  messages were removed during bulk deletes (e.g. "delete above/below"). */
     lastChatLength: 0,
+    /** Receipt-event counts by stable message identity. Only events that
+     * actually advanced the current cadence are recorded, so deletion can
+     * reverse precisely those events (including repeated regenerations). */
+    countedReceiptEvents: new Map(),
 };
 
 // ─── Late-binding registry for render functions ──────────────────────────────
@@ -90,7 +96,21 @@ try {
 } catch { /* ignore */ }
 
 export function persistMsgSinceSnapshot() {
-    setChronicleData({ msgSinceSnapshot: state.msgSinceSnapshot });
+    setChronicleData({
+        msgSinceSnapshot: state.msgSinceSnapshot,
+        countedReceiptEvents: [...state.countedReceiptEvents.entries()],
+    });
+}
+
+export function restoreReceiptBookkeeping(data = getChronicleData()) {
+    const entries = Array.isArray(data?.countedReceiptEvents) ? data.countedReceiptEvents : [];
+    state.countedReceiptEvents = new Map(entries.filter(([key, count]) =>
+        typeof key === 'string' && key && Number.isInteger(count) && count > 0
+    ));
+}
+
+export function getReceiptIdentity(message) {
+    return getOrCreateReceiptIdentity(message);
 }
 
 // ─── Content helper ──────────────────────────────────────────────────────────
@@ -270,13 +290,23 @@ export function shouldIncludeMessage(msg) {
 export function buildMessageWindow(fromIndex, toIndex) {
     const chat = getChat();
     const start = fromIndex ?? (() => { const { index } = resolveAnchor(getChronicleData().lastAnchor); return index; })();
-    let end = (toIndex !== undefined && toIndex !== null) ? Math.min(toIndex + 1, chat.length) : chat.length;
+    const explicitTo = toIndex !== undefined && toIndex !== null;
+    let end = explicitTo ? Math.min(toIndex + 1, chat.length) : chat.length;
     while (end > start) {
         const last = chat[end - 1];
         const streaming = last?.extra?.streaming === true || (last?.extra?.gen_started && !last?.extra?.gen_finished);
         const emptyAssistant = last && !last.is_user && !String(last.mes || '').trim();
         if (streaming || emptyAssistant) { end--; } else break;
     }
+    // When the caller didn't pin an explicit range (auto/manual snapshots up to
+    // "now"), also drop the trailing in-flight user+assistant pair. A snapshot
+    // is a frozen, persistent summary, so capturing a message that may still be
+    // swiped/discarded would bake the misrepresented turn in permanently — and
+    // the just-arrived AI reply is the single most likely message to be swiped.
+    // Chronicle is anchor-based, so the exclusion is lossless: the pair simply
+    // falls into the next snapshot's range. Regenerate/consolidate pass explicit
+    // bounds and keep them unchanged.
+    if (!explicitTo) end = Math.max(start, Math.min(end, getStableHistoryEnd(chat)));
     const slice = chat.slice(start, end);
     const filtered = slice.filter(shouldIncludeMessage);
     if (filtered.length === 0) return { text: '', lastMsg: null, fromIndex: start, toIndex: end - 1 };

@@ -85,6 +85,8 @@ describe('CHRONICLE-08 — anchors, counters, injection, and async commits', () 
         setFakeChat([
             { id: 'm0', name: 'User', is_user: true, mes: 'The first scene.' },
             { id: 'm1', name: 'Mara', mes: 'The second scene.', send_date: '2026-01-01T00:00:00.000Z' },
+            { id: 'm2', name: 'User', is_user: true, mes: 'The third scene.' },
+            { id: 'm3', name: 'Mara', mes: 'The fourth scene.' },
         ]);
         const { state } = await import('../chronicle/data.js');
         state.msgSinceSnapshot = 0;

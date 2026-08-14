@@ -25,7 +25,7 @@ import {
     state, _render,
     getSettings, saveSettings, hasValidSettings,
     getChronicleData, setChronicleData, getSnapshots,
-    persistMsgSinceSnapshot,
+    persistMsgSinceSnapshot, restoreReceiptBookkeeping, getReceiptIdentity,
     isAnchorStale,
 } from './data.js';
 
@@ -56,7 +56,22 @@ export function init(parentModal) {
         renderContent();
     }
     applyInjection();
+    initializeReceiptBookkeeping();
     console.log('[MWT:Chronicle] Module initialized');
+}
+
+function initializeReceiptBookkeeping() {
+    restoreReceiptBookkeeping();
+}
+
+function recordCurrentReceiptEvent(chat) {
+    for (let index = chat.length - 1; index >= 0; index--) {
+        const message = chat[index];
+        if (!message || message.is_user || message.is_system) continue;
+        const key = getReceiptIdentity(message);
+        state.countedReceiptEvents.set(key, (state.countedReceiptEvents.get(key) || 0) + 1);
+        return;
+    }
 }
 
 export function render() {
@@ -86,7 +101,8 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     //
     // Only the snapshot trigger itself should be suppressed during generation
     // (otherwise two concurrent generations could fire).
-    state.lastChatLength = getChat()?.length || 0;
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
 
     // PANIC-COUNTER-SYMMETRY (receive side): counting toward the auto-snapshot
     // threshold and the snapshot generation are gated by the panic flag
@@ -97,6 +113,7 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     if (!countMessage) return;
 
     state.msgSinceSnapshot++;
+    recordCurrentReceiptEvent(chat);
     persistMsgSinceSnapshot();
 
     const settings = getSettings();
@@ -130,6 +147,7 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     if (!snapshot) {
         if (assertSameScope(scopeBefore).ok) {
             state.msgSinceSnapshot = 0;
+            state.countedReceiptEvents.clear();
             persistMsgSinceSnapshot();
         }
     }
@@ -155,9 +173,13 @@ export function onChatChanged() {
     // so the counter survives chat switches and reloads.
     const saved = getChronicleData()?.msgSinceSnapshot;
     state.msgSinceSnapshot = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
+    initializeReceiptBookkeeping();
+    // Persist the restored pair together; persisting before restoration would
+    // overwrite valid stored provenance with the previous chat's empty map.
     persistMsgSinceSnapshot();
     // Track chat length for bulk-delete counter adjustment
-    state.lastChatLength = getChat()?.length || 0;
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
     applyInjection();
     console.log('[MWT:Chronicle] Chat changed — state reset.');
 }
@@ -185,14 +207,27 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    const liveReceiptKeys = new Set((getChat() || [])
+        .map(message => (!message || message.is_user || message.is_system ? null : getReceiptIdentity(message)))
+        .filter(Boolean));
+    let removedReceipts = 0;
+    let provenanceChanged = false;
+    for (const [key, eventCount] of state.countedReceiptEvents) {
+        if (!liveReceiptKeys.has(key)) {
+            removedReceipts += eventCount;
+            state.countedReceiptEvents.delete(key);
+            provenanceChanged = true;
+        }
+    }
     // Bookkeeping — ALWAYS live
     state.lastChatLength = currentLen;
 
     if (adjustCounters && state.msgSinceSnapshot > 0) {
-        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - removed);
+        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - removedReceipts);
         persistMsgSinceSnapshot();
-        console.log(`[MWT:Chronicle] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.msgSinceSnapshot}`);
+        console.log(`[MWT:Chronicle] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed} entries / ${removedReceipts} counted receipt events) — counter adjusted to ${state.msgSinceSnapshot}`);
     }
+    else if (provenanceChanged) persistMsgSinceSnapshot();
     // Integrity — ALWAYS live. If the anchor referenced the deleted message (or
     // something after it), mark it stale so the next snapshot re-anchors against
     // the live chat.

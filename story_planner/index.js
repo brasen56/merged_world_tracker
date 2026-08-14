@@ -13,7 +13,7 @@
  *   render.js     — UI rendering, event wiring
  */
 
-import { syncSharedConnectionSettings, notify, getChat, captureScope, assertSameScope } from '../core/index.js';
+import { syncSharedConnectionSettings, notify, getChat, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
@@ -67,7 +67,8 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     // auto-generate setting — so onMessageDeleted always computes `removed`
     // from a live length instead of a frozen one. (Hoisted above the early
     // returns for PANIC-COUNTER-SYMMETRY.)
-    state.lastChatLength = getChat()?.length || 0;
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
 
     // Beat aging, due-beat nudges, counting, and generation are all gated by
     // the panic switch. Before the router started threading countMessage, these
@@ -95,6 +96,11 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     if (!isAutoEnabled() || !hasValidSettings()) return;
 
     state.autoCounter++;
+    const receipt = [...chat].reverse().find(msg => msg && !msg.is_user && !msg.is_system);
+    if (receipt) {
+        const key = getReceiptIdentity(receipt);
+        state.countedReceiptEvents.set(key, (state.countedReceiptEvents.get(key) || 0) + 1);
+    }
     persistAutoCounter();
 
     const interval = getAutoInterval();
@@ -161,9 +167,12 @@ export function onChatChanged() {
     // Restore the per-chat auto counter (each chat tracks its own progress)
     const saved = getPlanData()?.autoCounter;
     state.autoCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
+    state.countedReceiptEvents = new Map((Array.isArray(getPlanData()?.countedReceiptEvents) ? getPlanData().countedReceiptEvents : [])
+        .filter(([key, count]) => typeof key === 'string' && key && Number.isInteger(count) && count > 0));
     persistAutoCounter();
     // Track chat length for bulk-delete counter adjustment
-    state.lastChatLength = getChat()?.length || 0;
+    const chat = getChat() || [];
+    state.lastChatLength = chat.length;
     applyPlanInjection();
     console.log('[MWT:StoryPlanner] Chat changed — state reset.');
 }
@@ -188,15 +197,30 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     const removed = state.lastChatLength > currentLen
         ? state.lastChatLength - currentLen
         : 1;
+    const liveReceiptKeys = new Set((getChat() || []).filter(msg => msg && !msg.is_user && !msg.is_system).map(getReceiptIdentity));
+    let removedReceipts = 0;
+    let provenanceChanged = false;
+    for (const [key, count] of state.countedReceiptEvents) {
+        if (!liveReceiptKeys.has(key)) {
+            removedReceipts += count;
+            state.countedReceiptEvents.delete(key);
+            provenanceChanged = true;
+        }
+    }
     // Bookkeeping — ALWAYS live
     state.lastChatLength = currentLen;
 
     if (adjustCounters && isAutoEnabled() && state.autoCounter > 0) {
-        state.autoCounter = Math.max(0, state.autoCounter - removed);
+        state.autoCounter = Math.max(0, state.autoCounter - removedReceipts);
         persistAutoCounter();
-        console.log(`[MWT:StoryPlanner] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed}) — counter adjusted to ${state.autoCounter}`);
+        console.log(`[MWT:StoryPlanner] MESSAGE_DELETED at index ${deletedIndex} (removed ${removed} entries / ${removedReceipts} receipts) — counter adjusted to ${state.autoCounter}`);
     }
+    else if (provenanceChanged) persistAutoCounter();
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+function getReceiptIdentity(message) {
+    return getOrCreateReceiptIdentity(message);
 }
 
 // ─── Beat reminders + chat-side confirmation ─────────────────────────────────

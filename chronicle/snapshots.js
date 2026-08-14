@@ -25,7 +25,7 @@ import {
     getChronicleData, setChronicleData, getSnapshots,
     getCharactersInRange, scSetStatus, getContentEl,
     makeAnchor, resolveAnchor, buildMessageWindow,
-    persistMsgSinceSnapshot,
+    persistMsgSinceSnapshot, getReceiptIdentity,
     _render,
 } from './data.js';
 
@@ -160,6 +160,19 @@ export async function generateSnapshot() {
     // next one. Subtracting the consumed amount instead of zeroing keeps the
     // auto-snapshot cadence honest across a long generation.
     const counterAtWindow = state.msgSinceSnapshot;
+    // The window now ends at `toIndex` (the last included message), not at the
+    // end of chat: buildMessageWindow excludes the trailing in-flight pair. Those
+    // excluded messages are still counted in `counterAtWindow`, so they must
+    // survive the consume below — otherwise the auto-snapshot cadence drifts by
+    // the exclusion count on every snapshot.
+    // msgSinceSnapshot counts MESSAGE_RECEIVED events, not raw chat entries.
+    // The excluded user+assistant pair therefore preserves one assistant
+    // receipt rather than two raw-array slots.
+    const tailStart = Math.max(0, toIndex + 1);
+    const uncoveredTailReceipts = chat
+        .slice(tailStart)
+        .filter(msg => msg && !msg.is_user && !msg.is_system).length;
+    const consumedAtWindow = counterAtWindow - uncoveredTailReceipts;
 
     // CHRONICLE-01/02: Capture scope before async API call. The old weak key
     // collapsed two different chats on the same character when chatId was
@@ -221,7 +234,21 @@ export async function generateSnapshot() {
         // still uncounted work, so it carries over. Clamped at 0 because a
         // deletion during generation can lower the counter below the captured
         // value.
-        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - counterAtWindow);
+        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - consumedAtWindow);
+        // Consume receipt provenance with the counter. Keep only events that
+        // belong to the uncovered tail, rather than relying on Map insertion
+        // order (which is unrelated to chat position after regenerations).
+        const tailReceiptCounts = new Map();
+        for (const message of chat.slice(tailStart)) {
+            if (!message || message.is_user || message.is_system) continue;
+            const key = getReceiptIdentity(message);
+            tailReceiptCounts.set(key, (tailReceiptCounts.get(key) || 0) + 1);
+        }
+        for (const [key, count] of state.countedReceiptEvents) {
+            const retain = Math.min(count, tailReceiptCounts.get(key) || 0);
+            if (retain > 0) state.countedReceiptEvents.set(key, retain);
+            else state.countedReceiptEvents.delete(key);
+        }
         persistMsgSinceSnapshot();
         state.selectedSnapshotId = snapshot.id;
         // Only update the UI when the Chronicle tab is actually visible —
