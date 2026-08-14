@@ -44,7 +44,7 @@
 // diagnostics singleton so events/last-runs don't leak between tests once later
 // phases call record() through the barrel. _resetDiagnostics stays out of the
 // production barrel — only this test stub reaches it.
-import { _resetDiagnostics } from '../../core/diagnostics.js';
+import { _resetDiagnostics, recordInjection } from '../../core/diagnostics.js';
 
 let _chat = [];
 let _meta = {};
@@ -428,15 +428,30 @@ export function applyExtensionPromptInjection({
     key, header = '', body = '', enabled, globalDepth, fallbackDepth,
     globalRole = 'system', wrapperTag, useTags = true,
 }) {
-    const depth = globalDepth != null ? Number(globalDepth) : fallbackDepth;
     const role = globalRole === 'user' ? 1 : globalRole === 'assistant' ? 2 : 0;
-    const payload = enabled && body?.trim()
-        ? `${header?.trim() ? `${header}\n\n` : ''}${body}`
-        : '';
+    // Finite-depth guard, mirroring the real core/injection.js: a
+    // present-but-non-finite globalDepth falls back to the module depth —
+    // never NaN.
+    const depth = (globalDepth != null && Number.isFinite(Number(globalDepth))) ? Number(globalDepth) : fallbackDepth;
+    const active = !!(enabled && body?.trim());
+    // Payload construction, mirroring the real core/injection.js: header
+    // prepended, then wrapInTag() (which boundary-escapes '<') when tags are
+    // on and a wrapper is configured. A fake that skipped wrapping/escaping
+    // would let feature-level diagnostics tests pass while asserting
+    // snapshots production never registers — so this must stay faithful.
+    // (wrapInTag below is this stub's mirror of the real one.)
+    const inner = header?.trim() ? `${header}\n\n${body}` : body;
+    const payload = active ? ((useTags && wrapperTag) ? wrapInTag(wrapperTag, inner) : inner) : '';
     _promptCalls.push({ key, payload, enabled: !!enabled, depth, role, wrapperTag, useTags });
     const ctx = buildFakeContext();
     ctx.setExtensionPrompt?.(key, payload, 1, depth, undefined, role);
-    return !!(enabled && body?.trim());
+    // Phase 2 parity with the real core/injection.js: record a diagnostics
+    // snapshot whenever setExtensionPrompt is available (the real module
+    // returns early — and records nothing — when it is not).
+    if (typeof ctx.setExtensionPrompt === 'function') {
+        recordInjection({ key, payload, role, depth, enabled: active });
+    }
+    return active;
 }
 export const roleToNumber = notImplemented('roleToNumber');
 export function wrapInTag(tag, body) {
@@ -494,11 +509,11 @@ export const createFloatingButtonBar = notImplemented('createFloatingButtonBar')
 // barrel consumers agree on the supported setting range.
 export { DEFAULT_RECENT_HISTORY_EXCLUDE, MAX_RECENT_HISTORY_EXCLUDE } from '../../core/context.js';
 export { MWT_VERSION } from '../../core/version.js';
-// Diagnostics accessors (Phase 0). Re-exported from the REAL module so feature
-// code reaching record()/getEvents()/... through the barrel sees the SAME
-// singleton state under test as in production (the barrel→stub alias trap —
-// see DIAGNOSTICS_PANEL_PHASES.md "Repo-specific traps"). diagnostics.js is a
-// pure in-memory module with no SillyTavern dependency, so no faking is needed.
+// Diagnostics accessors (Phases 0–2). Re-exported from the REAL module so
+// feature code reaching record()/getEvents()/... through the barrel sees the
+// SAME singleton state under test as in production (the barrel→stub alias trap
+// — see the phases doc, "Repo-specific traps"). diagnostics.js is a pure
+// in-memory module with no SillyTavern dependency, so no faking is needed.
 export {
     record,
     getEvents,
@@ -513,4 +528,8 @@ export {
     getLastApiCall,
     getAllLastApiCalls,
     clearApiCalls,
+    recordInjection,
+    getInjectedSnapshot,
+    getAllInjectedSnapshots,
+    clearInjections,
 } from '../../core/diagnostics.js';

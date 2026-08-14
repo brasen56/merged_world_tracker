@@ -20,7 +20,7 @@ import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMes
 // exposed to testers as window.MWT.diagnostics near the bottom of this file.
 // Imported directly (not via the core/index.js barrel) so the namespace reads
 // the real singleton regardless of the test-only barrel→stub alias.
-import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastRuns, clearEvents, clearApiCalls, clearLastRuns } from './core/diagnostics.js';
+import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastRuns, getInjectedSnapshot, getAllInjectedSnapshots, clearEvents, clearApiCalls, clearLastRuns, clearInjections } from './core/diagnostics.js';
 
 // ─── Feature module imports ─────────────────────────────────────────────────
 
@@ -1123,13 +1123,16 @@ window.MWT.backup = {
     fingerprintPreview,
 };
 
-// ── Diagnostics console namespace (Phases 0–1) ──────────────────────────────
+// ── Diagnostics console namespace (Phases 0–2) ──────────────────────────────
 //
 // Read-only, in-memory peek at the capture the diagnostics panel will later
-// show. See upcoming_work_misc/DIAGNOSTICS_CONSOLE_GUIDE.md for the tester
-// guide. Captures TELEMETRY ONLY — no prompts, API keys, custom headers, or
-// response bodies — and nothing here writes to chat_metadata, localStorage, or
-// settings. The buffer resets on page reload.
+// show. See DIAGNOSTICS_CONSOLE_GUIDE.md (repo root) for the tester guide.
+// API-call capture is TELEMETRY ONLY — no prompts, API keys, custom headers,
+// or response bodies. Injection snapshots (Phase 2) DO include the injected
+// payload text by design — that is the exact string sent to
+// setExtensionPrompt — but like everything here they stay in-memory only and
+// nothing is written to chat_metadata, localStorage, or settings. The buffer
+// resets on page reload.
 //
 // Usage examples:
 //   MWT.diagnostics.events()                    // event ring, newest first
@@ -1139,6 +1142,8 @@ window.MWT.backup = {
 //   MWT.diagnostics.lastApiCall('world_state')  // most recent call for one module
 //   MWT.diagnostics.lastApiCalls()              // last call per module
 //   MWT.diagnostics.lastRuns()                  // per-module last-run stamps
+//   MWT.diagnostics.injections()                // last snapshot per injection key
+//   MWT.diagnostics.injection('mwt_world_state_injection')  // one key's payload
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1220,14 +1225,42 @@ window.MWT.diagnostics = {
         return runs;
     },
 
+    injections: () => {
+        const snaps = getAllInjectedSnapshots();
+        const rows = Object.entries(snaps).map(([key, s]) => ({
+            key,
+            enabled: s.enabled,
+            role: s.role,           // 0 system · 1 user · 2 assistant
+            depth: s.depth,
+            chars: s.payload.length,
+            appliedAt: s.at ? new Date(s.at).toLocaleTimeString() : null,
+            ageSec: s.at ? Math.round((Date.now() - s.at) / 1000) : null,
+        }));
+        console.table(rows);
+        if (rows.length === 0) console.log('[MWT] No injection snapshots recorded yet — they appear once a module applies its prompt.');
+        else console.log('[MWT] Snapshots are the exact strings last registered with SillyTavern via setExtensionPrompt (frozen until re-applied; registration only — final prompt placement is not verified). NOTE: the return value includes full payload text, unlike apiCalls() which is telemetry-only.');
+        return snaps;
+    },
+
+    injection: (key) => {
+        const snap = getInjectedSnapshot(key);
+        if (!snap) {
+            console.log(`[MWT] No injection snapshot recorded for key "${key}". Known keys appear in MWT.diagnostics.injections().`);
+            return undefined;
+        }
+        console.log(`[MWT] Injection snapshot (${key}):`, snap);
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
         clearLastRuns();
-        console.log('[MWT] Diagnostics buffer cleared (events + API calls + last runs). In-memory only — nothing persisted.');
+        clearInjections();
+        console.log('[MWT] Diagnostics buffer cleared (events + API calls + last runs + injection snapshots). In-memory only — nothing persisted.');
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

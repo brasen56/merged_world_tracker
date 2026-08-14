@@ -1,4 +1,4 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–1)
+# MWT.diagnostics — Console Tester Guide (Phases 0–2)
 
 > **Status:** live now. This is the console-only bridge until the diagnostics
 > panel UI ships (Phase 5+).
@@ -6,15 +6,20 @@
 ## What this is
 
 `MWT.diagnostics` is a read-only window into the in-memory capture that
-Phase 0 (event ring + last-run map) and Phase 1 (API call telemetry) added. It
-exists so testers can use the data **now**, before the panel tab exists.
+Phase 0 (event ring + last-run map), Phase 1 (API call telemetry), and Phase 2
+(injected-payload snapshots) added. It exists so testers can use the data
+**now**, before the panel tab exists.
 
 - **In-memory only.** Everything clears on page reload. Nothing is written to
   chat metadata, `localStorage`, or settings.
-- **Telemetry only.** It records *about* a call — model/profile id, duration,
-  retry count, HTTP status, finish reason, token usage, error class — **never**
-  the prompt, API key, custom headers, or response body. Safe to paste into a
-  bug report.
+- **API telemetry only — for API calls.** They record *about* a call —
+  model/profile id, duration, retry count, HTTP status, finish reason, token
+  usage, error class — **never** the prompt, API key, custom headers, or
+  response body. Safe to paste into a bug report.
+- **Injection snapshots DO contain payload text.** `injections()` /
+  `injection(key)` return the exact string last registered with SillyTavern
+  via `setExtensionPrompt` — that is their purpose. Skim the payload before
+  pasting a snapshot into a public bug report.
 
 ## Quick start
 
@@ -37,6 +42,8 @@ MWT.diagnostics.apiCalls()                // last ~20 API calls, newest first
 MWT.diagnostics.lastApiCall('world_state')   // most recent call for one module
 MWT.diagnostics.lastApiCalls()            // last call per module (pointer view)
 MWT.diagnostics.lastRuns()                // per-module last-run stamps
+MWT.diagnostics.injections()              // last snapshot per injection key (payloads!)
+MWT.diagnostics.injection('mwt_world_state_injection')  // one key's recorded payload
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -76,10 +83,36 @@ show. `lastRuns()` shows the last module run (start/finish, ok/error, token
 counts) per module — currently empty until later phases call `setRunStart` /
 `setRunResult`.
 
+### `injections()` / `injection(key)`
+
+One row per injection key (World State, Chronicle, Interiority, Story
+Planner). The snapshot is the **frozen string MWT last registered with
+SillyTavern** via `setExtensionPrompt` — overwritten only when something
+re-applies it — so what you see here is that registration, not a fresh rebuild.
+
+> **What this does and does not prove.** Calling `setExtensionPrompt` proves
+> what MWT *registered* with SillyTavern — not that a generation ran
+> afterwards, and not that SillyTavern placed the payload in the final prompt.
+> The panel design marks placement `Unverified` for exactly this reason. Treat
+> the snapshot as "registered, placement not confirmed."
+
+| Field | Meaning |
+|---|---|
+| `enabled` | `false` means the last apply **cleared** the slot (empty payload) — i.e. MWT registered nothing |
+| `role` | Numeric role sent: `0` system · `1` user · `2` assistant |
+| `depth` | Resolved injection depth actually sent |
+| `chars` | Payload length in characters |
+| `appliedAt` / `ageSec` | When it was last applied, and how stale it is |
+
+Use `injection(key)` for the full payload text of one key. The event ring also
+gets a payload-free `injection_applied` echo per apply (module `injection`).
+
 ## How to capture a report
 
 1. Reproduce the problem.
 2. In the console, run `MWT.diagnostics.apiCalls()` (or `lastApiCall(...)`).
+   For injection bugs ("the model ignored my world state"), add
+   `MWT.diagnostics.injections()`.
 3. Copy the **returned object**: right-click → *Copy object*, or run
    `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
 4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for
@@ -87,7 +120,9 @@ counts) per module — currently empty until later phases call `setRunStart` /
 
 ## Limitations (until the panel ships)
 
-- No redaction toggle is needed because prompts/content are never captured.
+- No redaction toggle exists yet: API telemetry never captures content, but
+  injection snapshots DO include payload text (by design). The Phase 5 panel
+  adds the opt-in redaction layer for those.
 - No repair actions — read-only except `clear()`, which only empties the
   in-memory buffer.
 - The buffer is per-session; a reload clears it. Reproduce, then capture before

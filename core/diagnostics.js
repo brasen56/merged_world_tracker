@@ -62,6 +62,17 @@ let _apiCalls = [];
 const _lastApiCalls = Object.create(null);
 
 /**
+ * Injected-payload snapshots (Phase 2):
+ *   { [key]: { key, payload, role, depth, enabled, at } }
+ *
+ * ONE snapshot per setExtensionPrompt key, OVERWRITTEN on each apply — the
+ * injected payload is a frozen snapshot until something re-applies it, so the
+ * panel must show this recorded value, never a fresh rebuild (design §I.4.4).
+ * Null-prototype for the same reason as _lastRuns.
+ */
+const _injections = Object.create(null);
+
+/**
  * Resolver for the chat-identity key stamped on every record(). Defaults to
  * core/scope.js's getChatIdentity(); overridable via _setScopeKeyResolver() so
  * tests can stamp deterministically (the live resolver mints a unique nonce per
@@ -196,6 +207,86 @@ export function clearApiCalls() {
     for (const key of Object.keys(_lastApiCalls)) delete _lastApiCalls[key];
 }
 
+// ─── Injected-payload snapshots (Phase 2) ─────────────────────────────────────
+
+/**
+ * Record what applyExtensionPromptInjection (core/injection.js) actually sent
+ * to SillyTavern's setExtensionPrompt: `{ key, payload, role, depth, enabled,
+ * at }`. One snapshot per key, OVERWRITTEN on each apply — including applies
+ * that CLEAR the slot (enabled:false, payload:''), because "it was cleared at
+ * T" is exactly as diagnostic as what it contained before.
+ *
+ * Unlike recordApiCall this store keeps the payload BODY (that is its whole
+ * purpose), but it is still in-memory only; the future panel (Phase 5+) routes
+ * it through the redaction layer before display. The event-ring echo
+ * deliberately carries metadata + payload length ONLY, so the ring never
+ * duplicates full payloads.
+ *
+ * Never throws (always-on contract, decision D3): bad input is a no-op.
+ *
+ * @param {object}  [snapshot]
+ * @param {string}  [snapshot.key]     — setExtensionPrompt key (required)
+ * @param {string}  [snapshot.payload] — exact string passed to setExtensionPrompt
+ * @param {number}  [snapshot.role]    — numeric role actually sent (0|1|2)
+ * @param {number}  [snapshot.depth]   — resolved depth actually sent
+ * @param {boolean} [snapshot.enabled] — false when this apply cleared the slot
+ * @returns {object|undefined} a copy of the stored snapshot, or undefined on bad input
+ */
+export function recordInjection(snapshot = {}) {
+    if (!snapshot || typeof snapshot !== 'object') return undefined;
+    const { key } = snapshot;
+    if (typeof key !== 'string' || !key) return undefined;
+    const payload = typeof snapshot.payload === 'string' ? snapshot.payload : String(snapshot.payload ?? '');
+    const snap = {
+        key,
+        payload,
+        role: typeof snapshot.role === 'number' ? snapshot.role : null,
+        depth: typeof snapshot.depth === 'number' ? snapshot.depth : null,
+        enabled: snapshot.enabled === true,
+        at: Date.now(),
+    };
+    _injections[key] = snap;
+    record({
+        level: 'info',
+        module: 'injection',
+        event: 'injection_applied',
+        detail: {
+            key,
+            enabled: snap.enabled,
+            role: snap.role,
+            depth: snap.depth,
+            chars: payload.length,
+            at: snap.at,
+        },
+    });
+    return { ...snap };
+}
+
+/**
+ * @param {string} key — setExtensionPrompt key
+ * @returns {object|undefined} a copy of the last snapshot applied for that key
+ */
+export function getInjectedSnapshot(key) {
+    const snap = _injections[key];
+    return snap ? { ...snap } : undefined;
+}
+
+/**
+ * @returns {object} per-key copies of every recorded injection snapshot
+ */
+export function getAllInjectedSnapshots() {
+    const out = {};
+    for (const k of Object.keys(_injections)) out[k] = { ..._injections[k] };
+    return out;
+}
+
+/**
+ * Clear injection snapshots without affecting events, API calls, or last runs.
+ */
+export function clearInjections() {
+    for (const k of Object.keys(_injections)) delete _injections[k];
+}
+
 // ─── Last-run map ────────────────────────────────────────────────────────────
 
 /**
@@ -290,5 +381,6 @@ export function _resetDiagnostics() {
     _events = [];
     clearApiCalls();
     clearLastRuns();
+    clearInjections();
     _resolveScopeKey = defaultResolveScopeKey;
 }

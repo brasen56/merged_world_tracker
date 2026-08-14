@@ -12,7 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [1.6.0] - Unreleased
+## [Unreleased]
+
+### Added
+- Diagnostics Phase 2 — injected-payload snapshots (no UI yet):
+  `applyExtensionPromptInjection()` now records exactly what it registered
+  with SillyTavern via `setExtensionPrompt` — one snapshot per injection key,
+  overwritten on each apply (`{ key, payload, role, depth, enabled, at }`,
+  in-memory only), so a future panel can show the payload actually registered
+  (placement in the final prompt stays unverified) instead of a misleading
+  rebuild. Console bridge:
+  `MWT.diagnostics.injections()` / `MWT.diagnostics.injection(key)` — see
+  `DIAGNOSTICS_CONSOLE_GUIDE.md`.
+
+## [1.6.0] - 2026-08-13
 
 ### Added
 - Setting to change how many recent messages to ignore (Does NOT apply to interiority)

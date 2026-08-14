@@ -4,6 +4,7 @@
 
 import { getSetExtensionPrompt } from './context.js';
 import { escapePromptBoundary } from './prompt.js';
+import { recordInjection } from './diagnostics.js';
 
 export function roleToNumber(role) {
     switch (role) {
@@ -57,6 +58,12 @@ export function wrapInTag(tag, body) {
  *                                        enabled, wraps the full payload in
  *                                        `<wrapperTag>…</wrapperTag>`
  * @param {boolean} [opts.useTags=true] — master switch for tag wrapping
+ *
+ * Phase 2 diagnostics: every apply that reaches setExtensionPrompt (including
+ * clears) records a per-key snapshot `{ key, payload, role, depth, enabled, at }`
+ * via recordInjection() in core/diagnostics.js — overwritten on each apply, so
+ * `getInjectedSnapshot(key)` always reflects the last thing actually registered
+ * with SillyTavern.
  */
 export function applyExtensionPromptInjection({
     key,
@@ -77,6 +84,9 @@ export function applyExtensionPromptInjection({
 
     if (!enabled || !body?.trim()) {
         setEP(key, '', 1, depth, undefined, role);
+        // Phase 2 diagnostics: record the cleared state too — "it was cleared
+        // at T" is exactly as diagnostic as what the slot contained before.
+        recordInjection({ key, payload: '', role, depth, enabled: false });
         return false;
     }
 
@@ -87,5 +97,13 @@ export function applyExtensionPromptInjection({
     const payload = (useTags && wrapperTag) ? wrapInTag(wrapperTag, inner) : inner;
 
     setEP(key, payload, 1, depth, undefined, role);
+    // Phase 2 diagnostics: snapshot exactly what was registered with
+    // SillyTavern, after the handoff, so the recorded payload can never
+    // drift from the registration (a fresh rebuild on panel open would lie —
+    // see the stale-arc note at story_planner/index.js:85). This proves what
+    // MWT registered, not that a generation ran afterwards or that
+    // SillyTavern placed the payload in the final prompt — placement is not
+    // observable from here (the panel design calls it Unverified).
+    recordInjection({ key, payload, role, depth, enabled: true });
     return true;
 }

@@ -22,7 +22,9 @@ export { notify } from './notifications.js';
 // Phase 0 diagnostics — in-memory ring buffer + last-run map
 // (core/diagnostics.js). Pure module; re-exported through the barrel so feature
 // code can import it alongside the other core helpers. Mirrored in
-// test/stubs/core.js for the barrel→stub alias.
+// test/stubs/core.js for the barrel→stub alias. Phase 1 added recordApiCall
+// (API telemetry); Phase 2 added recordInjection (per-key injected-payload
+// snapshots, overwritten on each apply).
 export {
     record,
     getEvents,
@@ -37,6 +39,10 @@ export {
     getLastApiCall,
     getAllLastApiCalls,
     clearApiCalls,
+    recordInjection,
+    getInjectedSnapshot,
+    getAllInjectedSnapshots,
+    clearInjections,
 } from './diagnostics.js';
 export { downloadBlob, downloadJson, pickTextFile } from './file.js';
 export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
