@@ -39,6 +39,7 @@ export default [
             'Completed_Roadmaps/**',
             'Audit_Reports/**',
             '.claude/**',
+            'upcoming_work_misc/**',
             // JSON-only directories:
             'test_presets/**',
             'manifest.json',
