@@ -279,7 +279,8 @@ export async function loadEntryContent(uid, expectedName) {
                     `[MWT:Knowledge] Refusing to load uid ${uid} for "${String(expectedName).trim()}" — ` +
                     `that entry is labelled "${String(entry.comment || '').trim()}" in "${getLorebookName()}". ` +
                     `The uid points at a different NPC; treating it as missing. ` +
-                    `Run MWT.npcs.auditDuplicates() to review duplicate registry identities.`
+                    `Repair it with "📚 From Lorebooks" (or MWT.npcs.reconcile()); ` +
+                    `MWT.npcs.auditDuplicates() reviews the registry read-only.`
                 );
                 return null;
             }

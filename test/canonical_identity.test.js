@@ -33,7 +33,7 @@ import {
 } from '../knowledge/lorebook.js';
 import { findEntryUidByNpcIdentity } from '../knowledge/reconcile.js';
 import {
-    buildStagingItems, mergeScanResults, importFromLorebooks,
+    buildStagingItems, mergeScanResults, importFromLorebooks, reconcileRegistry,
     mergeKeywords, trackedType,
 } from '../knowledge/staging.js';
 import { resolveRosterName, mergeSplitResults, validateAndApply } from '../interiority/generation.js';
@@ -328,10 +328,16 @@ describe('importFromLorebooks canonical check', () => {
         expect(await loadEntryContent(reg['Sophie'].uid, 'Sophie')).toBe('Sophie Simpson | Human | clerk');
     });
 
-    test('an alias entry of an already-tracked NPC is skipped, not imported', async () => {
+    test('an alias entry of an already-tracked NPC is a duplicate, not a second identity', async () => {
         seedRegistry({ Sophie: { uid: 5, type: 'minor', keywords: ['Sophie'] } });
         wiFake.books.set('Knowledge Tracker', {
-            entries: { 7: { uid: 7, comment: 'Sophie Simpson', key: ['Sophie Simpson'], content: 'Sophie Simpson | Human | clerk' } },
+            entries: {
+                // Sophie's real entry (verified) plus a stray alias-labelled
+                // duplicate. Reconciliation must keep Sophie on uid 5 and flag
+                // uid 7 as a duplicate rather than forking "Sophie Simpson".
+                5: { uid: 5, comment: 'Sophie', key: ['Sophie'], content: 'Sophie | Human | clerk' },
+                7: { uid: 7, comment: 'Sophie Simpson', key: ['Sophie Simpson'], content: 'Sophie Simpson | Human | clerk' },
+            },
         });
 
         await importFromLorebooks();
@@ -339,6 +345,129 @@ describe('importFromLorebooks canonical check', () => {
         const reg = getRegistry();
         expect(Object.keys(reg)).toEqual(['Sophie']);
         expect(reg['Sophie'].uid).toBe(5);
+    });
+});
+
+// ─── reconcileRegistry: validate/relink/detach + adopt (the repair pass) ─────
+
+describe('reconcileRegistry repairs registry↔entry links non-destructively', () => {
+    test('a crossed uid relinks to the NPC\'s real entry and preserves metadata', async () => {
+        // reg says Mikhail→67, but uid 67 is physically Marcus. Mikhail's real
+        // entry is uid 12. This is the reported warning scenario.
+        seedRegistry({ 'Mikhail Volkov': { uid: 67, type: 'major', keywords: ['Mikhail'], profileUid: 99 } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                12: { uid: 12, comment: 'Mikhail Volkov', key: ['Mikhail'], content: 'Mikhail | Human | smith' },
+                67: { uid: 67, comment: 'Marcus Boykin', key: ['Marcus'], content: 'Marcus | Badger | mechanic' },
+            },
+        });
+
+        const result = await reconcileRegistry();
+        const reg = getRegistry();
+
+        expect(reg['Mikhail Volkov'].uid).toBe(12);       // relinked to the right entry
+        expect(reg['Mikhail Volkov'].profileUid).toBe(99); // metadata preserved
+        expect(reg['Mikhail Volkov'].type).toBe('major');
+        expect(result.relinked).toBe(1);
+        // The displaced Marcus entry is now tracked in its own right.
+        expect(reg['Marcus Boykin'].uid).toBe(67);
+        expect(result.adopted).toBe(1);
+        // And Mikhail now loads (the warning stops).
+        expect(await loadEntryContent(12, 'Mikhail Volkov')).toBe('Mikhail | Human | smith');
+    });
+
+    test('two swapped uids both resolve', async () => {
+        seedRegistry({ 'Ada Lin': { uid: 2, keywords: ['Ada'] }, 'Bo Ray': { uid: 1, keywords: ['Bo'] } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                1: { uid: 1, comment: 'Ada Lin', key: ['Ada'], content: 'Ada | Human' },
+                2: { uid: 2, comment: 'Bo Ray', key: ['Bo'], content: 'Bo | Human' },
+            },
+        });
+
+        const result = await reconcileRegistry();
+        const reg = getRegistry();
+
+        expect(reg['Ada Lin'].uid).toBe(1);
+        expect(reg['Bo Ray'].uid).toBe(2);
+        expect(result.relinked).toBe(2);
+    });
+
+    test('an orphan (uid-less) record adopts its physical entry', async () => {
+        seedRegistry({ Sophie: { uid: null, type: 'minor', keywords: ['Sophie'] } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 7: { uid: 7, comment: 'Sophie Simpson', key: ['Sophie Simpson'], content: 'Sophie Simpson | Human | clerk' } },
+        });
+
+        const result = await reconcileRegistry();
+        const reg = getRegistry();
+
+        expect(reg['Sophie'].uid).toBe(7);
+        expect(Object.keys(reg)).toEqual(['Sophie']);
+        expect(result.adopted).toBe(1);
+    });
+
+    test('a uid pointing at another NPC with no entry of its own is detached', async () => {
+        seedRegistry({ Ghost: { uid: 5, keywords: ['Ghost'] } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 3: { uid: 3, comment: 'Real Person', key: ['Real'], content: 'Real | Human' } },
+        });
+
+        const result = await reconcileRegistry();
+        const reg = getRegistry();
+
+        expect(reg['Ghost'].uid).toBeNull();  // detached — a scan will re-create
+        expect(result.detached).toBe(1);
+    });
+
+    test('an ambiguous repair is left unchanged (fail closed), not guessed', async () => {
+        // reg's uid is wrong, and "Mara" could be either full entry — no safe
+        // choice, so the (still-wrong) uid is LEFT and reported, not relinked.
+        seedRegistry({ Mara: { uid: 9, keywords: ['Mara'] } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                1: { uid: 1, comment: 'Mara Vance', key: ['Mara Vance'], content: 'Mara Vance | Human' },
+                2: { uid: 2, comment: 'Mara Chen', key: ['Mara Chen'], content: 'Mara Chen | Human' },
+            },
+        });
+
+        const result = await reconcileRegistry();
+        const reg = getRegistry();
+
+        expect(reg['Mara'].uid).toBe(9);      // unchanged
+        expect(result.relinked).toBe(0);
+        expect(result.ambiguous).toBeGreaterThanOrEqual(1);
+    });
+
+    test('a correctly-linked record is left alone (verified)', async () => {
+        seedRegistry({ Sophie: { uid: 5, keywords: ['Sophie'] } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 5: { uid: 5, comment: 'Sophie', key: ['Sophie'], content: 'Sophie | Human' } },
+        });
+
+        const result = await reconcileRegistry();
+        const reg = getRegistry();
+
+        expect(reg['Sophie'].uid).toBe(5);
+        expect(result.verified).toBe(1);
+        expect(result.relinked + result.adopted + result.detached).toBe(0);
+    });
+
+    test('a duplicate physical entry is flagged, never merged or forked', async () => {
+        seedRegistry({ Sophie: { uid: 5, keywords: ['Sophie'] } });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: {
+                5: { uid: 5, comment: 'Sophie', key: ['Sophie'], content: 'Sophie | Human | clerk' },
+                7: { uid: 7, comment: 'Sophie Simpson', key: ['Sophie Simpson'], content: 'Sophie Simpson | Human | clerk' },
+            },
+        });
+
+        const result = await reconcileRegistry();
+        const reg = getRegistry();
+
+        expect(Object.keys(reg)).toEqual(['Sophie']); // no second identity
+        expect(reg['Sophie'].uid).toBe(5);            // authoritative entry kept
+        expect(result.duplicates).toBe(1);            // the stray is reported
     });
 });
 

@@ -1169,6 +1169,31 @@ try {
             );
             return rows;
         },
+
+        // Repair pass — the console twin of the "📚 From Lorebooks" button.
+        // Validates every registry uid against its physical entry and relinks
+        // crossed ones, detaches dead ones, and adopts untracked entries. It
+        // rewrites ONLY registry pointers — no lorebook entry is edited, merged,
+        // or deleted — so it is safe to run on a live chat that is throwing
+        // "Refusing to load uid … points at a different NPC" warnings.
+        reconcile: async () => {
+            const { reconcileRegistry } = await import('./knowledge/staging.js');
+            const r = await reconcileRegistry();
+            if (r.report.length) {
+                console.table(r.report.map(row => ({
+                    action: row.action, npc: row.npc, uid: row.to ?? row.from ?? '', detail: row.detail,
+                })));
+            }
+            console.log(
+                `[MWT] Reconcile complete (registry pointers only — no entry edited/merged/deleted): ` +
+                `${r.verified} already linked, ${r.relinked} relinked, ${r.adopted} adopted, ` +
+                `${r.detached} detached, ${r.ambiguous + r.duplicates} to review.` +
+                (r.detached ? ' Detached NPCs get a fresh entry on the next scan.' : '') +
+                (r.ambiguous + r.duplicates ? ' Review flagged rows with MWT.npcs.auditDuplicates().' : '') +
+                ' Reopen the NPCs tab to refresh the list.'
+            );
+            return r;
+        },
     };
 
     // ── Interiority deletion tombstones ─────────────────────────────────────
@@ -1200,7 +1225,7 @@ try {
         },
     };
 
-    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.npcs.{auditDuplicates}, MWT.interiority.{deletions,clearDeletions}');
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.npcs.{auditDuplicates,reconcile}, MWT.interiority.{deletions,clearDeletions}');
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }

@@ -17,6 +17,7 @@ import {
     getRegistry, saveRegistry,
     getStateRegistry, saveStateRegistry,
     resolveRegistryKey, normalizeRegistryName,
+    isSameNpcIdentity, isUnambiguousNpcAlias,
 } from './registry.js';
 import {
     formatMinorEntry, formatMajorEntry,
@@ -28,7 +29,7 @@ import {
 } from './lorebook.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { isStoreEntry } from './store.js';
-import { reconcileImportedUid } from './reconcile.js';
+import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
 
@@ -494,6 +495,193 @@ export async function importNpcs() {
 
 // ─── Lorebook scan (auto-discover existing entries) ─────────────────────────
 
+/**
+ * Which registry record does a physical entry's label belong to? The mirror of
+ * findEntryUidByNpcIdentity, searching registry keys instead of book entries.
+ * Exact label wins; otherwise a single unambiguous alias; fail closed on any
+ * ambiguity (including a shorthand that pairwise-matches a key but isn't a safe
+ * alias) so a stranger's entry is never folded into a tracked NPC.
+ *
+ * @param {object} registry
+ * @param {string} label — a physical entry's comment
+ * @returns {{key: string|null, ambiguous: boolean}}
+ */
+function matchRegistryIdentity(registry, label) {
+    const norm = normalizeRegistryName(label);
+    if (!norm) return { key: null, ambiguous: false };
+    const keys = Object.keys(registry);
+    const exact = keys.filter(k => normalizeRegistryName(k) === norm);
+    if (exact.length === 1) return { key: exact[0], ambiguous: false };
+    if (exact.length > 1) return { key: null, ambiguous: true };
+    const alias = keys.filter(k => isUnambiguousNpcAlias(k, label, keys));
+    if (alias.length === 1) return { key: alias[0], ambiguous: false };
+    if (alias.length > 1) return { key: null, ambiguous: true };
+    // No safe alias. If any key is still pairwise-the-same-NPC, the label is a
+    // shorthand/variant we cannot attribute — flag it rather than fork a new
+    // identity for someone who may already be tracked.
+    if (keys.some(k => isSameNpcIdentity(k, label))) return { key: null, ambiguous: true };
+    return { key: null, ambiguous: false };
+}
+
+/** Null out a uid on every registry record except the one that should own it. */
+function unlinkRegistryUid(registry, uid, exceptKey) {
+    if (uid === null || uid === undefined) return;
+    for (const [k, rec] of Object.entries(registry)) {
+        if (k !== exceptKey && rec.uid === uid) rec.uid = null;
+    }
+}
+
+/**
+ * Reconcile the NPC registry against the physical Knowledge Tracker book.
+ *
+ * "From Lorebooks" is a repair pass, not just an importer. It NEVER edits,
+ * merges, or deletes a lorebook entry — it only rewrites registry pointers, so
+ * no facts can be lost. Two phases:
+ *
+ *   PHASE 1 — validate every tracked uid against its entry, using the SAME
+ *   contextual identity rule loadEntryContent uses at runtime (so "verified
+ *   here" means "loadable there"):
+ *     • the uid's entry is this NPC        → leave it (verified)
+ *     • uid missing / labels another NPC   → find this NPC's real entry
+ *       (findEntryUidByNpcIdentity: exact label preferred, one unambiguous
+ *       alias, fail-closed):
+ *         – one safe, unclaimed entry → relink. Only the uid pointer and
+ *           keywords change; profileUid, type, relationships, and evidence key
+ *           on the unchanged registry name, so they ride along untouched.
+ *         – several candidates        → report, change nothing
+ *         – none                      → detach the bad uid, report that the NPC
+ *           needs a fresh entry (a later scan/write adopts or creates one).
+ *
+ *   PHASE 2 — adopt entries no record owns (the classic "From Lorebooks"):
+ *     • label aliases an orphan (uid-less) record → repair that record's uid
+ *     • label is unknown                          → track it as a new identity
+ *     • label aliases a record already pointing at a DIFFERENT entry (a
+ *       duplicate physical entry) → report, change nothing
+ *
+ * @returns {Promise<{verified:number, relinked:number, detached:number,
+ *   ambiguous:number, adopted:number, duplicates:number, report:Array<object>}>}
+ */
+export async function reconcileRegistry() {
+    const result = { verified: 0, relinked: 0, detached: 0, ambiguous: 0, adopted: 0, duplicates: 0, report: [] };
+    if (!state.wiScript) return result;
+
+    const ktWi = await state.wiScript.loadWorldInfo(getLorebookName());
+    const rawEntries = ktWi?.entries;
+    if (!rawEntries) return result;
+
+    const registry = getRegistry();
+    const playerSet = getSettings().trackMainCharAsNpc ? getUserNames() : getPlayerNames();
+    // Every comment the contextual alias rule can see (mirrors loadEntryContent).
+    const allLabels = Object.values(rawEntries).map(e => e?.comment);
+
+    // Index all entries by uid (for uid → entry lookup), and collect the NPC
+    // entries only (skip the store row, unlabelled rows, and player names).
+    const entryByUid = new Map();
+    const npcEntries = [];
+    for (const [uidStr, entry] of Object.entries(rawEntries)) {
+        const uid = Number(entry?.uid ?? uidStr);
+        if (!Number.isFinite(uid)) continue;
+        entryByUid.set(uid, entry);
+        if (isStoreEntry(entry)) continue;
+        const label = String(entry?.comment || '').trim();
+        if (!label || playerSet.has(label.toLowerCase())) continue;
+        npcEntries.push({
+            uid, label,
+            keywords: Array.isArray(entry.key) && entry.key.length ? entry.key : [label],
+            isMajor: /knowledge ledger\s*:/i.test(entry.content || ''),
+        });
+    }
+
+    const claimedUids = new Set();
+
+    // ── PHASE 1a: lock records whose uid already points at their own entry ──
+    const needsRepair = [];
+    for (const [key, info] of Object.entries(registry)) {
+        if (info.uid === null || info.uid === undefined) continue; // orphan → phase 2
+        const entry = entryByUid.get(info.uid);
+        if (entry && isUnambiguousNpcAlias(entry.comment, key, allLabels)) {
+            result.verified++;
+            claimedUids.add(info.uid);
+        } else {
+            needsRepair.push(key);
+        }
+    }
+
+    // ── PHASE 1b: repair records whose uid is missing or labels another NPC ──
+    for (const key of needsRepair) {
+        const info = registry[key];
+        const match = findEntryUidByNpcIdentity(rawEntries, key);
+        if (match && !claimedUids.has(match.uid)) {
+            const from = info.uid;
+            const entry = entryByUid.get(match.uid);
+            info.uid = match.uid;
+            if (entry && Array.isArray(entry.key) && entry.key.length) info.keywords = entry.key;
+            info.lastUpdated = Date.now();
+            claimedUids.add(match.uid);
+            result.relinked++;
+            result.report.push({
+                action: 'relinked', npc: key, from: from ?? null, to: match.uid,
+                detail: `uid ${from ?? '(none)'} → ${match.uid} "${match.label}"` +
+                    (match.duplicates > 1 ? ` (${match.duplicates} entries share this label — kept lowest uid)` : ''),
+            });
+            continue;
+        }
+        // No safe, unclaimed match. Distinguish "ambiguous" (leave it, the
+        // wrong uid keeps failing closed) from "gone" (detach for a fresh entry).
+        if (npcEntries.some(e => isSameNpcIdentity(e.label, key))) {
+            result.ambiguous++;
+            result.report.push({
+                action: 'ambiguous', npc: key, from: info.uid, to: null,
+                detail: `uid ${info.uid} is wrong, but several entries could be "${key}" — left unchanged, resolve by hand`,
+            });
+        } else {
+            const from = info.uid;
+            info.uid = null;
+            result.detached++;
+            result.report.push({
+                action: 'detached', npc: key, from, to: null,
+                detail: `uid ${from} labels a different NPC and no "${key}" entry exists — detached; a scan will create one`,
+            });
+        }
+    }
+
+    // ── PHASE 2: adopt entries no record owns ──
+    for (const e of npcEntries) {
+        if (claimedUids.has(e.uid)) continue;
+        const owner = matchRegistryIdentity(registry, e.label);
+        if (owner.ambiguous) {
+            result.ambiguous++;
+            result.report.push({ action: 'ambiguous-entry', npc: e.label, from: null, to: e.uid, detail: `entry "${e.label}" (uid ${e.uid}) matches several registry names — left untracked` });
+            continue;
+        }
+        if (owner.key != null) {
+            const rec = registry[owner.key];
+            if (rec.uid === null || rec.uid === undefined) {
+                unlinkRegistryUid(registry, e.uid, owner.key);
+                rec.uid = e.uid;
+                rec.keywords = e.keywords;
+                rec.lastUpdated = Date.now();
+                claimedUids.add(e.uid);
+                result.adopted++;
+                result.report.push({ action: 'adopted', npc: owner.key, from: null, to: e.uid, detail: `linked orphan record "${owner.key}" to existing entry uid ${e.uid} "${e.label}"` });
+            } else {
+                result.duplicates++;
+                result.report.push({ action: 'duplicate-entry', npc: owner.key, from: rec.uid, to: e.uid, detail: `"${owner.key}" already uses uid ${rec.uid}; entry uid ${e.uid} "${e.label}" is a duplicate — kept, review with auditDuplicates()` });
+            }
+            continue;
+        }
+        // Unknown label → brand-new identity.
+        unlinkRegistryUid(registry, e.uid, e.label);
+        registry[e.label] = { uid: e.uid, type: e.isMajor ? 'major' : 'minor', keywords: e.keywords, lastUpdated: Date.now() };
+        claimedUids.add(e.uid);
+        result.adopted++;
+        result.report.push({ action: 'adopted', npc: e.label, from: null, to: e.uid, detail: `tracked new NPC "${e.label}" (uid ${e.uid})` });
+    }
+
+    saveRegistry(registry);
+    return result;
+}
+
 export async function importFromLorebooks() {
     if (!state.wiScript) {
         ktSetStatus('World-info script not available.', 'error');
@@ -504,70 +692,10 @@ export async function importFromLorebooks() {
     const skipped  = { npcs: 0, states: 0 };
     const errors = [];
 
-    // ── Knowledge Tracker ───────────────────────────────────────────────
+    // ── Knowledge Tracker (reconcile registry ↔ physical entries) ────────
+    let kt = { verified: 0, relinked: 0, detached: 0, ambiguous: 0, adopted: 0, duplicates: 0, report: [] };
     try {
-        const ktWi = await state.wiScript.loadWorldInfo(getLorebookName());
-        if (ktWi?.entries) {
-            const registry = getRegistry();
-            // Respect the trackMainCharAsNpc setting: when ON, only the human
-            // user is excluded so the AI cast ({{char}} and group members) can
-            // be imported as tracked NPCs too.
-            const playerSet = getSettings().trackMainCharAsNpc ? getUserNames() : getPlayerNames();
-
-            for (const [uidStr, entry] of Object.entries(ktWi.entries)) {
-                // The module's own bookkeeping entry is not an NPC.
-                if (isStoreEntry(entry)) continue;
-                const name = String(entry.comment || '').trim();
-                if (!name) continue;
-                if (playerSet.has(name.toLowerCase())) continue;
-                // Canonical check: an entry whose label is an unambiguous alias
-                // of a tracked NPC must not become a SECOND registry identity.
-                // The old exact `registry[name]` lookup let "Sophie Simpson"
-                // slip past a "Sophie" record, preserving the alias duplicate
-                // this import exists to repair.
-                const canonKey = resolveRegistryKey(registry, name);
-                const existing = canonKey != null ? registry[canonKey] : null;
-                if (existing && existing.uid !== null && existing.uid !== undefined) {
-                    skipped.npcs++;
-                    continue;
-                }
-                const isMajor = /knowledge ledger\s*:/i.test(entry.content || '');
-                const uid = entry.uid ?? Number(uidStr);
-                const finalUid = Number.isFinite(uid) ? uid : null;
-                const keywords = Array.isArray(entry.key) && entry.key.length ? entry.key : [name];
-                // Where this entry lands in the registry: an existing canonical
-                // record (repairing its missing uid) or a brand-new identity.
-                const targetKey = canonKey != null && registry[canonKey] ? canonKey : name;
-
-                // Unlink UID from any other entry that already owns it
-                if (finalUid != null) {
-                    for (const [regName, regEntry] of Object.entries(registry)) {
-                        if (regEntry.uid === finalUid && regName !== targetKey) {
-                            console.warn(`[MWT:Knowledge] UID ${finalUid} was owned by "${regName}", reassigning to "${targetKey}"`);
-                            registry[regName].uid = null;
-                        }
-                    }
-                }
-
-                if (targetKey !== name && registry[targetKey]) {
-                    // Repair the canonical record in place: fill the missing
-                    // uid and adopt the physical entry's keywords. Type is left
-                    // alone — relinking is not reclassification.
-                    registry[targetKey].uid = finalUid;
-                    registry[targetKey].keywords = keywords;
-                    registry[targetKey].lastUpdated = Date.now();
-                } else {
-                    registry[targetKey] = {
-                        uid: finalUid,
-                        type: isMajor ? 'major' : 'minor',
-                        keywords,
-                        lastUpdated: Date.now(),
-                    };
-                }
-                imported.npcs++;
-            }
-            saveRegistry(registry);
-        }
+        kt = await reconcileRegistry();
     } catch (err) {
         errors.push(`Knowledge Tracker: ${err.message}`);
     }
@@ -607,11 +735,28 @@ export async function importFromLorebooks() {
     renderNpcsSubTab();
 
     const parts = [];
-    if (imported.npcs)   parts.push(`${imported.npcs} NPC(s)`);
+    if (kt.adopted)  parts.push(`${kt.adopted} tracked`);
+    if (kt.relinked) parts.push(`${kt.relinked} relinked`);
+    if (kt.detached) parts.push(`${kt.detached} detached`);
+    const review = kt.ambiguous + kt.duplicates;
+    if (review)      parts.push(`${review} to review`);
     if (imported.states) parts.push(`${imported.states} state tracker(s)`);
-    let msg = parts.length ? `Imported ${parts.join(' and ')}.` : 'Nothing new to import.';
-    if (skipped.npcs + skipped.states > 0) msg += ` (${skipped.npcs + skipped.states} already tracked.)`;
+
+    let msg = parts.length
+        ? `Reconciled: ${parts.join(', ')}.`
+        : (kt.verified ? `All ${kt.verified} tracked NPC(s) already linked correctly.` : 'Nothing to reconcile.');
+    if (skipped.states) msg += ` (${skipped.states} state tracker(s) already tracked.)`;
     if (errors.length) msg += ` Errors: ${errors.join('; ')}`;
+
+    if (kt.report.length) {
+        console.table(kt.report.map(r => ({ action: r.action, npc: r.npc, uid: r.to ?? r.from ?? '', detail: r.detail })));
+        console.log(
+            '[MWT:Knowledge] Reconciliation changed only registry pointers — no lorebook entry was edited, merged, or deleted.\n' +
+            '• relinked: the record now points at the entry its label matches.\n' +
+            '• detached: the record\'s entry was gone; a scan will create a fresh one.\n' +
+            '• to review: ambiguous or duplicate — resolve by hand (MWT.npcs.auditDuplicates()).'
+        );
+    }
     ktSetStatus(msg, errors.length ? 'error' : 'success');
     notify('Knowledge Tracker', msg, parts.length ? 'success' : 'info');
 }
