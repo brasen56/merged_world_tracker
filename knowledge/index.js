@@ -9,7 +9,7 @@ import { getChat, escapeRegex, estimateTokens, getChatMeta, patchChatMeta, captu
 
 import { state, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
-import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg } from './registry.js';
+import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg, saveRegistry, resolveRegistryKey } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
 import { resetStoreCache, hydrateCurrentBooks } from './store.js';
@@ -563,10 +563,12 @@ export async function refreshTotalTokens() {
     try {
         const registry = getRegistry();
         let total = 0;
-        for (const [, info] of Object.entries(registry)) {
+        for (const [name, info] of Object.entries(registry)) {
             if (info.uid === null || info.uid === undefined) continue;
             try {
-                const content = await loadEntryContent(info.uid);
+                // Label-verified: a stale uid must not count another NPC's
+                // entry toward this book's token total.
+                const content = await loadEntryContent(info.uid, name);
                 if (content) total += estimateTokens(content);
             } catch { /* skip */ }
         }
@@ -598,30 +600,98 @@ export async function triggerScan() {
     return runScan();
 }
 
+/**
+ * Scan and write every resulting proposal without user review.
+ *
+ * Unattended, so it must FAIL CLOSED. The interactive UI refuses to write a
+ * proposal whose content is still a placeholder; this path did not, and the
+ * consequence was worse than a no-op: when enrichStagingItem() refuses a
+ * mismatched uid (the registry says "Mikhail", the entry is labelled
+ * "Marcus"), the proposal keeps its "(Fetch to see changes)" placeholder, and
+ * writing that detached the uid and created a fresh entry whose entire body
+ * was the literal string "(Fetch to see changes)".
+ *
+ * Two guards, in order: an update that survived enrichment with no
+ * existingContent is an unresolved identity and is never written; and any
+ * remaining placeholder text is rejected exactly as the UI rejects it.
+ *
+ * @returns {Promise<Array>} the staging items, each tagged with `accepted`
+ *   (true) or `skipReason` (string) so callers can report what happened
+ */
 export async function scanAndAccept() {
     const scanResult = await runScan();
     const items = buildStagingItems(scanResult);
+    const { writeToLorebook, writeStateTracker } = await import('./lorebook.js');
+    const { STAGING_PLACEHOLDERS } = await import('./staging.js');
+    let accepted = 0;
+    const skips = [];
+
     for (const item of items) {
+        // May convert a create into an update when the entry already exists.
         await enrichStagingItem(item);
-        const merged = item.mergedContent || item.proposedContent;
-        const keywords = item.keywords || [item.name];
-        // Minimal el stub for handleAccept
-        const { writeToLorebook, writeStateTracker } = await import('./lorebook.js');
-        const { localRegistry, saveRegistry } = await import('./registry.js');
-        if (item.type === 'state') {
-            await writeStateTracker(item.uid, item.name, merged);
-        } else {
-            const result = await writeToLorebook(item.name, merged, keywords, item.uid);
-            if (result.success) {
-                localRegistry()[item.name] = {
-                    uid: result.uid,
-                    type: item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
-                    keywords,
-                    lastUpdated: Date.now(),
-                };
-                saveRegistry(localRegistry());
-            }
+
+        const skip = (reason) => {
+            item.skipReason = reason;
+            skips.push(`"${item.name}" — ${reason}`);
+        };
+
+        // FAIL CLOSED #1: an update whose entry never loaded. loadEntryContent
+        // returns null both when the uid is missing and when it points at a
+        // differently-labelled entry; either way we do not know what we would
+        // be merging into, and writing detaches the uid and creates an entry.
+        if (item.action === 'update' && item.uid != null && item.existingContent === null) {
+            skip('its lorebook entry could not be verified (stale uid or wrong NPC) — run MWT.npcs.auditDuplicates()');
+            continue;
         }
+
+        const merged = item.mergedContent || item.proposedContent;
+        // FAIL CLOSED #2: unloaded placeholder text, same rule as the UI.
+        if (!merged || STAGING_PLACEHOLDERS.includes(merged)) {
+            skip('its content never loaded (placeholder text)');
+            continue;
+        }
+
+        const keywords = item.keywords || [item.name];
+        if (item.type === 'state') {
+            const result = await writeStateTracker(item.uid, item.name, merged);
+            if (result && result.success === false) { skip(result.error || 'state write failed'); continue; }
+            item.accepted = true;
+            accepted++;
+            continue;
+        }
+
+        const result = await writeToLorebook(item.name, merged, keywords, item.uid);
+        if (!result.success) { skip(result.error || 'lorebook write failed'); continue; }
+
+        // Canonical registry key, mirroring handleAccept: for updates
+        // (item.uid != null) resolve through the registry so the model's
+        // spelling can't create a second identity. For creates,
+        // buildStagingItems already set item.name to the canonical key when
+        // one exists. (This path previously destructured a nonexistent
+        // `localRegistry` export, which threw on the first NPC.)
+        const reg = getRegistry();
+        const regKey = item.uid != null
+            ? (resolveRegistryKey(reg, item.name) ?? item.name)
+            : item.name;
+        // MERGE, never replace — preserves profileUid and any other field
+        // this path does not manage. See the matching note in handleAccept.
+        reg[regKey] = {
+            ...(reg[regKey] || {}),
+            uid: result.uid,
+            type: item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
+            keywords,
+            lastUpdated: Date.now(),
+        };
+        saveRegistry(reg);
+        item.accepted = true;
+        accepted++;
+    }
+
+    if (skips.length > 0) {
+        console.warn(
+            `[MWT:Knowledge] scanAndAccept wrote ${accepted} of ${items.length} proposal(s). ` +
+            `Skipped ${skips.length}:\n  ${skips.join('\n  ')}`
+        );
     }
     return items;
 }
@@ -669,6 +739,8 @@ export async function getNpcContent(name) {
     // the full registry key ("Mara Vance") instead of silently missing.
     const entry = getRegistryEntry(name);
     if (!entry || entry.info.uid == null) return '';
-    const content = await loadEntryContent(entry.info.uid);
+    // Label-verified against the canonical key: a stale uid must not hand out
+    // another NPC's content under this name.
+    const content = await loadEntryContent(entry.info.uid, entry.key);
     return content || '';
 }

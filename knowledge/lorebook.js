@@ -20,11 +20,12 @@ import {
     HISTORY_KEY_PREFIX,
     state,
 } from './state.js';
-import { getRegistry, normalizeRegistryName } from './registry.js';
+import { getRegistry, normalizeRegistryName, isUnambiguousNpcAlias } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
+import { findEntryUidByNpcIdentity } from './reconcile.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
 
@@ -158,20 +159,56 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             // already content-verifies; normal updates were LESS protected.
             const existingComment = entries[existingUid].comment || '';
             const expectedName = String(name || '');
-            // KNOWLEDGE-01 (follow-up): compare through the registry accessor's
-            // normalization, not exact string. A case or leading/trailing-
-            // whitespace gap between the lorebook comment and the registry key
-            // is the same NPC; the old exact check detached a valid uid and
-            // created the duplicate this guard exists to prevent.
+            // KNOWLEDGE-01 (follow-up): compare through the shared contextual
+            // NPC-alias rule, not an exact string. A case/whitespace gap — OR an
+            // unambiguous alias spelling ("Sophie Simpson" for registry key
+            // "Sophie", which importFromLorebooks legitimately links) — is the
+            // same NPC. An exact-only check detached that valid uid and
+            // re-created the duplicate this guard exists to prevent. An empty
+            // comment is unlabelled, not a mismatch, so it still adopts.
             const commentN = normalizeRegistryName(existingComment);
-            const expectedN = normalizeRegistryName(expectedName);
-            if (commentN && commentN !== expectedN) {
+            if (commentN && !isUnambiguousNpcAlias(existingComment, expectedName,
+                Object.values(entries).map(entry => entry?.comment))) {
                 console.warn(
                     `[MWT:Knowledge] Registry uid ${existingUid} for "${expectedName.trim()}" points at ` +
                     `an entry labelled "${existingComment.trim()}" in "${book}" — the uid is stale (wrong NPC). ` +
                     `Detaching the stale uid and creating a new entry instead.`
                 );
                 existingUid = null;
+            }
+        }
+        // ADOPT BEFORE CREATE — the duplicate-entry backstop.
+        //
+        // Every path that lands here would otherwise add a SECOND entry beside
+        // one this book already holds under the same label: an orphan (uid-less)
+        // registry record, a registry that was empty when the scan ran, and the
+        // stale-uid guard above, which detaches the bad uid and falls straight
+        // through. That is what produced four entries labelled "Sophie" in the
+        // reported book — identical labels, so not an alias fork.
+        //
+        // Adoption turns the create into an update of the entry that is already
+        // there. The update branch pushes history first, so the previous text is
+        // always recoverable if the incoming proposal is thinner. Enrichment
+        // (enrichStagingItem) normally resolves this earlier and merges properly;
+        // this is the last line of defence for paths that skip it.
+        //
+        // assertHydrated runs BEFORE the lookup: this is the would-be-create
+        // path, so it must keep the same hydration guarantee a create had —
+        // adopting must not become a way to write against an un-hydrated store.
+        if (existingUid === null || existingUid === undefined || !entries[existingUid]) {
+            assertHydrated(book, `create a lorebook entry for "${name}"`);
+            const adopted = findEntryUidByNpcIdentity(entries, name);
+            if (adopted) {
+                console.warn(
+                    `[MWT:Knowledge] "${String(name).trim()}" already exists in "${book}" as uid ` +
+                    `${adopted.uid} (labelled "${adopted.label}")${adopted.exact ? '' : ' — an alias spelling'}. ` +
+                    `Updating that entry instead of creating a duplicate.` +
+                    (adopted.duplicates > 1
+                        ? ` NOTE: ${adopted.duplicates} entries share this label; adopting the lowest uid. ` +
+                          `Run MWT.npcs.auditDuplicates() to review and prune the rest.`
+                        : '')
+                );
+                existingUid = adopted.uid;
             }
         }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
@@ -188,6 +225,9 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             // Creating an entry against an un-hydrated store is the duplicate
             // bug in miniature: an empty registry reports every NPC as new, so
             // a scan would rebuild the whole book alongside itself. Refuse.
+            // (The adopt-before-create block above already asserted this for
+            // every path that reaches here; kept so the create branch does not
+            // depend on a distant guard for its own safety property.)
             assertHydrated(book, `create a lorebook entry for "${name}"`);
             const existingUids = Object.keys(entries).map(Number).filter(n => !isNaN(n));
             const newUid = existingUids.length > 0 ? existingUids.reduce((a, b) => a > b ? a : b, -1) + 1 : 0;
@@ -208,12 +248,78 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
     } catch (err) { return { success: false, content, keywords, error: err.message }; }
 }
 
-export async function loadEntryContent(uid) {
+/**
+ * Load an NPC entry's content from the Knowledge Tracker lorebook.
+ *
+ * @param {number} uid — entry UID
+ * @param {string} [expectedName] — when provided, the entry's label (comment)
+ *   must match this NPC — same normalization as writeToLorebook's
+ *   KNOWLEDGE-01 identity check — or the load is REFUSED. A uid is just a
+ *   number: stale or duplicated registry identities can point it at a
+ *   different NPC's entry, and every caller that displays or merges content
+ *   would then present one character's dossier under another's name (the
+ *   Mikhail/Marcus symptom). Returning null blocks the display/merge; callers
+ *   already treat null as "no content".
+ * @returns {Promise<string|null>}
+ */
+export async function loadEntryContent(uid, expectedName) {
     if (!state.wiScript) return null;
     try {
         const wi = await state.wiScript.loadWorldInfo(getLorebookName());
-        return wi?.entries?.[uid]?.content ?? null;
+        const entry = wi?.entries?.[uid];
+        if (!entry) return null;
+        if (expectedName !== undefined && expectedName !== null) {
+            // Same contextual NPC-alias rule as writeToLorebook's KNOWLEDGE-01: an
+            // alias spelling of the canonical key ("Sophie Simpson" for
+            // "Sophie") still verifies, but a genuinely different NPC — the
+            // Mikhail/Marcus symptom — is refused.
+            if (!isUnambiguousNpcAlias(entry.comment, expectedName,
+                Object.values(wi?.entries || {}).map(candidate => candidate?.comment))) {
+                console.warn(
+                    `[MWT:Knowledge] Refusing to load uid ${uid} for "${String(expectedName).trim()}" — ` +
+                    `that entry is labelled "${String(entry.comment || '').trim()}" in "${getLorebookName()}". ` +
+                    `The uid points at a different NPC; treating it as missing. ` +
+                    `Run MWT.npcs.auditDuplicates() to review duplicate registry identities.`
+                );
+                return null;
+            }
+        }
+        return entry.content ?? null;
     } catch { return null; }
+}
+
+/**
+ * List every NPC entry in the Knowledge Tracker lorebook (read-only).
+ *
+ * Same shape as listProfileEntries(). Used by the non-destructive duplicate
+ * audit (MWT.npcs.auditDuplicates) so alias entries that exist physically in
+ * the book — even when the registry never recorded them — are visible.
+ *
+ * @returns {Promise<Array<{uid:number, name:string, chars:number, preview:string}>>}
+ */
+export async function listKnowledgeEntries() {
+    if (!state.wiScript) return [];
+    try {
+        const wi = await state.wiScript.loadWorldInfo(getLorebookName());
+        const entries = wi?.entries || {};
+        return Object.keys(entries)
+            .filter(k => !isStoreEntry(entries[k]))
+            .map(k => {
+                const e = entries[k];
+                const content = String(e?.content || '');
+                return {
+                    uid: Number(e?.uid ?? k),
+                    name: String(e?.comment || '').trim(),
+                    chars: content.length,
+                    preview: content.slice(0, 80).replace(/\s+/g, ' '),
+                };
+            })
+            .filter(e => Number.isFinite(e.uid))
+            .sort((a, b) => a.name.localeCompare(b.name) || a.uid - b.uid);
+    } catch (err) {
+        console.warn('[MWT:Knowledge] Could not list knowledge entries:', err);
+        return [];
+    }
 }
 
 // ─── NPC Profiles lorebook (Slice 2 — non-injected growth profiles) ──────────
@@ -261,13 +367,13 @@ export async function writeProfileToLorebook(name, content, existingUid) {
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const existingComment = entries[existingUid].comment || '';
             const expectedName = String(name || '');
-            // KNOWLEDGE-01 (follow-up): same normalized comparison as
-            // writeToLorebook — a case/whitespace-only difference between the
-            // profile comment and the registry key is the same NPC, not a
-            // stale uid.
+            // KNOWLEDGE-01 (follow-up): same shared contextual NPC-alias rule as
+            // writeToLorebook — a case/whitespace difference OR an unambiguous
+            // alias spelling of the registry key is the same NPC, not a stale
+            // uid. An empty comment is unlabelled, not a mismatch.
             const commentN = normalizeRegistryName(existingComment);
-            const expectedN = normalizeRegistryName(expectedName);
-            if (commentN && commentN !== expectedN) {
+            if (commentN && !isUnambiguousNpcAlias(existingComment, expectedName,
+                Object.values(entries).map(entry => entry?.comment))) {
                 console.warn(
                     `[MWT:Knowledge] Profile uid ${existingUid} for "${expectedName.trim()}" points at ` +
                     `an entry labelled "${existingComment.trim()}" in "${book}" — the uid is stale (wrong NPC). ` +
@@ -442,9 +548,91 @@ export function synthesizeMajorFromUpdate(name, fields, newKnowledge) {
     return lines.join('\n');
 }
 
+/**
+ * Convert a scan record into the `fields` shape the update mergers consume.
+ *
+ * Handles both record shapes the scan produces: `update_*` records nest their
+ * values under `.fields`, `new_*` records carry them flat. Covers tone,
+ * perceived_as, descriptor AND every dossier field — the reclassification path
+ * used to copy only the first three, silently discarding role, appearance,
+ * secrets, agenda and the rest whenever a new_major turned out to describe an
+ * already-tracked NPC. `species` and `first_seen` are intentionally absent:
+ * they are creation-only and no merger updates them.
+ *
+ * @param {object} data — a scan record (new_* or update_*)
+ * @param {string} type — 'minor' | 'major'
+ * @returns {object} fields, with null for anything the record did not supply
+ */
+export function fieldsFromScanRecord(data, type) {
+    const src = (data && typeof data.fields === 'object' && data.fields !== null) ? data.fields : (data || {});
+    const pick = (k) => (src[k] === undefined ? null : src[k]);
+    const fields = {
+        tone: pick('tone'),
+        perceived_as: pick('perceived_as'),
+        descriptor: pick('descriptor'),
+    };
+    if (type === 'major') {
+        for (const f of DOSSIER_FIELDS) fields[f.key] = pick(f.key);
+    }
+    return fields;
+}
+
+/**
+ * Find this NPC's existing entry in the Knowledge book by label (read-only).
+ *
+ * @param {string} name — canonical NPC name
+ * @returns {Promise<{uid:number, label:string, content:string, exact:boolean, duplicates:number}|null>}
+ */
+export async function findKnowledgeEntryByName(name) {
+    if (!state.wiScript) return null;
+    try {
+        const wi = await state.wiScript.loadWorldInfo(getLorebookName());
+        const match = findEntryUidByNpcIdentity(wi?.entries || {}, name);
+        if (!match) return null;
+        return { ...match, content: wi.entries[match.uid]?.content ?? '' };
+    } catch { return null; }
+}
+
 export async function enrichStagingItem(item) {
-    if (!item || item.action !== 'update' || item.existingContent !== null || item.uid == null) return;
-    const existing = await loadEntryContent(item.uid);
+    if (!item) return;
+
+    // CREATE → UPDATE promotion (duplicate prevention, the visible half).
+    //
+    // A create proposal whose NPC ALREADY has an entry in the book would add a
+    // second one. That happens whenever the registry lost the pointer but the
+    // entry survived: an orphan (uid-less) record, a registry that was empty
+    // when the scan ran, or a stale uid the identity guard detached.
+    //
+    // writeToLorebook has a last-resort adopt-before-create backstop, but
+    // resolving it HERE is what makes it safe and legible: the item becomes a
+    // real update, so the user sees a diff against the actual entry and the
+    // merge preserves the existing dossier instead of overwriting it with a
+    // synthesized stub.
+    if (item.action === 'create' && item.uid == null && item.name) {
+        const found = await findKnowledgeEntryByName(item.name);
+        if (found) {
+            console.warn(
+                `[MWT:Knowledge] Staged create for "${item.name}" matches existing entry uid ${found.uid} ` +
+                `(labelled "${found.label}") — converting to an update so the entry is merged, not duplicated.`
+            );
+            item.uid = found.uid;
+            item.action = 'update';
+            item.adoptedUid = found.uid;
+            item.fields = item.fields || fieldsFromScanRecord(item.data, item.type);
+            item.newKnowledge = item.newKnowledge
+                || item.data?.initial_knowledge || item.data?.new_knowledge || [];
+            item.existingContent = null;
+            // Falls through to the normal update merge below.
+        }
+    }
+
+    if (item.action !== 'update' || item.existingContent !== null || item.uid == null) return;
+    // The item's name is the canonical registry key (buildStagingItems
+    // canonicalizes every category), so the label check inside
+    // loadEntryContent verifies uid ↔ NPC identity before this content is
+    // displayed or merged. A mismatch blocks the fetch (the placeholder text
+    // stays) instead of merging another character's dossier.
+    const existing = await loadEntryContent(item.uid, item.name);
     if (existing !== null) {
         item.existingContent = existing;
         if (item.type === 'minor') {
@@ -755,7 +943,7 @@ export async function runScan() {
             // scan can detect and fill missing dossier fields.
             if (dossierMode && info.type === 'major' && info.uid != null) {
                 try {
-                    const existing = await loadEntryContent(info.uid);
+                    const existing = await loadEntryContent(info.uid, name);
                     if (existing) {
                         // Truncate to keep the prompt manageable (we only need
                         // enough for the model to see which fields exist).
@@ -842,7 +1030,9 @@ export async function runStateUpdate(name, uid) {
 
 export async function runNpcUpdate(name, uid) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
-    const rawContent = await loadEntryContent(uid);
+    // Label-verified load: a uid pointing at another NPC's entry must refuse
+    // to load rather than feed that character's dossier in as update context.
+    const rawContent = await loadEntryContent(uid, name);
     if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
     const currentContent = stripRelationshipBlock(rawContent);
     const recentMessages = getRecentMessages();
@@ -915,7 +1105,7 @@ export async function runNpcUpdate(name, uid) {
  */
 export async function runNpcEnrich(name, uid) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
-    const rawContent = await loadEntryContent(uid);
+    const rawContent = await loadEntryContent(uid, name);
     if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
     const currentContent = stripRelationshipBlock(rawContent);
     const recentMessages = getRecentMessages(50);

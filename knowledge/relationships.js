@@ -295,7 +295,9 @@ export async function syncRelationshipsToLorebook(name) {
     // write can target a different book, writing one character's relationship
     // block into another character's entry.
     const scopeBefore = captureScope();
-    const currentContent = await loadEntryContent(reg.uid);
+    // Label-verified against the canonical key: a stale uid must not have
+    // another NPC's relationship block injected into (or stripped from) it.
+    const currentContent = await loadEntryContent(reg.uid, canonicalName);
     // KNOWLEDGE-04: Assert scope after the await and before the write. If the
     // chat changed during loadEntryContent, discard rather than risking a
     // cross-chat/cross-book write.

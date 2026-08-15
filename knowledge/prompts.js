@@ -19,10 +19,10 @@ OUTPUT FORMAT:
     { "name": "Full Name", "species": "Human/Elf/etc", "tone": "2-3 word communication style", "perceived_as": "how they present", "descriptor": "3-5 word physical/role descriptor", "first_seen": "location and in-world date/time", "initial_knowledge": [{ "fact": "concrete fact", "source": "how they know it", "date": "in-world date" }] }
   ],
   "update_minor": [
-    { "name": "must match an existing NPC name exactly", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" } }
+    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" } }
   ],
   "update_major": [
-    { "name": "must match an existing NPC name exactly", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows", "source": "how they know it", "date": "in-world date if known" }] }
+    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows", "source": "how they know it", "date": "in-world date if known" }] }
   ]
 }
 
@@ -31,6 +31,7 @@ Classification guide:
 - MAJOR NPC: named characters who have meaningful ongoing roles, relationships, or plot relevance.
 - If uncertain, classify as minor.
 - An NPC name MUST appear in the "Already Tracked NPCs" section to be classified as update. If not listed, classify as new.
+- A name that unambiguously refers to a listed NPC counts as listed — e.g. "Sophie" or "Sophie Simpson" for tracked "Sophie Simpson" is the SAME NPC. Classify it as an update and use the tracked spelling.
 - Only include NPCs who actually appeared or were meaningfully referenced.
 - For update entries: only include NPCs whose information actually changed.
 - If no NPCs qualify for a category, use an empty array [].`;
@@ -107,11 +108,11 @@ OUTPUT FORMAT:
     }
   ],
   "update_minor": [
-    { "name": "must match an existing NPC name exactly", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" } }
+    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" } }
   ],
   "update_major": [
     {
-      "name": "must match an existing NPC name exactly",
+      "name": "must match an existing tracked NPC — use the tracked spelling when possible",
       "fields": {
         "tone": "updated value or null if unchanged",
         "perceived_as": "updated value or null if unchanged",
@@ -137,6 +138,7 @@ Classification guide:
 - MAJOR NPC: named characters who have meaningful ongoing roles, relationships, or plot relevance. Fill ALL dossier fields.
 - If uncertain, classify as minor.
 - An NPC name MUST appear in "Already Tracked NPCs" to be classified as update. If not listed, classify as new.
+- A name that unambiguously refers to a listed NPC counts as listed — e.g. "Sophie" or "Sophie Simpson" for tracked "Sophie Simpson" is the SAME NPC. Classify it as an update and use the tracked spelling.
 - Only include NPCs who actually appeared or were meaningfully referenced.
 - For update entries: only include NPCs whose information actually changed.
 - SECRETS ARE NOT PERMANENT: a disclosed, resolved, or obsolete secret is a change worth an update_major. If a Tier's premise hinges on an in-world event that has clearly passed (compare against current in-world dates), retire that Tier rather than carrying it forward.

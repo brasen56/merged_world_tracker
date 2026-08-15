@@ -1077,6 +1077,100 @@ try {
         },
     };
 
+    // ── Knowledge Tracker duplicate audit (registry alias identities) ──────
+    //
+    // The knowledge scan/import/staging paths used to accept the model's
+    // spelling verbatim, so one NPC could accumulate several registry
+    // identities ("Sophie" and "Sophie Simpson"), each with its own lorebook
+    // entry. Those paths now canonicalize through resolveRegistryKey, which
+    // stops NEW duplicates — but existing ones are deliberately NOT auto-
+    // merged: entries under alias spellings may contain different facts, so
+    // which copy is authoritative is a human decision. This audit is
+    // READ-ONLY; it reports and explains, it never mutates.
+    window.MWT.npcs = {
+        auditDuplicates: async () => {
+            const reg = registryApi.getRegistry();
+            // An EMPTY registry is the most important case to audit, not a
+            // reason to stop: an empty (or wiped) registry over a populated
+            // book is exactly the state that makes every scan re-propose every
+            // NPC as new. Warn, then fall through to the physical sweep below,
+            // which will report each entry as untracked.
+            if (Object.keys(reg).length === 0) {
+                console.warn(
+                    '[MWT] The NPC registry is empty for this scope. If the book below holds entries, ' +
+                    'the registry has lost its pointers — "From Lorebooks" will re-adopt them. ' +
+                    'Run MWT.scope.diagnose() to confirm which books this chat resolves to.'
+                );
+            }
+
+            const rows = [];
+
+            // 1) Registry identities that alias each other, or collide.
+            for (const group of registryApi.auditRegistryAliases(reg)) {
+                for (const e of group.entries) {
+                    rows.push({
+                        kind: group.kind === 'ambiguous' ? 'ambiguous-name' : 'registry-alias',
+                        npc: e.name,
+                        uid: e.uid,
+                        type: e.type,
+                        detail: group.kind === 'ambiguous'
+                            ? `shorthand collision: ${group.names.join(' / ')} — NOT proven to be one NPC`
+                            : `aliases: ${group.names.join(' / ')}`,
+                    });
+                }
+            }
+
+            // 2) Physical lorebook entries whose label is NOT the entry their
+            //    canonical registry identity points at — the visible half of a
+            //    duplicate (or an entry the registry never tracked at all).
+            for (const e of await profileLorebookApi.listKnowledgeEntries()) {
+                const canon = registryApi.resolveRegistryKey(reg, e.name);
+                if (canon == null) {
+                    rows.push({
+                        kind: 'untracked-entry',
+                        npc: e.name || '(unlabelled)',
+                        uid: e.uid,
+                        type: '—',
+                        detail: `in book, no registry record (${e.chars} chars: "${e.preview}")`,
+                    });
+                    continue;
+                }
+                const regUid = reg[canon]?.uid;
+                if (regUid !== e.uid) {
+                    rows.push({
+                        kind: 'entry-not-linked',
+                        npc: e.name,
+                        uid: e.uid,
+                        type: reg[canon]?.type ?? '—',
+                        detail: `canonical identity "${canon}" points at uid ${regUid ?? '(none)'} (${e.chars} chars: "${e.preview}")`,
+                    });
+                }
+            }
+
+            if (rows.length === 0) {
+                console.log('[MWT] No duplicate NPC identities found in the registry or lorebook.');
+                return [];
+            }
+            console.table(rows);
+            console.log(
+                '[MWT] READ-ONLY audit — nothing was merged or deleted.\n' +
+                '• registry-alias: one NPC under several registry identities; each row is a separate lorebook entry that may hold different facts.\n' +
+                '• ambiguous-name: a short name (e.g. "Mara") that could belong to two different full names. These are NOT proven to be the same character — do not merge them. Rename the short record to the full name it belongs to.\n' +
+                '• entry-not-linked: a physical entry whose label aliases a tracked NPC but is not the entry the registry points at.\n' +
+                '• untracked-entry: an entry no registry record owns (the "From Lorebooks" import would adopt it).\n' +
+                '\nCLEANUP — two different operations, do not confuse them:\n' +
+                '1. Delete the redundant LOREBOOK ENTRY in SillyTavern\'s World Info editor, by its uid above. ' +
+                'This is what actually removes the duplicate text from your prompts.\n' +
+                '2. The ✕ button in the MWT NPC list does NOT do that. It deletes the registry record, ' +
+                'relationships, stance and evidence for that name, and deliberately leaves the lorebook entry in place.\n' +
+                'So: merge the facts you want into the entry you are keeping, delete the other entry in the World Info editor, ' +
+                'then use ✕ only to clear the leftover registry identity. Automatic deletion is not offered because ' +
+                'duplicate entries routinely hold different facts.'
+            );
+            return rows;
+        },
+    };
+
     // ── Interiority deletion tombstones ─────────────────────────────────────
     //
     // Deleting an intention records a tombstone so the engine cannot re-propose
@@ -1106,7 +1200,7 @@ try {
         },
     };
 
-    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.interiority.{deletions,clearDeletions}');
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.npcs.{auditDuplicates}, MWT.interiority.{deletions,clearDeletions}');
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }

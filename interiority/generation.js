@@ -16,6 +16,12 @@ import {
 } from '../core/index.js';
 
 import { REGISTRY_KEY } from '../knowledge/state.js';
+// Static, unlike the registry ACCESSORS below (which stay dynamic so the
+// interiority module does not pull the knowledge store into its load path).
+// isUnambiguousNpcAlias is pure string logic with no store dependency, and
+// resolveRosterName is synchronous — it cannot await an import. One shared
+// rule is the point: roster matching and registry matching must not drift.
+import { isUnambiguousNpcAlias } from '../knowledge/registry.js';
 
 import {
     buildSystemPrompt, buildUserContent,
@@ -265,7 +271,9 @@ async function loadNpcKnowledge(npcName) {
         const key = resolveRegistryKey(reg, npcName);
         const info = key != null ? reg[key] : null;
         if (!info || info.uid == null) return null;
-        const content = await loadEntryContent(info.uid);
+        // Label-verified against the canonical key: a stale uid must not hand
+        // another NPC's dossier to this roster member as context.
+        const content = await loadEntryContent(info.uid, key);
         if (!content) return null;
         return stripRelationshipBlock(content);
     } catch {
@@ -661,20 +669,30 @@ async function _filterToProfiledNpcs(roster) {
  * @returns {{npcs: Array<object>}} unified result; empty npcs if both inputs null
  */
 export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
-    // Build name → entry maps from both results (case-insensitive keys)
+    // Build name → entry maps from both results. Keys are RESOLVED against the
+    // roster via resolveRosterName (the same unambiguous alias rules
+    // validateAndApply uses), so a thoughts call answering "Charlotte Simpson"
+    // for roster "Charlotte" still merges — an exact case-insensitive key
+    // lookup would silently drop her thought block here before validation
+    // ever saw it. Unresolvable names are skipped; validateAndApply would
+    // discard them anyway.
     const intentionsMap = new Map();
     const thoughtsMap = new Map();
 
     if (intentionsResult && Array.isArray(intentionsResult.npcs)) {
         for (const npc of intentionsResult.npcs) {
             const name = String(npc?.name || '').trim();
-            if (name) intentionsMap.set(name.toLowerCase(), npc);
+            if (!name) continue;
+            const canon = resolveRosterName(roster, name);
+            if (canon != null) intentionsMap.set(canon.toLowerCase(), npc);
         }
     }
     if (thoughtsResult && Array.isArray(thoughtsResult.npcs)) {
         for (const npc of thoughtsResult.npcs) {
             const name = String(npc?.name || '').trim();
-            if (name) thoughtsMap.set(name.toLowerCase(), npc);
+            if (!name) continue;
+            const canon = resolveRosterName(roster, name);
+            if (canon != null) thoughtsMap.set(canon.toLowerCase(), npc);
         }
     }
 
@@ -754,7 +772,10 @@ export async function runStrictCalls(roster, virtuallyActiveIds = []) {
         const result = await fetchAndParse(systemPrompt, userContent, settings);
         if (result && Array.isArray(result.npcs)) {
             allNpcs.push(...result.npcs);
-            if (wantIntentions && result.npcs.some(npc => String(npc?.name || '').trim().toLowerCase() === name.toLowerCase())) {
+            // Alias-aware: the per-NPC call may be answered with a fuller
+            // spelling ("Charlotte Simpson" for roster "Charlotte") — that
+            // still counts as this NPC having been evaluated.
+            if (wantIntentions && result.npcs.some(npc => resolveRosterName([name], String(npc?.name || '').trim()) != null)) {
                 intentionsEvaluatedRoster.push(name);
             }
         }
@@ -872,6 +893,48 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
 // ─── Validation (§8) ─────────────────────────────────────────────────────────
 
 /**
+ * Resolve a model-returned NPC name against the roster.
+ *
+ * Mirrors resolveRegistryKey's matching rules against the roster list — the
+ * roster is canonicalized through the knowledge registry at build time, but a
+ * name can still legitimately miss it: the roster may carry a registry-less
+ * name from the world-state `Present:` line, and the model may answer with a
+ * fuller spelling of it. Matching runs strictest-first:
+ *   1. exact / case-insensitive membership → the roster's own spelling;
+ *   2. {@link isUnambiguousNpcAlias} alias match, both directions — ONLY when
+ *      unambiguous in the surrounding same-given-name roster population.
+ *
+ * Step 2 is what used to be missing: a response naming "Charlotte Simpson"
+ * for roster "Charlotte" was discarded whole — thoughts AND intentions — even
+ * though it unambiguously identified that NPC. Ambiguity still resolves to
+ * null (two roster members sharing a given name), and so does a name that is
+ * merely a same-given-name stranger ("Mara Chen" against roster "Mara
+ * Vance"): no entry is always safer than the wrong entry.
+ *
+ * @param {string[]} roster — canonical roster names
+ * @param {string} name — the name to resolve (model output)
+ * @returns {string|null} the roster's spelling of the matched member, or null
+ */
+export function resolveRosterName(roster, name) {
+    const wanted = String(name ?? '').trim();
+    if (!wanted || !Array.isArray(roster) || roster.length === 0) return null;
+    const wantedLower = wanted.toLowerCase().trim();
+    // 1. Exact / case-insensitive membership — the roster's spelling wins so
+    // every downstream store keys on the canonical form.
+    for (const r of roster) {
+        if (String(r).toLowerCase().trim() === wantedLower) return r;
+    }
+    // 2. Alias match, both directions ("Charlotte" ↔ "Charlotte Simpson"),
+    // using the SAME shared rule the knowledge registry uses. Not a bare
+    // first-token comparison: that resolved "Mara Chen" to roster "Mara Vance"
+    // whenever Vance was the only "Mara" present, attributing one character's
+    // thoughts and intentions to another.
+    const candidates = roster.filter(r => isUnambiguousNpcAlias(r, wanted, roster));
+    if (candidates.length === 1) return candidates[0];
+    return null;
+}
+
+/**
  * Validate and apply the interiority result to the ledger and per-message store.
  *
  * All validation is code-side, not prompt-side:
@@ -925,9 +988,6 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     // rewrites it (§18 rollback). Without this, a swipe would roll back
     // Mara's intentions but leave her mood from the abandoned timeline.
     const innerStatesSnapshot = getInnerStatesSnapshot();
-
-    // Normalize roster for case-insensitive matching
-    const rosterLower = new Set(roster.map(n => n.toLowerCase().trim()));
 
     // Defense-in-depth: also reject the user even if they somehow made it into
     // the roster (e.g. a stale ledger entry from before this fix, which is
@@ -1013,10 +1073,18 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
 
     const seenNpcs = new Set();
     for (const npcResult of result.npcs) {
-        const name = String(npcResult.name || '').trim();
-        if (!name || !rosterLower.has(name.toLowerCase())) {
+        const rawName = String(npcResult.name || '').trim();
+        // Resolve the model's spelling against the roster with the SAME
+        // unambiguous alias rules the knowledge registry uses (exact →
+        // case-insensitive → unambiguous given-name). The old exact
+        // case-insensitive membership test discarded "Charlotte Simpson"
+        // for roster "Charlotte" whole — thoughts, inner state, and
+        // intentions. `name` is the ROSTER's spelling from here on, so
+        // every downstream store keys on the canonical form.
+        const name = resolveRosterName(roster, rawName);
+        if (!rawName || !name) {
             // Unknown name — discard
-            console.warn(`[MWT:Interiority] Discarding NPC block "${name}" — not in roster [${roster.join(', ')}].`);
+            console.warn(`[MWT:Interiority] Discarding NPC block "${rawName}" — not in roster [${roster.join(', ')}].`);
             continue;
         }
         if (userNamesLower.has(name.toLowerCase())) {

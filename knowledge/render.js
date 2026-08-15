@@ -65,7 +65,14 @@ async function handleAccept(item, text, keywords, _el) {
             const regKey = item.uid != null
                 ? (resolveRegistryKey(reg, item.name) ?? item.name)
                 : item.name;
+            // MERGE, never replace. A wholesale `reg[regKey] = {...}` dropped
+            // every field not listed here — most importantly `profileUid`, the
+            // pointer at this NPC's "NPC Profiles" entry. Losing it makes the
+            // next profile save create a SECOND profile entry instead of
+            // overwriting (see MWT.profiles.duplicates), so accepting any
+            // ordinary proposal re-armed a duplicate bug in the other book.
             reg[regKey] = {
+                ...(reg[regKey] || {}),
                 uid: result.uid,
                 type: item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
                 keywords,
@@ -533,7 +540,8 @@ function wireNpcListEvents(el, _type) {
             const name = btn.dataset.name;
             const reg = getRegistry()[name];
             if (reg?.uid == null) return;
-            const existing = await loadEntryContent(reg.uid);
+            // Label-verified: refuse to promote off another NPC's entry content.
+            const existing = await loadEntryContent(reg.uid, name);
             const item = {
                 id: `promote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'promote', action: 'update', name, data: {},
                 proposedContent: '(promoting)', existingContent: existing,
@@ -553,7 +561,8 @@ function wireNpcListEvents(el, _type) {
             const name = btn.dataset.name;
             const reg = getRegistry()[name];
             if (reg?.uid == null) return;
-            const existing = await loadEntryContent(reg.uid);
+            // Label-verified: refuse to demote off another NPC's entry content.
+            const existing = await loadEntryContent(reg.uid, name);
             const item = {
                 id: `demote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'demote', action: 'update', name, data: {},
                 proposedContent: '(demoting)', existingContent: existing,
@@ -1506,7 +1515,9 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
 async function openNpcViewModal(name) {
     const reg = getRegistry()[name];
     if (!reg?.uid && reg?.uid !== 0) return;
-    const content = await loadEntryContent(reg.uid);
+    // Label-verified: a uid pointing at a differently-labelled entry must not
+    // display that character's dossier under this NPC's name.
+    const content = await loadEntryContent(reg.uid, name);
     if (!content) return;
     const viewModal = document.createElement('div');
     viewModal.id = 'kt-view-modal';

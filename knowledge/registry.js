@@ -102,12 +102,15 @@ export function normalizeRegistryName(name) {
  * Matching runs strictest-first:
  *   1. exact key
  *   2. case-insensitive exact
- *   3. given-name match, both directions — but ONLY when unambiguous
+ *   3. {@link isUnambiguousNpcAlias} alias match, both directions — but ONLY
+ *      when unambiguous in the context of every same-given-name registry key
  *
  * Step 3 refuses to choose between two NPCs sharing a given name ("Mara
- * Vance" / "Mara Chen"). Registry entries gate access to a character's
- * dossier and secrets, so a wrong match would hand one character's private
- * material to another. No entry is always safer than the wrong entry.
+ * Vance" / "Mara Chen") — and, since it uses the shared identity rule rather
+ * than a first-token comparison, it also refuses when only ONE of them is on
+ * file. Registry entries gate access to a character's dossier and secrets, so
+ * a wrong match would hand one character's private material to another. No
+ * entry is always safer than the wrong entry.
  *
  * @param {object} reg — the registry map ({ [npcName]: info })
  * @param {string} name — the name to resolve
@@ -130,12 +133,20 @@ export function resolveRegistryKey(reg, name) {
         if (normalizeRegistryName(key) === wanted) return key;
     }
 
-    // 3. Given-name match, both directions:
+    // 3. Alias match, both directions — with the full same-given-name context:
     //      "Mara"       → registry "Mara Vance"
     //      "Mara Vance" → registry "Mara"
-    const givenName = (s) => s.toLowerCase().trim().split(/\s+/)[0];
-    const wantedGiven = givenName(wanted);
-    const candidates = keys.filter(k => givenName(k) === wantedGiven);
+    //
+    // NOT a bare first-token comparison. That older rule resolved "Mara Chen"
+    // to registry "Mara Vance" whenever Vance was the only "Mara" on file —
+    // one full name silently answering for a DIFFERENT full name, which is the
+    // wrong-NPC failure this resolver exists to prevent. isSameNpcIdentity
+    // requires equality or single-token ↔ full-name, so two multi-token names
+    // that merely share a given name never match. Pairwise validity alone is
+    // insufficient, though: with "Mara", "Mara Vance", and "Mara Chen" on
+    // file, "Mara Vance" ↔ "Mara" is valid pairwise but the shorthand cannot
+    // safely be attributed to Vance. The contextual clique check catches that.
+    const candidates = keys.filter(k => isUnambiguousNpcAlias(k, wanted, keys));
     if (candidates.length === 1) return candidates[0];
     if (candidates.length > 1) {
         console.warn(
@@ -145,6 +156,68 @@ export function resolveRegistryKey(reg, name) {
         );
     }
     return null;
+}
+
+/**
+ * Do two names denote the SAME NPC — the pairwise (1:1) form of the matching
+ * {@link resolveRegistryKey} and {@link auditRegistryAliases} already use.
+ *
+ * True when, after normalization, the names are equal, OR one is a single
+ * token that is the other's first token ("Sophie" ↔ "Sophie Simpson"). Two
+ * multi-token names that merely share a given name ("Mara Vance" / "Mara
+ * Chen") are DIFFERENT people and return false. An empty name matches nothing.
+ *
+ * This is the pairwise primitive behind the lorebook label checks; their
+ * shorthand decisions additionally use {@link isUnambiguousNpcAlias}. The
+ * registry's own repair paths — e.g.
+ * importFromLorebooks — legitimately link a canonical key to a physical entry
+ * labelled with an alias spelling ("Sophie" → an entry commented "Sophie
+ * Simpson"). An exact-only label check refused that valid link, and on the
+ * next write detached the uid and re-created the very duplicate the guard
+ * exists to prevent. The Mikhail/Marcus protection is unchanged: names that
+ * are neither equal nor a single-token alias do not match.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+export function isSameNpcIdentity(a, b) {
+    const an = normalizeRegistryName(a);
+    const bn = normalizeRegistryName(b);
+    if (!an || !bn) return false;
+    if (an === bn) return true;
+    const aTokens = an.split(/\s+/);
+    const bTokens = bn.split(/\s+/);
+    return (aTokens.length === 1 && bTokens.length > 1 && bn.startsWith(an + ' '))
+        || (bTokens.length === 1 && aTokens.length > 1 && an.startsWith(bn + ' '));
+}
+
+/**
+ * Is a non-exact alias safe to use within a population of known names?
+ *
+ * {@link isSameNpcIdentity} intentionally answers only the pairwise question.
+ * A single-token shorthand can therefore bridge distinct full names: "Mara"
+ * aliases both "Mara Vance" and "Mara Chen" pairwise, even though Vance and
+ * Chen are strangers. Before resolving such a shorthand, every name sharing
+ * its given name must form a complete pairwise-alias clique. Exact normalized
+ * matches stay authoritative and do not need this contextual test.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @param {Iterable<string>} [population] — registry keys, roster names, or
+ *   lorebook labels visible to the caller
+ * @returns {boolean}
+ */
+export function isUnambiguousNpcAlias(a, b, population = []) {
+    const an = normalizeRegistryName(a);
+    const bn = normalizeRegistryName(b);
+    if (!an || !bn || !isSameNpcIdentity(an, bn)) return false;
+    if (an === bn) return true;
+
+    const givenName = an.split(/\s+/)[0];
+    const names = [a, b, ...population]
+        .filter(name => normalizeRegistryName(name).split(/\s+/)[0] === givenName);
+    return names.every(left => names.every(right => isSameNpcIdentity(left, right)));
 }
 
 // ─── Profile UID (NPC Profiles lorebook cross-reference) ─────────────────────
@@ -203,6 +276,74 @@ export function findOrphans() {
 }
 
 export function getAllNpcNames() { return Object.keys(getRegistry()); }
+
+/**
+ * Find registry identities that unambiguously alias the SAME NPC (read-only).
+ *
+ * History: the scan/import/staging paths used to accept the model's spelling
+ * verbatim, so one character could accumulate several registry identities
+ * ("Sophie" and "Sophie Simpson"), each with its own lorebook entry. Those
+ * paths now canonicalize through {@link resolveRegistryKey}, which stops NEW
+ * duplicates — but existing ones are deliberately NOT auto-merged here: two
+ * entries under alias spellings may contain different facts, so which copy is
+ * authoritative is a human decision. This function only reports.
+ *
+ * Two names are aliases when, after normalization, they are equal, or when one
+ * is a single token that equals the other's FIRST token (the same rule
+ * resolveRegistryKey uses). Two multi-token names that merely share a given
+ * name ("Mara Vance" / "Mara Chen") are DIFFERENT people.
+ *
+ * Each reported group is a connected component under that rule, CLASSIFIED —
+ * grouping alone would lie. A short name bridges two full names it cannot
+ * choose between: {"Mara", "Mara Vance", "Mara Chen"} is one component, but
+ * calling it one NPC contradicts resolveRegistryKey, which refuses that match
+ * outright, and could talk someone into deleting a real character. So:
+ *   - kind 'alias': every pair in the component aliases every other — these
+ *     really are one NPC under several spellings;
+ *   - kind 'ambiguous': the component is bridged by a shorthand. Which full
+ *     name it belongs to is unknowable from the registry; the fix is to rename
+ *     the short record, not to merge.
+ *
+ * @param {object} reg — the registry map ({ [npcName]: info })
+ * @returns {Array<{kind: string, names: string[], entries: Array<{name: string, uid: number|null, type: string, lastUpdated: number|null}>}>}
+ *   groups with 2+ identities; empty array when the registry is clean
+ */
+export function auditRegistryAliases(reg) {
+    const components = [];
+    // Same pairwise rule the lorebook label checks use — one source of truth
+    // for "same NPC" across the registry and the lorebook (see isSameNpcIdentity).
+    const areAliases = (a, b) => isSameNpcIdentity(a, b);
+
+    for (const key of Object.keys(reg || {})) {
+        // Merge every component this key touches: transitive reachability is
+        // what makes the result independent of key order (seeding from "Mara
+        // Vance" must produce the same components as seeding from "Mara").
+        const touched = components.filter(group => group.some(member => areAliases(member, key)));
+        if (touched.length === 0) { components.push([key]); continue; }
+        const [first, ...rest] = touched;
+        first.push(key);
+        for (const other of rest) {
+            first.push(...other);
+            components.splice(components.indexOf(other), 1);
+        }
+    }
+
+    return components
+        .filter(names => names.length > 1)
+        .map(names => ({
+            // A clique is one NPC; anything looser is a shorthand collision.
+            kind: names.every(a => names.every(b => a === b || areAliases(a, b)))
+                ? 'alias'
+                : 'ambiguous',
+            names,
+            entries: names.map(n => ({
+                name: n,
+                uid: reg[n]?.uid ?? null,
+                type: reg[n]?.type ?? 'minor',
+                lastUpdated: reg[n]?.lastUpdated ?? null,
+            })),
+        }));
+}
 
 // ─── State Registry ──────────────────────────────────────────────────────────
 

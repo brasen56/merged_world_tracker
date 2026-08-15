@@ -6,7 +6,7 @@
  * registry.
  */
 
-import { normalizeRegistryName } from './registry.js';
+import { normalizeRegistryName, isUnambiguousNpcAlias } from './registry.js';
 import { isStoreEntry } from './store.js';
 import { TRACKER_SENTINEL } from './state.js';
 
@@ -26,6 +26,65 @@ export function findDestinationEntryUid(entries, name, { kind = 'npc' } = {}) {
         if (normalizeRegistryName(label) !== expected) continue;
         const uid = entry?.uid ?? Number(key);
         if (Number.isInteger(Number(uid)) && Number(uid) >= 0) return Number(uid);
+    }
+    return null;
+}
+
+/**
+ * Find the entry in a book that ALREADY carries this NPC's label.
+ *
+ * The duplicate-entry bug in the reported screenshot (four entries labelled
+ * "Sophie", three labelled "Sophie Simpson") is not a registry fork —
+ * identical labels cannot come from alias canonicalization. They come from
+ * writeToLorebook's create branch, which only ever consulted the registry's
+ * `uid` and never asked whether the book already held this NPC. Three paths
+ * reach it with the entry sitting right there: an orphan (uid-less) registry
+ * record, a registry that was empty when the scan ran, and — most often — the
+ * KNOWLEDGE-01 stale-uid guard itself, which detaches the bad uid and falls
+ * straight through into a create.
+ *
+ * Unlike {@link findDestinationEntryUid} (exact normalized label, first hit,
+ * used by backup restore where strictness is the safer default), this matches
+ * on the shared contextual NPC-alias rule and FAILS CLOSED on ambiguity:
+ *   - exact-label matches win outright; the lowest uid is adopted so a book
+ *     that already holds several identical labels CONVERGES on one entry
+ *     instead of growing by one more on every scan;
+ *   - otherwise a single alias match ("Sophie Simpson" for "Sophie") is
+ *     adopted;
+ *   - two or more DIFFERENT alias matches ("Sophie Simpson" and "Sophie
+ *     Sinclair" for "Sophie") are two different people — return null and let
+ *     the caller create, rather than write into a stranger's entry.
+ *
+ * Unlabelled and store entries are never adoptable.
+ *
+ * @param {object} entries — the book's `entries` map
+ * @param {string} name — the NPC name about to be written
+ * @returns {{uid: number, label: string, exact: boolean, duplicates: number}|null}
+ */
+export function findEntryUidByNpcIdentity(entries, name) {
+    if (!normalizeRegistryName(name)) return null;
+    const wanted = normalizeRegistryName(name);
+    const labels = Object.values(entries || {}).map(entry => String(entry?.comment ?? '').trim());
+    const matches = [];
+    for (const [key, entry] of Object.entries(entries || {})) {
+        if (isStoreEntry(entry)) continue;
+        const label = String(entry?.comment ?? '').trim();
+        if (!label) continue;
+        if (!isUnambiguousNpcAlias(label, name, labels)) continue;
+        const uid = Number(entry?.uid ?? key);
+        if (!Number.isInteger(uid) || uid < 0) continue;
+        matches.push({ uid, label, exact: normalizeRegistryName(label) === wanted });
+    }
+    if (matches.length === 0) return null;
+
+    const exact = matches.filter(m => m.exact).sort((a, b) => a.uid - b.uid);
+    if (exact.length > 0) {
+        return { uid: exact[0].uid, label: exact[0].label, exact: true, duplicates: exact.length };
+    }
+    // Alias-only: one candidate is an unambiguous alias; several are strangers
+    // who merely share a given name.
+    if (matches.length === 1) {
+        return { uid: matches[0].uid, label: matches[0].label, exact: false, duplicates: 1 };
     }
     return null;
 }

@@ -289,7 +289,9 @@ export async function captureEvidence(name, uid) {
     let existingContext = '';
     if (uid != null) {
         try {
-            const content = await loadEntryContent(uid);
+            // Label-verified: a stale uid must not feed another NPC's dossier
+            // in as identity context for evidence capture.
+            const content = await loadEntryContent(uid, name);
             if (content) existingContext = content;
         } catch { /* ignore load errors */ }
     }
@@ -493,7 +495,8 @@ export async function runPsychoanalyzeProfile(name) {
     // output is a dead-end with no path back to live context.
     let curatedEntry = '';
     try {
-        curatedEntry = await loadEntryContent(uid);
+        // Label-verified: the historical baseline must be THIS NPC's entry.
+        curatedEntry = await loadEntryContent(uid, name);
     } catch { /* ignore load errors — proceed with evidence only */ }
 
     // Step 3: gather optional world context (same as captureEvidence)
@@ -617,7 +620,8 @@ export async function runGrowthProfile(name) {
     // Extract canon from the existing entry (NOT the Personality: line)
     let canon = '';
     try {
-        const content = await loadEntryContent(uid);
+        // Label-verified: canon must come from THIS NPC's entry.
+        const content = await loadEntryContent(uid, name);
         canon = extractCanonFromEntry(content);
     } catch { /* ignore */ }
 
@@ -861,7 +865,8 @@ export async function regenerateProfile(name) {
     // Extract canon from the existing entry (NOT the Personality: line)
     let canon = '';
     try {
-        const content = await loadEntryContent(uid);
+        // Label-verified: canon must come from THIS NPC's entry.
+        const content = await loadEntryContent(uid, name);
         canon = extractCanonFromEntry(content);
     } catch { /* ignore */ }
 
@@ -999,7 +1004,8 @@ export async function runContinuousCapture(name, opts = {}) {
     // Load existing entry as context (same as captureEvidence).
     let existingContext = '';
     try {
-        const content = await loadEntryContent(uid);
+        // Label-verified: identity context must be THIS NPC's entry.
+        const content = await loadEntryContent(uid, name);
         if (content) existingContext = content;
     } catch { /* ignore */ }
 
@@ -1247,7 +1253,8 @@ export async function runIlsBackfillCapture(name, opts = {}) {
     // Load existing entry as context.
     let existingContext = '';
     try {
-        const content = await loadEntryContent(uid);
+        // Label-verified: identity context must be THIS NPC's entry.
+        const content = await loadEntryContent(uid, name);
         if (content) existingContext = content;
     } catch { /* ignore */ }
 
