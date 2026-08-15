@@ -12,18 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [1.6.1] - 2026-08-14
 
-### Added
-- Diagnostics Phase 2 — injected-payload snapshots (no UI yet):
-  `applyExtensionPromptInjection()` now records exactly what it registered
-  with SillyTavern via `setExtensionPrompt` — one snapshot per injection key,
-  overwritten on each apply (`{ key, payload, role, depth, enabled, at }`,
-  in-memory only), so a future panel can show the payload actually registered
-  (placement in the final prompt stays unverified) instead of a misleading
-  rebuild. Console bridge:
-  `MWT.diagnostics.injections()` / `MWT.diagnostics.injection(key)` — see
-  `DIAGNOSTICS_CONSOLE_GUIDE.md`.
+### Fixed
+- **Interiority produced nothing on every turn** for the batched (default) and
+  split generation modes. `getEvaluatedNpcNames` built its fallback candidate
+  list as a `Set`, which fails the `Array.isArray` guard directly above it and
+  then throws `candidates.map is not a function`. Only strict mode passed the
+  optional `reportedNames` array that routed around the fallback, so it was the
+  one unaffected path. The throw was swallowed by the `generateForCurrentMessage`
+  try/catch, so the failure was silent: no thoughts, no intentions, and no ledger
+  write, with only a console error to show for it. Introduced in v1.6.0.
 
 ## [1.6.0] - 2026-08-13
 
@@ -188,7 +187,8 @@ and the shared core. Summarized here by theme rather than by individual commit.
 
 ---
 
-[1.6.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.5.2...HEAD
+[1.6.1]: https://github.com/brasen56/merged_world_tracker/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/brasen56/merged_world_tracker/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/brasen56/merged_world_tracker/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/brasen56/merged_world_tracker/compare/v1.4.23...v1.5.0

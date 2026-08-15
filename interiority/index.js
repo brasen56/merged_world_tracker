@@ -374,10 +374,24 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
     }
 }
 
-function getEvaluatedNpcNames(result, roster, reportedNames) {
+/**
+ * Resolve which roster NPCs actually had their intentions evaluated this turn.
+ *
+ * `reportedNames` is authoritative when the caller has it — only runStrictCalls
+ * tracks per-NPC evaluation, so the batched and split paths pass nothing and we
+ * fall back to inferring from the names present in the response. Both branches
+ * must be plain arrays: a Set here silently satisfies `Array.isArray === false`
+ * and then throws on `.map`, which is what broke every non-strict path in 1.6.0.
+ *
+ * @param {object|null} result parsed API result ({ npcs: [...] })
+ * @param {string[]} roster canonical roster names (returned casing wins)
+ * @param {string[]} [reportedNames] names the call reported as evaluated
+ * @returns {string[]} deduped roster names, in canonical casing
+ */
+export function getEvaluatedNpcNames(result, roster, reportedNames) {
     const rosterByLower = new Map(roster.map(name => [String(name).toLowerCase().trim(), name]));
-    const responseNames = new Set((Array.isArray(result?.npcs) ? result.npcs : [])
-        .map(npc => String(npc?.name || '').toLowerCase().trim()).filter(Boolean));
+    const responseNames = (Array.isArray(result?.npcs) ? result.npcs : [])
+        .map(npc => String(npc?.name || '').toLowerCase().trim()).filter(Boolean);
     const candidates = Array.isArray(reportedNames) ? reportedNames : responseNames;
     return [...new Set(candidates.map(name => rosterByLower.get(String(name).toLowerCase().trim())).filter(Boolean))];
 }
