@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.7.0]
+
+### Added
+- Diagnostics Phase 3 — silent-recovery counters (no UI yet): five quiet
+  fallbacks now record `warn` events into the diagnostics ring, so "why is my
+  data weird" reports arrive with evidence instead of guesswork:
+  `json_repaired` (lenient parse recovered JSON that strict `JSON.parse`
+  rejected), `reasoning_content_fallback` (empty `content`, reasoning channel
+  used instead), `output_stripped` (markdown fences / "Here is…" preamble
+  removed from an output), `scope_fallback_global` (Knowledge scope fell back
+  to the shared global lorebooks), and `wi_script_unavailable` (ST world-info
+  module missing — reads empty, writes blocked). Sizes and flags only, never
+  content. See `DIAGNOSTICS_CONSOLE_GUIDE.md` → "Reading the output".
+- Diagnostics Phase 2 — injected-payload snapshots (no UI yet):
+  `applyExtensionPromptInjection()` now records exactly what it registered
+  with SillyTavern via `setExtensionPrompt` — one snapshot per injection key,
+  overwritten on each apply (`{ key, payload, role, depth, enabled, at }`,
+  in-memory only), so a future panel can show the payload actually registered
+  (placement in the final prompt stays unverified) instead of a misleading
+  rebuild. Console bridge:
+  `MWT.diagnostics.injections()` / `MWT.diagnostics.injection(key)` — see
+  `DIAGNOSTICS_CONSOLE_GUIDE.md`.
+
+
 ## [1.6.1] - 2026-08-14
 
 ### Fixed

@@ -1,4 +1,4 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–2)
+# MWT.diagnostics — Console Tester Guide (Phases 0–3)
 
 > **Status:** live now. This is the console-only bridge until the diagnostics
 > panel UI ships (Phase 5+).
@@ -6,9 +6,9 @@
 ## What this is
 
 `MWT.diagnostics` is a read-only window into the in-memory capture that
-Phase 0 (event ring + last-run map), Phase 1 (API call telemetry), and Phase 2
-(injected-payload snapshots) added. It exists so testers can use the data
-**now**, before the panel tab exists.
+Phase 0 (event ring + last-run map), Phase 1 (API call telemetry), Phase 2
+(injected-payload snapshots), and Phase 3 (silent-recovery counters) added. It
+exists so testers can use the data **now**, before the panel tab exists.
 
 - **In-memory only.** Everything clears on page reload. Nothing is written to
   chat metadata, `localStorage`, or settings.
@@ -58,8 +58,22 @@ like `usage` / `detail`).
 
 One row per recorded event, newest first. Columns: `time`, `level`
 (`debug|info|warn|error`), `module`, `event`. The `api_call` events are the
-per-call echoes of `apiCalls()`; everything else is a `record()` fired by a
-future phase (e.g. the silent-recovery counters from Phase 3).
+per-call echoes of `apiCalls()`; Phase 3 added the **silent-recovery
+counters** — `warn` events that fire whenever MWT quietly recovered via a
+fallback the caller never sees:
+
+| Event | Module | Meaning |
+|---|---|---|
+| `json_repaired` | `api` | Strict `JSON.parse` failed; the lenient repair pipeline recovered an object anyway. Repaired parses correlate with "weird" data (dropped or half-written fields). Recorded only on success — a repair that fails throws loudly. |
+| `reasoning_content_fallback` | the calling module | `content` came back empty, so the text was taken from `reasoning_content`. The call "succeeded", but reasoning-channel output is often structured differently. |
+| `output_stripped` | `api` | `normaliseOutput` removed markdown fences and/or a "Here is…" preamble before the text reached the parser. `detail.fenced` / `detail.preamble` say which. |
+| `scope_fallback_global` | `knowledge` | Knowledge scope is `character`/`chat` but the identity did not resolve — data is going to the SHARED global lorebooks (`detail.scope` says which scope failed). |
+| `wi_script_unavailable` | `knowledge` | SillyTavern's world-info module is unavailable — Knowledge reads come back empty and writes are blocked (`detail.stage` says whether a previous or fresh import failed). |
+
+A quiet session is the goal: if none of these fire, no silent recovery
+happened. They record sizes and flags only — never prompt or output content.
+
+Everything else in the ring is a `record()` fired by a future phase.
 
 ### `apiCalls()`
 
@@ -112,7 +126,10 @@ gets a payload-free `injection_applied` echo per apply (module `injection`).
 1. Reproduce the problem.
 2. In the console, run `MWT.diagnostics.apiCalls()` (or `lastApiCall(...)`).
    For injection bugs ("the model ignored my world state"), add
-   `MWT.diagnostics.injections()`.
+   `MWT.diagnostics.injections()`. For "my data is weird" reports, add
+   `MWT.diagnostics.events({ level: 'warn' })` — it shows every silent
+   recovery (repaired JSON, reasoning fallback, stripped fences, scope
+   fallback, missing world-info) from the session.
 3. Copy the **returned object**: right-click → *Copy object*, or run
    `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
 4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for

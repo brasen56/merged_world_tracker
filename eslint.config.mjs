@@ -15,7 +15,7 @@
  *  - Globals: browser (the runtime) + node (for vitest.config.js and the test
  *    harness) + the four SillyTavern/jQuery globals the production code
  *    references as bare identifiers under typeof guards.
- *  - All SillyTavern-host imports (`../../../../script.js`, `world-info.js`,
+ *  - All SillyTavern-host imports (`../../../script.js`, `world-info.js`,
  *    `scripts/macros.js`) are DYNAMIC (await import(...)), so import/named —
  *    which only checks static imports — never touches them. It therefore only
  *    verifies static imports between project files, which is exactly the gap

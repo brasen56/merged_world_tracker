@@ -42,7 +42,7 @@
  * turning a silent data-corrupting bug into a loud, actionable error.
  */
 
-import { getChatMeta } from '../core/index.js';
+import { getChatMeta, record } from '../core/index.js';
 
 import {
     state, REGISTRY_KEY, STATE_REGISTRY_KEY, RELATIONSHIP_KEY,
@@ -198,13 +198,34 @@ function slot(bookName) {
  * (tried-and-failed), which this function returns directly without retrying.
  */
 async function getWiScript() {
-    if (state.wiScript !== undefined) return state.wiScript;
+    if (state.wiScript !== undefined) {
+        if (state.wiScript === null) {
+            // Phase 3 diagnostics (design §I.4.5, site 5): a previous import
+            // attempt failed and callers are silently operating without the
+            // world-info module — reads come back empty and writes are blocked.
+            record({
+                level: 'warn',
+                module: 'knowledge',
+                event: 'wi_script_unavailable',
+                detail: { stage: 'previous-attempt-failed' },
+            });
+        }
+        return state.wiScript;
+    }
     try {
         state.wiScript = await import('../../../../world-info.js');
         return state.wiScript;
     } catch (err) {
         state.wiScript = null;
         console.warn('[MWT:Knowledge] store: world-info.js unavailable:', err?.message || err);
+        // Phase 3 diagnostics (site 5, fresh failure) — same event as the
+        // short-circuit above so the ring shows one shape for this condition.
+        record({
+            level: 'warn',
+            module: 'knowledge',
+            event: 'wi_script_unavailable',
+            detail: { stage: 'import-failed', error: String(err?.message || err) },
+        });
         return null;
     }
 }

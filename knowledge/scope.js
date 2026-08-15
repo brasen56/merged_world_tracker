@@ -34,7 +34,7 @@
  * worse than writing to the shared one.
  */
 
-import { getContextSafe } from '../core/index.js';
+import { getContextSafe, record } from '../core/index.js';
 
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, PROFILE_LOREBOOK_NAME,
@@ -227,6 +227,16 @@ export function resolveBookNames() {
             `[MWT:Knowledge] Scope is "${scope}" but the current ${scope} could not be ` +
             `identified — falling back to the global lorebooks. (No chat open yet?)`
         );
+        // Phase 3 diagnostics (design §I.4.5, site 4): safe-but-silent by design
+        // — which is exactly why it must be visible. Everything keeps working,
+        // but data lands in the SHARED global books instead of this chat's own,
+        // which is the classic "why is my data weird across chats" report.
+        record({
+            level: 'warn',
+            module: 'knowledge',
+            event: 'scope_fallback_global',
+            detail: { scope },
+        });
         return deriveBookNames(null);
     }
 

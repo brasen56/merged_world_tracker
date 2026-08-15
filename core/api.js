@@ -7,7 +7,7 @@
 
 import { getContextSafe } from './context.js';
 import { getGlobalSettings } from './settings.js';
-import { recordApiCall } from './diagnostics.js';
+import { record, recordApiCall } from './diagnostics.js';
 
 function apiModule(settings) {
     return settings?.module || settings?.moduleKey || 'api';
@@ -249,6 +249,18 @@ export async function fetchFromApi({
             const reasoning = message?.reasoning_content || message?.reasoning || '';
             if (reasoning.trim()) {
                 console.warn(`[MWT API] Content empty but reasoning_content present (${reasoning.length} chars). Using reasoning_content as fallback.`);
+                // Phase 3 diagnostics (design §I.4.5, site 2): silent from the
+                // caller's side — the call "succeeded" and the parse will run,
+                // but the text came from the reasoning channel, which models
+                // structure differently. Tagged with the calling module (same
+                // convention as recordApiCall) so the warn lands next to the
+                // module whose data came out weird.
+                record({
+                    level: 'warn',
+                    module: apiModule(settings),
+                    event: 'reasoning_content_fallback',
+                    detail: { chars: reasoning.length },
+                });
                 content = reasoning;
             } else {
                 const err = new Error('API returned no content. Response: ' + JSON.stringify(data).slice(0, 300));
@@ -475,6 +487,13 @@ export function normaliseOutput(raw) {
     // matches the correct closing tag so <thinking>…</thinking> doesn't leave "ing>".
     text = text.replace(/<(think|thinking|reasoning)\b[\s\S]*?<\/\1>/gi, '').trim();
 
+    // Phase 3 diagnostics (design §I.4.5, site 3): fence unwrapping and preamble
+    // stripping are quiet recoveries — the caller receives clean text and never
+    // learns the model wrapped its output. Track which of the two fired so it
+    // can be recorded below. Thinking-block stripping and line-ending
+    // normalisation are deliberately NOT tracked (routine cleanup, not repair).
+    let fenced = false;
+
     // Unwrap markdown code fences — handle multiple patterns:
     // 1. Entire response is a single fenced block
     // 2. Fenced block with optional text before/after
@@ -482,17 +501,34 @@ export function normaliseOutput(raw) {
     const fenceMatch = text.match(/^```[a-z]*\r?\n([\s\S]*?)```\s*$/i);
     if (fenceMatch) {
         text = fenceMatch[1].trim();
+        fenced = true;
     } else {
         // Try to extract JSON from a fenced block that may have surrounding text
         const innerFence = text.match(/```[a-z]*\r?\n([\s\S]*?)```/i);
-        if (innerFence) text = innerFence[1].trim();
+        if (innerFence) {
+            text = innerFence[1].trim();
+            fenced = true;
+        }
     }
 
     // Strip common single-line preambles
-    text = text.replace(
+    const strippedPreamble = text.replace(
         /^(here(?:'s| is)(?: the| an)?(?: updated)?(?: world state)?(?:\s*document)?[:.\s]*)/i,
         ''
     ).trim();
+    const preamble = strippedPreamble !== text;
+    text = strippedPreamble;
+
+    if (fenced || preamble) {
+        // One warn per output that needed fence/preamble recovery. Sizes only —
+        // never the content itself.
+        record({
+            level: 'warn',
+            module: 'api',
+            event: 'output_stripped',
+            detail: { fenced, preamble, chars: text.length },
+        });
+    }
 
     // Normalize line endings
     text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -686,21 +722,18 @@ function removeTrailingCommas(text) {
 }
 
 /**
- * Parse a string expected to contain a single JSON object, tolerating common
- * model output problems: surrounding prose, markdown fences, truncation,
- * trailing commas, and unterminated strings.
+ * Recovery half of parseJsonLenient: everything after the strict parse fails.
+ * Extracts the outermost object, strips trailing commas, and repairs
+ * truncation. Behavior is identical to the pre-Phase-3 recovery block — it was
+ * hoisted verbatim into this helper so parseJsonLenient can record a warn ONLY
+ * when a repair path actually recovered an object (a repair that fails throws
+ * loudly and needs no counter).
  *
- * @param {string} raw
+ * @param {string} text — the raw text (already trimmed, strict parse failed)
  * @returns {object} the parsed object
  * @throws {Error} if the string cannot be parsed even after repair
  */
-export function parseJsonLenient(raw) {
-    const text = (raw || '').trim();
-    if (!text) throw new Error('empty output');
-
-    // Fast path — strict parse
-    try { return JSON.parse(text); } catch { /* continue to recovery */ }
-
+function parseLenientRecovery(text) {
     // Extract the outermost { … } region. This strips prose/code fences.
     const start = text.indexOf('{');
     if (start === -1) throw new Error('no JSON object found in output');
@@ -726,4 +759,37 @@ export function parseJsonLenient(raw) {
     try { return JSON.parse(repaired); } catch (err) {
         throw new Error(`Could not parse JSON even after repair: ${err.message}`);
     }
+}
+
+/**
+ * Parse a string expected to contain a single JSON object, tolerating common
+ * model output problems: surrounding prose, markdown fences, truncation,
+ * trailing commas, and unterminated strings.
+ *
+ * @param {string} raw
+ * @returns {object} the parsed object
+ * @throws {Error} if the string cannot be parsed even after repair
+ */
+export function parseJsonLenient(raw) {
+    const text = (raw || '').trim();
+    if (!text) throw new Error('empty output');
+
+    // Fast path — strict parse
+    try { return JSON.parse(text); } catch { /* continue to recovery */ }
+
+    const value = parseLenientRecovery(text);
+
+    // Phase 3 diagnostics (design §I.4.5, site 1): strict JSON.parse rejected
+    // the output but the lenient pipeline recovered an object. The caller can't
+    // tell — a repaired parse looks like any other parse — yet repaired input
+    // correlates with "weird" downstream data (dropped or half-written fields).
+    // Recorded only on success; size only, never the content.
+    record({
+        level: 'warn',
+        module: 'api',
+        event: 'json_repaired',
+        detail: { chars: text.length },
+    });
+
+    return value;
 }
