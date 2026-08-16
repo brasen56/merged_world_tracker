@@ -21,6 +21,10 @@ import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMes
 // Imported directly (not via the core/index.js barrel) so the namespace reads
 // the real singleton regardless of the test-only barrel→stub alias.
 import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastRuns, getInjectedSnapshot, getAllInjectedSnapshots, clearEvents, clearApiCalls, clearLastRuns, clearInjections } from './core/diagnostics.js';
+// Diagnostics Phase 6 — Tab 1 Health: the snapshot collector behind the ❤️
+// Health sub-tab (one row per module: enabled · gate · busy · tokens · auto ·
+// last run). Same direct-import rule as above.
+import { collectHealthSnapshot } from './diagnostics_panel/health.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1260,6 +1264,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.injections()                // last snapshot per injection key
 //   MWT.diagnostics.injection('mwt_world_state_injection')  // one key's payload
 //   MWT.diagnostics.settingsProvenance()        // where each WS/SP setting resolves from
+//   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1406,6 +1411,35 @@ window.MWT.diagnostics = {
         };
     },
 
+    // Phase 6 — Tab 1 Health (design §I.5 Tab 1): the same snapshot the ❤️
+    // Health sub-tab renders — one row per module (enabled · gate · busy ·
+    // tokens · auto-countdown · last run) plus the header (version, total
+    // token load, panic switch). Read-only; resolves live on every call.
+    health: () => {
+        const snap = collectHealthSnapshot();
+        if (snap.injectionMasterOff) {
+            console.warn('[MWT] ⛔ PANIC SWITCH IS ON (injectionMasterOff) — injection & scanning are stopped for every module.');
+        }
+        console.table(snap.modules.map(m => ({
+            module: m.id,
+            on: m.enabled,
+            gate: m.injectionAllowed,
+            busy: m.busy,
+            tokens: m.tokens,
+            auto: m.auto
+                ? (m.auto.perTurn ? `every turn${m.auto.pollDue ? ' (dormant poll due)' : ''}` : `in ${m.auto.remaining} msg(s)`)
+                : 'off',
+            lastRun: m.lastRun
+                ? `${new Date(m.lastRun.at).toLocaleTimeString()} ${m.lastRun.ok ? 'ok' : 'FAILED'}${m.lastRun.durationMs != null ? ` ${(m.lastRun.durationMs / 1000).toFixed(1)}s` : ''}`
+                : 'never',
+        })));
+        console.log(
+            `[MWT] Health snapshot for MWT v${snap.mwtVersion} — total tokens: ${snap.totalTokens}. ` +
+            'The return value carries the full rows (auto schedule, last-run source/model/HTTP status, per-field errors) for copy-paste.'
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1415,6 +1449,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

@@ -19,6 +19,12 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
     settingsKey: SETTINGS_KEY,
     legacyKey: 'world_state_settings',
     defaults: {
+        // Diagnostics (Phase 6): stamps this module's key onto API telemetry
+        // (core/api.js apiModule() → captureApiCall) and the
+        // reasoning_content_fallback warn, so per-module views — the Health
+        // tab's last-run column, MWT.diagnostics.lastApiCall('world_state') —
+        // actually key on it instead of everything landing under 'api'.
+        module: 'world_state',
         connectionProfileId: '',
         apiUrl: '',
         apiKey: '',

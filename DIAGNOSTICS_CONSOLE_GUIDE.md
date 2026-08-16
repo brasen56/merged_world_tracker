@@ -1,9 +1,10 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4)
+# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health)
 
 > **Status:** live now. The console bridge remains the deepest view; the
 > **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
-> redacted **📋 Copy Report** without devtools. Tabs 1–7 (Phases 6–12) are
-> still being built.
+> redacted **📋 Copy Report** without devtools, and its first live sub-tab —
+> **❤️ Health** (Phase 6) — renders the one-table answer to "is anything
+> broken right now?". Tabs 2–7 (Phases 7–12) are still being built.
 
 ## What this is
 
@@ -48,6 +49,7 @@ MWT.diagnostics.lastRuns()                // per-module last-run stamps
 MWT.diagnostics.injections()              // last snapshot per injection key (payloads!)
 MWT.diagnostics.injection('mwt_world_state_injection')  // one key's recorded payload
 MWT.diagnostics.settingsProvenance()      // where each WS/SP setting resolves from
+MWT.diagnostics.health()                  // the ❤️ Health tab snapshot, one row per module
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -150,6 +152,29 @@ Reach for this when "the setting is right but behaves wrong": the value
 usually resolves from a different level than the one the user believes they
 edited.
 
+### `health()` (Phase 6)
+
+The same snapshot the ❤️ Health tab renders — one row per module:
+
+| Column | Meaning |
+|---|---|
+| `on` | The per-tracker enable flag (`enable<ModuleKey>`) — right-click a module's floating button to flip it |
+| `gate` | `injectionAllowed()`: may this module inject/scan right now? Collapses the panic switch and the per-module disable into one boolean |
+| `busy` | A generation/refresh/scan is in flight right now |
+| `tokens` | That module's estimated injected token load (same number as its floating-button badge) |
+| `auto` | Countdown to the next auto-run in messages; `every turn` for Interiority (its dormant-poll state rides along); `off` when auto-run is disabled |
+| `lastRun` | The module's most recent API call: time · ok/FAILED · duration. `never` is normal right after a reload — the capture is in-memory only |
+
+The return value adds the header (`mwtVersion`, `totalTokens`,
+`injectionMasterOff`) and per-row detail (auto schedule, last-run source /
+model / HTTP status / retries, and `errors` where an accessor failed). If the
+panic switch is on, the call also prints a loud `console.warn` — that state
+explains most "nothing is injecting" reports on its own.
+
+Since Phase 6, API telemetry is stamped with the calling module's key
+(`world_state`, `chronicle`, `knowledge`, `story_planner`, `interiority`), so
+`lastApiCall('<module>')` finally keys per-module.
+
 ## How to capture a report
 
 1. Reproduce the problem.
@@ -159,7 +184,8 @@ edited.
    `MWT.diagnostics.events({ level: 'warn' })` — it shows every silent
    recovery (repaired JSON, reasoning fallback, stripped fences, scope
    fallback, missing world-info) from the session. For "the setting is right
-   but behaves wrong", add `MWT.diagnostics.settingsProvenance()`.
+   but behaves wrong", add `MWT.diagnostics.settingsProvenance()`. For "is
+   anything even running", start with `MWT.diagnostics.health()`.
 3. Copy the **returned object**: right-click → *Copy object*, or run
    `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
 4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for

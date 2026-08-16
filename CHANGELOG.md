@@ -13,6 +13,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
 
+## [1.7.2]
+
+### Added
+- Diagnostics Phase 6 — ❤️ Health tab (first live panel tab): the 🩺
+  Diagnostics panel's Health sub-tab answers "is anything broken right now?"
+  in one table — a row per module showing enabled · injection gate · busy ·
+  tokens · auto-countdown · last run (time · ok/failed · duration; hover for
+  model / HTTP status / retries) — under a header with the MWT version, the
+  total token load across modules, and an unmissable red banner whenever the
+  ⛔ panic switch (`injectionMasterOff`) is on. Read-only and open-and-read:
+  the snapshot is collected when the modal is built (re-open to refresh).
+  Inconsistent per-module accessors are normalized (Chronicle's
+  `threshold`-shaped countdown; Interiority's per-turn schedule with its
+  dormant-poll state; negative countdowns clamp at 0), every accessor call is
+  individually guarded so one broken cell can never blank the tab, and the
+  same snapshot is available to testers as `MWT.diagnostics.health()`. To make
+  the "last run" column real, all five modules' settings now stamp their key
+  (`module: '<id>'`) onto API telemetry — previously every live call was
+  recorded under module `'api'`, so `MWT.diagnostics.lastApiCall('<module>')`
+  and the per-module `reasoning_content_fallback` warns never keyed
+  correctly. Console bridge and tab share one collector
+  (`diagnostics_panel/health.js`), so they can never disagree.
+- Diagnostics Phase 5 — panel shell + redaction core + report shape: a new
+  **🩺 Diagnostics** tab in the main MWT modal mounts the diagnostics panel
+  with placeholders for the seven v1 tabs (Health, Environment, Scope &
+  storage, Injection, Last request, Log, Integrity). The shared redaction
+  layer (`core/redaction.js`) redacts `apiKey`, `customHeaders` values, and
+  `apiUrl` (host only) unconditionally, and gates prompt / injected-payload
+  content behind an explicit opt-in checkbox (default off, consequence stated
+  in the label, never persisted). Because MWT interpolates the resolved
+  endpoint and the upstream error body into its own error messages — and
+  `core/notifications.js` captures every toast into the event ring — matching
+  on field names alone was not enough: every string in a report is also
+  scrubbed for this install's live key values, embedded URLs (reduced to
+  scheme + host), and recognizable key/bearer-token shapes, and captured toast
+  bodies are gated as content alongside payloads. **📋 Copy Report** produces the support-ready
+  Markdown report — fenced JSON appendix (fence length adapts so payload
+  content can never break out), header states whether content is included —
+  serialized from the Phase 0–4 accessors, i.e. the same data the
+  `MWT.diagnostics` console bridge shows. Still read-only, in-memory only;
+  the redaction gate for Phases 6–12 is now in place.
+- Diagnostics Phase 4 — settings provenance + Interiority auto-status (no UI
+  yet): `resolveApiCall()` now reports which of its four config levels won
+  (`module-profile → module-custom → global-profile → global-custom`) as a
+  `source` field, and World State's `getEffectiveWorldSetting()` plus Story
+  Planner's `getEffectivePlanSetting()` accept `{ provenance: true }` to
+  return `{ value, source }` for their 3-level chain (per-chat override →
+  legacy chat field → global) — making "the value is right but came from
+  somewhere else" visible. Interiority gains `getAutoStatus()`, the auto-run
+  accessor the other four modules already expose (null when autoMode is off;
+  otherwise the §20 dormant-poll schedule). Console bridge:
+  `MWT.diagnostics.settingsProvenance()` also surfaces that Chronicle,
+  Knowledge, and Interiority have no per-chat/global settings split at all —
+  see `DIAGNOSTICS_CONSOLE_GUIDE.md`. Instrumentation for the diagnostics
+  panel is now complete; panel work (Phase 5) begins.
+
+### Fixed
+- Chronicle world-state sync: the trailing-time split of the Time Anchor line
+  ("June 4, 2024 2:30pm" → Date + Time) now matches against a short bounded
+  tail of the model-generated line instead of an end-anchored `\s+…$` pattern
+  over the whole string. The old form rescanned an unusually long
+  whitespace-heavy line once per start position (quadratic in the worst
+  case); the cost is now constant regardless of line length. The same audit
+  pass found the twin of that pattern in the World State injection rebuild:
+  `splitWorldState()`'s archive-section pattern led with an unanchored `\s*`
+  before its literal and rescanned whitespace runs the same way — and the
+  chronicle sync feeds the parsed Date line straight into that rebuild, so
+  the sync path stayed quadratic even with the split bounded. It is now
+  line-anchored (`(?:^|\n)\s*`, the WORLD-STATE-06 convention already used
+  by `extractOnlySection`/`replaceSection`), which also means a body line
+  that merely mentions "## Archive (Stale)" mid-sentence no longer triggers
+  removal. Regression tests in `test/remediation_followups.test.js` (audit P3).
+- Dev tooling: refreshed `package-lock.json` so the transitive `nanoid`
+  dependency (dev-only, via Vitest/Vite/PostCSS) resolves to 3.3.18,
+  clearing GHSA-2v37-7h3g-55p8 — extension users were never exposed. Verified
+  with a clean `npm audit` and the full test suite (audit P2).
+- Pinned CI actions immutably (Taverany.org unpinned-action finding)
+
 ## [1.7.1]
 
 ### Fixed: Knowledge Tracker duplicate entries; mismatch UIDs

@@ -53,11 +53,20 @@ function updateWorldStateFromChronicle(text) {
         // `(.+?),\s*(.+)` split on the FIRST comma, so "June 4, 2024 2:30pm"
         // was parsed as date="June 4", time="2024 2:30pm" — corrupting both
         // fields and self-perpetuating via generateSnapshot's read-back.
-        const trailingTime = inferred.match(/\s+(\d{1,2}:\d{2}(?:\s*[apAP]\.?[mM]\.?)?)$/);
+        // The match is bounded to a short TAIL of the line: the separator +
+        // time + optional am/pm marker spans a couple dozen characters at
+        // most, while an end-anchored `\s+…$` over the whole model-generated
+        // line rescans an unusually long whitespace-heavy line once per
+        // start position (quadratic in the worst case).
+        const TAIL_CHARS = 64;
+        const tail = inferred.length > TAIL_CHARS ? inferred.slice(-TAIL_CHARS) : inferred;
+        const trailingTime = tail.match(/\s+(\d{1,2}:\d{2}(?:\s*[apAP]\.?[mM]\.?)?)$/);
         let datePart, timePart;
         if (trailingTime) {
             timePart = trailingTime[1].trim();
-            datePart = inferred.slice(0, trailingTime.index).trim();
+            // trailingTime.index is relative to `tail` — rebase it onto the
+            // full line before slicing (a zero shift when no tail was cut).
+            datePart = inferred.slice(0, inferred.length - tail.length + trailingTime.index).trim();
         } else {
             datePart = inferred;
             timePart = '';

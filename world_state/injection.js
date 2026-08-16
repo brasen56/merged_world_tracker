@@ -75,9 +75,19 @@ export function structuralBoundariesEnabled() {
  * Returns { worldStateBody, seedsText }.
  */
 function splitWorldState(text) {
-    // Note: no trailing \b — "Archive (Stale)" ends in punctuation, and \b
-    // (which requires a word char on at least one side) never matches there.
-    const archivePattern = new RegExp(`\\s*## Archive \\(Stale\\)(?![A-Za-z0-9_])[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
+    // Line-anchored like extractOnlySection/replaceSection (WORLD-STATE-06),
+    // with the same quadratic-rescan consequence in mind: an unanchored
+    // `\s*` before the literal is retried at EVERY position inside a long
+    // whitespace run, rescanning the rest of the run each time — quadratic
+    // in the worst case. The `(?:^|\n)` gate fails in O(1) at non-newline
+    // positions, so the leading `\s*` only ever runs right after a line
+    // break. This matters here because the chronicle world-state sync can
+    // feed a whitespace-heavy model-generated Date line straight into this
+    // injection rebuild (audit P3 follow-up). Note: the section-name
+    // boundary stays a negative lookahead, not `\b` — "Archive (Stale)"
+    // ends in punctuation, and `\b` (which requires a word char on at
+    // least one side) never matches there.
+    const archivePattern = new RegExp(`(?:^|\\n)\\s*## Archive \\(Stale\\)(?![A-Za-z0-9_])[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
     const withoutArchive = text.replace(archivePattern, '');
 
     const seedsPattern = new RegExp(`## Plot Seeds\\b[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);

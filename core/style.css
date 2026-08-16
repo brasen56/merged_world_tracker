@@ -371,6 +371,128 @@ a:focus-visible {
     margin-bottom: 8px;
 }
 
+/* ─── Diagnostics Tab 1: Health (Phase 6) ─────────────────────────────────── */
+
+.mwt-diag-health-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-health-stat {
+    display: inline-block;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-family: var(--mwt-font-mono);
+    color: var(--mwt-text);
+}
+
+/* The panic switch is the one state that must be impossible to miss —
+   strong red regardless of theme, so "why is nothing injecting" reports
+   arrive with the answer already visible. */
+.mwt-diag-panic {
+    background: rgba(239, 83, 80, 0.16);
+    border: 1px solid var(--mwt-error);
+    color: var(--mwt-error);
+    border-radius: var(--mwt-radius);
+    padding: 10px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-panic code {
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+}
+
+.mwt-diag-health-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.mwt-diag-health-table th {
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--mwt-text-dim);
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--mwt-border);
+    white-space: nowrap;
+}
+
+.mwt-diag-health-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--mwt-border);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.mwt-diag-health-table td.mwt-diag-last-run,
+.mwt-diag-health-table td .mwt-diag-last-run {
+    white-space: normal;
+}
+
+.mwt-diag-health-row--off .mwt-diag-health-module {
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-health-row--gated .mwt-diag-health-module {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+}
+
+.mwt-diag-health-row--busy {
+    background: rgba(255, 152, 0, 0.07);
+}
+
+.mwt-diag-health-tokens {
+    font-family: var(--mwt-font-mono);
+}
+
+.mwt-diag-badge {
+    display: inline-block;
+    border-radius: 9px;
+    padding: 0px 7px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--mwt-font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border: 1px solid transparent;
+}
+
+.mwt-diag-badge--ok {
+    color: var(--mwt-success);
+    border-color: var(--mwt-success);
+}
+
+.mwt-diag-badge--fail {
+    color: var(--mwt-error);
+    border-color: var(--mwt-error);
+}
+
+.mwt-diag-badge--warn {
+    color: var(--mwt-warning);
+    border-color: var(--mwt-warning);
+}
+
+.mwt-diag-badge--dim {
+    color: var(--mwt-text-dim);
+    border-color: var(--mwt-border);
+}
+
+.mwt-diag-dim {
+    color: var(--mwt-text-dim);
+    font-size: 11px;
+}
+
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */
 
 .mwt-button-bar {
