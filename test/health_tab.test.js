@@ -100,7 +100,32 @@ describe('collectHealthSnapshot — header', () => {
         expect(snap.mwtVersion).toBe('9.9.9-test');
         expect(snap.generatedAt).toBe(1_700_000_000_000);
         expect(snap.injectionMasterOff).toBe(false);
-        expect(snap.totalTokens).toBe(375);
+        // Knowledge's 50 is lorebook corpus, not prompt load: it is reported
+        // separately and never folded into the injected total.
+        expect(snap.injectedTokens).toBe(325);
+        expect(snap.storedTokens).toBe(50);
+    });
+
+    test('a huge Knowledge library never inflates the injected total', () => {
+        // The reference chat's ~36k lorebook corpus is the case this guards:
+        // summed into one figure it reads as a 36k injection, which is false.
+        const snap = collectHealthSnapshot(deps({
+            modules: fakeModules({
+                world_state: { getTotalTokens: () => 2_200 },
+                knowledge: { getTotalTokens: () => 36_000 },
+            }),
+        }));
+        expect(snap.injectedTokens).toBe(2_200);
+        expect(snap.storedTokens).toBe(36_000);
+        expect(snap).not.toHaveProperty('totalTokens'); // no addable-looking field survives
+    });
+
+    test('every row declares which kind of tokens it counted', () => {
+        const byId = Object.fromEntries(collectHealthSnapshot(deps()).modules.map(r => [r.id, r]));
+        expect(byId.knowledge.tokenKind).toBe('stored');
+        for (const id of ['world_state', 'chronicle', 'story_planner', 'interiority']) {
+            expect(byId[id].tokenKind).toBe('injected');
+        }
     });
 
     test('flags injectionMasterOff from the global settings', () => {
@@ -297,11 +322,37 @@ describe('formatHealthDuration', () => {
 describe('renderHealthSnapshot', () => {
     const T = () => '12:41:03';
 
-    test('renders the header stat strip (version + total token load)', () => {
+    test('renders the header stat strip (version + injected token load)', () => {
         const html = renderHealthSnapshot(collectHealthSnapshot(deps()), { formatTime: T });
         expect(html).toContain('MWT v9.9.9-test');
-        expect(html).toContain('tokens: <strong>0</strong>');
+        expect(html).toContain('injecting: <strong>0</strong> tokens');
         expect(html).toContain('12:41:03');
+        // Nothing stored, nothing to explain.
+        expect(html).not.toContain('stored in lorebook');
+    });
+
+    test('a stored count is labelled in its cell and kept out of the injected total', () => {
+        const snap = collectHealthSnapshot(deps({
+            modules: fakeModules({
+                world_state: { getTotalTokens: () => 2_200 },
+                knowledge: { getTotalTokens: () => 36_000 },
+            }),
+        }));
+        const html = renderHealthSnapshot(snap, { formatTime: T });
+        expect(html).toContain('injecting: <strong>2,200</strong> tokens');
+        expect(html).toContain('36,000');
+        expect(html).toContain('mwt-diag-tokens-stored');
+        expect(html).toContain('stored in lorebook (not injected)');
+        // The alarming reading — one 38,200 figure presented as prompt load.
+        expect(html).not.toContain('38,200');
+        expect(html).not.toContain('38200');
+    });
+
+    test('the stored explanation names the mechanism, not just the word', () => {
+        const snap = collectHealthSnapshot(deps({ modules: fakeModules({ knowledge: { getTotalTokens: () => 36_000 } }) }));
+        const html = renderHealthSnapshot(snap, { formatTime: T });
+        expect(html).toMatch(/never injected as a block/i);
+        expect(html).toMatch(/keywords match recent chat/i);
     });
 
     test('renders the panic banner ONLY when the panic switch is on', () => {

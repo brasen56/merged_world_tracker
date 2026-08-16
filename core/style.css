@@ -454,6 +454,21 @@ a:focus-visible {
 
 .mwt-diag-health-tokens {
     font-family: var(--mwt-font-mono);
+    white-space: nowrap;
+}
+
+/* A 'stored' count (Knowledge's lorebook corpus) is deliberately NOT styled  */
+/* like the injected numbers beside it: same column, different quantity.      */
+.mwt-diag-tokens-stored {
+    cursor: help;
+    border-bottom: 1px dotted var(--mwt-border);
+}
+
+.mwt-diag-tokens-stored .mwt-diag-dim {
+    font-family: var(--mwt-font);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .mwt-diag-badge {

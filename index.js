@@ -1425,7 +1425,8 @@ window.MWT.diagnostics = {
             on: m.enabled,
             gate: m.injectionAllowed,
             busy: m.busy,
-            tokens: m.tokens,
+            // Kind matters: 'stored' is lorebook corpus, not prompt load.
+            tokens: m.tokenKind === 'stored' ? `${m.tokens} (stored)` : m.tokens,
             auto: m.auto
                 ? (m.auto.perTurn ? `every turn${m.auto.pollDue ? ' (dormant poll due)' : ''}` : `in ${m.auto.remaining} msg(s)`)
                 : 'off',
@@ -1434,7 +1435,11 @@ window.MWT.diagnostics = {
                 : 'never',
         })));
         console.log(
-            `[MWT] Health snapshot for MWT v${snap.mwtVersion} — total tokens: ${snap.totalTokens}. ` +
+            `[MWT] Health snapshot for MWT v${snap.mwtVersion} — injecting ${snap.injectedTokens} tokens` +
+            (snap.storedTokens > 0
+                ? `, plus ${snap.storedTokens} stored in the Knowledge lorebook (NOT injected — SillyTavern activates `
+                  + 'only the entries whose keywords match recent chat). '
+                : '. ') +
             'The return value carries the full rows (auto schedule, last-run source/model/HTTP status, per-field errors) for copy-paste.'
         );
         return snap;

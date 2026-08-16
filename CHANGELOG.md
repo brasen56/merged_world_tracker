@@ -21,8 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in one table — a row per module showing enabled · injection gate · busy ·
   tokens · auto-countdown · last run (time · ok/failed · duration; hover for
   model / HTTP status / retries) — under a header with the MWT version, the
-  total token load across modules, and an unmissable red banner whenever the
-  ⛔ panic switch (`injectionMasterOff`) is on. Read-only and open-and-read:
+  injected token load, and an unmissable red banner whenever the
+  ⛔ panic switch (`injectionMasterOff`) is on. **Token counts state what they
+  are counting.** Four modules report what they are injecting into the prompt
+  right now; Knowledge reports the size of the lorebook it has written, which
+  is a library, not prompt load — it has no injection path at all, and
+  SillyTavern activates only the entries whose keywords match recent chat. The
+  two are shown separately and never summed (`injecting: 4,651 tokens · +
+  36,412 stored in lorebook (not injected)`), because a single combined figure
+  reads as though the extension were sending its entire knowledge base every
+  turn. Read-only and open-and-read:
   the snapshot is collected when the modal is built (re-open to refresh).
   Inconsistent per-module accessors are normalized (Chronicle's
   `threshold`-shaped countdown; Interiority's per-turn schedule with its

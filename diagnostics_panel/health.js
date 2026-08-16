@@ -39,13 +39,51 @@ import * as Interiority from '../interiority/index.js';
 //   - `moduleKey`   — the PascalCase key behind `enable<ModuleKey>` and
 //                     injectionAllowed(moduleKey) (core/settings.js).
 //   - `isBusy`/`autoStatus` — that module's busy / auto-countdown accessor.
+//   - `tokenKind`   — WHAT that module's getTotalTokens() actually counts. The
+//                     five accessors share a name but not a meaning, and the
+//                     difference is the one a tester will misread (see below).
 export const HEALTH_MODULE_SPECS = [
-    { id: 'world_state', label: '🌍 World State', moduleKey: 'WorldState', isBusy: 'isRefreshing', autoStatus: 'getAutoRefreshStatus' },
-    { id: 'chronicle', label: '📜 Chronicle', moduleKey: 'Chronicle', isBusy: 'isGeneratingSnapshot', autoStatus: 'getAutoSnapshotStatus' },
-    { id: 'knowledge', label: '🧠 Knowledge', moduleKey: 'Knowledge', isBusy: 'isScanning', autoStatus: 'getAutoScanStatus' },
-    { id: 'story_planner', label: '🗺️ Story Planner', moduleKey: 'StoryPlanner', isBusy: 'isGenerating', autoStatus: 'getAutoPlanStatus' },
-    { id: 'interiority', label: '💭 Interiority', moduleKey: 'Interiority', isBusy: 'isGenerating', autoStatus: 'getAutoStatus' },
+    { id: 'world_state', label: '🌍 World State', moduleKey: 'WorldState', isBusy: 'isRefreshing', autoStatus: 'getAutoRefreshStatus', tokenKind: 'injected' },
+    { id: 'chronicle', label: '📜 Chronicle', moduleKey: 'Chronicle', isBusy: 'isGeneratingSnapshot', autoStatus: 'getAutoSnapshotStatus', tokenKind: 'injected' },
+    { id: 'knowledge', label: '🧠 Knowledge', moduleKey: 'Knowledge', isBusy: 'isScanning', autoStatus: 'getAutoScanStatus', tokenKind: 'stored' },
+    { id: 'story_planner', label: '🗺️ Story Planner', moduleKey: 'StoryPlanner', isBusy: 'isGenerating', autoStatus: 'getAutoPlanStatus', tokenKind: 'injected' },
+    { id: 'interiority', label: '💭 Interiority', moduleKey: 'Interiority', isBusy: 'isGenerating', autoStatus: 'getAutoStatus', tokenKind: 'injected' },
 ];
+
+/**
+ * What each `tokenKind` means, and why the distinction has to reach the UI.
+ *
+ * Four of the five getTotalTokens() accessors measure the payload the module
+ * hands to setExtensionPrompt right now:
+ *   - World State  → header + world state text (world_state/index.js)
+ *   - Chronicle    → 0 when injection is off, else the joined entries
+ *   - Story Planner→ getInjectedTokenCount()
+ *   - Interiority  → the ACTIVE ledger lines only (dormant excluded, §20)
+ *
+ * Knowledge measures something else entirely: `state._cachedTokenCount` is the
+ * sum over every NPC profile and state-tracker entry it has written to the
+ * LOREBOOK. Knowledge has no setExtensionPrompt call anywhere — its entries
+ * are created with `constant: false` (knowledge/lorebook.js), so SillyTavern's
+ * World Info engine activates only the entries whose keywords match recent
+ * chat, inside its own WI budget. On the reference chat that number is ~36k,
+ * and printed in the same column as four injection sizes it reads as "this
+ * extension is stuffing 36k tokens into my prompt" — which is not what happens.
+ *
+ * So: the column reports the kind, and the header total sums ONLY the injected
+ * kinds. A stored corpus and an injected payload are not addable quantities.
+ */
+export const TOKEN_KINDS = Object.freeze({
+    injected: {
+        label: 'injected',
+        title: 'Estimated tokens this module is injecting into the prompt right now.',
+    },
+    stored: {
+        label: 'stored',
+        title: 'Lorebook corpus — NOT an injection. MWT writes these entries to a lorebook and never '
+            + 'sends them as a block; SillyTavern activates only the entries whose keywords match recent '
+            + 'chat, within its own World Info budget. This is the size of the library, not the prompt.',
+    },
+});
 
 /** Live module namespaces by id — the instances index.js itself imports. */
 export const DEFAULT_HEALTH_MODULES = {
@@ -150,7 +188,10 @@ export function resolveLastRun(id, { lastApiCall, lastRun }) {
  * @param {string} [deps.version]
  * @param {function(): number} [deps.now]
  * @returns {{generatedAt: number, mwtVersion: string, injectionMasterOff:
- *   boolean, totalTokens: number, modules: Array<object>}}
+ *   boolean, injectedTokens: number, storedTokens: number,
+ *   modules: Array<object>}} — `injectedTokens` is prompt load right now;
+ *   `storedTokens` is lorebook corpus. Deliberately two fields: adding them
+ *   would state something untrue about the prompt (see TOKEN_KINDS).
  */
 export function collectHealthSnapshot({
     modules = DEFAULT_HEALTH_MODULES,
@@ -188,20 +229,32 @@ export function collectHealthSnapshot({
             // lives here, the panic switch in the header. `enabled` mirrors
             // the floating buttons' enableKey semantics (absent = on).
             enabled: settings?.[`enable${spec.moduleKey}`] !== false,
+            // NB: only chronicle/injection.js consults injectionAllowed()
+            // directly; for Knowledge the same two flags gate SCANNING via
+            // core/event_router.js, since Knowledge has no injection path at
+            // all. The computed value is right for every module — the word
+            // "inject" is what would be wrong, so the pane says "act".
             injectionAllowed: gate === true,
             busy: busy === true,
             tokens: typeof tokens === 'number' ? tokens : 0,
+            // What that number counts. Never sum across kinds — see TOKEN_KINDS.
+            tokenKind: spec.tokenKind,
             auto,
             lastRun,
             ...(errors.length ? { errors } : {}),
         };
     });
 
+    // Injected and stored tokens are reported separately and never added: one
+    // is prompt load this turn, the other is library size on disk (TOKEN_KINDS).
+    const sumKind = (kind) => rows.reduce((sum, r) => sum + (r.tokenKind === kind ? (r.tokens || 0) : 0), 0);
+
     return {
         generatedAt: now(),
         mwtVersion: version,
         injectionMasterOff: settings?.injectionMasterOff === true,
-        totalTokens: rows.reduce((sum, r) => sum + (r.tokens || 0), 0),
+        injectedTokens: sumKind('injected'),
+        storedTokens: sumKind('stored'),
         modules: rows,
     };
 }

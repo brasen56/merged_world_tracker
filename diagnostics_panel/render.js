@@ -27,7 +27,7 @@
 
 import { setStatus, escapeHtml } from '../core/index.js';
 import { buildReport, collectReportSections } from './report.js';
-import { collectHealthSnapshot } from './health.js';
+import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 
 // ─── Panel tab definitions (design §I.5 — the seven v1 tabs) ─────────────────
 
@@ -168,6 +168,22 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
         return `in ${auto.remaining} msg${auto.remaining !== 1 ? 's' : ''}`;
     };
 
+    // The Tokens cell states WHICH kind of tokens it is counting. Four modules
+    // report what they are injecting right now; Knowledge reports the size of
+    // the lorebook it has written (see TOKEN_KINDS in health.js). Printed bare
+    // in one column, a ~36k library reads as a ~36k injection — the single
+    // most alarming misreading this tab can produce.
+    const tokensCell = (r) => {
+        const n = Number(r.tokens) || 0;
+        const kind = TOKEN_KINDS[r.tokenKind] || TOKEN_KINDS.injected;
+        const amount = n.toLocaleString();
+        if (r.tokenKind === 'stored') {
+            return `<span class="mwt-diag-tokens-stored" title="${escapeHtml(kind.title)}">${amount}
+                <span class="mwt-diag-dim">stored</span></span>`;
+        }
+        return `<span title="${escapeHtml(kind.title)}">${amount}</span>`;
+    };
+
     const lastRunCell = (run) => {
         if (!run) return `<span class="mwt-diag-dim">never</span>`;
         const dur = formatHealthDuration(run.durationMs);
@@ -196,7 +212,7 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
                 <td>${r.enabled ? badge('on', 'ok') : badge('off', 'dim')}</td>
                 <td>${r.injectionAllowed ? badge('open', 'ok') : badge('blocked', 'fail')}</td>
                 <td>${r.busy ? badge('busy', 'warn') : '<span class="mwt-diag-dim">idle</span>'}</td>
-                <td class="mwt-diag-health-tokens">${r.tokens || 0}</td>
+                <td class="mwt-diag-health-tokens">${tokensCell(r)}</td>
                 <td>${autoCell(r.auto)}</td>
                 <td>${lastRunCell(r.lastRun)}</td>
             </tr>`;
@@ -205,6 +221,14 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
     // The panic switch is rendered unmissably (design §I.5 Tab 1): it is the
     // one global state that makes every "why is nothing injecting" report a
     // non-bug, so it leads the pane whenever it is on.
+    // Shown next to the injected total, never added to it: it answers "why is
+    // the Knowledge row so big" before the tester has to ask.
+    const storedTokens = Number(s.storedTokens) || 0;
+    const storedStat = storedTokens > 0
+        ? `<span class="mwt-diag-health-stat mwt-diag-dim" title="${escapeHtml(TOKEN_KINDS.stored.title)}">+
+             ${storedTokens.toLocaleString()} stored in lorebook (not injected)</span>`
+        : '';
+
     const panicBanner = s.injectionMasterOff
         ? `<div class="mwt-diag-panic">⛔ <strong>PANIC SWITCH ON</strong> — injection &amp; scanning are stopped for every module
              (<code>injectionMasterOff</code>). Right-click the ⚙️ floating button to release it.</div>`
@@ -214,7 +238,8 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
         <div class="mwt-diag-health">
             <div class="mwt-diag-health-stats">
                 <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
-                <span class="mwt-diag-health-stat">tokens: <strong>${s.totalTokens ?? 0}</strong> across all modules</span>
+                <span class="mwt-diag-health-stat">injecting: <strong>${(Number(s.injectedTokens) || 0).toLocaleString()}</strong> tokens</span>
+                ${storedStat}
                 <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
             </div>
             ${panicBanner}
@@ -227,7 +252,10 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
             <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. "Last run" is the module's most recent
                 API call (time · ok/failed · duration; hover for model/status); "never" is normal right after a reload —
                 the capture is in-memory only. The "Gate" column collapses the panic switch and per-module disable into
-                the one question that matters: may this module inject right now.</p>
+                the one question that matters: may this module act right now — inject, or in Knowledge's case scan.<br>
+                <strong>Tokens</strong> are what each module is injecting <em>right now</em> — except Knowledge, marked
+                <em>stored</em>: those live in a lorebook and are never injected as a block. SillyTavern activates only
+                the entries whose keywords match recent chat, so a large library is normal and is not prompt load.</p>
         </div>
     `;
 }
