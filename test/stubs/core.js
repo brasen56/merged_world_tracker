@@ -546,3 +546,16 @@ export {
     getAllInjectedSnapshots,
     clearInjections,
 } from '../../core/diagnostics.js';
+// Phase 5 redaction layer (core/redaction.js). Re-exported from the REAL
+// module — it is pure, with no SillyTavern dependency — so barrel consumers
+// see identical redaction behavior under test. The report tests pin this
+// contract: secrets never survive in either content mode.
+export {
+    REDACTED,
+    SECRET_KEYS,
+    CONTENT_KEYS,
+    redactApiUrl,
+    redactCustomHeaders,
+    redactSecretsDeep,
+    redactForReport,
+} from '../../core/redaction.js';

@@ -1,7 +1,9 @@
 # MWT.diagnostics — Console Tester Guide (Phases 0–4)
 
-> **Status:** live now. This is the console-only bridge until the diagnostics
-> panel UI ships (Phase 5+).
+> **Status:** live now. The console bridge remains the deepest view; the
+> **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
+> redacted **📋 Copy Report** without devtools. Tabs 1–7 (Phases 6–12) are
+> still being built.
 
 ## What this is
 

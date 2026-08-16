@@ -37,6 +37,9 @@ import * as StoryPlanner from './story_planner/index.js';
 import * as Interiority from './interiority/index.js';
 import { exportBackup, previewRestore, restoreBackup, undoLastRestore, fingerprintPreview } from './backup/index.js';
 import { renderBackupPanel, wireBackupEvents } from './backup/render.js';
+// Diagnostics panel shell (Phase 5): the 🩺 tab inside this modal, its redaction
+// layer (core/redaction.js), and the D1 copy-report shape.
+import { renderDiagnosticsPanel, wireDiagnosticsPanel } from './diagnostics_panel/render.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -175,6 +178,10 @@ const TABS = [
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
     { id: 'story-planner', label: '🗺️ Story Planner', module: StoryPlanner },
     { id: 'interiority', label: '💭 Interiority', module: Interiority },
+    // Diagnostics Phase 5: the panel shell (7 placeholder sub-tabs + content
+    // opt-in + Copy Report). Read-only; rendered/wired by
+    // diagnostics_panel/render.js, not by a feature module.
+    { id: 'diagnostics', label: '🩺 Diagnostics', module: null },
     { id: 'settings', label: '⚙️ Settings', module: null },
 ];
 
@@ -366,6 +373,8 @@ function renderSettingsTab() {
 
 function buildTabContent(tab) {
     if (tab.id === 'settings') return renderSettingsTab();
+    // Diagnostics Phase 5 — the panel shell (placeholders for tabs 1–7).
+    if (tab.id === 'diagnostics') return renderDiagnosticsPanel();
     const renderFn = tab.module?.getModuleRender?.() || tab.module?.render;
     if (typeof renderFn === 'function') return renderFn();
     return '';
@@ -435,6 +444,10 @@ function renderModal() {
     // Wire the Backup/Restore control (lives in the Settings tab). The body is
     // rebuilt on every open, so rebind each render like the module wire-events.
     wireBackupEvents(modal);
+
+    // Wire the Diagnostics panel shell (lives in the 🩺 Diagnostics tab).
+    // Same rebind-every-render rule as the backup control above.
+    wireDiagnosticsPanel(modal);
 
     // Wire connection profile toggle (hide API fields when a profile is selected)
     const profileSelect = modal.querySelector('#mwt-s-connection-profile');

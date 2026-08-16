@@ -44,6 +44,20 @@ export {
     getAllInjectedSnapshots,
     clearInjections,
 } from './diagnostics.js';
+// Phase 5 diagnostics — shared redaction layer (core/redaction.js). Every
+// diagnostics tab and the copy-report route through it: secrets
+// (apiKey / customHeaders / apiUrl) are redacted unconditionally, content
+// fields (payloads, prompts) only on explicit opt-in. Pure module; mirrored
+// in test/stubs/core.js for the barrel→stub alias.
+export {
+    REDACTED,
+    SECRET_KEYS,
+    CONTENT_KEYS,
+    redactApiUrl,
+    redactCustomHeaders,
+    redactSecretsDeep,
+    redactForReport,
+} from './redaction.js';
 export { downloadBlob, downloadJson, pickTextFile } from './file.js';
 export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from './strip.js';
