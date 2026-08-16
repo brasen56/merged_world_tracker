@@ -5,7 +5,8 @@
  *               onMessageSwiped, onMessageEdited, onMessageDeleted,
  *               applyIntentionsInjection, triggerGenerate,
  *               getModuleRender, getModuleWireEvents,
- *               syncGlobalSettings, getTotalTokens, isGenerating }
+ *               syncGlobalSettings, getTotalTokens, isGenerating,
+ *               getAutoStatus, getSettingsSummary, getLedgerCount }
  *
  * Sub-modules:
  *   data.js       — constants, state, settings, data access, helpers
@@ -31,6 +32,7 @@ import {
     migrateIndexKeys,
     isChatHydrated,
     incrementTurnCounter, restoreTurnCounter, isDormantPollDue,
+    getTurnCounter, getDormantLedger, getDormantPollInterval,
 } from './data.js';
 
 import {
@@ -685,6 +687,43 @@ export function getLedgerCount() {
         return getLedger().length;
     } catch {
         return 0;
+    }
+}
+
+/**
+ * Returns auto-run status for external display — the Phase 4 diagnostics
+ * accessor (design §I.4.7) that closes the one gap in the Health tab's
+ * per-module row. Mirrors the null-when-disabled contract of the other four
+ * modules' countdown accessors (getAutoRefreshStatus / getAutoSnapshotStatus /
+ * getAutoScanStatus / getAutoPlanStatus).
+ *
+ * Interiority is the one module whose auto-run has no countdown: when
+ * autoMode is ON it evaluates every AI message. The only scheduled cadence is
+ * the §20 dormant-intentions poll, so `counter`/`interval` describe THAT
+ * cycle — the poll fires on a turn where (turnCounter + 1) % interval === 0
+ * and dormant entries exist (isDormantPollDue's look-ahead-by-one), i.e.
+ * `pollDue` is the direct answer and `counter` is turnCounter % interval.
+ *
+ * @returns {{perTurn: boolean, counter: number, interval: number,
+ *            dormantCount: number, pollDue: boolean}|null} null when autoMode
+ *          is off
+ */
+export function getAutoStatus() {
+    try {
+        const settings = getSettings();
+        if (settings.autoMode === false) return null;
+        const interval = getDormantPollInterval();
+        return {
+            // Auto fires on every AI message — there is no "next run in N
+            // messages" countdown for the main generation.
+            perTurn: true,
+            counter: getTurnCounter() % interval,
+            interval,
+            dormantCount: getDormantLedger().length,
+            pollDue: isDormantPollDue(),
+        };
+    } catch {
+        return null;
     }
 }
 

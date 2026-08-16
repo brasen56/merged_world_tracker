@@ -129,7 +129,10 @@ export function setWorldStateData(patch) {
     patchChatMeta(CHAT_DATA_KEY, patch);
 }
 
-const GLOBAL_SETTING_KEYS = ['injectEnabled', 'autoRefresh', 'autoRefreshInterval'];
+// Exported (Phase 4 diagnostics, §I.4.6) so the settings-provenance surfaces —
+// MWT.diagnostics.settingsProvenance() now, the panel Health/Injection tabs
+// later — iterate the single source of truth instead of a second key list.
+export const GLOBAL_SETTING_KEYS = ['injectEnabled', 'autoRefresh', 'autoRefreshInterval'];
 
 // Historical per-chat defaults for legacy local records.
 const LEGACY_LOCAL_DEFAULTS = { injectEnabled: true, autoRefresh: false, autoRefreshInterval: 5 };
@@ -159,15 +162,53 @@ export function setUsesGlobalDefaults(useGlobal) {
     setWorldStateData({ useGlobalDefaults: false, settingsOverride: overrides });
 }
 
-export function getEffectiveWorldSetting(key, fallback) {
+/**
+ * Resolve a behavior setting through the 3-level chain: per-chat override →
+ * legacy top-level chat field → global (see usesGlobalDefaults).
+ *
+ * Phase 4 provenance (diagnostics design §I.4.6): pass `{ provenance: true }`
+ * to get `{ value, source }` instead of the bare value, so a surface can show
+ * WHERE a value came from — the value alone looks correct even when the
+ * user's mental model of its origin is wrong ("Depth 4 (this chat)" vs
+ * "Depth 4 (global default)"). Existing callers are unaffected.
+ *
+ * Stable `source` strings — consumed by MWT.diagnostics.settingsProvenance()
+ * and later the panel; do not rename:
+ *   'per-chat-override' — this chat's settingsOverride (Settings Scope
+ *                        unchecked, value edited for this chat)
+ *   'per-chat-legacy'   — a legacy top-level field on a pre-scope-feature
+ *                        per-chat record (the usesGlobalDefaults heuristic)
+ *   'builtin-default'   — local mode, key absent: the historical per-chat
+ *                        default (LEGACY_LOCAL_DEFAULTS)
+ *   'global'            — the shared module settings (Settings tab)
+ *   'fallback'          — key absent everywhere: the caller's fallback
+ *
+ * @param {string} key
+ * @param {*} [fallback]
+ * @param {{ provenance?: boolean }} [opts]
+ * @returns {*|{ value: *, source: string }}
+ */
+export function getEffectiveWorldSetting(key, fallback, { provenance = false } = {}) {
     const data = getWorldStateData();
     if (!usesGlobalDefaults()) {
         const override = data.settingsOverride?.[key];
-        if (override !== undefined) return override;
-        if (data[key] !== undefined) return data[key];
-        return LEGACY_LOCAL_DEFAULTS[key] ?? fallback;
+        if (override !== undefined) {
+            return provenance ? { value: override, source: 'per-chat-override' } : override;
+        }
+        if (data[key] !== undefined) {
+            return provenance ? { value: data[key], source: 'per-chat-legacy' } : data[key];
+        }
+        const builtin = LEGACY_LOCAL_DEFAULTS[key];
+        if (builtin != null) {
+            return provenance ? { value: builtin, source: 'builtin-default' } : builtin;
+        }
+        return provenance ? { value: fallback, source: 'fallback' } : fallback;
     }
-    return getSettings()[key] ?? fallback;
+    const global = getSettings()[key];
+    if (global != null) {
+        return provenance ? { value: global, source: 'global' } : global;
+    }
+    return provenance ? { value: fallback, source: 'fallback' } : fallback;
 }
 
 export function setWorldSetting(key, value) {

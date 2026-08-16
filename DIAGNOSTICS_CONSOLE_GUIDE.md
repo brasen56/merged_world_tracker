@@ -1,4 +1,4 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–3)
+# MWT.diagnostics — Console Tester Guide (Phases 0–4)
 
 > **Status:** live now. This is the console-only bridge until the diagnostics
 > panel UI ships (Phase 5+).
@@ -7,8 +7,9 @@
 
 `MWT.diagnostics` is a read-only window into the in-memory capture that
 Phase 0 (event ring + last-run map), Phase 1 (API call telemetry), Phase 2
-(injected-payload snapshots), and Phase 3 (silent-recovery counters) added. It
-exists so testers can use the data **now**, before the panel tab exists.
+(injected-payload snapshots), Phase 3 (silent-recovery counters), and
+Phase 4 (settings provenance) added. It exists so testers can use the data
+**now**, before the panel tab exists.
 
 - **In-memory only.** Everything clears on page reload. Nothing is written to
   chat metadata, `localStorage`, or settings.
@@ -44,6 +45,7 @@ MWT.diagnostics.lastApiCalls()            // last call per module (pointer view)
 MWT.diagnostics.lastRuns()                // per-module last-run stamps
 MWT.diagnostics.injections()              // last snapshot per injection key (payloads!)
 MWT.diagnostics.injection('mwt_world_state_injection')  // one key's recorded payload
+MWT.diagnostics.settingsProvenance()      // where each WS/SP setting resolves from
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -121,6 +123,31 @@ re-applies it — so what you see here is that registration, not a fresh rebuild
 Use `injection(key)` for the full payload text of one key. The event ring also
 gets a payload-free `injection_applied` echo per apply (module `injection`).
 
+### `settingsProvenance()` (Phase 4)
+
+One row per World State / Story Planner **behavior** setting, showing the
+resolved value and the **source** it came from. Behavior keys only — inject /
+auto toggles, intervals, modes — never `apiKey`, `customHeaders`, or `apiUrl`.
+
+| Source | Meaning |
+|---|---|
+| `per-chat-override` | This chat's own value (module's "Use global defaults" unchecked) |
+| `per-chat-legacy` | A pre-scope-feature per-chat field on the chat record |
+| `builtin-default` | Local mode, key missing — the historical per-chat default |
+| `global` | The shared module settings (module's settings tab) |
+| `fallback` | Key unknown — the caller's fallback |
+
+The bottom three rows (Chronicle, Knowledge, Interiority) are the asymmetry
+itself: those modules have **no** per-chat/global split — their behavior
+settings live only in their module tabs. Which API-config level a module's
+calls use (`module-profile → module-custom → global-profile → global-custom`)
+is reported by `resolveApiCall()` as a `source` field and will surface in the
+panel.
+
+Reach for this when "the setting is right but behaves wrong": the value
+usually resolves from a different level than the one the user believes they
+edited.
+
 ## How to capture a report
 
 1. Reproduce the problem.
@@ -129,7 +156,8 @@ gets a payload-free `injection_applied` echo per apply (module `injection`).
    `MWT.diagnostics.injections()`. For "my data is weird" reports, add
    `MWT.diagnostics.events({ level: 'warn' })` — it shows every silent
    recovery (repaired JSON, reasoning fallback, stripped fences, scope
-   fallback, missing world-info) from the session.
+   fallback, missing world-info) from the session. For "the setting is right
+   but behaves wrong", add `MWT.diagnostics.settingsProvenance()`.
 3. Copy the **returned object**: right-click → *Copy object*, or run
    `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
 4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for

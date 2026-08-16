@@ -21,6 +21,12 @@ import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMes
 // Imported directly (not via the core/index.js barrel) so the namespace reads
 // the real singleton regardless of the test-only barrel→stub alias.
 import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastRuns, getInjectedSnapshot, getAllInjectedSnapshots, clearEvents, clearApiCalls, clearLastRuns, clearInjections } from './core/diagnostics.js';
+// Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
+// attribute a behavior setting to its precedence level, plus their key lists
+// (single source of truth — no second key list here). Direct imports for the
+// same singleton rule as above.
+import { getEffectiveWorldSetting, GLOBAL_SETTING_KEYS as WS_GLOBAL_SETTING_KEYS } from './world_state/data.js';
+import { getEffectivePlanSetting, GLOBAL_SETTING_KEYS as SP_GLOBAL_SETTING_KEYS } from './story_planner/data.js';
 
 // ─── Feature module imports ─────────────────────────────────────────────────
 
@@ -1217,7 +1223,7 @@ window.MWT.backup = {
     fingerprintPreview,
 };
 
-// ── Diagnostics console namespace (Phases 0–2) ──────────────────────────────
+// ── Diagnostics console namespace (Phases 0–4) ──────────────────────────────
 //
 // Read-only, in-memory peek at the capture the diagnostics panel will later
 // show. See DIAGNOSTICS_CONSOLE_GUIDE.md (repo root) for the tester guide.
@@ -1226,7 +1232,9 @@ window.MWT.backup = {
 // payload text by design — that is the exact string sent to
 // setExtensionPrompt — but like everything here they stay in-memory only and
 // nothing is written to chat_metadata, localStorage, or settings. The buffer
-// resets on page reload.
+// resets on page reload. Settings provenance (Phase 4) resolves only the
+// World State / Story Planner BEHAVIOR keys (inject/auto toggles, intervals,
+// modes) — never apiKey, customHeaders, or apiUrl.
 //
 // Usage examples:
 //   MWT.diagnostics.events()                    // event ring, newest first
@@ -1238,6 +1246,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.lastRuns()                  // per-module last-run stamps
 //   MWT.diagnostics.injections()                // last snapshot per injection key
 //   MWT.diagnostics.injection('mwt_world_state_injection')  // one key's payload
+//   MWT.diagnostics.settingsProvenance()        // where each WS/SP setting resolves from
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1346,6 +1355,44 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 4 — settings provenance (design §I.4.6). Two jobs: show WHERE each
+    // World State / Story Planner behavior setting resolves from, and surface
+    // the asymmetry that Chronicle, Knowledge, and Interiority have no
+    // per-chat/global split at all — that asymmetry is itself diagnostic.
+    // Read-only; resolves live on every call.
+    settingsProvenance: () => {
+        const worldStateKeys = {};
+        for (const key of WS_GLOBAL_SETTING_KEYS) {
+            worldStateKeys[key] = getEffectiveWorldSetting(key, undefined, { provenance: true });
+        }
+        const storyPlannerKeys = {};
+        for (const key of SP_GLOBAL_SETTING_KEYS) {
+            storyPlannerKeys[key] = getEffectivePlanSetting(key, undefined, { provenance: true });
+        }
+        const rows = [
+            ...Object.entries(worldStateKeys).map(([key, r]) => ({ module: 'world_state', key, value: r.value, source: r.source })),
+            ...Object.entries(storyPlannerKeys).map(([key, r]) => ({ module: 'story_planner', key, value: r.value, source: r.source })),
+            ...['chronicle', 'knowledge', 'interiority'].map(m => ({
+                module: m, key: '(all behavior settings)', value: '', source: 'module-only — no per-chat/global split',
+            })),
+        ];
+        console.table(rows);
+        console.log(
+            '[MWT] World State and Story Planner behavior settings resolve through a 3-level chain ' +
+            '(per-chat override → legacy chat field → global). Chronicle, Knowledge, and Interiority ' +
+            'settings live only in their module tabs — that asymmetry is itself diagnostic. ' +
+            'API-config provenance (module profile → module custom → global profile → global custom) ' +
+            'is reported by resolveApiCall() as `source` on every resolved call.'
+        );
+        return {
+            world_state: { settingsScope: 'global-with-per-chat-override', keys: worldStateKeys },
+            story_planner: { settingsScope: 'global-with-per-chat-override', keys: storyPlannerKeys },
+            chronicle: { settingsScope: 'module-only' },
+            knowledge: { settingsScope: 'module-only' },
+            interiority: { settingsScope: 'module-only' },
+        };
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1355,6 +1402,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

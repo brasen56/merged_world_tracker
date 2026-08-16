@@ -356,10 +356,23 @@ export const fetchViaConnectionProfile = notImplemented('fetchViaConnectionProfi
 export function setFakeApi(fn) {
     _apiImpl = fn;
 }
-export function resolveApiCall({ moduleSettings = {} } = {}) {
+export function resolveApiCall({ moduleSettings = {}, globalSettings } = {}) {
+    // Phase 4 provenance parity: report which level of core/api.js's 4-level
+    // chain would have won, using the same precedence and source strings. The
+    // fetch behavior is unchanged (the stub's simple fake — see setFakeApi);
+    // only the `source` field is new.
+    const globals = globalSettings ?? getGlobalSettings();
+    const source = moduleSettings.connectionProfileId
+        ? 'module-profile'
+        : (moduleSettings.apiUrl && moduleSettings.modelName)
+            ? 'module-custom'
+            : globals?.connectionProfileId
+                ? 'global-profile'
+                : 'global-custom';
     return {
         mode: 'custom',
         settings: moduleSettings,
+        source,
         fetchFn: async (request) => {
             if (typeof _apiImpl !== 'function') {
                 throw new Error('[test/stubs/core.js] No fake API installed. Call setFakeApi().');

@@ -440,22 +440,30 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
  * A module explicitly configured with a custom URL/model wins over a global
  * profile — module config is the override, global config is the default.
  *
- * Returns { mode: 'cm' | 'custom', fetchFn, settings }
+ * Returns { mode: 'cm' | 'custom', fetchFn, settings, source }
+ *
+ * Phase 4 provenance (diagnostics design §I.4.6): `source` names which level
+ * of the 4-level chain won, so a surface can show WHERE the resolved config
+ * came from — the value alone looks correct even when the user's mental model
+ * of its origin is wrong. Stable strings, consumed by the panel (and mirrored
+ * in test/stubs/core.js) — do not rename:
+ *   'module-profile' | 'module-custom' | 'global-profile' | 'global-custom'
  */
 export function resolveApiCall({ moduleSettings, globalSettings }) {
     const globals = globalSettings ?? getGlobalSettings();
 
     if (moduleSettings.connectionProfileId) {
-        return { mode: 'cm', fetchFn: fetchViaConnectionProfile, settings: moduleSettings };
+        return { mode: 'cm', fetchFn: fetchViaConnectionProfile, settings: moduleSettings, source: 'module-profile' };
     }
     if (moduleSettings.apiUrl && moduleSettings.modelName) {
-        return { mode: 'custom', fetchFn: fetchFromApi, settings: moduleSettings };
+        return { mode: 'custom', fetchFn: fetchFromApi, settings: moduleSettings, source: 'module-custom' };
     }
     if (globals.connectionProfileId) {
         return {
             mode: 'cm',
             fetchFn: fetchViaConnectionProfile,
             settings: { ...moduleSettings, connectionProfileId: globals.connectionProfileId },
+            source: 'global-profile',
         };
     }
     // Global custom API: connection fields come from the global settings while
@@ -470,6 +478,7 @@ export function resolveApiCall({ moduleSettings, globalSettings }) {
             modelName: globals.modelName || '',
             customHeaders: moduleSettings.customHeaders || globals.customHeaders || '',
         },
+        source: 'global-custom',
     };
 }
 
