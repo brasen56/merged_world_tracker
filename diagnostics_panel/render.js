@@ -25,6 +25,14 @@
  * filled in ONCE by wireDiagnosticsPanel() when it resolves — a deferred
  * fill, not a render loop, so decision D2 still holds.
  *
+ * Phase 8 added the 🗂️ Scope & storage tab (./scope_storage.js for the
+ * snapshot, renderScopePane/renderScopeSnapshot here): resolved identity +
+ * epoch, which lorebooks this chat resolves to and WHY (re-derived
+ * read-only — opening the tab never saves a binding), per-book hydration +
+ * store versions, saved bindings, and the loud fallback-to-global warning
+ * fueled by Phase 3's scope_fallback_global counter. Fully synchronous —
+ * open-and-read, no wiring needed.
+ *
  * Hard limits inherited from the design (§I.1): READ-ONLY — nothing here
  * writes to settings, chat metadata, or localStorage; the checkbox state is
  * deliberately not persisted, so every session starts with content EXCLUDED.
@@ -37,6 +45,7 @@ import { setStatus, escapeHtml } from '../core/index.js';
 import { buildReport, collectReportSections } from './report.js';
 import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
+import { collectScopeSnapshot } from './scope_storage.js';
 
 // ─── Panel tab definitions (design §I.5 — the seven v1 tabs) ─────────────────
 
@@ -110,12 +119,12 @@ export function renderDiagnosticsPanel() {
 
     const subTabPanes = DIAGNOSTICS_PANEL_TABS.map((t, i) => `
         <div class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">
-            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : `
+            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : `
             <div class="mwt-diag-placeholder">
                 <span class="mwt-diag-placeholder-badge">Phase ${t.phase} — not built yet</span>
                 <p>${t.blurb}</p>
             </div>
-            `)}
+            `))}
         </div>
     `).join('');
 
@@ -444,6 +453,160 @@ export function renderEnvironmentPane() {
         `;
     }
     return renderEnvironmentSnapshot(snapshot);
+}
+
+// ─── Tab 3: Scope & storage (Phase 8) ────────────────────────────────────────
+
+/**
+ * Render the Scope & storage pane markup from a snapshot (pure string builder —
+ * the injectable formatTime keeps Node tests deterministic). Everything
+ * user-derived (identity keys, card/chat names, book names, binding keys,
+ * notes, error text) is escaped: those strings come from character cards and
+ * chat filenames.
+ *
+ * Layout, in design §I.5 Tab 3 order: stat header (version · scope · epoch) →
+ * the resolution banner (the "why", with the loud fallback warning) → the
+ * identity/book kv table → per-book hydration + store version → saved
+ * bindings → the Phase 3 counter line.
+ *
+ * @param {object} snapshot — collectScopeSnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts]
+ * @returns {string} innerHTML for the pane
+ */
+export function renderScopeSnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const r = s.resolution || { scope: 'global', mode: 'global', note: '', books: {} };
+    const books = Array.isArray(s.books) ? s.books : [];
+    const bindings = Array.isArray(s.bindings?.rows) ? s.bindings.rows : [];
+    const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+
+    const identityCell = (id) => id
+        ? `${escapeHtml(String(id.key ?? ''))}${id.name ? ` → "${escapeHtml(String(id.name))}"` : ''}${id.isGroup ? ' (group)' : ''}`
+        : '<span class="mwt-diag-dim">(unresolved)</span>';
+
+    const resolutionRows = [
+        ['scope setting', `${escapeHtml(String(r.scope ?? '?'))}${s.scopeSetting?.valid === false ? ' <span class="mwt-diag-dim">(invalid value — treated as global)</span>' : ''}`],
+        ['character identity', identityCell(s.character)],
+        ['chat identity', identityCell(s.chat)],
+        ['identity used by scope', r.identityKey ? escapeHtml(String(r.identityKey)) : '<span class="mwt-diag-dim">(none — global books)</span>'],
+        ['Knowledge book', escapeHtml(String(r.books?.knowledge ?? '?'))],
+        ['State book', escapeHtml(String(r.books?.state ?? '?'))],
+        ['Profiles book', escapeHtml(String(r.books?.profiles ?? '?'))],
+    ].map(([k, v]) => `
+        <tr><td class="mwt-diag-env-key">${escapeHtml(k)}</td><td class="mwt-diag-env-value">${v}</td></tr>
+    `).join('');
+
+    const bookRows = books.map((b) => {
+        // Store cell: only the Knowledge/State books carry a [MWT:store]
+        // entry; NPC Profiles is plain entries. The two un-loaded states are
+        // shown differently on purpose — 'failed' means writes are blocked and
+        // a tester must act; 'not attempted' is the ordinary early state right
+        // after a reload or chat switch, and painting that red would report a
+        // fault where there is none.
+        const storeCell = !b.hasStore
+            ? '<span class="mwt-diag-dim">no store — plain entries</span>'
+            : (b.storeState === 'loaded'
+                ? `${diagBadge('loaded', 'ok')}${b.dirty ? ` ${diagBadge('dirty', 'warn')}` : ''}`
+                : (b.storeState === 'failed'
+                    ? `${diagBadge('load failed', 'fail')} <span class="mwt-diag-dim">writes blocked</span>`
+                    : `${diagBadge('not loaded yet', 'warn')} <span class="mwt-diag-dim">hydration runs on chat change</span>`));
+        const versionCell = !b.hasStore
+            ? '—'
+            : (b.storeVersion != null
+                ? `v${escapeHtml(String(b.storeVersion))}${b.storeVersion !== b.currentStoreVersion ? ` <span class="mwt-diag-dim">(code: v${escapeHtml(String(b.currentStoreVersion ?? '?'))})</span>` : ''}`
+                : '<span class="mwt-diag-dim">—</span>');
+        return `
+            <tr data-book="${escapeHtml(String(b.id))}">
+                <td>${escapeHtml(String(b.label ?? b.id))}</td>
+                <td class="mwt-diag-env-value">${escapeHtml(String(b.name ?? ''))}</td>
+                <td>${storeCell}</td>
+                <td>${versionCell}</td>
+            </tr>
+        `;
+    }).join('');
+
+    const bindingRows = bindings.map((row) => `
+        <tr data-binding="${escapeHtml(String(row.key))}">
+            <td class="mwt-diag-env-value">${row.isCurrent ? '<span class="mwt-diag-scope-current" title="the identity this chat currently resolves to">● </span>' : ''}${escapeHtml(String(row.key))}</td>
+            <td>${escapeHtml(String(row.knowledge ?? '—'))}</td>
+            <td>${escapeHtml(String(row.state ?? '—'))}</td>
+            <td>${escapeHtml(String(row.profiles ?? '—'))}</td>
+        </tr>
+    `).join('');
+
+    const level = ['ok', 'warn', 'fail'].includes(s.bannerLevel) ? s.bannerLevel : 'ok';
+    const icon = level === 'ok' ? '✓' : (level === 'warn' ? '⚠' : '⛔');
+    const errorNote = s.errors?.length
+        ? `<p class="mwt-diag-note">⚠ Some fields degraded: ${escapeHtml(s.errors.join(' · '))}</p>`
+        : '';
+    const fallbackNote = s.fallbackEvents?.count > 0
+        ? `<p class="mwt-diag-note">⚠ <code>scope_fallback_global</code> fired ${escapeHtml(String(s.fallbackEvents.count))}× this session${s.fallbackEvents.last?.epoch != null ? ` — last at epoch ${escapeHtml(String(s.fallbackEvents.last.epoch))}` : ''}. Run <code>MWT.diagnostics.events({ level: 'warn' })</code> for every silent recovery this session.</p>`
+        : '';
+    const bindingsBlock = bindings.length
+        ? `<table class="mwt-diag-env-table">
+            <thead><tr><th>Identity key</th><th>Knowledge</th><th>State</th><th>Profiles</th></tr></thead>
+            <tbody>${bindingRows}</tbody>
+        </table>`
+        : '<p class="mwt-diag-note">No bindings saved yet — scope \'global\' never binds; character/chat scopes bind on their first real resolve.</p>';
+
+    return `
+        <div class="mwt-diag-scope">
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
+                <span class="mwt-diag-health-stat">scope: <strong>${escapeHtml(String(r.scope ?? '?'))}</strong></span>
+                <span class="mwt-diag-health-stat">epoch <strong>${escapeHtml(String(s.epoch ?? '?'))}</strong> <span class="mwt-diag-dim">(bumped on every chat switch)</span></span>
+                <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
+            </div>
+            <div class="mwt-diag-scope-banner mwt-diag-scope-banner--${level}">
+                ${icon} <strong>lorebook resolution: ${escapeHtml(String(r.mode ?? '?'))}</strong>
+                <div class="mwt-diag-scope-banner-note">${escapeHtml(String(r.note ?? ''))}</div>
+            </div>
+            ${warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
+                <li>${w.level === 'fail' ? '⛔' : '⚠'} ${escapeHtml(String(w.text ?? ''))}</li>
+            `).join('')}</ul>` : ''}
+            <table class="mwt-diag-env-table mwt-diag-env-kv">
+                <tbody>${resolutionRows}</tbody>
+            </table>
+            <p class="mwt-diag-env-subheading">Books — hydration &amp; store version</p>
+            <table class="mwt-diag-env-table">
+                <thead><tr><th>Book</th><th>Name</th><th>Store</th><th>Version</th></tr></thead>
+                <tbody>${bookRows}</tbody>
+            </table>
+            <p class="mwt-diag-env-subheading">Saved bindings (${escapeHtml(String(s.bindings?.count ?? bindings.length))}) — stable identity key → book names</p>
+            ${bindingsBlock}
+            ${fallbackNote}
+            ${errorNote}
+            <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. This tab re-derives the resolution
+                READ-ONLY: opening it never saves a binding or touches a book (that is <code>resolveBookNames()</code>'s
+                job, on the next real resolve). For the same data in the console run <code>MWT.diagnostics.scope()</code>;
+                <code>MWT.scope.diagnose()</code> adds the raw context fields, and <code>MWT.scope.bindings()</code>
+                prints the bindings table. Identity values contain your card/chat names — skim before pasting publicly.</p>
+        </div>
+    `;
+}
+
+/**
+ * Collect + render the Scope & storage pane under the Environment pane. Called
+ * at markup-build time inside renderDiagnosticsPanel() — the modal is rebuilt
+ * on every open, which is this tab's refresh model (decision D2). Fully
+ * synchronous; a total collection failure degrades to an error card, never a
+ * broken panel.
+ *
+ * @returns {string} innerHTML for the Scope & storage sub-tab pane
+ */
+export function renderScopePane() {
+    let snapshot;
+    try {
+        snapshot = collectScopeSnapshot();
+    } catch (err) {
+        return `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Scope &amp; storage unavailable</span>
+                <p>Collecting the scope snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+    }
+    return renderScopeSnapshot(snapshot);
 }
 
 // ─── Clipboard (Copy Report) ─────────────────────────────────────────────────

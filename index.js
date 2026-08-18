@@ -30,6 +30,7 @@ import { collectHealthSnapshot } from './diagnostics_panel/health.js';
 // feature detection, and the getCurrentChatId() premise behind core/scope.js,
 // validated live on the running build). Same direct-import rule as above.
 import { collectEnvironmentSnapshot, loadSharedModule } from './diagnostics_panel/environment.js';
+import { collectScopeSnapshot } from './diagnostics_panel/scope_storage.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1271,6 +1272,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.settingsProvenance()        // where each WS/SP setting resolves from
 //   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
 //   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
+//   MWT.diagnostics.scope()                     // the 🗂️ Scope & storage tab snapshot (which books + why)
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1492,6 +1494,67 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 8 — Tab 3 Scope & storage (design §I.5 Tab 3): the same snapshot
+    // the 🗂️ Scope & storage sub-tab renders — resolved identity + epoch,
+    // which lorebooks this chat resolves to and WHY (re-derived read-only:
+    // calling this never saves a binding), per-book hydration + store
+    // version, saved bindings, and every scope_fallback_global warn Phase 3
+    // recorded this session. Synchronous; read-only; resolves live per call.
+    // MWT.scope.diagnose() remains the deeper dump (raw context fields); this
+    // is the pasteable one-table answer.
+    scope: () => {
+        const snap = collectScopeSnapshot();
+        const r = snap.resolution;
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table({
+            'scope setting': `${r.scope}${r.valid ? '' : ' (INVALID — treated as global)'}`,
+            'resolution mode': r.mode,
+            'character identity': snap.character
+                ? `${snap.character.key} → "${snap.character.name}"${snap.character.isGroup ? ' (group)' : ''}`
+                : '(unresolved)',
+            'chat identity': snap.chat ? snap.chat.key : '(unresolved)',
+            'identity used': r.identityKey ?? '(none — global books)',
+            'Knowledge book': r.books.knowledge,
+            'State book': r.books.state,
+            'Profiles book': r.books.profiles,
+            'epoch': snap.epoch,
+            'bindings saved': snap.bindings.count,
+            'scope_fallback_global events': snap.fallbackEvents.count,
+        });
+        console.table(snap.books.map((b) => ({
+            book: b.id,
+            name: b.name,
+            // 'not attempted yet' is the ordinary early state (hydration is
+            // async, on chat change); only 'LOAD FAILED' blocks writes.
+            store: {
+                'no-store': 'no store',
+                loaded: b.dirty ? 'loaded (dirty)' : 'loaded',
+                failed: 'LOAD FAILED — writes blocked',
+                'not-attempted': 'not attempted yet',
+            }[b.storeState] ?? 'unknown',
+            version: b.hasStore ? (b.storeVersion != null ? `v${b.storeVersion}` : '—') : '—',
+        })));
+        if (snap.bindings.rows.length > 0) {
+            console.table(snap.bindings.rows.map((row) => ({
+                key: row.key,
+                current: row.isCurrent,
+                knowledge: row.knowledge,
+                state: row.state,
+                profiles: row.profiles,
+            })));
+            console.log('[MWT] "key" is the stable identity (avatar filename), which is why renaming a card keeps its books.');
+        }
+        console.log(
+            '[MWT] Scope & storage snapshot for MWT v' + snap.mwtVersion + ' — read-only, re-derived live; nothing was ' +
+            'saved by looking. The return value carries the full rows (resolution note, per-book dirty/version, ' +
+            'fallback-event details, per-field errors) for copy-paste. For scoping/identity bug reports pair it with ' +
+            'MWT.scope.diagnose() (raw context fields) or the 🌐 Environment tab.'
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1501,6 +1564,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

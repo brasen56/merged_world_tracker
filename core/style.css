@@ -598,6 +598,65 @@ a:focus-visible {
     margin: 12px 0 4px 0;
 }
 
+/* ─── Diagnostics Tab 3: Scope & storage (Phase 8) ────────────────────────── */
+
+/* The resolution banner states WHY this chat resolved to these books — the
+   loud fallback-to-global warning is this tab's headline, so warn/fail must
+   survive a screenshot while the quiet 'ok' state stays a footnote (the same
+   tone rule as the Environment premise banner). */
+.mwt-diag-scope-banner {
+    border-radius: var(--mwt-radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-scope-banner-note {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.mwt-diag-scope-banner--ok {
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-scope-banner--warn {
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--mwt-warning);
+    color: var(--mwt-warning);
+}
+
+.mwt-diag-scope-banner--fail {
+    background: rgba(239, 83, 80, 0.14);
+    border: 1px solid var(--mwt-error);
+    color: var(--mwt-error);
+}
+
+.mwt-diag-scope-banner--warn .mwt-diag-scope-banner-note,
+.mwt-diag-scope-banner--fail .mwt-diag-scope-banner-note {
+    color: inherit;
+    opacity: 0.85;
+}
+
+/* Individual findings under the banner (fallback events, invalid scope
+   value, store warnings) — amber/red bullets that stay readable in a pasted
+   screenshot without competing with the banner itself. */
+.mwt-diag-scope-warnings {
+    margin: 0 0 10px 0;
+    padding-left: 18px;
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+/* The ● marker on the binding row the current chat resolves to. */
+.mwt-diag-scope-current {
+    color: var(--mwt-accent);
+    font-weight: 700;
+}
+
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */
 
 .mwt-button-bar {

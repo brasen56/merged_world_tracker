@@ -388,6 +388,30 @@ export function assertHydrated(bookName, context = 'write') {
     );
 }
 
+/**
+ * Read-only peek at a book's cached store slot (Diagnostics Phase 8).
+ *
+ * The Scope & storage tab reports hydration + store version per book, and the
+ * existing accessors cannot answer that without side effects: `readField()`
+ * INSTALLS its fallback into the store data, and `hydrateBook()` performs IO.
+ * This is the one read-only view — it touches nothing, flushes nothing, and
+ * never creates a cache slot for a book that has not been touched.
+ *
+ * @param {string} bookName
+ * @returns {{ hydrated: boolean, dirty: boolean, version: number|null,
+ *            fields: string[] }|null} — null when the book has no cache slot
+ */
+export function peekStore(bookName) {
+    const s = _cache.get(bookName);
+    if (!s) return null;
+    return {
+        hydrated: s.hydrated === true,
+        dirty: s.dirty === true,
+        version: typeof s.data?.version === 'number' ? s.data.version : null,
+        fields: Object.keys(s.data ?? {}),
+    };
+}
+
 // ─── Field access ───────────────────────────────────────────────────────────
 
 /**

@@ -13,6 +13,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
 
+## [Unreleased]
+
+
+## [1.7.3]
+
+### Added
+- Diagnostics Phase 8 — 🗂️ Scope & storage tab: the Diagnostics panel's third
+  live sub-tab answers "which lorebooks is this chat actually using, and
+  WHY?" — the resolved character/chat identity and the current operation
+  epoch (core/scope.js), the three lorebook names this scope resolves to
+  with the reason each step of the resolution produced them, the saved
+  bindings (stable identity key → book names, with the current one
+  marked), per-book hydration and store versions, and the loud warning
+  when scope silently fell back to the global books (fueled by Phase 3's
+  `scope_fallback_global` counter: the banner names a LIVE fallback, and a
+  footer line counts every fallback already recorded this session, so a
+  fallback on a chat the user has since switched away from still shows).
+  Resolution modes mirror `resolveBookNames()` branch-for-branch — global,
+  saved-binding, newly-derived (flagged as save-on-next-resolve),
+  collision-disambiguated (the shared-display-name case),
+  sanitize-fallback-global (a name like "???" cannot become a filename),
+  and fallback-global — but are RE-DERIVED read-only: the real resolver
+  persists a binding on first sight of an identity, and the diagnostics
+  panel is read-only by contract, so opening the tab never writes anything.
+  That needed one new read-only accessor, `peekStore()` in
+  `knowledge/store.js` (hydration · dirty · version per cached book; the
+  existing `readField()` was unusable because it installs its fallback
+  INTO the store). A Knowledge store whose load FAILED is the one
+  red-level banner state ("writes blocked — the deliberate duplicate
+  guard"); a store that simply has not been hydrated yet is amber and says
+  so, because hydration is asynchronous and runs on chat change — the
+  ordinary early state is not a fault. Amber also covers the other
+  safe-but-silent recoveries. Same snapshot available to
+  testers as `MWT.diagnostics.scope()` (synchronous), which warns on
+  every finding; console bridge and tab share one collector
+  (`diagnostics_panel/scope_storage.js`), so they can never disagree.
+  `MWT.scope.diagnose()` remains the deeper dump (raw context fields).
+  Read-only and open-and-read like every tab.
+
+- Diagnostics Phase 7 — 🌐 Environment tab (the fork-compat probe): the
+  Diagnostics panel's second live sub-tab answers "which SillyTavern is this,
+  and which context APIs does it actually expose?" — MWT + SillyTavern
+  versions (probing `SillyTavern.version`, `SillyTavern.manifest.version`,
+  and the context's `version` field; "(not exposed)" is itself reported,
+  since no client-side version field is documented for extensions), a
+  feature-detection table for `getCurrentChatId`, `ctx.chatId`, the
+  tokenizer (`estimateTokens()`'s exact three-source order, verified with a
+  live call — a tokenizer that exists but throws is the state that silently
+  degrades every token figure MWT shows), `ConnectionManagerRequestService`
+  both on the context object and via the `shared.js` import core/api.js uses
+  (with `constructPrompt` as its own line item, the member the Aikobots-4
+  fork removed), and the world-info module tri-state behind Knowledge's
+  reads/writes — plus the eleven raw context fields `MWT.scope.diagnose()`
+  prints, with the same sentinels, so a pasted pane and a console dump
+  compare line for line. The tab's headline is a banner verdict on the
+  `getCurrentChatId()` premise underpinning `core/scope.js`, validated live
+  on the running build: **ok** (quiet footnote), **fallback** (amber — scope
+  is running on its `ctx.chatId` fallback; include the row when reporting
+  from that fork), or **fail-closed** (red — no usable chat id, identity
+  compares fail closed and chat-switch detection leans on the epoch counter
+  alone). This is how the scope premise finally gets validated on real forks
+  from tester reports, without a manual live-ST check per fork. Read-only and
+  open-and-read like every tab; the one async probe (shared.js) renders as a
+  "probing…" cell filled in once on open. The same snapshot is available to
+  testers as the async `MWT.diagnostics.environment()`, which warns on any
+  non-ok premise. Console bridge and tab share one collector
+  (`diagnostics_panel/environment.js`), so they can never disagree.
+
 ## [1.7.2]
 
 ### Added

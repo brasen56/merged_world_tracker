@@ -1,12 +1,13 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment)
+# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage)
 
 > **Status:** live now. The console bridge remains the deepest view; the
 > **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
 > redacted **📋 Copy Report** without devtools, and its live sub-tabs —
-> **❤️ Health** (Phase 6) and **🌐 Environment** (Phase 7) — render the
-> one-table answers to "is anything broken right now?" and "which
-> SillyTavern am I on, and what does it expose?". Tabs 3–7 (Phases 8–12)
-> are still being built.
+> **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), and **🗂️ Scope &
+> storage** (Phase 8) — render the one-table answers to "is anything
+> broken right now?", "which SillyTavern am I on, and what does it
+> expose?", and "which lorebooks is this chat using, and why?". Tabs 4–7
+> (Phases 9–12) are still being built.
 
 ## What this is
 
@@ -53,6 +54,7 @@ MWT.diagnostics.injection('mwt_world_state_injection')  // one key's recorded pa
 MWT.diagnostics.settingsProvenance()      // where each WS/SP setting resolves from
 MWT.diagnostics.health()                  // the ❤️ Health tab snapshot, one row per module
 MWT.diagnostics.environment()             // the 🌐 Environment tab snapshot (fork-compat probe; async)
+MWT.diagnostics.scope()                   // the 🗂️ Scope & storage tab snapshot (which books + why)
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -210,6 +212,37 @@ answered), any Knowledge write failure, and any scoping/identity issue.
 Context field values can contain your character's name and avatar filename —
 skim before pasting publicly.
 
+### `scope()` (Phase 8) — which lorebooks, and why
+
+The same snapshot the 🗂️ Scope & storage tab renders, **synchronous** and
+**read-only** (it re-derives the resolution without saving anything — no
+binding is persisted by looking). It prints a resolution table (scope setting,
+character/chat identity, the identity the scope keys on, the three book
+names), a books table (hydration · dirty · store version), and the bindings
+table (the same rows `MWT.scope.bindings()` prints, with `current: true` on
+the one this chat resolves to), then warns on every finding. The headline is
+the **resolution mode**:
+
+| Mode | Meaning |
+|---|---|
+| `global` | Scope is `global` (or an invalid value, normalized) — one shared set of books, the default |
+| `saved-binding` | This identity has a saved binding — books survive a card rename |
+| `newly-derived` | No binding yet; these are the names the next resolve will derive **and save** |
+| `collision-disambiguated` | Two cards share a display name — a stable discriminator from the identity key is appended |
+| `sanitize-fallback-global` | The card/chat name cannot become a filename — GLOBAL books in use, deliberately unbound |
+| `fallback-global` | Scope is `character`/`chat` but the identity could not be resolved — **silently using the GLOBAL books** (the amber banner; the classic "why is my data weird across chats" cause) |
+
+The one **red** finding is an un-hydrated Knowledge store (`loaded: NOT
+LOADED`): creating entries is blocked in that state — the deliberate
+duplicate-entry guard. The footer also counts every `scope_fallback_global`
+warn recorded this session, including fallbacks on chats you have since
+switched away from.
+
+**When to capture it:** any "my data is weird across chats/characters"
+report, any scoping or binding question, and any Knowledge write failure.
+Pair it with `MWT.scope.diagnose()` for the raw context fields. Identity
+values contain your card/chat names — skim before pasting publicly.
+
 ## How to capture a report
 
 1. Reproduce the problem.
@@ -226,8 +259,9 @@ skim before pasting publicly.
 3. Copy the **returned object**: right-click → *Copy object*, or run
    `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
 4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for
-   scoping/identity issues, `MWT.scope.diagnose()` (the 🌐 Environment tab
-   shows the same context fields — either is fine, both is best).
+   scoping/identity issues, `MWT.diagnostics.scope()` plus
+   `MWT.scope.diagnose()` (the 🗂️ Scope & storage tab shows the same
+   resolution — either is fine, both is best).
 
 ## Limitations (until the panel ships)
 
