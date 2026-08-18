@@ -1,10 +1,12 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health)
+# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment)
 
 > **Status:** live now. The console bridge remains the deepest view; the
 > **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
-> redacted **📋 Copy Report** without devtools, and its first live sub-tab —
-> **❤️ Health** (Phase 6) — renders the one-table answer to "is anything
-> broken right now?". Tabs 2–7 (Phases 7–12) are still being built.
+> redacted **📋 Copy Report** without devtools, and its live sub-tabs —
+> **❤️ Health** (Phase 6) and **🌐 Environment** (Phase 7) — render the
+> one-table answers to "is anything broken right now?" and "which
+> SillyTavern am I on, and what does it expose?". Tabs 3–7 (Phases 8–12)
+> are still being built.
 
 ## What this is
 
@@ -50,6 +52,7 @@ MWT.diagnostics.injections()              // last snapshot per injection key (pa
 MWT.diagnostics.injection('mwt_world_state_injection')  // one key's recorded payload
 MWT.diagnostics.settingsProvenance()      // where each WS/SP setting resolves from
 MWT.diagnostics.health()                  // the ❤️ Health tab snapshot, one row per module
+MWT.diagnostics.environment()             // the 🌐 Environment tab snapshot (fork-compat probe; async)
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -175,6 +178,38 @@ Since Phase 6, API telemetry is stamped with the calling module's key
 (`world_state`, `chronicle`, `knowledge`, `story_planner`, `interiority`), so
 `lastApiCall('<module>')` finally keys per-module.
 
+### `environment()` (Phase 7) — the fork-compat probe
+
+The same snapshot the 🌐 Environment tab renders. **Async** — it awaits the
+`shared.js` import behind connection-profile calls before answering. It
+prints three tables (features, versions/context, raw context fields) and
+returns the whole snapshot. The headline is the **chat-ID premise** verdict on
+the `getCurrentChatId()` assumption behind `core/scope.js`:
+
+| Level | Meaning |
+|---|---|
+| `ok` | `getCurrentChatId()` is exposed and answering — the premise holds |
+| `fallback` | No usable `getCurrentChatId()`; scope is running on its `ctx.chatId` fallback. Include this row when reporting from this build |
+| `fail-closed` | No usable chat id at all — identity compares fail closed and chat-switch detection leans on the epoch counter alone. Expected nowhere; report it |
+| `unknown` | No SillyTavern context object was resolvable at all |
+
+The feature table covers `getCurrentChatId`, `ctx.chatId`, the tokenizer
+(which of `estimateTokens()`'s three sources answered, verified with a live
+call), `ConnectionManagerRequestService` on the context object, and the
+world-info module behind Knowledge's lorebook reads/writes (the same
+tri-state the `wi_script_unavailable` warns watch). A separate row reports
+the `shared.js` `ConnectionManagerRequestService` — the exact import
+`core/api.js` uses — with `constructPrompt` as its own line item (the member
+some forks remove; MWT feature-detects around it, so "missing" is a state to
+note, not a failure). The raw context-field table is the same eleven rows
+`MWT.scope.diagnose()` prints, with the same `(absent)` sentinels.
+
+**When to capture it:** any report from a non-reference SillyTavern build or
+fork, any "tokens look wrong" report (it shows whether a real tokenizer
+answered), any Knowledge write failure, and any scoping/identity issue.
+Context field values can contain your character's name and avatar filename —
+skim before pasting publicly.
+
 ## How to capture a report
 
 1. Reproduce the problem.
@@ -185,11 +220,14 @@ Since Phase 6, API telemetry is stamped with the calling module's key
    recovery (repaired JSON, reasoning fallback, stripped fences, scope
    fallback, missing world-info) from the session. For "the setting is right
    but behaves wrong", add `MWT.diagnostics.settingsProvenance()`. For "is
-   anything even running", start with `MWT.diagnostics.health()`.
+   anything even running", start with `MWT.diagnostics.health()`. For
+   anything on a non-reference build/fork, or any scoping/identity issue, add
+   `MWT.diagnostics.environment()`.
 3. Copy the **returned object**: right-click → *Copy object*, or run
    `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
 4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for
-   scoping/identity issues, `MWT.scope.diagnose()`.
+   scoping/identity issues, `MWT.scope.diagnose()` (the 🌐 Environment tab
+   shows the same context fields — either is fine, both is best).
 
 ## Limitations (until the panel ships)
 

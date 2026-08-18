@@ -1,6 +1,6 @@
 /**
  * diagnostics_panel/render.js — Panel shell (Diagnostics Phase 5) + Tab 1
- * Health (Phase 6).
+ * Health (Phase 6) + Tab 2 Environment (Phase 7).
  *
  * The mount point every later tab plugs into (phases doc §II.4 Phase 5): a
  * 🩺 Diagnostics tab INSIDE the existing MWT modal (createModal infra — never
@@ -17,17 +17,26 @@
  * and the unmissable panic-switch banner. Open-and-read per decision D2: the
  * modal is rebuilt on every open, which is this tab's refresh model.
  *
+ * Phase 7 added the 🌐 Environment tab (./environment.js for the snapshot,
+ * renderEnvironmentPane/renderEnvironmentSnapshot here): MWT + SillyTavern
+ * versions, feature detection, and the raw context-field table — the
+ * fork-compat probe. The one async probe (shared.js →
+ * ConnectionManagerRequestService) starts as a "probing…" placeholder and is
+ * filled in ONCE by wireDiagnosticsPanel() when it resolves — a deferred
+ * fill, not a render loop, so decision D2 still holds.
+ *
  * Hard limits inherited from the design (§I.1): READ-ONLY — nothing here
  * writes to settings, chat metadata, or localStorage; the checkbox state is
  * deliberately not persisted, so every session starts with content EXCLUDED.
  *
  * DOM-coupled by design; all testable logic lives in core/redaction.js,
- * ./report.js, and ./health.js.
+ * ./report.js, ./health.js, and ./environment.js.
  */
 
 import { setStatus, escapeHtml } from '../core/index.js';
 import { buildReport, collectReportSections } from './report.js';
 import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
+import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
 
 // ─── Panel tab definitions (design §I.5 — the seven v1 tabs) ─────────────────
 
@@ -101,12 +110,12 @@ export function renderDiagnosticsPanel() {
 
     const subTabPanes = DIAGNOSTICS_PANEL_TABS.map((t, i) => `
         <div class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">
-            ${t.id === 'health' ? renderHealthPane() : `
+            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : `
             <div class="mwt-diag-placeholder">
                 <span class="mwt-diag-placeholder-badge">Phase ${t.phase} — not built yet</span>
                 <p>${t.blurb}</p>
             </div>
-            `}
+            `)}
         </div>
     `).join('');
 
@@ -283,6 +292,160 @@ export function renderHealthPane() {
     return renderHealthSnapshot(snapshot);
 }
 
+// ─── Tab 2: Environment (Phase 7) ────────────────────────────────────────────
+
+/** Shared badge builder (same tones as the Health pane's badges). */
+function diagBadge(text, tone) {
+    return `<span class="mwt-diag-badge mwt-diag-badge--${tone}">${text}</span>`;
+}
+
+/** DOM id of the shared.js Connection Manager cell wireDiagnosticsPanel() fills. */
+export const DIAGNOSTICS_ENV_CMRS_CELL_ID = 'mwt-diag-env-cmrs-cell';
+
+/**
+ * Render the shared.js ConnectionManagerRequestService probe cell — used for
+ * the unprobed placeholder at markup-build time AND re-used verbatim by
+ * wireDiagnosticsPanel()'s one-shot deferred fill, so the cell cannot look
+ * different depending on which path painted it.
+ *
+ * @param {object} probe — an inspectConnectionManager() result
+ * @returns {string} innerHTML for the cell
+ */
+export function renderConnectionManagerCell(probe) {
+    if (!probe?.probed) {
+        return '<span class="mwt-diag-dim">probing… (shared.js import in flight — check again in a second)</span>';
+    }
+    if (probe.error) {
+        return `<span title="${escapeHtml(probe.error)}">${diagBadge('shared.js import failed', 'fail')}
+            <span class="mwt-diag-dim">connection profiles unavailable — hover for the error</span></span>`;
+    }
+    const availability = probe.available
+        ? diagBadge('available', 'ok')
+        : diagBadge('missing', 'fail');
+    // constructPrompt is the member the Aikobots-4 fork removed; core/api.js
+    // feature-detects around its absence, so missing ≠ broken — but a tester
+    // on such a fork should see it called out, not buried.
+    const promptPart = probe.constructPrompt
+        ? '<span class="mwt-diag-dim">constructPrompt ✓</span>'
+        : diagBadge('constructPrompt missing', 'warn');
+    const sendPart = `<span class="mwt-diag-dim">sendRequest ${probe.sendRequest ? '✓' : '✗'}</span>`;
+    return `<span title="the exact import core/api.js uses for connection-profile calls">${availability} ${promptPart} ${sendPart}</span>`;
+}
+
+/**
+ * Render the Environment pane markup from a snapshot (pure string builder —
+ * the injectable formatTime keeps Node tests deterministic). Everything
+ * user-derived (names, avatars, ids, error text) is escaped: fork context
+ * objects carry user-controlled strings.
+ *
+ * @param {object} snapshot — collectEnvironmentSnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts]
+ * @returns {string} innerHTML for the pane
+ */
+export function renderEnvironmentSnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const premise = s.chatIdPremise || { level: 'unknown', note: '' };
+    const features = Array.isArray(s.features) ? s.features : [];
+
+    const stStat = s.stVersion
+        ? `<span class="mwt-diag-health-stat">SillyTavern: <strong>${escapeHtml(String(s.stVersion))}</strong>
+             <span class="mwt-diag-dim">(${escapeHtml(String(s.stVersionSource ?? '?'))})</span></span>`
+        : '<span class="mwt-diag-health-stat">SillyTavern: <span class="mwt-diag-dim">version not exposed on this build</span></span>';
+    const ctxStat = s.contextAvailable
+        ? `<span class="mwt-diag-health-stat">context via ${escapeHtml(String(s.contextSource ?? 'unknown route'))}</span>`
+        : '<span class="mwt-diag-health-stat">no SillyTavern context</span>';
+
+    // The fork-compat headline: one banner stating whether the
+    // getCurrentChatId() premise behind core/scope.js holds on this build.
+    // 'ok' is deliberately quiet; the other levels must survive a screenshot.
+    const premiseBanner = `
+        <div class="mwt-diag-env-premise mwt-diag-env-premise--${escapeHtml(premise.level)}">
+            ${premise.level === 'ok' ? '✓' : (premise.level === 'fallback' ? '⚠' : '⛔')}
+            <strong>chat-ID premise: ${escapeHtml(premise.level)}</strong>
+            ${premise.identityKey ? ` <span class="mwt-diag-dim">· identity ${escapeHtml(premise.identityKey)}</span>` : ''}
+            ${premise.chatIdValue ? ` <span class="mwt-diag-dim">· ${escapeHtml(premise.method)} → "${escapeHtml(premise.chatIdValue)}"</span>` : ''}
+            <div class="mwt-diag-env-premise-note">${escapeHtml(premise.note)}</div>
+        </div>
+    `;
+
+    const featureRows = features.map((f) => `
+        <tr data-feature="${escapeHtml(f.id)}">
+            <td class="mwt-diag-env-feature">${escapeHtml(String(f.label ?? f.id))}</td>
+            <td>${f.available ? diagBadge('✓ present', 'ok') : diagBadge('absent', 'fail')}</td>
+            <td class="mwt-diag-env-detail">${escapeHtml(String(f.detail ?? ''))}</td>
+        </tr>
+    `).join('');
+
+    // The shared.js probe row — its status cell carries the id the deferred
+    // fill targets, so the async result lands exactly where the placeholder
+    // was, with no other markup moving.
+    const cmrsRow = `
+        <tr data-feature="connectionManagerShared">
+            <td class="mwt-diag-env-feature">ConnectionManagerRequestService
+                <span class="mwt-diag-dim">(shared.js import — the path core/api.js uses)</span></td>
+            <td id="${DIAGNOSTICS_ENV_CMRS_CELL_ID}">${renderConnectionManagerCell(s.connectionManager)}</td>
+            <td class="mwt-diag-env-detail"><span class="mwt-diag-dim">connection-profile API calls</span></td>
+        </tr>
+    `;
+
+    // The raw context-field table MWT.scope.diagnose() already builds — same
+    // row labels, so console dumps and pane screenshots read alike.
+    const fieldRows = Object.entries(s.contextFields || {}).map(([k, v]) => `
+        <tr><td class="mwt-diag-env-key">${escapeHtml(k)}</td><td class="mwt-diag-env-value">${escapeHtml(String(v))}</td></tr>
+    `).join('');
+
+    return `
+        <div class="mwt-diag-env">
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
+                ${stStat}
+                ${ctxStat}
+                <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
+            </div>
+            ${premiseBanner}
+            <table class="mwt-diag-env-table">
+                <thead><tr><th>Feature</th><th>Status</th><th>Detail</th></tr></thead>
+                <tbody>${featureRows}${cmrsRow}</tbody>
+            </table>
+            <p class="mwt-diag-env-subheading">Raw context fields — mirrors MWT.scope.diagnose()</p>
+            <table class="mwt-diag-env-table mwt-diag-env-kv">
+                <tbody>${fieldRows}</tbody>
+            </table>
+            <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. This tab is the fork-compat probe: when
+                reporting from a non-reference SillyTavern build or fork, copy this whole tab (or run
+                <code>MWT.diagnostics.environment()</code>) into the report — the banner row is the
+                <code>getCurrentChatId()</code> premise behind core/scope.js, validated live on your build. The context
+                fields below the feature table are the same eleven rows <code>MWT.scope.diagnose()</code> prints. Context
+                field values can contain your character's name and avatar filename — skim before pasting publicly.</p>
+        </div>
+    `;
+}
+
+/**
+ * Collect + render the Environment pane. Called at markup-build time inside
+ * renderDiagnosticsPanel() — the modal is rebuilt on every open, which is this
+ * tab's refresh model (decision D2). The shared.js probe is NOT awaited here:
+ * the pane renders immediately with a "probing…" cell and
+ * wireDiagnosticsPanel() fills it once when the import settles. A total
+ * collection failure degrades to an error card, never a broken panel.
+ *
+ * @returns {string} innerHTML for the Environment sub-tab pane
+ */
+export function renderEnvironmentPane() {
+    let snapshot;
+    try {
+        snapshot = collectEnvironmentSnapshot();
+    } catch (err) {
+        return `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Environment unavailable</span>
+                <p>Collecting the environment snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+    }
+    return renderEnvironmentSnapshot(snapshot);
+}
+
 // ─── Clipboard (Copy Report) ─────────────────────────────────────────────────
 
 
@@ -391,6 +554,20 @@ export function wireDiagnosticsPanel(root) {
                     ? 'Report copied — content INCLUDED (contains chat text).'
                     : 'Report copied — content excluded, secrets redacted.', 'success', 4000);
             });
+        });
+    }
+
+    // Phase 7 — one-shot deferred fill of the shared.js Connection Manager
+    // probe cell. The Environment pane renders synchronously with a
+    // "probing…" placeholder because the ONLY authoritative source for this
+    // feature is the dynamic import core/api.js itself uses; this fills the
+    // cell once when that settles (or reports the import failure). NOT a
+    // render loop — decision D2's open-and-read model is untouched, and a
+    // modal closed before the import settles simply patches a detached node.
+    const cmrsCell = root.querySelector(`#${DIAGNOSTICS_ENV_CMRS_CELL_ID}`);
+    if (cmrsCell) {
+        loadSharedModule().then((loaded) => {
+            cmrsCell.innerHTML = renderConnectionManagerCell(inspectConnectionManager(loaded));
         });
     }
 }

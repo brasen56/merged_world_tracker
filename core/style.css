@@ -410,13 +410,15 @@ a:focus-visible {
     font-size: 11px;
 }
 
-.mwt-diag-health-table {
+.mwt-diag-health-table,
+.mwt-diag-env-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
 }
 
-.mwt-diag-health-table th {
+.mwt-diag-health-table th,
+.mwt-diag-env-table th {
     text-align: left;
     font-size: 10px;
     text-transform: uppercase;
@@ -427,7 +429,8 @@ a:focus-visible {
     white-space: nowrap;
 }
 
-.mwt-diag-health-table td {
+.mwt-diag-health-table td,
+.mwt-diag-env-table td {
     padding: 6px 8px;
     border-bottom: 1px solid var(--mwt-border);
     vertical-align: middle;
@@ -506,6 +509,93 @@ a:focus-visible {
 .mwt-diag-dim {
     color: var(--mwt-text-dim);
     font-size: 11px;
+}
+
+/* ─── Diagnostics Tab 2: Environment (Phase 7) ─────────────────────────────── */
+
+/* The premise banner states whether the getCurrentChatId() premise behind
+   core/scope.js holds on this build — the row a fork report needs. Tones
+   follow the panic-switch rule: the failure states must be impossible to
+   miss in a screenshot; the quiet 'ok' state stays a footnote. */
+.mwt-diag-env-premise {
+    border-radius: var(--mwt-radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-env-premise-note {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.mwt-diag-env-premise--ok {
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-env-premise--fallback {
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--mwt-warning);
+    color: var(--mwt-warning);
+}
+
+.mwt-diag-env-premise--fail-closed,
+.mwt-diag-env-premise--unknown {
+    background: rgba(239, 83, 80, 0.14);
+    border: 1px solid var(--mwt-error);
+    color: var(--mwt-error);
+}
+
+.mwt-diag-env-premise--fallback .mwt-diag-env-premise-note,
+.mwt-diag-env-premise--fail-closed .mwt-diag-env-premise-note,
+.mwt-diag-env-premise--unknown .mwt-diag-env-premise-note {
+    color: inherit;
+    opacity: 0.85;
+}
+
+/* Feature + raw-field tables reuse the Health table rules above (grouped
+   selectors); only the Environment-specific overrides live here. */
+
+/* Detail cells wrap: fork notes are sentences, not table words. */
+.mwt-diag-env-table td.mwt-diag-env-detail,
+.mwt-diag-env-table td.mwt-diag-env-key,
+.mwt-diag-env-table td.mwt-diag-env-value {
+    white-space: normal;
+}
+
+.mwt-diag-env-feature {
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+    white-space: normal;
+    min-width: 180px;
+}
+
+/* The raw context-field table — two dense monospace columns so a pasted pane
+   and a MWT.scope.diagnose() console dump read line for line. */
+.mwt-diag-env-kv td {
+    padding: 3px 8px;
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+}
+
+.mwt-diag-env-key {
+    color: var(--mwt-text-dim);
+    width: 40%;
+}
+
+.mwt-diag-env-value {
+    word-break: break-all;
+}
+
+.mwt-diag-env-subheading {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--mwt-text-dim);
+    margin: 12px 0 4px 0;
 }
 
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */

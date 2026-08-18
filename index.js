@@ -25,6 +25,11 @@ import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastR
 // Health sub-tab (one row per module: enabled · gate · busy · tokens · auto ·
 // last run). Same direct-import rule as above.
 import { collectHealthSnapshot } from './diagnostics_panel/health.js';
+// Diagnostics Phase 7 — Tab 2 Environment (fork-compat probe): the snapshot
+// collector + shared.js loader behind the 🌐 Environment sub-tab (versions,
+// feature detection, and the getCurrentChatId() premise behind core/scope.js,
+// validated live on the running build). Same direct-import rule as above.
+import { collectEnvironmentSnapshot, loadSharedModule } from './diagnostics_panel/environment.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1265,6 +1270,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.injection('mwt_world_state_injection')  // one key's payload
 //   MWT.diagnostics.settingsProvenance()        // where each WS/SP setting resolves from
 //   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
+//   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1445,6 +1451,47 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 7 — Tab 2 Environment, the fork-compat probe (design §I.5 Tab 2):
+    // the same snapshot the 🌐 Environment sub-tab renders — MWT + SillyTavern
+    // versions, feature detection, the raw context fields, and the banner
+    // verdict on the getCurrentChatId() premise behind core/scope.js. Async
+    // because the shared.js Connection Manager probe (the exact import
+    // core/api.js uses) can only settle through a dynamic import. Read-only;
+    // resolves live on every call.
+    environment: async () => {
+        const loaded = await loadSharedModule();
+        const snap = collectEnvironmentSnapshot({ sharedModule: loaded });
+        const premise = snap.chatIdPremise;
+        if (premise.level === 'fallback' || premise.level === 'fail-closed' || premise.level === 'unknown') {
+            console.warn(`[MWT] ⚠ chat-ID premise: ${premise.level} — ${premise.note}`);
+        }
+        console.table(snap.features.map(f => ({
+            feature: f.id,
+            available: f.available,
+            detail: f.detail,
+        })));
+        console.table({
+            'MWT version': snap.mwtVersion,
+            'SillyTavern version': snap.stVersion ?? `(not exposed${snap.stVersionSource ? ` via ${snap.stVersionSource}` : ''})`,
+            'context': snap.contextAvailable ? (snap.contextSource ?? 'resolved') : '(none)',
+            'chat-ID premise': `${premise.level}${premise.method ? ` via ${premise.method}` : ''}`,
+            'identity key': premise.identityKey ?? '(none)',
+            'CMRS (shared.js)': snap.connectionManager.probed
+                ? (snap.connectionManager.error
+                    ? `import failed: ${snap.connectionManager.error}`
+                    : `${snap.connectionManager.available ? 'available' : 'missing'} · constructPrompt ${snap.connectionManager.constructPrompt ? '✓' : 'MISSING'}`)
+                : 'not probed',
+        });
+        console.table(snap.contextFields);
+        console.log(
+            '[MWT] Environment probe — when reporting from a non-reference build or fork, copy the returned object ' +
+            '(or screenshot the 🌐 Environment tab) into the report. The chat-ID premise row is core/scope.js\'s ' +
+            'getCurrentChatId() assumption, validated live on this build; the context fields are the same table ' +
+            'MWT.scope.diagnose() prints. Context field values can contain your character\'s name — skim before pasting.'
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1454,6 +1501,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');
