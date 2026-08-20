@@ -71,11 +71,50 @@ export function getInjectionStats() {
     return { totalEntries, manualCount, consolidatedCount, generatedCount: totalEntries - manualCount, totalWords, entriesToInject: entriesToInject.length, tokenEstimate, characterCount: allCharacters.size, characters: Array.from(allCharacters), injectMode, injectCount };
 }
 
+/**
+ * Resolve the depth/role Chronicle's injection will use, WITH provenance —
+ * the exact precedence applyInjection() hands to applyExtensionPromptInjection():
+ *   depth — global `chronicleDepth` (Settings tab; a present, finite value
+ *           wins) → THIS CHAT's `injectDepth` (Chronicle tab, chat metadata)
+ *           → built-in 2
+ *   role  — global `chronicleRole` (truthy wins) → built-in 'system'
+ *
+ * Phase 9 (diagnostics design §I.4.6, §I.5 Tab 4): the apply path and the 💉
+ * Injection tab call the SAME function, so what the tab reports and what the
+ * applier registers cannot drift. `source` strings are stable API —
+ * 'global' | 'module' | 'builtin' (rendered via PLACEMENT_SOURCE_LABELS,
+ * diagnostics_panel/injection.js); do not rename. For Chronicle the 'module'
+ * level is per-chat data, not a settings store — the tab labels it so.
+ *
+ * @returns {{depth: {value: number, source: string}, role: {value: string, source: string}}}
+ */
+export function resolveInjectionPlacement() {
+    const globalSettings = getGlobalSettings();
+    const gd = globalSettings.chronicleDepth;
+    const globalDepthWins = gd != null && Number.isFinite(Number(gd));
+    const chatDepth = getChronicleData().injectDepth;
+    return {
+        depth: {
+            value: globalDepthWins ? Number(gd) : (chatDepth ?? 2),
+            source: globalDepthWins ? 'global' : (chatDepth != null ? 'module' : 'builtin'),
+        },
+        role: {
+            value: globalSettings.chronicleRole || 'system',
+            source: globalSettings.chronicleRole ? 'global' : 'builtin',
+        },
+    };
+}
+
 export function applyInjection() {
     const enabled = isInjectionEnabled() && injectionAllowed('Chronicle');
     const snapshots = getSnapshots();
 
     const globalSettings = getGlobalSettings();
+    // Placement comes fully resolved from resolveInjectionPlacement() (Phase 9).
+    // It is passed as the fallback depth so the injector's own
+    // globalDepth/fallbackDepth split stays inert — one resolver, two consumers
+    // (this apply + the 💉 Injection diagnostics tab).
+    const placement = resolveInjectionPlacement();
 
     let body = '';
     if (enabled && snapshots.length > 0) {
@@ -95,9 +134,8 @@ export function applyInjection() {
         header: CHRONICLE_INJECTION_HEADER,
         body,
         enabled,
-        globalDepth: globalSettings.chronicleDepth,
-        fallbackDepth: getChronicleData().injectDepth ?? 2,
-        globalRole: globalSettings.chronicleRole || 'system',
+        fallbackDepth: placement.depth.value,
+        globalRole: placement.role.value,
         wrapperTag: 'mwt_chronicle',
         useTags: globalSettings.structuralBoundaries !== false,
     });

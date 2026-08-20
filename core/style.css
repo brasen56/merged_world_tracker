@@ -657,6 +657,74 @@ a:focus-visible {
     font-weight: 700;
 }
 
+/* ─── Diagnostics panel — 💉 Injection tab (Phase 9) ───────────────────────── */
+
+/* Per-module provenance note under a Module cell (Knowledge's lorebook
+   mechanism, Story Planner's "no global pair"). Small, dim, wraps — it
+   explains a whole row without widening the table. */
+.mwt-diag-inj-note {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--mwt-text-dim);
+    margin-top: 2px;
+    max-width: 260px;
+    white-space: normal;
+    line-height: 1.4;
+}
+
+/* Collapsed-by-default recorded-payload blocks (design §I.5 Tab 4). The
+   summary line is the age-stamped metadata; the body is the exact string
+   last registered via setExtensionPrompt. */
+.mwt-diag-inj-details {
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    margin: 0 0 6px 0;
+    padding: 4px 8px;
+    font-size: 11px;
+    background: var(--mwt-bg-light);
+}
+
+.mwt-diag-inj-details summary {
+    cursor: pointer;
+    color: var(--mwt-accent);
+    font-family: var(--mwt-font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mwt-diag-inj-details[open] summary {
+    margin-bottom: 6px;
+}
+
+/* The recorded payload itself — monospace, scrollable, capped height so a
+   30k-char world state can never blow the modal open. */
+.mwt-diag-inj-payload {
+    margin: 0;
+    padding: 8px;
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--mwt-border);
+    border-radius: 4px;
+    color: var(--mwt-text);
+}
+
+/* The content-excluded placeholder shown while the opt-in checkbox is off
+   (same gating rule as the copied report — design §I.6). */
+.mwt-diag-inj-gated {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    font-style: italic;
+    padding: 6px 2px;
+}
+
+
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */
 
 .mwt-button-bar {

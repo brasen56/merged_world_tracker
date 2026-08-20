@@ -16,6 +16,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [1.7.4]
+
+### Added
+- Diagnostics Phase 9 — 💉 Injection tab: the Diagnostics panel's fourth live
+  sub-tab answers "what is MWT actually putting in the narrator's prompt right
+  now, where, and why there?" — one row per module showing on/off · gate ·
+  **resolved role and depth with provenance** · a token estimate · and the
+  Registered column (time + age of the exact `setExtensionPrompt`
+  registration, a "cleared" badge when the last apply emptied the slot).
+  The recorded payloads render below the table as collapsed `<details>`
+  blocks, age-stamped — and, because payloads are chat-derived content that
+  can quote secrets (an upstream error pasted into a state document, a token
+  in a card), two guards stack on them: the payload text is **not in the DOM
+  at all** until the content opt-in checkbox is ticked (the `<pre>` ships
+  empty carrying only the snapshot key; a one-shot listener in
+  `wireDiagnosticsPanel()` fills it on opt-in and clears it again on un-tick
+  — not a render loop), and what gets inserted is first scrubbed through the
+  shared redaction layer (`core/redaction.js` via `scrubPayloadForDisplay()`:
+  embedded URLs cut to scheme+host — which removes `user:pass@` credentials
+  and key-bearing paths — vendor key/bearer shapes redacted, and this
+  install's live secret values struck via `collectKnownSecrets()`), then
+  assigned as `textContent`, so payload text is never parsed as HTML either.
+  Opting into content never opts into secrets.
+  Token columns state their kind: *recorded* (tokens of the exact registered
+  payload), *est.* (module accessor estimate, only while nothing is
+  registered this session), and *stored* (Knowledge's lorebook corpus —
+  never prompt load, never summed into the registered total).
+- **Per-module injection placement provenance** (the design's §I.4.6 "small
+  provenance helpers"): `resolveInjectionPlacement()` is now exported from
+  World State, Chronicle, Story Planner, and Interiority `injection.js` — and
+  each applier CALLS its own helper, so the tab reports precedence
+  (global override → module setting → built-in default; Chronicle's "module"
+  level is this chat's `injectDepth`) from the same function the apply path
+  uses. Parity is pinned by tests that drive the real appliers and compare
+  the registered snapshot against the resolver. Story Planner's missing
+  global pair is stated in its row.
+- **Injection warning set** (tab + console both surface these): the Knowledge
+  lorebook caveat is now ALWAYS visible on this tab — amber normally, red
+  with "NOT stopped by the panic switch" wording when the switch is on —
+  closing `TODO.md` §4 "Panic switch UI clarity"; a panic-switch banner
+  (SillyTavern keeps whatever was registered before the flip);
+  `flag-on-registered-empty` (flag on, gate open, but the last registration
+  was a CLEAR — usually "nothing to inject yet");
+  `flag-off-registered-live` (module off/gated yet a live payload is STILL
+  registered — the missed re-apply, e.g. the panic switch flipped without a
+  re-apply event); and `placement-drift` (settings now resolve to a
+  different depth/role than the live registration — the stale-registration
+  case made actionable).
+- Console bridge `MWT.diagnostics.injectionStatus()` — so named because
+  Phase 2 already took `injections()` (all keys) and `injection(key)` (one
+  raw snapshot). Synchronous; warns on every finding; tables the rows plus
+  the registered depth/role per key. **Safe by default:** what it RETURNS is
+  `redactInjectionSnapshot()` output — payload text gated to
+  `[content excluded — N chars]` markers and every string secret-scrubbed
+  (same shared layer, same live `collectKnownSecrets()` list as Copy
+  Report) — so the return value pastes without auditing.
+  `injectionStatus({ includeContent: true })` includes (still scrubbed)
+  payloads, and one key's byte-EXACT text stays on the deliberate
+  single-key path, `injection(key)`. Console bridge and tab share one
+  collector (`diagnostics_panel/injection.js`), so they can never disagree.
+  Tests: `test/injection_tab.test.js` (52).
+- **Post-landing review fix (same release):** the payload display originally
+  shipped the (HTML-escaped) payload in the markup behind `hidden`. That met
+  the content gate but not the redaction contract — escapeHtml() stops HTML
+  injection, not secrets. The payload body is now DEFERRED (empty `<pre>` +
+  snapshot key in the markup; `wireDiagnosticsPanel()` inserts it only on
+  opt-in, as `textContent`, and clears it on un-tick) and SCRUBBED through
+  the shared layer (`scrubPayloadForDisplay()` → `redactForReport()` with
+  `collectKnownSecrets()`), pinned by tests carrying a key-shaped secret and
+  an authenticated `user:pass@` URL. The same review closed the console
+  side: `MWT.diagnostics.injectionStatus()` now returns
+  `redactInjectionSnapshot()` output (payloads gated to size markers, all
+  strings secret-scrubbed) by default, with `{ includeContent: true }` for
+  scrubbed payloads and `injection(key)` as the deliberate exact-text path.
+
 ## [1.7.3]
 
 ### Added

@@ -95,32 +95,63 @@ export function buildInjectionBody() {
     return out.join('\n').trim();
 }
 
+// ─── Placement resolution (Phase 9 diagnostics) ──────────────────────────────
+
+/**
+ * Resolve the depth/role this module's injection will use, WITH provenance —
+ * the exact precedence applyPlanInjection() hands to
+ * applyExtensionPromptInjection():
+ *   depth — this module's `injectionDepth` setting → built-in 4
+ *   role  — built-in 'system' (no setting exists)
+ *
+ * The Story Planner deliberately has NO global depth/role pair in the Settings
+ * tab (see applyPlanInjection — it stays self-contained), so the chain is
+ * module-only. Phase 9 (diagnostics design §I.4.6, §I.5 Tab 4): the apply path
+ * and the 💉 Injection tab call the SAME function, so what the tab reports and
+ * what the applier registers cannot drift. `source` strings are stable API —
+ * 'global' | 'module' | 'builtin' (rendered via PLACEMENT_SOURCE_LABELS,
+ * diagnostics_panel/injection.js); do not rename.
+ *
+ * @returns {{depth: {value: number, source: string}, role: {value: string, source: string}}}
+ */
+export function resolveInjectionPlacement() {
+    const moduleDepth = getSettings().injectionDepth;
+    return {
+        depth: {
+            value: moduleDepth ?? 4,
+            source: moduleDepth != null ? 'module' : 'builtin',
+        },
+        role: { value: 'system', source: 'builtin' },
+    };
+}
+
 // ─── Core injection ──────────────────────────────────────────────────────────
 
 export function applyPlanInjection() {
     const enabled = isInjectionEnabled() && injectionAllowed('StoryPlanner');
     const body = enabled ? buildInjectionBody() : '';
-    const s = getSettings();
     const globalSettings = getGlobalSettings();
 
     // The Story Planner uses its own injectionDepth; there is no global
     // depth/role pair for it in the Settings tab (we keep it self-contained),
     // but we still honor structural-boundaries and injectionAllowed().
+    // Placement comes fully resolved from resolveInjectionPlacement() (Phase 9)
+    // — one resolver, two consumers (this apply + the 💉 Injection tab).
     const useTags = globalSettings.structuralBoundaries !== false;
+    const placement = resolveInjectionPlacement();
 
     applyExtensionPromptInjection({
         key: EXTENSION_PROMPT_KEY,
         header: currentHeader(),
         body,
         enabled,
-        fallbackDepth: s.injectionDepth ?? 4,
-        globalRole: 'system',
+        fallbackDepth: placement.depth.value,
+        globalRole: placement.role.value,
         wrapperTag: 'mwt_story_plan',
         useTags,
     });
 
-    const depth = s.injectionDepth ?? 4;
-    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", push "${getEnforcement()}", ${getArcsForInjection().length} arcs, ${body.length} chars at depth ${depth}`);
+    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", push "${getEnforcement()}", ${getArcsForInjection().length} arcs, ${body.length} chars at depth ${placement.depth.value}`);
 }
 
 // ─── Token estimate ──────────────────────────────────────────────────────────

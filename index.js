@@ -31,6 +31,10 @@ import { collectHealthSnapshot } from './diagnostics_panel/health.js';
 // validated live on the running build). Same direct-import rule as above.
 import { collectEnvironmentSnapshot, loadSharedModule } from './diagnostics_panel/environment.js';
 import { collectScopeSnapshot } from './diagnostics_panel/scope_storage.js';
+// Diagnostics Phase 9 — Tab 4 Injection: the snapshot collector behind the 💉
+// Injection sub-tab (per module: on/off · gate · role/depth with provenance ·
+// token estimate · the Phase 2 recorded payload). Same direct-import rule.
+import { collectInjectionSnapshot, redactInjectionSnapshot, formatInjectionAge, ROLE_NUMBERS } from './diagnostics_panel/injection.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1555,6 +1559,61 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 9 — Tab 4 Injection (design §I.5 Tab 4): the same snapshot the 💉
+    // Injection sub-tab renders — per module: on/off · gate · resolved
+    // role/depth WITH provenance · token estimate · the Phase 2 registered
+    // payload (with its age) — plus the mandatory Knowledge lorebook caveat.
+    // Named injectionStatus() because Phase 2 already took injections() (all
+    // keys) and injection(key) (one key's raw snapshot). Read-only; resolves
+    // live on every call. Synchronous.
+    //
+    // SAFE BY DEFAULT (the redaction contract): what this RETURNS is
+    // redactInjectionSnapshot() output — payload text gated to size markers
+    // and every string secret-scrubbed — so a tester can paste the return
+    // value without auditing it. `injectionStatus({ includeContent: true })`
+    // includes (still scrubbed) payloads; the EXACT recorded text is only
+    // available through the deliberate single-key path, injection(key).
+    injectionStatus: ({ includeContent = false } = {}) => {
+        const snap = redactInjectionSnapshot(collectInjectionSnapshot(), { includeContent });
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table(snap.modules.map(m => ({
+            module: m.id,
+            on: m.enabled === null ? 'n/a' : m.enabled,
+            gate: m.gate,
+            depth: m.placement ? `${m.placement.depth.value} (${m.placement.depth.source})` : '—',
+            role: m.placement ? `${m.placement.role.value} (${m.placement.role.source})` : '—',
+            // Kind matters: 'stored' is lorebook corpus, 'accessor' is only an
+            // estimate while nothing is registered this session.
+            tokens: m.tokens.kind === 'stored'
+                ? `${m.tokens.value} (stored)`
+                : (m.tokens.kind === 'accessor' ? `${m.tokens.value} (est.)` : m.tokens.value),
+            registered: m.snapshot
+                ? (m.snapshot.enabled
+                    ? `${new Date(m.snapshot.at).toLocaleTimeString()} · ${formatInjectionAge(m.snapshot.ageSec)} · ${m.snapshot.chars} chars`
+                    : `cleared ${new Date(m.snapshot.at).toLocaleTimeString()} · ${formatInjectionAge(m.snapshot.ageSec)}`)
+                : 'never',
+        })));
+        if (snap.modules.some(m => m.snapshot?.enabled && m.snapshot.role != null)) {
+            console.table(snap.modules
+                .filter(m => m.snapshot?.enabled)
+                .map(m => ({
+                    key: m.key,
+                    registeredDepth: m.snapshot.depth,
+                    registeredRole: `${ROLE_NUMBERS[m.snapshot.role] ?? '?'} (${m.snapshot.role})`,
+                })));
+        }
+        console.log(
+            `[MWT] Injection snapshot for MWT v${snap.mwtVersion} — ${snap.livePayloads} live payload(s), ~${snap.registeredTokens} registered tokens` +
+            (snap.injectionMasterOff ? '. ⛔ PANIC SWITCH IS ON — nothing new can register via setExtensionPrompt, and Knowledge lorebook entries are NOT stopped (see the warning above).' : '.') +
+            (includeContent
+                ? ' Payloads are INCLUDED but secret-scrubbed (URLs cut to scheme+host, key/bearer shapes redacted). Registration only — final-prompt placement is unverified.'
+                : ' Payload text is content-gated OUT of this return value (size markers only). For scrubbed payloads: MWT.diagnostics.injectionStatus({ includeContent: true }). For one key\u2019s EXACT recorded text — the deliberate path when you truly need it: MWT.diagnostics.injection(key).')
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1564,6 +1623,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

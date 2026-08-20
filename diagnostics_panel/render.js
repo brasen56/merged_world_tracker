@@ -33,19 +33,41 @@
  * fueled by Phase 3's scope_fallback_global counter. Fully synchronous —
  * open-and-read, no wiring needed.
  *
+ * Phase 9 added the 💉 Injection tab (./injection.js for the snapshot,
+ * renderInjectionPane/renderInjectionSnapshot here): per module on/off ·
+ * gate · resolved role/depth WITH provenance · token estimate · the Phase 2
+ * recorded payload (collapsed <details>, age-stamped, behind the content
+ * opt-in checkbox above — wireDiagnosticsPanel() inserts the payload text
+ * only on opt-in, scrubbed through core/redaction.js — opting into content
+ * never opts into secrets — and as textContent, never HTML), plus the
+ * mandatory Knowledge lorebook caveat, which also closes TODO.md §4 "Panic
+ * switch UI clarity". Fully synchronous — open-and-read; the only wiring is
+ * the checkbox reveal.
+ *
  * Hard limits inherited from the design (§I.1): READ-ONLY — nothing here
  * writes to settings, chat metadata, or localStorage; the checkbox state is
  * deliberately not persisted, so every session starts with content EXCLUDED.
  *
  * DOM-coupled by design; all testable logic lives in core/redaction.js,
- * ./report.js, ./health.js, and ./environment.js.
+ * ./report.js, ./health.js, ./environment.js, ./scope_storage.js, and
+ * ./injection.js.
  */
 
 import { setStatus, escapeHtml } from '../core/index.js';
-import { buildReport, collectReportSections } from './report.js';
+import { buildReport, collectReportSections, collectKnownSecrets } from './report.js';
 import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
 import { collectScopeSnapshot } from './scope_storage.js';
+// Direct core/diagnostics.js import (NOT the barrel) per the §II.3 alias-trap
+// rule: the payload reveal must read the REAL Phase 2 snapshot store.
+import { getAllInjectedSnapshots } from '../core/diagnostics.js';
+import {
+    collectInjectionSnapshot,
+    PLACEMENT_SOURCE_LABELS,
+    ROLE_NUMBERS,
+    formatInjectionAge,
+    scrubPayloadForDisplay,
+} from './injection.js';
 
 // ─── Panel tab definitions (design §I.5 — the seven v1 tabs) ─────────────────
 
@@ -119,12 +141,12 @@ export function renderDiagnosticsPanel() {
 
     const subTabPanes = DIAGNOSTICS_PANEL_TABS.map((t, i) => `
         <div class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">
-            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : `
+            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : `
             <div class="mwt-diag-placeholder">
                 <span class="mwt-diag-placeholder-badge">Phase ${t.phase} — not built yet</span>
                 <p>${t.blurb}</p>
             </div>
-            `))}
+            `)))}
         </div>
     `).join('');
 
@@ -609,6 +631,207 @@ export function renderScopePane() {
     return renderScopeSnapshot(snapshot);
 }
 
+// ─── Tab 4: Injection (Phase 9) ───────────────────────────────────────────────
+
+/**
+ * Render the Injection pane markup from a snapshot (pure string builder — the
+ * injectable formatTime keeps Node tests deterministic). Everything
+ * user-derived (payloads, notes, warning text, hover titles) is escaped:
+ * payloads are chat-derived content by construction.
+ *
+ * Layout, in design §I.5 Tab 4 order: stat header (version · live payloads ·
+ * registered tokens · tag wrapping · read-at) → the panic banner when the
+ * switch is on → the mandatory Knowledge lorebook caveat (always shown; the
+ * design requires this tab to state it, and TODO.md §4 closes here) → the
+ * per-module table (on/off · gate · depth & role WITH provenance · tokens ·
+ * registered/age) → the recorded payloads, one collapsed <details> per
+ * module with the payload gated behind the content opt-in checkbox.
+ *
+ * @param {object} snapshot — collectInjectionSnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts]
+ * @returns {string} innerHTML for the pane
+ */
+export function renderInjectionSnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const rows = Array.isArray(s.modules) ? s.modules : [];
+    const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+
+    const badge = (text, tone) => `<span class="mwt-diag-badge mwt-diag-badge--${tone}">${text}</span>`;
+
+    const sourceLabel = (r, part) => {
+        const source = part?.source ?? 'builtin';
+        if (source === 'module' && r.moduleSourceLabel) return r.moduleSourceLabel;
+        return PLACEMENT_SOURCE_LABELS[source] ?? source;
+    };
+
+    const depthCell = (r) => r.placement
+        ? `${escapeHtml(String(r.placement.depth.value))} <span class="mwt-diag-dim">(${escapeHtml(sourceLabel(r, r.placement.depth))})</span>`
+        : '<span class="mwt-diag-dim">—</span>';
+
+    const roleCell = (r) => r.placement
+        ? `${escapeHtml(String(r.placement.role.value))} <span class="mwt-diag-dim">(${escapeHtml(sourceLabel(r, r.placement.role))})</span>`
+        : '<span class="mwt-diag-dim">—</span>';
+
+    // Tokens carry their KIND, same rule as the Health tab: 'recorded' is the
+    // exact registered payload, 'accessor' is only an estimate shown when
+    // nothing is registered yet, and 'stored' is lorebook corpus — never
+    // prompt load.
+    const tokensCell = (r) => {
+        const n = (Number(r.tokens?.value) || 0).toLocaleString();
+        if (r.tokens?.kind === 'stored') {
+            return `<span class="mwt-diag-tokens-stored" title="Lorebook corpus — SillyTavern activates only keyword-matched entries, so this is NOT prompt load.">${n} <span class="mwt-diag-dim">stored</span></span>`;
+        }
+        if (r.tokens?.kind === 'accessor') {
+            return `<span title="Module accessor estimate (header + current data) — nothing is registered yet this session; the number approximates the NEXT apply, not the prompt.">${n} <span class="mwt-diag-dim">est.</span></span>`;
+        }
+        return `<span title="Tokens of the exact payload registered with SillyTavern right now (estimateTokens on the Phase 2 snapshot).">${n}</span>`;
+    };
+
+    const registeredCell = (r) => {
+        if (!r.snapshot) return '<span class="mwt-diag-dim" title="In-memory capture — appears after the module first applies its prompt this session (a reload clears it).">never</span>';
+        const time = r.snapshot.at != null ? formatTime(r.snapshot.at) : '?';
+        const age = formatInjectionAge(r.snapshot.ageSec);
+        const hover = `registered at depth ${r.snapshot.depth ?? '?'} / role ${ROLE_NUMBERS[r.snapshot.role] ?? '?'} · ${r.snapshot.chars.toLocaleString()} chars`;
+        if (!r.snapshot.enabled) {
+            return `<span class="mwt-diag-last-run" title="${escapeHtml(hover)}">${badge('cleared', 'dim')} <span class="mwt-diag-dim">${escapeHtml(time)} · ${escapeHtml(age)}</span></span>`;
+        }
+        return `<span class="mwt-diag-last-run" title="${escapeHtml(hover)}">${escapeHtml(time)} <span class="mwt-diag-dim">· ${escapeHtml(age)}</span></span>`;
+    };
+
+    const rowHtml = rows.map((r) => {
+        const classes = ['mwt-diag-health-row'];
+        if (r.enabled === false) classes.push('mwt-diag-health-row--off');
+        if (!r.gate) classes.push('mwt-diag-health-row--gated');
+        const errFlag = r.errors?.length
+            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(r.errors.join('\n'))}">⚠</span>`
+            : '';
+        const onCell = r.enabled === null
+            ? '<span class="mwt-diag-dim" title="Knowledge has no injection flag — its gates (panic switch / enableKnowledge) govern SCANNING, and its lorebook entries are always live in SillyTavern.">n/a</span>'
+            : (r.enabled ? badge('on', 'ok') : badge('off', 'dim'));
+        const noteRow = r.note
+            ? `<div class="mwt-diag-inj-note">${escapeHtml(r.note)}</div>`
+            : '';
+        return `
+            <tr class="${classes.join(' ')}" data-module="${escapeHtml(r.id)}">
+                <td class="mwt-diag-health-module">${r.label}${errFlag}${noteRow}</td>
+                <td>${onCell}</td>
+                <td>${r.gate ? badge('open', 'ok') : badge('blocked', 'fail')}</td>
+                <td>${depthCell(r)}</td>
+                <td>${roleCell(r)}</td>
+                <td class="mwt-diag-health-tokens">${tokensCell(r)}</td>
+                <td>${registeredCell(r)}</td>
+            </tr>`;
+    }).join('');
+
+    const panicBanner = s.injectionMasterOff
+        ? `<div class="mwt-diag-panic">⛔ <strong>PANIC SWITCH ON</strong> — no module can register injections via
+             <code>setExtensionPrompt</code> while this is on, and SillyTavern keeps whatever was registered before it was
+             flipped. Right-click the ⚙️ floating button to release it.</div>`
+        : '';
+
+    // The Knowledge caveat is mandatory on this tab (design §I.5 Tab 4) — it
+    // closes TODO.md §4 "Panic switch UI clarity". Always shown as its own
+    // banner (amber normally; the panic tone when the switch is on), and it
+    // is excluded from the generic warnings list below so it cannot render
+    // twice.
+    const caveat = warnings.find((w) => w.id === 'knowledge-lorebook-caveat');
+    const caveatBanner = caveat ? `
+        <div class="mwt-diag-scope-banner mwt-diag-scope-banner--${caveat.level === 'fail' ? 'fail' : 'warn'}">
+            ${caveat.level === 'fail' ? '⛔' : '⚠'} <strong>Knowledge caveat: lorebook entries are not switchable from MWT</strong>
+            <div class="mwt-diag-scope-banner-note">${escapeHtml(caveat.text)}</div>
+        </div>
+    ` : '';
+    const otherWarnings = warnings.filter((w) => w.id !== 'knowledge-lorebook-caveat');
+    const warningList = otherWarnings.length ? `<ul class="mwt-diag-scope-warnings">${otherWarnings.map((w) => `
+        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+    `).join('')}</ul>` : '';
+
+    // The recorded payloads — Phase 2 snapshots, collapsed by default with
+    // their age (design §I.5 Tab 4). The payload body is chat-derived
+    // content, so it renders behind the panel's content opt-in checkbox
+    // (design §I.6): the gated placeholder ships visible and the <pre> ships
+    // hidden; wireDiagnosticsPanel() flips them when the checkbox changes.
+    const withSnapshots = rows.filter((r) => r.snapshot);
+    const payloadBlocks = withSnapshots.map((r) => {
+        const summary = r.snapshot.enabled
+            ? `${r.label} — ${r.snapshot.chars.toLocaleString()} chars · ~${r.tokens.value.toLocaleString()} tokens · applied ${escapeHtml(formatTime(r.snapshot.at ?? Date.now()))} (${escapeHtml(formatInjectionAge(r.snapshot.ageSec))})`
+            : `${r.label} — cleared ${escapeHtml(formatTime(r.snapshot.at ?? Date.now()))} (${escapeHtml(formatInjectionAge(r.snapshot.ageSec))})`;
+        // DEFERRED INSERTION (redaction contract §I.6): the payload text is
+        // deliberately NOT in this markup — the <pre> ships empty, carrying
+        // only the snapshot KEY, and wireDiagnosticsPanel() fills it (via
+        // textContent, so payload text is never parsed as HTML) only when the
+        // content opt-in is ticked — scrubbed through scrubPayloadForDisplay
+        // first, because opting into content never opts into secrets.
+        const body = r.snapshot.payload
+            ? `<div class="mwt-diag-inj-gated" data-diag-inj-gate="placeholder">[content excluded — tick the “Include prompt bodies, injected payloads…” checkbox above to reveal the recorded ${r.snapshot.chars.toLocaleString()}-char payload (secrets stay redacted even then)]</div>
+               <pre class="mwt-diag-inj-payload" data-diag-inj-gate="body" data-diag-inj-key="${escapeHtml(r.key)}" hidden></pre>`
+            : '<div class="mwt-diag-inj-gated">(registered empty — the last apply cleared this slot)</div>';
+        return `<details class="mwt-diag-inj-details"><summary>${summary}</summary>${body}</details>`;
+    }).join('');
+    const payloadSection = withSnapshots.length
+        ? `<p class="mwt-diag-env-subheading">Recorded payloads — the exact strings last registered via setExtensionPrompt (collapsed; re-open this tab to refresh)</p>${payloadBlocks}`
+        : '<p class="mwt-diag-dim">No injection registrations yet this session — snapshots are in-memory and appear after each module first applies its prompt (a reload clears them).</p>';
+
+    const registeredTokens = (Number(s.registeredTokens) || 0).toLocaleString();
+
+    return `
+        <div class="mwt-diag-inj">
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
+                <span class="mwt-diag-health-stat">registered: <strong>${Number(s.livePayloads) || 0}</strong> live payload(s) · <strong>${registeredTokens}</strong> tokens</span>
+                <span class="mwt-diag-health-stat mwt-diag-dim" title="Structural boundaries: whether injected blocks are wrapped in &lt;mwt_*&gt; tags.">tags ${s.structuralBoundaries ? 'on' : 'off'}</span>
+                <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
+            </div>
+            ${panicBanner}
+            ${caveatBanner}
+            ${warningList}
+            <table class="mwt-diag-health-table">
+                <thead>
+                    <tr><th>Module</th><th>On</th><th>Gate</th><th>Depth</th><th>Role</th><th>Tokens</th><th>Registered</th></tr>
+                </thead>
+                <tbody>${rowHtml}</tbody>
+            </table>
+            ${payloadSection}
+            <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. "Registered" is the Phase 2 snapshot: the exact
+                string MWT last handed to SillyTavern's <code>setExtensionPrompt</code> (frozen until re-applied), with its age —
+                registration only, final-prompt placement is not observable from the extension. <strong>Depth/Role</strong> show
+                where the value resolved FROM (global override · module setting · built-in default) — the same resolver the
+                appliers call, so they cannot disagree. <strong>Tokens</strong> marked <em>est.</em> are module accessor
+                estimates (nothing registered yet); <em>stored</em> is lorebook corpus, not prompt load. Payloads are chat
+                content — the text does not enter this page until the content opt-in above is ticked, and even then it is
+                secret-scrubbed (core/redaction.js — the same layer as Copy Report; URLs are cut to scheme+host and key/
+                bearer shapes are redacted) and inserted as plain text. Same data in the console:
+                <code>MWT.diagnostics.injectionStatus()</code> — its return value is redacted the same way by default
+                (<code>{ includeContent: true }</code> for scrubbed payload text); one key's exact recorded string:
+                <code>MWT.diagnostics.injection(key)</code>.</p>
+        </div>
+    `;
+}
+
+/**
+ * Collect + render the Injection pane under the Scope pane. Called at
+ * markup-build time inside renderDiagnosticsPanel() — the modal is rebuilt on
+ * every open, which is this tab's refresh model (decision D2). Fully
+ * synchronous; a total collection failure degrades to an error card, never a
+ * broken panel. The ONLY wiring this tab needs (the payload reveal) lives in
+ * wireDiagnosticsPanel().
+ *
+ * @returns {string} innerHTML for the Injection sub-tab pane
+ */
+export function renderInjectionPane() {
+    let snapshot;
+    try {
+        snapshot = collectInjectionSnapshot();
+    } catch (err) {
+        return `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Injection unavailable</span>
+                <p>Collecting the injection snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+    }
+    return renderInjectionSnapshot(snapshot);
+}
 // ─── Clipboard (Copy Report) ─────────────────────────────────────────────────
 
 
@@ -717,6 +940,38 @@ export function wireDiagnosticsPanel(root) {
                     ? 'Report copied — content INCLUDED (contains chat text).'
                     : 'Report copied — content excluded, secrets redacted.', 'success', 4000);
             });
+        });
+    }
+
+    // Phase 9 — content opt-in reveal for the Injection tab's recorded
+    // payloads. Payloads are chat-derived content, so they sit behind the
+    // SAME consequence-stated checkbox the copied report uses (design §I.6).
+    // Two guards stack here:
+    //   1. DEFERRED INSERTION — the <pre> ships EMPTY in the markup; the
+    //      payload only enters the DOM at the moment of opt-in (and leaves it
+    //      again on un-tick), so no payload text is ever present-but-hidden.
+    //   2. SECRET SCRUBBING — what gets inserted is
+    //      scrubPayloadForDisplay() over the live Phase 2 snapshot (embedded
+    //      URLs → scheme+host, key/bearer shapes, and this install's known
+    //      secret values via collectKnownSecrets()), and it goes in via
+    //      textContent, so payload text is never parsed as HTML either.
+    // Insertion happens by KEY (data-diag-inj-key), reading the store live —
+    // fresher than a render-time copy and no cache to leak. NOT a render
+    // loop — decision D2's open-and-read model is untouched.
+    const contentToggle = root.querySelector(`#${DIAGNOSTICS_CONTENT_OPT_IN_ID}`);
+    if (contentToggle) {
+        contentToggle.addEventListener('change', () => {
+            const include = contentToggle.checked === true;
+            root.querySelectorAll('[data-diag-inj-gate="body"]').forEach((el) => {
+                el.hidden = !include;
+                el.textContent = include
+                    ? scrubPayloadForDisplay(
+                        getAllInjectedSnapshots()[el.dataset?.diagInjKey]?.payload ?? '',
+                        { knownSecrets: collectKnownSecrets() },
+                    )
+                    : '';
+            });
+            root.querySelectorAll('[data-diag-inj-gate="placeholder"]').forEach((el) => { el.hidden = include; });
         });
     }
 

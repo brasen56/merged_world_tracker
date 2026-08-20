@@ -55,6 +55,8 @@ MWT.diagnostics.settingsProvenance()      // where each WS/SP setting resolves f
 MWT.diagnostics.health()                  // the ❤️ Health tab snapshot, one row per module
 MWT.diagnostics.environment()             // the 🌐 Environment tab snapshot (fork-compat probe; async)
 MWT.diagnostics.scope()                   // the 🗂️ Scope & storage tab snapshot (which books + why)
+MWT.diagnostics.injectionStatus()         // the 💉 Injection tab snapshot (placements + registrations + warnings)
+                                          //   — redacted by default; { includeContent: true } for scrubbed payloads
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -243,17 +245,63 @@ report, any scoping or binding question, and any Knowledge write failure.
 Pair it with `MWT.scope.diagnose()` for the raw context fields. Identity
 values contain your card/chat names — skim before pasting publicly.
 
+### `injectionStatus()` (Phase 9) — what is actually registered
+
+The same snapshot the 💉 Injection tab renders, **synchronous** and
+**read-only**. One row per module: `on` (the module's own flag; Knowledge is
+`n/a` — its gates govern scanning), `gate`, `depth`/`role` **with
+provenance** — `global` (the Settings-tab override won), `module` (the
+module's own setting; for Chronicle that is *this chat's* `injectDepth`), or
+`builtin` (the hardcoded default) — `tokens` with its kind (`est.` while
+nothing is registered this session, `stored` for Knowledge's lorebook
+corpus), and `registered` (time · age · chars of the exact `setExtensionPrompt`
+registration, or `cleared …`). A second table prints the registered
+depth/role per live key. It then warns on every finding:
+
+| Warning | Meaning |
+|---|---|
+| `knowledge-lorebook-caveat` | Always present, amber: Knowledge injects through lorebook entries (World Info keyword activation), which no MWT switch controls. Red + "NOT stopped by the panic switch" wording when the panic switch is on. |
+| `panic-master-off` | The panic switch is on — nothing new can register, and SillyTavern keeps whatever was registered before the flip. |
+| `flag-on-registered-empty` | Flag on + gate open, but the last registration was a CLEAR — usually "nothing to inject yet"; if data exists, a toggle/re-apply was missed. |
+| `flag-off-registered-live` | Module off or gated, but a live payload is STILL registered — the narrator keeps seeing it until the next apply or reload. |
+| `placement-drift` | The settings now resolve to a different depth/role than the live registration — re-apply to move it. |
+
+**When to capture it:** every "the model ignored my world state / chronicle /
+plan" report, every depth/role question ("why is it injecting at 4?"), and
+anything involving the panic switch.
+
+**Safe by default (the redaction contract):** what `injectionStatus()`
+RETURNS is already redacted — payload text gated to `[content excluded — N
+chars]` size markers, and every string secret-scrubbed (embedded URLs cut to
+scheme+host, key/bearer shapes, this install's live key values) — so the
+return value can be pasted without auditing it. Two deliberate escapes:
+
+- `MWT.diagnostics.injectionStatus({ includeContent: true })` — includes the
+  payload text, **still secret-scrubbed** (opting into content never opts
+  into secrets).
+- `MWT.diagnostics.injection(key)` — one key's EXACT recorded text, raw.
+  This is the deliberate path for when you truly need the byte-exact string
+  (e.g. reproducing a prompt with the same model); it is NOT redacted, so
+  skim before pasting publicly. `injections()` lists all keys' raw snapshots
+  the same way.
+
 ## How to capture a report
 
 1. Reproduce the problem.
 2. In the console, run `MWT.diagnostics.apiCalls()` (or `lastApiCall(...)`).
    For injection bugs ("the model ignored my world state"), add
-   `MWT.diagnostics.injections()`. For "my data is weird" reports, add
-   `MWT.diagnostics.events({ level: 'warn' })` — it shows every silent
-   recovery (repaired JSON, reasoning fallback, stripped fences, scope
-   fallback, missing world-info) from the session. For "the setting is right
-   but behaves wrong", add `MWT.diagnostics.settingsProvenance()`. For "is
-   anything even running", start with `MWT.diagnostics.health()`. For
+   `MWT.diagnostics.injectionStatus()` — placements, registrations, and the
+   warnings; its return value is redacted by default (payloads gated, secrets
+   scrubbed), so it is safe to paste as-is. Only if you need payload text:
+   `MWT.diagnostics.injectionStatus({ includeContent: true })` (still
+   secret-scrubbed), and only if you need one key's byte-exact string:
+   `MWT.diagnostics.injection('mwt_world_state_injection')` (raw — skim
+   before pasting). For "my data is
+   weird" reports, add `MWT.diagnostics.events({ level: 'warn' })` — it shows
+   every silent recovery (repaired JSON, reasoning fallback, stripped fences,
+   scope fallback, missing world-info) from the session. For "the setting is
+   right but behaves wrong", add `MWT.diagnostics.settingsProvenance()`. For
+   "is anything even running", start with `MWT.diagnostics.health()`. For
    anything on a non-reference build/fork, or any scoping/identity issue, add
    `MWT.diagnostics.environment()`.
 3. Copy the **returned object**: right-click → *Copy object*, or run
