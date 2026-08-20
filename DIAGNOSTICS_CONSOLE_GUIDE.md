@@ -1,13 +1,15 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage)
+# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage + Injection + Last request)
 
 > **Status:** live now. The console bridge remains the deepest view; the
 > **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
 > redacted **📋 Copy Report** without devtools, and its live sub-tabs —
-> **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), and **🗂️ Scope &
-> storage** (Phase 8) — render the one-table answers to "is anything
-> broken right now?", "which SillyTavern am I on, and what does it
-> expose?", and "which lorebooks is this chat using, and why?". Tabs 4–7
-> (Phases 9–12) are still being built.
+> **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), **🗂️ Scope &
+> storage** (Phase 8), **💉 Injection** (Phase 9), and **📡 Last request**
+> (Phase 10) — render the one-table answers to "is anything broken right
+> now?", "which SillyTavern am I on, and what does it expose?", "which
+> lorebooks is this chat using, and why?", "what is MWT putting in the
+> narrator's prompt, where, and why?", and "what did the last API call look
+> like?". Tabs 6–7 (Phases 11–12) are still being built.
 
 ## What this is
 
@@ -57,6 +59,8 @@ MWT.diagnostics.environment()             // the 🌐 Environment tab snapshot (
 MWT.diagnostics.scope()                   // the 🗂️ Scope & storage tab snapshot (which books + why)
 MWT.diagnostics.injectionStatus()         // the 💉 Injection tab snapshot (placements + registrations + warnings)
                                           //   — redacted by default; { includeContent: true } for scrubbed payloads
+MWT.diagnostics.lastRequest()             // the 📡 Last request tab snapshot (last call + short history + stats)
+                                          //   — redacted by default; raw telemetry-only copies: apiCalls()
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -285,10 +289,39 @@ return value can be pasted without auditing it. Two deliberate escapes:
   skim before pasting publicly. `injections()` lists all keys' raw snapshots
   the same way.
 
+### `lastRequest()` (Phase 10) — what the last call looked like
+
+The same snapshot the 📡 Last request tab renders, **synchronous** and safe
+to paste: `lastRequest()` returns a redacted snapshot with the most recent
+captured call (`last` — module · mode · model/profile · HTTP status ·
+duration · retries · `finish_reason` · token usage · error class), the short
+history (`history`, newest first, every retained call — the store keeps 20),
+and window stats (`stats` — ok/failed, retries, token totals, avg/max
+duration). It warns on the one finding the tab also banners: the most recent
+call FAILED.
+
+**Telemetry by construction** — the Phase 1 capture records *about* a call
+and NEVER the prompt, API key, custom headers, or response body, so there is
+no content to gate here (the panel's content checkbox changes nothing on
+this tab). What redaction still does: every string in the RETURN VALUE
+(model/profile ids, finish reasons, error classes) is secret-scrubbed —
+embedded URLs cut to scheme+host, key/bearer shapes, and this install's live
+key values — so it pastes without auditing. Want the raw telemetry-only
+copies anyway? Those never carried content either:
+`MWT.diagnostics.apiCalls()` / `lastApiCall(module)`.
+
+**When to capture it:** every "the model isn't responding / is responding
+weird" report, every timeout, retry, or token-accounting question, and as
+the companion to `MWT.diagnostics.health()`'s last-run column — that shows
+WHEN each module last ran; this shows WHAT that call actually did.
+
 ## How to capture a report
 
 1. Reproduce the problem.
-2. In the console, run `MWT.diagnostics.apiCalls()` (or `lastApiCall(...)`).
+2. In the console, run `MWT.diagnostics.apiCalls()` (or `lastApiCall(...)`);
+   for the tab-shaped view with window stats and the failed-last warning,
+   `MWT.diagnostics.lastRequest()` (its return value is redacted by default,
+   so it is safe to paste as-is).
    For injection bugs ("the model ignored my world state"), add
    `MWT.diagnostics.injectionStatus()` — placements, registrations, and the
    warnings; its return value is redacted by default (payloads gated, secrets

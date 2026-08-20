@@ -18,7 +18,8 @@
  *      renderInjectionPane() string builders (panic banner, the mandatory
  *      Knowledge caveat in both tones, provenance labels, the collapsed
  *      content-gated payload blocks, escaping) plus the pane switch that
- *      mounts the sub-tab and moves the placeholder line to Phase 10.
+ *      mounts the sub-tab (the placeholder-line assertion moved on to
+ *      Phase 11 when Last request landed).
  *
  * The final smoke test exercises the DEFAULT wiring (real module graph under
  * the barrel→stub alias) — it exists to catch import-graph breakage, not to
@@ -543,9 +544,10 @@ describe('renderInjectionPane (default wiring)', () => {
         // The real pane rendered (not the Phase 9 placeholder card)…
         expect(html).toContain('mwt-diag-inj');
         expect(html).not.toContain('Phase 9 — not built yet');
-        // …while later tabs still show their placeholders (Phase 10 owns the
-        // line now — it moves again when Last request lands).
-        expect(html).toContain('Phase 10 — not built yet');
+        // …while later tabs still show their placeholders (Phase 10 landed
+        // 2026-08-20 and owns the line no more — it moves again when Log
+        // lands).
+        expect(html).toContain('Phase 11 — not built yet');
     });
 });
 

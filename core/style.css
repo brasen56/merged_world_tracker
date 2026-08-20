@@ -724,6 +724,19 @@ a:focus-visible {
     padding: 6px 2px;
 }
 
+/* ─── Diagnostics panel — 📡 Last request tab (Phase 10) ───────────────────── */
+
+/* The "most recent call" detail card. Same chrome as the recorded-payload
+   <details> blocks (Phase 9): a light bordered card that reads as one call.
+   The kv table inside reuses the Environment pane's env-table/env-kv styles;
+   the history table reuses the Health pane's health-table styles. */
+.mwt-diag-lr-detail {
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    margin: 0 0 10px 0;
+    padding: 6px 10px;
+    background: var(--mwt-bg-light);
+}
 
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */
 
