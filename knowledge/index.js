@@ -29,6 +29,12 @@ import {
 // silently resetting on reload or chat switch.  The helpers below mirror the
 // pattern used by the other modules so behaviour is consistent.
 
+// A spent provenance marker (every cadence zeroed) exists only so a
+// regeneration of an already-counted receipt stays a no-op. Only the tail of
+// the chat can be regenerated, so a short recency window is enough — and it
+// keeps the persisted map from growing one entry per message forever.
+const SPENT_RECEIPT_WINDOW = 10;
+
 export function persistCounters() {
     patchChatMeta(COUNTERS_META_KEY, {
         messageCounter: state.messageCounter,
@@ -92,10 +98,35 @@ export function onMessageReceived({ countMessage = true } = {}) {
     if (!stateAuto && !npcAuto && !growthAuto && !relAuto) return;
     if (!hasValidSettings()) return;
 
+    // SillyTavern also emits MESSAGE_RECEIVED when an assistant reply is
+    // swiped/regenerated.  Count a stable message receipt at most once for
+    // each cadence so replacement generations cannot advance (or trigger)
+    // Knowledge work that will immediately be discarded.
+    //
+    // A value of 1 means the receipt contributes to the current cadence. A
+    // value of 0 means it was already counted in an earlier, completed
+    // cadence. Keeping the zero-valued marker is important: deleting that
+    // receipt must not roll back the current cadence, but regenerating it must
+    // still remain a no-op.
+    const receipt = [...chat].reverse().find(msg => msg && !msg.is_user && !msg.is_system);
+    const receiptKey = receipt ? getReceiptIdentity(receipt) : null;
+    const receiptCounts = receiptKey ? (state.countedReceiptEvents.get(receiptKey) || {}) : null;
+    const isNewReceiptFor = type => !receiptCounts
+        || !Object.prototype.hasOwnProperty.call(receiptCounts, type);
+    const countState = stateAuto && isNewReceiptFor('state');
+    const countNpc = npcAuto && isNewReceiptFor('npc');
+    const countGrowth = growthAuto && isNewReceiptFor('growth');
+    const countRelationship = relAuto && isNewReceiptFor('relationship');
+
+    // Every enabled cadence has already seen this assistant message. This is
+    // a swipe/regeneration receipt, so bookkeeping above stays current while
+    // counters and background API work remain untouched.
+    if (!countState && !countNpc && !countGrowth && !countRelationship) return;
+
     let doState = false;
     let doNpc = false;
 
-    if (stateAuto) {
+    if (countState) {
         const everyN = Math.max(1, Number(settings.autoTriggerEveryN) || 5);
         state.messageCounter++;
         if (state.messageCounter >= everyN) {
@@ -104,7 +135,7 @@ export function onMessageReceived({ countMessage = true } = {}) {
         }
     }
 
-    if (npcAuto) {
+    if (countNpc) {
         const everyN = Math.max(1, Number(settings.npcAutoScanEveryN) || 10);
         state.npcMessageCounter++;
         if (state.npcMessageCounter >= everyN) {
@@ -114,7 +145,7 @@ export function onMessageReceived({ countMessage = true } = {}) {
     }
 
     let doGrowth = false;
-    if (growthAuto) {
+    if (countGrowth) {
         const everyN = Math.max(1, Number(settings.growthAutoCaptureEveryN) || 15);
         state.growthMessageCounter++;
         if (state.growthMessageCounter >= everyN) {
@@ -124,7 +155,7 @@ export function onMessageReceived({ countMessage = true } = {}) {
     }
 
     let doRel = false;
-    if (relAuto) {
+    if (countRelationship) {
         const everyN = Math.max(1, Number(settings.relationshipAutoExtractEveryN) || 10);
         state.relationshipMessageCounter++;
         if (state.relationshipMessageCounter >= everyN) {
@@ -133,26 +164,33 @@ export function onMessageReceived({ countMessage = true } = {}) {
         }
     }
 
-    const receipt = [...chat].reverse().find(msg => msg && !msg.is_user && !msg.is_system);
-    if (receipt) {
-        const key = getReceiptIdentity(receipt);
-        const counts = state.countedReceiptEvents.get(key) || {};
-        if (stateAuto && !doState) counts.state = (counts.state || 0) + 1;
-        if (npcAuto && !doNpc) counts.npc = (counts.npc || 0) + 1;
-        if (growthAuto && !doGrowth) counts.growth = (counts.growth || 0) + 1;
-        if (relAuto && !doRel) counts.relationship = (counts.relationship || 0) + 1;
-        if (Object.keys(counts).length) state.countedReceiptEvents.set(key, counts);
+    if (receiptCounts) {
+        if (countState) receiptCounts.state = 1;
+        if (countNpc) receiptCounts.npc = 1;
+        if (countGrowth) receiptCounts.growth = 1;
+        if (countRelationship) receiptCounts.relationship = 1;
+        if (Object.keys(receiptCounts).length) state.countedReceiptEvents.set(receiptKey, receiptCounts);
     }
-    // Each counter that reached its interval starts a new cadence. Drop only
-    // that cadence's provenance; the other independently configured counters
-    // may still have active work on the same receipt.
+    // Each counter that reached its interval starts a new cadence. Mark its
+    // prior receipts as seen-but-not-contributing instead of forgetting them;
+    // forgetting them would let a later regeneration of the trigger message
+    // advance the new cadence again.
     for (const type of [doState && 'state', doNpc && 'npc', doGrowth && 'growth', doRel && 'relationship'].filter(Boolean)) {
         for (const [key, counts] of state.countedReceiptEvents) {
-            delete counts[type];
-            if (Object.keys(counts).length) state.countedReceiptEvents.set(key, counts);
-            else state.countedReceiptEvents.delete(key);
+            if (!Object.prototype.hasOwnProperty.call(counts, type)) continue;
+            counts[type] = 0;
+            state.countedReceiptEvents.set(key, counts);
         }
     }
+    // Release fully spent markers beyond the recency window. Entries still
+    // carrying a live 1 are never dropped — onMessageDeleted needs them to
+    // reverse the current cadence — and those are self-bounding, since a
+    // counter resets once it reaches its interval.
+    const spentKeys = [];
+    for (const [key, counts] of state.countedReceiptEvents) {
+        if (Object.values(counts).every(value => !value)) spentKeys.push(key);
+    }
+    for (const key of spentKeys.slice(0, -SPENT_RECEIPT_WINDOW)) state.countedReceiptEvents.delete(key);
 
     // Persist counters so they survive reloads and chat switches (mirrors World
     // State, Chronicle, and Story Planner behaviour).
@@ -416,8 +454,15 @@ export function onChatChanged() {
     state.npcMessageCounter = (typeof saved?.npcMessageCounter === 'number' && Number.isFinite(saved.npcMessageCounter)) ? saved.npcMessageCounter : 0;
     state.growthMessageCounter = (typeof saved?.growthMessageCounter === 'number' && Number.isFinite(saved.growthMessageCounter)) ? saved.growthMessageCounter : 0;
     state.relationshipMessageCounter = (typeof saved?.relationshipMessageCounter === 'number' && Number.isFinite(saved.relationshipMessageCounter)) ? saved.relationshipMessageCounter : 0;
+    // Values are 1 (contributes to the current cadence) or 0 (seen, already
+    // spent). Metadata written before the swipe fix stored raw receive counts,
+    // which would over-decrement the counters when such a receipt is deleted —
+    // normalise them to the two-state form on the way in.
     state.countedReceiptEvents = new Map((Array.isArray(saved?.countedReceiptEvents) ? saved.countedReceiptEvents : [])
-        .filter(([key, counts]) => typeof key === 'string' && key && counts && typeof counts === 'object'));
+        .filter(([key, counts]) => typeof key === 'string' && key && counts && typeof counts === 'object')
+        .map(([key, counts]) => [key, Object.fromEntries(
+            Object.entries(counts).map(([type, value]) => [type, value ? 1 : 0]),
+        )]));
     const chat = getChat() || [];
     state.lastChatLength = chat.length;
     state.isRunning = false;

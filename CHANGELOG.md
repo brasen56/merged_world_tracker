@@ -13,7 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
 
-## [Unreleased]
+## [1.7.5]
+
+### Fixed
+- Knowledge auto-trigger countdowns no longer advance on swipes and
+  regenerations. SillyTavern emits `MESSAGE_RECEIVED` again for every
+  replacement generation of the same reply, so each swipe consumed a step of
+  the World State / NPC scan / growth / relationship cadences — and once a
+  countdown landed on a discarded generation, the run spent tokens analysing a
+  reply that was about to disappear. Each cadence now counts a given assistant
+  *message slot* at most once, keyed by the message's stable receipt identity
+  (`extra.mwt_uuid`), which survives regeneration because ST mutates a swiped
+  message's `extra` in place rather than replacing it. A receipt that has
+  already been counted is a no-op for that cadence, and stays one after the
+  cadence completes, so regenerating the message that triggered a run cannot
+  re-trigger it. Deletes still reverse exactly the contribution a receipt made
+  to the cadence in progress. The per-receipt bookkeeping is bounded: markers
+  spent by a completed cadence are released beyond a short recency window
+  (only the tail of a chat can be regenerated), so the map persisted to chat
+  metadata no longer grows one entry per message for the life of the chat.
+  Regression tests in `test/knowledge_countdown.test.js`.
 
 
 ## [1.7.4]
