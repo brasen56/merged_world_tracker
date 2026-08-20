@@ -75,9 +75,19 @@ export function structuralBoundariesEnabled() {
  * Returns { worldStateBody, seedsText }.
  */
 function splitWorldState(text) {
-    // Note: no trailing \b — "Archive (Stale)" ends in punctuation, and \b
-    // (which requires a word char on at least one side) never matches there.
-    const archivePattern = new RegExp(`\\s*## Archive \\(Stale\\)(?![A-Za-z0-9_])[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
+    // Line-anchored like extractOnlySection/replaceSection (WORLD-STATE-06),
+    // with the same quadratic-rescan consequence in mind: an unanchored
+    // `\s*` before the literal is retried at EVERY position inside a long
+    // whitespace run, rescanning the rest of the run each time — quadratic
+    // in the worst case. The `(?:^|\n)` gate fails in O(1) at non-newline
+    // positions, so the leading `\s*` only ever runs right after a line
+    // break. This matters here because the chronicle world-state sync can
+    // feed a whitespace-heavy model-generated Date line straight into this
+    // injection rebuild (audit P3 follow-up). Note: the section-name
+    // boundary stays a negative lookahead, not `\b` — "Archive (Stale)"
+    // ends in punctuation, and `\b` (which requires a word char on at
+    // least one side) never matches there.
+    const archivePattern = new RegExp(`(?:^|\\n)\\s*## Archive \\(Stale\\)(?![A-Za-z0-9_])[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
     const withoutArchive = text.replace(archivePattern, '');
 
     const seedsPattern = new RegExp(`## Plot Seeds\\b[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
@@ -130,13 +140,47 @@ export function buildInjectionPayload(text) {
     return wsBlock;
 }
 
+// ─── Placement resolution (Phase 9 diagnostics) ──────────────────────────────
+
+/**
+ * Resolve the depth/role this module's injection will use, WITH provenance —
+ * the exact precedence applyWorldStateInjection() hands to
+ * applyExtensionPromptInjection():
+ *   depth — global `worldStateDepth` (Settings tab; a present, finite value
+ *           wins) → this module's `injectionDepth` setting → built-in 1
+ *   role  — global `worldStateRole` (truthy wins) → built-in 'system'
+ *
+ * Phase 9 (diagnostics design §I.4.6, §I.5 Tab 4): the apply path and the 💉
+ * Injection tab call the SAME function, so what the tab reports and what the
+ * applier registers cannot drift. `source` strings are stable API —
+ * 'global' | 'module' | 'builtin' (rendered via PLACEMENT_SOURCE_LABELS,
+ * diagnostics_panel/injection.js); do not rename.
+ *
+ * @returns {{depth: {value: number, source: string}, role: {value: string, source: string}}}
+ */
+export function resolveInjectionPlacement() {
+    const globalSettings = getGlobalSettings();
+    const gd = globalSettings.worldStateDepth;
+    const globalDepthWins = gd != null && Number.isFinite(Number(gd));
+    const moduleDepth = getSettings().injectionDepth;
+    return {
+        depth: {
+            value: globalDepthWins ? Number(gd) : (moduleDepth ?? 1),
+            source: globalDepthWins ? 'global' : (moduleDepth != null ? 'module' : 'builtin'),
+        },
+        role: {
+            value: globalSettings.worldStateRole || 'system',
+            source: globalSettings.worldStateRole ? 'global' : 'builtin',
+        },
+    };
+}
+
 // ─── Core injection ──────────────────────────────────────────────────────────
 
 export function applyWorldStateInjection() {
     const text = getWorldStateText();
     const enabled = isInjectionEnabled() && injectionAllowed('WorldState');
-    const s = getSettings();
-    const globalSettings = getGlobalSettings();
+    const placement = resolveInjectionPlacement();
 
     try {
         // Tag handling is intentionally two layers:
@@ -155,17 +199,17 @@ export function applyWorldStateInjection() {
             header: '',
             body: payload,
             enabled,
-            globalDepth: globalSettings.worldStateDepth,
-            fallbackDepth: s.injectionDepth ?? 1,
-            globalRole: globalSettings.worldStateRole || 'system',
+            // Placement comes fully resolved from resolveInjectionPlacement()
+            // (Phase 9). It is passed as the fallback depth so the injector's
+            // own globalDepth/fallbackDepth split stays inert — one resolver,
+            // two consumers (this apply + the 💉 Injection diagnostics tab).
+            fallbackDepth: placement.depth.value,
+            globalRole: placement.role.value,
             // Content-layer wrapping is already applied per-block above; pass
             // false so the generic injector doesn't add an additional wrapper.
             useTags: false,
         });
-        const resolvedDepth = Number.isFinite(Number(globalSettings.worldStateDepth))
-            ? Number(globalSettings.worldStateDepth)
-            : (s.injectionDepth ?? 1);
-        console.log(`[MWT:WorldState] Injected ${text.length} chars at depth ${resolvedDepth}`);
+        console.log(`[MWT:WorldState] Injected ${text.length} chars at depth ${placement.depth.value}`);
     } catch (err) {
         console.warn('[MWT:WorldState] Injection failed:', err);
     }

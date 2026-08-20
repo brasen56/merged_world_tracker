@@ -31,6 +31,11 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
     settingsKey: SETTINGS_KEY,
     legacyKey: 'session_chronicle_settings',
     defaults: {
+        // Diagnostics (Phase 6): stamps this module's key onto API telemetry
+        // (core/api.js apiModule() → captureApiCall) so per-module views — the
+        // Health tab's last-run column, MWT.diagnostics.lastApiCall('chronicle')
+        // — actually key on it instead of everything landing under 'api'.
+        module: 'chronicle',
         connectionProfileId: '',
         apiUrl: '',
         apiKey: '',

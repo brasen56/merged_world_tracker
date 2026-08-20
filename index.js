@@ -21,6 +21,26 @@ import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMes
 // Imported directly (not via the core/index.js barrel) so the namespace reads
 // the real singleton regardless of the test-only barrel→stub alias.
 import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastRuns, getInjectedSnapshot, getAllInjectedSnapshots, clearEvents, clearApiCalls, clearLastRuns, clearInjections } from './core/diagnostics.js';
+// Diagnostics Phase 6 — Tab 1 Health: the snapshot collector behind the ❤️
+// Health sub-tab (one row per module: enabled · gate · busy · tokens · auto ·
+// last run). Same direct-import rule as above.
+import { collectHealthSnapshot } from './diagnostics_panel/health.js';
+// Diagnostics Phase 7 — Tab 2 Environment (fork-compat probe): the snapshot
+// collector + shared.js loader behind the 🌐 Environment sub-tab (versions,
+// feature detection, and the getCurrentChatId() premise behind core/scope.js,
+// validated live on the running build). Same direct-import rule as above.
+import { collectEnvironmentSnapshot, loadSharedModule } from './diagnostics_panel/environment.js';
+import { collectScopeSnapshot } from './diagnostics_panel/scope_storage.js';
+// Diagnostics Phase 9 — Tab 4 Injection: the snapshot collector behind the 💉
+// Injection sub-tab (per module: on/off · gate · role/depth with provenance ·
+// token estimate · the Phase 2 recorded payload). Same direct-import rule.
+import { collectInjectionSnapshot, redactInjectionSnapshot, formatInjectionAge, ROLE_NUMBERS } from './diagnostics_panel/injection.js';
+// Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
+// attribute a behavior setting to its precedence level, plus their key lists
+// (single source of truth — no second key list here). Direct imports for the
+// same singleton rule as above.
+import { getEffectiveWorldSetting, GLOBAL_SETTING_KEYS as WS_GLOBAL_SETTING_KEYS } from './world_state/data.js';
+import { getEffectivePlanSetting, GLOBAL_SETTING_KEYS as SP_GLOBAL_SETTING_KEYS } from './story_planner/data.js';
 
 // ─── Feature module imports ─────────────────────────────────────────────────
 
@@ -31,6 +51,9 @@ import * as StoryPlanner from './story_planner/index.js';
 import * as Interiority from './interiority/index.js';
 import { exportBackup, previewRestore, restoreBackup, undoLastRestore, fingerprintPreview } from './backup/index.js';
 import { renderBackupPanel, wireBackupEvents } from './backup/render.js';
+// Diagnostics panel shell (Phase 5): the 🩺 tab inside this modal, its redaction
+// layer (core/redaction.js), and the D1 copy-report shape.
+import { renderDiagnosticsPanel, wireDiagnosticsPanel } from './diagnostics_panel/render.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -169,6 +192,10 @@ const TABS = [
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
     { id: 'story-planner', label: '🗺️ Story Planner', module: StoryPlanner },
     { id: 'interiority', label: '💭 Interiority', module: Interiority },
+    // Diagnostics Phase 5: the panel shell (7 placeholder sub-tabs + content
+    // opt-in + Copy Report). Read-only; rendered/wired by
+    // diagnostics_panel/render.js, not by a feature module.
+    { id: 'diagnostics', label: '🩺 Diagnostics', module: null },
     { id: 'settings', label: '⚙️ Settings', module: null },
 ];
 
@@ -360,6 +387,8 @@ function renderSettingsTab() {
 
 function buildTabContent(tab) {
     if (tab.id === 'settings') return renderSettingsTab();
+    // Diagnostics Phase 5 — the panel shell (placeholders for tabs 1–7).
+    if (tab.id === 'diagnostics') return renderDiagnosticsPanel();
     const renderFn = tab.module?.getModuleRender?.() || tab.module?.render;
     if (typeof renderFn === 'function') return renderFn();
     return '';
@@ -429,6 +458,10 @@ function renderModal() {
     // Wire the Backup/Restore control (lives in the Settings tab). The body is
     // rebuilt on every open, so rebind each render like the module wire-events.
     wireBackupEvents(modal);
+
+    // Wire the Diagnostics panel shell (lives in the 🩺 Diagnostics tab).
+    // Same rebind-every-render rule as the backup control above.
+    wireDiagnosticsPanel(modal);
 
     // Wire connection profile toggle (hide API fields when a profile is selected)
     const profileSelect = modal.querySelector('#mwt-s-connection-profile');
@@ -1242,7 +1275,7 @@ window.MWT.backup = {
     fingerprintPreview,
 };
 
-// ── Diagnostics console namespace (Phases 0–2) ──────────────────────────────
+// ── Diagnostics console namespace (Phases 0–4) ──────────────────────────────
 //
 // Read-only, in-memory peek at the capture the diagnostics panel will later
 // show. See DIAGNOSTICS_CONSOLE_GUIDE.md (repo root) for the tester guide.
@@ -1251,7 +1284,9 @@ window.MWT.backup = {
 // payload text by design — that is the exact string sent to
 // setExtensionPrompt — but like everything here they stay in-memory only and
 // nothing is written to chat_metadata, localStorage, or settings. The buffer
-// resets on page reload.
+// resets on page reload. Settings provenance (Phase 4) resolves only the
+// World State / Story Planner BEHAVIOR keys (inject/auto toggles, intervals,
+// modes) — never apiKey, customHeaders, or apiUrl.
 //
 // Usage examples:
 //   MWT.diagnostics.events()                    // event ring, newest first
@@ -1263,6 +1298,10 @@ window.MWT.backup = {
 //   MWT.diagnostics.lastRuns()                  // per-module last-run stamps
 //   MWT.diagnostics.injections()                // last snapshot per injection key
 //   MWT.diagnostics.injection('mwt_world_state_injection')  // one key's payload
+//   MWT.diagnostics.settingsProvenance()        // where each WS/SP setting resolves from
+//   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
+//   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
+//   MWT.diagnostics.scope()                     // the 🗂️ Scope & storage tab snapshot (which books + why)
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1371,6 +1410,235 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 4 — settings provenance (design §I.4.6). Two jobs: show WHERE each
+    // World State / Story Planner behavior setting resolves from, and surface
+    // the asymmetry that Chronicle, Knowledge, and Interiority have no
+    // per-chat/global split at all — that asymmetry is itself diagnostic.
+    // Read-only; resolves live on every call.
+    settingsProvenance: () => {
+        const worldStateKeys = {};
+        for (const key of WS_GLOBAL_SETTING_KEYS) {
+            worldStateKeys[key] = getEffectiveWorldSetting(key, undefined, { provenance: true });
+        }
+        const storyPlannerKeys = {};
+        for (const key of SP_GLOBAL_SETTING_KEYS) {
+            storyPlannerKeys[key] = getEffectivePlanSetting(key, undefined, { provenance: true });
+        }
+        const rows = [
+            ...Object.entries(worldStateKeys).map(([key, r]) => ({ module: 'world_state', key, value: r.value, source: r.source })),
+            ...Object.entries(storyPlannerKeys).map(([key, r]) => ({ module: 'story_planner', key, value: r.value, source: r.source })),
+            ...['chronicle', 'knowledge', 'interiority'].map(m => ({
+                module: m, key: '(all behavior settings)', value: '', source: 'module-only — no per-chat/global split',
+            })),
+        ];
+        console.table(rows);
+        console.log(
+            '[MWT] World State and Story Planner behavior settings resolve through a 3-level chain ' +
+            '(per-chat override → legacy chat field → global). Chronicle, Knowledge, and Interiority ' +
+            'settings live only in their module tabs — that asymmetry is itself diagnostic. ' +
+            'API-config provenance (module profile → module custom → global profile → global custom) ' +
+            'is reported by resolveApiCall() as `source` on every resolved call.'
+        );
+        return {
+            world_state: { settingsScope: 'global-with-per-chat-override', keys: worldStateKeys },
+            story_planner: { settingsScope: 'global-with-per-chat-override', keys: storyPlannerKeys },
+            chronicle: { settingsScope: 'module-only' },
+            knowledge: { settingsScope: 'module-only' },
+            interiority: { settingsScope: 'module-only' },
+        };
+    },
+
+    // Phase 6 — Tab 1 Health (design §I.5 Tab 1): the same snapshot the ❤️
+    // Health sub-tab renders — one row per module (enabled · gate · busy ·
+    // tokens · auto-countdown · last run) plus the header (version, total
+    // token load, panic switch). Read-only; resolves live on every call.
+    health: () => {
+        const snap = collectHealthSnapshot();
+        if (snap.injectionMasterOff) {
+            console.warn('[MWT] ⛔ PANIC SWITCH IS ON (injectionMasterOff) — injection & scanning are stopped for every module.');
+        }
+        console.table(snap.modules.map(m => ({
+            module: m.id,
+            on: m.enabled,
+            gate: m.injectionAllowed,
+            busy: m.busy,
+            // Kind matters: 'stored' is lorebook corpus, not prompt load.
+            tokens: m.tokenKind === 'stored' ? `${m.tokens} (stored)` : m.tokens,
+            auto: m.auto
+                ? (m.auto.perTurn ? `every turn${m.auto.pollDue ? ' (dormant poll due)' : ''}` : `in ${m.auto.remaining} msg(s)`)
+                : 'off',
+            lastRun: m.lastRun
+                ? `${new Date(m.lastRun.at).toLocaleTimeString()} ${m.lastRun.ok ? 'ok' : 'FAILED'}${m.lastRun.durationMs != null ? ` ${(m.lastRun.durationMs / 1000).toFixed(1)}s` : ''}`
+                : 'never',
+        })));
+        console.log(
+            `[MWT] Health snapshot for MWT v${snap.mwtVersion} — injecting ${snap.injectedTokens} tokens` +
+            (snap.storedTokens > 0
+                ? `, plus ${snap.storedTokens} stored in the Knowledge lorebook (NOT injected — SillyTavern activates `
+                  + 'only the entries whose keywords match recent chat). '
+                : '. ') +
+            'The return value carries the full rows (auto schedule, last-run source/model/HTTP status, per-field errors) for copy-paste.'
+        );
+        return snap;
+    },
+
+    // Phase 7 — Tab 2 Environment, the fork-compat probe (design §I.5 Tab 2):
+    // the same snapshot the 🌐 Environment sub-tab renders — MWT + SillyTavern
+    // versions, feature detection, the raw context fields, and the banner
+    // verdict on the getCurrentChatId() premise behind core/scope.js. Async
+    // because the shared.js Connection Manager probe (the exact import
+    // core/api.js uses) can only settle through a dynamic import. Read-only;
+    // resolves live on every call.
+    environment: async () => {
+        const loaded = await loadSharedModule();
+        const snap = collectEnvironmentSnapshot({ sharedModule: loaded });
+        const premise = snap.chatIdPremise;
+        if (premise.level === 'fallback' || premise.level === 'fail-closed' || premise.level === 'unknown') {
+            console.warn(`[MWT] ⚠ chat-ID premise: ${premise.level} — ${premise.note}`);
+        }
+        console.table(snap.features.map(f => ({
+            feature: f.id,
+            available: f.available,
+            detail: f.detail,
+        })));
+        console.table({
+            'MWT version': snap.mwtVersion,
+            'SillyTavern version': snap.stVersion ?? `(not exposed${snap.stVersionSource ? ` via ${snap.stVersionSource}` : ''})`,
+            'context': snap.contextAvailable ? (snap.contextSource ?? 'resolved') : '(none)',
+            'chat-ID premise': `${premise.level}${premise.method ? ` via ${premise.method}` : ''}`,
+            'identity key': premise.identityKey ?? '(none)',
+            'CMRS (shared.js)': snap.connectionManager.probed
+                ? (snap.connectionManager.error
+                    ? `import failed: ${snap.connectionManager.error}`
+                    : `${snap.connectionManager.available ? 'available' : 'missing'} · constructPrompt ${snap.connectionManager.constructPrompt ? '✓' : 'MISSING'}`)
+                : 'not probed',
+        });
+        console.table(snap.contextFields);
+        console.log(
+            '[MWT] Environment probe — when reporting from a non-reference build or fork, copy the returned object ' +
+            '(or screenshot the 🌐 Environment tab) into the report. The chat-ID premise row is core/scope.js\'s ' +
+            'getCurrentChatId() assumption, validated live on this build; the context fields are the same table ' +
+            'MWT.scope.diagnose() prints. Context field values can contain your character\'s name — skim before pasting.'
+        );
+        return snap;
+    },
+
+    // Phase 8 — Tab 3 Scope & storage (design §I.5 Tab 3): the same snapshot
+    // the 🗂️ Scope & storage sub-tab renders — resolved identity + epoch,
+    // which lorebooks this chat resolves to and WHY (re-derived read-only:
+    // calling this never saves a binding), per-book hydration + store
+    // version, saved bindings, and every scope_fallback_global warn Phase 3
+    // recorded this session. Synchronous; read-only; resolves live per call.
+    // MWT.scope.diagnose() remains the deeper dump (raw context fields); this
+    // is the pasteable one-table answer.
+    scope: () => {
+        const snap = collectScopeSnapshot();
+        const r = snap.resolution;
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table({
+            'scope setting': `${r.scope}${r.valid ? '' : ' (INVALID — treated as global)'}`,
+            'resolution mode': r.mode,
+            'character identity': snap.character
+                ? `${snap.character.key} → "${snap.character.name}"${snap.character.isGroup ? ' (group)' : ''}`
+                : '(unresolved)',
+            'chat identity': snap.chat ? snap.chat.key : '(unresolved)',
+            'identity used': r.identityKey ?? '(none — global books)',
+            'Knowledge book': r.books.knowledge,
+            'State book': r.books.state,
+            'Profiles book': r.books.profiles,
+            'epoch': snap.epoch,
+            'bindings saved': snap.bindings.count,
+            'scope_fallback_global events': snap.fallbackEvents.count,
+        });
+        console.table(snap.books.map((b) => ({
+            book: b.id,
+            name: b.name,
+            // 'not attempted yet' is the ordinary early state (hydration is
+            // async, on chat change); only 'LOAD FAILED' blocks writes.
+            store: {
+                'no-store': 'no store',
+                loaded: b.dirty ? 'loaded (dirty)' : 'loaded',
+                failed: 'LOAD FAILED — writes blocked',
+                'not-attempted': 'not attempted yet',
+            }[b.storeState] ?? 'unknown',
+            version: b.hasStore ? (b.storeVersion != null ? `v${b.storeVersion}` : '—') : '—',
+        })));
+        if (snap.bindings.rows.length > 0) {
+            console.table(snap.bindings.rows.map((row) => ({
+                key: row.key,
+                current: row.isCurrent,
+                knowledge: row.knowledge,
+                state: row.state,
+                profiles: row.profiles,
+            })));
+            console.log('[MWT] "key" is the stable identity (avatar filename), which is why renaming a card keeps its books.');
+        }
+        console.log(
+            '[MWT] Scope & storage snapshot for MWT v' + snap.mwtVersion + ' — read-only, re-derived live; nothing was ' +
+            'saved by looking. The return value carries the full rows (resolution note, per-book dirty/version, ' +
+            'fallback-event details, per-field errors) for copy-paste. For scoping/identity bug reports pair it with ' +
+            'MWT.scope.diagnose() (raw context fields) or the 🌐 Environment tab.'
+        );
+        return snap;
+    },
+
+    // Phase 9 — Tab 4 Injection (design §I.5 Tab 4): the same snapshot the 💉
+    // Injection sub-tab renders — per module: on/off · gate · resolved
+    // role/depth WITH provenance · token estimate · the Phase 2 registered
+    // payload (with its age) — plus the mandatory Knowledge lorebook caveat.
+    // Named injectionStatus() because Phase 2 already took injections() (all
+    // keys) and injection(key) (one key's raw snapshot). Read-only; resolves
+    // live on every call. Synchronous.
+    //
+    // SAFE BY DEFAULT (the redaction contract): what this RETURNS is
+    // redactInjectionSnapshot() output — payload text gated to size markers
+    // and every string secret-scrubbed — so a tester can paste the return
+    // value without auditing it. `injectionStatus({ includeContent: true })`
+    // includes (still scrubbed) payloads; the EXACT recorded text is only
+    // available through the deliberate single-key path, injection(key).
+    injectionStatus: ({ includeContent = false } = {}) => {
+        const snap = redactInjectionSnapshot(collectInjectionSnapshot(), { includeContent });
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table(snap.modules.map(m => ({
+            module: m.id,
+            on: m.enabled === null ? 'n/a' : m.enabled,
+            gate: m.gate,
+            depth: m.placement ? `${m.placement.depth.value} (${m.placement.depth.source})` : '—',
+            role: m.placement ? `${m.placement.role.value} (${m.placement.role.source})` : '—',
+            // Kind matters: 'stored' is lorebook corpus, 'accessor' is only an
+            // estimate while nothing is registered this session.
+            tokens: m.tokens.kind === 'stored'
+                ? `${m.tokens.value} (stored)`
+                : (m.tokens.kind === 'accessor' ? `${m.tokens.value} (est.)` : m.tokens.value),
+            registered: m.snapshot
+                ? (m.snapshot.enabled
+                    ? `${new Date(m.snapshot.at).toLocaleTimeString()} · ${formatInjectionAge(m.snapshot.ageSec)} · ${m.snapshot.chars} chars`
+                    : `cleared ${new Date(m.snapshot.at).toLocaleTimeString()} · ${formatInjectionAge(m.snapshot.ageSec)}`)
+                : 'never',
+        })));
+        if (snap.modules.some(m => m.snapshot?.enabled && m.snapshot.role != null)) {
+            console.table(snap.modules
+                .filter(m => m.snapshot?.enabled)
+                .map(m => ({
+                    key: m.key,
+                    registeredDepth: m.snapshot.depth,
+                    registeredRole: `${ROLE_NUMBERS[m.snapshot.role] ?? '?'} (${m.snapshot.role})`,
+                })));
+        }
+        console.log(
+            `[MWT] Injection snapshot for MWT v${snap.mwtVersion} — ${snap.livePayloads} live payload(s), ~${snap.registeredTokens} registered tokens` +
+            (snap.injectionMasterOff ? '. ⛔ PANIC SWITCH IS ON — nothing new can register via setExtensionPrompt, and Knowledge lorebook entries are NOT stopped (see the warning above).' : '.') +
+            (includeContent
+                ? ' Payloads are INCLUDED but secret-scrubbed (URLs cut to scheme+host, key/bearer shapes redacted). Registration only — final-prompt placement is unverified.'
+                : ' Payload text is content-gated OUT of this return value (size markers only). For scrubbed payloads: MWT.diagnostics.injectionStatus({ includeContent: true }). For one key\u2019s EXACT recorded text — the deliberate path when you truly need it: MWT.diagnostics.injection(key).')
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1380,6 +1648,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

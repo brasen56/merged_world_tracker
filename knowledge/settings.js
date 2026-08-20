@@ -10,6 +10,11 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
     legacyKey: 'knowledge_tracker_settings',
     defaults: {
+        // Diagnostics (Phase 6): stamps this module's key onto API telemetry
+        // (core/api.js apiModule() → captureApiCall) so per-module views — the
+        // Health tab's last-run column, MWT.diagnostics.lastApiCall('knowledge')
+        // — actually key on it instead of everything landing under 'api'.
+        module: 'knowledge',
         connectionProfileId: '',
         apiUrl: '',
         apiKey: '',

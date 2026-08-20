@@ -271,6 +271,460 @@ a:focus-visible {
     display: block;
 }
 
+/* ─── Diagnostics panel (Phase 5 shell) ────────────────────────────────────── */
+/* Own class namespace (mwt-diag-*) so the main tab bar's selectors            */
+/* (.mwt-tab-btn / .mwt-tab-content) can never collide with the panel's        */
+/* secondary tab strip.                                                        */
+
+.mwt-diag-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.mwt-diag-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-top: 12px;
+}
+
+.mwt-diag-content-opt-in {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+    max-width: 68%;
+}
+
+.mwt-diag-note {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    margin: 6px 0 10px 0;
+}
+
+.mwt-diag-tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    border-bottom: 1px solid var(--mwt-border);
+    margin-bottom: 12px;
+}
+
+.mwt-diag-tab-btn {
+    background: none;
+    border: none;
+    color: var(--mwt-text-dim);
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mwt-font);
+    box-shadow: inset 0 -2px 0 transparent;
+    transition: color var(--mwt-transition), box-shadow var(--mwt-transition);
+}
+
+.mwt-diag-tab-btn:hover {
+    color: var(--mwt-text);
+}
+
+.mwt-diag-tab-btn.active {
+    color: var(--mwt-accent);
+    box-shadow: inset 0 -2px 0 var(--mwt-accent);
+}
+
+.mwt-diag-tab-pane {
+    display: none;
+}
+
+.mwt-diag-tab-pane.active {
+    display: block;
+}
+
+.mwt-diag-placeholder {
+    border: 1px dashed var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    padding: 16px;
+    color: var(--mwt-text-dim);
+    font-size: 12px;
+}
+
+.mwt-diag-placeholder p {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.mwt-diag-placeholder-badge {
+    display: inline-block;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--mwt-font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+}
+
+/* ─── Diagnostics Tab 1: Health (Phase 6) ─────────────────────────────────── */
+
+.mwt-diag-health-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-health-stat {
+    display: inline-block;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-family: var(--mwt-font-mono);
+    color: var(--mwt-text);
+}
+
+/* The panic switch is the one state that must be impossible to miss —
+   strong red regardless of theme, so "why is nothing injecting" reports
+   arrive with the answer already visible. */
+.mwt-diag-panic {
+    background: rgba(239, 83, 80, 0.16);
+    border: 1px solid var(--mwt-error);
+    color: var(--mwt-error);
+    border-radius: var(--mwt-radius);
+    padding: 10px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-panic code {
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+}
+
+.mwt-diag-health-table,
+.mwt-diag-env-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.mwt-diag-health-table th,
+.mwt-diag-env-table th {
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--mwt-text-dim);
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--mwt-border);
+    white-space: nowrap;
+}
+
+.mwt-diag-health-table td,
+.mwt-diag-env-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--mwt-border);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.mwt-diag-health-table td.mwt-diag-last-run,
+.mwt-diag-health-table td .mwt-diag-last-run {
+    white-space: normal;
+}
+
+.mwt-diag-health-row--off .mwt-diag-health-module {
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-health-row--gated .mwt-diag-health-module {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+}
+
+.mwt-diag-health-row--busy {
+    background: rgba(255, 152, 0, 0.07);
+}
+
+.mwt-diag-health-tokens {
+    font-family: var(--mwt-font-mono);
+    white-space: nowrap;
+}
+
+/* A 'stored' count (Knowledge's lorebook corpus) is deliberately NOT styled  */
+/* like the injected numbers beside it: same column, different quantity.      */
+.mwt-diag-tokens-stored {
+    cursor: help;
+    border-bottom: 1px dotted var(--mwt-border);
+}
+
+.mwt-diag-tokens-stored .mwt-diag-dim {
+    font-family: var(--mwt-font);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.mwt-diag-badge {
+    display: inline-block;
+    border-radius: 9px;
+    padding: 0px 7px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--mwt-font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border: 1px solid transparent;
+}
+
+.mwt-diag-badge--ok {
+    color: var(--mwt-success);
+    border-color: var(--mwt-success);
+}
+
+.mwt-diag-badge--fail {
+    color: var(--mwt-error);
+    border-color: var(--mwt-error);
+}
+
+.mwt-diag-badge--warn {
+    color: var(--mwt-warning);
+    border-color: var(--mwt-warning);
+}
+
+.mwt-diag-badge--dim {
+    color: var(--mwt-text-dim);
+    border-color: var(--mwt-border);
+}
+
+.mwt-diag-dim {
+    color: var(--mwt-text-dim);
+    font-size: 11px;
+}
+
+/* ─── Diagnostics Tab 2: Environment (Phase 7) ─────────────────────────────── */
+
+/* The premise banner states whether the getCurrentChatId() premise behind
+   core/scope.js holds on this build — the row a fork report needs. Tones
+   follow the panic-switch rule: the failure states must be impossible to
+   miss in a screenshot; the quiet 'ok' state stays a footnote. */
+.mwt-diag-env-premise {
+    border-radius: var(--mwt-radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-env-premise-note {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.mwt-diag-env-premise--ok {
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-env-premise--fallback {
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--mwt-warning);
+    color: var(--mwt-warning);
+}
+
+.mwt-diag-env-premise--fail-closed,
+.mwt-diag-env-premise--unknown {
+    background: rgba(239, 83, 80, 0.14);
+    border: 1px solid var(--mwt-error);
+    color: var(--mwt-error);
+}
+
+.mwt-diag-env-premise--fallback .mwt-diag-env-premise-note,
+.mwt-diag-env-premise--fail-closed .mwt-diag-env-premise-note,
+.mwt-diag-env-premise--unknown .mwt-diag-env-premise-note {
+    color: inherit;
+    opacity: 0.85;
+}
+
+/* Feature + raw-field tables reuse the Health table rules above (grouped
+   selectors); only the Environment-specific overrides live here. */
+
+/* Detail cells wrap: fork notes are sentences, not table words. */
+.mwt-diag-env-table td.mwt-diag-env-detail,
+.mwt-diag-env-table td.mwt-diag-env-key,
+.mwt-diag-env-table td.mwt-diag-env-value {
+    white-space: normal;
+}
+
+.mwt-diag-env-feature {
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+    white-space: normal;
+    min-width: 180px;
+}
+
+/* The raw context-field table — two dense monospace columns so a pasted pane
+   and a MWT.scope.diagnose() console dump read line for line. */
+.mwt-diag-env-kv td {
+    padding: 3px 8px;
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+}
+
+.mwt-diag-env-key {
+    color: var(--mwt-text-dim);
+    width: 40%;
+}
+
+.mwt-diag-env-value {
+    word-break: break-all;
+}
+
+.mwt-diag-env-subheading {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--mwt-text-dim);
+    margin: 12px 0 4px 0;
+}
+
+/* ─── Diagnostics Tab 3: Scope & storage (Phase 8) ────────────────────────── */
+
+/* The resolution banner states WHY this chat resolved to these books — the
+   loud fallback-to-global warning is this tab's headline, so warn/fail must
+   survive a screenshot while the quiet 'ok' state stays a footnote (the same
+   tone rule as the Environment premise banner). */
+.mwt-diag-scope-banner {
+    border-radius: var(--mwt-radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.mwt-diag-scope-banner-note {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.mwt-diag-scope-banner--ok {
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-scope-banner--warn {
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--mwt-warning);
+    color: var(--mwt-warning);
+}
+
+.mwt-diag-scope-banner--fail {
+    background: rgba(239, 83, 80, 0.14);
+    border: 1px solid var(--mwt-error);
+    color: var(--mwt-error);
+}
+
+.mwt-diag-scope-banner--warn .mwt-diag-scope-banner-note,
+.mwt-diag-scope-banner--fail .mwt-diag-scope-banner-note {
+    color: inherit;
+    opacity: 0.85;
+}
+
+/* Individual findings under the banner (fallback events, invalid scope
+   value, store warnings) — amber/red bullets that stay readable in a pasted
+   screenshot without competing with the banner itself. */
+.mwt-diag-scope-warnings {
+    margin: 0 0 10px 0;
+    padding-left: 18px;
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+/* The ● marker on the binding row the current chat resolves to. */
+.mwt-diag-scope-current {
+    color: var(--mwt-accent);
+    font-weight: 700;
+}
+
+/* ─── Diagnostics panel — 💉 Injection tab (Phase 9) ───────────────────────── */
+
+/* Per-module provenance note under a Module cell (Knowledge's lorebook
+   mechanism, Story Planner's "no global pair"). Small, dim, wraps — it
+   explains a whole row without widening the table. */
+.mwt-diag-inj-note {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--mwt-text-dim);
+    margin-top: 2px;
+    max-width: 260px;
+    white-space: normal;
+    line-height: 1.4;
+}
+
+/* Collapsed-by-default recorded-payload blocks (design §I.5 Tab 4). The
+   summary line is the age-stamped metadata; the body is the exact string
+   last registered via setExtensionPrompt. */
+.mwt-diag-inj-details {
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    margin: 0 0 6px 0;
+    padding: 4px 8px;
+    font-size: 11px;
+    background: var(--mwt-bg-light);
+}
+
+.mwt-diag-inj-details summary {
+    cursor: pointer;
+    color: var(--mwt-accent);
+    font-family: var(--mwt-font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mwt-diag-inj-details[open] summary {
+    margin-bottom: 6px;
+}
+
+/* The recorded payload itself — monospace, scrollable, capped height so a
+   30k-char world state can never blow the modal open. */
+.mwt-diag-inj-payload {
+    margin: 0;
+    padding: 8px;
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--mwt-border);
+    border-radius: 4px;
+    color: var(--mwt-text);
+}
+
+/* The content-excluded placeholder shown while the opt-in checkbox is off
+   (same gating rule as the copied report — design §I.6). */
+.mwt-diag-inj-gated {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    font-style: italic;
+    padding: 6px 2px;
+}
+
+
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */
 
 .mwt-button-bar {

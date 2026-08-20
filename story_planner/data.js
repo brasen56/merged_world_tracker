@@ -208,7 +208,10 @@ export function setPlanData(patch) {
     patchChatMeta(CHAT_DATA_KEY, patch);
 }
 
-const GLOBAL_SETTING_KEYS = ['injectMode', 'enforcement', 'arcCount', 'autoInterval', 'injectEnabled', 'autoEnabled'];
+// Exported (Phase 4 diagnostics, §I.4.6) so the settings-provenance surfaces
+// iterate the single source of truth instead of a second key list. Mirrors
+// world_state/data.js's GLOBAL_SETTING_KEYS.
+export const GLOBAL_SETTING_KEYS = ['injectMode', 'enforcement', 'arcCount', 'autoInterval', 'injectEnabled', 'autoEnabled'];
 
 // Historical per-chat defaults. Legacy records may contain only settings the
 // user changed, so missing keys must not inherit later global changes.
@@ -242,15 +245,41 @@ export function setUsesGlobalDefaults(useGlobal) {
     setPlanData({ useGlobalDefaults: false, settingsOverride: overrides });
 }
 
-export function getEffectivePlanSetting(key, fallback) {
+/**
+ * Resolve a planner setting through the 3-level chain: per-chat override →
+ * legacy top-level chat field → global (see usesGlobalDefaults).
+ *
+ * Phase 4 provenance (diagnostics design §I.4.6 — World State / Story Planner
+ * share this chain): pass `{ provenance: true }` to get `{ value, source }`
+ * instead of the bare value. Source strings are documented on world_state's
+ * getEffectiveWorldSetting and are identical here.
+ *
+ * @param {string} key
+ * @param {*} [fallback]
+ * @param {{ provenance?: boolean }} [opts]
+ * @returns {*|{ value: *, source: string }}
+ */
+export function getEffectivePlanSetting(key, fallback, { provenance = false } = {}) {
     const data = getPlanData();
     if (!usesGlobalDefaults()) {
         const override = data.settingsOverride?.[key];
-        if (override !== undefined) return override;
-        if (data[key] !== undefined) return data[key];
-        return LEGACY_LOCAL_DEFAULTS[key] ?? fallback;
+        if (override !== undefined) {
+            return provenance ? { value: override, source: 'per-chat-override' } : override;
+        }
+        if (data[key] !== undefined) {
+            return provenance ? { value: data[key], source: 'per-chat-legacy' } : data[key];
+        }
+        const builtin = LEGACY_LOCAL_DEFAULTS[key];
+        if (builtin != null) {
+            return provenance ? { value: builtin, source: 'builtin-default' } : builtin;
+        }
+        return provenance ? { value: fallback, source: 'fallback' } : fallback;
     }
-    return getSettings()[key] ?? fallback;
+    const global = getSettings()[key];
+    if (global != null) {
+        return provenance ? { value: global, source: 'global' } : global;
+    }
+    return provenance ? { value: fallback, source: 'fallback' } : fallback;
 }
 
 export function setPlanSetting(key, value) {

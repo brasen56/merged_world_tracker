@@ -13,6 +13,12 @@ export const SETTINGS_KEY = 'mwt_story_planner';
 export const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
     defaults: {
+        // Diagnostics (Phase 6): stamps this module's key onto API telemetry
+        // (core/api.js apiModule() → captureApiCall) so per-module views — the
+        // Health tab's last-run column,
+        // MWT.diagnostics.lastApiCall('story_planner') — actually key on it
+        // instead of everything landing under 'api'.
+        module: 'story_planner',
         connectionProfileId: '',
         apiUrl: '',
         apiKey: '',

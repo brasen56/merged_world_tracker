@@ -6,6 +6,9 @@
  * window, the editor debounce). Two cover findings that were fixed correctly
  * but shipped with no test at all, which is how the `scSetStatus` ReferenceError
  * on the strict-grounding path survived review (WORLD-STATE-04, INTERIORITY-01).
+ * The last block hardens the chronicle date/time sync itself: the trailing-time
+ * match is bounded to a short tail of the model's Time Anchor line, so an
+ * unusually long whitespace-heavy line can no longer force a quadratic rescan.
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -465,5 +468,107 @@ describe('CORE-05 (read boundary) — finiteNumber + fetchFromApi payload', () =
         expect(payload.top_p).toBe(0.8);
         expect(payload.frequency_penalty).toBe(0.5);
         expect(payload.presence_penalty).toBe(-0.5);
+    });
+});
+
+// ─── CHRONICLE date/time sync — bounded trailing-time parsing ────────────────
+
+describe('CHRONICLE date/time sync — the trailing-time split stays bounded', () => {
+    beforeEach(async () => {
+        resetCoreStubs();
+        _resetEpoch();
+        // core/scope.js reads globalThis.SillyTavern directly (not the stub
+        // context), so the chat id has to be seeded here — same as the
+        // CHRONICLE-03 block above.
+        globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'chat-A' }) };
+        globalThis.document = { dispatchEvent: vi.fn() };
+        // Same 5-message shape as the CHRONICLE-03 block: the message window
+        // drops the trailing in-flight user+assistant pair, so a snapshot
+        // needs at least one full pair BEYOND the messages it will cover.
+        setFakeChat([
+            { id: 'm0', name: 'User', is_user: true, mes: 'The first scene.' },
+            { id: 'm1', name: 'Mara', mes: 'The second scene.' },
+            { id: 'm2', name: 'User', is_user: true, mes: 'The third scene.' },
+            { id: 'm3', name: 'Mara', mes: 'The fourth scene.' },
+            { id: 'm4', name: 'User', is_user: true, mes: 'The fifth scene.' },
+        ]);
+        const { state, saveSettings } = await import('../chronicle/data.js');
+        state.isGenerating = false;
+        state.isMainGenerating = false;
+        state.msgSinceSnapshot = 0;
+        // syncWorldState defaults to true; the seeded world state gives the
+        // sync somewhere to write so the Date/Time split is observable.
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const { setWorldStateData } = await import('../world_state/data.js');
+        setWorldStateData({ text: '## Current Scene\n\nDate: Old Date\nTime: 09:00' });
+    });
+
+    function chronicleWithDateLine(dateLine) {
+        return [
+            '## Summary',
+            '- The troupe crosses the river at dusk.',
+            '',
+            '## Time Anchor',
+            `In-world date and time at end of this period: ${dateLine}`,
+            'Location at end of this period: The ferry landing',
+        ].join('\n');
+    }
+
+    async function generateWith(dateLine) {
+        const { generateSnapshot } = await import('../chronicle/snapshots.js');
+        setFakeApi(async () => chronicleWithDateLine(dateLine));
+        return generateSnapshot();
+    }
+
+    test('a normal date line splits date and trailing time (base regression)', async () => {
+        const snapshot = await generateWith('June 4, 2024 2:30pm');
+        expect(snapshot).not.toBeNull();
+
+        const { getWorldStateText } = await import('../world_state/data.js');
+        const ws = getWorldStateText();
+        expect(ws).toContain('Date: June 4, 2024');
+        expect(ws).toContain('Time: 2:30pm');
+    });
+
+    test('a long whitespace-heavy line still splits date and trailing time', async () => {
+        // 300 spaces between the date and the time. The line is longer than
+        // the tail window, so this exercises the rebase of the match index
+        // onto the full line: the date part must keep everything before the
+        // gap, not everything before the window.
+        const line = `Midsummer Eve, Year of the Long Rain${' '.repeat(300)}11:45 PM`;
+        const snapshot = await generateWith(line);
+        expect(snapshot).not.toBeNull();
+
+        const { getWorldStateText } = await import('../world_state/data.js');
+        const ws = getWorldStateText();
+        expect(ws).toContain('Date: Midsummer Eve, Year of the Long Rain');
+        expect(ws).toContain('Time: 11:45 PM');
+    });
+
+    test('a long line with no trailing time parses in bounded time', async () => {
+        // Worst-case input for the old end-anchored `\s+(\d…)$` pattern: for
+        // every position inside a whitespace run the engine rescanned the
+        // rest of the run, making the match quadratic in the line length
+        // (200k spaces ≈ 20G steps — minutes, not milliseconds). The audit
+        // pass also caught the twin of that pattern downstream: the parsed
+        // Date line flows into applyWorldStateInjection → splitWorldState,
+        // whose archive pattern led with an unanchored `\s*` and rescanned
+        // whitespace runs the same way (80k spaces ≈ 5s before the
+        // line-anchoring fix). Both matches are now bounded, so the whole
+        // sync path is constant-time in the line length. The 1s budget is
+        // deliberately generous: it only fails if a quadratic rescan ever
+        // comes back, not on a slow machine.
+        const line = `Midsummer Eve${' '.repeat(200000)}dawn`;
+        const t0 = Date.now();
+        const snapshot = await generateWith(line);
+        expect(Date.now() - t0).toBeLessThan(1000);
+        expect(snapshot).not.toBeNull();
+
+        const { getWorldStateText } = await import('../world_state/data.js');
+        const ws = getWorldStateText();
+        // No trailing time → the whole (trimmed) line is the date, and the
+        // Time field is left exactly as it was.
+        expect(ws).toContain('Date: Midsummer Eve');
+        expect(ws).toContain('Time: 09:00');
     });
 });
