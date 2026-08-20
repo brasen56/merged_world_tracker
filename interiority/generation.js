@@ -120,6 +120,37 @@ export async function resolveUserNames() {
     return names;
 }
 
+/**
+ * Does `candidate` name the human user?
+ *
+ * {@link resolveUserNames} widens {{user}} in ONE direction — through the
+ * knowledge registry, which turns a short persona into the fuller name the
+ * tracker recorded ("Alex" → "Alex Blackwell"). The inverse never resolves:
+ * with {{user}} = "Alex Hiro" and a scene that says "Alex", there is no
+ * registry entry to bridge them, *because the player character is deliberately
+ * never recorded in the registry*. The one bridge the old code had is the one
+ * the PC structurally cannot have.
+ *
+ * So test the shorthand directly, with the same unambiguous-alias rule the
+ * registry uses — and with the same refusal: if another candidate in the scene
+ * also answers to "Alex", the shorthand is ambiguous and nobody is excluded,
+ * so a real NPC never loses their interiority to a name collision.
+ *
+ * @param {string} candidate — a roster candidate or ledger owner
+ * @param {Set<string>} userNamesLower — from {@link resolveUserNames}
+ * @param {string[]} [population] — every other name visible in this context
+ * @returns {boolean}
+ */
+export function isUserName(candidate, userNamesLower, population = []) {
+    const c = String(candidate || '').toLowerCase().trim();
+    if (!c) return false;
+    if (userNamesLower.has(c)) return true;
+    for (const userName of userNamesLower) {
+        if (isUnambiguousNpcAlias(userName, c, population)) return true;
+    }
+    return false;
+}
+
 export async function buildSceneRoster(virtuallyActiveIds = []) {
     const settings = getSettings();
     const maxNpcs = Math.max(1, settings.maxNpcs || 4);
@@ -131,38 +162,20 @@ export async function buildSceneRoster(virtuallyActiveIds = []) {
     // Test BOTH forms. Canonicalization can map a name INTO the user's registry
     // identity ("Alex" → "Alex Blackwell") or the scene can name the user in a
     // form the persona field never used; testing only one of them lets the
-    // other through.
+    // other through. `population` (filled in below, before any candidate is
+    // tested) is what keeps the shorthand match honest.
+    const population = [];
     const excluded = [];
     const exclude = (raw, canon) => {
         const a = String(raw || '').toLowerCase().trim();
         const b = String(canon || '').toLowerCase().trim();
         if (!a && !b) return true;
-        if (userNames.has(a) || userNames.has(b)) {
+        if (isUserName(a, userNames, population) || isUserName(b, userNames, population)) {
             if (!excluded.includes(canon || raw)) excluded.push(canon || raw);
             return true;
         }
         return false;
     };
-
-    const roster = [];
-    const addUnique = (name) => {
-        const n = canonicalize(name);
-        if (exclude(name, n)) return;
-        if (!roster.some(r => r.toLowerCase() === n.toLowerCase())) roster.push(n);
-    };
-
-    // Active ledger NPCs first — always included, never capped. A dormant entry
-    // proposed by this turn's poll is virtually active too: it must be present
-    // in the intentions request before the proposal can be committed.
-    // NPCs are exempt from injection and evaluation (§20), so they should not
-    // consume a roster slot every turn (item 3 fix). They still join normally
-    // via `Present:` when actually in scene, and the dormant poll wakes their
-    // intentions on schedule regardless of roster membership.
-    const virtualIds = new Set(virtuallyActiveIds);
-    for (const entry of getLedger()) {
-        if (entry.status !== 'dormant' || virtualIds.has(entry.id)) addUnique(entry.npc);
-    }
-    const ledgerCount = roster.length;
 
     // 1. Parse `Present:` from world state. The world-state template emits
     //    comma-separated names — do not split on hyphens ("Jean-Luc") or
@@ -214,6 +227,42 @@ export async function buildSceneRoster(virtuallyActiveIds = []) {
         const ctx = getContextSafe();
         if (ctx?.name2) sceneNames.push(ctx.name2);
     }
+
+    const roster = [];
+    const addUnique = (name) => {
+        const n = canonicalize(name);
+        if (exclude(name, n)) return;
+        if (!roster.some(r => r.toLowerCase() === n.toLowerCase())) roster.push(n);
+    };
+
+    // Every name this turn could put in front of the model, gathered BEFORE
+    // the first exclusion test. `exclude` judges a shorthand ("Alex") against
+    // this list, so an incomplete list would let an ambiguous shorthand read as
+    // unambiguous — the one way this filter could silence a real NPC.
+    const virtualIds = new Set(virtuallyActiveIds);
+    const ledgerNames = getLedger()
+        .filter(entry => entry.status !== 'dormant' || virtualIds.has(entry.id))
+        .map(entry => entry.npc);
+    const rawCandidates = [...ledgerNames, ...sceneNames, ...registryPresent];
+    // Canonicalized forms join the raw ones in the population. The registry's
+    // answer for a shorthand is a NAME too, even when no raw list holds it:
+    // with {{user}} = "Alex Hiro", a registry NPC "Alex Blackwell", and
+    // `Present: Alex`, canonicalize("Alex") IS "Alex Blackwell" — a distinct
+    // full identity. Judged against raw names only, "Alex" read as an
+    // unambiguous alias of the user and the NPC was silently excluded. The
+    // canonical form joins the clique check, the shorthand reads as
+    // ambiguous, and the registry's distinct identity keeps its interiority.
+    population.push(...rawCandidates, ...rawCandidates.map(canonicalize));
+
+    // Active ledger NPCs first — always included, never capped. A dormant entry
+    // proposed by this turn's poll is virtually active too: it must be present
+    // in the intentions request before the proposal can be committed.
+    // NPCs are exempt from injection and evaluation (§20), so they should not
+    // consume a roster slot every turn (item 3 fix). They still join normally
+    // via `Present:` when actually in scene, and the dormant poll wakes their
+    // intentions on schedule regardless of roster membership.
+    for (const entry of ledgerNames) addUnique(entry);
+    const ledgerCount = roster.length;
 
     // Scene NPCs fill the capped slots (cap counts scene additions only).
     // Order: `Present:` names first (authoritative), then registry-derived
@@ -1087,7 +1136,7 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
             console.warn(`[MWT:Interiority] Discarding NPC block "${rawName}" — not in roster [${roster.join(', ')}].`);
             continue;
         }
-        if (userNamesLower.has(name.toLowerCase())) {
+        if (isUserName(name, userNamesLower, roster)) {
             // The player character must never get thoughts or ledger entries.
             // Reaching here means the roster filter let them through, which is
             // worth saying out loud — an intention for the PC makes the
