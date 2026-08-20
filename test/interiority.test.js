@@ -11,7 +11,7 @@
  * for both so the two paths can't drift apart again.
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
     resetCoreStubs, setFakeContextExtras, getFakeMeta, setFakeChat,
     WORLD_STATE_METADATA_KEY,
@@ -24,11 +24,13 @@ import {
     getInnerState, getInnerStates, setInnerState,
     getInnerStatesSnapshot, restoreInnerStatesSnapshot,
 } from '../interiority/data.js';
-import { assembleNpcBlocks, buildSceneRoster, resolveUserNames } from '../interiority/generation.js';
+import { assembleNpcBlocks, buildSceneRoster, resolveUserNames, isUserName } from '../interiority/generation.js';
 import { purgeUserLedgerEntries } from '../interiority/data.js';
 import { _setCacheForTests, _clearCacheForTests } from '../knowledge/store.js';
 import { saveSettings as saveKnowledgeSettings } from '../knowledge/settings.js';
 import { buildUserContent, buildSystemPrompt } from '../interiority/prompts.js';
+import { purgeLeakedUserEntries } from '../interiority/index.js';
+import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 
 beforeEach(() => resetCoreStubs());
 
@@ -212,6 +214,175 @@ describe('the player character never reaches the roster', () => {
         // The filter must not become "exclude anyone named like the user".
         const roster = await buildSceneRoster();
         expect(roster).toContain('Ezra Blackwell');
+    });
+});
+
+describe('the player character is excluded when the scene shortens their name', () => {
+
+    // THE BUG (reported from live use, 2026-08-20): {{user}} = "Alex Hiro",
+    // the scene says "Alex", and the PC picked up intentions — the injection
+    // then demands the narrator act for the player.
+    //
+    // This is the INVERSE of the bug above, and the earlier fix cannot reach
+    // it. resolveUserNames widens {{user}} through the knowledge registry, so
+    // it turns a short persona into a recorded fuller name. Here the persona is
+    // already the fuller name and the SCENE holds the shorthand — and there is
+    // no registry entry to bridge them, because the knowledge tracker
+    // deliberately never records the player character. The one bridge the
+    // filter had is the one the PC structurally cannot have.
+    //
+    // Worse, it ratchets: a single leaked turn puts "Alex" in the ledger,
+    // getActiveLedger() seeds the roster from the ledger every turn, and the
+    // purge only matched "alex hiro" — so the leak was permanent.
+
+    beforeEach(() => {
+        _clearCacheForTests();
+        saveKnowledgeSettings({ scope: 'global' });
+        // The registry knows the real NPCs. It does NOT know the PC, and never
+        // will — that is the point.
+        _setCacheForTests('Knowledge Tracker', {
+            registry: {
+                'Ezra Blackwell': { uid: 1 },
+                'Derek Sandhorn': { uid: 2 },
+            },
+        });
+        setFakeContextExtras({ name1: 'Alex Hiro', name2: 'Ezra Blackwell' });
+        getFakeMeta()[WORLD_STATE_METADATA_KEY] = {
+            text: 'Present: Alex, Ezra Blackwell, Derek Sandhorn',
+        };
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    test('the scene shorthand for {{user}} never reaches the roster', async () => {
+        const roster = await buildSceneRoster();
+        expect(roster).not.toContain('Alex');
+        expect(roster).toContain('Ezra Blackwell');
+        expect(roster).toContain('Derek Sandhorn');
+    });
+
+    test('a ledger entry leaked under the shorthand does not re-admit the PC', async () => {
+        addLedgerEntry({ npc: 'Alex', action: 'finalize the brochure copy', trigger: 'by Sunday' }, 'day 1', 1);
+        expect(await buildSceneRoster()).not.toContain('Alex');
+    });
+
+    test('an NPC who genuinely shares the given name keeps their interiority', async () => {
+        // The refusal half of the rule: with two Alexes in the scene the
+        // shorthand is ambiguous, so it is not treated as the user — better a
+        // leak the purge can clean than an NPC silently denied thoughts.
+        getFakeMeta()[WORLD_STATE_METADATA_KEY] = {
+            text: 'Present: Alex Chen, Ezra Blackwell',
+        };
+        const roster = await buildSceneRoster();
+        expect(roster).toContain('Alex Chen');
+    });
+
+    test('isUserName matches the shorthand only while it is unambiguous', async () => {
+        const names = await resolveUserNames();
+        expect(isUserName('Alex', names, ['Alex', 'Ezra Blackwell'])).toBe(true);
+        expect(isUserName('Alex Hiro', names, [])).toBe(true);
+        // Another Alex in the scene makes the shorthand ambiguous.
+        expect(isUserName('Alex', names, ['Alex', 'Alex Chen'])).toBe(false);
+        // And it never widens to unrelated people.
+        expect(isUserName('Ezra Blackwell', names, ['Ezra Blackwell'])).toBe(false);
+    });
+});
+
+describe('a registry NPC behind the shorthand keeps their interiority', () => {
+
+    // THE BUG: {{user}} = "Alex Hiro", a real registry NPC "Alex Blackwell",
+    // and `Present: Alex`. canonicalize("Alex") identifies the NPC — but the
+    // ambiguity population held only RAW names, and "Alex Blackwell" never
+    // appears raw in any of the three lists (ledger / Present: / registry
+    // names in recent messages). Judged against raw names only, "Alex" read
+    // as an unambiguous alias of the user, so the NPC was excluded and
+    // silently lost their thoughts/intentions. The registry's canonical form
+    // must join the population: its distinct full identity participates in
+    // the clique check, the shorthand reads as ambiguous, and nobody is
+    // excluded — the refusal half of isUserName's rule.
+
+    beforeEach(() => {
+        _clearCacheForTests();
+        saveKnowledgeSettings({ scope: 'global' });
+        // The registry knows the NPC "Alex Blackwell" — and never the player,
+        // who is deliberately not recorded.
+        _setCacheForTests('Knowledge Tracker', {
+            registry: {
+                'Alex Blackwell': { uid: 1 },
+                'Ezra Blackwell': { uid: 2 },
+            },
+        });
+        setFakeContextExtras({ name1: 'Alex Hiro', name2: 'Ezra Blackwell' });
+        getFakeMeta()[WORLD_STATE_METADATA_KEY] = {
+            text: 'Present: Alex, Ezra Blackwell',
+        };
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    test('the shorthand that canonically names an NPC does not exclude them', async () => {
+        const roster = await buildSceneRoster();
+        // canonicalize("Alex") === "Alex Blackwell": the scene shorthand is
+        // the NPC's, not the user's — the NPC must be rostered under it.
+        expect(roster).toContain('Alex Blackwell');
+        expect(roster).toContain('Ezra Blackwell');
+    });
+});
+
+describe('the leaked-entry purge is scoped to the chat that started it', () => {
+
+    // INTERIORITY-02: purgeLeakedUserEntries() resolves the user's name forms
+    // across a dynamic-import await before it reads and mutates the ledger.
+    // Without a scope re-check, a chat switch during that await would purge
+    // matching entries from the NEWLY active chat — a cleanup for a chat the
+    // user already left, aimed at a chat that runs its own purge.
+
+    let chatId = 'chat-a';
+
+    beforeEach(() => {
+        _resetEpoch();
+        _clearCacheForTests();
+        saveKnowledgeSettings({ scope: 'global' });
+        setFakeContextExtras({ name1: 'Alex Hiro', name2: 'Ezra Blackwell' });
+        chatId = 'chat-a';
+        // The scope guard reads the LIVE SillyTavern global (core/scope.js
+        // resolves the context lazily), not the barrel stub — the same
+        // harness pattern as test/backup.test.js. A known chat id matters:
+        // two UNKNOWN identities never compare equal (fresh nonce per
+        // getChatIdentity() call), so the same-chat case needs a verifiable
+        // identity to pass assertSameScope().
+        globalThis.SillyTavern = {
+            getContext: () => ({ getCurrentChatId: () => chatId }),
+        };
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        delete globalThis.SillyTavern;
+    });
+
+    test('a chat switch during the resolve leaves the new chat\'s ledger alone', async () => {
+        // The new chat holds an entry under the user's shorthand — exactly
+        // what a stale purge would delete.
+        addLedgerEntry({ npc: 'Alex', action: 'call the tailor', trigger: 'tomorrow' }, 'day 1', 1);
+
+        const pending = purgeLeakedUserEntries();
+        // The user switches chats while resolveUserNames() is still awaiting
+        // the registry import: bump the epoch and change the chat id, exactly
+        // as the root CHAT_CHANGED handler does. This runs synchronously
+        // before the dynamic import can resolve, so the ordering is
+        // deterministic.
+        bumpEpoch();
+        chatId = 'chat-b';
+        await pending;
+
+        expect(getLedger()).toHaveLength(1);
+    });
+
+    test('the same chat still gets the purge (a leaked entry is removed)', async () => {
+        addLedgerEntry({ npc: 'Alex', action: 'call the tailor', trigger: 'tomorrow' }, 'day 1', 1);
+
+        await purgeLeakedUserEntries();
+
+        expect(getLedger()).toHaveLength(0);
     });
 });
 

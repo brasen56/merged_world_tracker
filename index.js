@@ -35,6 +35,10 @@ import { collectScopeSnapshot } from './diagnostics_panel/scope_storage.js';
 // Injection sub-tab (per module: on/off · gate · role/depth with provenance ·
 // token estimate · the Phase 2 recorded payload). Same direct-import rule.
 import { collectInjectionSnapshot, redactInjectionSnapshot, formatInjectionAge, ROLE_NUMBERS } from './diagnostics_panel/injection.js';
+// Diagnostics Phase 10 — Tab 5 Last request: the snapshot collector behind the
+// 📡 Last request sub-tab (the Phase 1 capture for the most recent call plus
+// the short history, telemetry by construction). Same direct-import rule.
+import { collectLastRequestSnapshot, redactLastRequestSnapshot, formatRequestAge } from './diagnostics_panel/last_request.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1639,6 +1643,46 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 10 — Tab 5 Last request (design §I.5 Tab 5): the same snapshot the
+    // 📡 Last request sub-tab renders — the Phase 1 capture for the most
+    // recent call (module · mode · model/profile · HTTP status · duration ·
+    // retries · finish_reason · token usage · error class) plus the short
+    // history, newest first. Named lastRequest() because Phase 1 already took
+    // apiCalls() (raw ring) / lastApiCall() / lastApiCalls() (per-module
+    // pointers). Read-only; resolves live on every call. Synchronous.
+    //
+    // SAFE BY DEFAULT (the redaction contract): what this RETURNS is
+    // redactLastRequestSnapshot() output — telemetry by construction (the
+    // capture never held the prompt, key, headers, or body), with every
+    // string secret-scrubbed (model/profile ids are free text and could quote
+    // a secret). The raw telemetry-only copies stay on the Phase 1 paths.
+    lastRequest: () => {
+        const snap = redactLastRequestSnapshot(collectLastRequestSnapshot());
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table(snap.history.map(c => ({
+            time: c.at != null ? new Date(c.at).toLocaleTimeString() : '—',
+            age: formatRequestAge(c.ageSec),
+            module: c.module,
+            mode: c.mode,
+            model: c.model,
+            status: c.status,
+            ok: c.ok,
+            durationMs: c.durationMs,
+            retries: c.retries,
+            errorClass: c.errorClass ?? null,
+            finish_reason: c.finish_reason ?? null,
+            tokens: c.usage?.total_tokens ?? null,
+        })));
+        console.log(
+            snap.count
+                ? `[MWT] Last-request snapshot for MWT v${snap.mwtVersion} — ${snap.count} captured call(s) of ${snap.capacity} (${snap.stats.ok} ok, ${snap.stats.failed} failed), newest first; the return value carries the detail card, window stats, and full usage. Telemetry by construction: model/profile id, timings, HTTP status, finish reason, token usage, error class — never the prompt, API key, custom headers, or response body. Strings are secret-scrubbed (core/redaction.js); raw telemetry-only copies: MWT.diagnostics.apiCalls().`
+                : '[MWT] No API calls captured yet — the capture is in-memory and resets on reload.'
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1648,6 +1692,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

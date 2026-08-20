@@ -12,6 +12,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.7.6]
+
+### Added
+- Diagnostics Phase 10 — 📡 Last request tab: the Diagnostics panel's fifth
+  live sub-tab answers "what did MWT's last API call look like, and how have
+  the recent ones been going?" — a detail card for the most recent captured
+  call (module · mode with an inline explanation of `custom` vs `cm` ·
+  model/profile · HTTP status · duration · retries · `finish_reason` · token
+  usage · error class), the short history table (every retained call, newest
+  first — the store's `API_CALL_CAPACITY = 20` cap **is** the "short
+  history"), and window stats (ok/failed, retries, token totals, avg/max
+  duration) in the stat header. A warn banner fires when the most recent call
+  FAILED — an older failure stays a reading in the table, not a verdict.
+  Telemetry by construction (`captureApiCall()` records ABOUT a call — never
+  the prompt, API key, custom headers, or response body), so there is no
+  content to gate and the report opt-in changes nothing on this tab.
+- Console bridge `MWT.diagnostics.lastRequest()` — so named because Phase 1
+  already took `apiCalls()` / `lastApiCall()` / `lastApiCalls()`.
+  Synchronous; warns on every finding; tables the history. **Safe by
+  default:** what it RETURNS is `redactLastRequestSnapshot()` output — the
+  shared layer's sanctioned telemetry-only mode (`redactSecretsDeep()`), with
+  Rule 1b string scrubbing (this install's live secret values, embedded URLs
+  → scheme+host, key/bearer shapes) applied to every model/profile id,
+  finish reason, and error class, so the return value pastes without
+  auditing it; raw telemetry-only copies stay on the Phase 1 paths.
+  Console bridge and tab share one collector
+  (`diagnostics_panel/last_request.js`), so they can never disagree.
+- Collector `diagnostics_panel/last_request.js` is DOM-free with every
+  dependency injectable and every accessor individually guarded (a throwing
+  store degrades to an empty snapshot + an `errors` note), and normalises
+  each captured call defensively — a malformed entry degrades its own cells,
+  never the table. Tests: `test/last_request_tab.test.js` (29). Maintenance:
+  the "later tabs still show their placeholders" assertions in the
+  environment + scope + injection suites moved from Phase 10 to Phase 11.
+
+### Fixed
+- Interiority no longer generates thoughts and intentions for the player
+  character when the scene uses a shorter form of their name. `{{user}}` =
+  "Alex Hiro" with a `Present:` line saying "Alex" put the PC on the roster,
+  and the injection then instructed the narrator to act for the player. This is
+  the inverse of the v1.5.x fix and that fix could not reach it: the exclusion
+  widened `{{user}}` in one direction only — through the knowledge registry,
+  which turns a short persona into the fuller name the tracker recorded. Here
+  the persona *is* the fuller name and the scene holds the shorthand, and no
+  registry entry can bridge them, because the knowledge tracker deliberately
+  never records the player. The one bridge the filter had is the one the PC
+  structurally cannot have. The exclusion now applies the registry's
+  unambiguous-alias rule directly (`isUserName`), keeping its refusal: if
+  another character in the scene also answers to "Alex", the shorthand is
+  ambiguous and nobody is excluded, so a real NPC is never silently denied
+  interiority. Applied at all three gates — roster build, result validation,
+  and the leaked-entry purge. The purge matters most: a leak entered the ledger
+  as "Alex", `getActiveLedger()` re-seeds the roster from the ledger every
+  turn, and a purge matching only "alex hiro" could never remove it — so one
+  slipped turn became permanent for the chat. Existing leaks are cleaned up on
+  the next chat load. Regression tests in `test/interiority.test.js`.
+
+
 
 ## [1.7.5]
 

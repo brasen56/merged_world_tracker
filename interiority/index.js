@@ -37,7 +37,7 @@ import {
 
 import {
     buildSceneRoster, runBatchedCall, runStrictCalls, validateAndApply,
-    runSplitCall, mergeSplitResults, runDormantPoll, resolveUserNames,
+    runSplitCall, mergeSplitResults, runDormantPoll, resolveUserNames, isUserName,
 } from './generation.js';
 
 import { applyIntentionsInjection } from './injection.js';
@@ -76,14 +76,42 @@ export function init(parentModal) {
  * registry, which is a dynamic import. The injection is re-applied only when
  * something was actually removed, so the common case costs nothing.
  *
+ * That dynamic import is an await boundary (INTERIORITY-02): the scope is
+ * captured before it and re-asserted after, so a chat switch during the
+ * resolve discards this purge instead of letting an old chat's cleanup purge
+ * the NEWLY active chat's ledger — the new chat's own init/onChatChanged
+ * runs its own purge.
+ *
  * A leaked entry is self-sustaining — `getActiveLedger()` seeds the roster from
  * the ledger every turn, so the PC would be re-admitted to the roster for the
  * rest of the chat. Purging it is what breaks that loop.
+ *
+ * Exported (and returned as a promise) so the scope-guard regression tests can
+ * observe the guard deterministically; production callers fire and forget it.
+ *
+ * @returns {Promise<void>} settles when the cleanup has run (or been discarded)
  */
-function purgeLeakedUserEntries() {
-    resolveUserNames()
+export function purgeLeakedUserEntries() {
+    // Capture BEFORE the await — the INTERIORITY-02 contract:
+    // capture → await → assert → discard-on-stale.
+    const scope = captureScope();
+    return resolveUserNames()
         .then(names => {
-            if (purgeUserLedgerEntries(names)) applyIntentionsInjection();
+            // The user may have switched chats while the name forms resolved;
+            // getLedger() below would then read the NEW chat. Discard quietly.
+            if (!assertSameScope(scope).ok) return;
+            // Widen the set to the name forms the ledger actually holds. A leak
+            // that arrived as "Alex" is invisible to a set holding only
+            // "alex hiro", so the entry survives every purge and re-admits the
+            // PC to the roster forever. The ledger's own owners are the
+            // population for the ambiguity test: if two of them answer to
+            // "Alex", nothing is purged.
+            const owners = [...new Set(getLedger().map(entry => entry.npc))];
+            const leaked = new Set(names);
+            for (const owner of owners) {
+                if (isUserName(owner, names, owners)) leaked.add(String(owner).toLowerCase().trim());
+            }
+            if (purgeUserLedgerEntries(leaked)) applyIntentionsInjection();
         })
         .catch(err => console.warn('[MWT:Interiority] User-entry purge failed:', err?.message || err));
 }

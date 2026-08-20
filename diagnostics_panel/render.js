@@ -44,6 +44,18 @@
  * switch UI clarity". Fully synchronous — open-and-read; the only wiring is
  * the checkbox reveal.
  *
+ * Phase 10 added the 📡 Last request tab (./last_request.js for the snapshot,
+ * renderLastRequestPane/renderLastRequestSnapshot here): the Phase 1 capture
+ * for the most recent call — one detail card (module · mode · model/profile ·
+ * HTTP status · duration · retries · finish_reason · token usage · error
+ * class) — plus the short history table, newest first, under window stats
+ * (ok/failed, retries, token totals, avg/max duration) and a banner when the
+ * most recent call failed. Telemetry by construction (never the prompt, API
+ * key, custom headers, or response body), so there is no content to gate;
+ * strings still route through the shared redaction layer on BOTH surfaces —
+ * the console bridge AND the rendered pane (redactLastRequestSnapshot, Phase
+ * 10 review). Fully synchronous — open-and-read, no wiring.
+ *
  * Hard limits inherited from the design (§I.1): READ-ONLY — nothing here
  * writes to settings, chat metadata, or localStorage; the checkbox state is
  * deliberately not persisted, so every session starts with content EXCLUDED.
@@ -68,6 +80,10 @@ import {
     formatInjectionAge,
     scrubPayloadForDisplay,
 } from './injection.js';
+// Diagnostics Phase 10 — Tab 5 Last request: the snapshot collector + shared
+// age formatter behind the 📡 Last request sub-tab (the Phase 1 capture for
+// the most recent call plus the short history).
+import { collectLastRequestSnapshot, redactLastRequestSnapshot, formatRequestAge } from './last_request.js';
 
 // ─── Panel tab definitions (design §I.5 — the seven v1 tabs) ─────────────────
 
@@ -141,12 +157,12 @@ export function renderDiagnosticsPanel() {
 
     const subTabPanes = DIAGNOSTICS_PANEL_TABS.map((t, i) => `
         <div class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">
-            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : `
+            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : (t.id === 'last-request' ? renderLastRequestPane() : `
             <div class="mwt-diag-placeholder">
                 <span class="mwt-diag-placeholder-badge">Phase ${t.phase} — not built yet</span>
                 <p>${t.blurb}</p>
             </div>
-            `)))}
+            `))))}
         </div>
     `).join('');
 
@@ -832,6 +848,175 @@ export function renderInjectionPane() {
     }
     return renderInjectionSnapshot(snapshot);
 }
+
+// ─── Tab 5: Last request (Phase 10) ───────────────────────────────────────────
+
+/**
+ * What each captured `mode` means, shown inline so the card is self-explaining.
+ * Mirrors the two call paths in core/api.js (fetchFromApi = the module's own
+ * API settings; fetchViaConnectionProfile = a SillyTavern connection profile).
+ */
+const LR_MODE_LABELS = {
+    custom: 'custom (this module\u2019s own API settings)',
+    cm: 'cm (SillyTavern connection profile)',
+};
+
+/**
+ * Render the Last request pane markup from a snapshot (pure string builder —
+ * the injectable formatTime keeps Node tests deterministic). Every
+ * string-valued captured field (model/profile ids, finish reasons, error
+ * classes) is escaped — they are free text — and numbers render through the
+ * shared formatters so the card, the history table, and the console bridge
+ * (MWT.diagnostics.lastRequest()) can never disagree.
+ *
+ * Layout, in design §I.5 Tab 5 order: stat header (version · captured ·
+ * ok/failed · tokens · avg/max · read-at) → the failure banner when the most
+ * recent call failed → the "most recent call" detail card → the short
+ * history table, newest first.
+ *
+ * @param {object} snapshot — collectLastRequestSnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts]
+ * @returns {string} innerHTML for the pane
+ */
+export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const history = Array.isArray(s.history) ? s.history : [];
+    const stats = s.stats || {};
+    const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+    const last = s.last ?? null;
+
+    const dim = (text) => `<span class="mwt-diag-dim">${text}</span>`;
+
+    /** One kv row for the detail card. */
+    const kv = (k, v) => `<tr><td class="mwt-diag-env-key">${escapeHtml(k)}</td><td class="mwt-diag-env-value">${v}</td></tr>`;
+
+    /** The usage trio, or a dim dash when the backend reported none. */
+    const usageCell = (c) => {
+        if (!c?.usage) return dim('—');
+        const t = Number(c.usage.total_tokens ?? 0).toLocaleString();
+        const p = c.usage.prompt_tokens != null ? Number(c.usage.prompt_tokens).toLocaleString() : '—';
+        const o = c.usage.completion_tokens != null ? Number(c.usage.completion_tokens).toLocaleString() : '—';
+        return `<strong>${t}</strong> ${dim('total')} <span class="mwt-diag-dim" title="usage.prompt_tokens / usage.completion_tokens">(in ${p} · out ${o})</span>`;
+    };
+
+    // The banner appears only when the most recent call failed (the
+    // collector's one warning today); it reuses the Scope pane's banner list
+    // markup, like the Injection pane does.
+    const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
+        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+    `).join('')}</ul>` : '';
+
+    // The most recent call — one detail card of exactly what Phase 1 captured.
+    const lastCard = last ? `
+        <div class="mwt-diag-lr-detail">
+            <p class="mwt-diag-env-subheading">Most recent call — ${escapeHtml(formatTime(last.at ?? s.generatedAt ?? Date.now()))} (${escapeHtml(formatRequestAge(last.ageSec))})</p>
+            <table class="mwt-diag-env-table mwt-diag-env-kv">
+                <tbody>
+                    ${kv('module', escapeHtml(last.module))}
+                    ${kv('mode', last.mode ? `${escapeHtml(last.mode)} — ${escapeHtml(LR_MODE_LABELS[last.mode] ?? 'unknown capture mode')}` : dim('—'))}
+                    ${kv('model / profile', last.model != null ? `<code>${escapeHtml(last.model)}</code>` : dim('—'))}
+                    ${kv('HTTP status', last.status != null ? escapeHtml(String(last.status)) : dim('—'))}
+                    ${kv('result', last.ok
+                        ? '<span class="mwt-diag-badge mwt-diag-badge--ok">ok</span>'
+                        : `<span class="mwt-diag-badge mwt-diag-badge--fail">FAILED</span>${last.errorClass ? dim(` error class: <code>${escapeHtml(last.errorClass)}</code>`) : ''}`)}
+                    ${kv('duration', last.durationMs != null ? escapeHtml(formatHealthDuration(last.durationMs)) : dim('—'))}
+                    ${kv('retries', String(last.retries ?? 0))}
+                    ${kv('finish_reason', last.finish_reason ? escapeHtml(last.finish_reason) : dim('—'))}
+                    ${kv('token usage', usageCell(last))}
+                </tbody>
+            </table>
+        </div>
+    ` : '<p class="mwt-diag-dim">No API calls captured yet this session — the capture is in-memory, appears after a module\u2019s first call, and clears on reload.</p>';
+
+    // The short history — every retained call (the store caps at
+    // API_CALL_CAPACITY = 20), newest first, one row per call.
+    const historyRows = history.map((c) => `
+        <tr class="${c.ok ? '' : 'mwt-diag-health-row--gated'}">
+            <td>${escapeHtml(formatTime(c.at ?? s.generatedAt ?? Date.now()))}</td>
+            <td class="mwt-diag-dim">${escapeHtml(formatRequestAge(c.ageSec))}</td>
+            <td>${escapeHtml(c.module)}</td>
+            <td class="mwt-diag-dim">${escapeHtml(c.mode ?? '—')}</td>
+            <td>${c.model != null ? escapeHtml(c.model) : dim('—')}</td>
+            <td>${c.status != null ? escapeHtml(String(c.status)) : dim('—')}</td>
+            <td>${c.ok ? '<span class="mwt-diag-badge mwt-diag-badge--ok">ok</span>' : '<span class="mwt-diag-badge mwt-diag-badge--fail">FAILED</span>'}</td>
+            <td class="mwt-diag-dim">${c.durationMs != null ? escapeHtml(formatHealthDuration(c.durationMs)) : '—'}</td>
+            <td class="mwt-diag-dim">${c.retries > 0 ? `+${c.retries}` : '0'}</td>
+            <td class="mwt-diag-dim">${c.finish_reason ? escapeHtml(c.finish_reason) : '—'}</td>
+            <td class="mwt-diag-dim">${c.usage ? escapeHtml(Number(c.usage.total_tokens ?? 0).toLocaleString()) : '—'}</td>
+        </tr>
+    `).join('');
+
+    const historySection = history.length ? `
+        <p class="mwt-diag-env-subheading">History — newest first (the store keeps the last ${escapeHtml(String(s.capacity ?? '?'))} calls)</p>
+        <table class="mwt-diag-health-table">
+            <thead>
+                <tr><th>Time</th><th>Age</th><th>Module</th><th>Mode</th><th>Model</th><th>HTTP</th><th>Result</th><th>Dur</th><th>Ret</th><th>Finish</th><th>Tokens</th></tr>
+            </thead>
+            <tbody>${historyRows}</tbody>
+        </table>
+    ` : '';
+
+    const tokenStat = stats.totalTokens
+        ? `<span class="mwt-diag-health-stat"><strong>${Number(stats.totalTokens).toLocaleString()}</strong> tokens ${dim('across captured calls')}</span>`
+        : '';
+    const paceStat = stats.avgDurationMs != null
+        ? `<span class="mwt-diag-health-stat">avg ${escapeHtml(formatHealthDuration(stats.avgDurationMs))}${stats.maxDurationMs != null ? ` · max ${escapeHtml(formatHealthDuration(stats.maxDurationMs))}` : ''}</span>`
+        : '';
+
+    return `
+        <div class="mwt-diag-lr">
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
+                <span class="mwt-diag-health-stat"><strong>${history.length}</strong> captured call(s) ${dim(`store keeps ${s.capacity ?? '?'}`)}</span>
+                <span class="mwt-diag-health-stat">ok <strong>${Number(stats.ok) || 0}</strong> · failed <strong>${Number(stats.failed) || 0}</strong>${stats.retries ? ` · ${stats.retries} retr${stats.retries === 1 ? 'y' : 'ies'}` : ''}</span>
+                ${tokenStat}
+                ${paceStat}
+                <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
+            </div>
+            ${warningList}
+            ${lastCard}
+            ${historySection}
+            <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. Telemetry by construction: the capture records ABOUT a call — module,
+                mode, model/profile, HTTP status, duration, retries, finish_reason, token usage, error class — and NEVER the prompt, API key, custom
+                headers, or response body, so there is no content to gate here (the report checkbox above changes nothing on this tab). It is in-memory
+                only and resets on reload. This pane renders redactLastRequestSnapshot() output — the same secret-scrubbed guarantee. Same data in the console: <code>MWT.diagnostics.lastRequest()</code> — its return value is secret-scrubbed
+                (model/profile strings can quote a secret, so every string routes through core/redaction.js) — or the raw telemetry-only copies
+                <code>MWT.diagnostics.apiCalls()</code> / <code>lastApiCall(module)</code>.</p>
+        </div>
+    `;
+}
+
+/**
+ * Collect + render the Last request pane. Called at markup-build time inside
+ * renderDiagnosticsPanel() — the modal is rebuilt on every open, which is this
+ * tab's refresh model (decision D2). Fully synchronous; a total collection
+ * failure degrades to an error card, never a broken panel. The collected
+ * snapshot is REDACTED (redactLastRequestSnapshot) before it is rendered — the
+ * same safe-by-default contract as the console bridge; the raw telemetry-only
+ * copies stay in the store and on MWT.diagnostics.apiCalls(). No wiring —
+ * unlike the Injection tab there is nothing to reveal.
+ *
+ * @returns {string} innerHTML for the Last request sub-tab pane
+ */
+export function renderLastRequestPane() {
+    let snapshot;
+    try {
+        snapshot = collectLastRequestSnapshot();
+    } catch (err) {
+        return `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Last request unavailable</span>
+                <p>Collecting the last-request snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+    }
+    // Redact BEFORE rendering (Phase 10 review): the console bridge guarantees
+    // redactLastRequestSnapshot() output, and the visible pane must not be the
+    // one surface without it — model/profile ids, finish reasons, error
+    // classes, and warning text are free strings that can quote a secret.
+    return renderLastRequestSnapshot(redactLastRequestSnapshot(snapshot));
+}
+
 // ─── Clipboard (Copy Report) ─────────────────────────────────────────────────
 
 
