@@ -56,6 +56,18 @@
  * the console bridge AND the rendered pane (redactLastRequestSnapshot, Phase
  * 10 review). Fully synchronous — open-and-read, no wiring.
  *
+ * Phase 11 added the 📋 Log tab (./log.js for the snapshot,
+ * renderLogPane/renderLogSnapshot here): the Phase 0 ring buffer, newest
+ * first, with per-level and per-module counts. The level chips and module
+ * select are VIEW TOGGLES over the rendered rows — they never re-read the
+ * store, so decision D2's open-and-read model is untouched (the pane is
+ * re-built on every modal open). Event details carry chat content (toast
+ * bodies) and raw error text, so the pane renders redactLogSnapshot() output
+ * — size-only markers by default — and the content opt-in checkbox above
+ * reveals the full (still secret-scrubbed) detail per row via
+ * wireDiagnosticsPanel(), the same deferred-insertion + scrub guards the
+ * Phase 9 payload reveal uses.
+ *
  * Hard limits inherited from the design (§I.1): READ-ONLY — nothing here
  * writes to settings, chat metadata, or localStorage; the checkbox state is
  * deliberately not persisted, so every session starts with content EXCLUDED.
@@ -71,8 +83,9 @@ import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
 import { collectScopeSnapshot } from './scope_storage.js';
 // Direct core/diagnostics.js import (NOT the barrel) per the §II.3 alias-trap
-// rule: the payload reveal must read the REAL Phase 2 snapshot store.
-import { getAllInjectedSnapshots } from '../core/diagnostics.js';
+// rule: the payload reveal must read the REAL Phase 2 snapshot store, and the
+// Phase 11 log reveal must read the REAL Phase 0 ring.
+import { getAllInjectedSnapshots, getEvents } from '../core/diagnostics.js';
 import {
     collectInjectionSnapshot,
     PLACEMENT_SOURCE_LABELS,
@@ -84,6 +97,18 @@ import {
 // age formatter behind the 📡 Last request sub-tab (the Phase 1 capture for
 // the most recent call plus the short history).
 import { collectLastRequestSnapshot, redactLastRequestSnapshot, formatRequestAge } from './last_request.js';
+// Diagnostics Phase 11 — Tab 6 Log: the snapshot collector + redaction gate +
+// reveal scrubber + fingerprint keys behind the 📋 Log sub-tab (the Phase 0
+// ring, filterable by level and module, newest first).
+import {
+    collectLogSnapshot,
+    redactLogSnapshot,
+    scrubLogDetailForDisplay,
+    logEventKey,
+    logLevelCount,
+    formatLogAge,
+    LOG_LEVELS,
+} from './log.js';
 
 // ─── Panel tab definitions (design §I.5 — the seven v1 tabs) ─────────────────
 
@@ -157,12 +182,12 @@ export function renderDiagnosticsPanel() {
 
     const subTabPanes = DIAGNOSTICS_PANEL_TABS.map((t, i) => `
         <div class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">
-            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : (t.id === 'last-request' ? renderLastRequestPane() : `
+            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : (t.id === 'last-request' ? renderLastRequestPane() : (t.id === 'log' ? renderLogPane() : `
             <div class="mwt-diag-placeholder">
                 <span class="mwt-diag-placeholder-badge">Phase ${t.phase} — not built yet</span>
                 <p>${t.blurb}</p>
             </div>
-            `))))}
+            `)))))}
         </div>
     `).join('');
 
@@ -1017,6 +1042,258 @@ export function renderLastRequestPane() {
     return renderLastRequestSnapshot(redactLastRequestSnapshot(snapshot));
 }
 
+// ─── Diagnostics Tab 6: Log (Phase 11) ────────────────────────────────────────
+
+/**
+ * Render a REDACTED Log snapshot (renderLogPane / the console bridge pass
+ * redactLogSnapshot() output). Stat header (version · total vs ring capacity ·
+ * error/warn counts · read-at), the warning banner when error-level events
+ * exist, the filter row (level chips with counts + module select + the
+ * visible-of counter), and the event table — newest first, one row per event:
+ * time · age · level · module · event · detail · the chat stamp (epoch with
+ * the scopeKey on hover — Phase 0's cross-chat-switch correlation dimension).
+ *
+ * The detail column ships the SAFE SUMMARY (the already-redacted detail JSON —
+ * message/error bodies are size-only markers by construction); the opt-in
+ * reveal element ships HIDDEN and EMPTY carrying only the event's fingerprint
+ * key, and wireDiagnosticsPanel() fills it on opt-in — the Phase 9
+ * deferred-insertion guards, applied to every row (injectable formatTime
+ * keeps Node tests deterministic).
+ *
+ * @param {object} snapshot — collectLogSnapshot() → redactLogSnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts]
+ * @returns {string} innerHTML for the pane
+ */
+export function renderLogSnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const events = Array.isArray(s.events) ? s.events : [];
+    const levels = s.levels || {};
+    const modules = Array.isArray(s.modules) ? s.modules : [];
+    const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+
+    const dim = (text) => `<span class="mwt-diag-dim">${text}</span>`;
+
+    /** Level cell — error/warn get the loud badges; info/debug stay quiet. */
+    const levelCell = (lvl) => {
+        if (lvl === 'error') return '<span class="mwt-diag-badge mwt-diag-badge--fail">error</span>';
+        if (lvl === 'warn') return '<span class="mwt-diag-badge mwt-diag-badge--warn">warn</span>';
+        if (lvl === 'debug') return dim('debug');
+        return 'info';
+    };
+
+    /**
+     * The safe-summary detail text: the event's detail as it arrived HERE is
+     * already redactLogSnapshot() output, so plain JSON serialisation is the
+     * summary — markers and all. Null/undefined detail renders a dim dash.
+     */
+    const detailSummary = (e) => {
+        if (e.detail == null) return dim('—');
+        try {
+            return escapeHtml(JSON.stringify(e.detail) ?? '—');
+        } catch {
+            return dim('[unserializable detail]');
+        }
+    };
+
+    // The banner list reuses the Scope pane's warning markup, like the
+    // Last request + Injection panes do.
+    const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
+        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+    `).join('')}</ul>` : '';
+
+    // The filter row — chips carry the whole-ring counts (they are the
+    // "what is in here" numbers, independent of the current filter), and the
+    // counter ships its all-visible initial state; the wiring rewrites it as
+    // filters toggle. View toggles only: nothing here re-reads the store.
+    // The checkbox carries value="<level>" (a checkbox with no value
+    // attribute reads as the string "on" in the DOM — the Phase 11 review's
+    // P1: without it the filter set became {'on'} and every toggle blanked
+    // the table); applyLogViewFilters() reads data-diag-log-filter-level
+    // FIRST so the dataset is authoritative either way.
+    const chips = LOG_LEVELS.map((lvl) => `
+        <label class="mwt-diag-log-chip" title="Show/hide ${lvl}-level events — a view toggle over the rendered rows; it never re-reads the store">
+            <input type="checkbox" checked value="${lvl}" data-diag-log-filter-level="${lvl}">
+            <span class="mwt-diag-log-chip-label">${lvl}</span>
+            <span class="mwt-diag-log-chip-count">${logLevelCount(levels, lvl)}</span>
+        </label>`).join('');
+
+    const moduleOptions = `
+        <option value="all">all modules (${escapeHtml(String(s.total ?? events.length))})</option>
+        ${modules.map((m) => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)} — ${escapeHtml(String(m.count))}</option>`).join('')}`;
+
+    const rows = events.map((e) => `
+        <tr data-diag-log-row data-diag-log-level="${escapeHtml(e.level)}" data-diag-log-module="${escapeHtml(e.module)}">
+            <td>${e.ts != null ? escapeHtml(formatTime(e.ts)) : dim('—')}</td>
+            <td class="mwt-diag-dim">${escapeHtml(formatLogAge(e.ageSec))}</td>
+            <td>${levelCell(e.level)}</td>
+            <td><code>${escapeHtml(e.module)}</code></td>
+            <td><code>${escapeHtml(e.event)}</code></td>
+            <td class="mwt-diag-log-detail">${e.detail == null ? dim('—') : `
+                <span data-diag-log-gate="summary">${detailSummary(e)}</span>
+                <code data-diag-log-gate="body" data-diag-log-key="${escapeHtml(logEventKey(e))}" hidden></code>`}
+            </td>
+            <td class="mwt-diag-log-scope" title="${e.scopeKey ? escapeHtml(e.scopeKey) : 'scope key unknown (identity did not resolve)'}">#${e.epoch != null ? escapeHtml(String(e.epoch)) : '?'}</td>
+        </tr>`).join('');
+
+    const tableSection = events.length ? `
+        <div class="mwt-diag-log-filters">
+            <span class="mwt-diag-log-filters-label">Filter:</span>
+            ${chips}
+            <select class="mwt-diag-log-module" data-diag-log-filter-module title="Show one module's events — a view toggle over the rendered rows; it never re-reads the store">${moduleOptions}</select>
+            <span class="mwt-diag-log-counter" data-diag-log-counter>showing ${events.length} of ${events.length}</span>
+        </div>
+        <table class="mwt-diag-health-table mwt-diag-log-table">
+            <thead>
+                <tr><th>Time</th><th>Age</th><th>Level</th><th>Module</th><th>Event</th><th>Detail</th><th>Chat</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    ` : '<p class="mwt-diag-dim">No diagnostics events captured yet this session — every toast, API-call echo, and silent-recovery warn lands here; the ring is in-memory and resets on reload.</p>';
+
+    return `
+        <div class="mwt-diag-log">
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
+                <span class="mwt-diag-health-stat"><strong>${escapeHtml(String(s.total ?? events.length))}</strong> event(s) ${dim(`ring keeps ${s.capacity ?? '?'}`)}</span>
+                <span class="mwt-diag-health-stat">error <strong>${logLevelCount(levels, 'error')}</strong> · warn <strong>${logLevelCount(levels, 'warn')}</strong></span>
+                <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
+            </div>
+            ${warningList}
+            ${tableSection}
+            <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh; the level/module filters are view toggles over the rows already on screen and never re-read the store.
+                The ring is global across chat switches — the <strong>Chat</strong> column stamps each event with the operation epoch (hover for the resolved chat identity), so a scope bug is visible
+                across a switch. Detail summaries are safe by construction here: toast message bodies and raw error text render as size-only markers and every string is secret-scrubbed
+                (core/redaction.js); tick the content opt-in above to reveal the full — still scrubbed — detail text. In-memory only; resets on reload. Same data in the console:
+                <code>MWT.diagnostics.log()</code> (redacted return, accepts the same level/module filters as <code>events()</code>) or the raw ring <code>MWT.diagnostics.events()</code>.</p>
+        </div>
+    `;
+}
+
+/**
+ * Collect + render the Log pane. Called at markup-build time inside
+ * renderDiagnosticsPanel() — the modal is rebuilt on every open, which is this
+ * tab's whole refresh model (decision D2 — no render loop). Fully synchronous;
+ * a total collection failure degrades to an error card, never a broken panel.
+ * The collected snapshot is REDACTED (redactLogSnapshot, strict mode) before
+ * it is rendered — the same safe-by-default contract as the console bridge;
+ * the full-but-scrubbed detail is the opt-in reveal wireDiagnosticsPanel()
+ * performs, and the raw ring stays on MWT.diagnostics.events().
+ *
+ * @returns {string} innerHTML for the Log sub-tab pane
+ */
+export function renderLogPane() {
+    let snapshot;
+    try {
+        snapshot = collectLogSnapshot();
+    } catch (err) {
+        return `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Log unavailable</span>
+                <p>Collecting the log snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+    }
+    // Redact BEFORE rendering (the Phase 10 review rule): toast bodies and
+    // raw error text can quote the chat, so the pane renders the SAME
+    // strict-mode redactLogSnapshot() output the console bridge returns by
+    // default — only markers + scrubbed strings reach the DOM.
+    return renderLogSnapshot(redactLogSnapshot(snapshot));
+}
+
+/**
+ * Apply the Log tab's level/module VIEW filters to already-rendered rows —
+ * wireDiagnosticsPanel()'s change listener calls this; nothing re-collects
+ * or re-renders, so decision D2's open-and-read model is untouched.
+ *
+ * Extracted as a named export (the copyTextToClipboard precedent) so the
+ * Node suite can drive the real filter logic with element-like fakes — the
+ * Phase 11 review's P1 lived exactly here: the chips shipped without a
+ * `value` attribute, so `c.value` read as the default string "on", the
+ * active-level set became {'on'}, and toggling ANY chip hid EVERY row. The
+ * level now comes from `data-diag-log-filter-level` first (the markup pins
+ * `value="<level>"` as well), and checked-ness is filtered HERE rather than
+ * delegated to a `:checked` pseudo-class the fakes cannot honour.
+ *
+ * @param {Iterable<object>} rows — the rendered `tr[data-diag-log-row]`
+ *        elements (`.dataset.diagLogLevel` / `.dataset.diagLogModule` / `.hidden`)
+ * @param {Iterable<object>} levelFilters — the chip inputs (`.checked`,
+ *        `.dataset.diagLogFilterLevel`, `.value`)
+ * @param {{value: string}|null} moduleFilter — the module `<select>` (value
+ *        'all' or an exact module name), or null when absent
+ * @param {{textContent: string}|null} counter — the visible-of counter, or null
+ * @returns {number} how many rows remain visible
+ */
+export function applyLogViewFilters(rows, levelFilters, moduleFilter, counter) {
+    const activeLevels = new Set(
+        Array.from(levelFilters ?? [])
+            .filter((c) => c?.checked === true)
+            .map((c) => c?.dataset?.diagLogFilterLevel ?? c?.value),
+    );
+    const module = moduleFilter?.value ?? 'all';
+    const rowList = Array.from(rows ?? []);
+    let visible = 0;
+    for (const row of rowList) {
+        const show = activeLevels.has(row?.dataset?.diagLogLevel ?? '')
+            && (module === 'all' || row?.dataset?.diagLogModule === module);
+        row.hidden = !show;
+        if (show) visible += 1;
+    }
+    if (counter) counter.textContent = `showing ${visible} of ${rowList.length}`;
+    return visible;
+}
+
+/**
+ * Reveal (or re-hide) every rendered Log row's full detail — the content
+ * opt-in checkbox handler in wireDiagnosticsPanel() calls this. The Phase 9
+ * guard stack, applied per row:
+ *   1. DEFERRED INSERTION — the body `<code>` shipped empty; the raw detail
+ *      only enters the DOM at the moment of opt-in (as textContent) and
+ *      leaves it again on un-tick.
+ *   2. SECRET SCRUBBING — what gets inserted is scrubLogDetailForDisplay()
+ *      over the LIVE ring entry matched by fingerprint key
+ *      (logEventKey = seq|ts|epoch|module|event), never a rebuild.
+ *
+ * A body whose key is NOT in the live ring (the event was evicted after the
+ * pane was built) is never revealed: it stays hidden and empty and its safe
+ * summary stays visible — the documented fallback, and the Phase 11 review's
+ * second P2: the previous code hid the summary and showed an empty detail
+ * for exactly those rows. Extracted (the copyTextToClipboard precedent) so
+ * the Node suite can pin both behaviours with element-like fakes.
+ *
+ * @param {Iterable<object>} bodies — the `[data-diag-log-gate="body"]`
+ *        elements (`.dataset.diagLogKey` / `.hidden` / `.textContent`, and
+ *        `.parentElement.querySelector` reaching the sibling summary)
+ * @param {boolean} include — the live content opt-in state
+ * @param {object} [deps]
+ * @param {function(object=): object[]} [deps.events] — core/diagnostics
+ *        getEvents (defaults the real ring; direct import, §II.3)
+ * @param {function(): string[]} [deps.knownSecrets] — collectKnownSecrets
+ * @returns {void}
+ */
+export function revealLogDetails(bodies, include, { events = getEvents, knownSecrets = collectKnownSecrets } = {}) {
+    const bodyList = Array.from(bodies ?? []);
+    if (!bodyList.length) return;
+
+    // The LIVE ring, keyed by fingerprint. seq disambiguates same-millisecond
+    // repeats (the review's third find) — without it this Map would collapse
+    // them onto one detail and several rows would show the wrong content.
+    const secrets = knownSecrets();
+    const detailByKey = new Map();
+    for (const evt of events()) detailByKey.set(logEventKey(evt), evt.detail);
+
+    for (const el of bodyList) {
+        const key = el?.dataset?.diagLogKey;
+        const known = detailByKey.has(key);
+        const showBody = include && known;
+        el.hidden = !showBody;
+        el.textContent = showBody
+            ? scrubLogDetailForDisplay(detailByKey.get(key), { knownSecrets: secrets })
+            : '';
+        const summary = el.parentElement?.querySelector?.('[data-diag-log-gate="summary"]');
+        if (summary) summary.hidden = showBody;
+    }
+}
+
 // ─── Clipboard (Copy Report) ─────────────────────────────────────────────────
 
 
@@ -1157,6 +1434,38 @@ export function wireDiagnosticsPanel(root) {
                     : '';
             });
             root.querySelectorAll('[data-diag-inj-gate="placeholder"]').forEach((el) => { el.hidden = include; });
+
+            // Phase 11 — Log detail reveal: the SAME two guards as the
+            // Injection payloads applied to every event row, extracted into
+            // revealLogDetails() (deferred insertion + secret scrubbing over
+            // the LIVE ring, matched by the seq-carrying fingerprint — see
+            // its docstring for the evicted-row and collision rules).
+            revealLogDetails(root.querySelectorAll('[data-diag-log-gate="body"]'), include);
+        });
+    }
+
+    // Phase 11 — Log filters (design §I.5 Tab 6): level chips + module select
+    // + the visible-of counter, as VIEW TOGGLES over the rows already on
+    // screen — they never re-collect or re-render, so decision D2's
+    // open-and-read model is untouched (the same "a view toggle, not a render
+    // loop" carve-out the Phase 9 payload reveal uses). The logic lives in
+    // applyLogViewFilters(); this glue only gathers the elements. Scoped to
+    // the Log pane so the checkbox/select listeners cannot collide with the
+    // main modal's delegation.
+    const logPane = root.querySelector('.mwt-diag-log');
+    if (logPane) {
+        const applyLogFilters = () => {
+            applyLogViewFilters(
+                logPane.querySelectorAll('tr[data-diag-log-row]'),
+                logPane.querySelectorAll('input[data-diag-log-filter-level]'),
+                logPane.querySelector('select[data-diag-log-filter-module]'),
+                logPane.querySelector('[data-diag-log-counter]'),
+            );
+        };
+        logPane.addEventListener('change', (e) => {
+            if (e.target?.matches?.('input[data-diag-log-filter-level], select[data-diag-log-filter-module]')) {
+                applyLogFilters();
+            }
         });
     }
 

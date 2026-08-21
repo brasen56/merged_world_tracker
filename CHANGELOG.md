@@ -12,6 +12,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.7.7]
+
+### Added
+- Diagnostics Phase 11 — 📋 Log tab: the Diagnostics panel's sixth live sub-tab
+  answers "what has MWT been doing this session?" — the Phase 0 event ring
+  (every captured toast, API-call echo, and silent-recovery warn), newest
+  first, with per-level and per-module counts in the stat header. The level
+  chips and module select are **view toggles over the rendered rows** — they
+  never re-read the store, so decision D2's open-and-read model is untouched
+  (re-open the tab to refresh). A **Chat** column stamps each event with the
+  operation epoch (resolved chat identity on hover), the correlation dimension
+  that survives forks where identity cannot group events on its own. A warn
+  banner fires when error-level events are in the ring (warn-level silent
+  recoveries stay rows, not verdicts).
+- Redaction on this tab is strict by default and follows the Phase 9/10
+  precedent on both surfaces: the ring CAN carry content (toast bodies quote
+  the chat; `wi_script_unavailable` records a raw `detail.error`), so the pane
+  renders `redactLogSnapshot()` output — message/error bodies collapse to
+  size-only markers, every string is secret-scrubbed — and the content opt-in
+  checkbox reveals the full (still scrubbed) detail per row via
+  `wireDiagnosticsPanel()`: deferred insertion (the `<code>` ships hidden and
+  EMPTY carrying only a fingerprint key `seq|ts|epoch|module|event`; the raw
+  detail enters the DOM only on opt-in, as `textContent`, and leaves it on
+  un-tick) + secret scrubbing (`scrubLogDetailForDisplay()`). The reveal
+  matches rows against the LIVE ring by fingerprint, not array index — a row
+  whose event was evicted keeps its safe summary. One review find is pinned
+  by tests: the snapshot's level counts ship as `{ level, count }` pairs
+  (never a map keyed `error`) because the shared redaction layer gates any
+  field literally named `error` (ERROR_KEYS), which would have replaced the
+  error COUNT with an exclusion marker the moment the snapshot was redacted.
+- Console bridge `MWT.diagnostics.log({ level, module, includeContent })` —
+  so named because Phase 0 already took `events()` (the RAW ring). Takes the
+  same filter shapes `events()` accepts (data-side filtering, unlike the
+  tab's view toggles). Synchronous; warns on every finding; tables the rows.
+  **Safe by default:** what it RETURNS is `redactLogSnapshot()` output —
+  toast bodies gated to size markers, error bodies to error markers, every
+  string secret-scrubbed — so the return value pastes without auditing it;
+  `log({ includeContent: true })` includes the (still scrubbed) full details.
+  Console bridge and tab share one collector (`diagnostics_panel/log.js`),
+  so they can never disagree.
+- Collector `diagnostics_panel/log.js` is DOM-free with every dependency
+  injectable and every accessor individually guarded (a throwing store
+  degrades to an empty snapshot + an `errors` note), and normalises each
+  event defensively — a malformed entry degrades its own cells, never the
+  table. Tests: `test/log_tab.test.js` (63). Maintenance: the "later tabs
+  still show their placeholders" assertions in the environment + scope +
+  injection + last-request suites moved from Phase 11 to Phase 12.
+
+### Fixed
+- Three review finds in the new 📋 Log tab (post-implementation pass), all
+  pinned by new wiring tests that drive the real logic with element-like
+  fakes (the `copyTextToClipboard()` precedent):
+  - **Level filters hid every row (P1).** The level chips shipped without a
+    `value` attribute, so each checkbox's DOM `value` read as the default
+    string `"on"` — the active-level set became `{'on'}`, no row level ever
+    matched, and toggling ANY chip blanked the ENTIRE table. The chips now
+    carry `value="<level>"`, and the filter logic was extracted into the
+    exported `applyLogViewFilters()` (called by `wireDiagnosticsPanel()`),
+    which reads `data-diag-log-filter-level` first and filters on `.checked`
+    itself rather than delegating to a `:checked` selector.
+  - **Evicted rows lost their safe summary (P2).** On opt-in, a row whose
+    event had already been evicted from the live ring had its safe summary
+    hidden and an EMPTY detail body shown — the opposite of the documented
+    fallback. The reveal (extracted into the exported `revealLogDetails()`)
+    now consults the fingerprint map with `has()` before revealing: an
+    unknown key keeps the summary visible and the body hidden and empty
+    until the tab is re-opened.
+  - **The event fingerprint could select the wrong detail (P2).**
+    `ts|epoch|module|event` is not unique — `record()` stamps `ts` at
+    millisecond resolution, so repeated events from one module in one
+    millisecond share all four fields, and the reveal Map collapsed them
+    onto one detail (several rows displayed the wrong event content).
+    `record()` now stamps every ring event with a monotonic `seq` (reset
+    only by `_resetDiagnostics()`), carried through `normaliseLogEvent()`
+    and leading the fingerprint: `logEventKey()` =
+    `seq|ts|epoch|module|event`. Pinned at the store level in
+    `test/diagnostics.test.js` and at the tab level in `test/log_tab.test.js`.
+
 ## [1.7.6]
 
 ### Added

@@ -39,6 +39,11 @@ import { collectInjectionSnapshot, redactInjectionSnapshot, formatInjectionAge, 
 // 📡 Last request sub-tab (the Phase 1 capture for the most recent call plus
 // the short history, telemetry by construction). Same direct-import rule.
 import { collectLastRequestSnapshot, redactLastRequestSnapshot, formatRequestAge } from './diagnostics_panel/last_request.js';
+// Diagnostics Phase 11 — Tab 6 Log: the snapshot collector + redaction gate
+// behind the 📋 Log sub-tab (the Phase 0 ring, filterable by level and module,
+// newest first; details are content-gated because toast bodies quote the
+// chat and error bodies can too). Same direct-import rule.
+import { collectLogSnapshot, redactLogSnapshot, logLevelCount } from './diagnostics_panel/log.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1281,6 +1286,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
 //   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
 //   MWT.diagnostics.scope()                     // the 🗂️ Scope & storage tab snapshot (which books + why)
+//   MWT.diagnostics.log({ level: 'warn' })      // the 📋 Log tab snapshot (ring + counts; redacted return)
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1658,6 +1664,42 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 11 — Tab 6 Log (design §I.5 Tab 6): the same snapshot the 📋 Log
+    // sub-tab renders — the Phase 0 event ring, newest first, with per-level
+    // and per-module counts, plus a warn when error-level events exist. Takes
+    // the SAME filter shapes events() accepts ({ level: 'error' | [...],
+    // module: 'api' }) — data-side filtering, unlike the tab's view toggles.
+    // Named log() because Phase 0 already took events() — the RAW ring.
+    // Read-only; resolves live on every call. Synchronous.
+    //
+    // SAFE BY DEFAULT (the redaction contract): what this RETURNS is
+    // redactLogSnapshot() output — toast message bodies (chat content, per
+    // core/notifications.js) gated to size-only markers, raw error bodies to
+    // error markers, and every string secret-scrubbed (Rule 1b: this
+    // install's live secret values, embedded URLs cut to scheme+host,
+    // key/bearer shapes) — so the return value pastes without auditing it.
+    // log({ includeContent: true }) includes the (still scrubbed) full
+    // details; the raw ring stays on the Phase 0 path, events().
+    log: ({ level, module, includeContent = false } = {}) => {
+        const snap = redactLogSnapshot(collectLogSnapshot({ level, module }), { includeContent });
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table(snap.events.map(e => ({
+            time: e.ts != null ? new Date(e.ts).toLocaleTimeString() : '—',
+            level: e.level,
+            module: e.module,
+            event: e.event,
+            chat: e.epoch != null ? `#${e.epoch}` : '—',
+        })));
+        console.log(
+            snap.total
+                ? `[MWT] Log snapshot for MWT v${snap.mwtVersion} — ${snap.count} of ${snap.total} retained event(s) shown (newest first; the ring keeps ${snap.capacity}): ${logLevelCount(snap.levels, 'error')} error(s), ${logLevelCount(snap.levels, 'warn')} warn(s), ${logLevelCount(snap.levels, 'info')} info, ${logLevelCount(snap.levels, 'debug')} debug. The return value carries ageSec/scopeKey and the redacted detail for every event${includeContent ? ' (content INCLUDED, still secret-scrubbed)' : ' (toast bodies and error text gated to size markers)'}; the raw ring: MWT.diagnostics.events().`
+                : '[MWT] No diagnostics events captured yet — the ring is in-memory and resets on reload.'
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1667,6 +1709,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,log,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

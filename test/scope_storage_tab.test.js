@@ -424,8 +424,8 @@ describe('renderScopePane (default wiring)', () => {
         // The real pane rendered (not the Phase 8 placeholder card)…
         expect(html).toContain('lorebook resolution:');
         expect(html).not.toContain('Phase 8 — not built yet');
-        // …while later tabs still show their placeholders (Phase 10 landed
-        // 2026-08-20 — its suite owns the last-request-pane assertion now).
-        expect(html).toContain('Phase 11 — not built yet');
+        // …while later tabs still show their placeholders (Phase 11 landed
+        // 2026-08-21 — its suite owns the log-pane assertion now).
+        expect(html).toContain('Phase 12 — not built yet');
     });
 });

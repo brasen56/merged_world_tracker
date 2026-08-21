@@ -1,15 +1,16 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage + Injection + Last request)
+# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage + Injection + Last request + Log)
 
 > **Status:** live now. The console bridge remains the deepest view; the
 > **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
 > redacted **📋 Copy Report** without devtools, and its live sub-tabs —
 > **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), **🗂️ Scope &
-> storage** (Phase 8), **💉 Injection** (Phase 9), and **📡 Last request**
-> (Phase 10) — render the one-table answers to "is anything broken right
-> now?", "which SillyTavern am I on, and what does it expose?", "which
-> lorebooks is this chat using, and why?", "what is MWT putting in the
-> narrator's prompt, where, and why?", and "what did the last API call look
-> like?". Tabs 6–7 (Phases 11–12) are still being built.
+> storage** (Phase 8), **💉 Injection** (Phase 9), **📡 Last request**
+> (Phase 10), and **📋 Log** (Phase 11) — render the one-table answers to
+> "is anything broken right now?", "which SillyTavern am I on, and what does
+> it expose?", "which lorebooks is this chat using, and why?", "what is MWT
+> putting in the narrator's prompt, where, and why?", "what did the last API
+> call look like?", and "what has MWT been doing this session?". Tab 7
+> (Phase 12) is still being built.
 
 ## What this is
 
@@ -61,6 +62,8 @@ MWT.diagnostics.injectionStatus()         // the 💉 Injection tab snapshot (pl
                                           //   — redacted by default; { includeContent: true } for scrubbed payloads
 MWT.diagnostics.lastRequest()             // the 📡 Last request tab snapshot (last call + short history + stats)
                                           //   — redacted by default; raw telemetry-only copies: apiCalls()
+MWT.diagnostics.log()                     // the 📋 Log tab snapshot (the event ring + counts, newest first)
+MWT.diagnostics.log({ level: 'warn' })    //   …data-side filtered, like events(); redacted by default
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -315,6 +318,37 @@ weird" report, every timeout, retry, or token-accounting question, and as
 the companion to `MWT.diagnostics.health()`'s last-run column — that shows
 WHEN each module last ran; this shows WHAT that call actually did.
 
+### `log()` (Phase 11) — what MWT has been doing this session
+
+The same snapshot the 📋 Log tab renders, **synchronous** and safe to paste:
+`log()` returns a redacted view of the Phase 0 event ring — every captured
+toast, API-call echo, and silent-recovery warn, newest first — with
+per-level and per-module counts, each event stamped with its age and the
+operation epoch (`chat` column; the raw return value also carries the
+resolved chat identity per event). It warns on the one finding the tab also
+banners: error-level events are in the ring.
+
+Unlike the tab's level/module chips (view toggles over rendered rows),
+`log()`'s `{ level, module }` arguments are **data-side filters** taking the
+same shapes `events()` accepts — `log({ level: ['warn', 'error'] })`,
+`log({ module: 'api' })` — and the counts still describe the whole ring.
+
+**Not telemetry by construction** — unlike `apiCalls()`, the ring carries
+chat content: every toast is recorded with its message body, and error
+details can quote upstream bodies. So the RETURN VALUE is redacted by
+default: message bodies collapse to `[content excluded — N chars]` markers,
+raw error text to `[error excluded — N chars]`, and every string is
+secret-scrubbed. `log({ includeContent: true })` includes the (still
+scrubbed) full details — opting into content never opts into secrets. The
+RAW ring (unredacted, includes everything) stays on `MWT.diagnostics.events()`
+— skim before pasting that one.
+
+**When to capture it:** "my data is weird" reports (pair with
+`events({ level: 'warn' })` for the raw silent-recovery list), "a toast
+flashed and disappeared", and any report where the sequence of what MWT did
+matters — the epoch stamps make cross-chat-switch corruptions visible as a
+row-by-row timeline.
+
 ## How to capture a report
 
 1. Reproduce the problem.
@@ -332,7 +366,7 @@ WHEN each module last ran; this shows WHAT that call actually did.
    before pasting). For "my data is
    weird" reports, add `MWT.diagnostics.events({ level: 'warn' })` — it shows
    every silent recovery (repaired JSON, reasoning fallback, stripped fences,
-   scope fallback, missing world-info) from the session. For "the setting is
+   scope fallback, missing world-info) from the session — or `MWT.diagnostics.log({ level: 'warn' })` for the same data with counts, ages, and epoch stamps, already redacted for pasting. For "the setting is
    right but behaves wrong", add `MWT.diagnostics.settingsProvenance()`. For
    "is anything even running", start with `MWT.diagnostics.health()`. For
    anything on a non-reference build/fork, or any scoping/identity issue, add
