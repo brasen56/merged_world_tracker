@@ -1,16 +1,18 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage + Injection + Last request + Log)
+# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage + Injection + Last request + Log + Integrity)
 
 > **Status:** live now. The console bridge remains the deepest view; the
 > **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
 > redacted **📋 Copy Report** without devtools, and its live sub-tabs —
 > **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), **🗂️ Scope &
 > storage** (Phase 8), **💉 Injection** (Phase 9), **📡 Last request**
-> (Phase 10), and **📋 Log** (Phase 11) — render the one-table answers to
-> "is anything broken right now?", "which SillyTavern am I on, and what does
-> it expose?", "which lorebooks is this chat using, and why?", "what is MWT
-> putting in the narrator's prompt, where, and why?", "what did the last API
-> call look like?", and "what has MWT been doing this session?". Tab 7
-> (Phase 12) is still being built.
+> (Phase 10), **📋 Log** (Phase 11), and **🛡️ Integrity** (Phase 12) — render
+> the one-table answers to "is anything broken right now?", "which
+> SillyTavern am I on, and what does it expose?", "which lorebooks is this
+> chat using, and why?", "what is MWT putting in the narrator's prompt,
+> where, and why?", "what did the last API call look like?", "what has MWT
+> been doing this session?", and "do my stores reference things that
+> exist?". All seven v1 tabs are live; Phase 13 (copy-report finalize +
+> QA) is what remains.
 
 ## What this is
 
@@ -64,6 +66,8 @@ MWT.diagnostics.lastRequest()             // the 📡 Last request tab snapshot 
                                           //   — redacted by default; raw telemetry-only copies: apiCalls()
 MWT.diagnostics.log()                     // the 📋 Log tab snapshot (the event ring + counts, newest first)
 MWT.diagnostics.log({ level: 'warn' })    //   …data-side filtered, like events(); redacted by default
+MWT.diagnostics.integrity()               // the 🛡️ Integrity tab snapshot (on-demand store checks; async)
+                                          //   — read-only; repairs stay on MWT.profiles / MWT.evidence / MWT.interiority
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -348,6 +352,40 @@ RAW ring (unredacted, includes everything) stays on `MWT.diagnostics.events()`
 flashed and disappeared", and any report where the sequence of what MWT did
 matters — the epoch stamps make cross-chat-switch corruptions visible as a
 row-by-row timeline.
+
+### `integrity()` (Phase 12) — do my stores reference things that exist?
+
+The same snapshot the 🛡️ Integrity tab renders when its **▶ Run** button is
+pressed — **async** (it reads the NPC Profiles lorebook) and, like the tab,
+meant for on-demand use. Read-only checks with counts + top-5 samples per
+check: duplicate profile entries, dangling `profileUid` pointers,
+evidence↔profile orphans in both directions, `validateSection()` per store
+(the same records a backup import would refuse), and Interiority ledger
+reference integrity (duplicate ledger ids, deleted intentions that came
+back, duplicate tombstone ids). It warns on every finding and tables both
+the per-check counts and the per-store validation rows.
+
+**Safe to paste as-is** — safer than any other method here, in fact: the
+snapshot carries no chat prose by construction (names, uids, counts, and
+the validators' own reason strings — never previews, quotes, or quarantined
+records), and every string is still secret-scrubbed. No repair is offered
+on purpose: cleanup stays on `MWT.profiles.{duplicates,pruneDuplicates,relink}`
+/ `MWT.evidence.clear*` / `MWT.interiority.clearDeletions`, which all have
+dry-run guards.
+
+Two readings that are NOT faults: "evidence with no profile" (capture ran,
+the profile has not been generated yet — ordinary mid-pipeline) and absent
+store sections (a store that has never written this chat). And one flag to
+know: if the profile-book read comes back empty while registry pointers are
+set, the affected checks report `unreliable` instead of flooding false
+findings — check `MWT.scope.diagnose()` for which book this chat resolves
+to.
+
+**When to capture it:** any "my data is weird" report — duplicate NPC
+profiles, profiles that regenerate oddly ("never generated" despite an
+entry existing), backup imports that refuse records, or intentions that
+reappear after you deleted them. Pair with `MWT.scope.diagnose()` when the
+unreliable flag shows.
 
 ## How to capture a report
 

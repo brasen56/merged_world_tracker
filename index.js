@@ -44,6 +44,10 @@ import { collectLastRequestSnapshot, redactLastRequestSnapshot, formatRequestAge
 // newest first; details are content-gated because toast bodies quote the
 // chat and error bodies can too). Same direct-import rule.
 import { collectLogSnapshot, redactLogSnapshot, logLevelCount } from './diagnostics_panel/log.js';
+// Diagnostics Phase 12 — Tab 7 Integrity: the async snapshot collector + safe-
+// return redaction gate behind the 🛡️ Integrity sub-tab (on-demand read-only
+// checks over lorebooks + chat metadata). Same direct-import rule.
+import { collectIntegritySnapshot, redactIntegritySnapshot } from './diagnostics_panel/integrity.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1287,6 +1291,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
 //   MWT.diagnostics.scope()                     // the 🗂️ Scope & storage tab snapshot (which books + why)
 //   MWT.diagnostics.log({ level: 'warn' })      // the 📋 Log tab snapshot (ring + counts; redacted return)
+//   MWT.diagnostics.integrity()                 // the 🛡️ Integrity tab snapshot (on-demand checks; async, redacted return)
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1700,6 +1705,56 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 12 — Tab 7 Integrity (design §I.5 Tab 7): the same snapshot the 🛡️
+    // Integrity sub-tab renders when its ▶ Run button is pressed — duplicate
+    // profile entries, dangling profileUid pointers, evidence↔profile
+    // orphans, validateSection() per store (enumerated from the METADATA_KEYS
+    // whitelist), and Interiority ledger reference integrity. ASYNC (the
+    // profile-book read loads a lorebook) and, like the tab, intended for
+    // on-demand use — it is read-only either way. Read-only; nothing is
+    // repaired here: the cleanup tools stay on MWT.profiles / MWT.evidence /
+    // MWT.interiority with their dry-run guards.
+    //
+    // SAFE BY DEFAULT (the redaction contract): what this RETURNS is
+    // redactIntegritySnapshot() output. The snapshot carries no chat prose by
+    // construction (names, uids, counts, and the backup validators' own
+    // reason strings — never previews, quotes, or quarantined records), and
+    // every string is Rule-1b secret-scrubbed besides, so the return value
+    // pastes without auditing it.
+    integrity: async () => {
+        const snap = redactIntegritySnapshot(await collectIntegritySnapshot());
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table({
+            findings: snap.totals?.findings ?? 0,
+            'duplicate profile entries': snap.duplicateProfiles?.count ?? 0,
+            'dangling profileUid pointers': snap.danglingProfileUids?.count ?? 0,
+            'evidence without profile (reading)': snap.evidenceWithoutProfile?.count ?? 0,
+            'profiles without evidence': snap.profilesWithoutEvidence?.count ?? 0,
+            'store records quarantined': snap.storeValidations?.skippedTotal ?? 0,
+            'store id conflicts': snap.storeValidations?.conflictsTotal ?? 0,
+            'interiority: dup ledger ids': snap.interiority?.duplicateLedgerIds?.count ?? 0,
+            'interiority: tombstoned but live': snap.interiority?.tombstonedStillInLedger?.count ?? 0,
+            'interiority: dup tombstone ids': snap.interiority?.duplicateTombstoneIds?.count ?? 0,
+        });
+        console.table((snap.storeValidations?.sections || []).map((r) => ({
+            store: r.id,
+            present: r.present,
+            added: r.added ?? '—',
+            skipped: r.skippedCount ?? '—',
+            conflicts: r.conflicts ?? '—',
+        })));
+        console.log(
+            `[MWT] Integrity snapshot for MWT v${snap.mwtVersion} — ${snap.totals?.findings ?? 0} finding(s) across `
+            + `${snap.totals?.profileEntries ?? 0} profile entries, ${snap.totals?.registryRecords ?? 0} registry records, `
+            + `${snap.totals?.evidenceFiles ?? 0} evidence files, ${snap.totals?.ledgerEntries ?? 0} ledger entries, `
+            + `${snap.totals?.sectionsPresent ?? 0} store section(s). READ-ONLY — repairs stay on MWT.profiles / `
+            + 'MWT.evidence / MWT.interiority (dry-run first). The return value carries the samples and per-store rows.'
+        );
+        return snap;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1709,6 +1764,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,log,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,log,integrity,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

@@ -419,6 +419,19 @@ describe('captured notification bodies (core/notifications.js event shape)', () 
         expect(redactForReport({ settings: { pinnedEntities: names } }, { includeContent: true }).settings.pinnedEntities)
             .toBe(names);
     });
+
+    test('preview is chat prose (NPC Profiles entry body — knowledge/lorebook.js listProfileEntries)', () => {
+        // The first 80 chars of a profile BODY. The Phase 12 Integrity collector
+        // never emits it, but this makes the redaction layer the backstop if any
+        // surface ever spreads a listProfileEntries() row wholesale.
+        const body = 'Mira Vance is the poisoner and secretly loves the stablehand.';
+        const off = redactForReport({ entry: { name: 'Mira', uid: 5, preview: body } }, { includeContent: false });
+        expect(JSON.stringify(off)).not.toContain('poisoner');
+        expect(off.entry.preview).toMatch(/^\[content excluded — \d+ chars\]$/);
+        expect(off.entry.name).toBe('Mira');  // name is an identity string — stays
+        expect(off.entry.uid).toBe(5);
+        expect(redactForReport({ entry: { preview: body } }, { includeContent: true }).entry.preview).toBe(body);
+    });
 });
 
 // ─── Rule 2 (error bodies): errors can quote the chat ────────────────────────

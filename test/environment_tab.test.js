@@ -529,8 +529,9 @@ describe('renderEnvironmentPane (default wiring)', () => {
         // The real pane rendered (not the Phase 7 placeholder card)…
         expect(html).toContain('mwt-diag-env-premise--');
         expect(html).not.toContain('Phase 7 — not built yet');
-        // …while later tabs still show their placeholders (Phase 11 landed
-        // 2026-08-21 — its suite owns the log-pane assertion now).
-        expect(html).toContain('Phase 12 — not built yet');
+        // …and with Phase 12 (Integrity) landed 2026-08-21, every one of the
+        // seven v1 tabs renders a real pane — no placeholder remains.
+        expect(html).toContain('mwt-diag-int-run');
+        expect(html).not.toContain('— not built yet');
     });
 });

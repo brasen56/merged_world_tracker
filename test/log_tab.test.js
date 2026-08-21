@@ -14,8 +14,8 @@
  *      renderLogPane() string builders (stat header, filter chips with
  *      counts, module select, the table newest first, gated detail markup,
  *      the warning banner, the empty state, escaping) plus the pane switch
- *      that mounts the sub-tab and moves the placeholder line to Phase 12;
- *      and the two wiring helpers behind wireDiagnosticsPanel()'s Log glue —
+ *      that mounts the sub-tab; and the two wiring helpers behind
+ *      wireDiagnosticsPanel()'s Log glue —
  *      applyLogViewFilters() (the P1: value-less checkboxes read as "on"
  *      and blanked the table) and revealLogDetails() (the P2s: evicted rows
  *      keep their safe summary; seq disambiguates same-millisecond repeats).
@@ -568,9 +568,10 @@ describe('renderLogPane (default wiring)', () => {
         // The real pane rendered (not the Phase 11 placeholder card)…
         expect(html).toContain('mwt-diag-log');
         expect(html).not.toContain('Phase 11 — not built yet');
-        // …while the last tab still shows its placeholder (Phase 11 landed
-        // 2026-08-21 — this suite owns the log-pane assertion now).
-        expect(html).toContain('Phase 12 — not built yet');
+        // …and with Phase 12 (Integrity) landed 2026-08-21, every one of the
+        // seven v1 tabs renders a real pane — no placeholder remains.
+        expect(html).toContain('mwt-diag-int-run');
+        expect(html).not.toContain('— not built yet');
     });
 });
 

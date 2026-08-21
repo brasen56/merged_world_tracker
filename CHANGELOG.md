@@ -12,6 +12,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.7.8]
+
+### Added
+- Diagnostics Phase 12 — 🛡️ Integrity tab: the Diagnostics panel's seventh
+  and final v1 sub-tab answers "do my stores reference things that exist?"
+  — on-demand read-only checks over lorebooks and chat metadata: duplicate
+  profile entries (the visible half of lost `profileUid` pointers), dangling
+  `profileUid` pointers (the duplicate-generating state
+  `MWT.profiles.relink()` recovers), evidence↔profile orphans in both
+  directions, `validateSection()` per store (reused as-is from
+  backup/validate.js over the chat-metadata sections — the same records a
+  backup import would refuse are quarantined with the validator's own
+  reasons), and Interiority ledger reference integrity (duplicate ledger
+  ids, tombstoned-but-still-live intentions via the real
+  `isIntentionDeleted` rule, duplicate tombstone ids). Every check reports a
+  count + a top-5 sample, with a **📋 Copy full JSON** escape hatch for the
+  complete lists. No repair actions in v1 — the mutating console tools
+  (`MWT.profiles.*`, `MWT.evidence.*`, `MWT.interiority.*`) stay where they
+  have dry-run guards.
+- Unlike Tabs 1–6 this pane is **on demand only**: every check is O(entries)
+  and one is an async lorebook read, so the pane renders an idle state + a
+  **▶ Run integrity checks** button (`runIntegrityChecks()`, extracted and
+  injectable for the Node suite) and nothing runs on tab/modal open — one
+  collect per press, never a render loop (decision D2 untouched).
+- Two judgment calls are pinned by tests: an empty NPC-Profiles read over
+  SET registry pointers flags the affected checks `unreliable` + a
+  `profile-book-unreadable` warning instead of flooding false findings
+  (evidence alone does not trip the guard — an empty book over pointer-less
+  evidence is the ordinary young-chat state, so "evidence with no profile"
+  stays a counted READING, never a warning); and the snapshot carries **no
+  chat prose by construction** — no profile previews, evidence quotes, or
+  quarantined records, only names/uids/counts and the validators' own
+  reason strings — while both surfaces still route through
+  `redactIntegritySnapshot()` (= `redactForReport()`), so every string is
+  Rule-1b secret-scrubbed. As a backstop, the redaction layer now also gates
+  the `preview` field name (the profile-body snippet `listProfileEntries()`
+  returns) as content, so the shared helper's chat prose is protected even if
+  a future tab surfaces a whole entry row rather than picking fields by hand.
+  Evidence↔profile joins go through canonical registry names
+  (`resolveRegistryKey`), so alias spellings join through the real identity
+  rules.
+- Console bridge `MWT.diagnostics.integrity()` — **async** (awaits the
+  profile-book read), warns on every finding, tables the per-check counts
+  and the per-store validation rows, and returns the redacted snapshot.
+  Console bridge and tab share one collector
+  (`diagnostics_panel/integrity.js`), so they can never disagree.
+- With all seven v1 tabs live, the "later tabs still show their
+  placeholders" assertions in the environment + scope + injection +
+  last-request + log suites retired in favour of "no placeholder remains".
+
 ## [1.7.7]
 
 ### Added

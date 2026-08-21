@@ -820,6 +820,84 @@ a:focus-visible {
     color: var(--mwt-text-dim);
 }
 
+/* ─── Diagnostics: Tab 7 Integrity (Phase 12) ────────────────────────────── */
+
+/* The ▶ Run button — deliberately prominent: it is the only trigger for the
+   checks (never on open), so it must not read as decoration. */
+.mwt-diag-int-run {
+    padding: 8px 14px;
+    border-radius: var(--mwt-radius);
+    border: 1px solid var(--mwt-border);
+    background: var(--mwt-bg);
+    color: var(--mwt-text);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.mwt-diag-int-run:hover:not(:disabled) {
+    border-color: var(--mwt-accent);
+}
+
+.mwt-diag-int-run:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+/* The results container (idle placeholder in, run results out). */
+.mwt-diag-int-result {
+    margin-top: 10px;
+}
+
+/* One check = one card: title row + note + sample table, separated like the
+   scope pane's blocks. */
+.mwt-diag-int-card {
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    padding: 8px 10px;
+    margin: 10px 0;
+}
+
+.mwt-diag-int-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.mwt-diag-int-note {
+    margin: 4px 0 6px;
+    font-size: 12px;
+}
+
+/* Validator reason samples inside the store-validation table: dim, small,
+   quoted — they are the backup validators' own strings, one line each. */
+.mwt-diag-int-reasons {
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.mwt-diag-int-table {
+    margin: 4px 0;
+}
+
+/* The "Copy full JSON" escape hatch row. */
+.mwt-diag-int-actions {
+    margin-top: 10px;
+}
+
+.mwt-diag-int-copy {
+    padding: 6px 12px;
+    border-radius: var(--mwt-radius);
+    border: 1px solid var(--mwt-border);
+    background: var(--mwt-bg);
+    color: var(--mwt-text);
+    cursor: pointer;
+}
+
+.mwt-diag-int-copy:hover {
+    border-color: var(--mwt-accent);
+}
+
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */
 
 .mwt-button-bar {
