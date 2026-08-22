@@ -1,6 +1,7 @@
 /**
  * diagnostics_panel/render.js — Panel shell (Diagnostics Phase 5) + Tab 1
- * Health (Phase 6) + Tab 2 Environment (Phase 7).
+ * Health (Phase 6) + Tab 2 Environment (Phase 7) + Copy Report finalize
+ * (Phase 13).
  *
  * The mount point every later tab plugs into (phases doc §II.4 Phase 5): a
  * 🩺 Diagnostics tab INSIDE the existing MWT modal (createModal infra — never
@@ -79,6 +80,15 @@
  * (runIntegrityChecks) — still one collect per render, never a render loop
  * and never on open. Counts + a top-N sample per check, with a "copy full
  * JSON" escape hatch (copyIntegritySnapshotJson); no repair actions in v1.
+ *
+ * Phase 13 finalized the 📋 Copy Report button (runCopyReport, extracted and
+ * injectable like runIntegrityChecks): collectReportSections() (./report.js)
+ * now serializes the tab accessors — health, environment (shared.js probe
+ * awaited up front), scope, injection, integrity — alongside the Phase 0–4
+ * accessors, which makes the collect async; the button disables + relabels
+ * while it runs. The button press is the Phase 12 "on demand only" trigger
+ * for the Integrity section (one press = one collect, never on open), and
+ * buildReport()'s redaction gate still sees every section.
  *
  * Hard limits inherited from the design (§I.1): READ-ONLY — nothing here
  * writes to settings, chat metadata, or localStorage; the checkbox state is
@@ -1562,6 +1572,73 @@ export async function copyTextToClipboard(text, { nav = globalThis.navigator, do
     }
 }
 
+/**
+ * Build + copy the full diagnostics report — the handler behind the panel's
+ * 📋 Copy Report button, the feature's primary deliverable (design goal 2).
+ *
+ * ASYNC since Phase 13: the report now serializes the tab accessors
+ * (collectReportSections()), and the Integrity section's collect is an async
+ * lorebook read — the button is therefore disabled + relabelled while it runs
+ * (the runIntegrityChecks precedent) and restored in `finally`, whatever
+ * happened. The press itself is the Phase 12 "on demand only" trigger: nothing
+ * collects on tab/modal open, and this is one collect per press, never a
+ * render loop (decision D2).
+ *
+ * The content opt-in is read LIVE from the checkbox and never persisted
+ * (read-only + in-memory rules), so every session starts with content
+ * EXCLUDED. Redaction is buildReport()'s single gate — every section, secrets
+ * in either mode, content only with the opt-in.
+ *
+ * Extracted as a named export with injectable collect/build/copy/status deps
+ * (the runIntegrityChecks precedent) so the Node suite can drive the real
+ * flow with element-like fakes.
+ *
+ * @param {HTMLElement} button — the 📋 Copy Report button element
+ * @param {HTMLElement} root — the modal root (its checkbox is read; its
+ *        status bar is the default status sink)
+ * @param {object} [opts] — { collect, build, copy, status, readOptIn }
+ *        overrides; `status` is (message, type, clearAfterMs), `readOptIn`
+ *        is () => boolean (defaults: the live checkbox in `root`)
+ * @returns {Promise<boolean>} whether the report reached the clipboard
+ */
+export async function runCopyReport(button, root, {
+    collect = collectReportSections,
+    build = buildReport,
+    copy = copyTextToClipboard,
+    status = () => {},
+    readOptIn,
+} = {}) {
+    if (!button || !root) return false;
+    const includeContent = (readOptIn ?? (() => !!root.querySelector(`#${DIAGNOSTICS_CONTENT_OPT_IN_ID}`)?.checked))();
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '⏳ Building report…';
+    try {
+        // Phase 13: one collect per press — the sections now include the five
+        // tab accessors (health / environment / scope / injection / integrity).
+        const report = build({ includeContent, sections: await collect() });
+        const copied = await copy(report.markdown);
+        if (!copied) {
+            // Escape hatch: the report exists even where the clipboard does
+            // not — dump it to the console so a tester can still copy it from
+            // there.
+            console.warn('[MWT:Diagnostics] Clipboard copy failed — the report follows; copy it from the console:', report.markdown);
+            status('Copy failed — clipboard unavailable in this context. The report was logged to the browser console (F12).', 'error');
+            return false;
+        }
+        status(includeContent
+            ? 'Report copied — content INCLUDED (contains chat text).'
+            : 'Report copied — content excluded, secrets redacted.', 'success', 4000);
+        return true;
+    } catch (err) {
+        status(`Report build failed: ${err?.message || err}`, 'error');
+        return false;
+    } finally {
+        button.disabled = false;
+        button.textContent = label || '📋 Copy Report';
+    }
+}
+
 // ─── Integrity wiring (Phase 12) ──────────────────────────────────────────────
 
 /**
@@ -1686,35 +1763,19 @@ export function wireDiagnosticsPanel(root) {
 
     // Copy Report — the feature's primary deliverable (design goal 2). The
     // checkbox is read live and never persisted (read-only + in-memory
-    // rules), so every session starts with content EXCLUDED. Phase 13 will
-    // extend the serialized sections and run the final QA sweep; the shape
-    // and the redaction routing are fixed here. The clipboard itself goes
-    // through copyTextToClipboard(): navigator.clipboard is absent on
-    // non-secure origins, and touching it unguarded threw synchronously out
-    // of this handler (Phase 5 review follow-up).
+    // rules), so every session starts with content EXCLUDED. Phase 13
+    // finalized the serialized sections (the tab accessors now included) and
+    // made the collect async — the Integrity section reads a lorebook — so the
+    // button is disabled while it runs (runCopyReport, the runIntegrityChecks
+    // precedent). The clipboard itself goes through copyTextToClipboard():
+    // navigator.clipboard is absent on non-secure origins, and touching it
+    // unguarded threw synchronously out of this handler (Phase 5 review
+    // follow-up).
     const copyBtn = root.querySelector('#mwt-diag-copy-report');
     if (copyBtn) {
         copyBtn.addEventListener('click', () => {
-            const includeContent = !!root.querySelector(`#${DIAGNOSTICS_CONTENT_OPT_IN_ID}`)?.checked;
-            let report;
-            try {
-                report = buildReport({ includeContent, sections: collectReportSections() });
-            } catch (err) {
-                setStatus(root, `Report build failed: ${err?.message || err}`, 'error');
-                return;
-            }
-            copyTextToClipboard(report.markdown).then((copied) => {
-                if (!copied) {
-                    // Escape hatch: the report exists even where the clipboard
-                    // does not — dump it to the console so a tester can still
-                    // copy it from there.
-                    console.warn('[MWT:Diagnostics] Clipboard copy failed — the report follows; copy it from the console:', report.markdown);
-                    setStatus(root, 'Copy failed — clipboard unavailable in this context. The report was logged to the browser console (F12).', 'error');
-                    return;
-                }
-                setStatus(root, includeContent
-                    ? 'Report copied — content INCLUDED (contains chat text).'
-                    : 'Report copied — content excluded, secrets redacted.', 'success', 4000);
+            runCopyReport(copyBtn, root, {
+                status: (message, type, clearAfterMs) => setStatus(root, message, type, clearAfterMs),
             });
         });
     }

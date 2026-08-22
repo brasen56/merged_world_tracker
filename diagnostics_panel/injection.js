@@ -42,7 +42,10 @@ import { estimateTokens } from '../core/context.js';
 // so what this tab SHOWS goes through it too.
 import { redactForReport } from '../core/redaction.js';
 // Live secret VALUES for the scrub list. report.js is a sibling collector
-// (it does not import this module), so there is no cycle; the
+// that (since Phase 13) imports this module for the report's Injection
+// section, so there IS a module cycle — safe because both sides only
+// reference the other's bindings inside function bodies (hoisted function
+// declarations), never at module-init time. The
 // knownSecrets-??-collectKnownSecrets() "safe by default" pattern below is
 // lifted from buildReport() — collectKnownSecrets() is fully guarded and
 // returns [] with no SillyTavern runtime, keeping this unit-testable in Node.

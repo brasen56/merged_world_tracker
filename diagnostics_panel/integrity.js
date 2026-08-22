@@ -68,8 +68,11 @@
 import { MWT_VERSION } from '../core/version.js';
 import { getChatMeta } from '../core/context.js';
 import { redactForReport } from '../core/redaction.js';
-// Live secret VALUES for the scrub list. report.js is a sibling collector (it
-// does not import this module), so there is no cycle; the guarded
+// Live secret VALUES for the scrub list. report.js is a sibling collector
+// that (since Phase 13) imports this module for the report's Integrity
+// section, so there IS a module cycle — safe because both sides only
+// reference the other's bindings inside function bodies (hoisted function
+// declarations), never at module-init time. The guarded
 // collectKnownSecrets() returns [] with no SillyTavern runtime, keeping this
 // unit-testable in Node (the last_request.js / log.js precedent).
 import { collectKnownSecrets } from './report.js';

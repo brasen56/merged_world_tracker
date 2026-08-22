@@ -1,9 +1,9 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage + Injection + Last request + Log + Integrity)
+# MWT.diagnostics — Console Tester Guide (Phases 0–13)
 
-> **Status:** live now. The console bridge remains the deepest view; the
-> **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
-> redacted **📋 Copy Report** without devtools, and its live sub-tabs —
-> **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), **🗂️ Scope &
+> **Status:** live now, and v1 is COMPLETE (Phase 13 shipped). The console
+> bridge remains the deepest view; the **🩺 Diagnostics tab** (Phase 5) in the
+> MWT modal offers a redacted **📋 Copy Report** without devtools, and its live
+> sub-tabs — **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), **🗂️ Scope &
 > storage** (Phase 8), **💉 Injection** (Phase 9), **📡 Last request**
 > (Phase 10), **📋 Log** (Phase 11), and **🛡️ Integrity** (Phase 12) — render
 > the one-table answers to "is anything broken right now?", "which
@@ -11,8 +11,8 @@
 > chat using, and why?", "what is MWT putting in the narrator's prompt,
 > where, and why?", "what did the last API call look like?", "what has MWT
 > been doing this session?", and "do my stores reference things that
-> exist?". All seven v1 tabs are live; Phase 13 (copy-report finalize +
-> QA) is what remains.
+> exist?". Phase 13 finalized the copy report (it now serializes the tab
+> accessors too) and added the `MWT.diagnostics.report()` console counterpart.
 
 ## What this is
 
@@ -68,6 +68,8 @@ MWT.diagnostics.log()                     // the 📋 Log tab snapshot (the even
 MWT.diagnostics.log({ level: 'warn' })    //   …data-side filtered, like events(); redacted by default
 MWT.diagnostics.integrity()               // the 🛡️ Integrity tab snapshot (on-demand store checks; async)
                                           //   — read-only; repairs stay on MWT.profiles / MWT.evidence / MWT.interiority
+await MWT.diagnostics.report()            // the FULL D1 Markdown report the 📋 Copy Report button copies (async)
+                                          //   — content EXCLUDED by default; { includeContent: true } to include it
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -389,38 +391,39 @@ unreliable flag shows.
 
 ## How to capture a report
 
-1. Reproduce the problem.
-2. In the console, run `MWT.diagnostics.apiCalls()` (or `lastApiCall(...)`);
-   for the tab-shaped view with window stats and the failed-last warning,
-   `MWT.diagnostics.lastRequest()` (its return value is redacted by default,
-   so it is safe to paste as-is).
-   For injection bugs ("the model ignored my world state"), add
-   `MWT.diagnostics.injectionStatus()` — placements, registrations, and the
-   warnings; its return value is redacted by default (payloads gated, secrets
-   scrubbed), so it is safe to paste as-is. Only if you need payload text:
-   `MWT.diagnostics.injectionStatus({ includeContent: true })` (still
-   secret-scrubbed), and only if you need one key's byte-exact string:
-   `MWT.diagnostics.injection('mwt_world_state_injection')` (raw — skim
-   before pasting). For "my data is
-   weird" reports, add `MWT.diagnostics.events({ level: 'warn' })` — it shows
-   every silent recovery (repaired JSON, reasoning fallback, stripped fences,
-   scope fallback, missing world-info) from the session — or `MWT.diagnostics.log({ level: 'warn' })` for the same data with counts, ages, and epoch stamps, already redacted for pasting. For "the setting is
-   right but behaves wrong", add `MWT.diagnostics.settingsProvenance()`. For
-   "is anything even running", start with `MWT.diagnostics.health()`. For
-   anything on a non-reference build/fork, or any scoping/identity issue, add
-   `MWT.diagnostics.environment()`.
-3. Copy the **returned object**: right-click → *Copy object*, or run
-   `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
-4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for
-   scoping/identity issues, `MWT.diagnostics.scope()` plus
-   `MWT.scope.diagnose()` (the 🗂️ Scope & storage tab shows the same
-   resolution — either is fine, both is best).
+1. **The easy way (no devtools):** open the MWT modal → 🩺 Diagnostics tab →
+   **📋 Copy Report**. The report lands on your clipboard as Markdown —
+   secrets redacted, content (prompt bodies / payload text / full error
+   bodies) EXCLUDED unless you tick the opt-in checkbox above the button
+   (its state is never persisted; every session starts excluded). It now
+   includes everything: global settings + provenance, last runs, API calls,
+   the event ring, injected payloads (content-gated), and the Health /
+   Environment / Scope / Injection / Integrity tab snapshots. The console
+   counterpart is `await MWT.diagnostics.report()` (same sections, same
+   redaction — the return value is the Markdown string; `copy(await
+   MWT.diagnostics.report())` puts it on the clipboard).
+2. Reproduce the problem first, then capture — the buffer is in-memory only
+   and clears on reload.
+3. For a deeper drill-down, add the individual accessors: `MWT.diagnostics.lastRequest()`
+   (the tab-shaped view with window stats; redacted by default),
+   `MWT.diagnostics.injectionStatus()` (placements + registrations; payloads
+   content-gated), `MWT.diagnostics.injection(key)` for one key's byte-exact
+   recorded string (RAW — skim before pasting), `MWT.diagnostics.log({ level: 'warn' })`
+   for the silent-recovery ring with counts (redacted), or
+   `MWT.diagnostics.settingsProvenance()` for "the setting is right but
+   behaves wrong". For anything on a non-reference build/fork, the report's
+   Environment section (or `MWT.diagnostics.environment()`) states the
+   fork-compat verdict.
+4. Paste into the bug report. Identity strings (character / chat names in
+   scope keys) can still appear even with content excluded — skim the report
+   before pasting it somewhere public.
 
-## Limitations (until the panel ships)
+## Limitations
 
-- No redaction toggle exists yet: API telemetry never captures content, but
-  injection snapshots DO include payload text (by design). The Phase 5 panel
-  adds the opt-in redaction layer for those.
+- Content opt-in: the panel's checkbox (and `report({ includeContent: true })`)
+  is the ONLY way payload / prompt / captured-toast / error-body text enters
+  a report, and it is never persisted — every session starts with content
+  excluded. Secrets are redacted in BOTH modes.
 - No repair actions — read-only except `clear()`, which only empties the
   in-memory buffer.
 - The buffer is per-session; a reload clears it. Reproduce, then capture before

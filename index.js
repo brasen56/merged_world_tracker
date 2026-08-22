@@ -48,6 +48,11 @@ import { collectLogSnapshot, redactLogSnapshot, logLevelCount } from './diagnost
 // return redaction gate behind the 🛡️ Integrity sub-tab (on-demand read-only
 // checks over lorebooks + chat metadata). Same direct-import rule.
 import { collectIntegritySnapshot, redactIntegritySnapshot } from './diagnostics_panel/integrity.js';
+// Diagnostics Phase 13 — Copy-report finalize: the D1 report the 📋 Copy
+// Report button produces (sections = Phase 0–4 accessors + the tab accessors,
+// redacted through the Phase 5 layer). The console bridge's report() returns
+// the same Markdown the button copies. Same direct-import rule.
+import { collectReportSections, buildReport } from './diagnostics_panel/report.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1292,6 +1297,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.scope()                     // the 🗂️ Scope & storage tab snapshot (which books + why)
 //   MWT.diagnostics.log({ level: 'warn' })      // the 📋 Log tab snapshot (ring + counts; redacted return)
 //   MWT.diagnostics.integrity()                 // the 🛡️ Integrity tab snapshot (on-demand checks; async, redacted return)
+//   await MWT.diagnostics.report()              // the FULL D1 Markdown report the 📋 Copy Report button copies
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1755,6 +1761,31 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 13 — Copy-report finalize (design §I.6, build-order step 7): the
+    // FULL D1 report the 🩺 Diagnostics tab's 📋 Copy Report button copies —
+    // the same collectReportSections() (Phase 0–4 accessors + the health /
+    // environment / scope / injection / integrity tab accessors), the same
+    // buildReport() redaction gate, so the button, the bridge, and the tabs
+    // can never disagree. ASYNC like the button (the Integrity section's
+    // lorebook read); this call is the Phase 12 on-demand trigger, so nothing
+    // collects until you run it. Read-only, in-memory only.
+    //
+    // SAFE BY DEFAULT: content fields (payloads, toast bodies, error bodies)
+    // are gated OUT unless { includeContent: true } — and secrets are
+    // redacted in EITHER mode. The return value is the paste-ready Markdown
+    // STRING (the appendix JSON is inside it), so `copy(await
+    // MWT.diagnostics.report())` works even where the clipboard API is
+    // missing; identity strings (character/chat names in scope keys) can
+    // still appear — skim before pasting, exactly like the button's report.
+    report: async ({ includeContent = false } = {}) => {
+        const sections = await collectReportSections();
+        const { markdown } = buildReport({ includeContent, sections });
+        console.log(
+            `[MWT] Diagnostics report — ${sections.length} section(s), content ${includeContent ? 'INCLUDED (⚠ contains chat text — skim before pasting)' : 'EXCLUDED'}, secrets redacted either way. The return value is the paste-ready Markdown; the 🩺 Diagnostics tab's 📋 Copy Report button copies the same thing without devtools.`
+        );
+        return markdown;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1764,6 +1795,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,log,integrity,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,log,integrity,report,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

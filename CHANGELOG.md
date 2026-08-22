@@ -12,6 +12,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.7.9]
+
+### Added
+- Diagnostics Phase 13 — **Copy-report finalize + redaction sweep** (the last
+  v1 phase): the 📋 Copy Report button now serializes the **tab accessors**
+  alongside the Phase 0–4 accessors — `collectReportSections()`
+  (`diagnostics_panel/report.js`) gained `health`, `environment` (shared.js
+  Connection-Manager probe awaited up front, exactly like
+  `MWT.diagnostics.environment()`), `scope`, `injection`, and `integrity`
+  sections, so a pasted report, a console dump, and the panel can never
+  disagree. The 📡 Last request and 📋 Log tabs deliberately get **no** extra
+  section: their stores were already serialized as `apiCalls` (Phase 1) and
+  `events` (Phase 0); their snapshots only add derived digest lines over the
+  same rows, so a report reader loses no data. The collect is **async** (the
+  Integrity section reads a lorebook) and the button press is the Phase 12
+  "on demand only" trigger for it — one press = one collect, never on
+  tab/modal open, never a render loop (decision D2 untouched).
+- The copy flow was extracted into the exported, injectable
+  `runCopyReport()` (`diagnostics_panel/render.js`, the `runIntegrityChecks`
+  precedent): the button disables + relabels ("⏳ Building report…") while the
+  async collect runs and is restored in `finally`; the content opt-in is
+  still read live and never persisted; the clipboard still goes through
+  `copyTextToClipboard()` (async API → legacy `execCommand` fallback →
+  console-dump escape hatch).
+- Console bridge `MWT.diagnostics.report({ includeContent })` — **async**,
+  returns the paste-ready D1 Markdown STRING the button copies (so
+  `copy(await MWT.diagnostics.report())` works even where the clipboard API
+  is missing), logging the section count + content mode. One
+  `collectReportSections()` backs the button and the bridge, so they can
+  never disagree.
+
+### Fixed
+- **Phase 13 redaction sweep (QA):** the new sections route through the same
+  single `redactForReport()` gate in `buildReport()` — pinned by a new
+  tab-shaped sweep suite (`test/diagnostics_report.test.js`): the Phase 9
+  rows' `snapshot.payload` and the Scope tab's captured
+  `scope_fallback_global` toast body are content-gated to size-only markers
+  by default (returning, still secret-scrubbed, on opt-in); keys interpolated
+  into free text (warning strings, last-run model names) and URL paths are
+  struck in BOTH modes; identity strings (character/chat names in scope keys
+  and context fields) deliberately survive — the header still says to skim
+  before pasting. A collector that throws now degrades to a `collectionError`
+  section via the async guard (an ERROR_KEY: size-only marker with the opt-in
+  off) instead of breaking the report. The module cycle this phase creates
+  (`report.js` ↔ `injection.js` / `integrity.js` over `collectKnownSecrets`)
+  is function-reference-only and documented on both sides.
+
 ## [1.7.8]
 
 ### Added
