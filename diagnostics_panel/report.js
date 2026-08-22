@@ -1,5 +1,5 @@
 /**
- * diagnostics_panel/report.js — Copy-report shape (Diagnostics Phase 5).
+ * diagnostics_panel/report.js — Copy-report shape (Diagnostics Phases 5 + 13).
  *
  * Decision D1 (phases doc §II.2): the report is MARKDOWN with a fenced JSON
  * appendix — paste-friendly in issues *and* machine-parseable. It is built by
@@ -11,10 +11,10 @@
  * appendix — secrets are redacted in BOTH content modes, and prompt/payload
  * content appears only when the panel's explicit opt-in checkbox is on.
  *
- * Phase 5 defines and wires the SHAPE with the Phase 0–4 accessors. Phase 13
- * extends collectReportSections() with the tab accessors (health,
- * environment, scope, injection, integrity) as those tabs land, then does the
- * final redaction sweep and QA.
+ * Phase 5 defined and wired the SHAPE with the Phase 0–4 accessors. Phase 13
+ * finalized it: collectReportSections() now also serializes the tab accessors
+ * (health, environment, scope, injection, integrity), so the copied report and
+ * the seven sub-tabs can never disagree about what happened.
  *
  * buildReport() is pure (sections are passed in), so it is unit-testable with
  * no SillyTavern runtime (test/diagnostics_report.test.js).
@@ -30,6 +30,22 @@ import { getContextSafe } from '../core/context.js';
 import { getEffectiveWorldSetting, GLOBAL_SETTING_KEYS as WS_GLOBAL_SETTING_KEYS } from '../world_state/data.js';
 import { getEffectivePlanSetting, GLOBAL_SETTING_KEYS as SP_GLOBAL_SETTING_KEYS } from '../story_planner/data.js';
 import { redactForReport } from '../core/redaction.js';
+
+// Phase 13 — the tab accessors, so the report serializes exactly what the
+// sub-tabs render (the "same accessors the tabs use" rule, phases doc §II.4
+// Phase 13). Sibling diagnostics_panel modules, imported directly like every
+// other import here.
+//
+// NOTE the module cycle this creates: injection.js and integrity.js import
+// collectKnownSecrets() from THIS module. It is safe — both sides only
+// reference the other's bindings inside function bodies (function declarations
+// are hoisted live bindings), never at module-init time — and their own import
+// comments state the same. Direct imports throughout, still never the barrel.
+import { collectHealthSnapshot } from './health.js';
+import { collectEnvironmentSnapshot, loadSharedModule } from './environment.js';
+import { collectScopeSnapshot } from './scope_storage.js';
+import { collectInjectionSnapshot } from './injection.js';
+import { collectIntegritySnapshot } from './integrity.js';
 
 // ─── Header lines ────────────────────────────────────────────────────────────
 
@@ -199,26 +215,42 @@ export function buildReport({ includeContent = false, sections = [], meta = {}, 
 // ─── Section collectors (live accessors) ─────────────────────────────────────
 
 /**
- * Serialize the Phase 0–4 accessors into report sections — the same data the
- * MWT.diagnostics console bridge shows, so a pasted report and a console dump
- * can never disagree. Each collector is guarded: one that throws degrades to
- * an error note in its section, never a broken report.
+ * Serialize the Phase 0–4 accessors AND the tab accessors into report sections
+ * — the same data the MWT.diagnostics console bridge shows and the sub-tabs
+ * render, so a pasted report, a console dump, and the panel can never
+ * disagree. Each collector is guarded: one that throws (sync or async)
+ * degrades to an error note in its section, never a broken report.
  *
- * Phase 13 extends this with the tab accessors (health, environment, scope,
- * injection, integrity) as Phases 6–12 land.
+ * ASYNC since Phase 13: the Integrity section's collect is an async lorebook
+ * read, and the Environment section awaits the shared.js probe up front (the
+ * exact `MWT.diagnostics.environment()` shape — a report and a console dump of
+ * the same session must state the same CMRS verdict).
  *
- * @returns {Array<{id: string, title: string, data: *}>}
+ * Scope notes (phases doc §II.4 Phase 13 / §0):
+ *  - The 📡 Last request and 📋 Log tabs get NO section of their own: their
+ *    stores are already serialized as `apiCalls` (Phase 1) and `events`
+ *    (Phase 0). Their snapshots only ADD derived digest lines (window stats,
+ *    counts, warnings) over those same rows — a report reader loses no data.
+ *  - Integrity is the one O(entries) section (design §I.6 scale note). It runs
+ *    here because every caller of this function is an explicit user action —
+ *    the 📋 Copy Report button or `MWT.diagnostics.report()` — which is
+ *    exactly the Phase 12 "on demand only" trigger; it never runs on tab/modal
+ *    open and is never a render loop. One press = one collect.
+ *
+ * @returns {Promise<Array<{id: string, title: string, data: *}>>}
  */
-export function collectReportSections() {
-    const guarded = (id, title, collect) => {
+export async function collectReportSections() {
+    // guarded() is async (Integrity's collect awaits a lorebook read), so the
+    // array below is one of PROMISES until Promise.all resolves it.
+    const guarded = async (id, title, collect) => {
         try {
-            return { id, title, data: collect() };
+            return { id, title, data: await collect() };
         } catch (err) {
             return { id, title, data: { collectionError: String(err?.message || err) } };
         }
     };
 
-    return [
+    return Promise.all([
         guarded('settings', 'Global settings (secrets redacted)', () => getGlobalSettings()),
 
         // Mirrors MWT.diagnostics.settingsProvenance() (index.js), including
@@ -248,6 +280,21 @@ export function collectReportSections() {
         // Payloads in this section are content: they appear only when the
         // opt-in is on, because redactForReport() gates the `payload` field.
         guarded('injections', 'Injected payloads (Phase 2 — content-gated)', () => getAllInjectedSnapshots()),
-    ];
+
+        // ── Phase 13 — the tab accessors, in sub-tab order ──────────────────
+        guarded('health', 'Health (Phase 6 — one row per module)', () => collectHealthSnapshot()),
+
+        guarded('environment', 'Environment (Phase 7 — fork-compat probe)', async () =>
+            collectEnvironmentSnapshot({ sharedModule: await loadSharedModule() })),
+
+        guarded('scope', 'Scope & storage (Phase 8 — which lorebooks, and why)', () => collectScopeSnapshot()),
+
+        // The Phase 9 snapshot carries each module's recorded payload under
+        // `modules[].snapshot.payload` — a CONTENT_KEY, so the panel's opt-in
+        // gates it here exactly like it gates the `injections` section above.
+        guarded('injection', 'Injection status (Phase 9 — content-gated)', () => collectInjectionSnapshot()),
+
+        guarded('integrity', 'Integrity (Phase 12 — on-demand checks)', () => collectIntegritySnapshot()),
+    ]);
 }
 

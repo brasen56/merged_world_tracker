@@ -1,6 +1,7 @@
 /**
  * diagnostics_panel/render.js — Panel shell (Diagnostics Phase 5) + Tab 1
- * Health (Phase 6) + Tab 2 Environment (Phase 7).
+ * Health (Phase 6) + Tab 2 Environment (Phase 7) + Copy Report finalize
+ * (Phase 13).
  *
  * The mount point every later tab plugs into (phases doc §II.4 Phase 5): a
  * 🩺 Diagnostics tab INSIDE the existing MWT modal (createModal infra — never
@@ -56,13 +57,46 @@
  * the console bridge AND the rendered pane (redactLastRequestSnapshot, Phase
  * 10 review). Fully synchronous — open-and-read, no wiring.
  *
+ * Phase 11 added the 📋 Log tab (./log.js for the snapshot,
+ * renderLogPane/renderLogSnapshot here): the Phase 0 ring buffer, newest
+ * first, with per-level and per-module counts. The level chips and module
+ * select are VIEW TOGGLES over the rendered rows — they never re-read the
+ * store, so decision D2's open-and-read model is untouched (the pane is
+ * re-built on every modal open). Event details carry chat content (toast
+ * bodies) and raw error text, so the pane renders redactLogSnapshot() output
+ * — size-only markers by default — and the content opt-in checkbox above
+ * reveals the full (still secret-scrubbed) detail per row via
+ * wireDiagnosticsPanel(), the same deferred-insertion + scrub guards the
+ * Phase 9 payload reveal uses.
+ *
+ * Phase 12 added the 🛡️ Integrity tab (./integrity.js for the snapshot,
+ * renderIntegrityPane/renderIntegritySnapshot here): on-demand read-only
+ * checks — duplicate profile entries, dangling profileUid pointers,
+ * evidence↔profile orphans, validateSection() per store (enumerated from the
+ * METADATA_KEYS whitelist), Interiority ledger reference integrity. Unlike
+ * Tabs 1–6 this pane is NOT open-and-read: every check is O(entries) across
+ * lorebooks and chat metadata (the §I.6 scale note), so the pane renders an
+ * idle state + a ▶ Run button and the checks only run on click
+ * (runIntegrityChecks) — still one collect per render, never a render loop
+ * and never on open. Counts + a top-N sample per check, with a "copy full
+ * JSON" escape hatch (copyIntegritySnapshotJson); no repair actions in v1.
+ *
+ * Phase 13 finalized the 📋 Copy Report button (runCopyReport, extracted and
+ * injectable like runIntegrityChecks): collectReportSections() (./report.js)
+ * now serializes the tab accessors — health, environment (shared.js probe
+ * awaited up front), scope, injection, integrity — alongside the Phase 0–4
+ * accessors, which makes the collect async; the button disables + relabels
+ * while it runs. The button press is the Phase 12 "on demand only" trigger
+ * for the Integrity section (one press = one collect, never on open), and
+ * buildReport()'s redaction gate still sees every section.
+ *
  * Hard limits inherited from the design (§I.1): READ-ONLY — nothing here
  * writes to settings, chat metadata, or localStorage; the checkbox state is
  * deliberately not persisted, so every session starts with content EXCLUDED.
  *
  * DOM-coupled by design; all testable logic lives in core/redaction.js,
- * ./report.js, ./health.js, ./environment.js, ./scope_storage.js, and
- * ./injection.js.
+ * ./report.js, ./health.js, ./environment.js, ./scope_storage.js,
+ * ./injection.js, and ./integrity.js.
  */
 
 import { setStatus, escapeHtml } from '../core/index.js';
@@ -71,8 +105,9 @@ import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
 import { collectScopeSnapshot } from './scope_storage.js';
 // Direct core/diagnostics.js import (NOT the barrel) per the §II.3 alias-trap
-// rule: the payload reveal must read the REAL Phase 2 snapshot store.
-import { getAllInjectedSnapshots } from '../core/diagnostics.js';
+// rule: the payload reveal must read the REAL Phase 2 snapshot store, and the
+// Phase 11 log reveal must read the REAL Phase 0 ring.
+import { getAllInjectedSnapshots, getEvents } from '../core/diagnostics.js';
 import {
     collectInjectionSnapshot,
     PLACEMENT_SOURCE_LABELS,
@@ -84,6 +119,22 @@ import {
 // age formatter behind the 📡 Last request sub-tab (the Phase 1 capture for
 // the most recent call plus the short history).
 import { collectLastRequestSnapshot, redactLastRequestSnapshot, formatRequestAge } from './last_request.js';
+// Diagnostics Phase 11 — Tab 6 Log: the snapshot collector + redaction gate +
+// reveal scrubber + fingerprint keys behind the 📋 Log sub-tab (the Phase 0
+// ring, filterable by level and module, newest first).
+// Diagnostics Phase 12 — Tab 7 Integrity: the async snapshot collector +
+// redaction gate behind the 🛡️ Integrity sub-tab (on-demand read-only checks
+// over lorebooks + chat metadata; counts + top-N samples, no chat prose).
+import { collectIntegritySnapshot, redactIntegritySnapshot, INTEGRITY_SAMPLE_LIMIT } from './integrity.js';
+import {
+    collectLogSnapshot,
+    redactLogSnapshot,
+    scrubLogDetailForDisplay,
+    logEventKey,
+    logLevelCount,
+    formatLogAge,
+    LOG_LEVELS,
+} from './log.js';
 
 // ─── Panel tab definitions (design §I.5 — the seven v1 tabs) ─────────────────
 
@@ -157,12 +208,12 @@ export function renderDiagnosticsPanel() {
 
     const subTabPanes = DIAGNOSTICS_PANEL_TABS.map((t, i) => `
         <div class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">
-            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : (t.id === 'last-request' ? renderLastRequestPane() : `
+            ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : (t.id === 'last-request' ? renderLastRequestPane() : (t.id === 'log' ? renderLogPane() : (t.id === 'integrity' ? renderIntegrityPane() : `
             <div class="mwt-diag-placeholder">
                 <span class="mwt-diag-placeholder-badge">Phase ${t.phase} — not built yet</span>
                 <p>${t.blurb}</p>
             </div>
-            `))))}
+            `))))))}
         </div>
     `).join('');
 
@@ -1017,8 +1068,461 @@ export function renderLastRequestPane() {
     return renderLastRequestSnapshot(redactLastRequestSnapshot(snapshot));
 }
 
-// ─── Clipboard (Copy Report) ─────────────────────────────────────────────────
+// ─── Diagnostics Tab 6: Log (Phase 11) ────────────────────────────────────────
 
+/**
+ * Render a REDACTED Log snapshot (renderLogPane / the console bridge pass
+ * redactLogSnapshot() output). Stat header (version · total vs ring capacity ·
+ * error/warn counts · read-at), the warning banner when error-level events
+ * exist, the filter row (level chips with counts + module select + the
+ * visible-of counter), and the event table — newest first, one row per event:
+ * time · age · level · module · event · detail · the chat stamp (epoch with
+ * the scopeKey on hover — Phase 0's cross-chat-switch correlation dimension).
+ *
+ * The detail column ships the SAFE SUMMARY (the already-redacted detail JSON —
+ * message/error bodies are size-only markers by construction); the opt-in
+ * reveal element ships HIDDEN and EMPTY carrying only the event's fingerprint
+ * key, and wireDiagnosticsPanel() fills it on opt-in — the Phase 9
+ * deferred-insertion guards, applied to every row (injectable formatTime
+ * keeps Node tests deterministic).
+ *
+ * @param {object} snapshot — collectLogSnapshot() → redactLogSnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts]
+ * @returns {string} innerHTML for the pane
+ */
+export function renderLogSnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const events = Array.isArray(s.events) ? s.events : [];
+    const levels = s.levels || {};
+    const modules = Array.isArray(s.modules) ? s.modules : [];
+    const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+
+    const dim = (text) => `<span class="mwt-diag-dim">${text}</span>`;
+
+    /** Level cell — error/warn get the loud badges; info/debug stay quiet. */
+    const levelCell = (lvl) => {
+        if (lvl === 'error') return '<span class="mwt-diag-badge mwt-diag-badge--fail">error</span>';
+        if (lvl === 'warn') return '<span class="mwt-diag-badge mwt-diag-badge--warn">warn</span>';
+        if (lvl === 'debug') return dim('debug');
+        return 'info';
+    };
+
+    /**
+     * The safe-summary detail text: the event's detail as it arrived HERE is
+     * already redactLogSnapshot() output, so plain JSON serialisation is the
+     * summary — markers and all. Null/undefined detail renders a dim dash.
+     */
+    const detailSummary = (e) => {
+        if (e.detail == null) return dim('—');
+        try {
+            return escapeHtml(JSON.stringify(e.detail) ?? '—');
+        } catch {
+            return dim('[unserializable detail]');
+        }
+    };
+
+    // The banner list reuses the Scope pane's warning markup, like the
+    // Last request + Injection panes do.
+    const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
+        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+    `).join('')}</ul>` : '';
+
+    // The filter row — chips carry the whole-ring counts (they are the
+    // "what is in here" numbers, independent of the current filter), and the
+    // counter ships its all-visible initial state; the wiring rewrites it as
+    // filters toggle. View toggles only: nothing here re-reads the store.
+    // The checkbox carries value="<level>" (a checkbox with no value
+    // attribute reads as the string "on" in the DOM — the Phase 11 review's
+    // P1: without it the filter set became {'on'} and every toggle blanked
+    // the table); applyLogViewFilters() reads data-diag-log-filter-level
+    // FIRST so the dataset is authoritative either way.
+    const chips = LOG_LEVELS.map((lvl) => `
+        <label class="mwt-diag-log-chip" title="Show/hide ${lvl}-level events — a view toggle over the rendered rows; it never re-reads the store">
+            <input type="checkbox" checked value="${lvl}" data-diag-log-filter-level="${lvl}">
+            <span class="mwt-diag-log-chip-label">${lvl}</span>
+            <span class="mwt-diag-log-chip-count">${logLevelCount(levels, lvl)}</span>
+        </label>`).join('');
+
+    const moduleOptions = `
+        <option value="all">all modules (${escapeHtml(String(s.total ?? events.length))})</option>
+        ${modules.map((m) => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)} — ${escapeHtml(String(m.count))}</option>`).join('')}`;
+
+    const rows = events.map((e) => `
+        <tr data-diag-log-row data-diag-log-level="${escapeHtml(e.level)}" data-diag-log-module="${escapeHtml(e.module)}">
+            <td>${e.ts != null ? escapeHtml(formatTime(e.ts)) : dim('—')}</td>
+            <td class="mwt-diag-dim">${escapeHtml(formatLogAge(e.ageSec))}</td>
+            <td>${levelCell(e.level)}</td>
+            <td><code>${escapeHtml(e.module)}</code></td>
+            <td><code>${escapeHtml(e.event)}</code></td>
+            <td class="mwt-diag-log-detail">${e.detail == null ? dim('—') : `
+                <span data-diag-log-gate="summary">${detailSummary(e)}</span>
+                <code data-diag-log-gate="body" data-diag-log-key="${escapeHtml(logEventKey(e))}" hidden></code>`}
+            </td>
+            <td class="mwt-diag-log-scope" title="${e.scopeKey ? escapeHtml(e.scopeKey) : 'scope key unknown (identity did not resolve)'}">#${e.epoch != null ? escapeHtml(String(e.epoch)) : '?'}</td>
+        </tr>`).join('');
+
+    const tableSection = events.length ? `
+        <div class="mwt-diag-log-filters">
+            <span class="mwt-diag-log-filters-label">Filter:</span>
+            ${chips}
+            <select class="mwt-diag-log-module" data-diag-log-filter-module title="Show one module's events — a view toggle over the rendered rows; it never re-reads the store">${moduleOptions}</select>
+            <span class="mwt-diag-log-counter" data-diag-log-counter>showing ${events.length} of ${events.length}</span>
+        </div>
+        <table class="mwt-diag-health-table mwt-diag-log-table">
+            <thead>
+                <tr><th>Time</th><th>Age</th><th>Level</th><th>Module</th><th>Event</th><th>Detail</th><th>Chat</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    ` : '<p class="mwt-diag-dim">No diagnostics events captured yet this session — every toast, API-call echo, and silent-recovery warn lands here; the ring is in-memory and resets on reload.</p>';
+
+    return `
+        <div class="mwt-diag-log">
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
+                <span class="mwt-diag-health-stat"><strong>${escapeHtml(String(s.total ?? events.length))}</strong> event(s) ${dim(`ring keeps ${s.capacity ?? '?'}`)}</span>
+                <span class="mwt-diag-health-stat">error <strong>${logLevelCount(levels, 'error')}</strong> · warn <strong>${logLevelCount(levels, 'warn')}</strong></span>
+                <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
+            </div>
+            ${warningList}
+            ${tableSection}
+            <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh; the level/module filters are view toggles over the rows already on screen and never re-read the store.
+                The ring is global across chat switches — the <strong>Chat</strong> column stamps each event with the operation epoch (hover for the resolved chat identity), so a scope bug is visible
+                across a switch. Detail summaries are safe by construction here: toast message bodies and raw error text render as size-only markers and every string is secret-scrubbed
+                (core/redaction.js); tick the content opt-in above to reveal the full — still scrubbed — detail text. In-memory only; resets on reload. Same data in the console:
+                <code>MWT.diagnostics.log()</code> (redacted return, accepts the same level/module filters as <code>events()</code>) or the raw ring <code>MWT.diagnostics.events()</code>.</p>
+        </div>
+    `;
+}
+
+/**
+ * Collect + render the Log pane. Called at markup-build time inside
+ * renderDiagnosticsPanel() — the modal is rebuilt on every open, which is this
+ * tab's whole refresh model (decision D2 — no render loop). Fully synchronous;
+ * a total collection failure degrades to an error card, never a broken panel.
+ * The collected snapshot is REDACTED (redactLogSnapshot, strict mode) before
+ * it is rendered — the same safe-by-default contract as the console bridge;
+ * the full-but-scrubbed detail is the opt-in reveal wireDiagnosticsPanel()
+ * performs, and the raw ring stays on MWT.diagnostics.events().
+ *
+ * @returns {string} innerHTML for the Log sub-tab pane
+ */
+export function renderLogPane() {
+    let snapshot;
+    try {
+        snapshot = collectLogSnapshot();
+    } catch (err) {
+        return `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Log unavailable</span>
+                <p>Collecting the log snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+    }
+    // Redact BEFORE rendering (the Phase 10 review rule): toast bodies and
+    // raw error text can quote the chat, so the pane renders the SAME
+    // strict-mode redactLogSnapshot() output the console bridge returns by
+    // default — only markers + scrubbed strings reach the DOM.
+    return renderLogSnapshot(redactLogSnapshot(snapshot));
+}
+
+/**
+ * Apply the Log tab's level/module VIEW filters to already-rendered rows —
+ * wireDiagnosticsPanel()'s change listener calls this; nothing re-collects
+ * or re-renders, so decision D2's open-and-read model is untouched.
+ *
+ * Extracted as a named export (the copyTextToClipboard precedent) so the
+ * Node suite can drive the real filter logic with element-like fakes — the
+ * Phase 11 review's P1 lived exactly here: the chips shipped without a
+ * `value` attribute, so `c.value` read as the default string "on", the
+ * active-level set became {'on'}, and toggling ANY chip hid EVERY row. The
+ * level now comes from `data-diag-log-filter-level` first (the markup pins
+ * `value="<level>"` as well), and checked-ness is filtered HERE rather than
+ * delegated to a `:checked` pseudo-class the fakes cannot honour.
+ *
+ * @param {Iterable<object>} rows — the rendered `tr[data-diag-log-row]`
+ *        elements (`.dataset.diagLogLevel` / `.dataset.diagLogModule` / `.hidden`)
+ * @param {Iterable<object>} levelFilters — the chip inputs (`.checked`,
+ *        `.dataset.diagLogFilterLevel`, `.value`)
+ * @param {{value: string}|null} moduleFilter — the module `<select>` (value
+ *        'all' or an exact module name), or null when absent
+ * @param {{textContent: string}|null} counter — the visible-of counter, or null
+ * @returns {number} how many rows remain visible
+ */
+export function applyLogViewFilters(rows, levelFilters, moduleFilter, counter) {
+    const activeLevels = new Set(
+        Array.from(levelFilters ?? [])
+            .filter((c) => c?.checked === true)
+            .map((c) => c?.dataset?.diagLogFilterLevel ?? c?.value),
+    );
+    const module = moduleFilter?.value ?? 'all';
+    const rowList = Array.from(rows ?? []);
+    let visible = 0;
+    for (const row of rowList) {
+        const show = activeLevels.has(row?.dataset?.diagLogLevel ?? '')
+            && (module === 'all' || row?.dataset?.diagLogModule === module);
+        row.hidden = !show;
+        if (show) visible += 1;
+    }
+    if (counter) counter.textContent = `showing ${visible} of ${rowList.length}`;
+    return visible;
+}
+
+/**
+ * Reveal (or re-hide) every rendered Log row's full detail — the content
+ * opt-in checkbox handler in wireDiagnosticsPanel() calls this. The Phase 9
+ * guard stack, applied per row:
+ *   1. DEFERRED INSERTION — the body `<code>` shipped empty; the raw detail
+ *      only enters the DOM at the moment of opt-in (as textContent) and
+ *      leaves it again on un-tick.
+ *   2. SECRET SCRUBBING — what gets inserted is scrubLogDetailForDisplay()
+ *      over the LIVE ring entry matched by fingerprint key
+ *      (logEventKey = seq|ts|epoch|module|event), never a rebuild.
+ *
+ * A body whose key is NOT in the live ring (the event was evicted after the
+ * pane was built) is never revealed: it stays hidden and empty and its safe
+ * summary stays visible — the documented fallback, and the Phase 11 review's
+ * second P2: the previous code hid the summary and showed an empty detail
+ * for exactly those rows. Extracted (the copyTextToClipboard precedent) so
+ * the Node suite can pin both behaviours with element-like fakes.
+ *
+ * @param {Iterable<object>} bodies — the `[data-diag-log-gate="body"]`
+ *        elements (`.dataset.diagLogKey` / `.hidden` / `.textContent`, and
+ *        `.parentElement.querySelector` reaching the sibling summary)
+ * @param {boolean} include — the live content opt-in state
+ * @param {object} [deps]
+ * @param {function(object=): object[]} [deps.events] — core/diagnostics
+ *        getEvents (defaults the real ring; direct import, §II.3)
+ * @param {function(): string[]} [deps.knownSecrets] — collectKnownSecrets
+ * @returns {void}
+ */
+export function revealLogDetails(bodies, include, { events = getEvents, knownSecrets = collectKnownSecrets } = {}) {
+    const bodyList = Array.from(bodies ?? []);
+    if (!bodyList.length) return;
+
+    // The LIVE ring, keyed by fingerprint. seq disambiguates same-millisecond
+    // repeats (the review's third find) — without it this Map would collapse
+    // them onto one detail and several rows would show the wrong content.
+    const secrets = knownSecrets();
+    const detailByKey = new Map();
+    for (const evt of events()) detailByKey.set(logEventKey(evt), evt.detail);
+
+    for (const el of bodyList) {
+        const key = el?.dataset?.diagLogKey;
+        const known = detailByKey.has(key);
+        const showBody = include && known;
+        el.hidden = !showBody;
+        el.textContent = showBody
+            ? scrubLogDetailForDisplay(detailByKey.get(key), { knownSecrets: secrets })
+            : '';
+        const summary = el.parentElement?.querySelector?.('[data-diag-log-gate="summary"]');
+        if (summary) summary.hidden = showBody;
+    }
+}
+
+// ─── Diagnostics Tab 7: Integrity (Phase 12) ──────────────────────────────────
+
+/** DOM id of the ▶ Run button (wireDiagnosticsPanel wires its click). */
+export const DIAGNOSTICS_INTEGRITY_RUN_BTN_ID = 'mwt-diag-int-run';
+
+/** DOM id of the results container runIntegrityChecks() replaces. */
+export const DIAGNOSTICS_INTEGRITY_RESULT_ID = 'mwt-diag-int-result';
+
+/**
+ * Render the Integrity pane's IDLE state — the only tab that does NOT render
+ * live data at markup-build time. Every check is O(entries) across lorebooks
+ * and chat metadata (design §I.6 scale note) and one is an async lorebook
+ * read, so the checks run ONLY when the ▶ Run button is clicked
+ * (wireDiagnosticsPanel → runIntegrityChecks): never on open, never as a
+ * render loop — the §II.4 Phase 12 "on demand only" rule. The idle markup
+ * states what will be checked and that nothing is written.
+ *
+ * @returns {string} innerHTML for the pane
+ */
+export function renderIntegrityPane() {
+    return `
+        <div class="mwt-diag-int">
+            <div class="mwt-diag-note">
+                Read-only checks over this chat's stores — duplicate profile entries, dangling <code>profileUid</code>
+                pointers, evidence↔profile orphans, <code>validateSection()</code> per store, and Interiority ledger
+                reference integrity. They are <strong>O(entries)</strong>, so they never run on open: press the button,
+                read the counts (top-${INTEGRITY_SAMPLE_LIMIT} sample per check; “Copy full JSON” for the complete lists).
+                Nothing is written or repaired — the cleanup tools stay in the console where they have dry-run guards.
+            </div>
+            <button type="button" class="mwt-diag-int-run" id="${DIAGNOSTICS_INTEGRITY_RUN_BTN_ID}" data-diag-int-run="1">▶ Run integrity checks</button>
+            <div class="mwt-diag-int-result" id="${DIAGNOSTICS_INTEGRITY_RESULT_ID}" data-diag-int-result="1">
+                <p class="mwt-diag-dim" data-diag-int-idle>Not run yet — this tab never checks anything on its own.</p>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Render a REDACTED Integrity snapshot (runIntegrityChecks / the console
+ * bridge pass redactIntegritySnapshot() output). Stat header (version ·
+ * findings · checked totals · run-at), the verdict banner + warning list
+ * (the Scope pane's markup), then one card per check: title + count badge +
+ * top-N sample table + “N more” line. Findings are counts and references
+ * only — no chat prose reaches this markup by construction (see the
+ * integrity.js header), and everything is escapeHtml()-ed regardless.
+ *
+ * @param {object} snapshot — collectIntegritySnapshot() → redactIntegritySnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts] — injectable for Node tests
+ * @returns {string} innerHTML for the results container
+ */
+export function renderIntegritySnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+    const totals = s.totals || {};
+
+    const dim = (text) => `<span class="mwt-diag-dim">${text}</span>`;
+    const badge = (text, kind) => `<span class="mwt-diag-badge mwt-diag-badge--${kind}">${escapeHtml(text)}</span>`;
+    const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : '?');
+
+    // A card: header (title + count badge or dim “unreliable”) + optional
+    // note line + optional sample table + “N more” tail. `rows` are pre-built
+    // <tr> strings so each check keeps its own columns.
+    const card = (title, block, { note = '', columns = '', rowsHtml = '', zeroText = 'None found.', moreLabel = 'more' } = {}) => {
+        const countCell = block?.unreliable
+            ? badge('unreliable', 'dim')
+            : (num(block?.count) === '0' ? badge('0', 'ok') : badge(num(block?.count), 'warn'));
+        const more = typeof block?.more === 'number' ? block.more : 0;
+        const table = block?.unreliable
+            // An unreliable check was SKIPPED, not run clean — "None found."
+            // would read as a verdict it does not have.
+            ? ''
+            : (rowsHtml && columns
+                ? `<table class="mwt-diag-health-table mwt-diag-int-table"><thead><tr>${columns}</tr></thead><tbody>${rowsHtml}</tbody></table>`
+                : `<p class="mwt-diag-dim">${escapeHtml(zeroText)}</p>`);
+        const moreLine = more > 0 ? `<p class="mwt-diag-dim">…and ${more} ${escapeHtml(moreLabel)} — “Copy full JSON” below carries the complete lists.</p>` : '';
+        return `
+            <div class="mwt-diag-int-card">
+                <div class="mwt-diag-int-card-head"><strong>${escapeHtml(title)}</strong> ${countCell}</div>
+                ${note ? `<div class="mwt-diag-dim mwt-diag-int-note">${note}</div>` : ''}
+                ${table}
+                ${moreLine}
+            </div>
+        `;
+    };
+
+    const dupRows = (Array.isArray(s.duplicateProfiles?.sample) ? s.duplicateProfiles.sample : []).map((g) => `
+        <tr>
+            <td>${escapeHtml(String(g?.npc ?? '?'))}</td>
+            <td>${num(g?.count)}</td>
+            <td><code>${escapeHtml((Array.isArray(g?.entries) ? g.entries : []).map((e) => num(e?.uid)).join(', '))}</code></td>
+            <td>${(Array.isArray(g?.entries) ? g.entries : []).map((e) => e?.referenced ? badge('↩ referenced', 'ok') : dim('orphan')).join(' ') || dim('—')}</td>
+        </tr>`).join('');
+
+    const danglingRows = (Array.isArray(s.danglingProfileUids?.sample) ? s.danglingProfileUids.sample : []).map((r) => `
+        <tr>
+            <td>${escapeHtml(String(r?.npc ?? '?'))}</td>
+            <td><code>${escapeHtml(String(r?.profileUid ?? '?'))}</code></td>
+            <td>${r?.registryUid == null ? dim('—') : `<code>${escapeHtml(String(r.registryUid))}</code>`}</td>
+        </tr>`).join('');
+
+    const orphanRows = (list) => (Array.isArray(list?.sample) ? list.sample : []).map((r) => `
+        <tr>
+            <td>${escapeHtml(String(r?.npc ?? '?'))}</td>
+            <td>${r?.uid == null ? dim('—') : `<code>${escapeHtml(String(r.uid))}</code>`}</td>
+            <td>${r?.chars == null ? dim('—') : num(r.chars)}</td>
+        </tr>`).join('');
+    const evidenceRows = (Array.isArray(s.evidenceWithoutProfile?.sample) ? s.evidenceWithoutProfile.sample : []).map((r) => `
+        <tr>
+            <td>${escapeHtml(String(r?.npc ?? '?'))}</td>
+            <td>${num(r?.raw)} raw · ${num(r?.consolidated)} consolidated · ${num(r?.archivedRaw)} archived</td>
+        </tr>`).join('');
+
+    const storeRows = (Array.isArray(s.storeValidations?.sections) ? s.storeValidations.sections : []).map((r) => {
+        const statusCell = r?.present === false
+            ? dim('absent')
+            : ((num(r.skippedCount) === '0' && num(r.conflicts) === '0')
+                ? badge('ok', 'ok')
+                : badge(`${num(r.skippedCount)} skipped / ${num(r.conflicts)} conflicts`, 'warn'));
+        const reasons = Array.isArray(r?.reasons) && r.reasons.length
+            ? `<div class="mwt-diag-dim mwt-diag-int-reasons">${r.reasons.map((x) => `“${escapeHtml(String(x))}”`).join(' · ')}</div>`
+            : '';
+        return `
+            <tr>
+                <td>${escapeHtml(String(r?.label ?? r?.id ?? '?'))} ${dim(`<code>${escapeHtml(String(r?.key ?? ''))}</code>`)}</td>
+                <td>${r?.present === false ? dim('never written this chat') : `${num(r?.added)} in / ${num(r?.updated)} upd`}</td>
+                <td>${statusCell}${reasons}</td>
+            </tr>`;
+    }).join('');
+
+    const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
+        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+    `).join('')}</ul>` : '';
+
+    const bannerNote = (s.bannerLevel === 'ok')
+        ? 'No integrity findings — every check ran and found nothing warn-worthy.'
+        : 'One or more checks found something — read the cards; every cleanup path named in a warning is a console tool with a dry-run guard.';
+
+    // Interiority card body: fixed rows (one per sub-check) instead of a
+    // generic sample table — the sub-checks have different shapes. The card's
+    // count badge is the SUM of the three sub-check counts.
+    const int = s.interiority || {};
+    const intCount = Math.max(0, Number(int.duplicateLedgerIds?.count) || 0)
+        + Math.max(0, Number(int.tombstonedStillInLedger?.count) || 0)
+        + Math.max(0, Number(int.duplicateTombstoneIds?.count) || 0);
+    const intRows = `
+        <tr><td>ledger entries / tombstones</td><td>${num(int.ledgerEntries)} / ${num(int.tombstones)}</td></tr>
+        <tr><td>duplicate ledger ids</td><td>${num(int.duplicateLedgerIds?.count) === '0' ? badge('0', 'ok') : badge(num(int.duplicateLedgerIds?.count), 'warn')}
+            ${(Array.isArray(int.duplicateLedgerIds?.sample) ? int.duplicateLedgerIds.sample : []).map((r) => `<code>${escapeHtml(String(r?.id ?? '?'))}</code>×${num(r?.occurrences)}`).join(' ')}</td></tr>
+        <tr><td>tombstoned but still live</td><td>${num(int.tombstonedStillInLedger?.count) === '0' ? badge('0', 'ok') : badge(num(int.tombstonedStillInLedger?.count), 'warn')}
+            ${(Array.isArray(int.tombstonedStillInLedger?.sample) ? int.tombstonedStillInLedger.sample : []).map((r) => `<code>${escapeHtml(String(r?.id ?? '?'))}</code> ${escapeHtml(String(r?.npc ?? ''))}`).join(' · ')}</td></tr>
+        <tr><td>duplicate tombstone ids</td><td>${num(int.duplicateTombstoneIds?.count) === '0' ? badge('0', 'ok') : badge(num(int.duplicateTombstoneIds?.count), 'warn')}</td></tr>`;
+
+    return `
+        <div class="mwt-diag-int" data-diag-int-run-result="1">
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat"><strong>MWT v${escapeHtml(String(s.mwtVersion ?? '?'))}</strong></span>
+                <span class="mwt-diag-health-stat">findings <strong>${num(totals.findings)}</strong></span>
+                <span class="mwt-diag-health-stat">${dim('checked:')} <strong>${num(totals.profileEntries)}</strong> profile entries · <strong>${num(totals.registryRecords)}</strong> registry · <strong>${num(totals.evidenceFiles)}</strong> evidence · <strong>${num(totals.ledgerEntries)}</strong> ledger · <strong>${num(totals.sectionsPresent)}</strong> store(s)</span>
+                <span class="mwt-diag-health-stat">run at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
+            </div>
+            <div class="mwt-diag-scope-banner mwt-diag-scope-banner--${s.bannerLevel === 'ok' ? 'ok' : 'warn'}">
+                <strong>${s.bannerLevel === 'ok' ? '✅' : '⚠️'} Integrity: ${num(totals.findings)} finding(s)</strong>
+                <div class="mwt-diag-scope-banner-note">${escapeHtml(bannerNote)}</div>
+            </div>
+            ${warningList}
+            ${card('Duplicate profile entries', s.duplicateProfiles, {
+                columns: '<th>NPC</th><th>entries</th><th>uids</th><th>registry</th>',
+                rowsHtml: dupRows, moreLabel: 'group(s) not shown',
+                note: 'Groups of “NPC Profiles” entries sharing a name — the visible half of lost pointers. Preview + prune (dry-run first): <code>MWT.profiles.duplicates()</code> / <code>pruneDuplicates()</code>.',
+            })}
+            ${card('Dangling profileUid pointers', s.danglingProfileUids, {
+                columns: '<th>NPC (registry key)</th><th>points at uid</th><th>lorebook uid</th>',
+                rowsHtml: danglingRows, moreLabel: 'pointer(s) not shown',
+                note: 'Registry pointers whose target entry no longer exists — the next save duplicates instead of overwriting. Recovery (dry-run first): <code>MWT.profiles.relink()</code>.',
+            })}
+            ${card('Evidence with no profile', s.evidenceWithoutProfile, {
+                columns: '<th>NPC</th><th>evidence</th>',
+                rowsHtml: evidenceRows, moreLabel: 'file(s) not shown', zeroText: 'None — every evidence file has a profile behind it.',
+                note: 'A READING, not a fault: capture ran, the profile has not been generated yet (ordinary mid-pipeline). It only matters if it persists.',
+            })}
+            ${card('Profiles with no evidence', s.profilesWithoutEvidence, {
+                columns: '<th>NPC</th><th>uid</th><th>chars</th>',
+                rowsHtml: orphanRows(s.profilesWithoutEvidence), moreLabel: 'entr(y/ies) not shown',
+                note: 'The unfalsifiable state the growth feature exists to prevent — nothing can confirm or regenerate these entries.',
+            })}
+            ${card('Store validation (validateSection per store)', { count: (s.storeValidations?.skippedTotal || 0) + (s.storeValidations?.conflictsTotal || 0), more: 0, sample: [] }, {
+                columns: '<th>Store</th><th>records</th><th>validateSection()</th>',
+                rowsHtml: storeRows, zeroText: 'Every present store section passed validateSection() with nothing quarantined.',
+                note: 'The chat-metadata stores, enumerated from the <code>METADATA_KEYS</code> whitelist (<code>backup/data.js</code>) — records a backup import would refuse are quarantined here with the validator\u2019s own reasons.',
+            })}
+            ${card('Interiority ledger integrity', { count: intCount, more: 0, sample: [] }, {
+                columns: '<th>check</th><th>rows</th>',
+                rowsHtml: intRows, zeroText: '',
+                note: 'Built on <code>MWT.interiority.deletions()</code> — live entries matching a deletion tombstone (npc + action) came back through a swipe/restore; <code>clearDeletions()</code> is the regret escape hatch, not a fix for these.',
+            })}
+            <div class="mwt-diag-int-actions">
+                <button type="button" class="mwt-diag-int-copy" data-diag-int-copy="1">📋 Copy full JSON</button>
+            </div>
+        </div>
+    `;
+}
+
+// ─── Clipboard (Copy Report) ─────────────────────────────────────────────────
 
 /**
  * Copy text to the clipboard WITHOUT ever throwing.
@@ -1068,6 +1572,170 @@ export async function copyTextToClipboard(text, { nav = globalThis.navigator, do
     }
 }
 
+/**
+ * Build + copy the full diagnostics report — the handler behind the panel's
+ * 📋 Copy Report button, the feature's primary deliverable (design goal 2).
+ *
+ * ASYNC since Phase 13: the report now serializes the tab accessors
+ * (collectReportSections()), and the Integrity section's collect is an async
+ * lorebook read — the button is therefore disabled + relabelled while it runs
+ * (the runIntegrityChecks precedent) and restored in `finally`, whatever
+ * happened. The press itself is the Phase 12 "on demand only" trigger: nothing
+ * collects on tab/modal open, and this is one collect per press, never a
+ * render loop (decision D2).
+ *
+ * The content opt-in is read LIVE from the checkbox and never persisted
+ * (read-only + in-memory rules), so every session starts with content
+ * EXCLUDED. Redaction is buildReport()'s single gate — every section, secrets
+ * in either mode, content only with the opt-in.
+ *
+ * Extracted as a named export with injectable collect/build/copy/status deps
+ * (the runIntegrityChecks precedent) so the Node suite can drive the real
+ * flow with element-like fakes.
+ *
+ * @param {HTMLElement} button — the 📋 Copy Report button element
+ * @param {HTMLElement} root — the modal root (its checkbox is read; its
+ *        status bar is the default status sink)
+ * @param {object} [opts] — { collect, build, copy, status, readOptIn }
+ *        overrides; `status` is (message, type, clearAfterMs), `readOptIn`
+ *        is () => boolean (defaults: the live checkbox in `root`)
+ * @returns {Promise<boolean>} whether the report reached the clipboard
+ */
+export async function runCopyReport(button, root, {
+    collect = collectReportSections,
+    build = buildReport,
+    copy = copyTextToClipboard,
+    status = () => {},
+    readOptIn,
+} = {}) {
+    if (!button || !root) return false;
+    const includeContent = (readOptIn ?? (() => !!root.querySelector(`#${DIAGNOSTICS_CONTENT_OPT_IN_ID}`)?.checked))();
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '⏳ Building report…';
+    try {
+        // Phase 13: one collect per press — the sections now include the five
+        // tab accessors (health / environment / scope / injection / integrity).
+        const report = build({ includeContent, sections: await collect() });
+        const copied = await copy(report.markdown);
+        if (!copied) {
+            // Escape hatch: the report exists even where the clipboard does
+            // not — dump it to the console so a tester can still copy it from
+            // there.
+            console.warn('[MWT:Diagnostics] Clipboard copy failed — the report follows; copy it from the console:', report.markdown);
+            status('Copy failed — clipboard unavailable in this context. The report was logged to the browser console (F12).', 'error');
+            return false;
+        }
+        status(includeContent
+            ? 'Report copied — content INCLUDED (contains chat text).'
+            : 'Report copied — content excluded, secrets redacted.', 'success', 4000);
+        return true;
+    } catch (err) {
+        status(`Report build failed: ${err?.message || err}`, 'error');
+        return false;
+    } finally {
+        button.disabled = false;
+        button.textContent = label || '📋 Copy Report';
+    }
+}
+
+// ─── Integrity wiring (Phase 12) ──────────────────────────────────────────────
+
+/**
+ * Run the Integrity checks on demand and render the results — the handler
+ * behind the 🛡️ Integrity pane's ▶ Run button. This is the ONLY trigger: the
+ * checks never run on tab open or modal open (the §II.4 Phase 12 rule), and
+ * this is one collect per press, never a render loop (decision D2 holds).
+ *
+ * The button is disabled + relabelled while the async collect runs (the
+ * profile-book read can take a moment); a collection failure degrades to an
+ * error card in the results container, never a broken pane. The snapshot is
+ * REDACTED (redactIntegritySnapshot) before it is rendered — the same
+ * safe-by-default contract as the console bridge. The rendered "Copy full
+ * JSON" button (data-diag-int-copy) is wired here against the REDACTED
+ * snapshot it belongs to, via copyIntegritySnapshotJson().
+ *
+ * Extracted as a named export with injectable collect/render/copy/status
+ * deps (the applyLogViewFilters precedent) so the Node suite can drive the
+ * real flow with element-like fakes.
+ *
+ * @param {HTMLElement} button — the ▶ Run button element
+ * @param {HTMLElement} result — the results container replaced by this run
+ * @param {object} [opts] — { collect, redact, render, copy, status,
+ *        formatTime } overrides; `status` is (message, type, clearAfterMs)
+ */
+export async function runIntegrityChecks(button, result, {
+    collect = collectIntegritySnapshot,
+    redact = redactIntegritySnapshot,
+    render = renderIntegritySnapshot,
+    copy = copyTextToClipboard,
+    status = () => {},
+    formatTime,
+} = {}) {
+    if (!button || !result) return;
+    button.disabled = true;
+    button.textContent = '⏳ Running…';
+    let snapshot;
+    try {
+        snapshot = redact(await collect());
+    } catch (err) {
+        result.innerHTML = `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Integrity run failed</span>
+                <p>Collecting the integrity snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+        status(`Integrity run failed: ${err?.message || err}`, 'error');
+        return;
+    } finally {
+        button.disabled = false;
+        button.textContent = '▶ Run again';
+    }
+    result.innerHTML = render(snapshot, formatTime ? { formatTime } : {});
+    const copyBtn = result.querySelector('[data-diag-int-copy]');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', () => copyIntegritySnapshotJson(snapshot, { copy, status }));
+    }
+    const findings = snapshot?.totals?.findings;
+    status(`Integrity check run complete — ${typeof findings === 'number' ? findings : '?'} finding(s).`,
+        findings > 0 ? 'warning' : 'success', 4000);
+}
+
+/**
+ * Copy the (already-redacted) Integrity snapshot as pretty-printed JSON —
+ * the "copy full JSON" escape hatch for the complete finding lists the pane
+ * samples. The snapshot that reaches here is redactIntegritySnapshot()
+ * output, so the clipboard text is safe by construction (secrets scrubbed,
+ * no chat prose); it still says what it is on failure: the JSON is dumped to
+ * the console so a tester can copy it from there (the copyTextToClipboard
+ * escape-hatch precedent).
+ *
+ * @param {object} snapshot — the REDACTED snapshot this run rendered
+ * @param {object} [opts] — { copy, status } overrides (Node tests)
+ * @returns {Promise<string|null>} the serialised JSON on success, else null
+ */
+export async function copyIntegritySnapshotJson(snapshot, { copy = copyTextToClipboard, status = () => {} } = {}) {
+    let text;
+    try {
+        text = JSON.stringify(snapshot ?? {}, null, 2);
+    } catch {
+        text = null;
+    }
+    if (typeof text !== 'string') {
+        status('Could not serialise the integrity snapshot.', 'error');
+        return null;
+    }
+    const ok = await copy(text);
+    if (!ok) {
+        console.warn('[MWT:Diagnostics] Clipboard copy failed — the integrity snapshot JSON follows; copy it from the console:', text);
+        status('Copy failed — clipboard unavailable. The JSON was logged to the browser console (F12).', 'error');
+        return null;
+    }
+    status('Integrity snapshot JSON copied (secrets redacted).', 'success', 4000);
+    return text;
+}
+
+
 // ─── Wiring ──────────────────────────────────────────────────────────────────
 
 /**
@@ -1095,35 +1763,19 @@ export function wireDiagnosticsPanel(root) {
 
     // Copy Report — the feature's primary deliverable (design goal 2). The
     // checkbox is read live and never persisted (read-only + in-memory
-    // rules), so every session starts with content EXCLUDED. Phase 13 will
-    // extend the serialized sections and run the final QA sweep; the shape
-    // and the redaction routing are fixed here. The clipboard itself goes
-    // through copyTextToClipboard(): navigator.clipboard is absent on
-    // non-secure origins, and touching it unguarded threw synchronously out
-    // of this handler (Phase 5 review follow-up).
+    // rules), so every session starts with content EXCLUDED. Phase 13
+    // finalized the serialized sections (the tab accessors now included) and
+    // made the collect async — the Integrity section reads a lorebook — so the
+    // button is disabled while it runs (runCopyReport, the runIntegrityChecks
+    // precedent). The clipboard itself goes through copyTextToClipboard():
+    // navigator.clipboard is absent on non-secure origins, and touching it
+    // unguarded threw synchronously out of this handler (Phase 5 review
+    // follow-up).
     const copyBtn = root.querySelector('#mwt-diag-copy-report');
     if (copyBtn) {
         copyBtn.addEventListener('click', () => {
-            const includeContent = !!root.querySelector(`#${DIAGNOSTICS_CONTENT_OPT_IN_ID}`)?.checked;
-            let report;
-            try {
-                report = buildReport({ includeContent, sections: collectReportSections() });
-            } catch (err) {
-                setStatus(root, `Report build failed: ${err?.message || err}`, 'error');
-                return;
-            }
-            copyTextToClipboard(report.markdown).then((copied) => {
-                if (!copied) {
-                    // Escape hatch: the report exists even where the clipboard
-                    // does not — dump it to the console so a tester can still
-                    // copy it from there.
-                    console.warn('[MWT:Diagnostics] Clipboard copy failed — the report follows; copy it from the console:', report.markdown);
-                    setStatus(root, 'Copy failed — clipboard unavailable in this context. The report was logged to the browser console (F12).', 'error');
-                    return;
-                }
-                setStatus(root, includeContent
-                    ? 'Report copied — content INCLUDED (contains chat text).'
-                    : 'Report copied — content excluded, secrets redacted.', 'success', 4000);
+            runCopyReport(copyBtn, root, {
+                status: (message, type, clearAfterMs) => setStatus(root, message, type, clearAfterMs),
             });
         });
     }
@@ -1157,6 +1809,54 @@ export function wireDiagnosticsPanel(root) {
                     : '';
             });
             root.querySelectorAll('[data-diag-inj-gate="placeholder"]').forEach((el) => { el.hidden = include; });
+
+            // Phase 11 — Log detail reveal: the SAME two guards as the
+            // Injection payloads applied to every event row, extracted into
+            // revealLogDetails() (deferred insertion + secret scrubbing over
+            // the LIVE ring, matched by the seq-carrying fingerprint — see
+            // its docstring for the evicted-row and collision rules).
+            revealLogDetails(root.querySelectorAll('[data-diag-log-gate="body"]'), include);
+        });
+    }
+
+    // Phase 11 — Log filters (design §I.5 Tab 6): level chips + module select
+    // + the visible-of counter, as VIEW TOGGLES over the rows already on
+    // screen — they never re-collect or re-render, so decision D2's
+    // open-and-read model is untouched (the same "a view toggle, not a render
+    // loop" carve-out the Phase 9 payload reveal uses). The logic lives in
+    // applyLogViewFilters(); this glue only gathers the elements. Scoped to
+    // the Log pane so the checkbox/select listeners cannot collide with the
+    // main modal's delegation.
+    const logPane = root.querySelector('.mwt-diag-log');
+    if (logPane) {
+        const applyLogFilters = () => {
+            applyLogViewFilters(
+                logPane.querySelectorAll('tr[data-diag-log-row]'),
+                logPane.querySelectorAll('input[data-diag-log-filter-level]'),
+                logPane.querySelector('select[data-diag-log-filter-module]'),
+                logPane.querySelector('[data-diag-log-counter]'),
+            );
+        };
+        logPane.addEventListener('change', (e) => {
+            if (e.target?.matches?.('input[data-diag-log-filter-level], select[data-diag-log-filter-module]')) {
+                applyLogFilters();
+            }
+        });
+    }
+
+    // Phase 12 — Integrity on-demand run (design §I.5 Tab 7): the ▶ Run
+    // button is the ONLY trigger for the checks — they are O(entries) and one
+    // is an async lorebook read, so they never run on tab/modal open (the
+    // "on demand only" rule). One press = one collect + one render (never a
+    // render loop). The real logic lives in runIntegrityChecks(); this glue
+    // only adapts the status sink to this modal's status bar.
+    const integrityRunBtn = root.querySelector(`#${DIAGNOSTICS_INTEGRITY_RUN_BTN_ID}`);
+    const integrityResult = root.querySelector(`#${DIAGNOSTICS_INTEGRITY_RESULT_ID}`);
+    if (integrityRunBtn && integrityResult) {
+        integrityRunBtn.addEventListener('click', () => {
+            runIntegrityChecks(integrityRunBtn, integrityResult, {
+                status: (message, type, clearAfterMs) => setStatus(root, message, type, clearAfterMs),
+            });
         });
     }
 

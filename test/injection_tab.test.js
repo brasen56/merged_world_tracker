@@ -544,10 +544,10 @@ describe('renderInjectionPane (default wiring)', () => {
         // The real pane rendered (not the Phase 9 placeholder card)…
         expect(html).toContain('mwt-diag-inj');
         expect(html).not.toContain('Phase 9 — not built yet');
-        // …while later tabs still show their placeholders (Phase 10 landed
-        // 2026-08-20 and owns the line no more — it moves again when Log
-        // lands).
-        expect(html).toContain('Phase 11 — not built yet');
+        // …and with Phase 12 (Integrity) landed 2026-08-21, every one of the
+        // seven v1 tabs renders a real pane — no placeholder remains.
+        expect(html).toContain('mwt-diag-int-run');
+        expect(html).not.toContain('— not built yet');
     });
 });
 

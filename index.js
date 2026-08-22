@@ -39,6 +39,20 @@ import { collectInjectionSnapshot, redactInjectionSnapshot, formatInjectionAge, 
 // 📡 Last request sub-tab (the Phase 1 capture for the most recent call plus
 // the short history, telemetry by construction). Same direct-import rule.
 import { collectLastRequestSnapshot, redactLastRequestSnapshot, formatRequestAge } from './diagnostics_panel/last_request.js';
+// Diagnostics Phase 11 — Tab 6 Log: the snapshot collector + redaction gate
+// behind the 📋 Log sub-tab (the Phase 0 ring, filterable by level and module,
+// newest first; details are content-gated because toast bodies quote the
+// chat and error bodies can too). Same direct-import rule.
+import { collectLogSnapshot, redactLogSnapshot, logLevelCount } from './diagnostics_panel/log.js';
+// Diagnostics Phase 12 — Tab 7 Integrity: the async snapshot collector + safe-
+// return redaction gate behind the 🛡️ Integrity sub-tab (on-demand read-only
+// checks over lorebooks + chat metadata). Same direct-import rule.
+import { collectIntegritySnapshot, redactIntegritySnapshot } from './diagnostics_panel/integrity.js';
+// Diagnostics Phase 13 — Copy-report finalize: the D1 report the 📋 Copy
+// Report button produces (sections = Phase 0–4 accessors + the tab accessors,
+// redacted through the Phase 5 layer). The console bridge's report() returns
+// the same Markdown the button copies. Same direct-import rule.
+import { collectReportSections, buildReport } from './diagnostics_panel/report.js';
 // Phase 4 (settings provenance, design §I.4.6): the two resolvers that can
 // attribute a behavior setting to its precedence level, plus their key lists
 // (single source of truth — no second key list here). Direct imports for the
@@ -1306,6 +1320,9 @@ window.MWT.backup = {
 //   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
 //   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
 //   MWT.diagnostics.scope()                     // the 🗂️ Scope & storage tab snapshot (which books + why)
+//   MWT.diagnostics.log({ level: 'warn' })      // the 📋 Log tab snapshot (ring + counts; redacted return)
+//   MWT.diagnostics.integrity()                 // the 🛡️ Integrity tab snapshot (on-demand checks; async, redacted return)
+//   await MWT.diagnostics.report()              // the FULL D1 Markdown report the 📋 Copy Report button copies
 //   MWT.diagnostics.clear()                     // wipe the in-memory buffer
 //
 // Each method prints a console.table(...) and RETURNS the full data, so the
@@ -1683,6 +1700,117 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Phase 11 — Tab 6 Log (design §I.5 Tab 6): the same snapshot the 📋 Log
+    // sub-tab renders — the Phase 0 event ring, newest first, with per-level
+    // and per-module counts, plus a warn when error-level events exist. Takes
+    // the SAME filter shapes events() accepts ({ level: 'error' | [...],
+    // module: 'api' }) — data-side filtering, unlike the tab's view toggles.
+    // Named log() because Phase 0 already took events() — the RAW ring.
+    // Read-only; resolves live on every call. Synchronous.
+    //
+    // SAFE BY DEFAULT (the redaction contract): what this RETURNS is
+    // redactLogSnapshot() output — toast message bodies (chat content, per
+    // core/notifications.js) gated to size-only markers, raw error bodies to
+    // error markers, and every string secret-scrubbed (Rule 1b: this
+    // install's live secret values, embedded URLs cut to scheme+host,
+    // key/bearer shapes) — so the return value pastes without auditing it.
+    // log({ includeContent: true }) includes the (still scrubbed) full
+    // details; the raw ring stays on the Phase 0 path, events().
+    log: ({ level, module, includeContent = false } = {}) => {
+        const snap = redactLogSnapshot(collectLogSnapshot({ level, module }), { includeContent });
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table(snap.events.map(e => ({
+            time: e.ts != null ? new Date(e.ts).toLocaleTimeString() : '—',
+            level: e.level,
+            module: e.module,
+            event: e.event,
+            chat: e.epoch != null ? `#${e.epoch}` : '—',
+        })));
+        console.log(
+            snap.total
+                ? `[MWT] Log snapshot for MWT v${snap.mwtVersion} — ${snap.count} of ${snap.total} retained event(s) shown (newest first; the ring keeps ${snap.capacity}): ${logLevelCount(snap.levels, 'error')} error(s), ${logLevelCount(snap.levels, 'warn')} warn(s), ${logLevelCount(snap.levels, 'info')} info, ${logLevelCount(snap.levels, 'debug')} debug. The return value carries ageSec/scopeKey and the redacted detail for every event${includeContent ? ' (content INCLUDED, still secret-scrubbed)' : ' (toast bodies and error text gated to size markers)'}; the raw ring: MWT.diagnostics.events().`
+                : '[MWT] No diagnostics events captured yet — the ring is in-memory and resets on reload.'
+        );
+        return snap;
+    },
+
+    // Phase 12 — Tab 7 Integrity (design §I.5 Tab 7): the same snapshot the 🛡️
+    // Integrity sub-tab renders when its ▶ Run button is pressed — duplicate
+    // profile entries, dangling profileUid pointers, evidence↔profile
+    // orphans, validateSection() per store (enumerated from the METADATA_KEYS
+    // whitelist), and Interiority ledger reference integrity. ASYNC (the
+    // profile-book read loads a lorebook) and, like the tab, intended for
+    // on-demand use — it is read-only either way. Read-only; nothing is
+    // repaired here: the cleanup tools stay on MWT.profiles / MWT.evidence /
+    // MWT.interiority with their dry-run guards.
+    //
+    // SAFE BY DEFAULT (the redaction contract): what this RETURNS is
+    // redactIntegritySnapshot() output. The snapshot carries no chat prose by
+    // construction (names, uids, counts, and the backup validators' own
+    // reason strings — never previews, quotes, or quarantined records), and
+    // every string is Rule-1b secret-scrubbed besides, so the return value
+    // pastes without auditing it.
+    integrity: async () => {
+        const snap = redactIntegritySnapshot(await collectIntegritySnapshot());
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table({
+            findings: snap.totals?.findings ?? 0,
+            'duplicate profile entries': snap.duplicateProfiles?.count ?? 0,
+            'dangling profileUid pointers': snap.danglingProfileUids?.count ?? 0,
+            'evidence without profile (reading)': snap.evidenceWithoutProfile?.count ?? 0,
+            'profiles without evidence': snap.profilesWithoutEvidence?.count ?? 0,
+            'store records quarantined': snap.storeValidations?.skippedTotal ?? 0,
+            'store id conflicts': snap.storeValidations?.conflictsTotal ?? 0,
+            'interiority: dup ledger ids': snap.interiority?.duplicateLedgerIds?.count ?? 0,
+            'interiority: tombstoned but live': snap.interiority?.tombstonedStillInLedger?.count ?? 0,
+            'interiority: dup tombstone ids': snap.interiority?.duplicateTombstoneIds?.count ?? 0,
+        });
+        console.table((snap.storeValidations?.sections || []).map((r) => ({
+            store: r.id,
+            present: r.present,
+            added: r.added ?? '—',
+            skipped: r.skippedCount ?? '—',
+            conflicts: r.conflicts ?? '—',
+        })));
+        console.log(
+            `[MWT] Integrity snapshot for MWT v${snap.mwtVersion} — ${snap.totals?.findings ?? 0} finding(s) across `
+            + `${snap.totals?.profileEntries ?? 0} profile entries, ${snap.totals?.registryRecords ?? 0} registry records, `
+            + `${snap.totals?.evidenceFiles ?? 0} evidence files, ${snap.totals?.ledgerEntries ?? 0} ledger entries, `
+            + `${snap.totals?.sectionsPresent ?? 0} store section(s). READ-ONLY — repairs stay on MWT.profiles / `
+            + 'MWT.evidence / MWT.interiority (dry-run first). The return value carries the samples and per-store rows.'
+        );
+        return snap;
+    },
+
+    // Phase 13 — Copy-report finalize (design §I.6, build-order step 7): the
+    // FULL D1 report the 🩺 Diagnostics tab's 📋 Copy Report button copies —
+    // the same collectReportSections() (Phase 0–4 accessors + the health /
+    // environment / scope / injection / integrity tab accessors), the same
+    // buildReport() redaction gate, so the button, the bridge, and the tabs
+    // can never disagree. ASYNC like the button (the Integrity section's
+    // lorebook read); this call is the Phase 12 on-demand trigger, so nothing
+    // collects until you run it. Read-only, in-memory only.
+    //
+    // SAFE BY DEFAULT: content fields (payloads, toast bodies, error bodies)
+    // are gated OUT unless { includeContent: true } — and secrets are
+    // redacted in EITHER mode. The return value is the paste-ready Markdown
+    // STRING (the appendix JSON is inside it), so `copy(await
+    // MWT.diagnostics.report())` works even where the clipboard API is
+    // missing; identity strings (character/chat names in scope keys) can
+    // still appear — skim before pasting, exactly like the button's report.
+    report: async ({ includeContent = false } = {}) => {
+        const sections = await collectReportSections();
+        const { markdown } = buildReport({ includeContent, sections });
+        console.log(
+            `[MWT] Diagnostics report — ${sections.length} section(s), content ${includeContent ? 'INCLUDED (⚠ contains chat text — skim before pasting)' : 'EXCLUDED'}, secrets redacted either way. The return value is the paste-ready Markdown; the 🩺 Diagnostics tab's 📋 Copy Report button copies the same thing without devtools.`
+        );
+        return markdown;
+    },
+
     clear: () => {
         clearEvents();
         clearApiCalls();
@@ -1692,6 +1820,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,log,integrity,report,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

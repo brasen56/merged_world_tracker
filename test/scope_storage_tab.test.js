@@ -424,8 +424,9 @@ describe('renderScopePane (default wiring)', () => {
         // The real pane rendered (not the Phase 8 placeholder card)…
         expect(html).toContain('lorebook resolution:');
         expect(html).not.toContain('Phase 8 — not built yet');
-        // …while later tabs still show their placeholders (Phase 10 landed
-        // 2026-08-20 — its suite owns the last-request-pane assertion now).
-        expect(html).toContain('Phase 11 — not built yet');
+        // …and with Phase 12 (Integrity) landed 2026-08-21, every one of the
+        // seven v1 tabs renders a real pane — no placeholder remains.
+        expect(html).toContain('mwt-diag-int-run');
+        expect(html).not.toContain('— not built yet');
     });
 });

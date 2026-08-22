@@ -12,6 +12,198 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+- Environment tab — SillyTavern **version now resolved from the DOM** when no
+  API field exposes it. Live testing on stock ST 1.18.0 confirmed the three
+  field probes (`SillyTavern.version`, `SillyTavern.manifest.version`,
+  `context.version`) genuinely find nothing — `globalThis.SillyTavern` is only
+  `{ libs, getContext }` and `getContext()` carries no version — so the tab had
+  read "version not exposed on this build", which reads like a fault. A fourth,
+  last-resort source reads `#version_display` (what ST paints for the user,
+  filled from its `/version` fetch), drops the redundant "SillyTavern " prefix,
+  and reports e.g. `1.18.0 'release' (abc1234)` with source `DOM
+  #version_display`. It is LAST in probe order, so a fork that exposes a real
+  version field still wins; the bare "SillyTavern" placeholder before the fetch
+  resolves still reads as not-exposed. `environment.js` gains an injectable
+  `doc` dependency to keep the probe unit-testable.
+
+## [1.7.9]
+
+### Added
+- Diagnostics Phase 13 — **Copy-report finalize + redaction sweep** (the last
+  v1 phase): the 📋 Copy Report button now serializes the **tab accessors**
+  alongside the Phase 0–4 accessors — `collectReportSections()`
+  (`diagnostics_panel/report.js`) gained `health`, `environment` (shared.js
+  Connection-Manager probe awaited up front, exactly like
+  `MWT.diagnostics.environment()`), `scope`, `injection`, and `integrity`
+  sections, so a pasted report, a console dump, and the panel can never
+  disagree. The 📡 Last request and 📋 Log tabs deliberately get **no** extra
+  section: their stores were already serialized as `apiCalls` (Phase 1) and
+  `events` (Phase 0); their snapshots only add derived digest lines over the
+  same rows, so a report reader loses no data. The collect is **async** (the
+  Integrity section reads a lorebook) and the button press is the Phase 12
+  "on demand only" trigger for it — one press = one collect, never on
+  tab/modal open, never a render loop (decision D2 untouched).
+- The copy flow was extracted into the exported, injectable
+  `runCopyReport()` (`diagnostics_panel/render.js`, the `runIntegrityChecks`
+  precedent): the button disables + relabels ("⏳ Building report…") while the
+  async collect runs and is restored in `finally`; the content opt-in is
+  still read live and never persisted; the clipboard still goes through
+  `copyTextToClipboard()` (async API → legacy `execCommand` fallback →
+  console-dump escape hatch).
+- Console bridge `MWT.diagnostics.report({ includeContent })` — **async**,
+  returns the paste-ready D1 Markdown STRING the button copies (so
+  `copy(await MWT.diagnostics.report())` works even where the clipboard API
+  is missing), logging the section count + content mode. One
+  `collectReportSections()` backs the button and the bridge, so they can
+  never disagree.
+
+### Fixed
+- **Phase 13 redaction sweep (QA):** the new sections route through the same
+  single `redactForReport()` gate in `buildReport()` — pinned by a new
+  tab-shaped sweep suite (`test/diagnostics_report.test.js`): the Phase 9
+  rows' `snapshot.payload` and the Scope tab's captured
+  `scope_fallback_global` toast body are content-gated to size-only markers
+  by default (returning, still secret-scrubbed, on opt-in); keys interpolated
+  into free text (warning strings, last-run model names) and URL paths are
+  struck in BOTH modes; identity strings (character/chat names in scope keys
+  and context fields) deliberately survive — the header still says to skim
+  before pasting. A collector that throws now degrades to a `collectionError`
+  section via the async guard (an ERROR_KEY: size-only marker with the opt-in
+  off) instead of breaking the report. The module cycle this phase creates
+  (`report.js` ↔ `injection.js` / `integrity.js` over `collectKnownSecrets`)
+  is function-reference-only and documented on both sides.
+
+## [1.7.8]
+
+### Added
+- Diagnostics Phase 12 — 🛡️ Integrity tab: the Diagnostics panel's seventh
+  and final v1 sub-tab answers "do my stores reference things that exist?"
+  — on-demand read-only checks over lorebooks and chat metadata: duplicate
+  profile entries (the visible half of lost `profileUid` pointers), dangling
+  `profileUid` pointers (the duplicate-generating state
+  `MWT.profiles.relink()` recovers), evidence↔profile orphans in both
+  directions, `validateSection()` per store (reused as-is from
+  backup/validate.js over the chat-metadata sections — the same records a
+  backup import would refuse are quarantined with the validator's own
+  reasons), and Interiority ledger reference integrity (duplicate ledger
+  ids, tombstoned-but-still-live intentions via the real
+  `isIntentionDeleted` rule, duplicate tombstone ids). Every check reports a
+  count + a top-5 sample, with a **📋 Copy full JSON** escape hatch for the
+  complete lists. No repair actions in v1 — the mutating console tools
+  (`MWT.profiles.*`, `MWT.evidence.*`, `MWT.interiority.*`) stay where they
+  have dry-run guards.
+- Unlike Tabs 1–6 this pane is **on demand only**: every check is O(entries)
+  and one is an async lorebook read, so the pane renders an idle state + a
+  **▶ Run integrity checks** button (`runIntegrityChecks()`, extracted and
+  injectable for the Node suite) and nothing runs on tab/modal open — one
+  collect per press, never a render loop (decision D2 untouched).
+- Two judgment calls are pinned by tests: an empty NPC-Profiles read over
+  SET registry pointers flags the affected checks `unreliable` + a
+  `profile-book-unreadable` warning instead of flooding false findings
+  (evidence alone does not trip the guard — an empty book over pointer-less
+  evidence is the ordinary young-chat state, so "evidence with no profile"
+  stays a counted READING, never a warning); and the snapshot carries **no
+  chat prose by construction** — no profile previews, evidence quotes, or
+  quarantined records, only names/uids/counts and the validators' own
+  reason strings — while both surfaces still route through
+  `redactIntegritySnapshot()` (= `redactForReport()`), so every string is
+  Rule-1b secret-scrubbed. As a backstop, the redaction layer now also gates
+  the `preview` field name (the profile-body snippet `listProfileEntries()`
+  returns) as content, so the shared helper's chat prose is protected even if
+  a future tab surfaces a whole entry row rather than picking fields by hand.
+  Evidence↔profile joins go through canonical registry names
+  (`resolveRegistryKey`), so alias spellings join through the real identity
+  rules.
+- Console bridge `MWT.diagnostics.integrity()` — **async** (awaits the
+  profile-book read), warns on every finding, tables the per-check counts
+  and the per-store validation rows, and returns the redacted snapshot.
+  Console bridge and tab share one collector
+  (`diagnostics_panel/integrity.js`), so they can never disagree.
+- With all seven v1 tabs live, the "later tabs still show their
+  placeholders" assertions in the environment + scope + injection +
+  last-request + log suites retired in favour of "no placeholder remains".
+
+## [1.7.7]
+
+### Added
+- Diagnostics Phase 11 — 📋 Log tab: the Diagnostics panel's sixth live sub-tab
+  answers "what has MWT been doing this session?" — the Phase 0 event ring
+  (every captured toast, API-call echo, and silent-recovery warn), newest
+  first, with per-level and per-module counts in the stat header. The level
+  chips and module select are **view toggles over the rendered rows** — they
+  never re-read the store, so decision D2's open-and-read model is untouched
+  (re-open the tab to refresh). A **Chat** column stamps each event with the
+  operation epoch (resolved chat identity on hover), the correlation dimension
+  that survives forks where identity cannot group events on its own. A warn
+  banner fires when error-level events are in the ring (warn-level silent
+  recoveries stay rows, not verdicts).
+- Redaction on this tab is strict by default and follows the Phase 9/10
+  precedent on both surfaces: the ring CAN carry content (toast bodies quote
+  the chat; `wi_script_unavailable` records a raw `detail.error`), so the pane
+  renders `redactLogSnapshot()` output — message/error bodies collapse to
+  size-only markers, every string is secret-scrubbed — and the content opt-in
+  checkbox reveals the full (still scrubbed) detail per row via
+  `wireDiagnosticsPanel()`: deferred insertion (the `<code>` ships hidden and
+  EMPTY carrying only a fingerprint key `seq|ts|epoch|module|event`; the raw
+  detail enters the DOM only on opt-in, as `textContent`, and leaves it on
+  un-tick) + secret scrubbing (`scrubLogDetailForDisplay()`). The reveal
+  matches rows against the LIVE ring by fingerprint, not array index — a row
+  whose event was evicted keeps its safe summary. One review find is pinned
+  by tests: the snapshot's level counts ship as `{ level, count }` pairs
+  (never a map keyed `error`) because the shared redaction layer gates any
+  field literally named `error` (ERROR_KEYS), which would have replaced the
+  error COUNT with an exclusion marker the moment the snapshot was redacted.
+- Console bridge `MWT.diagnostics.log({ level, module, includeContent })` —
+  so named because Phase 0 already took `events()` (the RAW ring). Takes the
+  same filter shapes `events()` accepts (data-side filtering, unlike the
+  tab's view toggles). Synchronous; warns on every finding; tables the rows.
+  **Safe by default:** what it RETURNS is `redactLogSnapshot()` output —
+  toast bodies gated to size markers, error bodies to error markers, every
+  string secret-scrubbed — so the return value pastes without auditing it;
+  `log({ includeContent: true })` includes the (still scrubbed) full details.
+  Console bridge and tab share one collector (`diagnostics_panel/log.js`),
+  so they can never disagree.
+- Collector `diagnostics_panel/log.js` is DOM-free with every dependency
+  injectable and every accessor individually guarded (a throwing store
+  degrades to an empty snapshot + an `errors` note), and normalises each
+  event defensively — a malformed entry degrades its own cells, never the
+  table. Tests: `test/log_tab.test.js` (63). Maintenance: the "later tabs
+  still show their placeholders" assertions in the environment + scope +
+  injection + last-request suites moved from Phase 11 to Phase 12.
+
+### Fixed
+- Three review finds in the new 📋 Log tab (post-implementation pass), all
+  pinned by new wiring tests that drive the real logic with element-like
+  fakes (the `copyTextToClipboard()` precedent):
+  - **Level filters hid every row (P1).** The level chips shipped without a
+    `value` attribute, so each checkbox's DOM `value` read as the default
+    string `"on"` — the active-level set became `{'on'}`, no row level ever
+    matched, and toggling ANY chip blanked the ENTIRE table. The chips now
+    carry `value="<level>"`, and the filter logic was extracted into the
+    exported `applyLogViewFilters()` (called by `wireDiagnosticsPanel()`),
+    which reads `data-diag-log-filter-level` first and filters on `.checked`
+    itself rather than delegating to a `:checked` selector.
+  - **Evicted rows lost their safe summary (P2).** On opt-in, a row whose
+    event had already been evicted from the live ring had its safe summary
+    hidden and an EMPTY detail body shown — the opposite of the documented
+    fallback. The reveal (extracted into the exported `revealLogDetails()`)
+    now consults the fingerprint map with `has()` before revealing: an
+    unknown key keeps the summary visible and the body hidden and empty
+    until the tab is re-opened.
+  - **The event fingerprint could select the wrong detail (P2).**
+    `ts|epoch|module|event` is not unique — `record()` stamps `ts` at
+    millisecond resolution, so repeated events from one module in one
+    millisecond share all four fields, and the reveal Map collapsed them
+    onto one detail (several rows displayed the wrong event content).
+    `record()` now stamps every ring event with a monotonic `seq` (reset
+    only by `_resetDiagnostics()`), carried through `normaliseLogEvent()`
+    and leading the fingerprint: `logEventKey()` =
+    `seq|ts|epoch|module|event`. Pinned at the store level in
+    `test/diagnostics.test.js` and at the tab level in `test/log_tab.test.js`.
+
 ## [1.7.6]
 
 ### Added

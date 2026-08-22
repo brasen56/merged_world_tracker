@@ -738,6 +738,166 @@ a:focus-visible {
     background: var(--mwt-bg-light);
 }
 
+/* ─── Diagnostics panel — 📋 Log tab (Phase 11) ────────────────────────────── */
+
+/* Filter row: level chips + module select + the visible-of counter. The
+   filters are VIEW TOGGLES over rows already rendered (decision D2) — they
+   never re-read the store, so they need no spinner and no re-render chrome. */
+.mwt-diag-log-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 10px 0;
+}
+
+.mwt-diag-log-filters-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--mwt-text-dim);
+}
+
+/* One chip per severity; the count is the whole-ring count so it reads as
+   "what is in the ring", not "what is selected". */
+.mwt-diag-log-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-family: var(--mwt-font-mono);
+    cursor: pointer;
+    user-select: none;
+}
+
+.mwt-diag-log-chip-count {
+    font-size: 10px;
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-log-module {
+    background: var(--mwt-bg-light);
+    color: var(--mwt-text);
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-family: var(--mwt-font);
+}
+
+.mwt-diag-log-counter {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    font-family: var(--mwt-font-mono);
+}
+
+/* The event table reuses the Health pane's table chrome; the Detail column
+   must wrap (a redacted JSON summary can be long) and stay compact, and the
+   revealed detail body (opt-in only) renders as a second block under the
+   summary rather than inline beside it. */
+.mwt-diag-log-table td.mwt-diag-log-detail {
+    white-space: normal;
+    word-break: break-word;
+    font-family: var(--mwt-font-mono);
+    font-size: 11px;
+    min-width: 220px;
+}
+
+.mwt-diag-log-table td.mwt-diag-log-detail [data-diag-log-gate="body"] {
+    display: block;
+    margin-top: 4px;
+    white-space: pre-wrap;
+}
+
+/* The chat-correlation stamp: dim monospace so the epoch reads as metadata,
+   with the resolved scopeKey on hover. */
+.mwt-diag-log-scope {
+    font-family: var(--mwt-font-mono);
+    color: var(--mwt-text-dim);
+}
+
+/* ─── Diagnostics: Tab 7 Integrity (Phase 12) ────────────────────────────── */
+
+/* The ▶ Run button — deliberately prominent: it is the only trigger for the
+   checks (never on open), so it must not read as decoration. */
+.mwt-diag-int-run {
+    padding: 8px 14px;
+    border-radius: var(--mwt-radius);
+    border: 1px solid var(--mwt-border);
+    background: var(--mwt-bg);
+    color: var(--mwt-text);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.mwt-diag-int-run:hover:not(:disabled) {
+    border-color: var(--mwt-accent);
+}
+
+.mwt-diag-int-run:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+/* The results container (idle placeholder in, run results out). */
+.mwt-diag-int-result {
+    margin-top: 10px;
+}
+
+/* One check = one card: title row + note + sample table, separated like the
+   scope pane's blocks. */
+.mwt-diag-int-card {
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    padding: 8px 10px;
+    margin: 10px 0;
+}
+
+.mwt-diag-int-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.mwt-diag-int-note {
+    margin: 4px 0 6px;
+    font-size: 12px;
+}
+
+/* Validator reason samples inside the store-validation table: dim, small,
+   quoted — they are the backup validators' own strings, one line each. */
+.mwt-diag-int-reasons {
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.mwt-diag-int-table {
+    margin: 4px 0;
+}
+
+/* The "Copy full JSON" escape hatch row. */
+.mwt-diag-int-actions {
+    margin-top: 10px;
+}
+
+.mwt-diag-int-copy {
+    padding: 6px 12px;
+    border-radius: var(--mwt-radius);
+    border: 1px solid var(--mwt-border);
+    background: var(--mwt-bg);
+    color: var(--mwt-text);
+    cursor: pointer;
+}
+
+.mwt-diag-int-copy:hover {
+    border-color: var(--mwt-accent);
+}
+
 /* ─── Button bar (floating toolbar) ────────────────────────────────────────── */
 
 .mwt-button-bar {

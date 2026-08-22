@@ -47,6 +47,16 @@ export const API_CALL_CAPACITY = 20;
 let _events = [];
 
 /**
+ * Monotonic per-event sequence number, incremented on every record(). ts
+ * alone cannot identify an event: Date.now() has millisecond resolution, so
+ * two events from the same module in the same millisecond share every
+ * record()-stamped field. The seq is what makes the Phase 11 log tab's
+ * row→detail fingerprint (logEventKey) collision-safe. Reset with the rest
+ * of the state by _resetDiagnostics().
+ */
+let _eventSeq = 0;
+
+/**
  * Per-module last-run stamp:
  *   { [module]: { startedAt, finishedAt, ok, error, tokensIn, tokensOut, trigger } }
  *
@@ -110,6 +120,10 @@ export function record(entry = {}) {
     const { level, module, event, detail } = entry ?? {};
 
     _events.push({
+        // seq FIRST among the identity fields: the monotonic counter is the
+        // only per-event-unique stamp (ts has millisecond resolution — two
+        // record() calls in the same millisecond share it).
+        seq: ++_eventSeq,
         ts: Date.now(),
         epoch: getEpoch(),
         level: normalizeLevel(level),
@@ -379,6 +393,7 @@ export function _setScopeKeyResolver(fn) {
  */
 export function _resetDiagnostics() {
     _events = [];
+    _eventSeq = 0;
     clearApiCalls();
     clearLastRuns();
     clearInjections();

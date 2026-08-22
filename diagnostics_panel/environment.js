@@ -39,17 +39,43 @@ import { state as knowledgeState } from '../knowledge/state.js';
 // ─── ST version ("if exposed" — the probe itself is the finding) ─────────────
 
 /**
+ * Read SillyTavern's version out of the DOM, the way ST itself displays it.
+ * `#version_display` (public/index.html) is filled on load from the `/version`
+ * fetch with `displayVersion` = "SillyTavern <pkg> '<branch>' (<rev>)"
+ * (public/script.js). The leading product name is dropped — the row label
+ * already says "SillyTavern:" — leaving e.g. "1.18.0 'release' (abc1234)".
+ *
+ * Returns undefined (→ the probe treats it as absent, tries nothing else and
+ * ends at null) when there is no document, no element, or the element is still
+ * empty / the bare "SillyTavern" placeholder before the fetch resolves — so a
+ * not-yet-populated element honestly reads as "not exposed", never as a stale
+ * or half value.
+ *
+ * @param {Document} [doc]
+ * @returns {string|undefined}
+ */
+function readVersionDisplay(doc) {
+    const text = doc?.getElementById?.('version_display')?.textContent;
+    const stripped = String(text ?? '').trim().replace(/^SillyTavern\s*/i, '').trim();
+    return stripped || undefined;
+}
+
+/**
  * Where a version string might live, in probe order. The reference
- * SillyTavern does not document a client-side version field for extensions,
- * and forks vary — so the tab reports the FIRST one present and names its
- * source, or reports "(not exposed)". That absence is itself fork-compat data:
- * tester reports from builds where no source answers tell us which candidates
- * are real.
+ * SillyTavern exposes no client-side version FIELD for extensions
+ * (`globalThis.SillyTavern` is just `{ libs, getContext }` and `getContext()`
+ * carries no version), so the three field probes below return nothing on stock
+ * ST — confirmed against a live 1.18.0 build. The DOM probe is the universal
+ * fallback: `#version_display` is what ST paints for the user, present on every
+ * build that renders the main UI. It is LAST so a fork that DOES expose a real
+ * version field still wins (a field is cleaner than scraping); the absence of
+ * every source is itself fork-compat data.
  */
 export const ST_VERSION_SOURCES = [
-    { id: 'SillyTavern.version', read: (st, _ctx) => st?.version },
-    { id: 'SillyTavern.manifest.version', read: (st, _ctx) => st?.manifest?.version },
-    { id: 'context.version', read: (_st, ctx) => ctx?.version },
+    { id: 'SillyTavern.version', read: (st, _ctx, _doc) => st?.version },
+    { id: 'SillyTavern.manifest.version', read: (st, _ctx, _doc) => st?.manifest?.version },
+    { id: 'context.version', read: (_st, ctx, _doc) => ctx?.version },
+    { id: 'DOM #version_display', read: (_st, _ctx, doc) => readVersionDisplay(doc) },
 ];
 
 /**
@@ -57,13 +83,14 @@ export const ST_VERSION_SOURCES = [
  *
  * @param {object} [st] — the SillyTavern global namespace
  * @param {object} [ctx] — the context object from getContextSafe()
+ * @param {Document} [doc] — the document, for the DOM #version_display fallback
  * @returns {{ value: string|null, source: string|null }}
  */
-export function detectStVersion(st, ctx) {
+export function detectStVersion(st, ctx, doc) {
     for (const source of ST_VERSION_SOURCES) {
         let raw;
         try {
-            raw = source.read(st, ctx);
+            raw = source.read(st, ctx, doc);
         } catch { /* unreadable on this build — try the next candidate */ }
         if (typeof raw === 'string' && raw.trim() !== '') {
             return { value: raw.trim(), source: source.id };
@@ -339,6 +366,7 @@ export async function probeConnectionManager() {
  * @param {object} [deps.st] — SillyTavern namespace (default: live global)
  * @param {object} [deps.globalScope] — global scope for the legacy tokenizer
  * @param {object} [deps.ctx] — context (default: getContextSafe())
+ * @param {Document} [deps.doc] — document, for the DOM #version_display probe
  * @param {function} [deps.getIdentity] — core/scope.js getChatIdentity
  * @param {object} [deps.wiState] — knowledge/state.js state (wiScript tri-state)
  * @param {object|null} [deps.sharedModule] — a loadSharedModule() result or null
@@ -354,6 +382,7 @@ export function collectEnvironmentSnapshot({
     st = (typeof SillyTavern !== 'undefined' ? SillyTavern : undefined),
     globalScope = globalThis,
     ctx = getContextSafe(),
+    doc = (typeof document !== 'undefined' ? document : undefined),
     getIdentity = getChatIdentity,
     wiState = knowledgeState,
     sharedModule = null,
@@ -378,7 +407,7 @@ export function collectEnvironmentSnapshot({
         return null;
     }, null);
 
-    const stVersion = call('stVersion', () => detectStVersion(st, ctx), { value: null, source: null });
+    const stVersion = call('stVersion', () => detectStVersion(st, ctx, doc), { value: null, source: null });
     const premise = call('chatIdPremise', () => detectChatIdPremise(ctx, getIdentity), null) ?? {
         level: 'unknown', method: null, chatIdValue: null, getCurrentChatIdOutcome: 'not-a-function',
         identityKey: null, identityUnknown: true, note: 'premise probe failed — see errors',

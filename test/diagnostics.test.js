@@ -69,7 +69,49 @@ describe('record + getEvents', () => {
         // detail may be anything, including a function or undefined.
         expect(() => record({ level: 'info', detail: () => {} })).not.toThrow();
     });
+
+    test('every event is stamped with a strictly increasing seq', () => {
+        record({ level: 'info', module: 'm', event: 'one' });
+        record({ level: 'info', module: 'm', event: 'two' });
+        // Newest first: [two, one].
+        expect(getEvents()[1].seq).toBe(1);
+        expect(getEvents()[0].seq).toBe(2);
+    });
 });
+
+// ─── Sequence numbers (Phase 11: collision-safe row fingerprints) ────────────
+
+describe('event seq — the per-event-unique stamp', () => {
+    // ts has millisecond resolution, so ts|epoch|module|event is NOT unique —
+    // the Phase 11 log tab's row→detail fingerprint needs the monotonic seq
+    // to pick the right detail for same-millisecond repeats. Pinned here at
+    // the store level; the tab-level behaviour is pinned in log_tab.test.js.
+    test('seq distinguishes events stamped in the same millisecond', () => {
+        vi.spyOn(Date, 'now').mockReturnValue(1_000);
+        try {
+            record({ level: 'warn', module: 'api', event: 'burst', detail: 1 });
+            record({ level: 'warn', module: 'api', event: 'burst', detail: 2 });
+        } finally {
+            vi.restoreAllMocks();
+        }
+        const [second, first] = getEvents();
+        // Same millisecond by construction — every field except seq matches…
+        expect(first.ts).toBe(second.ts);
+        expect(first.epoch).toBe(second.epoch);
+        expect(first.module).toBe(second.module);
+        expect(first.event).toBe(second.event);
+        // …so seq is the only thing telling them apart.
+        expect(first.seq).not.toBe(second.seq);
+    });
+
+    test('seq survives eviction bookkeeping — retained events keep their stamps', () => {
+        record({ level: 'debug', module: 'm', event: 'a' });
+        record({ level: 'debug', module: 'm', event: 'b' });
+        record({ level: 'debug', module: 'm', event: 'c' });
+        expect(getEvents().map((e) => e.seq)).toEqual([3, 2, 1]);
+    });
+});
+
 
     test('record never throws when passed null', () => {
         expect(() => record(null)).not.toThrow();

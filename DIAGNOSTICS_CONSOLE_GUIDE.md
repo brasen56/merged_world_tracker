@@ -1,15 +1,22 @@
-# MWT.diagnostics — Console Tester Guide (Phases 0–4 + Health + Environment + Scope & storage + Injection + Last request)
+# MWT.diagnostics — Console Tester Guide (Phases 0–13)
 
-> **Status:** live now. The console bridge remains the deepest view; the
-> **🩺 Diagnostics tab** (Phase 5) in the MWT modal now also offers a
-> redacted **📋 Copy Report** without devtools, and its live sub-tabs —
-> **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), **🗂️ Scope &
-> storage** (Phase 8), **💉 Injection** (Phase 9), and **📡 Last request**
-> (Phase 10) — render the one-table answers to "is anything broken right
-> now?", "which SillyTavern am I on, and what does it expose?", "which
-> lorebooks is this chat using, and why?", "what is MWT putting in the
-> narrator's prompt, where, and why?", and "what did the last API call look
-> like?". Tabs 6–7 (Phases 11–12) are still being built.
+> **New to this?** Start with [`DIAGNOSTICS_GUIDE.md`](DIAGNOSTICS_GUIDE.md)
+> — the beginner-friendly walkthrough (panel first, symptom table, console
+> primer). This file is the deep per-command reference.
+
+> **Status:** live now, and v1 is COMPLETE (Phase 13 shipped). The console
+> bridge remains the deepest view; the **🩺 Diagnostics tab** (Phase 5) in the
+> MWT modal offers a redacted **📋 Copy Report** without devtools, and its live
+> sub-tabs — **❤️ Health** (Phase 6), **🌐 Environment** (Phase 7), **🗂️ Scope &
+> storage** (Phase 8), **💉 Injection** (Phase 9), **📡 Last request**
+> (Phase 10), **📋 Log** (Phase 11), and **🛡️ Integrity** (Phase 12) — render
+> the one-table answers to "is anything broken right now?", "which
+> SillyTavern am I on, and what does it expose?", "which lorebooks is this
+> chat using, and why?", "what is MWT putting in the narrator's prompt,
+> where, and why?", "what did the last API call look like?", "what has MWT
+> been doing this session?", and "do my stores reference things that
+> exist?". Phase 13 finalized the copy report (it now serializes the tab
+> accessors too) and added the `MWT.diagnostics.report()` console counterpart.
 
 ## What this is
 
@@ -61,6 +68,12 @@ MWT.diagnostics.injectionStatus()         // the 💉 Injection tab snapshot (pl
                                           //   — redacted by default; { includeContent: true } for scrubbed payloads
 MWT.diagnostics.lastRequest()             // the 📡 Last request tab snapshot (last call + short history + stats)
                                           //   — redacted by default; raw telemetry-only copies: apiCalls()
+MWT.diagnostics.log()                     // the 📋 Log tab snapshot (the event ring + counts, newest first)
+MWT.diagnostics.log({ level: 'warn' })    //   …data-side filtered, like events(); redacted by default
+MWT.diagnostics.integrity()               // the 🛡️ Integrity tab snapshot (on-demand store checks; async)
+                                          //   — read-only; repairs stay on MWT.profiles / MWT.evidence / MWT.interiority
+await MWT.diagnostics.report()            // the FULL D1 Markdown report the 📋 Copy Report button copies (async)
+                                          //   — content EXCLUDED by default; { includeContent: true } to include it
 
 MWT.diagnostics.clear()                   // wipe the buffer to start a clean test
 ```
@@ -315,40 +328,106 @@ weird" report, every timeout, retry, or token-accounting question, and as
 the companion to `MWT.diagnostics.health()`'s last-run column — that shows
 WHEN each module last ran; this shows WHAT that call actually did.
 
+### `log()` (Phase 11) — what MWT has been doing this session
+
+The same snapshot the 📋 Log tab renders, **synchronous** and safe to paste:
+`log()` returns a redacted view of the Phase 0 event ring — every captured
+toast, API-call echo, and silent-recovery warn, newest first — with
+per-level and per-module counts, each event stamped with its age and the
+operation epoch (`chat` column; the raw return value also carries the
+resolved chat identity per event). It warns on the one finding the tab also
+banners: error-level events are in the ring.
+
+Unlike the tab's level/module chips (view toggles over rendered rows),
+`log()`'s `{ level, module }` arguments are **data-side filters** taking the
+same shapes `events()` accepts — `log({ level: ['warn', 'error'] })`,
+`log({ module: 'api' })` — and the counts still describe the whole ring.
+
+**Not telemetry by construction** — unlike `apiCalls()`, the ring carries
+chat content: every toast is recorded with its message body, and error
+details can quote upstream bodies. So the RETURN VALUE is redacted by
+default: message bodies collapse to `[content excluded — N chars]` markers,
+raw error text to `[error excluded — N chars]`, and every string is
+secret-scrubbed. `log({ includeContent: true })` includes the (still
+scrubbed) full details — opting into content never opts into secrets. The
+RAW ring (unredacted, includes everything) stays on `MWT.diagnostics.events()`
+— skim before pasting that one.
+
+**When to capture it:** "my data is weird" reports (pair with
+`events({ level: 'warn' })` for the raw silent-recovery list), "a toast
+flashed and disappeared", and any report where the sequence of what MWT did
+matters — the epoch stamps make cross-chat-switch corruptions visible as a
+row-by-row timeline.
+
+### `integrity()` (Phase 12) — do my stores reference things that exist?
+
+The same snapshot the 🛡️ Integrity tab renders when its **▶ Run** button is
+pressed — **async** (it reads the NPC Profiles lorebook) and, like the tab,
+meant for on-demand use. Read-only checks with counts + top-5 samples per
+check: duplicate profile entries, dangling `profileUid` pointers,
+evidence↔profile orphans in both directions, `validateSection()` per store
+(the same records a backup import would refuse), and Interiority ledger
+reference integrity (duplicate ledger ids, deleted intentions that came
+back, duplicate tombstone ids). It warns on every finding and tables both
+the per-check counts and the per-store validation rows.
+
+**Safe to paste as-is** — safer than any other method here, in fact: the
+snapshot carries no chat prose by construction (names, uids, counts, and
+the validators' own reason strings — never previews, quotes, or quarantined
+records), and every string is still secret-scrubbed. No repair is offered
+on purpose: cleanup stays on `MWT.profiles.{duplicates,pruneDuplicates,relink}`
+/ `MWT.evidence.clear*` / `MWT.interiority.clearDeletions`, which all have
+dry-run guards.
+
+Two readings that are NOT faults: "evidence with no profile" (capture ran,
+the profile has not been generated yet — ordinary mid-pipeline) and absent
+store sections (a store that has never written this chat). And one flag to
+know: if the profile-book read comes back empty while registry pointers are
+set, the affected checks report `unreliable` instead of flooding false
+findings — check `MWT.scope.diagnose()` for which book this chat resolves
+to.
+
+**When to capture it:** any "my data is weird" report — duplicate NPC
+profiles, profiles that regenerate oddly ("never generated" despite an
+entry existing), backup imports that refuse records, or intentions that
+reappear after you deleted them. Pair with `MWT.scope.diagnose()` when the
+unreliable flag shows.
+
 ## How to capture a report
 
-1. Reproduce the problem.
-2. In the console, run `MWT.diagnostics.apiCalls()` (or `lastApiCall(...)`);
-   for the tab-shaped view with window stats and the failed-last warning,
-   `MWT.diagnostics.lastRequest()` (its return value is redacted by default,
-   so it is safe to paste as-is).
-   For injection bugs ("the model ignored my world state"), add
-   `MWT.diagnostics.injectionStatus()` — placements, registrations, and the
-   warnings; its return value is redacted by default (payloads gated, secrets
-   scrubbed), so it is safe to paste as-is. Only if you need payload text:
-   `MWT.diagnostics.injectionStatus({ includeContent: true })` (still
-   secret-scrubbed), and only if you need one key's byte-exact string:
-   `MWT.diagnostics.injection('mwt_world_state_injection')` (raw — skim
-   before pasting). For "my data is
-   weird" reports, add `MWT.diagnostics.events({ level: 'warn' })` — it shows
-   every silent recovery (repaired JSON, reasoning fallback, stripped fences,
-   scope fallback, missing world-info) from the session. For "the setting is
-   right but behaves wrong", add `MWT.diagnostics.settingsProvenance()`. For
-   "is anything even running", start with `MWT.diagnostics.health()`. For
-   anything on a non-reference build/fork, or any scoping/identity issue, add
-   `MWT.diagnostics.environment()`.
-3. Copy the **returned object**: right-click → *Copy object*, or run
-   `copy(MWT.diagnostics.apiCalls())` in Chrome/Edge.
-4. Paste into the bug report. Add `MWT.diagnostics.lastRuns()` and, for
-   scoping/identity issues, `MWT.diagnostics.scope()` plus
-   `MWT.scope.diagnose()` (the 🗂️ Scope & storage tab shows the same
-   resolution — either is fine, both is best).
+1. **The easy way (no devtools):** open the MWT modal → 🩺 Diagnostics tab →
+   **📋 Copy Report**. The report lands on your clipboard as Markdown —
+   secrets redacted, content (prompt bodies / payload text / full error
+   bodies) EXCLUDED unless you tick the opt-in checkbox above the button
+   (its state is never persisted; every session starts excluded). It now
+   includes everything: global settings + provenance, last runs, API calls,
+   the event ring, injected payloads (content-gated), and the Health /
+   Environment / Scope / Injection / Integrity tab snapshots. The console
+   counterpart is `await MWT.diagnostics.report()` (same sections, same
+   redaction — the return value is the Markdown string; `copy(await
+   MWT.diagnostics.report())` puts it on the clipboard).
+2. Reproduce the problem first, then capture — the buffer is in-memory only
+   and clears on reload.
+3. For a deeper drill-down, add the individual accessors: `MWT.diagnostics.lastRequest()`
+   (the tab-shaped view with window stats; redacted by default),
+   `MWT.diagnostics.injectionStatus()` (placements + registrations; payloads
+   content-gated), `MWT.diagnostics.injection(key)` for one key's byte-exact
+   recorded string (RAW — skim before pasting), `MWT.diagnostics.log({ level: 'warn' })`
+   for the silent-recovery ring with counts (redacted), or
+   `MWT.diagnostics.settingsProvenance()` for "the setting is right but
+   behaves wrong". For anything on a non-reference build/fork, the report's
+   Environment section (or `MWT.diagnostics.environment()`) states the
+   fork-compat verdict.
+4. Paste into the bug report. Identity strings (character / chat names in
+   scope keys) can still appear even with content excluded — skim the report
+   before pasting it somewhere public.
 
-## Limitations (until the panel ships)
+## Limitations
 
-- No redaction toggle exists yet: API telemetry never captures content, but
-  injection snapshots DO include payload text (by design). The Phase 5 panel
-  adds the opt-in redaction layer for those.
+- Content opt-in: the panel's checkbox (and `report({ includeContent: true })`)
+  is the ONLY way payload / prompt / captured-toast / error-body text enters
+  a report, and it is never persisted — every session starts with content
+  excluded. Secrets are redacted in BOTH modes.
 - No repair actions — read-only except `clear()`, which only empties the
   in-memory buffer.
 - The buffer is per-session; a reload clears it. Reproduce, then capture before

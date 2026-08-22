@@ -123,6 +123,13 @@ export const CONTENT_KEYS = Object.freeze([
     // World State pinned entity names (world_state/settings.js) — a
     // comma-separated list of CHARACTER names, i.e. chat-derived content.
     'pinnedEntities',
+    // NPC Profiles entry preview (knowledge/lorebook.js listProfileEntries) —
+    // the first 80 chars of the profile BODY, i.e. chat prose. The Phase 12
+    // Integrity collector is careful to read only name/uid/chars from each
+    // entry, but this shared helper is the kind of thing a future tab spreads
+    // wholesale; gating the field name makes the redaction layer the backstop
+    // rather than trusting every caller to keep picking fields by hand.
+    'preview',
 ]);
 
 /**
