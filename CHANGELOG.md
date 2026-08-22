@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+- Environment tab — SillyTavern **version now resolved from the DOM** when no
+  API field exposes it. Live testing on stock ST 1.18.0 confirmed the three
+  field probes (`SillyTavern.version`, `SillyTavern.manifest.version`,
+  `context.version`) genuinely find nothing — `globalThis.SillyTavern` is only
+  `{ libs, getContext }` and `getContext()` carries no version — so the tab had
+  read "version not exposed on this build", which reads like a fault. A fourth,
+  last-resort source reads `#version_display` (what ST paints for the user,
+  filled from its `/version` fetch), drops the redundant "SillyTavern " prefix,
+  and reports e.g. `1.18.0 'release' (abc1234)` with source `DOM
+  #version_display`. It is LAST in probe order, so a fork that exposes a real
+  version field still wins; the bare "SillyTavern" placeholder before the fetch
+  resolves still reads as not-exposed. `environment.js` gains an injectable
+  `doc` dependency to keep the probe unit-testable.
+
 ## [1.7.9]
 
 ### Added

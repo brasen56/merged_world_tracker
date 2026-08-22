@@ -1,5 +1,9 @@
 # MWT.diagnostics — Console Tester Guide (Phases 0–13)
 
+> **New to this?** Start with [`DIAGNOSTICS_GUIDE.md`](DIAGNOSTICS_GUIDE.md)
+> — the beginner-friendly walkthrough (panel first, symptom table, console
+> primer). This file is the deep per-command reference.
+
 > **Status:** live now, and v1 is COMPLETE (Phase 13 shipped). The console
 > bridge remains the deepest view; the **🩺 Diagnostics tab** (Phase 5) in the
 > MWT modal offers a redacted **📋 Copy Report** without devtools, and its live

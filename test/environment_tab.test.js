@@ -132,6 +132,30 @@ describe('detectStVersion', () => {
     test('reports null when nothing exposes a version — that absence is the finding', () => {
         expect(detectStVersion(undefined, undefined)).toEqual({ value: null, source: null });
     });
+
+    // The DOM fallback: stock ST exposes no version FIELD (globalThis.SillyTavern
+    // is just { libs, getContext }), but it paints #version_display for the user.
+    const fakeDoc = (text) => ({ getElementById: (id) => (id === 'version_display' ? { textContent: text } : null) });
+
+    test('falls back to the DOM #version_display, dropping the redundant product name', () => {
+        expect(detectStVersion({}, {}, fakeDoc("SillyTavern 1.18.0 'release' (abc1234)")))
+            .toEqual({ value: "1.18.0 'release' (abc1234)", source: 'DOM #version_display' });
+    });
+
+    test('a real version FIELD still wins over the DOM (DOM is the last resort)', () => {
+        expect(detectStVersion({ version: '9.9.9-fork' }, {}, fakeDoc('SillyTavern 1.18.0')))
+            .toEqual({ value: '9.9.9-fork', source: 'SillyTavern.version' });
+    });
+
+    test('the bare "SillyTavern" placeholder before /version resolves reads as not-exposed', () => {
+        expect(detectStVersion({}, {}, fakeDoc('SillyTavern'))).toEqual({ value: null, source: null });
+        expect(detectStVersion({}, {}, fakeDoc('   '))).toEqual({ value: null, source: null });
+        expect(detectStVersion({}, {}, fakeDoc(''))).toEqual({ value: null, source: null });
+    });
+
+    test('a missing #version_display element is simply skipped', () => {
+        expect(detectStVersion({}, {}, { getElementById: () => null })).toEqual({ value: null, source: null });
+    });
 });
 
 // ─── detectChatIdPremise ─────────────────────────────────────────────────────
@@ -324,6 +348,15 @@ describe('collectEnvironmentSnapshot', () => {
             'getCurrentChatId', 'chatId', 'getTokenCount', 'connectionManagerContext', 'worldInfo',
         ]);
         expect(snap.errors).toBeUndefined();
+    });
+
+    test('the DOM #version_display probe flows through the snapshot (stock ST, no version field)', () => {
+        // st/ctx expose no version — the stock-ST case the user hit — but the
+        // DOM element does, so the snapshot now reports it instead of null.
+        const doc = { getElementById: (id) => (id === 'version_display' ? { textContent: "SillyTavern 1.18.0 'release' (abc1234)" } : null) };
+        const snap = collectEnvironmentSnapshot(deps({ st: {}, doc }));
+        expect(snap.stVersion).toBe("1.18.0 'release' (abc1234)");
+        expect(snap.stVersionSource).toBe('DOM #version_display');
     });
 
     test('contextFields mirror MWT.scope.diagnose() — same rows, same sentinels', () => {
