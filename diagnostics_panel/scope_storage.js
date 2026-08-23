@@ -36,6 +36,7 @@
 import { MWT_VERSION } from '../core/version.js';
 import { getEpoch } from '../core/scope.js';
 import { getEvents } from '../core/diagnostics.js';
+import { getContextSafe } from '../core/context.js';
 
 import {
     SCOPES,
@@ -46,6 +47,7 @@ import {
 } from '../knowledge/scope.js';
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, PROFILE_LOREBOOK_NAME,
+    state as knowledgeState,
 } from '../knowledge/state.js';
 import { getSettings } from '../knowledge/settings.js';
 import { peekStore, STORE_VERSION } from '../knowledge/store.js';
@@ -58,11 +60,18 @@ import { peekStore, STORE_VERSION } from '../knowledge/store.js';
  * each keep a store inside the book (registry / state registry), while NPC
  * Profiles is plain entries with no store — hydration and store version only
  * exist where a store exists.
+ *
+ * `injectable` marks which books ST is expected to inject from, and therefore
+ * which ones need to be switched on in the World Info panel to do anything.
+ * The Knowledge and State Tracker books hold keyworded entries that ST injects
+ * when the book is active; NPC Profiles entries carry NO keywords on purpose
+ * (see knowledge/lorebook.js), so ST never injects them whether the book is
+ * active or not — activation status is meaningless for it.
  */
 export const SCOPE_BOOK_SPECS = [
-    { id: 'knowledge', label: '🧠 Knowledge Tracker', nameKey: 'knowledge', hasStore: true },
-    { id: 'state', label: '📜 State Tracker', nameKey: 'state', hasStore: true },
-    { id: 'profiles', label: '👥 NPC Profiles', nameKey: 'profiles', hasStore: false },
+    { id: 'knowledge', label: '🧠 Knowledge Tracker', nameKey: 'knowledge', hasStore: true, injectable: true },
+    { id: 'state', label: '📜 State Tracker', nameKey: 'state', hasStore: true, injectable: true },
+    { id: 'profiles', label: '👥 NPC Profiles', nameKey: 'profiles', hasStore: false, injectable: false },
 ];
 
 /** The global (un-scoped) book names, for comparison and labels. */
@@ -71,6 +80,171 @@ export const GLOBAL_BOOK_NAMES = {
     state: STATE_LOREBOOK_NAME,
     profiles: PROFILE_LOREBOOK_NAME,
 };
+
+// ─── World-info activation probe (read-only) ──────────────────────────────────
+//
+// MWT creates the lorebook FILES (loadWorldInfo / saveWorldInfo) but has never
+// touched any of SillyTavern's activation slots. ST only scans a book that is
+// switched on in one of four places (world-info.js):
+//
+//   1. Global select      selected_world_info[]                 (applies to all)
+//   2. Chat-bound         chat_metadata.world_info              (this chat)
+//   3. Character primary  character.data.extensions.world       (this card)
+//   4. Character extra    world_info.charLore[…].extraBooks     (this card)
+//
+// A book that is in none of these is inert: MWT keeps writing entries and ST
+// injects nothing, with no error anywhere. That is invisible on 'global' scope
+// (the name never changes, so a book switched on once stays on), but 'character'
+// and 'chat' scope mint a brand-new book name that is guaranteed inactive on
+// creation. This probe reads all four slots so the tab can say, per book,
+// whether ST will actually scan it.
+
+/**
+ * Read SillyTavern's world-info activation state for the CURRENT chat/character,
+ * defensively and READ-ONLY. Every slot is read under its own guard; a fork
+ * that lacks one export degrades that slot to "unreadable" rather than throwing.
+ *
+ * `detectable` means EVERY applicable slot was read. A book that is absent
+ * from the readable slots can only be proved inactive when nothing was
+ * missed, so as soon as any slot is unreadable (world-info.js not imported
+ * yet, a fork without an export, a hostile accessor) the classifier reports
+ * such books as 'unknown' rather than risk a false 'inactive'.
+ *
+ * @param {object} [deps]
+ * @param {object} [deps.wiScript] — the world-info.js namespace (live export bindings)
+ * @param {object} [deps.ctx] — SillyTavern context
+ * @returns {{ detectable: boolean, globalReadable: boolean, chatReadable: boolean,
+ *            charReadable: boolean, global: string[], chat: string|null,
+ *            charPrimary: string|null, charAdditional: string[], note: string }}
+ */
+export function gatherActivationState({
+    wiScript = knowledgeState?.wiScript,
+    ctx = getContextSafe(),
+} = {}) {
+    const out = {
+        detectable: false,
+        globalReadable: false, chatReadable: false, charReadable: false,
+        global: [], chat: null, charPrimary: null, charAdditional: [],
+        note: '',
+    };
+
+    // 1. Global select — `selected_world_info` (a live binding on the namespace).
+    try {
+        const sel = wiScript?.selected_world_info;
+        if (Array.isArray(sel)) {
+            out.global = sel.filter((n) => typeof n === 'string');
+            out.globalReadable = true;
+        }
+    } catch { /* fork without the export — leave unreadable */ }
+
+    // 2. Chat-bound — `chat_metadata.world_info` (ST's METADATA_KEY === 'world_info').
+    //    An open chat always has a chatMetadata object; the key simply being
+    //    absent is a definite "not chat-bound", not an unreadable slot.
+    try {
+        const meta = ctx?.chatMetadata;
+        if (meta && typeof meta === 'object') {
+            const bound = meta.world_info;
+            out.chat = (typeof bound === 'string' && bound) ? bound : null;
+            out.chatReadable = true;
+        }
+    } catch { /* ignore */ }
+
+    // 3 + 4. Character primary + additional — scoped to the CURRENT character.
+    try {
+        const chid = ctx?.characterId;
+        const card = (chid !== null && chid !== undefined && Array.isArray(ctx?.characters))
+            ? ctx.characters[chid]
+            : null;
+        if (card) {
+            const primary = card?.data?.extensions?.world;
+            out.charPrimary = (typeof primary === 'string' && primary) ? primary : null;
+            // charLore keys on the avatar filename WITHOUT its extension — the
+            // exact transform ST's getCharaFilename() applies.
+            const fileName = String(card?.avatar || '').replace(/\.[^/.]+$/, '');
+            const charLore = wiScript?.world_info?.charLore;
+            if (fileName && Array.isArray(charLore)) {
+                const entry = charLore.find((e) => e?.name === fileName);
+                if (entry && Array.isArray(entry.extraBooks)) {
+                    out.charAdditional = entry.extraBooks.filter((n) => typeof n === 'string');
+                }
+            }
+            // Readable only NOW: every character source above (primary world,
+            // avatar, charLore) has been read without throwing. Setting the
+            // flag earlier left it stuck on `true` when a later accessor
+            // threw, letting the classifier report a definite 'inactive'
+            // from what was actually a partial read.
+            out.charReadable = true;
+        } else if (ctx && (ctx.groupId === null || ctx.groupId === undefined || ctx.groupId === '')) {
+            // Context present, not a group, but no character resolved (no card
+            // open): there is simply no character slot to read, which is a
+            // definite "not character-bound" — mark it readable so a book that
+            // is otherwise absent can be reported 'inactive', not 'unknown'.
+            out.charReadable = true;
+        }
+    } catch { /* ignore */ }
+
+    // Detection needs every slot: absence from the readable ones proves
+    // inactivity only when nothing applicable was missed.
+    out.detectable = out.globalReadable && out.chatReadable && out.charReadable;
+    const unread = [];
+    if (!out.globalReadable) unread.push('global selection');
+    if (!out.chatReadable) unread.push('chat metadata');
+    if (!out.charReadable) unread.push('character books');
+    out.note = unread.length
+        ? `Could not read: ${unread.join(', ')}. Books absent from the readable slots are reported "unknown", not inactive.`
+        : 'All four world-info activation slots read successfully.';
+    return out;
+}
+
+/**
+ * Classify one resolved book name against the gathered activation state.
+ *
+ * @param {string} name — the resolved book name
+ * @param {ReturnType<typeof gatherActivationState>} active
+ * @param {{ injectable?: boolean }} [opts]
+ * @returns {{ active: 'yes'|'no'|'unknown'|'n/a', activeIn: string[], note: string }}
+ */
+export function classifyBookActivation(name, active, { injectable = true } = {}) {
+    if (injectable === false) {
+        return {
+            active: 'n/a',
+            activeIn: [],
+            note: 'Never injected — its entries carry no keywords, so World Info activation does not apply.',
+        };
+    }
+    if (!name || name === '(unresolved)') {
+        return { active: 'unknown', activeIn: [], note: 'Book name unresolved.' };
+    }
+    const a = active || {};
+    const activeIn = [];
+    if (Array.isArray(a.global) && a.global.includes(name)) activeIn.push('global selection');
+    if (a.chat === name) activeIn.push('chat-bound');
+    if (a.charPrimary === name) activeIn.push('character (primary)');
+    if (Array.isArray(a.charAdditional) && a.charAdditional.includes(name)) activeIn.push('character (additional)');
+
+    if (activeIn.length) {
+        return { active: 'yes', activeIn, note: `ST will scan this book — switched on via ${activeIn.join(', ')}.` };
+    }
+    // Absence proves inactivity only when EVERY applicable slot was read: the
+    // book may be active in a slot that could not be inspected, so a partial
+    // read reports 'unknown' — never a false 'no'.
+    const unread = [];
+    if (!a.globalReadable) unread.push('global selection');
+    if (!a.chatReadable) unread.push('chat');
+    if (!a.charReadable) unread.push('character');
+    if (unread.length) {
+        return {
+            active: 'unknown',
+            activeIn: [],
+            note: `Not found in the readable slots, but could not read: ${unread.join(', ')} — activation cannot be ruled out.`,
+        };
+    }
+    return {
+        active: 'no',
+        activeIn: [],
+        note: 'Not switched on in any World Info slot — ST will NOT inject its entries.',
+    };
+}
 
 // ─── Resolution explainer (the read-only mirror of resolveBookNames) ──────────
 
@@ -217,6 +391,7 @@ export function explainBookResolution({
  * @param {object} [deps] — every dependency injectable for the Node suite
  * @param {object} [deps.scopeApi] — { getCharacterIdentity, getChatIdentity }
  * @param {object} [deps.storeApi] — { peekStore }
+ * @param {object} [deps.activationApi] — { gather } → gatherActivationState()
  * @param {function(): object} [deps.getKnowledgeSettings]
  * @param {function(): number} [deps.epoch]
  * @param {function(object=): object[]} [deps.events] — core/diagnostics getEvents
@@ -226,6 +401,8 @@ export function explainBookResolution({
  * @returns {{generatedAt: number, mwtVersion: string, epoch: number,
  *   scopeSetting: {value: string, valid: boolean}, character: object|null,
  *   chat: object|null, resolution: object, books: Array<object>,
+ *   activation: {detectable: boolean, globalReadable: boolean, chatReadable: boolean,
+ *     charReadable: boolean, globalCount: number, note: string},
  *   bindings: {count: number, rows: Array<object>},
  *   fallbackEvents: {count: number, last: object|null},
  *   bannerLevel: 'ok'|'warn'|'fail', warnings: Array<object>,
@@ -234,6 +411,7 @@ export function explainBookResolution({
 export function collectScopeSnapshot({
     scopeApi = { getCharacterIdentity, getChatIdentity },
     storeApi = { peekStore },
+    activationApi = { gather: gatherActivationState },
     getKnowledgeSettings = getSettings,
     epoch = getEpoch,
     events = getEvents,
@@ -292,6 +470,17 @@ export function collectScopeSnapshot({
     //                state assertHydrated() blocks writes on.
     // Only the second is a fault. Reporting the first in red would paint
     // "writes are blocked" over a panel that is simply early.
+    //
+    // Activation is read ONCE for all three books — the four World Info slots
+    // (see gatherActivationState) are the same regardless of which book we ask
+    // about. Guarded like every other accessor so a probe failure degrades to
+    // an undetectable state, never a blank tab.
+    const activation = call('activation', () => activationApi.gather?.() ?? null, null) ?? {
+        detectable: false, globalReadable: false, chatReadable: false, charReadable: false,
+        global: [], chat: null, charPrimary: null, charAdditional: [],
+        note: '(activation probe failed — see errors)',
+    };
+
     const books = SCOPE_BOOK_SPECS.map((spec) => {
         const name = resolution.books?.[spec.nameKey];
         const peek = (spec.hasStore && name)
@@ -302,16 +491,23 @@ export function collectScopeSnapshot({
             : (peek === null || peek === undefined
                 ? 'not-attempted'
                 : (peek.hydrated === true ? 'loaded' : 'failed'));
+        const act = call(`activation:${spec.id}`,
+            () => classifyBookActivation(name ?? '(unresolved)', activation, { injectable: spec.injectable !== false }),
+            { active: 'unknown', activeIn: [], note: '' });
         return {
             id: spec.id,
             label: spec.label,
             name: name ?? '(unresolved)',
             hasStore: spec.hasStore,
+            injectable: spec.injectable !== false,
             storeState,
             hydrated: peek?.hydrated === true,
             dirty: peek?.dirty === true,
             storeVersion: typeof peek?.version === 'number' ? peek.version : null,
             currentStoreVersion,
+            active: act.active,
+            activeIn: Array.isArray(act.activeIn) ? act.activeIn : [],
+            activeNote: act.note ?? '',
         };
     });
 
@@ -404,6 +600,29 @@ export function collectScopeSnapshot({
         });
     }
 
+    // World Info activation — the silent-injection gap. MWT creates a book file
+    // but never switches it on in ST; an inactive injectable book means the
+    // tracker keeps writing and ST scans nothing, with no error. The Knowledge
+    // book is the documented keyword-injection path, so an inactive one is
+    // always worth surfacing. The State book is user-created, so only flag it
+    // once its store is loaded (the book is real and MWT is using it) — that
+    // avoids a false alarm for users who never set up state trackers.
+    if (knowledgeBook?.injectable && knowledgeBook.active === 'no') {
+        warnings.push({
+            id: 'knowledge-book-inactive',
+            level: 'warn',
+            text: `The Knowledge Tracker book "${knowledgeBook.name}" is NOT switched on in SillyTavern's World Info — not in the global selection, this chat's bound book, or the character's books. MWT keeps writing NPC entries to it, but ST will not inject them until the book is activated. Enable it in the World Info panel, or turn on "Switch the Knowledge Tracker lorebook on automatically" in Knowledge → Settings and MWT will claim this chat's slot itself (per-character and per-chat scope each mint a new book that starts inactive).`,
+        });
+    }
+    const stateBook = books.find((b) => b.id === 'state');
+    if (stateBook?.injectable && stateBook.active === 'no' && stateBook.storeState === 'loaded') {
+        warnings.push({
+            id: 'state-book-inactive',
+            level: 'warn',
+            text: `The State Tracker book "${stateBook.name}" is NOT switched on in SillyTavern's World Info. MWT still updates its tracker entries, but ST will not inject them until the book is activated in the World Info panel, or you turn on the State Tracker auto-activation toggle in Knowledge → Settings.`,
+        });
+    }
+
     const bannerLevel = warnings.some((w) => w.level === 'fail')
         ? 'fail'
         : (warnings.length > 0 ? 'warn' : 'ok');
@@ -421,6 +640,14 @@ export function collectScopeSnapshot({
         chat,
         resolution,
         books,
+        activation: {
+            detectable: activation.detectable === true,
+            globalReadable: activation.globalReadable === true,
+            chatReadable: activation.chatReadable === true,
+            charReadable: activation.charReadable === true,
+            globalCount: Array.isArray(activation.global) ? activation.global.length : 0,
+            note: activation.note ?? '',
+        },
         bindings: bindingsInfo,
         fallbackEvents,
         bannerLevel,

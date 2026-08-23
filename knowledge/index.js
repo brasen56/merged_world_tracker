@@ -500,6 +500,25 @@ export async function reloadStores(reason = 'reload') {
         // restored the chat. Seeing two different books logged in a row is
         // expected, and without the label it reads like a bug.
         console.log(`[MWT:Knowledge] Store ready (${reason}) — lorebook "${knowledge}".`);
+        // Switch MWT's books on in ST's World Info when the user opted in
+        // (knowledge/activation.js). Runs after hydration so the store is
+        // loaded and the resolved book names are settled before any slot is
+        // written. Note the book FILE may still not exist — it is created
+        // lazily by the first write (flushBook / writeToLorebook), not by
+        // hydration — but binding a not-yet-created name is harmless and
+        // self-healing: ST ignores a chat-slot name missing from world_names
+        // and drops unknown names from the global selection, and the next
+        // apply re-adds them once the file is on disk.
+        // A scope change first prunes ledger entries whose books the new
+        // scope no longer targets (settings.js already removed the old
+        // bindings before calling this). Fire-and-forget: activation is
+        // fully guarded and must never block or fail the store load.
+        import('./activation.js')
+            .then((m) => {
+                if (reason === 'scope change') m.pruneStaleLedger();
+                return m.applyActivationBindings(reason);
+            })
+            .catch((err) => console.warn('[MWT:Knowledge] Lorebook activation failed:', err?.message || err));
     } catch (err) {
         console.warn('[MWT:Knowledge] Store hydration failed:', err?.message || err);
     }
