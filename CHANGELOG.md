@@ -12,6 +12,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.8.0 - Unreleased]
+
+### Added
+
+- **Lorebook auto-activation (opt-in)** — MWT creates its lorebook files but
+  never switched them on in SillyTavern's World Info, so ST scanned nothing
+  the trackers wrote until each book was enabled by hand. Two toggles in
+  Knowledge → Settings now let MWT claim activation slots itself:
+  - **Knowledge Tracker → the chat's bound-book slot** (`chat_metadata.world_info`,
+    single-entry by ST design). No-clobber: the slot is only claimed when empty
+    or already holding an MWT book; a foreign book produces a visible conflict
+    note instead. Unbinding deletes the key exactly like ST's own UI.
+  - **State Tracker → a `stateScope`-chosen slot**: `character` (default) adds
+    the book to the card's *additional* books (`charLore[].extraBooks` via ST's
+    `charUpdateAddAuxWorld`/`charSetAuxWorlds` — settings-only, no card re-save,
+    never touches the card's primary lorebook), or `global`
+    (`updateWorldInfoSettings()` — active in every chat). `chat` targets and
+    group chats are skipped with a note (the chat slot belongs to Knowledge;
+    ST's character scan is inert in group chats).
+  - Every slot write is recorded in a ledger (`settings.activation`), so
+    toggle-off removes **exactly** MWT's entries and nothing else, and a
+    lorebook-scope change unbinds the old books before binding the new ones.
+  - Bindings re-apply after book hydration on init, chat change, and scope
+    change (`reloadStores`); the Scope & storage diagnostics warnings now point
+    at the toggles; the settings panel warns when the State target is wider
+    than the underlying book's scope. Design doc:
+    `upcoming_work_misc/LOREBOOK_ACTIVATION_PLAN.md`; implementation:
+    `knowledge/activation.js` (+ suite `test/activation.test.js`).
+
+- **Lorebook auto-activation — safety rules** — the guarantees the feature
+  above is built on, each covered by `test/activation.test.js`:
+  - **Nothing is adopted.** A slot that merely already holds the target book
+    is never recorded as MWT's, so turning a toggle off can never remove a
+    binding you made yourself — for the chat slot, the global selection, and
+    character books alike.
+  - **Never guess, never erase.** Both setters replace a whole list, so an
+    unreadable global selection or character aux list is treated as unknown,
+    never as empty: binding skips with a visible note and unbinding keeps its
+    ledger entry to retry later, rather than writing a list that would drop
+    your own books. A merely *missing* `charLore` is stock SillyTavern and
+    still reads as empty, so character binding works on a clean install.
+  - **A failed unbind is remembered.** If a book cannot be switched off
+    (missing setter, unreadable selection, a rejected write) it stays in the
+    ledger and is retried automatically on the next init / chat change,
+    instead of being forgotten while still active.
+  - **Chat-slot ownership is per chat**, marked in that chat's own metadata
+    (`mwt_chat_world_info`). Binding a second chat cannot orphan the first:
+    each chat is cleaned when revisited, a stale MWT-owned slot is reclaimed
+    on a scope change rather than reported as a conflict, and a slot you
+    rebound by hand instantly stops counting as MWT's.
+  - **One State book per card.** With lorebook scope `chat` and the State
+    target `character`, each chat's State book superseded the last but left it
+    switched on, so a card slowly accumulated dead books that all injected at
+    once. Superseded bindings MWT itself made are now swept when the
+    replacement is bound (never before, so a failed write cannot leave a card
+    with no State book) — books you added yourself are untouched, and a card
+    that already accumulated them is healed on the next activation.
+
+- **Diagnostics: Scope & storage tab** (`diagnostics_panel/scope_storage.js`) —
+  a book absent from the readable activation slots was reported "inactive"
+  even when the chat or character slot could not be inspected. Partial reads
+  now report "unknown" (never a false "inactive"), and `detectable` requires
+  every applicable slot to have been read. A hostile character accessor
+  (card fields, `charLore`) no longer leaves the character slot falsely
+  marked readable after a failed read.
+
+## [1.7.11]
+
+### Added
+- Schema Validation (Part 1)
+
 ## [1.7.10]
 
 ### Added

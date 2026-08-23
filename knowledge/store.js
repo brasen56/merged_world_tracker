@@ -44,13 +44,21 @@
 
 import { getChatMeta, record } from '../core/index.js';
 
+// The lorebook-store sentinel and version are owned by the module schema
+// (knowledge/schema.js) so the schema registry and the runtime can never
+// drift apart. Both are re-exported below for the existing importers.
+import {
+    STORE_SENTINEL,
+    KNOWLEDGE_STORE_VERSION,
+} from './schema.js';
+
 import {
     state, REGISTRY_KEY, STATE_REGISTRY_KEY, RELATIONSHIP_KEY,
     LOREBOOK_NAME, STATE_LOREBOOK_NAME,
 } from './state.js';
 
 /** Marks the entry that holds this book's store. Matched as a PREFIX — see isStoreEntry. */
-export const STORE_SENTINEL = '[MWT:store]';
+export { STORE_SENTINEL };
 
 /**
  * The full title written on the store entry. The sentinel comes first so the
@@ -77,8 +85,8 @@ export function isStoreEntry(entry) {
     return typeof entry?.comment === 'string' && entry.comment.startsWith(STORE_SENTINEL);
 }
 
-/** Bumped only on a breaking change to the stored shape. */
-export const STORE_VERSION = 1;
+/** Bumped only on a breaking change to the stored shape. Owned by ./schema.js. */
+export const STORE_VERSION = KNOWLEDGE_STORE_VERSION;
 
 /** How long to wait before flushing a dirty store back to its book. */
 const FLUSH_DEBOUNCE_MS = 1200;

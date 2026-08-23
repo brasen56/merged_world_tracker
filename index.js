@@ -1576,6 +1576,15 @@ window.MWT.diagnostics = {
         console.table(snap.books.map((b) => ({
             book: b.id,
             name: b.name,
+            // Whether ST will actually scan this book. 'inactive' means MWT is
+            // writing to a book ST never injects — the silent-injection gap.
+            'active (WI)': b.injectable === false
+                ? 'n/a — never injected'
+                : ({
+                    yes: b.activeIn?.length ? `active (${b.activeIn.join(', ')})` : 'active',
+                    no: 'INACTIVE — ST will not inject',
+                    unknown: 'unknown (WI unreadable)',
+                }[b.active] ?? 'unknown'),
             // 'not attempted yet' is the ordinary early state (hydration is
             // async, on chat change); only 'LOAD FAILED' blocks writes.
             store: {

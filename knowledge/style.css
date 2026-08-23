@@ -499,6 +499,9 @@
 .kt-status--info    { color: var(--mwt-info); }
 .kt-status--success { color: var(--mwt-success); }
 .kt-status--error   { color: var(--mwt-error); }
+/* 'warning' is the spelling ktSetStatus() callers use; it had no rule, so
+   every warning-level status silently rendered in the default body colour. */
+.kt-status--warning { color: var(--mwt-warning); }
 
 /* ─── KT diff inside staging detail ───────────────────────────────── */
 

@@ -604,10 +604,23 @@ export function renderScopeSnapshot(snapshot, { formatTime = (ts) => new Date(ts
             : (b.storeVersion != null
                 ? `v${escapeHtml(String(b.storeVersion))}${b.storeVersion !== b.currentStoreVersion ? ` <span class="mwt-diag-dim">(code: v${escapeHtml(String(b.currentStoreVersion ?? '?'))})</span>` : ''}`
                 : '<span class="mwt-diag-dim">—</span>');
+        // Active cell: whether ST will actually scan this book (see
+        // gatherActivationState). 'inactive' is amber, not red — it is usually a
+        // one-click fix in the World Info panel, not a fault in MWT. NPC Profiles
+        // reports n/a: its entries carry no keywords, so activation is moot.
+        const title = b.activeNote ? ` title="${escapeHtml(String(b.activeNote))}"` : '';
+        const activeCell = b.injectable === false
+            ? `<span class="mwt-diag-dim"${title}>n/a — never injected</span>`
+            : (b.active === 'yes'
+                ? `${diagBadge('active', 'ok')}${b.activeIn?.length ? ` <span class="mwt-diag-dim"${title}>${escapeHtml(b.activeIn.join(', '))}</span>` : ''}`
+                : (b.active === 'no'
+                    ? `${diagBadge('inactive', 'warn')} <span class="mwt-diag-dim"${title}>ST will not inject</span>`
+                    : `${diagBadge('unknown', 'dim')} <span class="mwt-diag-dim"${title}>can't read World Info</span>`));
         return `
             <tr data-book="${escapeHtml(String(b.id))}">
                 <td>${escapeHtml(String(b.label ?? b.id))}</td>
                 <td class="mwt-diag-env-value">${escapeHtml(String(b.name ?? ''))}</td>
+                <td>${activeCell}</td>
                 <td>${storeCell}</td>
                 <td>${versionCell}</td>
             </tr>
@@ -656,11 +669,14 @@ export function renderScopeSnapshot(snapshot, { formatTime = (ts) => new Date(ts
             <table class="mwt-diag-env-table mwt-diag-env-kv">
                 <tbody>${resolutionRows}</tbody>
             </table>
-            <p class="mwt-diag-env-subheading">Books — hydration &amp; store version</p>
+            <p class="mwt-diag-env-subheading">Books — World Info activation, hydration &amp; store version</p>
             <table class="mwt-diag-env-table">
-                <thead><tr><th>Book</th><th>Name</th><th>Store</th><th>Version</th></tr></thead>
+                <thead><tr><th>Book</th><th>Name</th><th>Active (World Info)</th><th>Store</th><th>Version</th></tr></thead>
                 <tbody>${bookRows}</tbody>
             </table>
+            ${s.activation && s.activation.detectable === false
+                ? `<p class="mwt-diag-note">⚠ Could not read SillyTavern's World Info activation state${s.activation.note ? ` — ${escapeHtml(String(s.activation.note))}` : ''}. Book activation shows as “unknown” while any activation slot cannot be read.</p>`
+                : `<p class="mwt-diag-note"><strong>Active</strong> = the book is switched on in ST's World Info (global selection, this chat's bound book, or the character's books), so ST will scan it. <strong>Inactive</strong> = MWT still writes to the book, but ST injects nothing until you enable it in the World Info panel. Activation is opt-in — the toggles in Knowledge → Settings can switch these books on automatically (this chat's slot for the Knowledge book, the global selection or the character's additional books for the State book); a book no toggle covers stays inactive until you enable it in the World Info panel. Per-character and per-chat scope each mint a fresh book that starts inactive.</p>`}
             <p class="mwt-diag-env-subheading">Saved bindings (${escapeHtml(String(s.bindings?.count ?? bindings.length))}) — stable identity key → book names</p>
             ${bindingsBlock}
             ${fallbackNote}

@@ -26,6 +26,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
     explainBookResolution,
     collectScopeSnapshot,
+    gatherActivationState,
+    classifyBookActivation,
     SCOPE_BOOK_SPECS,
     GLOBAL_BOOK_NAMES,
 } from '../diagnostics_panel/scope_storage.js';
@@ -289,6 +291,233 @@ describe('collectScopeSnapshot — warnings & the Phase 3 counter', () => {
         expect(snap.errors.some((e) => e.startsWith('characterIdentity:'))).toBe(true);
         expect(snap.chat).toEqual(CHAT);
         expect(snap.books).toHaveLength(3);
+    });
+});
+
+// ─── World Info activation probe ──────────────────────────────────────────────
+
+describe('gatherActivationState — reads the four ST activation slots, read-only', () => {
+    test('reads global select, chat-bound, character primary and additional', () => {
+        const a = gatherActivationState({
+            wiScript: {
+                selected_world_info: ['Some Global Book', 'Knowledge Tracker'],
+                world_info: { charLore: [{ name: 'seraphina', extraBooks: ['Extra Book'] }] },
+            },
+            ctx: {
+                chatMetadata: { world_info: 'Chat Bound Book' },
+                characterId: 0,
+                characters: [{ avatar: 'seraphina.png', data: { extensions: { world: 'Primary Book' } } }],
+            },
+        });
+        expect(a.globalReadable).toBe(true);
+        expect(a.chatReadable).toBe(true);
+        expect(a.charReadable).toBe(true);
+        expect(a.detectable).toBe(true);
+        expect(a.global).toContain('Knowledge Tracker');
+        expect(a.chat).toBe('Chat Bound Book');
+        expect(a.charPrimary).toBe('Primary Book');
+        expect(a.charAdditional).toEqual(['Extra Book']);
+    });
+
+    test('matches charLore on the extension-stripped avatar filename (getCharaFilename rule)', () => {
+        const a = gatherActivationState({
+            wiScript: { selected_world_info: [], world_info: { charLore: [{ name: 'mara_v2', extraBooks: ['Mara Book'] }] } },
+            ctx: { chatMetadata: {}, characterId: 0, characters: [{ avatar: 'mara_v2.png', data: {} }] },
+        });
+        expect(a.charAdditional).toEqual(['Mara Book']);
+    });
+
+    test('an absent global export leaves globalReadable false and undetectable', () => {
+        const a = gatherActivationState({ wiScript: {}, ctx: { chatMetadata: {}, characters: [] } });
+        expect(a.globalReadable).toBe(false);
+        expect(a.detectable).toBe(false);
+        expect(a.note).toMatch(/global selection/i);
+    });
+
+    test('a partially unreadable state is not detectable — absence proves nothing', () => {
+        const a = gatherActivationState({
+            wiScript: { selected_world_info: [] },
+            ctx: { chatMetadata: {}, groupId: 7 }, // group: character slot not inspectable
+        });
+        expect(a.globalReadable).toBe(true);
+        expect(a.chatReadable).toBe(true);
+        expect(a.charReadable).toBe(false);
+        expect(a.detectable).toBe(false);
+        expect(a.note).toMatch(/character books/);
+        expect(a.note).toMatch(/unknown/i);
+    });
+
+    test('an open chat with no bound book is readable but null (definite "not chat-bound")', () => {
+        const a = gatherActivationState({
+            wiScript: { selected_world_info: [] },
+            ctx: { chatMetadata: {}, characterId: 0, characters: [{ avatar: 'x.png', data: {} }] },
+        });
+        expect(a.chatReadable).toBe(true);
+        expect(a.chat).toBeNull();
+    });
+
+    test('never throws on a hostile context', () => {
+        expect(() => gatherActivationState({
+            wiScript: { get selected_world_info() { throw new Error('boom'); } },
+            ctx: { get chatMetadata() { throw new Error('boom'); } },
+        })).not.toThrow();
+    });
+
+    test('a throwing charLore accessor leaves the character slot unreadable — never a false "read"', () => {
+        const wiScript = { selected_world_info: [], world_info: {} };
+        Object.defineProperty(wiScript.world_info, 'charLore', {
+            configurable: true,
+            get() { throw new Error('boom'); },
+        });
+        const a = gatherActivationState({
+            wiScript,
+            ctx: { chatMetadata: {}, characterId: 0, characters: [{ avatar: 'mara.png', data: {} }] },
+        });
+        expect(a.charReadable).toBe(false); // a FAILED read must not count as a read
+        expect(a.detectable).toBe(false);
+        expect(a.note).toMatch(/character books/);
+    });
+
+    test('a throwing card accessor (avatar) leaves the character slot unreadable', () => {
+        const card = { data: {} };
+        Object.defineProperty(card, 'avatar', {
+            configurable: true,
+            get() { throw new Error('boom'); },
+        });
+        const a = gatherActivationState({
+            wiScript: { selected_world_info: [], world_info: { charLore: [] } },
+            ctx: { chatMetadata: {}, characterId: 0, characters: [card] },
+        });
+        expect(a.charReadable).toBe(false);
+        expect(a.detectable).toBe(false);
+    });
+
+    test('a missing charLore (stock ST world_info === {}) still reads the character slot', () => {
+        const a = gatherActivationState({
+            wiScript: { selected_world_info: [], world_info: {} },
+            ctx: { chatMetadata: {}, characterId: 0, characters: [{ avatar: 'mara.png', data: {} }] },
+        });
+        expect(a.charReadable).toBe(true);
+        expect(a.charAdditional).toEqual([]);
+        expect(a.detectable).toBe(true);
+    });
+});
+
+describe('classifyBookActivation — yes/no/unknown/n-a', () => {
+    const readable = {
+        globalReadable: true, chatReadable: true, charReadable: true,
+        global: ['Knowledge Tracker - Mara'], chat: null, charPrimary: null, charAdditional: [],
+    };
+    test('a book in a readable slot is active, and names the slot', () => {
+        const r = classifyBookActivation('Knowledge Tracker - Mara', readable);
+        expect(r.active).toBe('yes');
+        expect(r.activeIn).toContain('global selection');
+    });
+    test('a book absent from all readable slots is inactive', () => {
+        const r = classifyBookActivation('State Tracker - Mara', readable);
+        expect(r.active).toBe('no');
+        expect(r.note).toMatch(/will NOT inject/i);
+    });
+    test('when the global slot is unreadable, activation is unknown (never a false inactive)', () => {
+        const r = classifyBookActivation('Anything', { globalReadable: false, chatReadable: false, charReadable: false });
+        expect(r.active).toBe('unknown');
+    });
+    test('a non-injectable book (NPC Profiles) reports n/a regardless of slots', () => {
+        const r = classifyBookActivation('NPC Profiles', readable, { injectable: false });
+        expect(r.active).toBe('n/a');
+        expect(r.note).toMatch(/no keywords/i);
+    });
+    test('a readable global selection but an unreadable chat slot cannot prove inactivity → unknown', () => {
+        const r = classifyBookActivation('State Tracker - Mara', {
+            ...readable, chatReadable: false, chat: null,
+        });
+        expect(r.active).toBe('unknown');
+        expect(r.note).toMatch(/could not read: chat/i);
+    });
+    test('an unreadable character slot likewise reports unknown, never a false inactive', () => {
+        const r = classifyBookActivation('State Tracker - Mara', {
+            ...readable, charReadable: false, charPrimary: null, charAdditional: [],
+        });
+        expect(r.active).toBe('unknown');
+        expect(r.note).toMatch(/character/);
+    });
+});
+
+describe('collectScopeSnapshot — activation wiring & warnings', () => {
+    /** All three resolved global books switched on. */
+    const allActive = () => ({
+        detectable: true, globalReadable: true, chatReadable: true, charReadable: true,
+        global: [GLOBAL_BOOK_NAMES.knowledge, GLOBAL_BOOK_NAMES.state, GLOBAL_BOOK_NAMES.profiles],
+        chat: null, charPrimary: null, charAdditional: [], note: 'ok',
+    });
+    /** Nothing switched on, but ST readable → definite "inactive". */
+    const noneActive = () => ({
+        detectable: true, globalReadable: true, chatReadable: true, charReadable: true,
+        global: [], chat: null, charPrimary: null, charAdditional: [], note: 'ok',
+    });
+
+    test('per-book active fields land on each row; Profiles is n/a', () => {
+        const snap = collectScopeSnapshot(deps({ activationApi: { gather: allActive } }));
+        const k = snap.books.find((b) => b.id === 'knowledge');
+        const p = snap.books.find((b) => b.id === 'profiles');
+        expect(k.active).toBe('yes');
+        expect(k.activeIn).toContain('global selection');
+        expect(p.active).toBe('n/a');
+        expect(snap.activation.detectable).toBe(true);
+    });
+
+    test('an inactive Knowledge book raises a warn (the silent-injection gap)', () => {
+        const snap = collectScopeSnapshot(deps({ activationApi: { gather: noneActive } }));
+        const w = snap.warnings.find((x) => x.id === 'knowledge-book-inactive');
+        expect(w).toBeTruthy();
+        expect(w.level).toBe('warn');
+        expect(snap.bannerLevel).toBe('warn');
+    });
+
+    test('the State warning fires only when its store is loaded (avoids false alarm for unused trackers)', () => {
+        // State store NOT loaded → no state warning even though it is inactive.
+        const noStore = collectScopeSnapshot(deps({ activationApi: { gather: noneActive } }));
+        expect(noStore.warnings.find((x) => x.id === 'state-book-inactive')).toBeFalsy();
+        // State store loaded → the warning appears.
+        const withStore = collectScopeSnapshot(deps({
+            activationApi: { gather: noneActive },
+            storeApi: { peekStore: () => ({ hydrated: true, dirty: false, version: 1, fields: [] }) },
+        }));
+        expect(withStore.warnings.find((x) => x.id === 'state-book-inactive')).toBeTruthy();
+    });
+
+    test('no activation warning when detection is undetectable (unknown, not inactive)', () => {
+        const undetectable = () => ({
+            detectable: false, globalReadable: false, chatReadable: false, charReadable: false,
+            global: [], chat: null, charPrimary: null, charAdditional: [], note: 'unreadable',
+        });
+        const snap = collectScopeSnapshot(deps({ activationApi: { gather: undetectable } }));
+        expect(snap.books.find((b) => b.id === 'knowledge').active).toBe('unknown');
+        expect(snap.warnings.find((x) => x.id === 'knowledge-book-inactive')).toBeFalsy();
+    });
+
+    test('a throwing activation probe degrades to undetectable, never blanks the tab', () => {
+        const snap = collectScopeSnapshot(deps({
+            activationApi: { gather: () => { throw new Error('probe exploded'); } },
+        }));
+        expect(snap.activation.detectable).toBe(false);
+        expect(snap.books.find((b) => b.id === 'knowledge').active).toBe('unknown');
+        expect(snap.errors?.some((e) => /activation/.test(e))).toBe(true);
+    });
+});
+
+describe('renderScopeSnapshot — activation column', () => {
+    const noneActive = () => ({
+        detectable: true, globalReadable: true, chatReadable: true, charReadable: true,
+        global: [], chat: null, charPrimary: null, charAdditional: [], note: 'ok',
+    });
+    test('renders the Active column header and an inactive amber badge', () => {
+        const html = renderScopeSnapshot(collectScopeSnapshot(deps({ activationApi: { gather: noneActive } })), { formatTime: T });
+        expect(html).toContain('Active (World Info)');
+        expect(html).toContain('>inactive<');
+        expect(html).toContain('ST will not inject');
+        // NPC Profiles is n/a, not a badge.
+        expect(html).toContain('never injected');
     });
 });
 

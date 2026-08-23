@@ -331,6 +331,12 @@ Control how World State, Chronicle, Story Plan, and Interiority content are inje
 
 > **Note:** Knowledge Tracker does not use extension prompt injection — it writes directly to SillyTavern lorebooks, which are triggered by keywords. Disabling the Knowledge tracker only stops it from scanning/updating; existing lorebook entries continue to be injected by SillyTavern's World Info until you disable them manually in the World Info panel.
 
+> **Automatic lorebook activation** *(opt-in)* — by default, SillyTavern only scans a lorebook after you switch it on yourself (global selection, the chat's bound book, or the character's books). Two toggles in **Knowledge → Settings** let MWT switch its own books on:
+> - **Knowledge Tracker → this chat's World Info slot.** SillyTavern keeps exactly one bound book per chat; MWT claims the slot only when it is empty or already holds an MWT book — a book you chose yourself is never replaced. Binding re-applies automatically on page load and every chat change.
+> - **State Tracker → its own activation target** (`character` by default, or `global`): the current card's *additional* World Info books (a settings-only write that leaves the card's own lorebook untouched), or the shared global selection. In group chats, or with the `chat` target, the State book is not auto-bound — the chat slot is single-entry and reserved for the Knowledge book.
+>
+> MWT records every World Info slot it writes (a ledger in its settings) and, when you turn a toggle off, removes **only its own entries** — books you added yourself are never touched. Changing the lorebook scope switches the old books back off and the new ones on automatically.
+
 ### Floating Buttons
 
 The floating buttons (🌍 📜 🧠 🗺️ 💭 ⚙️) can be individually shown/hidden, repositioned (drag), collapsed into a single hub button, and styled as icon-only ("Modern") or icon+text ("Classic"). Position is persisted across sessions. You can also open the MWT modal from the wand (extensions) menu or the Extensions panel drawer.

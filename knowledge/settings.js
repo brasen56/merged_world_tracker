@@ -35,6 +35,27 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // Stable-key → resolved book names, so renaming a card does not orphan
         // its books. Written by scope.js; never edited by hand.
         bookBindings: {},
+        // ── Lorebook auto-activation (opt-in; see knowledge/activation.js) ──
+        // MWT creates lorebook files but never switched them on in ST's World
+        // Info, so ST scanned nothing until each book was enabled by hand.
+        // These toggles let MWT switch its own books on. Off by default so an
+        // upgrade never changes a user's World Info setup.
+        bindKnowledgeToChat: false,
+        bindStateBook: false,
+        // State activates independently of Knowledge's `scope` — the two
+        // modules have different natural lifetimes (open-thread trackers are
+        // usually character-wide; daily-state trackers are per-chat).
+        //   'character' → the card's ADDITIONAL (aux) books — additive,
+        //                  settings-only, never touches the card's own
+        //                  primary lorebook (default: the clean case)
+        //   'global'    → the global selection (active in every chat)
+        //   'chat'      → not auto-bound in v1 (the single-entry chat slot
+        //                  is reserved for the Knowledge book)
+        stateScope: 'character',
+        // Ledger of ONLY the World Info slot writes MWT made, so unbind is
+        // surgical (removeActivationBindings undoes exactly these, nothing
+        // else). Written by activation.js; never edited by hand.
+        activation: { chatSlot: [], global: [], charAux: {} },
         autoTriggerEnabled: false,
         autoTriggerEveryN: 5,
         trackerCooldownMsgs: 3,
@@ -82,6 +103,17 @@ export function showKnowledgeSettings() {
     const el = getNpcsContentEl();
     if (!el) return;
     const s = getSettings();
+    // Lorebook activation UI helpers: the effective state scope, and the
+    // breadth warning for the case where the State slot is WIDER than the
+    // book it switches on (e.g. lorebook scope "per chat" + State target
+    // "character" activates each chat's State book in every chat with the
+    // card — including chats that never wrote a line of it).
+    const stateScopeChoice = ['global', 'character', 'chat'].includes(s.stateScope) ? s.stateScope : 'character';
+    const ktScopeChoice = ['global', 'character', 'chat'].includes(s.scope) ? s.scope : 'global';
+    const SCOPE_BREADTH = { chat: 1, character: 2, global: 3 };
+    const breadthWarning = SCOPE_BREADTH[stateScopeChoice] > SCOPE_BREADTH[ktScopeChoice]
+        ? `⚠ Lorebook scope is "${ktScopeChoice}" but the State target is "${stateScopeChoice}" — a ${ktScopeChoice}-level State book will be switched on in ${stateScopeChoice === 'global' ? 'every chat' : 'every chat with this card'}, including ones that never wrote it.`
+        : '';
     const apiFieldOpts = {
         urlId: 'kt-cfg-api-url', keyId: 'kt-cfg-api-key', modelId: 'kt-cfg-model',
         maxTokensId: 'kt-cfg-max-tokens', tempId: 'kt-cfg-temp', topPId: 'kt-cfg-top-p',
@@ -102,6 +134,24 @@ export function showKnowledgeSettings() {
                 <option value="chat" ${s.scope === 'chat' ? 'selected' : ''}>Per chat — one set per chat file</option>
             </select>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Which lorebooks NPC entries are written to. <strong>Global</strong> shares one "Knowledge Tracker" book across every chat and character — two characters with an NPC of the same name will share (and both inject) the same entry. <strong>Per character</strong> gives each card its own books, kept across all chats with that card. <strong>Per chat</strong> gives every chat its own. Changing this does not move existing entries; the previous books are left untouched.</p>
+        </div>
+        <div style="margin-top:12px">
+            <label><input type="checkbox" id="kt-cfg-bind-kt-chat" ${s.bindKnowledgeToChat ? 'checked' : ''}> Switch the Knowledge Tracker lorebook on automatically (this chat's World Info slot)</label>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">SillyTavern keeps <strong>one</strong> bound lorebook per chat. When ON, MWT claims that slot for its Knowledge book — but only when the slot is empty or already holds an MWT book; a book you chose yourself is never replaced. When OFF, enable the book by hand in the World Info panel.</p>
+            <div style="margin-top:6px">
+                <label><input type="checkbox" id="kt-cfg-bind-state" ${s.bindStateBook ? 'checked' : ''}> Switch the State Tracker lorebook on automatically</label>
+                <div id="kt-cfg-state-scope-row" style="margin-top:6px;${s.bindStateBook ? '' : 'display:none'}">
+                    <label class="mwt-label">State activation target</label>
+                    <select id="kt-cfg-state-scope" class="mwt-input">
+                        <option value="character" ${stateScopeChoice === 'character' ? 'selected' : ''}>Character — this card's additional books</option>
+                        <option value="global" ${stateScopeChoice === 'global' ? 'selected' : ''}>Global — the shared World Info selection</option>
+                        <option value="chat" ${stateScopeChoice === 'chat' ? 'selected' : ''}>Chat — (not auto-bound; slot belongs to Knowledge)</option>
+                    </select>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px"><strong>Character</strong> adds the State book to the current card's <em>additional</em> World Info books — a settings-only write that leaves the card's own lorebook alone and is active in every chat with that card. <strong>Global</strong> switches it on for every chat. <strong>Chat</strong> cannot auto-bind (the chat slot is single-entry and reserved for the Knowledge book).</p>
+                    ${breadthWarning ? `<p style="font-size:11px;color:var(--SmartThemeQuoteColor,#e6a23a);margin-top:4px"><strong>${breadthWarning}</strong></p>` : ''}
+                </div>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">MWT records every World Info slot it writes and only ever removes its own entries when you turn a toggle off.</p>
+            </div>
         </div>
         <div style="margin-top:12px">
             <label><input type="checkbox" id="kt-cfg-auto-trigger" ${s.autoTriggerEnabled ? 'checked' : ''}> Auto-trigger state tracker updates</label>
@@ -159,6 +209,15 @@ export function showKnowledgeSettings() {
         // `s` was read when the panel rendered, so it holds the pre-edit value.
         const previousScope = s.scope || 'global';
         const chosenScope = el.querySelector('#kt-cfg-scope')?.value;
+        // Same pattern for the activation toggles — prev from `s`, new from
+        // the form — so the save handler can reconcile World Info bindings.
+        const stateScopeChosen = el.querySelector('#kt-cfg-state-scope')?.value;
+        const newBindKt = el.querySelector('#kt-cfg-bind-kt-chat')?.checked ?? false;
+        const newBindState = el.querySelector('#kt-cfg-bind-state')?.checked ?? false;
+        const prevBindKt = !!s.bindKnowledgeToChat;
+        const prevBindState = !!s.bindStateBook;
+        const prevStateScope = ['global', 'character', 'chat'].includes(s.stateScope) ? s.stateScope : 'character';
+        const newStateScope = ['global', 'character', 'chat'].includes(stateScopeChosen) ? stateScopeChosen : 'character';
         saveSettings({
             ...apiValues,
             scope: ['global', 'character', 'chat'].includes(chosenScope) ? chosenScope : 'global',
@@ -174,20 +233,63 @@ export function showKnowledgeSettings() {
             trackMainCharAsNpc: el.querySelector('#kt-cfg-track-mainchar')?.checked ?? false,
             relationshipAutoExtractEnabled: el.querySelector('#kt-cfg-rel-auto')?.checked ?? false,
             relationshipAutoExtractEveryN: Number(el.querySelector('#kt-cfg-rel-every')?.value) || 10,
+            bindKnowledgeToChat: newBindKt,
+            bindStateBook: newBindState,
+            stateScope: newStateScope,
         });
         state.activeSubTab = 'staging';
         // A scope change points the module at different lorebooks, so the
         // cached stores for the old books must be flushed and the new ones
-        // loaded before anything reads the registry again.
+        // loaded before anything reads the registry again. It must ALSO
+        // switch off whatever the OLD scope had MWT activate (the ledger
+        // knows; the current names are already the new ones) — otherwise the
+        // previous books stay active in ST while MWT stops writing them.
+        // reloadStores('scope change') then prunes the ledger and binds the
+        // new books, so this branch is the full activation story.
         if (chosenScope !== previousScope) {
-            import('./index.js')
+            import('./activation.js')
+                .then((m) => m.removeActivationBindings({ chat: true, state: true }))
+                .catch(() => { /* activation must never block the reload */ })
+                .then(() => import('./index.js'))
                 .then(({ reloadStores }) => reloadStores('scope change'))
                 .then(() => import('./render.js'))
                 .then(({ renderNpcsSubTab }) => renderNpcsSubTab());
         } else {
+            // Reconcile World Info activation for the new toggle values.
+            // apply/remove are idempotent and guarded. A stateScope switch
+            // unbinds the old slot first so the book is not left on in two
+            // slots; a toggle-off undoes exactly the ledgered writes.
+            const ktTurnedOn = newBindKt && !prevBindKt;
+            const ktTurnedOff = !newBindKt && prevBindKt;
+            const stateTurnedOn = newBindState && !prevBindState;
+            const stateTurnedOff = !newBindState && prevBindState;
+            const stateScopeSwitched = newBindState && prevStateScope !== newStateScope;
+            if (ktTurnedOn || ktTurnedOff || stateTurnedOn || stateTurnedOff || stateScopeSwitched) {
+                import('./activation.js').then(async (m) => {
+                    if (ktTurnedOff || stateTurnedOff) {
+                        await m.removeActivationBindings({ chat: ktTurnedOff, state: stateTurnedOff });
+                    }
+                    if (stateScopeSwitched) {
+                        await m.removeActivationBindings({ state: true });
+                        m.pruneStaleLedger();
+                    }
+                    if (ktTurnedOn || stateTurnedOn || stateScopeSwitched) {
+                        const res = await m.applyActivationBindings('settings-save');
+                        const notes = [...res.conflicts, ...res.skipped];
+                        if (notes.length) {
+                            ktSetStatus(`Settings saved. Lorebook activation: ${notes.join(' · ')}`, 'warning');
+                        }
+                    }
+                }).catch(() => { /* guarded inside; never surface a crash */ });
+            }
             import('./render.js').then(({ renderNpcsSubTab }) => renderNpcsSubTab());
         }
         ktSetStatus('Settings saved.', 'success');
+    });
+    // Show/hide the State activation target row with its toggle.
+    el.querySelector('#kt-cfg-bind-state')?.addEventListener('change', (e) => {
+        const row = el.querySelector('#kt-cfg-state-scope-row');
+        if (row) row.style.display = e.target.checked ? '' : 'none';
     });
     el.querySelector('#kt-cancel-settings')?.addEventListener('click', () => {
         state.activeSubTab = 'staging';
