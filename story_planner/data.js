@@ -6,13 +6,16 @@
  *
  * The plan is stored as an array of structured arc objects (see ARC SHAPE in
  * ./schema.js) rather than one opaque blob of text. Plans authored before that
- * change are migrated lazily on first read (see {@link getArcs}).
+ * change are migrated by the schema's v0 -> v1 migration; the lazy on-read
+ * conversion in {@link getArcs} remains only as a temporary compatibility
+ * path until the runtime cutover (Part 6 of the schema plan).
  *
  * Arc canonicalization (sanitizeArc/sanitizeArcs), the section/status
- * vocabulary, the arc-id factory, and the beat-index clamp moved to
- * ./schema.js (Part 1 of the schema-validation plan) so writes, loads, backup
- * imports, and history restores retain one owner. They are re-exported below
- * so every existing importer of data.js keeps working unchanged.
+ * vocabulary, the arc-id factory, the beat-index clamp, and the markdown plan
+ * parser moved to ./schema.js (Parts 1–2 of the schema-validation plan) so
+ * writes, loads, backup imports, and history restores retain one owner. They
+ * are re-exported below so every existing importer of data.js keeps working
+ * unchanged.
  */
 
 import { getChatMeta, patchChatMeta } from '../core/index.js';
@@ -27,11 +30,13 @@ import {
     MAX_BEAT_LENGTH,
     clampBeatIndex,
     newArcId,
+    parsePlanTextToArcs,
     sanitizeArc,
     sanitizeArcs,
+    sectionKeyFromLabel,
 } from './schema.js';
 
-export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, sanitizeArc, sanitizeArcs };
+export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -285,164 +290,16 @@ export function getOverdueArcs(threshold = getNudgeTurns()) {
 }
 
 // ─── Parsing / serialising ───────────────────────────────────────────────────
-
-/** Normalise a heading label for tolerant matching ("## Immediate Hooks:" → "immediatehooks"). */
-function normaliseLabel(label) {
-    return String(label).toLowerCase().replace(/[^a-z]/g, '');
-}
-
-const LABEL_TO_KEY = new Map(SECTIONS.map(s => [normaliseLabel(s.label), s.key]));
-
-/**
- * Resolve a markdown heading to a section key. Unrecognised headings (e.g. from
- * a custom system prompt, or the legacy "Upcoming Arcs") fall back to the
- * default section rather than dropping their bullets on the floor.
- */
-export function sectionKeyFromLabel(label) {
-    return LABEL_TO_KEY.get(normaliseLabel(label)) || DEFAULT_SECTION;
-}
+//
+// The markdown PARSER (normaliseLabel/LABEL_TO_KEY/sectionKeyFromLabel,
+// cleanBulletContent/cleanBeatContent/splitTitleBody/stripArcFlags, and
+// parsePlanTextToArcs) moved to ./schema.js in Part 2 of the schema plan —
+// the v0 -> v1 migration parses legacy plan text with the same rules fresh
+// LLM responses go through, so both live with the schema owner. This module
+// re-exports them unchanged at the top of the file.
 
 export function getSectionMeta(key) {
     return SECTIONS.find(s => s.key === key) || SECTIONS.find(s => s.key === DEFAULT_SECTION);
-}
-
-/** Strip markdown emphasis and a leading legacy `[Tag]` from bullet content. */
-function cleanBulletContent(raw) {
-    return String(raw)
-        .replace(/^\s*\[[^\]]{1,24}\]\s*/, '')  // legacy "[Arc] " prefix — never parsed, purely decorative
-        .replace(/\*\*/g, '')
-        .replace(/^\s*__|__\s*$/g, '')
-        .trim();
-}
-
-/**
- * Status flags `serializeArcsToText` appends to a title under `annotateStatus`.
- * Built from the same sources the serializer uses so the two can't drift.
- */
-const ARC_FLAG_WORDS = [...ARC_STATUSES.map(s => s.toUpperCase()), 'PINNED', 'SETUP COMPLETE'];
-const ARC_FLAG_ALT = ARC_FLAG_WORDS.join('|');
-const ARC_FLAG_RE = new RegExp(
-    `\\s*\\[(?:${ARC_FLAG_ALT})(?:\\s*,\\s*(?:${ARC_FLAG_ALT}))*\\]\\s*$`, 'i',
-);
-
-/**
- * Strip a trailing "[PINNED]" / "[RESOLVED, SETUP COMPLETE]" off a parsed title.
- *
- * The annotated plan is what regeneration hands the model, so a model that
- * echoes a title back hands the flag back with it. Left in, the flag becomes
- * part of the stored title — and since titles are the merge key, the arc no
- * longer matches the one it came from and gets duplicated alongside it.
- * Symmetric to the [PLANTED]/[CURRENT] strip in {@link cleanBeatContent}.
- */
-function stripArcFlags(title) {
-    return String(title).replace(ARC_FLAG_RE, '').trim();
-}
-
-/** Strip the leading marker and any "NOW:"/"NEXT:" label off a beat line. */
-function cleanBeatContent(raw) {
-    return String(raw)
-        .replace(/\*\*/g, '')
-        .replace(/^\s*(?:NOW|NEXT|BEAT|SETUP)\s*[:—-]\s*/i, '')
-        .replace(/^\s*\[[^\]]{1,32}\]\s*/, '')  // our own "[beat 2 of 3 · 6 turns]" marker
-        // Trailing progress markers we emit ourselves — stripped so a
-        // serialize → parse round-trip does not bake them into the beat text.
-        .replace(/\s*\[(?:PLANTED|CURRENT|READY|SETUP COMPLETE)\]\s*$/i, '')
-        .trim();
-}
-
-/**
- * Split a bullet into title + body. Prefers an em/en-dash or colon separator
- * (the format the prompt asks for); falls back to the first sentence, and
- * finally to a length cut so a title is never absurdly long.
- */
-function splitTitleBody(content) {
-    const dash = content.match(/^(.{2,90}?)\s*[—–]\s*(.+)$/s);
-    if (dash) return { title: dash[1].trim(), body: dash[2].trim() };
-
-    const hyphen = content.match(/^(.{2,90}?)\s+-\s+(.+)$/s);
-    if (hyphen) return { title: hyphen[1].trim(), body: hyphen[2].trim() };
-
-    const colon = content.match(/^([^:]{2,90}?):\s+(.+)$/s);
-    if (colon) return { title: colon[1].trim(), body: colon[2].trim() };
-
-    if (content.length <= 70) return { title: content, body: '' };
-
-    const sentence = content.match(/^(.{2,90}?[.!?])\s+(.+)$/s);
-    if (sentence) return { title: sentence[1].trim(), body: sentence[2].trim() };
-
-    return { title: `${content.slice(0, 67).trim()}…`, body: content };
-}
-
-/**
- * Parse a markdown plan document into arcs.
- *
- * Used for BOTH the migration of legacy single-blob plans and for turning a
- * fresh LLM response into arc objects, so the two can never disagree about what
- * counts as an arc.
- *
- * @param {string} text
- * @returns {object[]} arcs
- */
-export function parsePlanTextToArcs(text) {
-    if (!text || !String(text).trim()) return [];
-    const arcs = [];
-    let section = DEFAULT_SECTION;
-    let last = null;
-
-    for (const rawLine of String(text).split(/\r?\n/)) {
-        const line = rawLine.trimEnd();
-        // A blank line does NOT end an arc any more — beats are often separated
-        // from their arc bullet by one. Only a heading or a new bullet does.
-        if (!line.trim()) continue;
-
-        const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
-        if (heading) {
-            section = sectionKeyFromLabel(heading[1]);
-            last = null;
-            continue;
-        }
-
-        // ── Beats ──
-        // Checked BEFORE the arc bullet, because an indented "- foo" would
-        // otherwise match as a new arc. Two accepted forms, since models are
-        // inconsistent: a numbered line at any indent, or an indented bullet.
-        const numbered = line.match(/^[ \t]*\d+[.)][ \t]+(.+)$/);
-        const indentedBullet = line.match(/^(?:[ \t]{2,}|\t)[-*+][ \t]+(.+)$/);
-        const beatMatch = numbered || indentedBullet;
-        if (beatMatch && last) {
-            const beat = cleanBeatContent(beatMatch[1]);
-            if (beat) last.beats.push(beat);
-            continue;
-        }
-        // A numbered line with no arc above it is malformed — skip rather than
-        // silently turning it into an arc.
-        if (numbered && !last) continue;
-
-        // ── Arc bullet ──
-        const bullet = line.match(/^[ \t]{0,3}[-*+][ \t]+(.+)$/);
-        if (bullet) {
-            const content = cleanBulletContent(bullet[1]);
-            if (!content) { last = null; continue; }
-            const { title, body } = splitTitleBody(content);
-            last = makeArc({ title: stripArcFlags(title), body, section });
-            arcs.push(last);
-            continue;
-        }
-
-        // A wrapped continuation line beneath a bullet — fold it into that
-        // arc's body so multi-line descriptions survive the round-trip.
-        // STORY-PLANNER-06: The old `last.beats.length === 0` guard dropped
-        // wrapped prose that appeared AFTER a beat list, silently losing the
-        // continuation. Fold into the body regardless of whether beats exist.
-        if (last && /^[ \t]+\S/.test(rawLine)) {
-            const continuation = line.trim();
-            // Don't fold beat-like lines (numbered or already handled above).
-            if (!numbered && !indentedBullet) {
-                last.body = last.body ? `${last.body} ${continuation}` : continuation;
-            }
-        }
-    }
-    return arcs;
 }
 
 /**

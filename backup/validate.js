@@ -16,8 +16,9 @@
  *
  * Do not add new validation rules here — add them to a module schema.
  * `skipped` entries are derived from quarantine-severity issues; the reason
- * strings are the issues' messages, kept identical to the previous
- * implementation so summaries do not churn.
+ * strings are the issues' messages and the records are the issues' display
+ * identities, kept identical to the previous implementation so summaries do
+ * not churn.
  */
 import { BACKUP_TYPE, FORMAT_VERSION } from './data.js';
 import { STORE_SCHEMAS, getStoreSchema } from '../schema/registry.js';
@@ -26,17 +27,37 @@ import { ISSUE_SEVERITIES } from '../core/schema.js';
 /**
  * Adapt a module-schema validation result to the backup summary shape.
  * Quarantine-severity issues become the skipped list in detection order;
- * repair/reference findings stay out of it, exactly as before.
+ * FATAL store-level findings (an unreadable root) ride along so the summary
+ * never hides a section this build refused to canonicalize. Repair/reference
+ * findings stay out of it, exactly as before.
+ *
+ * DEFER findings (preparation paused pending chat-dependent work) are kept
+ * OUT of `skipped`: the entries they describe were retained — not refused —
+ * and a backup import accepts them, so counting them as skipped would both
+ * double-report the same data and misrender a preparing store as a corrupt
+ * one. They ride a separate `deferred` list, present ONLY when a deferral
+ * exists so clean sections keep the exact historical summary shape; live
+ * surfaces use it to present the store as "preparing".
+ *
+ * Skipped records keep the pre-adapter DISPLAY contract: the issue's
+ * `identity` (id string, map key, field label) when one exists, with the raw
+ * rejected value only as the fallback — summaries and the restore preview
+ * render identifiers, never rejected prose. The complete `issue.record` stays
+ * on the issue, where quarantine creation (prepareStore) reads it.
  */
 function toBackupSummary(validation) {
+    const deferred = validation.issues
+        .filter(issue => issue.severity === ISSUE_SEVERITIES.DEFER)
+        .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message }));
     return {
         added: validation.stats.added,
         // Validators never merge; "updated" is decided by restore planning.
         updated: 0,
         skipped: validation.issues
-            .filter(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE)
-            .map(issue => ({ record: issue.record, reason: issue.message })),
+            .filter(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE || issue.severity === ISSUE_SEVERITIES.FATAL)
+            .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message })),
         conflicts: validation.stats.conflicts,
+        ...(deferred.length > 0 ? { deferred } : {}),
     };
 }
 
@@ -145,6 +166,9 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
             updated: checked.updated,
             skipped: checked.skipped,
             conflicts: checked.conflicts,
+            // Present only when a deferral exists (see toBackupSummary): a
+            // preparing store, never a quarantine count.
+            ...(Array.isArray(checked.deferred) && checked.deferred.length > 0 ? { deferred: checked.deferred } : {}),
         };
     }
     result.ok = result.errors.length === 0;

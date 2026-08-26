@@ -1449,13 +1449,24 @@ export function renderIntegritySnapshot(snapshot, { formatTime = (ts) => new Dat
         </tr>`).join('');
 
     const storeRows = (Array.isArray(s.storeValidations?.sections) ? s.storeValidations.sections : []).map((r) => {
+        // Badges compose: a preparing store (design §7.5 — a one-time
+        // compatibility update is pending, data left unchanged) never renders
+        // as quarantined/corrupt, and can still show real skipped counts
+        // alongside when both apply.
+        const statusBits = [];
+        if (r?.preparing) statusBits.push(badge('preparing', 'warn'));
+        if (num(r.skippedCount) !== '0' || num(r.conflicts) !== '0') {
+            statusBits.push(badge(`${num(r.skippedCount)} skipped / ${num(r.conflicts)} conflicts`, 'warn'));
+        }
         const statusCell = r?.present === false
             ? dim('absent')
-            : ((num(r.skippedCount) === '0' && num(r.conflicts) === '0')
-                ? badge('ok', 'ok')
-                : badge(`${num(r.skippedCount)} skipped / ${num(r.conflicts)} conflicts`, 'warn'));
-        const reasons = Array.isArray(r?.reasons) && r.reasons.length
-            ? `<div class="mwt-diag-dim mwt-diag-int-reasons">${r.reasons.map((x) => `“${escapeHtml(String(x))}”`).join(' · ')}</div>`
+            : (statusBits.length ? statusBits.join(' ') : badge('ok', 'ok'));
+        const reasonStrings = [
+            ...(Array.isArray(r?.deferredReasons) ? r.deferredReasons : []),
+            ...(Array.isArray(r?.reasons) ? r.reasons : []),
+        ];
+        const reasons = reasonStrings.length
+            ? `<div class="mwt-diag-dim mwt-diag-int-reasons">${reasonStrings.map((x) => `“${escapeHtml(String(x))}”`).join(' · ')}</div>`
             : '';
         return `
             <tr>
@@ -1524,7 +1535,7 @@ export function renderIntegritySnapshot(snapshot, { formatTime = (ts) => new Dat
             ${card('Store validation (validateSection per store)', { count: (s.storeValidations?.skippedTotal || 0) + (s.storeValidations?.conflictsTotal || 0), more: 0, sample: [] }, {
                 columns: '<th>Store</th><th>records</th><th>validateSection()</th>',
                 rowsHtml: storeRows, zeroText: 'Every present store section passed validateSection() with nothing quarantined.',
-                note: 'The chat-metadata stores, enumerated from the <code>METADATA_KEYS</code> whitelist (<code>backup/data.js</code>) — records a backup import would refuse are quarantined here with the validator\u2019s own reasons.',
+                note: 'The chat-metadata stores, enumerated from the <code>METADATA_KEYS</code> whitelist (<code>backup/data.js</code>) — records a backup import would refuse are quarantined here with the validator\u2019s own reasons. A store paused pending a one-time compatibility update renders as <preparing> — its data was left unchanged and nothing was quarantined.',
             })}
             ${card('Interiority ledger integrity', { count: intCount, more: 0, sample: [] }, {
                 columns: '<th>check</th><th>rows</th>',

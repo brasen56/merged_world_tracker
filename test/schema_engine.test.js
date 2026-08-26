@@ -12,6 +12,7 @@ import { describe, test, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+    checkPlainRecordList,
     checkRecordList,
     checkRecordMap,
     defineStoreSchema,
@@ -304,6 +305,44 @@ describe('core/schema.js — prepareStore runner', () => {
         expect(input).toEqual({ snapshots: [] });
     });
 
+    test('a DEFER-severity finding pauses preparation as deferred, not blocked', () => {
+        const deferFinding = {
+            code: 'legacy-pending',
+            path: ['perMessage'],
+            severity: 'defer',
+            message: 'needs a one-time compatibility update',
+            record: undefined,
+        };
+        const descriptor = makeTestDescriptor({
+            validate: data => ({ data, issues: [deferFinding], stats: emptyStats() }),
+        });
+        const input = { perMessage: { '4': {} } };
+        const result = prepareStore(descriptor, input, { version: 1 });
+        // A store-local pause pending chat-dependent work (design §7.5):
+        // not a fault — no error, no canonical data, nothing quarantined,
+        // original untouched, and no partial result stamped.
+        expect(result.status).toBe('deferred');
+        expect(result.error).toBeNull();
+        expect(result.data).toBeUndefined();
+        expect(result.changed).toBe(false);
+        expect(result.original).toBe(input);
+        expect(result.quarantined).toEqual([]);
+        expect(result.issues).toEqual([deferFinding]);
+        expect(input).toEqual({ perMessage: { '4': {} } });
+    });
+
+    test('a FATAL finding wins over a simultaneous DEFER finding', () => {
+        const deferFinding = { code: 'legacy-pending', path: [], severity: 'defer', message: 'pending conversion' };
+        const fatalFinding = { code: 'root-unreadable', path: [], severity: 'fatal', message: 'Store root could not be read.' };
+        const descriptor = makeTestDescriptor({
+            validate: () => ({ data: {}, issues: [deferFinding, fatalFinding], stats: emptyStats() }),
+        });
+        const result = prepareStore(descriptor, { a: 1 }, { version: 1 });
+        expect(result.status).toBe('blocked');
+        expect(result.error.code).toBe('fatal-issue');
+        expect(result.issues).toEqual([deferFinding, fatalFinding]);
+    });
+
     test('quarantine issues reported by migration steps become recovery items', () => {
         const rejected = { id: 'legacy-bad', text: '' };
         const descriptor = makeTestDescriptor({
@@ -389,10 +428,12 @@ describe('core/schema.js — record-collection helpers', () => {
         );
         expect(checked.records).toEqual([{ id: 'a' }]);
         expect(checked.stats).toEqual({ added: 1, updated: 0, conflicts: 1 });
-        expect(checked.issues.map(issue => [issue.code, issue.path, issue.record])).toEqual([
-            ['duplicate-id', ['snapshots', 1, 'id'], 'a'],
-            ['missing-id', ['snapshots', 2], ''],
-            ['missing-id', ['snapshots', 3], 'junk'],
+        // Rejected records keep their COMPLETE raw record (recoverable); the
+        // display id string rides separately in `identity`.
+        expect(checked.issues.map(issue => [issue.code, issue.path, issue.record, issue.identity])).toEqual([
+            ['duplicate-id', ['snapshots', 1, 'id'], { id: 'a' }, 'a'],
+            ['missing-id', ['snapshots', 2], { id: '' }, ''],
+            ['missing-id', ['snapshots', 3], 'junk', undefined],
         ]);
         for (const issue of checked.issues) {
             expect(issue.severity).toBe('quarantine');
@@ -408,7 +449,8 @@ describe('core/schema.js — record-collection helpers', () => {
             path: ['autoSaveHistory'],
             severity: 'quarantine',
             message: 'autoSaveHistory must be an array.',
-            record: 'autoSaveHistory',
+            record: 'nope',
+            identity: 'autoSaveHistory',
         }]);
     });
 
@@ -420,13 +462,32 @@ describe('core/schema.js — record-collection helpers', () => {
         });
     });
 
+    test('checkPlainRecordList: accepts duplicate ids — no dedup by design', () => {
+        const check = record => (record && typeof record === 'object' && record.id ? null : { code: 'missing-id', message: 'no id' });
+        const checked = checkPlainRecordList(
+            [{ id: 'a' }, { id: 'a' }, 'junk'],
+            'arcs',
+            check,
+            { path: ['arcs'] },
+        );
+        // The NON-deduplicating twin (renamed from checkUniqueRecordList,
+        // which read backwards): repeats are the caller's canonicalizer's to
+        // resolve (Story Planner's sanitizeArcs mints fresh ids), so both
+        // records survive with no conflict counted.
+        expect(checked.records).toEqual([{ id: 'a' }, { id: 'a' }]);
+        expect(checked.stats).toEqual({ added: 2, updated: 0, conflicts: 0 });
+        expect(checked.issues.map(issue => [issue.code, issue.path, issue.record, issue.identity])).toEqual([
+            ['missing-id', ['arcs', 2], 'junk', undefined],
+        ]);
+    });
+
     test('checkRecordMap: empty keys, entry shapes, and permissive fallback', () => {
         const checked = checkRecordMap({ Good: { uid: 1 }, '': {}, Bad: 5 }, 'registry', null, { path: ['registry'] });
         expect(checked.data).toEqual({ Good: { uid: 1 } });
         expect(checked.stats.added).toBe(1);
-        expect(checked.issues.map(issue => [issue.code, issue.path, issue.record])).toEqual([
-            ['empty-key', ['registry', ''], ''],
-            ['entry-not-object', ['registry', 'Bad'], 'Bad'],
+        expect(checked.issues.map(issue => [issue.code, issue.path, issue.record, issue.identity])).toEqual([
+            ['empty-key', ['registry', ''], {}, ''],
+            ['entry-not-object', ['registry', 'Bad'], 5, 'Bad'],
         ]);
         const notMap = checkRecordMap(null, 'stances', null);
         expect(notMap.issues).toEqual([{
@@ -434,7 +495,8 @@ describe('core/schema.js — record-collection helpers', () => {
             path: [],
             severity: 'quarantine',
             message: 'stances must be an object map.',
-            record: 'stances',
+            record: null,
+            identity: 'stances',
         }]);
     });
 });
@@ -515,14 +577,19 @@ describe('schema/registry.js — authoritative store coverage', () => {
         }
     });
 
-    test('legacy (version 0) stores report the missing migration until Part 2 lands', () => {
+    test('registered stores now migrate legacy (version 0) data through Part 2 migrations', () => {
         const result = prepareStore(STORE_SCHEMAS.chronicle, { snapshots: [] });
         expect(result.fromVersion).toBe(0);
-        expect(result.status).toBe('blocked');
-        expect(result.error.code).toBe('missing-migration');
+        expect(result.status).toBe('migrated');
+        expect(result.toVersion).toBe(1);
+        expect(result.data).toEqual({ snapshots: [], _deletedBin: [] });
         // Current-version data still validates through the same runner.
         const current = prepareStore(STORE_SCHEMAS.chronicle, { snapshots: [] }, { version: 1 });
         expect(current.status).toBe('valid');
+        // Every registered store has its 0 -> 1 step wired.
+        for (const id of SCHEMA_STORE_IDS) {
+            expect(typeof STORE_SCHEMAS[id].migrations[0], id).toBe('function');
+        }
     });
 });
 
@@ -530,6 +597,7 @@ describe('schema modules stay pure', () => {
     const SCHEMA_FILES = [
         'core/schema.js',
         'core/quarantine.js',
+        'schema/manifest.js',
         'schema/registry.js',
         'world_state/schema.js',
         'chronicle/schema.js',

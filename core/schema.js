@@ -44,16 +44,97 @@ export const ISSUE_SEVERITIES = Object.freeze({
     REFERENCE: 'reference',
     /** Store-level problem: unreadable root, failed migration, future version. */
     FATAL: 'fatal',
+    /**
+     * Preparation cannot complete YET: chat-dependent work must run before the
+     * store can be canonicalized. Not a fault — the store pauses (design §7.5)
+     * with the original untouched, and every surface presents it as preparing,
+     * never as corrupt or quarantined.
+     */
+    DEFER: 'defer',
 });
 
-/** Build one issue record. `record` is the complete raw record involved. */
-export function makeIssue({ code, path = [], severity, message, record = undefined }) {
-    return { code, path, severity, message, record };
+/**
+ * Build one issue record. `record` is the COMPLETE raw record/value involved
+ * (design §5 acceptance): a recovery export must be able to reconstruct what
+ * was rejected. `identity` is the optional display identity (id string, map
+ * key, container label) shown in summaries instead of the raw payload.
+ */
+export function makeIssue({ code, path = [], severity, message, record = undefined, identity = undefined }) {
+    return { code, path, severity, message, record, identity };
 }
 
 /** Convenience constructor for the dominant severity. */
-export function quarantineIssue(code, path, message, record) {
-    return makeIssue({ code, path, severity: ISSUE_SEVERITIES.QUARANTINE, message, record });
+export function quarantineIssue(code, path, message, record, identity = undefined) {
+    return makeIssue({ code, path, severity: ISSUE_SEVERITIES.QUARANTINE, message, record, identity });
+}
+
+/** Convenience constructor for deterministic, semantics-preserving repairs. */
+export function repairIssue(code, path, message, record = undefined, identity = undefined) {
+    return makeIssue({ code, path, severity: ISSUE_SEVERITIES.REPAIR, message, record, identity });
+}
+
+/** Convenience constructor for store-level fatal problems (design §3.5). */
+export function fatalIssue(code, path, message, record, identity = undefined) {
+    return makeIssue({ code, path, severity: ISSUE_SEVERITIES.FATAL, message, record, identity });
+}
+
+/**
+ * Convenience constructor for preparation deferrals (design §7.5). A deferral
+ * is not a fatal finding: prepareStore() answers it with status 'deferred' —
+ * a store-local pause pending chat-dependent work — instead of 'blocked', and
+ * summaries/diagnostics present the store as preparing, not quarantined.
+ */
+export function deferIssue(code, path, message, record, identity = undefined) {
+    return makeIssue({ code, path, severity: ISSUE_SEVERITIES.DEFER, message, record, identity });
+}
+
+// ─── Per-store issue policies (design §3.5) ──────────────────────────────────
+//
+// Part 2 adds a structured classification of the issue codes a store can
+// emit, so runtime preparation, Diagnostics, and backup planning can decide
+// what a finding MEANS without parsing message strings:
+//
+//   - repair     deterministic, semantics-preserving fix; data retained;
+//   - record     invalid record removed from the live view; raw preserved in
+//                quarantine (the dominant category today);
+//   - reference  structurally valid but dangling/inconsistent; retained with
+//                a finding;
+//   - fatal      store-level problem; the store blocks instead of loading;
+//   - defer      preparation cannot complete yet (chat-dependent work
+//                pending); the store pauses with status 'deferred', the
+//                original untouched, and is presented as preparing — never
+//                as corrupt or quarantined (design §7.5).
+//
+// The lists are declarative — current validators emit only record-level
+// findings, migrations only repair/quarantine ones, Interiority's legacy-key
+// deferral the one defer code — but they are pinned by
+// test/schema_migrations.test.js: any code a store's validator or migration
+// emits must be declared in exactly one category, so the classification
+// cannot drift from the rules.
+
+export const POLICY_CATEGORIES = Object.freeze(['repair', 'record', 'reference', 'fatal', 'defer']);
+
+/**
+ * Build a frozen per-store issue policy. Unknown categories on the input are
+ * ignored; each declared category becomes a frozen code list.
+ */
+export function defineIssuePolicy({ repair = [], record = [], reference = [], fatal = [], defer = [] } = {}) {
+    return Object.freeze({
+        repair: Object.freeze([...repair]),
+        record: Object.freeze([...record]),
+        reference: Object.freeze([...reference]),
+        fatal: Object.freeze([...fatal]),
+        defer: Object.freeze([...defer]),
+    });
+}
+
+/** Which policy category (if any) owns this code for this store. */
+export function getPolicyCategory(policy, code) {
+    if (!isObject(policy) || typeof code !== 'string') return null;
+    for (const category of POLICY_CATEGORIES) {
+        if (Array.isArray(policy[category]) && policy[category].includes(code)) return category;
+    }
+    return null;
 }
 
 // ─── Validation stats ────────────────────────────────────────────────────────
@@ -77,11 +158,11 @@ export function mergeStats(target, source) {
 // ─── Record-collection helpers ───────────────────────────────────────────────
 //
 // Shared traversal for the store shapes every module uses: keyed record lists
-// (id-deduplicated), plain record arrays, and name → record maps. They carry
-// the exact accept/skip semantics the backup validators had — including which
-// value represents the rejected record (its id string when it has one, the
-// record itself otherwise, the map key for map entries) — so porting the
-// rules onto issues changes no observable summary.
+// (id-deduplicated), plain record arrays, and name → record maps. Rejected
+// entries keep their COMPLETE raw record/value in `record` (the Part 2
+// acceptance rule: recovery exports must reconstruct rejected data); the
+// display identity (id string, map key, container label) rides separately in
+// `identity`.
 //
 // A record check returns null when the record is accepted, or
 // { code, message } when it is not.
@@ -92,7 +173,7 @@ export function checkRecordList(list, label, check, { key = 'id', path = [] } = 
     const stats = emptyStats();
     if (list === undefined) return { records, issues, stats };
     if (!Array.isArray(list)) {
-        issues.push(quarantineIssue('not-an-array', [...path], `${label} must be an array.`, label));
+        issues.push(quarantineIssue('not-an-array', [...path], `${label} must be an array.`, list, label));
         return { records, issues, stats };
     }
     const seen = new Set();
@@ -102,10 +183,10 @@ export function checkRecordList(list, label, check, { key = 'id', path = [] } = 
         const id = record && typeof record === 'object' ? record[key] : undefined;
         const identity = id === undefined ? null : String(id);
         if (finding) {
-            issues.push(quarantineIssue(finding.code, [...path, index], finding.message, identity ?? record));
+            issues.push(quarantineIssue(finding.code, [...path, index], finding.message, record, identity ?? undefined));
         } else if (identity !== null && seen.has(identity)) {
             stats.conflicts++;
-            issues.push(quarantineIssue('duplicate-id', [...path, index, key], `Duplicate ${key} in ${label}.`, identity));
+            issues.push(quarantineIssue('duplicate-id', [...path, index, key], `Duplicate ${key} in ${label}.`, record, identity));
         } else {
             if (identity !== null) seen.add(identity);
             records.push(record);
@@ -115,20 +196,28 @@ export function checkRecordList(list, label, check, { key = 'id', path = [] } = 
     return { records, issues, stats };
 }
 
-export function checkUniqueRecordList(list, label, check, { path = [] } = {}) {
+/**
+ * Check a record list WITHOUT id-deduplication: every record the per-record
+ * check accepts is kept, duplicate ids included. This is the helper for
+ * stores whose own canonicalizer resolves repeats afterwards (Story Planner's
+ * sanitizeArcs() mints a fresh id for a duplicate arc id); for stores that
+ * instead quarantine repeats as conflicts, checkRecordList() is the
+ * deduplicating twin — the names must not be swapped.
+ */
+export function checkPlainRecordList(list, label, check, { path = [] } = {}) {
     const records = [];
     const issues = [];
     const stats = emptyStats();
     if (list === undefined) return { records, issues, stats };
     if (!Array.isArray(list)) {
-        issues.push(quarantineIssue('not-an-array', [...path], `${label} must be an array.`, label));
+        issues.push(quarantineIssue('not-an-array', [...path], `${label} must be an array.`, list, label));
         return { records, issues, stats };
     }
     for (let index = 0; index < list.length; index++) {
         const record = list[index];
         const finding = check(record);
         if (finding) {
-            issues.push(quarantineIssue(finding.code, [...path, index], finding.message, record?.id ?? record));
+            issues.push(quarantineIssue(finding.code, [...path, index], finding.message, record, record?.id ?? undefined));
         } else {
             records.push(record);
             stats.added++;
@@ -142,12 +231,12 @@ export function checkRecordMap(map, label, check, { path = [] } = {}) {
     const issues = [];
     const stats = emptyStats();
     if (!isObject(map)) {
-        issues.push(quarantineIssue('not-an-object', [...path], `${label} must be an object map.`, label));
+        issues.push(quarantineIssue('not-an-object', [...path], `${label} must be an object map.`, map, label));
         return { data, issues, stats };
     }
     for (const [name, value] of Object.entries(map)) {
         if (!isNonEmptyString(name)) {
-            issues.push(quarantineIssue('empty-key', [...path, name], `${label} keys must be non-empty strings.`, name));
+            issues.push(quarantineIssue('empty-key', [...path, name], `${label} keys must be non-empty strings.`, value, name));
             continue;
         }
         // Shape guard so maps without a record-level check keep the permissive
@@ -156,7 +245,7 @@ export function checkRecordMap(map, label, check, { path = [] } = {}) {
             ? check(value)
             : (isObject(value) ? null : { code: 'entry-not-object', message: `${label} entry must be an object.` });
         if (finding) {
-            issues.push(quarantineIssue(finding.code, [...path, name], finding.message, name));
+            issues.push(quarantineIssue(finding.code, [...path, name], finding.message, value, name));
         } else {
             data[name] = value;
             stats.added++;
@@ -230,6 +319,11 @@ export function defineStoreSchema(descriptor) {
     if (typeof descriptor.validate !== 'function') {
         throw new TypeError(`Store schema "${descriptor.id}" needs a validate() function.`);
     }
+    if (descriptor.policy !== undefined
+        && (!isObject(descriptor.policy)
+            || POLICY_CATEGORIES.some(category => !Array.isArray(descriptor.policy[category])))) {
+        throw new TypeError(`Store schema "${descriptor.id}" has an invalid policy (expected repair/record/reference/fatal/defer arrays).`);
+    }
     return Object.freeze({ ...descriptor });
 }
 
@@ -252,9 +346,10 @@ function applyMigrationStep(step, data, issues) {
 }
 
 /**
- * Convert quarantine-severity issues into recovery items. Part 1 captures the
- * same raw value the backup summaries kept; Part 2's migrations widen this to
- * the complete record (design §5.2) as the deep validators land.
+ * Convert quarantine-severity issues into recovery items. Validators capture
+ * the same raw value the backup summaries always kept; Part 2's migrations
+ * emit complete records (a malformed receipt tuple, a legacy plan blob) so
+ * everything a migration rejects stays recoverable whole (design §5.2).
  */
 function collectQuarantineItems(storeId, issues, { sourceVersion, detectedAt }) {
     const items = [];
@@ -297,11 +392,19 @@ function findFatalIssue(issues) {
     return null;
 }
 
+/** The first DEFER-severity issue in a list, or null (design §7.5). */
+function findDeferIssue(issues) {
+    for (const issue of issues ?? []) {
+        if (issue?.severity === ISSUE_SEVERITIES.DEFER) return issue;
+    }
+    return null;
+}
+
 /** Build the tagged error that turns a fatal finding into a blocked result. */
-function makeFatalBlock(descriptor, fatalIssue) {
+function makeFatalBlock(descriptor, issue) {
     const error = new Error(
         `Store "${descriptor.id}" validation reported a fatal problem `
-        + `(${fatalIssue.code ?? 'unknown'}): ${fatalIssue.message ?? 'unreadable store'}; `
+        + `(${issue.code ?? 'unknown'}): ${issue.message ?? 'unreadable store'}; `
         + 'the original data was left unchanged.',
     );
     error.code = 'fatal-issue';
@@ -326,8 +429,8 @@ function isUnchangedData(before, after) {
  * exist, migrates) one store's data, returning a stable result shape:
  *
  *   {
- *     status: 'valid' | 'migrated' | 'blocked',
- *     data,          // canonical live data; undefined when blocked
+ *     status: 'valid' | 'migrated' | 'blocked' | 'deferred',
+ *     data,          // canonical live data; undefined when blocked/deferred
  *     original,      // the untouched caller input
  *     fromVersion, toVersion, changed,
  *     issues: [], quarantined: [], error: null | { code, message },
@@ -350,6 +453,13 @@ function isUnchangedData(before, after) {
  *   - Any FATAL-severity finding, from a migration envelope or a validation
  *     pass, blocks the store with error code 'fatal-issue'; the original
  *     data is left untouched (design §3.5 category 4).
+ *   - Any DEFER-severity finding returns status 'deferred' (design §7.5): a
+ *     store-local pause pending chat-dependent preparation, not a fault. The
+ *     original is left untouched, nothing is quarantined or stamped, and
+ *     `error` stays null — the issues explain the pause. The runtime gate
+ *     must clear it through a dedicated preparation path (privileged
+ *     orchestration, not the module's own queued work), then re-run
+ *     preparation; a deferral must never render as corrupt or quarantined.
  *   - Quarantine records are built from the combined migration and validation
  *     issue lists, so a record a migration step rejects stays recoverable
  *     exactly like one the validator rejects (design §5.2).
@@ -437,6 +547,19 @@ export function prepareStore(descriptor, input, options = {}) {
         result.error = { code: error?.code ?? 'migration-failed', message: error?.message ?? String(error) };
         // Blocked results still carry the issues detected before the block:
         // they explain it, and nothing here is quarantine-persisted.
+        result.issues = [...issues];
+        return result;
+    }
+
+    // A DEFER-severity finding is a pause, not a fault (design §7.5): it names
+    // chat-dependent preparation that must run before this store can be
+    // canonicalized. The store stays at its current version with the original
+    // untouched — nothing is quarantined, persisted, or stamped, and `error`
+    // stays null — until the privileged preparation path converts the data and
+    // preparation is re-run. Quarantine findings found alongside a deferral
+    // are re-derived after preparation instead of being collected now.
+    if (findDeferIssue(issues)) {
+        result.status = 'deferred';
         result.issues = [...issues];
         return result;
     }

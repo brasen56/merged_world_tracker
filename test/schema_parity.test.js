@@ -5,8 +5,11 @@
  * backup/validate.js became a compatibility adapter over schema/registry.js.
  * These tests pin the adapter's observable behavior to the exact output the
  * pre-adapter validators produced: accepted data, added/conflicts counts, and
- * every { record, reason } skipped entry (record identity AND reason string),
- * so the port onto structured issues changed no user-visible summary.
+ * every { record, reason } skipped entry — record DISPLAY identity (id string,
+ * map key, or field label; the raw rejected value only when no identity
+ * exists) AND reason string — so the port onto structured issues changed no
+ * user-visible summary. The complete raw record rides on the issue itself for
+ * quarantine recovery; summaries never render rejected prose.
  */
 import { describe, test, expect } from 'vitest';
 import {
@@ -47,7 +50,10 @@ describe('validator parity — worldState', () => {
         });
     });
 
-    test('root and field failures keep the legacy messages and order', () => {
+    test('root and field failures keep the legacy messages, labels, and order', () => {
+        // Skipped records stay on the pre-adapter display identities — the
+        // store/field labels the old validators put there. The raw rejected
+        // value travels on the issue for quarantine recovery, not here.
         expect(validateWorldState(null)).toEqual({
             data: {},
             added: 0,

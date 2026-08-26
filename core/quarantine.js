@@ -133,3 +133,231 @@ export function normalizeQuarantineStore(value) {
         items: mergeQuarantineItems([], items),
     };
 }
+
+// ─── Container schema + export/import shapes (design §5, Part 2) ─────────────
+//
+// The `mwt_schema_quarantine` chat-metadata container gets its own validator
+// (same `{ data, issues, stats }` contract as every store validator) and a
+// recovery-export envelope so quarantined records can leave the chat and come
+// back without being re-interpreted by hand.
+//
+// This module stays import-free (core/schema.js imports it), so issue objects
+// here are built with literal severities that mirror ISSUE_SEVERITIES.
+
+/**
+ * Rebuild one persisted/imported item in the canonical makeQuarantineItem()
+ * shape. The fingerprint is ALWAYS recomputed from `raw`: it is derived data
+ * by definition, and trusting a supplied value would let a hand-edited import
+ * stamp one fingerprint onto two DIFFERENT raw records, after which
+ * mergeQuarantineItems() silently discards the second as a duplicate (the
+ * mismatch is reported as a repair finding by the caller). The id is always
+ * `store:fingerprint` so deduplication stays reliable even when the stored id
+ * disagrees, and path/detectedAt/sourceVersion fall back to the same defaults
+ * the factory uses.
+ */
+function canonicalizeQuarantineItem(item) {
+    const print = fingerprintValue(item.raw);
+    return {
+        id: `${item.store}:${print}`,
+        store: item.store,
+        path: Array.isArray(item.path) ? [...item.path] : [],
+        reasonCode: item.reasonCode,
+        message: item.message,
+        raw: item.raw,
+        detectedAt: Number.isFinite(item.detectedAt) ? item.detectedAt : Date.now(),
+        sourceVersion: item.sourceVersion === undefined ? null : item.sourceVersion,
+        fingerprint: print,
+    };
+}
+
+/**
+ * Item-level structural check shared by the container validator and import
+ * (ONE owner so the two paths cannot drift).
+ *
+ * Recovery contract (design §5.1): an item must carry its raw record and a
+ * human-readable message — neither can be derived, and without them the item
+ * supports neither recovery ({ store, reasonCode } alone reconstructs nothing)
+ * nor a meaningful display. Everything else (fingerprint, id, path,
+ * detectedAt, sourceVersion) is canonicalized from what IS present — the
+ * fingerprint unconditionally from `raw` — so an export written by a slightly
+ * different build still imports cleanly and a forged fingerprint cannot
+ * collide distinct records.
+ *
+ * @returns {{ issues: object[], usable: object[], accepted: number }} the
+ *   findings plus the canonicalized items allowed into a container.
+ */
+function checkQuarantineItems(items) {
+    const issues = [];
+    const usable = [];
+    for (let index = 0; index < items.length; index++) {
+        const item = items[index];
+        if (!isObject(item)) {
+            issues.push({
+                code: 'item-not-object',
+                path: ['items', index],
+                severity: 'quarantine',
+                message: 'Quarantine item must be an object.',
+                record: item,
+            });
+            continue;
+        }
+        if (typeof item.store !== 'string' || !item.store.trim()
+            || typeof item.reasonCode !== 'string' || !item.reasonCode.trim()) {
+            issues.push({
+                code: 'item-missing-fields',
+                path: ['items', index],
+                severity: 'quarantine',
+                message: 'Quarantine item needs non-empty store and reasonCode strings.',
+                record: typeof item.id === 'string' ? item.id : index,
+            });
+            continue;
+        }
+        if (item.raw === undefined || typeof item.message !== 'string' || !item.message.trim()) {
+            issues.push({
+                code: 'item-unrecoverable',
+                path: ['items', index],
+                severity: 'quarantine',
+                message: 'Quarantine item needs a raw record and a non-empty message to support recovery.',
+                record: typeof item.id === 'string' ? item.id : index,
+            });
+            continue;
+        }
+        const canonical = canonicalizeQuarantineItem(item);
+        // Repair, not rejection: the fingerprint is derived data, so a
+        // disagreeing supplied value is overwritten with the recomputed one
+        // while the item — raw record intact — stays recoverable.
+        if (typeof item.fingerprint === 'string' && item.fingerprint.length > 0
+            && item.fingerprint !== canonical.fingerprint) {
+            issues.push({
+                code: 'fingerprint-mismatch',
+                path: ['items', index, 'fingerprint'],
+                severity: 'repair',
+                message: `Supplied fingerprint "${item.fingerprint}" does not match its raw record's content fingerprint "${canonical.fingerprint}"; it was recomputed from the raw record.`,
+                record: typeof item.id === 'string' ? item.id : index,
+            });
+        }
+        usable.push(canonical);
+    }
+    return { issues, usable, accepted: usable.length };
+}
+
+const emptyQuarantineStats = () => ({ added: 0, updated: 0, conflicts: 0 });
+
+/**
+ * Validate the `mwt_schema_quarantine` container. The canonical data is
+ * normalizeQuarantineStore()'s output — re-stamped version, deduplicated
+ * items — so loading quarantine always converges on one shape no matter what
+ * was persisted. The one refusal is a container from a NEWER MWT (below).
+ */
+export function validateQuarantineStoreData(data) {
+    const issues = [];
+    const stats = emptyQuarantineStats();
+    if (!isObject(data)) {
+        issues.push({
+            code: 'root-not-object',
+            path: [],
+            severity: 'quarantine',
+            message: 'Quarantine container must be an object.',
+            record: QUARANTINE_METADATA_KEY,
+        });
+        return { data: normalizeQuarantineStore(null), issues, stats };
+    }
+    // Unknown-future-version guardrail (design §3.5 category 4 — the same rule
+    // quarantine imports and the manifest validator enforce): a container a
+    // NEWER release wrote may carry item fields or shapes this build cannot
+    // understand, so it is refused UNCHANGED with a fatal finding instead of
+    // being silently rewritten as the current version (which would discard
+    // whatever that release recorded). Integer-only, mirroring the manifest: a
+    // fractional or non-number version is garbage that converges on the
+    // canonical shape below, not a deliberate marker from a future release.
+    if (Number.isInteger(data.version) && data.version > QUARANTINE_SCHEMA_VERSION) {
+        issues.push({
+            code: 'future-version',
+            path: ['version'],
+            severity: 'fatal',
+            message: `Quarantine container version ${data.version} is newer than the supported version ${QUARANTINE_SCHEMA_VERSION}; it was left unchanged.`,
+            record: 'version',
+        });
+        return { data, issues, stats };
+    }
+    let sourceItems = [];
+    if (data.items !== undefined && !Array.isArray(data.items)) {
+        issues.push({
+            code: 'items-not-array',
+            path: ['items'],
+            severity: 'quarantine',
+            message: 'Quarantine items must be an array.',
+            record: 'items',
+        });
+    } else {
+        sourceItems = Array.isArray(data.items) ? data.items : [];
+    }
+    const checked = checkQuarantineItems(sourceItems);
+    issues.push(...checked.issues);
+    stats.added = checked.accepted;
+    // The canonical container keeps only recoverable items — rejected ones are
+    // reported above with their raw value preserved in the issue.
+    return {
+        data: { version: QUARANTINE_SCHEMA_VERSION, items: mergeQuarantineItems([], checked.usable) },
+        issues,
+        stats,
+    };
+}
+
+/** Marks a JSON payload as a MWT quarantine recovery export. */
+export const QUARANTINE_EXPORT_KIND = 'mwt-quarantine-export';
+
+/**
+ * Build a portable recovery export from quarantine items. Deduplicating here
+ * means an export can never carry the same raw record twice, matching what a
+ * re-import would merge down to anyway.
+ */
+export function exportQuarantineData(items, { exportedAt = Date.now() } = {}) {
+    return {
+        kind: QUARANTINE_EXPORT_KIND,
+        version: QUARANTINE_SCHEMA_VERSION,
+        exportedAt,
+        items: mergeQuarantineItems([], Array.isArray(items) ? items : []),
+    };
+}
+
+/**
+ * Ingest a quarantine recovery export (or any persisted quarantine-shaped
+ * payload). Tolerant by design — this is recovery data — except that foreign
+ * kinds and future versions are refused untouched rather than guessed at.
+ *
+ * @returns {{ items: object[], issues: object[] }} canonical deduplicated
+ *   items plus plain { code, message } findings (empty `items` on refusal).
+ */
+export function importQuarantineItems(payload) {
+    const issues = [];
+    if (!isObject(payload)) {
+        issues.push({ code: 'root-not-object', message: 'Quarantine export must be a JSON object.' });
+        return { items: [], issues };
+    }
+    if (payload.kind !== undefined && payload.kind !== QUARANTINE_EXPORT_KIND) {
+        issues.push({ code: 'unknown-kind', message: `Not a quarantine export (kind "${String(payload.kind)}").` });
+        return { items: [], issues };
+    }
+    if (payload.version !== undefined && (!Number.isInteger(payload.version) || payload.version < 1)) {
+        issues.push({ code: 'version-invalid', message: 'Quarantine export version must be a positive integer.' });
+        return { items: [], issues };
+    }
+    if (payload.version > QUARANTINE_SCHEMA_VERSION) {
+        issues.push({
+            code: 'future-version',
+            message: `Quarantine export version ${payload.version} is newer than supported version ${QUARANTINE_SCHEMA_VERSION}; it was left unchanged.`,
+        });
+        return { items: [], issues };
+    }
+    if (payload.items !== undefined && !Array.isArray(payload.items)) {
+        issues.push({ code: 'items-not-array', message: 'Quarantine export items must be an array.' });
+        return { items: [], issues };
+    }
+    const sourceItems = Array.isArray(payload.items) ? payload.items : [];
+    const checked = checkQuarantineItems(sourceItems);
+    issues.push(...checked.issues.map(({ code, message }) => ({ code, message })));
+    // Only recoverable items survive the import; rejected ones are reported
+    // above and stay in the source export untouched.
+    return { items: mergeQuarantineItems([], checked.usable), issues };
+}

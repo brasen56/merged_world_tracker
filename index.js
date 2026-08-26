@@ -1774,6 +1774,7 @@ window.MWT.diagnostics = {
             'profiles without evidence': snap.profilesWithoutEvidence?.count ?? 0,
             'store records quarantined': snap.storeValidations?.skippedTotal ?? 0,
             'store id conflicts': snap.storeValidations?.conflictsTotal ?? 0,
+            'stores preparing': snap.storeValidations?.deferredTotal ?? 0,
             'interiority: dup ledger ids': snap.interiority?.duplicateLedgerIds?.count ?? 0,
             'interiority: tombstoned but live': snap.interiority?.tombstonedStillInLedger?.count ?? 0,
             'interiority: dup tombstone ids': snap.interiority?.duplicateTombstoneIds?.count ?? 0,
@@ -1784,6 +1785,7 @@ window.MWT.diagnostics = {
             added: r.added ?? '—',
             skipped: r.skippedCount ?? '—',
             conflicts: r.conflicts ?? '—',
+            preparing: r.preparing ?? false,
         })));
         console.log(
             `[MWT] Integrity snapshot for MWT v${snap.mwtVersion} — ${snap.totals?.findings ?? 0} finding(s) across `

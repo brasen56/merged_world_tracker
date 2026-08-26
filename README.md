@@ -36,6 +36,7 @@
 - [Theme Support](#theme-support)
 - [Data Storage](#data-storage)
   - [The \[MWT:store\] entry](#the-mwtstore-entry--what-it-is-and-why-its-there)
+  - [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained)
 - [License](#license)
 
 ---
@@ -595,6 +596,10 @@ If you open a Knowledge Tracker or State Tracker lorebook in the World Info edit
 **If you delete it.** That book's registry resets: MWT no longer knows which entry belongs to which NPC, and the next scan may create duplicates. Delete it only if you're deliberately resetting the book.
 
 **If you share or export a book.** The store travels with the book by design — that's what keeps a shared book working out of the box. What it carries is the same kind of chat-derived information as the visible NPC entries (names, keywords, relationship summaries) — never credentials or chat logs. If you'd rather share a clean book, just delete the `[MWT:store]` entry from the exported copy; the recipient's MWT will simply rebuild a fresh registry.
+
+### Data safety in MWT 2.0 — validation, migrations, and quarantine, explained
+
+MWT 2.0 adds a safety layer under everything the extension saves. Saved data is checked before it's used, chats in older formats upgrade themselves automatically the first time you open them, and a record MWT can't safely understand is set aside for recovery — preserved, reported, and exportable — instead of being skipped, mangled, or fed to the AI. A problem pauses at most one module, visibly, with a banner and a Retry; your prose and lorebook content are never touched or judged. This isn't in the current release yet — the full plain-language guide, written for non-programmers, is in **[DATA_SAFETY_GUIDE.md](DATA_SAFETY_GUIDE.md)**.
 
 
 **Credits/Inspirations:**

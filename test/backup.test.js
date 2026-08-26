@@ -90,6 +90,42 @@ describe('unified backup Phase 1 pure core', () => {
         expect(result.summaries.interiority.skipped).toHaveLength(1);
     });
 
+    test('a preparation deferral is not reported as skipped or quarantined records', () => {
+        // Legacy perMessage keys are RETAINED pending the chat-dependent
+        // conversion: the import accepts them, so the summary must count
+        // them as added — never as "skipped records a backup import would
+        // refuse" — and surface the pause as a separate `deferred` entry
+        // (the "preparing" state, design §7.5).
+        const file = backup();
+        file.sections.interiority.data.perMessage = {
+            'mu-a': { generatedAt: 1 },
+            'sd-2026-01-01': { generatedAt: 2 },
+            '4': { generatedAt: 3 },
+        };
+        const result = validateBackupEnvelope(file);
+        expect(result.ok).toBe(true);
+        const summary = result.summaries.interiority;
+        // 3 retained perMessage entries (incl. both legacy keys) + the
+        // fixture's 1 ledger entry — the legacy keys count as ADDED, never
+        // as skipped.
+        expect(summary.added).toBe(4);
+        expect(summary.skipped).toEqual([]);
+        expect(summary.conflicts).toBe(0);
+        expect(summary.deferred).toEqual([
+            { record: 'perMessage', reason: expect.stringContaining('one-time compatibility update') },
+        ]);
+        expect(summary.deferred[0].reason).not.toContain('migrateIndexKeys');
+        // The retained entries themselves are accepted into the section.
+        expect(result.sections.interiority.perMessage).toEqual({
+            'mu-a': { generatedAt: 1 },
+            'sd-2026-01-01': { generatedAt: 2 },
+            '4': { generatedAt: 3 },
+        });
+        // Clean sections keep the exact historical summary shape — `deferred`
+        // only appears when a deferral exists.
+        expect(result.summaries.chronicle.deferred).toBeUndefined();
+    });
+
     test('rejects zero and negative format versions as invalid', () => {
         const zero = backup();
         zero._meta.formatVersion = 0;

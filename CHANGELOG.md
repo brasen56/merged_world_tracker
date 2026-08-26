@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [1.8.0 - Unreleased]
+## [1.8.0]
 
 ### Added
 
@@ -77,6 +77,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every applicable slot to have been read. A hostile character accessor
   (card fields, `charLore`) no longer leaves the character slot falsely
   marked readable after a failed read.
+
+- Schema Validation (Part 2) — per-store schema version manifest (`mwt_schema_manifest`),
+  pure 0 → 1 migrations for all seven authoritative stores, structured issue
+  policies, and quarantine container validation plus recovery export/import
+  shapes. All dry-run only: no live persistence behavior changes until Part 6.
+
+### Fixed
+- **Interiority's preparation deferral no longer leaks into live user surfaces
+  as a fatal.** Interiority's legacy `perMessage` keys (numeric / `sd-*`,
+  pending the chat-dependent conversion) were reported through the FATAL
+  channel, so `toBackupSummary()` counted them as *skipped* while the same
+  entries were also counted as *added*, ❤️ Health rendered them as
+  "quarantined record(s) … records a backup import would refuse" when nothing
+  was quarantined and an import accepts them, and the reason string named the
+  internal `migrateIndexKeys()` function. Deferral now has its own
+  disposition (design §7.5): a `defer` issue severity + policy category,
+  `prepareStore()` returning `status: 'deferred'` (original untouched,
+  nothing quarantined or stamped, no error), backup summaries limited to
+  quarantine and genuine fatal findings with deferrals in a separate
+  `deferred` list, and the Diagnostics Integrity tab rendering deferred
+  stores as **"preparing"** (own badge, sampled reasons, one
+  `store-preparing` warning) instead of counting them toward quarantined
+  records or findings. The message is now user-facing: "Interiority needs a
+  one-time compatibility update before it can be used (N legacy message
+  key(s) still to convert); the saved data was left unchanged." The Part 6
+  ordering rule — preparation runs as privileged orchestration, never through
+  the paused module's own `queueWork` (it would deadlock its own recovery at
+  `interiority/index.js` init) — is written into plan §7.5.
+- **`createDefault()` is now canonical for every store.** World State's
+  default lacked `autoSaveHistory: []` and Interiority's lacked
+  `turnCounter: 0` — both existed only after the 0 → 1 migration ran, so a
+  freshly created store and a just-migrated empty one had different shapes.
+  Both defaults now match what the migrations converge on, pinned by a new
+  generic invariant test (migrating a store's own default must converge on
+  the default itself, for all seven stores).
+- **Renamed `checkUniqueRecordList()` → `checkPlainRecordList()`** — the name
+  read backwards: it never deduplicated (`checkRecordList()` is the one that
+  quarantines duplicate ids). Story Planner keeps the non-deduplicating check
+  deliberately (`sanitizeArcs()` mints a fresh id for a repeat, per
+  STORY-PLANNER-09), now documented at the call site; the rename stops the
+  name from misleading whoever implements §6.5's quarantine-on-duplicate.
+- The store-schema policy authoring error now names all five categories it
+  actually requires (`repair/record/reference/fatal/defer`); it previously
+  omitted `repair` (and, with this release, `defer`).
+- **A migration no longer replaces a corrupt container.** Two 0 → 1 migrations
+  destroyed a present-but-invalid container instead of leaving it for the
+  validator to quarantine — the exact loss the subsystem exists to prevent.
+  Chronicle routed `snapshots` through `backfillSnapshotIds()`, which coerces
+  any non-array to `[]`; Story Planner treated a non-array `arcs` as "legacy"
+  and overwrote it with the text-parse result. Both then reported
+  `changed: true` with an EMPTY quarantine list, so the Part 6 cutover would
+  have persisted the loss with nothing to recover from. Chronicle now
+  backfills only an actual array, and Story Planner quarantines the raw
+  container before converting (so a corrupt `arcs` alongside legacy plan text
+  still yields the parsed plan AND a recoverable copy). Both stores now
+  quarantine exactly what the validate-only path quarantines.
+- **The migration path is now tested, not just the validators.** The Part 2
+  policy batteries only ever called `validate()` directly, so nothing drove a
+  corrupt container through `prepareStore()` at version 0 — which is why
+  neither bug above surfaced. A table of corrupt containers across all seven
+  stores now pins the rule: migrating a legacy chat can never lose more than
+  opening an already-current one.
+- Backup summaries render **display identities again, not rejected prose**.
+  The Phase 1 adapter in `backup/validate.js` exported each issue's complete
+  raw record as the skipped-entry `record`, changing the long-standing
+  `{ record, reason }` contract from ids/labels to whole objects — so the
+  restore preview and Diagnostics summaries showed the full rejected payload
+  (potentially quoting the chat) instead of the snapshot id, NPC key, or field
+  label. The adapter now uses `issue.identity ?? issue.record`, restoring the
+  pre-adapter display value; quarantine creation still consumes the complete
+  `issue.record`, and the validator-parity tests pin the legacy expectations
+  again instead of blessing the regression.
+- **Future quarantine containers are refused unchanged.**
+  `validateQuarantineStoreData()` ignored a persisted container's `version`,
+  so a container written by a newer MWT was silently re-stamped as version 1 —
+  potentially discarding fields that release introduced. An integer version
+  above `QUARANTINE_SCHEMA_VERSION` now returns a fatal `future-version`
+  finding with the original container untouched (same guardrail as quarantine
+  imports and the schema manifest); garbage versions still converge on the
+  canonical shape.
+- **Quarantine items must be recoverable.** `checkQuarantineItems()` accepted
+  `{ store, reasonCode }`-only objects, which have no raw record to recover,
+  no message to display, and no fingerprint/id to deduplicate on. Items now
+  need their `raw` record and a non-empty `message`; everything safely
+  derivable (fingerprint from `raw`, id as `store:fingerprint`, default
+  path/detectedAt/sourceVersion) is canonicalized instead of demanded. The
+  container validator and imports share one check so the two paths cannot
+  drift, with export/import tests added for incomplete objects.
+- **Imported fingerprints are recomputed from the raw record.** Quarantine
+  canonicalization trusted a supplied non-empty fingerprint, so a hand-edited
+  recovery export could stamp one fingerprint onto two DIFFERENT raw records
+  and have `mergeQuarantineItems()` silently discard the second as a duplicate
+  — losing recovery data to a forged field. The canonical fingerprint is now
+  always computed from `item.raw`; a supplied fingerprint that disagrees is
+  replaced and reported as a `fingerprint-mismatch` repair finding while the
+  item itself stays recoverable.
 
 ## [1.7.11]
 

@@ -5,9 +5,12 @@
  * THE module-owned schema for `chat_metadata.story_planner_data` (design
  * §3.2/§6.5 of SCHEMA_VALIDATION_MIGRATIONS_PLAN.md). sanitizeArc/sanitizeArcs,
  * the section/status vocabulary, the arc-id factory, and the beat-index clamp
- * moved here from data.js (Part 1 of the schema plan) so writes, loads,
- * backup imports, and history restores retain ONE owner; data.js imports and
- * re-exports them unchanged.
+ * moved here from data.js in Part 1 of the schema plan; Part 2 moves the
+ * markdown plan PARSER here too (parsePlanTextToArcs and its helpers — one
+ * owner shared by the legacy-plan migration, fresh LLM responses, and history
+ * restores), adds the 0 -> 1 migration that retires getArcs()' lazy
+ * text-to-arcs path, and the per-store issue policy. data.js imports and
+ * re-exports everything unchanged.
  *
  * Pure by contract: no DOM, no SillyTavern runtime, no core barrel, and
  * nothing from story_planner/data.js or story_planner/settings.js (that would
@@ -17,13 +20,16 @@
  * module's own CHAT_DATA_KEY); test/schema_parity.test.js pins them together.
  */
 import {
-    checkUniqueRecordList,
+    checkPlainRecordList,
+    defineIssuePolicy,
     defineStoreSchema,
     emptyStats,
+    fatalIssue,
     isFiniteNumber,
     isNonEmptyString,
     isObject,
     quarantineIssue,
+    repairIssue,
 } from '../core/schema.js';
 
 // ─── STORY-PLANNER-04 / -09: Arc canonicalizer ──────────────────────────────
@@ -199,6 +205,170 @@ export function clampBeatIndex(idx, beatCount) {
     return Math.min(Math.floor(n), beatCount);
 }
 
+// ─── Markdown plan parsing (moved from data.js, Part 2) ──────────────────────
+//
+// ONE OWNER OF FORMAT, read side: the parser must sit HERE because the
+// v0 -> v1 migration parses legacy plan text with the exact same rules that
+// turn a fresh LLM response into arcs — the two can never disagree about what
+// counts as an arc.
+
+/** Normalise a heading label for tolerant matching ("## Immediate Hooks:" → "immediatehooks"). */
+function normaliseLabel(label) {
+    return String(label).toLowerCase().replace(/[^a-z]/g, '');
+}
+
+const LABEL_TO_KEY = new Map(SECTIONS.map(s => [normaliseLabel(s.label), s.key]));
+
+/**
+ * Resolve a markdown heading to a section key. Unrecognised headings (e.g. from
+ * a custom system prompt, or the legacy "Upcoming Arcs") fall back to the
+ * default section rather than dropping their bullets on the floor.
+ */
+export function sectionKeyFromLabel(label) {
+    return LABEL_TO_KEY.get(normaliseLabel(label)) || DEFAULT_SECTION;
+}
+
+/** Strip markdown emphasis and a leading legacy `[Tag]` from bullet content. */
+function cleanBulletContent(raw) {
+    return String(raw)
+        .replace(/^\s*\[[^\]]{1,24}\]\s*/, '')  // legacy "[Arc] " prefix — never parsed, purely decorative
+        .replace(/\*\*/g, '')
+        .replace(/^\s*__|__\s*$/g, '')
+        .trim();
+}
+
+/**
+ * Status flags `serializeArcsToText` appends to a title under `annotateStatus`.
+ * Built from the same sources the serializer uses so the two can't drift.
+ */
+const ARC_FLAG_WORDS = [...ARC_STATUSES.map(s => s.toUpperCase()), 'PINNED', 'SETUP COMPLETE'];
+const ARC_FLAG_ALT = ARC_FLAG_WORDS.join('|');
+const ARC_FLAG_RE = new RegExp(
+    `\\s*\\[(?:${ARC_FLAG_ALT})(?:\\s*,\\s*(?:${ARC_FLAG_ALT}))*\\]\\s*$`, 'i',
+);
+
+/**
+ * Strip a trailing "[PINNED]" / "[RESOLVED, SETUP COMPLETE]" off a parsed title.
+ *
+ * The annotated plan is what regeneration hands the model, so a model that
+ * echoes a title back hands the flag back with it. Left in, the flag becomes
+ * part of the stored title — and since titles are the merge key, the arc no
+ * longer matches the one it came from and gets duplicated alongside it.
+ * Symmetric to the [PLANTED]/[CURRENT] strip in {@link cleanBeatContent}.
+ */
+function stripArcFlags(title) {
+    return String(title).replace(ARC_FLAG_RE, '').trim();
+}
+
+/** Strip the leading marker and any "NOW:"/"NEXT:" label off a beat line. */
+function cleanBeatContent(raw) {
+    return String(raw)
+        .replace(/\*\*/g, '')
+        .replace(/^\s*(?:NOW|NEXT|BEAT|SETUP)\s*[:—-]\s*/i, '')
+        .replace(/^\s*\[[^\]]{1,32}\]\s*/, '')  // our own "[beat 2 of 3 · 6 turns]" marker
+        // Trailing progress markers we emit ourselves — stripped so a
+        // serialize → parse round-trip does not bake them into the beat text.
+        .replace(/\s*\[(?:PLANTED|CURRENT|READY|SETUP COMPLETE)\]\s*$/i, '')
+        .trim();
+}
+
+/**
+ * Split a bullet into title + body. Prefers an em/en-dash or colon separator
+ * (the format the prompt asks for); falls back to the first sentence, and
+ * finally to a length cut so a title is never absurdly long.
+ */
+function splitTitleBody(content) {
+    const dash = content.match(/^(.{2,90}?)\s*[—–]\s*(.+)$/s);
+    if (dash) return { title: dash[1].trim(), body: dash[2].trim() };
+
+    const hyphen = content.match(/^(.{2,90}?)\s+-\s+(.+)$/s);
+    if (hyphen) return { title: hyphen[1].trim(), body: hyphen[2].trim() };
+
+    const colon = content.match(/^([^:]{2,90}?):\s+(.+)$/s);
+    if (colon) return { title: colon[1].trim(), body: colon[2].trim() };
+
+    if (content.length <= 70) return { title: content, body: '' };
+
+    const sentence = content.match(/^(.{2,90}?[.!?])\s+(.+)$/s);
+    if (sentence) return { title: sentence[1].trim(), body: sentence[2].trim() };
+
+    return { title: `${content.slice(0, 67).trim()}…`, body: content };
+}
+
+/**
+ * Parse a markdown plan document into arcs.
+ *
+ * Used for BOTH the migration of legacy single-blob plans and for turning a
+ * fresh LLM response into arc objects, so the two can never disagree about what
+ * counts as an arc.
+ *
+ * @param {string} text
+ * @returns {object[]} arcs
+ */
+export function parsePlanTextToArcs(text) {
+    if (!text || !String(text).trim()) return [];
+    const arcs = [];
+    let section = DEFAULT_SECTION;
+    let last = null;
+
+    for (const rawLine of String(text).split(/\r?\n/)) {
+        const line = rawLine.trimEnd();
+        // A blank line does NOT end an arc any more — beats are often separated
+        // from their arc bullet by one. Only a heading or a new bullet does.
+        if (!line.trim()) continue;
+
+        const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
+        if (heading) {
+            section = sectionKeyFromLabel(heading[1]);
+            last = null;
+            continue;
+        }
+
+        // ── Beats ──
+        // Checked BEFORE the arc bullet, because an indented "- foo" would
+        // otherwise match as a new arc. Two accepted forms, since models are
+        // inconsistent: a numbered line at any indent, or an indented bullet.
+        const numbered = line.match(/^[ \t]*\d+[.)][ \t]+(.+)$/);
+        const indentedBullet = line.match(/^(?:[ \t]{2,}|\t)[-*+][ \t]+(.+)$/);
+        const beatMatch = numbered || indentedBullet;
+        if (beatMatch && last) {
+            const beat = cleanBeatContent(beatMatch[1]);
+            if (beat) last.beats.push(beat);
+            continue;
+        }
+        // A numbered line with no arc above it is malformed — skip rather than
+        // silently turning it into an arc.
+        if (numbered && !last) continue;
+
+        // ── Arc bullet ──
+        const bullet = line.match(/^[ \t]{0,3}[-*+][ \t]+(.+)$/);
+        if (bullet) {
+            const content = cleanBulletContent(bullet[1]);
+            if (!content) { last = null; continue; }
+            const { title, body } = splitTitleBody(content);
+            // preserveId:false mints a fresh id — identical to data.js's
+            // makeArc(), which is just sanitizeArc with this option.
+            last = sanitizeArc({ title: stripArcFlags(title), body, section }, { preserveId: false });
+            arcs.push(last);
+            continue;
+        }
+
+        // A wrapped continuation line beneath a bullet — fold it into that
+        // arc's body so multi-line descriptions survive the round-trip.
+        // STORY-PLANNER-06: The old `last.beats.length === 0` guard dropped
+        // wrapped prose that appeared AFTER a beat list, silently losing the
+        // continuation. Fold into the body regardless of whether beats exist.
+        if (last && /^[ \t]+\S/.test(rawLine)) {
+            const continuation = line.trim();
+            // Don't fold beat-like lines (numbered or already handled above).
+            if (!numbered && !indentedBullet) {
+                last.body = last.body ? `${last.body} ${continuation}` : continuation;
+            }
+        }
+    }
+    return arcs;
+}
+
 // ─── Store validation ────────────────────────────────────────────────────────
 
 /**
@@ -238,12 +408,19 @@ export function validateStoryPlannerData(data) {
     const issues = [];
     const stats = emptyStats();
     if (!isObject(data)) {
-        issues.push(quarantineIssue('root-not-object', [], 'Story Planner data must be an object.', 'storyPlanner'));
+        // Fatal-root policy (design §3.5, category 4): block the store with the
+        // raw value preserved instead of loading an empty one.
+        issues.push(fatalIssue('root-not-object', [], 'Story Planner data must be an object.', data, 'storyPlanner'));
         return { data: {}, issues, stats };
     }
     const accepted = { ...data };
     if (data.arcs !== undefined) {
-        const arcs = checkUniqueRecordList(data.arcs, 'arcs', checkArc, { path: ['arcs'] });
+        // Deliberately the NON-deduplicating check: sanitizeArcs() below mints
+        // a fresh id for a duplicate arc id (STORY-PLANNER-09), so repeats are
+        // resolved by canonicalization rather than quarantined here. When §6.5
+        // moves Story Planner to quarantine-on-duplicate, this becomes
+        // checkRecordList — the deduplicating twin.
+        const arcs = checkPlainRecordList(data.arcs, 'arcs', checkArc, { path: ['arcs'] });
         accepted.arcs = sanitizeArcs(arcs.records);
         // Same counting the backup summary always did: the check counts the
         // arcs it accepted; canonicalization never removes one.
@@ -254,9 +431,59 @@ export function validateStoryPlannerData(data) {
     }
     if (data.history !== undefined && !Array.isArray(data.history)) {
         delete accepted.history;
-        issues.push(quarantineIssue('history-not-array', ['history'], 'Story Planner history must be an array.', 'history'));
+        issues.push(quarantineIssue('history-not-array', ['history'], 'Story Planner history must be an array.', data.history, 'history'));
     }
     return { data: accepted, issues, stats };
+}
+
+// ─── Migration (design §4.2 / §6.5, Part 2) ──────────────────────────────────
+
+/**
+ * v0 -> v1: convert a legacy single-blob text plan into structured arcs.
+ *
+ * Mirrors the lazy conversion getArcs() used to perform on first read — same
+ * parser, same "keep the original text" recovery rule — but as a pure,
+ * idempotent step: once `arcs` is an array the migration is a no-op. The old
+ * `text` field is deliberately LEFT IN PLACE rather than deleted; the
+ * migration is a parse, and keeping the original means a bad parse is
+ * recoverable instead of destructive (design §12).
+ *
+ * A PRESENT but non-array `arcs` is corrupt, not legacy. The lazy path fell
+ * straight through to the text conversion and overwrote it; here the raw
+ * container is QUARANTINED first, so the conversion still returns the user's
+ * plan without the rejected value being destroyed on the way (design §5.2:
+ * never drop what was rejected). The code and message match the v1
+ * validator's own `not-an-array` finding so summaries do not churn depending
+ * on which path rejected it.
+ *
+ * A NON-OBJECT root is returned untouched for the validation gate to block
+ * (fatal-root policy, design §3.5 category 4) — never replaced with an empty
+ * store here.
+ */
+export function migrateStoryPlannerV0ToV1(data) {
+    const issues = [];
+    if (!isObject(data)) return { data, issues };
+    const next = { ...data };
+    if (!Array.isArray(next.arcs)) {
+        if (next.arcs !== undefined) {
+            issues.push(quarantineIssue('not-an-array', ['arcs'], 'arcs must be an array.', next.arcs, 'arcs'));
+        }
+        const legacy = typeof next.text === 'string' ? next.text : '';
+        const migrated = sanitizeArcs(parsePlanTextToArcs(legacy));
+        next.arcs = migrated;
+        if (legacy.trim()) {
+            // Only flag the marker when something was actually converted —
+            // exactly what the lazy path did.
+            if (migrated.length > 0) next._migratedFromText = true;
+            issues.push(repairIssue(
+                'plan-text-migrated',
+                ['text'],
+                `Migrated legacy plan text to ${migrated.length} arc(s); the original text was retained.`,
+                legacy,
+            ));
+        }
+    }
+    return { data: next, issues };
 }
 
 /** Story Planner store schema — arcs under their own key since v1. */
@@ -265,6 +492,24 @@ export const storyPlannerSchema = defineStoreSchema({
     metadataKey: 'story_planner_data',
     currentVersion: 1,
     createDefault: () => ({ arcs: [] }),
-    migrations: {},
+    migrations: { 0: migrateStoryPlannerV0ToV1 },
     validate: validateStoryPlannerData,
+    policy: defineIssuePolicy({
+        repair: ['plan-text-migrated'],
+        fatal: ['root-not-object'],
+        record: [
+            'not-an-array',
+            'arc-not-object',
+            'arc-missing-id',
+            'arc-title-not-string',
+            'arc-body-not-string',
+            'arc-invalid-section',
+            'arc-invalid-status',
+            'arc-invalid-beats',
+            'arc-invalid-beat-index',
+            'arc-invalid-turns',
+            'arc-invalid-timestamps',
+            'history-not-array',
+        ],
+    }),
 });

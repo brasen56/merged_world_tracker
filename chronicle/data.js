@@ -14,6 +14,8 @@ import {
     getOrCreateReceiptIdentity,
 } from '../core/index.js';
 
+import { backfillSnapshotIds } from './schema.js';
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const SETTINGS_KEY = 'mwt_chronicle';
@@ -245,16 +247,12 @@ export function setChronicleData(patch) {
 
 export function getSnapshots() {
     const raw = getChronicleData().snapshots || [];
-    let mutated = false;
-    const fixed = raw.map(s => {
-        if (s.id === undefined || s.id === null || s.id === '') {
-            mutated = true;
-            return { ...s, id: `legacy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` };
-        }
-        if (typeof s.id !== 'string') { mutated = true; return { ...s, id: String(s.id) }; }
-        return s;
-    });
-    if (mutated) setChronicleData({ snapshots: fixed });
+    // Part 2 (schema plan): the repair logic moved to chronicle/schema.js
+    // backfillSnapshotIds() — the single owner shared with the v0 -> v1
+    // migration. This compatibility call site stays for now and still
+    // persists the fix on read; the runtime cutover (Part 6) retires it.
+    const { snapshots: fixed, changed } = backfillSnapshotIds(raw);
+    if (changed) setChronicleData({ snapshots: fixed });
     return fixed;
 }
 

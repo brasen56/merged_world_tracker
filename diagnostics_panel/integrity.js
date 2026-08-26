@@ -349,6 +349,26 @@ export async function collectIntegritySnapshot(deps = {}) {
     // never a warning. Quarantined RECORDS are never copied into the
     // snapshot (they can quote the chat); only the validators' own reason
     // strings are kept, capped like any sample.
+    //
+    // DEFERRALS (a store paused pending a one-time, chat-dependent
+    // compatibility update) are a PREPARING state, not findings: the entries
+    // they describe were retained — an import accepts them — so they never
+    // inflate skippedCount/skippedTotal or the findings count. They surface
+    // as `preparing` rows with their own sampled reasons and one
+    // store-preparing warning (design §7.5: a pause must be visible, but
+    // never read as quarantined or corrupt).
+    const sampleReasons = (entries) => {
+        const reasons = [];
+        const seenReason = new Set();
+        for (const entry of Array.isArray(entries) ? entries : []) {
+            const reason = entry && typeof entry === 'object' ? String(entry.reason ?? '') : '';
+            if (!reason || seenReason.has(reason)) continue;
+            seenReason.add(reason);
+            reasons.push(reason);
+            if (reasons.length >= INTEGRITY_SAMPLE_LIMIT) break;
+        }
+        return reasons;
+    };
     const storeValidations = await guard('storeValidations', () => {
         const rows = stores.map((spec) => {
             const raw = meta[spec.key];
@@ -357,15 +377,7 @@ export async function collectIntegritySnapshot(deps = {}) {
                 return { id: spec.id, label: spec.label, key: spec.key, present: false };
             }
             const checked = validate(spec.id, raw);
-            const reasons = [];
-            const seenReason = new Set();
-            for (const skipped of Array.isArray(checked.skipped) ? checked.skipped : []) {
-                const reason = skipped && typeof skipped === 'object' ? String(skipped.reason ?? '') : '';
-                if (!reason || seenReason.has(reason)) continue;
-                seenReason.add(reason);
-                reasons.push(reason);
-                if (reasons.length >= INTEGRITY_SAMPLE_LIMIT) break;
-            }
+            const deferred = Array.isArray(checked.deferred) ? checked.deferred : [];
             return {
                 id: spec.id,
                 label: spec.label,
@@ -375,14 +387,18 @@ export async function collectIntegritySnapshot(deps = {}) {
                 updated: checked.updated ?? 0,
                 skippedCount: Array.isArray(checked.skipped) ? checked.skipped.length : 0,
                 conflicts: checked.conflicts ?? 0,
-                reasons,
+                reasons: sampleReasons(checked.skipped),
+                preparing: deferred.length > 0,
+                deferredCount: deferred.length,
+                deferredReasons: sampleReasons(deferred),
                 warning: typeof checked.warning === 'string' ? checked.warning : null,
             };
         });
         const skippedTotal = rows.reduce((sum, r) => sum + (r.skippedCount || 0), 0);
         const conflictsTotal = rows.reduce((sum, r) => sum + (r.conflicts || 0), 0);
-        return { sections: rows, skippedTotal, conflictsTotal };
-    }, { sections: [], skippedTotal: 0, conflictsTotal: 0 });
+        const deferredTotal = rows.reduce((sum, r) => sum + (r.deferredCount || 0), 0);
+        return { sections: rows, skippedTotal, conflictsTotal, deferredTotal };
+    }, { sections: [], skippedTotal: 0, conflictsTotal: 0, deferredTotal: 0 });
 
     // ── Check 5: Interiority ledger reference integrity ─────────────────────
     // Built on the tombstones MWT.interiority.deletions() exposes:
@@ -460,6 +476,14 @@ export async function collectIntegritySnapshot(deps = {}) {
     if (storeValidations.skippedTotal > 0) {
         warn('store-validation-skipped', 'warn',
             `${storeValidations.skippedTotal} quarantined record(s) across the chat-metadata stores — records a backup import would refuse. Reasons are sampled per store in storeValidations.sections.`);
+    }
+    if (storeValidations.deferredTotal > 0) {
+        // A preparation pause (design §7.5/§5.4): visible, store-local, and
+        // worded as preparing — never as quarantined or corrupt records. The
+        // deferred stores' own reasons (sampled in storeValidations.sections)
+        // carry the module-specific wording.
+        warn('store-preparing', 'warn',
+            `${storeValidations.deferredTotal} store section(s) are preparing — a one-time, chat-dependent compatibility update is pending; the saved data was left unchanged and nothing was quarantined.`);
     }
     if (storeValidations.conflictsTotal > 0) {
         warn('store-validation-conflicts', 'warn',
