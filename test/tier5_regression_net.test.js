@@ -173,8 +173,10 @@ describe('INTERIORITY-08 — ledger, prompt, injection, and stale commit barrier
         bumpEpoch();
         const result = await validateAndApply({ npcs: [] }, ['Mara'], 0, scope);
         expect(result).toBeNull();
-        expect(getFakeMeta().mwt_interiority.ledger).toEqual([]);
-        expect(getFakeMeta().mwt_interiority.perMessage).toEqual({});
+        // Reads no longer eagerly create the store (the interiority accessor
+        // never canonicalizes live metadata), so "zero metadata writes" now
+        // means the store was not even initialized: still genuinely absent.
+        expect(getFakeMeta().mwt_interiority).toBeUndefined();
     });
 
     test('ledger field caps apply to the actual prompt payload', async () => {

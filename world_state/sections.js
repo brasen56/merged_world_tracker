@@ -15,8 +15,7 @@ import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings, getPinnedEntities } from './settings.js';
 import {
     state, SECTIONS, VARIETY_LABELS,
-    getWorldStateText, setWorldStateData,
-    pushToHistory, setProvenance,
+    getWorldStateText, commitHistorySnapshot, setProvenance,
     extractOnlySection, replaceSection,
 } from './data.js';
 import { applyWorldStateInjection } from './injection.js';
@@ -271,8 +270,19 @@ export async function regenerateSection(sectionName, variety = 2) {
         const docNow = getWorldStateText();
         const updated = replaceSection(docNow, sectionName, cleaned);
 
-        if (docNow?.trim()) pushToHistory(docNow);
-        setWorldStateData({ text: updated });
+        // Checked write (design §8): ONE commit carries BOTH the outgoing
+        // document's history snapshot and the regenerated document. A refused
+        // store write (unsafe current value, quarantine container refusing the
+        // rejected records) must not apply injection/provenance or report
+        // success — discard the generated text and return null so the caller
+        // keeps the previous document, exactly like the guards above. (A blank
+        // outgoing document skips the history snapshot, preserving the old
+        // `if (docNow?.trim())` no-op.)
+        const written = commitHistorySnapshot(docNow, { text: updated });
+        if (!written.ok) {
+            console.warn(`[MWT:WorldState] Section "${sectionName}" regeneration refused at the store write (${written.reason ?? 'unknown reason'}) — the previous world state was kept.`);
+            return null;
+        }
         applyWorldStateInjection();
         try { setProvenance(buildProvenance()); } catch (err) {
             console.warn('[MWT:WorldState] Provenance build failed (non-fatal):', err.message);

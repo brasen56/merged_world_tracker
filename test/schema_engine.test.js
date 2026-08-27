@@ -599,6 +599,7 @@ describe('schema modules stay pure', () => {
         'core/quarantine.js',
         'schema/manifest.js',
         'schema/registry.js',
+        'schema/gate.js',
         'world_state/schema.js',
         'chronicle/schema.js',
         'knowledge/schema.js',
@@ -616,7 +617,7 @@ describe('schema modules stay pure', () => {
             checkedImports += specifiers.length;
             for (const specifier of specifiers) {
                 expect(specifier, `${file} imports ${specifier}`).toMatch(
-                    /^(\.\/quarantine\.js|\.\.\/core\/(schema|quarantine)\.js|\.\.\/(world_state|chronicle|knowledge|story_planner|interiority)\/schema\.js)$/,
+                    /^(\.\/quarantine\.js|\.\.\/core\/(schema|quarantine)\.js|\.\.\/(world_state|chronicle|knowledge|story_planner|interiority)\/schema\.js|\.\/(?:registry|manifest)\.js)$/,
                 );
             }
         }

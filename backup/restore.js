@@ -7,9 +7,13 @@
 
 import {
     MAX_TRASH_SIZE,
+    backupDataEqual,
     cloneBackupData,
 } from './data.js';
 import { validateBackupEnvelope } from './validate.js';
+import { getStoreSchema } from '../schema/registry.js';
+import { ISSUE_SEVERITIES, prepareStore } from '../core/schema.js';
+import { mergeQuarantineItems } from '../core/quarantine.js';
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const objectOrEmpty = value => (isObject(value) ? value : {});
@@ -375,6 +379,14 @@ function sectionMode(modes, name, fallback = 'merge') {
 /**
  * Create a dry-run restore plan. `current` is a plain object containing the
  * currently stored section data; omitted sections are treated as empty.
+ *
+ * `currentVersions` (optional) maps each section name to the schema version
+ * the DESTINATION's manifest actually declares for it. The current half of
+ * every merged section is prepared from that version before merging, so a
+ * legacy destination (an unstamped Chronicle store) runs its v0 → v1 migration
+ * instead of being quarantined by the current-version validator (design §4.2/
+ * §7.7). Without the map, each section defaults to its current version — the
+ * historical behavior for pure callers with no manifest at hand.
  */
 export function planRestore(envelope, current = {}, {
     modes = {},
@@ -382,6 +394,7 @@ export function planRestore(envelope, current = {}, {
     currentMessageIds = [],
     maxFormatVersion,
     exact = false,
+    currentVersions = null,
 } = {}) {
     const validation = validateBackupEnvelope(envelope, maxFormatVersion === undefined ? {} : { maxFormatVersion });
     if (!validation.ok) return { ok: false, validation, summary: {}, plan: null };
@@ -391,20 +404,125 @@ export function planRestore(envelope, current = {}, {
     const identityPolicy = resolveIdentityPolicy(identityUnknown, sameChat);
     const sections = {};
     const summary = {};
+    const canonicalSections = [];
+    // Sections whose completed value is DEFERRED (design §7.5): their retained
+    // data is committed, but they are never stamped current and the commit
+    // withholds any existing stamp — the privileged conversion has not run.
+    const deferredSections = [];
+    // Destination sections whose CURRENT half REFUSED preparation (§3.5: an
+    // unreadable root, a manifest version from the future). The plan omits
+    // them so the raw stored value survives unstamped and un-downgraded;
+    // exposed on the plan so exact planning preserves the same refusal
+    // instead of reintroducing the section from the import.
+    const blockedSections = [];
     const imported = validation.sections;
+
+    // ── Recovery ownership (design §5.1, Part 3) ───────────────────────────
+    //
+    // The envelope-level recovery container imports tolerantly, but its items
+    // are NOT all chat-local: a recovery export — or a backup written by the
+    // earlier implementation, before Knowledge quarantine moved into the
+    // lorebook store — can carry store:'knowledgeStore' records, which one
+    // chat's metadata must not own (a shared global/scoped book belongs to
+    // every chat that reads it). Partition the recovery items by store,
+    // exactly like the per-section findings: Knowledge-store items ride
+    // validation.quarantine.knowledgeStore so the commit's lorebook flush
+    // carries them INSIDE the affected book(s), and only genuinely
+    // chat-local records stay in validation.recovery for the chat container
+    // merge.
+    if (Array.isArray(validation.recovery?.items) && validation.recovery.items.length > 0) {
+        const knowledgeStoreId = getStoreSchema('knowledgeStore')?.id;
+        const chatLocalRecovery = [];
+        const storeOwnedRecovery = [];
+        for (const item of validation.recovery.items) {
+            (item && item.store === knowledgeStoreId ? storeOwnedRecovery : chatLocalRecovery).push(item);
+        }
+        if (storeOwnedRecovery.length > 0) {
+            validation.quarantine.knowledgeStore = mergeQuarantineItems(
+                validation.quarantine.knowledgeStore || [],
+                storeOwnedRecovery,
+            );
+        }
+        validation.recovery.items = chatLocalRecovery;
+    }
+
     const restoreChronicleSettings = modes.restoreSessionConfig === true
         || modes.chronicle?.restoreSessionConfig === true;
     const restoreInterioritySettings = modes.restoreSessionConfig === true
         || modes.interiority?.restoreSessionConfig === true;
 
     for (const [name, data] of Object.entries(imported)) {
-        const currentData = current[name];
+        const schema = getStoreSchema(name);
+        const rawCurrent = current[name];
+        // Replace-mode sections honor keep/skip (worldState, knowledgeCounters).
+        const replaceMode = name === 'worldState'
+            ? sectionMode(modes, name, identityPolicy.worldStateDefault)
+            : name === 'knowledgeCounters'
+                ? sectionMode(modes, name, 'replace')
+                : null;
+        const isKeepSkip = replaceMode === 'keep' || replaceMode === 'skip';
+
+        // ── Migrate the DESTINATION half before merging (design §4.2/§7.7) ──
+        //
+        // Only the incoming half of each section was ever prepared: the import
+        // validation (§7.7) migrated it from its declared version, but the
+        // CURRENT half entered the merge raw. Preparing the completed value at
+        // the CURRENT version (below) could not fix that — a legacy Chronicle
+        // snapshot without an id was quarantined by the v1 validator even
+        // though its v0 → v1 migration would have backfilled a deterministic
+        // id, so valid legacy data went inactive with the wrong sourceVersion.
+        // Prepare the current section from the version the destination
+        // manifest actually declares (missing ⇒ legacy 0) and merge canonical
+        // current data with canonical imported data.
+        let currentData = rawCurrent;
+        let currentQuarantined = [];
+        let currentSkipped = [];
+        // §3.5: a current store that REFUSED preparation (a fatal root, a
+        // declared version from the future) makes this section unwritable —
+        // see the write decision below. The merge helpers normalize whatever
+        // shape they are handed, so merging the raw value and revalidating the
+        // completed result would happily "repair" an unreadable store (or
+        // downgrade a future-version one) and stamp it current.
+        let currentBlocked = false;
+        if (schema && !isKeepSkip && rawCurrent !== undefined && rawCurrent !== null) {
+            const declaredVersion = currentVersions !== null && Number.isInteger(currentVersions[name])
+                ? currentVersions[name]
+                : schema.currentVersion;
+            const preparedCurrent = prepareStore(schema, rawCurrent, {
+                version: declaredVersion,
+                deferPolicy: 'canonicalize',
+            });
+            if (preparedCurrent.status === 'blocked') {
+                currentBlocked = true;
+                // Surface the refusal (§10.3 display contract: identifiers,
+                // never rejected prose). A blocked preparation carries either
+                // FATAL/QUARANTINE issues (an unreadable root) or only a
+                // store-level error — a future version blocks before any issue
+                // is recorded — so the error message names the reason then.
+                currentSkipped = preparedCurrent.issues
+                    .filter(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE
+                        || issue.severity === ISSUE_SEVERITIES.FATAL)
+                    .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message }));
+                if (currentSkipped.length === 0 && preparedCurrent.error) {
+                    currentSkipped = [{ record: name, reason: preparedCurrent.error.message }];
+                }
+            } else {
+                currentData = preparedCurrent.data;
+                currentQuarantined = preparedCurrent.quarantined;
+                // §10.3 display contract: identifiers, never rejected prose.
+                currentSkipped = preparedCurrent.issues
+                    .filter(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE
+                        || issue.severity === ISSUE_SEVERITIES.FATAL)
+                    .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message }));
+            }
+        }
+
         let planned;
         if (name === 'chronicle') planned = mergeChronicle(currentData, data, {
             restoreSessionConfig: restoreChronicleSettings,
         });
         else if (name === 'knowledgeEvidence') planned = mergeNamedFiles(currentData, data, mergeEvidenceFile);
-        else if (name === 'knowledgeCounters') planned = replaceSection(currentData, data, sectionMode(modes, name, 'replace'), name);
+        else if (name === 'knowledgeCounters') planned = replaceSection(currentData, data, replaceMode, name);
         else if (name === 'storyPlanner') planned = mergeStoryPlanner(currentData, data);
         else if (name === 'interiority') planned = mergeInteriority(currentData, data, {
             sameChat,
@@ -413,10 +531,142 @@ export function planRestore(envelope, current = {}, {
         else if (name === 'knowledgeStore') planned = exact
             ? exactKnowledgeStore(data)
             : mergeKnowledgeStore(currentData, data, modes.knowledgeStore || {});
-        else if (name === 'worldState') planned = replaceSection(currentData, data, sectionMode(modes, name, identityPolicy.worldStateDefault), name);
+        else if (name === 'worldState') planned = replaceSection(currentData, data, replaceMode, name);
         else planned = { data: cloneBackupData(data), summary: emptySummary() };
-        sections[name] = planned.data;
+
+        // ── Revalidate the COMPLETED section value (design §8) ──────────────
+        //
+        // Both halves are canonical by now, but the merge itself can still
+        // produce a shape neither half validated (a duplicate id formed across
+        // the two halves). Preparing the completed value here means the plan
+        // only ever carries canonical data: invalid records are quarantined
+        // (their items ride validation.quarantine so the commit preserves
+        // them, §5.2) and a FATAL result leaves the section UNWRITTEN — the
+        // previous value stays intact and unstamped (§3.5: a blocked store
+        // blocks only itself).
+        let writeSection = true;
+        let canonicalWrite = true;
+        // DEFER findings of the completed-value preparation (§7.5), surfaced
+        // in the summary below alongside the import-time deferrals.
+        let preparedDeferred = [];
+        if (isKeepSkip) {
+            // Keep/skip owes the section NO write at all. Re-preparing the
+            // kept value would turn the "no-op" into an integrity repair the
+            // preview never offered — a kept World State with an invalid
+            // autoSaveHistory had that field removed, quarantined, written,
+            // and stamped, even though the preview said the section was not
+            // replaced. The section is omitted from the write plan entirely;
+            // repairing the live store is a separate operation.
+            writeSection = false;
+            canonicalWrite = false;
+        } else if (currentBlocked) {
+            // The current half refused preparation, so the completed value is
+            // unwritable no matter what the merge produced (§3.5): the section
+            // keeps its raw stored value, unstamped and un-downgraded. The
+            // refusal rides the summary's skipped list so the preview explains
+            // the omission; a blocked store blocks only itself — unrelated
+            // sections still restore.
+            writeSection = false;
+            canonicalWrite = false;
+            blockedSections.push(name);
+            // The preview must describe the actual write plan (§10.3): nothing
+            // from this section's merge will be committed, so its prospective
+            // added/updated/conflict counts are fiction — zero them and let
+            // the skipped entries carry the refusal instead, so the summary
+            // never reports an addition that cannot occur.
+            planned.summary.added = 0;
+            planned.summary.updated = 0;
+            planned.summary.conflicts = 0;
+            if (currentSkipped.length > 0) {
+                planned.summary.skipped = [...currentSkipped, ...planned.summary.skipped];
+            }
+        } else if (schema) {
+            const prepared = prepareStore(schema, planned.data, {
+                version: schema.currentVersion,
+                deferPolicy: 'canonicalize',
+            });
+            // §10.3: findings against the completed value are surfaced in the
+            // preview exactly like import-time refusals — identifiers, never
+            // rejected prose (same display contract as toBackupSummary).
+            const preparedSkipped = prepared.issues
+                .filter(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE
+                    || issue.severity === ISSUE_SEVERITIES.FATAL)
+                .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message }));
+            if (preparedSkipped.length > 0) {
+                planned.summary.skipped = [...preparedSkipped, ...planned.summary.skipped];
+            }
+            if (prepared.status === 'blocked') {
+                writeSection = false;
+            } else {
+                planned.data = prepared.data;
+                if (prepared.status === 'deferred') {
+                    // §7.5: a deferred completed value is RETAINED (written)
+                    // but never stamped current — the manifest may not claim
+                    // the privileged conversion already ran, or it never will.
+                    // The commit also withholds any EXISTING stamp
+                    // (plan.deferredSections): a newly deferred section must
+                    // not keep a stamp claiming it is prepared.
+                    canonicalWrite = false;
+                    deferredSections.push(name);
+                    preparedDeferred = prepared.issues
+                        .filter(issue => issue.severity === ISSUE_SEVERITIES.DEFER)
+                        .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message }));
+                } else {
+                    // Stamp only what the restore actually rewrites (§7.7): a
+                    // completed value whose canonical form equals the STORED
+                    // value made no canonical change and must not be stamped.
+                    // The comparison is against the RAW stored value, not the
+                    // prepared current half — a migration the write persists
+                    // (backfilled legacy ids) is a canonical change even
+                    // though both prepared halves already agree.
+                    canonicalWrite = !backupDataEqual(prepared.data, rawCurrent);
+                }
+                // Records quarantined out of the CURRENT half ride the same
+                // commit-time preservation (§5.2): the write drops them from
+                // the live store, so they must stay recoverable. Surfaced only
+                // when the section is written — an unwritten section leaves
+                // the current store, rejected records included, untouched.
+                if (currentSkipped.length > 0) {
+                    planned.summary.skipped = [...currentSkipped, ...planned.summary.skipped];
+                }
+                if (prepared.quarantined.length > 0 || currentQuarantined.length > 0) {
+                    validation.quarantine[name] = mergeQuarantineItems(
+                        validation.quarantine[name] || [],
+                        mergeQuarantineItems(prepared.quarantined, currentQuarantined),
+                    );
+                }
+            }
+        }
+        if (writeSection) {
+            sections[name] = planned.data;
+            if (canonicalWrite) canonicalSections.push(name);
+        }
         summary[name] = planned.summary;
+        // §10.3 (Part 3): merge/replace preview counts include quarantine
+        // results. The planner's summary covers merge decisions; records the
+        // IMPORT VALIDATION refused never reach the planner (they were
+        // quarantined out of the canonical section), so their skips are
+        // prepended here — a preview that silently dropped records it refused
+        // would understate what the restore does. Import-time DEFER findings
+        // ride along the same way (a preparing store, §7.5).
+        const importSkipped = validation.summaries[name]?.skipped;
+        if (Array.isArray(importSkipped) && importSkipped.length > 0) {
+            summary[name].skipped = [...importSkipped, ...summary[name].skipped];
+        }
+        const importDeferred = validation.summaries[name]?.deferred;
+        // §7.5: the completed value's own DEFER findings (e.g. legacy
+        // per-message keys retained out of the CURRENT half) join the
+        // import-time ones — deduplicated, because both describe the same
+        // retained entries when the deferral came in with the import.
+        const deferredSeen = new Set(preparedDeferred.map(entry => `${entry.record}::${entry.reason}`));
+        const deferredEntries = [
+            ...preparedDeferred,
+            ...(Array.isArray(importDeferred) ? importDeferred : [])
+                .filter(entry => !deferredSeen.has(`${entry.record}::${entry.reason}`)),
+        ];
+        if (deferredEntries.length > 0) {
+            summary[name].deferred = deferredEntries;
+        }
     }
 
     const perMessage = imported.interiority?.perMessage;
@@ -439,6 +689,22 @@ export function planRestore(envelope, current = {}, {
         sameChat,
         identityPolicy,
         summary,
-        plan: { sections, identity: envelope._meta.identity },
+        plan: {
+            sections,
+            identity: envelope._meta.identity,
+            // Sections the restore actually rewrites with canonical data (a
+            // keep/skip no-op is not one): the ONLY sections the commit may
+            // stamp current-version in the schema manifest (§7.3/§7.7).
+            canonicalSections,
+            // Sections whose completed value is DEFERRED (§7.5): their data is
+            // retained in the write, but the commit must NOT stamp them — and
+            // must remove any existing stamp, since the privileged conversion
+            // has not run on the committed value.
+            deferredSections,
+            // Destination sections whose CURRENT half refused preparation
+            // (§3.5): unwritten, unstamped, and left raw. Exact planning reads
+            // this so an exact restore preserves the same refusal.
+            blockedSections,
+        },
     };
 }

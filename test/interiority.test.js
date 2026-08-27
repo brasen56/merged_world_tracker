@@ -590,11 +590,14 @@ describe('dedup survives a user edit', () => {
 describe('restoreLedgerSnapshot (existing behaviour — the reference)', () => {
 
     test('a manual entry added after the snapshot survives rollback', () => {
-        setLedger([{ id: 'e1', npc: 'Mara', action: 'engine intent' }]);
+        // Part 3 write seam: setLedger() validates the complete next store
+        // against the interiority schema, so the fixtures carry the full
+        // ledger-entry shape (id/npc/action/trigger) the schema requires.
+        setLedger([{ id: 'e1', npc: 'Mara', action: 'engine intent', trigger: 't1' }]);
         const snapshot = structuredClone(getLedger());
 
         // User adds an intention by hand, later than the snapshot.
-        setLedger([...getLedger(), { id: 'm1', npc: 'Mara', action: 'user intent', manual: true }]);
+        setLedger([...getLedger(), { id: 'm1', npc: 'Mara', action: 'user intent', trigger: 't2', manual: true }]);
 
         restoreLedgerSnapshot(snapshot);
 
@@ -602,9 +605,9 @@ describe('restoreLedgerSnapshot (existing behaviour — the reference)', () => {
     });
 
     test('an engine entry added after the snapshot is rolled back', () => {
-        setLedger([{ id: 'e1', npc: 'Mara', action: 'engine intent' }]);
+        setLedger([{ id: 'e1', npc: 'Mara', action: 'engine intent', trigger: 't1' }]);
         const snapshot = structuredClone(getLedger());
-        setLedger([...getLedger(), { id: 'e2', npc: 'Mara', action: 'from the abandoned timeline' }]);
+        setLedger([...getLedger(), { id: 'e2', npc: 'Mara', action: 'from the abandoned timeline', trigger: 't2' }]);
 
         restoreLedgerSnapshot(snapshot);
 

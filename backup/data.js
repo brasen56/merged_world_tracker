@@ -4,12 +4,18 @@
  * This module deliberately has no SillyTavern or browser dependencies. Runtime
  * collection belongs to Phase 2a; this file only defines the versioned envelope
  * and the safe, explicit list of chat-metadata sections that may be exported.
+ *
+ * Part 3 (design §3.4): the per-section wrapper versions are SOURCED from the
+ * registered store descriptors in schema/registry.js — one owner per shape.
+ * A section exported by this build is stamped with that store's
+ * `currentVersion`, and a restore migrates each section from the version its
+ * wrapper declares (backup/validate.js) before validating and merge-planning.
  */
+
+import { STORE_SCHEMAS } from '../schema/registry.js';
 
 export const BACKUP_TYPE = 'mwt-chat-backup';
 export const FORMAT_VERSION = 1;
-export const SECTION_SCHEMA_VERSION = 1;
-export const KNOWLEDGE_STORE_VERSION = 1;
 export const MAX_TRASH_SIZE = 50;
 
 export const SECTION_KEYS = Object.freeze([
@@ -54,8 +60,13 @@ export function cloneBackupData(value, seen = new WeakMap()) {
     return result;
 }
 
-function section(data, schemaVersion = SECTION_SCHEMA_VERSION) {
-    return { schemaVersion, data: cloneBackupData(data && typeof data === 'object' ? data : {}) };
+/** The wrapper version a section carries: its store descriptor's currentVersion. */
+function sectionVersion(sectionName) {
+    return STORE_SCHEMAS[sectionName]?.currentVersion ?? 1;
+}
+
+function section(data, sectionName) {
+    return { schemaVersion: sectionVersion(sectionName), data: cloneBackupData(data && typeof data === 'object' ? data : {}) };
 }
 
 /**
@@ -64,10 +75,14 @@ function section(data, schemaVersion = SECTION_SCHEMA_VERSION) {
  * `metadata` is intentionally whitelisted. Passing a complete metadata object
  * cannot accidentally export settings, legacy pointers, or unrelated keys.
  * `knowledgeStore` is optional because its runtime collection is Phase 2a.
+ * `quarantine` is the optional chat-local quarantine recovery container
+ * (design §5.3): recovery data rides with every backup so a restore can never
+ * strand rejected records on the source chat.
  */
 export function buildBackupEnvelope({
     metadata = {},
     knowledgeStore,
+    quarantine,
     identity = null,
     createdAt = new Date().toISOString(),
     mwtVersion = null,
@@ -80,12 +95,16 @@ export function buildBackupEnvelope({
         if (Object.prototype.hasOwnProperty.call(metadata, key)
             && metadata[key] !== undefined
             && metadata[key] !== null) {
-            sections[key] = section(metadata[key]);
+            sections[key] = section(metadata[key], key);
         }
     }
     if (knowledgeStore !== undefined) {
         const storeInput = knowledgeStore && typeof knowledgeStore === 'object' ? knowledgeStore : {};
-        const storeVersion = Number.isInteger(storeInput.version) ? storeInput.version : KNOWLEDGE_STORE_VERSION;
+        // The wrapper's storeVersion mirrors the embedded lorebook-store
+        // version, owned by the knowledgeStore descriptor (design §3.4).
+        const storeVersion = Number.isInteger(storeInput.version)
+            ? storeInput.version
+            : STORE_SCHEMAS.knowledgeStore.currentVersion;
         // The store version is carried by the section wrapper (storeVersion) only.
         // Carrying it a second time inside `data` left an unchanged exact Knowledge
         // restore reporting "replaced": current-state comparison retained the inner
@@ -110,7 +129,14 @@ export function buildBackupEnvelope({
         identity: cloneBackupData(identity),
     };
 
-    return { _meta: meta, sections };
+    // Quarantine recovery data is NOT a store section (it is subsystem data
+    // ABOUT the stores, like the manifest); it rides as its own top-level
+    // container and is only present when the chat has quarantined records.
+    const envelope = { _meta: meta, sections };
+    if (quarantine !== undefined && quarantine !== null) {
+        envelope.quarantine = cloneBackupData(quarantine);
+    }
+    return envelope;
 }
 
 export function getBackupSection(envelope, name) {

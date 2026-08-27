@@ -8,13 +8,15 @@ import {
     getContextSafe, getChat, getChatMeta,
     escapeHtml,
     createSettingsManager,
-    patchChatMeta,
+    persistChatMeta,
+    preserveQuarantinedRecords,
     stripNonNarrative,
     getStableHistoryEnd,
     getOrCreateReceiptIdentity,
 } from '../core/index.js';
 
-import { backfillSnapshotIds } from './schema.js';
+import { backfillSnapshotIds, chronicleSchema } from './schema.js';
+import { prepareNextStoreValue } from '../core/schema.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -234,15 +236,111 @@ export function isAnchorStale(anchor) {
 
 export function getChronicleData() {
     const meta = getChatMeta();
-    if (!meta) return { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false, msgSinceSnapshot: 0 };
-    if (!meta[CHRONICLE_KEY]) {
-        meta[CHRONICLE_KEY] = { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false, msgSinceSnapshot: 0 };
+    if (!meta) return chronicleReadDefaults();
+    const stored = meta[CHRONICLE_KEY];
+    // Only a GENUINELY ABSENT root (undefined/null — the values the write seam
+    // also treats as absent) is initialized with the canonical defaults; that
+    // write is lossless. A PRESENT-but-invalid root ('' / 0 / false, or any
+    // non-object) must survive the read untouched: replacing it here would
+    // destroy the raw value before the write seam could fail closed on it
+    // (prepareNextStoreValue refuses a present non-object), so the reader gets
+    // a DETACHED default while the stored value stays recoverable.
+    if (stored === undefined || stored === null) {
+        meta[CHRONICLE_KEY] = chronicleReadDefaults();
+    } else if (typeof stored !== 'object' || Array.isArray(stored)) {
+        return chronicleReadDefaults();
     }
     return meta[CHRONICLE_KEY];
 }
 
+/** Runtime read defaults (injection/suggestion settings owned here, not by the
+ *  schema — chronicle/schema.js createDefault covers the record containers). */
+function chronicleReadDefaults() {
+    return { snapshots: [], lastAnchor: null, injectEnabled: false, injectCount: 2, injectDepth: 2, autoSuggestAfter: AUTO_SUGGEST_AFTER, suggestSent: false, msgSinceSnapshot: 0 };
+}
+
+/**
+ * The Chronicle write seam (design §8, Part 3): the COMPLETE proposed next
+ * store — current data with the patch applied — is validated by the
+ * registered chronicle schema before anything is persisted. The write either
+ * commits CANONICAL data (invalid snapshots quarantined out of the live
+ * value, their issues reported) or, on a fatal root problem, leaves the
+ * previous value intact. The canonical result REPLACES the stored value (a
+ * merge would resurrect a container the validator just rejected).
+ *
+ * This checked variant is the one callers that CANNOT proceed on a refused
+ * write should use (design §8: "commit canonical data or leave the previous
+ * value intact" — the UI import path may only apply/render/report success
+ * after the write is confirmed): the result is discriminated instead of
+ * returning the new-or-previous value, so a refusal is never mistaken for a
+ * commit.
+ *
+ * @param {object} patch fields to overlay on the current store value
+ * @param {object} [options]
+ * @param {object[]|{issues: object[], sourceVersion: number}} [options.preserveIssues]
+ *   EXTRA schema findings whose rejected records must be preserved in this
+ *   same commit (design §5.2) even though they did not come from validating
+ *   the proposed value — e.g. a standalone import file's findings. They ride
+ *   the seam so the DESTINATION is validated first: a refused write mutates
+ *   neither the store value nor the quarantine container, instead of the
+ *   caller merging the container beforehand and stranding quarantine records
+ *   when the write refuses. Pass a `{ issues, sourceVersion }` group to stamp
+ *   those records with the version their SOURCE was at (an unversioned
+ *   standalone export is prepared from legacy version 0, design §6.2) rather
+ *   than the destination's current version; a bare array keeps the historical
+ *   current-version stamping for callers with no source version to report.
+ * @returns {{ ok: boolean, data, reason?: string, message?: string, issues?: object[] }}
+ *   `ok: true` — `data` is the committed canonical value. `ok: false` —
+ *   `data` is the PREVIOUS value that was kept, with `reason` naming the
+ *   refusal ('metadata-unavailable', 'validation-refused', or the quarantine
+ *   container's refusal reason from preserveQuarantinedRecords).
+ */
+export function setChronicleDataChecked(patch, { preserveIssues = [] } = {}) {
+    const meta = getChatMeta();
+    if (!meta) return { ok: false, data: undefined, reason: 'metadata-unavailable' };
+    const next = prepareNextStoreValue(chronicleSchema, meta[CHRONICLE_KEY], patch);
+    if (!next.ok) {
+        console.warn('[MWT:Chronicle] Write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);
+        return { ok: false, data: meta[CHRONICLE_KEY], reason: 'validation-refused', issues: next.issues };
+    }
+    for (const issue of next.issues) {
+        console.warn(`[MWT:Chronicle] ${issue.severity}: ${issue.message}`);
+    }
+    // §5.2: the canonical write is only allowed to commit if its rejected
+    // records were preserved. A refused quarantine container means they cannot
+    // be — leave the previous value intact instead. preserveIssues fold in
+    // here — AFTER the destination validated — so a caller's external records
+    // are preserved by (and only by) a write that actually commits. The
+    // external group carries the version its SOURCE was at (an unversioned
+    // legacy export is version 0, design §6.2): stamping its records with the
+    // destination's current version would misreport where they came from.
+    // Tagging each external issue keeps this ONE preservation call — one
+    // refusal point — for both groups.
+    const external = Array.isArray(preserveIssues)
+        ? { issues: preserveIssues, sourceVersion: chronicleSchema.currentVersion }
+        : {
+            issues: preserveIssues?.issues ?? [],
+            sourceVersion: preserveIssues?.sourceVersion ?? chronicleSchema.currentVersion,
+        };
+    const externalIssues = external.issues.map(issue => ({ ...issue, sourceVersion: external.sourceVersion }));
+    const preserved = preserveQuarantinedRecords(chronicleSchema.id, [...next.issues, ...externalIssues], { sourceVersion: chronicleSchema.currentVersion });
+    if (!preserved.ok) {
+        console.warn(`[MWT:Chronicle] Write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
+        return { ok: false, data: meta[CHRONICLE_KEY], reason: preserved.reason, message: preserved.message };
+    }
+    meta[CHRONICLE_KEY] = next.data;
+    persistChatMeta();
+    return { ok: true, data: next.data };
+}
+
+/**
+ * Historical unchecked wrapper over setChronicleDataChecked(): returns the
+ * written value on success and the KEPT previous value on refusal (so callers
+ * that re-read the store afterwards stay correct), exactly as before the
+ * checked seam existed.
+ */
 export function setChronicleData(patch) {
-    patchChatMeta(CHRONICLE_KEY, patch);
+    return setChronicleDataChecked(patch).data;
 }
 
 export function getSnapshots() {

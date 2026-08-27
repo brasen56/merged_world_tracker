@@ -31,6 +31,7 @@ import {
     getLedger, addLedgerEntry, wakeLedgerEntry, restoreLedgerSnapshot,
     getTurnCounter, incrementTurnCounter, restoreTurnCounter,
     setPerMessage, getOrCreateMsgKeyForIndex, getInteriorityData,
+    patchInteriorityData,
     saveSettings,
 } from '../interiority/data.js';
 import { validateAndApply, runStrictCalls } from '../interiority/generation.js';
@@ -295,7 +296,15 @@ describe('onMessageDeleted — bulk generated-turn rollback', () => {
 
         const newestSnapshot = JSON.parse(JSON.stringify(getLedger()));
         const secondKey = getOrCreateMsgKeyForIndex(2);
-        getLedger().push({ id: 'i-new', npc: 'Mara', action: 'new demand', trigger: '', turnsOpen: 0 });
+        // Reads hand out a detached working copy now, so the new demand is
+        // added through an explicit committed write instead of pushing into
+        // the (formerly live) ledger array. The entry keeps the same shape it
+        // always had here — schema-quarantined at this commit — so the
+        // observable end state (nothing survives the final rollback) is
+        // unchanged.
+        patchInteriorityData({
+            ledger: [...getLedger(), { id: 'i-new', npc: 'Mara', action: 'new demand', trigger: '', turnsOpen: 0 }],
+        });
         incrementTurnCounter();
         setPerMessage(secondKey, {
             reactions: [], ledgerSnapshot: newestSnapshot, turnCounterAtSnapshot: 1, generatedAt: 2,

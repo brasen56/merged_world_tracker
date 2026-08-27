@@ -63,8 +63,13 @@ export function createSchemaManifest() {
  * non-number manifestVersion is garbage this build converges on the canonical
  * shape; only a strictly greater integer version is a deliberate marker from
  * a release this one cannot understand.
+ *
+ * Exported for transaction callers (e.g. a backup restore) that must preflight
+ * the destination manifest BEFORE any write: stamping onto a future manifest
+ * throws by design, so discovering one only after durable writes have started
+ * would bypass the rollback entirely.
  */
-function isFutureManifest(value) {
+export function isFutureManifest(value) {
     return isObject(value)
         && Number.isInteger(value.manifestVersion)
         && value.manifestVersion > MANIFEST_VERSION;

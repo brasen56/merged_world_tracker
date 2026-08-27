@@ -8,12 +8,14 @@ import {
 
 import {
     state, SC_VERSION,
-    getChronicleData, setChronicleData, getSnapshots,
+    getChronicleData, setChronicleDataChecked, getSnapshots,
     scSetStatus,
     _render,
 } from './data.js';
 
 import { applyInjection, isInjectionEnabled } from './injection.js';
+import { chronicleSchema } from './schema.js';
+import { prepareStore } from '../core/schema.js';
 
 // ─── Export / Import ─────────────────────────────────────────────────────────
 
@@ -59,37 +61,50 @@ export async function triggerImport() {
     if (text) importChronicle(text);
 }
 
+// Standalone export files predate the data-schema version marker (SC_VERSION
+// is the module version, not a data version — design §6.2), so the import
+// always prepares from legacy version 0. One constant feeds BOTH the
+// prepareStore version AND the quarantine sourceVersion below, so a rejected
+// record's recovery metadata always names the version it actually came from.
+const LEGACY_IMPORT_VERSION = 0;
+
 function importChronicle(jsonString) {
     try {
         const parsed = JSON.parse(jsonString);
         if (!parsed.snapshots || !Array.isArray(parsed.snapshots)) throw new Error('Invalid: missing snapshots.');
+
+        // Part 3 (design §8): the standalone import runs through the SAME
+        // schema owner as runtime loading and backup imports. Standalone
+        // export files predate the data-schema version marker (SC_VERSION is
+        // the module version, not a data version — design §6.2), so the
+        // import prepares from legacy version 0: the migration backfills
+        // missing ids DETERMINISTICALLY (same file ⇒ same ids, so re-imports
+        // dedup instead of duplicating), and the validator quarantines
+        // malformed snapshots with their raw records preserved.
+        const prepared = prepareStore(chronicleSchema, { snapshots: parsed.snapshots }, {
+            version: LEGACY_IMPORT_VERSION,
+            deferPolicy: 'canonicalize',
+        });
+        if (prepared.status === 'blocked') {
+            throw new Error(prepared.error?.message || 'Snapshots failed schema validation.');
+        }
+        const incoming = prepared.data.snapshots || [];
+        const skipped = prepared.issues.filter(issue => issue.severity === 'quarantine').length;
+
         const existing = getSnapshots();
         const existingIds = new Set(existing.map(s => s.id));
         let added = 0;
-        let skipped = 0;
         const merged = [...existing];
-        for (const snap of parsed.snapshots) {
-            // Validate per-snapshot shape: an entry without `text` (or with
-            // non-string text) crashes the consolidation preview's
-            // `e.text.slice(...)` and `validateConsolidationOutput`'s
-            // `e.text.split(...)`. Skip malformed entries instead of writing
-            // them through.
-            if (!snap || typeof snap.text !== 'string' || !snap.text.trim()) {
-                skipped++;
-                continue;
-            }
-            if (!existingIds.has(snap.id)) {
-                // CHRONICLE-04: Add the accepted id to the set so a file
-                // containing two identical ids does not append both. The old
-                // code built `existingIds` once and never updated it in the
-                // loop, so duplicates within a single import file were
-                // silently accepted — making selection/deletion/undo
-                // ambiguous later.
-                const newId = snap.id || `imp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                existingIds.add(newId);
-                merged.push({ ...snap, id: newId });
-                added++;
-            }
+        for (const snap of incoming) {
+            // The schema guarantees a non-empty id (backfilled above when the
+            // record was acceptable), so the id IS the merge key: a snapshot
+            // this chat already has is preserved as-is (merge semantics), and
+            // a file containing the same id twice was already deduplicated by
+            // the validator (CHRONICLE-04).
+            if (existingIds.has(snap.id)) continue;
+            existingIds.add(snap.id);
+            merged.push({ ...snap });
+            added++;
         }
         merged.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
@@ -99,7 +114,6 @@ function importChronicle(jsonString) {
         if (parsed.lastAnchor) patch.lastAnchor = parsed.lastAnchor;
         if (typeof parsed.msgSinceSnapshot === 'number' && Number.isFinite(parsed.msgSinceSnapshot)) {
             patch.msgSinceSnapshot = parsed.msgSinceSnapshot;
-            state.msgSinceSnapshot = parsed.msgSinceSnapshot;
         }
         if (parsed.injectEnabled !== undefined || parsed.injectCount !== undefined || parsed.injectDepth !== undefined) {
             const restoreInjection = confirm('Import contains injection settings (enabled/count/depth). Restore those too?');
@@ -110,11 +124,38 @@ function importChronicle(jsonString) {
             }
         }
 
-        setChronicleData(patch);
+        // Checked write (design §8 + §5.2): ONE commit carries the merged
+        // snapshots AND the import file's schema findings (e.g. a malformed
+        // snapshot) so its rejected records are preserved. The findings ride
+        // the checked seam itself — the store validates the destination
+        // BEFORE the quarantine container is touched, so a refused write (an
+        // unreadable current Chronicle, or a container that refuses the
+        // records) leaves BOTH the previous store AND the container intact.
+        // The old standalone preserve ran first and could not be undone when
+        // the write refused, stranding quarantine records in a chat whose
+        // import then reported failure.
+        const written = setChronicleDataChecked(patch, {
+            // The file's findings ride the same commit, stamped with the
+            // version their SOURCE was at (0) — not the destination's current
+            // version, which would misreport an unversioned legacy export's
+            // rejected snapshots as current-version data.
+            preserveIssues: { issues: prepared.issues, sourceVersion: LEGACY_IMPORT_VERSION },
+        });
+        if (!written.ok) {
+            const detail = written.message || written.reason || 'unknown reason';
+            scSetStatus(`Import failed: the chronicle store refused the write (${detail}); the previous chronicle was kept.`, 'error');
+            return;
+        }
+        // Module/UI state only moves after the commit is confirmed — a
+        // refusal must not leave the cadence counter, injection, selection,
+        // or render reporting an import that never landed.
+        if (patch.msgSinceSnapshot !== undefined) {
+            state.msgSinceSnapshot = patch.msgSinceSnapshot;
+        }
         applyInjection();
         state.selectedSnapshotId = null;
         _render.renderContent();
-        scSetStatus(`Imported ${added} entries (${merged.length} total${skipped ? `, ${skipped} skipped (missing text)` : ''}).`, 'success');
+        scSetStatus(`Imported ${added} entries (${merged.length} total${skipped ? `, ${skipped} skipped (failed validation)` : ''}).`, 'success');
     } catch (err) {
         scSetStatus(`Import failed: ${err.message}`, 'error');
     }

@@ -19,8 +19,8 @@ import {
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL, getPinnedEntities } from './settings.js';
 import {
-    state, getWorldStateText, setWorldStateData,
-    pushToHistory, pushAutoSave,
+    state, getWorldStateText, setWorldStateDataChecked,
+    commitHistorySnapshot, pushAutoSave,
     isAutoRefreshEnabled, getAutoRefreshInterval,
     persistAutoRefreshCounter,
     getMaxScanMessages, setProvenance, getProvenance,
@@ -290,9 +290,17 @@ export async function refreshWorldState(isAuto = false) {
             return null;
         }
 
-        if (oldText?.trim()) pushToHistory(oldText);
-
-        setWorldStateData({ text });
+        // Checked write (design §8): one patch carries BOTH the outgoing
+        // text's history snapshot and the generated text. A refusal keeps the
+        // previous world state — history included — intact, aborts before any
+        // injection/provenance work, and the null return tells every caller
+        // the refresh produced nothing.
+        const written = commitHistorySnapshot(oldText, { text });
+        if (!written.ok) {
+            console.error(`[MWT:WorldState] Refresh refused at the store write (${written.reason ?? 'unknown reason'}) — the previous world state was kept.`);
+            setStatus(state.modal, `Refresh failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error', 6000);
+            return null;
+        }
         state.autoSaveLastText = text;
         state.isDirty = false;
         state.editSessionActive = false;
@@ -385,7 +393,14 @@ export function scheduleAutoRefresh(reason = 'scheduled') {
             // capture exists for is unaffected.
             const editorEl = state.editSessionActive ? state.modal?.querySelector('#ws-editor') : null;
             if (editorEl && editorEl.value && editorEl.value !== getWorldStateText()) {
-                setWorldStateData({ text: editorEl.value });
+                // Checked write (design §8): a refused pre-sync must not begin
+                // the dependent auto-refresh over an editor value that never
+                // landed — skip this cycle and retry on the next one.
+                const written = setWorldStateDataChecked({ text: editorEl.value });
+                if (!written.ok) {
+                    console.warn(`[MWT:WorldState] Auto-refresh skipped: the store refused the editor pre-sync (${written.reason ?? 'unknown reason'}); the previous world state was kept.`);
+                    return;
+                }
             }
 
             console.log(`[MWT:WorldState] Running delayed auto-refresh (${reason}).`);

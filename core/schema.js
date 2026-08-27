@@ -350,8 +350,18 @@ function applyMigrationStep(step, data, issues) {
  * the same raw value the backup summaries always kept; Part 2's migrations
  * emit complete records (a malformed receipt tuple, a legacy plan blob) so
  * everything a migration rejects stays recoverable whole (design §5.2).
+ * Shared by prepareStore() and by the module write seams (design §8): the
+ * record a validator rejects at a WRITE seam is preserved exactly like one
+ * rejected at load — `record` carries the COMPLETE raw value, so a recovery
+ * export can reconstruct what was refused.
+ *
+ * An issue may carry its own integer `sourceVersion` to override the group
+ * default — a single batch can then mix records from different source
+ * versions (e.g. this store's findings plus an import file's findings
+ * prepared from a legacy version) while staying ONE preservation call, so
+ * the commit keeps a single refusal point.
  */
-function collectQuarantineItems(storeId, issues, { sourceVersion, detectedAt }) {
+export function collectQuarantineItems(storeId, issues, { sourceVersion, detectedAt }) {
     const items = [];
     for (const issue of issues) {
         if (issue?.severity !== ISSUE_SEVERITIES.QUARANTINE) continue;
@@ -361,7 +371,7 @@ function collectQuarantineItems(storeId, issues, { sourceVersion, detectedAt }) 
             reasonCode: issue.code,
             message: issue.message,
             raw: issue.record,
-            sourceVersion,
+            sourceVersion: Number.isInteger(issue.sourceVersion) ? issue.sourceVersion : sourceVersion,
             detectedAt,
         }));
     }
@@ -460,6 +470,10 @@ function isUnchangedData(before, after) {
  *     must clear it through a dedicated preparation path (privileged
  *     orchestration, not the module's own queued work), then re-run
  *     preparation; a deferral must never render as corrupt or quarantined.
+ *     The ONE caller that accepts deferred entries — the backup/import
+ *     boundary, which retains them (design §7.7) — passes
+ *     `deferPolicy: 'canonicalize'` so the canonical (retained-entries) value
+ *     is returned alongside the status instead of `undefined`.
  *   - Quarantine records are built from the combined migration and validation
  *     issue lists, so a record a migration step rejects stays recoverable
  *     exactly like one the validator rejects (design §5.2).
@@ -482,6 +496,7 @@ export function prepareStore(descriptor, input, options = {}) {
         existingQuarantine = [],
         now = Date.now(),
         maxQuarantineItems = Number.POSITIVE_INFINITY,
+        deferPolicy = 'pause',
     } = options;
     const currentVersion = descriptor.currentVersion;
     const fromVersion = Number.isInteger(version) && version > 0 ? version : 0;
@@ -561,6 +576,16 @@ export function prepareStore(descriptor, input, options = {}) {
     if (findDeferIssue(issues)) {
         result.status = 'deferred';
         result.issues = [...issues];
+        // The backup/import boundary (design §7.7, §8) is the one caller that
+        // ACCEPTS deferred entries: the validator retained them, so canonical
+        // data exists even though runtime preparation would pause. With
+        // `deferPolicy: 'canonicalize'` that canonical value rides along so a
+        // restore can commit the retained records now; the runtime load gate
+        // (the default 'pause') still gets the untouched original instead.
+        if (deferPolicy === 'canonicalize') {
+            result.data = validation.data;
+            result.changed = migrated || !isUnchangedData(input, validation.data);
+        }
         return result;
     }
 
@@ -593,4 +618,89 @@ export function prepareStore(descriptor, input, options = {}) {
     result.issues = [...issues];
     result.quarantined = detected;
     return result;
+}
+
+// ─── Write-seam preparation (design §8, Part 3) ──────────────────────────────
+
+/**
+ * Validate the COMPLETE proposed next store value at a module write seam.
+ *
+ * Design §8: "For writes, validate the complete proposed next store rather
+ * than only the patch. The mutation must either commit canonical data or
+ * leave the previous value intact." This helper is the pure half of that
+ * contract; the caller owns persistence:
+ *
+ *   const next = prepareNextStoreValue(schema, current, patch);
+ *   if (!next.ok) return current;        // fatal — leave the previous intact
+ *   commit(next.data);                   // canonical data (may drop invalid
+ *                                        // records — preserve them in
+ *                                        // quarantine via next.issues)
+ *
+ * Rules:
+ *   - The next value is `{ ...current, ...patch }`; the CURRENT version's
+ *     validator canonicalizes it. A genuinely ABSENT store (`undefined`/`null`
+ *     — the values the metadata accessors produce for a missing key) starts
+ *     from the descriptor's canonical default, so a missing store is never an
+ *     excuse to skip the seam.
+ *   - A PRESENT but non-object `current` (a corrupted root, e.g. a string that
+ *     survived in metadata) also fails closed: it is returned untouched as
+ *     `data` with a fatal root finding. Substituting the default here would
+ *     return ok:true and let the caller commit a fresh canonical store over
+ *     the unreadable original — destroying it without a quarantine record —
+ *     which is exactly the loss the fatal-root policy exists to prevent
+ *     (design §3.5 category 4).
+ *   - A FATAL finding (an unreadable root) fails closed: `ok: false` with the
+ *     previous value returned as `data`, so the caller can leave it intact.
+ *   - DEFER findings do NOT fail a write: the validator RETAINED those
+ *     entries (legacy Interiority per-message keys pending the chat-dependent
+ *     conversion), and refusing the write would freeze the module. They ride
+ *     along in `issues` exactly as they do for a backup import.
+ *   - Quarantine-severity findings are reported in `issues`; the caller that
+ *     persists the canonical result must preserve the complete rejected
+ *     records (design §5.2) — `collectQuarantineItems` builds the items from
+ *     these issues, or `prepareStore` does when the caller has a version.
+ *
+ * @param {object} descriptor registered store descriptor
+ * @param {*} current the live current value of the store
+ * @param {object} patch shallow patch to apply on top
+ * @returns {{ ok: boolean, data: object, issues: object[], changed: boolean }}
+ */
+export function prepareNextStoreValue(descriptor, current, patch = {}) {
+    const absent = current === undefined || current === null;
+    const base = absent ? descriptor.createDefault() : current;
+    if (!isObject(base)) {
+        // Present-but-invalid root: fail closed with the PREVIOUS value (not a
+        // manufactured default) so the caller leaves the stored value intact.
+        return { ok: false, data: current, issues: [makeIssue({
+            code: 'root-not-object',
+            path: [],
+            severity: ISSUE_SEVERITIES.FATAL,
+            message: `Store "${descriptor.id}" must be an object; the previous value was kept.`,
+            record: current,
+            identity: descriptor.id,
+        })], changed: false };
+    }
+    const next = isObject(patch) ? { ...base, ...patch } : base;
+    let validation;
+    try {
+        validation = runValidation(descriptor, next);
+    } catch (error) {
+        // A validator that THROWS is a store-level fault: fail closed with the
+        // previous value intact rather than committing anything.
+        return { ok: false, data: base, issues: [makeIssue({
+            code: error?.code ?? 'validation-failed',
+            severity: ISSUE_SEVERITIES.FATAL,
+            message: error?.message ?? String(error),
+        })], changed: false };
+    }
+    const fatal = findFatalIssue(validation.issues);
+    if (fatal) {
+        return { ok: false, data: base, issues: validation.issues, changed: false };
+    }
+    return {
+        ok: true,
+        data: validation.data,
+        issues: validation.issues,
+        changed: !isUnchangedData(next, validation.data),
+    };
 }

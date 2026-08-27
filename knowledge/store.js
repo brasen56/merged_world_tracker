@@ -43,6 +43,11 @@
  */
 
 import { getChatMeta, record } from '../core/index.js';
+import {
+    mergeQuarantineItems,
+    QUARANTINE_SCHEMA_VERSION,
+    validateQuarantineStoreData,
+} from '../core/quarantine.js';
 
 // The lorebook-store sentinel and version are owned by the module schema
 // (knowledge/schema.js) so the schema registry and the runtime can never
@@ -476,6 +481,118 @@ export function _writeFieldDirect(bookName, field, value) {
     s.data[field] = value;
     s.dirty = true;
     scheduleFlush(bookName);
+}
+
+// ─── Embedded store quarantine (design §5.1) ────────────────────────────────
+//
+// A global/scoped lorebook is SHARED across chats, so its recovery records
+// must live inside the book's own store entry — a chat-local
+// `mwt_schema_quarantine` container cannot correctly own them. The container
+// uses the exact same shape and validator as the chat-local one; the store
+// schema (knowledge/schema.js) accepts it as the `quarantine` field.
+
+/** The store-data field holding a book's embedded quarantine container. */
+export const STORE_QUARANTINE_FIELD = 'quarantine';
+
+function refusedQuarantineContainer(bookName) {
+    const s = _cache.get(bookName);
+    if (!s || !s.hydrated) return { ok: false, reason: 'store-not-hydrated' };
+    const container = s.data?.[STORE_QUARANTINE_FIELD];
+    // An ABSENT container is the normal pre-quarantine state, not corruption —
+    // it validates as an empty container and the first merge creates it.
+    if (container === undefined || container === null) {
+        return {
+            ok: true,
+            validated: { data: { version: QUARANTINE_SCHEMA_VERSION, items: [] }, issues: [], stats: { added: 0, updated: 0, conflicts: 0 } },
+        };
+    }
+    const validated = validateQuarantineStoreData(container);
+    if (validated.issues.some(issue => issue.code === 'future-version')) {
+        // Unknown-future-version guardrail (§3.5 cat 4): never downgrade a
+        // container this build cannot understand.
+        return { ok: false, reason: 'quarantine-version-future' };
+    }
+    // Any other NON-REPAIR finding means part of the persisted container could
+    // not be preserved in its canonical form — a malformed root or items list,
+    // or items the checker rejected as unrecoverable (design §5.2). Merging
+    // into the canonical form would overwrite the container and silently
+    // delete those records, so the container is refused whole: a failed merge
+    // leaves the book untouched. Repair findings (a recomputed fingerprint)
+    // preserve the raw record and never refuse.
+    const lossy = validated.issues.find(issue => issue.severity === 'quarantine' || issue.severity === 'fatal');
+    if (lossy) {
+        return { ok: false, reason: 'quarantine-container-invalid' };
+    }
+    return { ok: true, validated };
+}
+
+/**
+ * Inspect a book's embedded quarantine container for a caller that must not
+ * silently omit recovery data (e.g. a backup export): `ok: false` means the
+ * container is refused — not loaded, written by a newer MWT, or malformed in a
+ * way this build cannot preserve — so the container must be surfaced, not read
+ * as "no items".
+ *
+ * @param {string} bookName
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export function getStoreQuarantineContainerStatus(bookName) {
+    const check = refusedQuarantineContainer(bookName);
+    return check.ok ? { ok: true } : { ok: false, reason: check.reason };
+}
+
+/**
+ * Read a book's embedded quarantine items (canonical, deduplicated). A book
+ * with no cache slot, an un-hydrated slot, no container, or a container this
+ * build must refuse all read as "no items" — this is a READ; the container
+ * itself is never rewritten here.
+ *
+ * @param {string} bookName
+ * @returns {object[]}
+ */
+export function getStoreQuarantineItems(bookName) {
+    const check = refusedQuarantineContainer(bookName);
+    return check.ok ? check.validated.data.items : [];
+}
+
+/**
+ * Can quarantine items be merged into this book's embedded container right
+ * now? Refusal reasons: the book's store is not loaded (writing an un-hydrated
+ * slot would be erased by the next hydration) or its container was written by
+ * a newer MWT (must be left unchanged).
+ *
+ * @param {string} bookName
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export function canMergeStoreQuarantine(bookName) {
+    const check = refusedQuarantineContainer(bookName);
+    return check.ok ? { ok: true } : { ok: false, reason: check.reason };
+}
+
+/**
+ * Merge quarantine items into a book's embedded container and schedule the
+ * flush (during a restore transaction the write goes through the direct seam
+ * so it joins the transaction's own flush and is covered by its rollback).
+ * Content fingerprints dedup a record that is already stored.
+ *
+ * @param {string} bookName
+ * @param {object[]} items quarantine items (makeQuarantineItem shape)
+ * @returns {{ ok: boolean, reason?: string, stored: number }} `stored` is the
+ *   item count after the merge; `ok: false` means NOTHING was written — the
+ *   caller must treat preserving the records as failed and block.
+ */
+export function mergeStoreQuarantineItems(bookName, items) {
+    if (!Array.isArray(items) || items.length === 0) return { ok: true, stored: 0 };
+    const check = refusedQuarantineContainer(bookName);
+    if (!check.ok) return { ok: false, reason: check.reason, stored: 0 };
+    const merged = mergeQuarantineItems(check.validated.data.items, items);
+    const container = { version: QUARANTINE_SCHEMA_VERSION, items: merged };
+    if (_storeTransaction) {
+        _writeFieldDirect(bookName, STORE_QUARANTINE_FIELD, container);
+    } else {
+        writeField(bookName, STORE_QUARANTINE_FIELD, container);
+    }
+    return { ok: true, stored: merged.length };
 }
 
 /**

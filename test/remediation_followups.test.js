@@ -14,10 +14,11 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
-    resetCoreStubs, setFakeChat, setFakeApi, getFakeStatusCalls,
+    resetCoreStubs, setFakeChat, setFakeApi, getFakeStatusCalls, getFakeMeta,
 } from './stubs/core.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { finiteNumber, fetchFromApi } from '../core/api.js';
+import { QUARANTINE_METADATA_KEY } from '../core/quarantine.js';
 
 // ─── CHRONICLE-03 (part 2) ────────────────────────────────────────────────────
 
@@ -159,6 +160,34 @@ describe('WORLD-STATE-02 — section regen writes against the current document',
         expect(finalText).toContain('Mara waits by the door. (user edit)');
         expect(finalText).toContain('now overdue');
         expect(finalText).not.toContain('waits in the study');
+    });
+
+    test('a refused store write discards the generated section', async () => {
+        const { saveSettings } = await import('../world_state/settings.js');
+        const { setWorldStateData, getWorldStateText, CHAT_DATA_KEY } = await import('../world_state/data.js');
+        const { regenerateSection } = await import('../world_state/sections.js');
+
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        setWorldStateData({ text: BASE });
+
+        // After the baseline write, poison the store so the regeneration's
+        // final checked write must refuse: a quarantine finding (invalid
+        // provenance) that cannot be preserved (malformed quarantine
+        // container).
+        getFakeMeta()[CHAT_DATA_KEY].provenance = 'NOT AN OBJECT';
+        getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 1, items: 'garbage-not-an-array' };
+
+        setFakeApi(async () => '## Pending\n- An unpaid debt, now overdue.');
+
+        const updated = await regenerateSection('Pending', 2);
+        // The generation succeeded but the store refused the commit: the
+        // uncommitted text must be discarded — no injection, no provenance
+        // work, no "regenerated" report from the caller.
+        expect(updated).toBeNull();
+        expect(getWorldStateText()).toBe(BASE);
+        // The refused write must not have snapshotted the outgoing document.
+        const history = getFakeMeta()[CHAT_DATA_KEY].autoSaveHistory || [];
+        expect(history.some(entry => entry?.text === BASE)).toBe(false);
     });
 });
 
@@ -308,6 +337,31 @@ describe('WORLD-STATE-09 — the editor debounce is scoped to its own chat', () 
         vi.advanceTimersByTime(2000);
 
         expect(getWorldStateText()).toBe('Chat A state, edited.');
+    });
+
+    test('a refused editor persist keeps the store and the burst un-snapshotted', async () => {
+        const { state, getWorldStateText } = await import('../world_state/data.js');
+        const { scheduleEditorPersist } = await import('../world_state/render.js');
+
+        // An unreadable store root makes the checked write fail closed
+        // (bugs_temp round 3: the debounce used the unchecked wrapper and
+        // updated UI state regardless of whether storage accepted the write).
+        getFakeMeta().world_state_tracker_metadata = 'CORRUPT ROOT';
+        state.modal = fakeModalWithEditor('Chat A state, edited.');
+        state.isDirty = true;
+        state.editSessionActive = false;
+
+        scheduleEditorPersist();
+        vi.advanceTimersByTime(2000);
+
+        // The store kept its previous (unreadable) value…
+        expect(getFakeMeta().world_state_tracker_metadata).toBe('CORRUPT ROOT');
+        expect(getWorldStateText()).toBe('');
+        // …the edit was not marked clean, and the burst was not marked
+        // snapshotted, so the next debounce retries instead of proceeding
+        // over an edit that never landed.
+        expect(state.isDirty).toBe(true);
+        expect(state.editSessionActive).toBe(false);
     });
 });
 

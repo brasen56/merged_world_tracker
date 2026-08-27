@@ -5,7 +5,9 @@
  * consumed by the root index.js.  All implementation lives in sub-files.
  */
 
-import { getChat, escapeRegex, estimateTokens, getChatMeta, patchChatMeta, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
+import { getChat, escapeRegex, estimateTokens, getChatMeta, persistChatMeta, preserveQuarantinedRecords, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
+import { prepareNextStoreValue } from '../core/schema.js';
+import { knowledgeCountersSchema } from './schema.js';
 
 import { state, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
@@ -35,14 +37,43 @@ import {
 // keeps the persisted map from growing one entry per message forever.
 const SPENT_RECEIPT_WINDOW = 10;
 
+/**
+ * The Knowledge-counters write seam (design §8, Part 3): the COMPLETE proposed
+ * next counters store — the persisted cadence counters plus the receipt-event
+ * tuples rebuilt from live state — is validated by the registered
+ * knowledgeCounters schema before anything is persisted. The write either
+ * commits CANONICAL data (a malformed receipt tuple quarantined out of the
+ * live value, its issue reported) or, on a fatal root problem, leaves the
+ * previous value intact.
+ */
 export function persistCounters() {
-    patchChatMeta(COUNTERS_META_KEY, {
+    const meta = getChatMeta();
+    if (!meta) return undefined;
+    const next = prepareNextStoreValue(knowledgeCountersSchema, meta[COUNTERS_META_KEY], {
         messageCounter: state.messageCounter,
         npcMessageCounter: state.npcMessageCounter,
         growthMessageCounter: state.growthMessageCounter,
         relationshipMessageCounter: state.relationshipMessageCounter,
         countedReceiptEvents: [...state.countedReceiptEvents.entries()],
     });
+    if (!next.ok) {
+        console.warn('[MWT:Knowledge] Counter write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);
+        return meta[COUNTERS_META_KEY];
+    }
+    for (const issue of next.issues) {
+        console.warn(`[MWT:Knowledge] ${issue.severity}: ${issue.message}`);
+    }
+    // §5.2: the canonical write is only allowed to commit if its rejected
+    // records were preserved. A refused quarantine container means they cannot
+    // be — leave the previous value intact instead.
+    const preserved = preserveQuarantinedRecords(knowledgeCountersSchema.id, next.issues, { sourceVersion: knowledgeCountersSchema.currentVersion });
+    if (!preserved.ok) {
+        console.warn(`[MWT:Knowledge] Counter write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
+        return meta[COUNTERS_META_KEY];
+    }
+    meta[COUNTERS_META_KEY] = next.data;
+    persistChatMeta();
+    return next.data;
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────

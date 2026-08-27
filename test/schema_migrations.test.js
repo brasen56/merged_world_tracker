@@ -611,7 +611,7 @@ const POLICY_BATTERIES = {
     knowledgeCounters: [null, { messageCounter: -1, npcMessageCounter: 'x' }],
     storyPlanner: [null, { arcs: 'x' }, { history: 'x' }, { arcs: ['junk', { id: '' }, { id: 'a', title: 1, body: 1, section: 'nope', status: 'nope', beats: 'x', beatIndex: -1, turnsSinceAdvance: 'x', createdAt: 'x', updatedAt: 'x' }] }],
     interiority: [null, { ledger: 'x' }, { ledger: [{}, { id: 'i' }] }, { deletedIntentions: [{ id: 't', npc: 'n', actions: 'x', triggers: [1] }] }, { perMessage: 'x' }, { perMessage: { bad: {}, 'mu-': {} } }, { perMessage: { 'sd-legacy': {}, '3': {}, 'mu-ok': {} } }, { turnCounter: 'x' }],
-    knowledgeStore: [null, { registry: 'x' }, { registry: { g: 'junk', b: { uid: -1 } } }, { relationships: 'x' }, { relationships: { r: 'x', s: [{ target: '' }, { target: 't' }, 'junk'] } }, { stances: { a: 3 } }, { stanceSources: { a: 3 } }, { version: 0 }],
+    knowledgeStore: [null, { registry: 'x' }, { registry: { g: 'junk', b: { uid: -1 } } }, { relationships: 'x' }, { relationships: { r: 'x', s: [{ target: '' }, { target: 't' }, 'junk'] } }, { stances: { a: 3 } }, { stanceSources: { a: 3 } }, { version: 0 }, { quarantine: 'x' }, { quarantine: { version: 2 } }, { quarantine: { items: 'x' } }, { quarantine: { items: [{}, { store: 'x' }, { store: 'x', reasonCode: 'y' }] } }],
 };
 
 describe('structured record/reference/fatal policies per store (design §3.5)', () => {

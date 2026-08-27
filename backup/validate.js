@@ -10,9 +10,15 @@
  * quarantined in `skipped`, never silently coerced.
  *
  * This file keeps the historical backup-facing surface:
- *   - accepted/skipped summaries ({ added, updated, skipped, conflicts })
- *     for restore planning and the Diagnostics integrity collector;
+ *   - accepted/skipped summaries ({ added, updated, skipped, conflicts }) for
+ *     restore planning and the Diagnostics integrity collector;
  *   - validateSection / validateBackupEnvelope as the envelope gate.
+ *
+ * Part 3 (design §7.7) makes the IMPORT path a full preparation:
+ * prepareBackupSection() runs each section's registered migrations from the
+ * version its wrapper declares, then validates at the current version — so a
+ * merge/replace preview is always planned against current-version canonical
+ * data, whatever version the backup was exported at.
  *
  * Do not add new validation rules here — add them to a module schema.
  * `skipped` entries are derived from quarantine-severity issues; the reason
@@ -22,7 +28,8 @@
  */
 import { BACKUP_TYPE, FORMAT_VERSION } from './data.js';
 import { STORE_SCHEMAS, getStoreSchema } from '../schema/registry.js';
-import { ISSUE_SEVERITIES } from '../core/schema.js';
+import { ISSUE_SEVERITIES, prepareStore } from '../core/schema.js';
+import { importQuarantineItems } from '../core/quarantine.js';
 
 /**
  * Adapt a module-schema validation result to the backup summary shape.
@@ -100,16 +107,94 @@ export function validateSection(name, data) {
     return validateSectionData(schema.id, data);
 }
 
+// ─── Import preparation (design §7.7, Part 3) ────────────────────────────────
+
+/**
+ * Migrate and validate ONE backup section from the version its wrapper
+ * declares, producing the current-version canonical data a merge/replace plan
+ * is planned against.
+ *
+ * This is the import twin of the runtime load gate: the same
+ * `prepareStore()` runner, the same migrations, the same quarantine records —
+ * `deferPolicy: 'canonicalize'` because an import ACCEPTS deferred entries
+ * (their conversion is chat-dependent and runs later, design §7.5), while a
+ * blocked store (fatal root, failed migration, future version) refuses the
+ * section instead of importing an empty replacement for unreadable data.
+ *
+ * The summary's `added` counts the ACCEPTED records of the canonical result
+ * (a deterministic re-validation of canonical data — the same numbers the
+ * validate-only path always reported); `skipped`/`deferred` come from the
+ * preparation issues, which name every record that was rejected or retained
+ * pending preparation. `migrated: true` appears only when the wrapper's
+ * version was older than the store's current version, so clean imports keep
+ * the exact historical summary shape.
+ *
+ * @param {object} schema registered store descriptor (or a test descriptor
+ *   with the same contract)
+ * @param {*} data the section's raw data
+ * @param {number} version the version the section wrapper declares
+ * @returns {{
+ *   ok: boolean,
+ *   data?: object,
+ *   summary?: object,
+ *   quarantined?: object[],
+ *   status?: string,
+ *   error?: string,
+ * }} `ok: false` carries a single user-facing `error` string.
+ */
+export function prepareBackupSection(schema, data, version) {
+    const prepared = prepareStore(schema, data, { version, deferPolicy: 'canonicalize' });
+    if (prepared.status === 'blocked') {
+        return {
+            ok: false,
+            status: prepared.status,
+            error: `Section "${schema.id}" could not be imported: ${prepared.error?.message ?? 'preparation failed'}.`,
+        };
+    }
+    // Deterministic stats for the canonical result — validation of already
+    // canonical data re-derives the accepted-record counts (imports are a
+    // triggered deep validation, design §7.1, so the second walk is fine).
+    const canonical = schema.validate(prepared.data);
+    const deferred = prepared.issues
+        .filter(issue => issue.severity === ISSUE_SEVERITIES.DEFER)
+        .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message }));
+    const summary = {
+        added: canonical.stats.added,
+        // Validators never merge; "updated" is decided by restore planning.
+        updated: 0,
+        skipped: prepared.issues
+            .filter(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE || issue.severity === ISSUE_SEVERITIES.FATAL)
+            .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message })),
+        conflicts: canonical.stats.conflicts,
+        ...(deferred.length > 0 ? { deferred } : {}),
+        ...(prepared.status === 'migrated' ? { migrated: true } : {}),
+    };
+    return {
+        ok: true,
+        status: prepared.status,
+        data: prepared.data,
+        summary,
+        quarantined: prepared.quarantined,
+    };
+}
+
 /**
  * Validate the envelope and all known sections. Unknown sections are ignored
  * with warnings; unknown-high versions refuse the entire import.
  *
  * Section version ceilings come from the registered descriptors: chat-metadata
  * sections carry `schemaVersion`, the knowledgeStore wrapper carries
- * `storeVersion` (mirroring the embedded lorebook STORE_VERSION).
+ * `storeVersion` (mirroring the embedded lorebook STORE_VERSION). Each section
+ * is MIGRATED from its declared version before validation (§7.7), so
+ * `result.sections` is always current-version canonical data and per-section
+ * quarantine records detected on the way in ride in `result.quarantine` for
+ * the restore commit to preserve (§5.2). An envelope-level `quarantine`
+ * recovery container (§5.3) is accepted through the tolerant recovery import
+ * and surfaced as `result.recovery`; malformed recovery data warns but never
+ * blocks a restore.
  */
 export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VERSION } = {}) {
-    const result = { ok: false, errors: [], warnings: [], sections: {}, summaries: {} };
+    const result = { ok: false, errors: [], warnings: [], sections: {}, summaries: {}, quarantine: {} };
     if (typeof envelope !== 'object' || envelope === null || Array.isArray(envelope)) {
         result.errors.push('Backup must be a JSON object.');
         return result;
@@ -159,17 +244,27 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
             result.errors.push(`Section "${name}" version ${version} is newer than supported version ${maxVersion}.`);
             continue;
         }
-        const checked = validateSection(name, wrapped.data);
-        result.sections[name] = checked.data;
-        result.summaries[name] = {
-            added: checked.added,
-            updated: checked.updated,
-            skipped: checked.skipped,
-            conflicts: checked.conflicts,
-            // Present only when a deferral exists (see toBackupSummary): a
-            // preparing store, never a quarantine count.
-            ...(Array.isArray(checked.deferred) && checked.deferred.length > 0 ? { deferred: checked.deferred } : {}),
-        };
+        const prepared = prepareBackupSection(schema, wrapped.data, version);
+        if (!prepared.ok) {
+            result.errors.push(prepared.error);
+            continue;
+        }
+        result.sections[name] = prepared.data;
+        result.summaries[name] = prepared.summary;
+        if (prepared.quarantined.length > 0) {
+            result.quarantine[name] = prepared.quarantined;
+        }
+    }
+    // Recovery data (§5.3): the source chat's quarantined records ride with
+    // the backup. It is imported tolerantly and can never block the restore —
+    // refusing a whole backup over malformed recovery data would strand the
+    // user's real stores to protect bookkeeping about old rejected records.
+    if (envelope.quarantine !== undefined && envelope.quarantine !== null) {
+        const recovery = importQuarantineItems(envelope.quarantine);
+        for (const issue of recovery.issues) {
+            result.warnings.push(`Quarantine recovery data: ${issue.message}`);
+        }
+        result.recovery = { items: recovery.items };
     }
     result.ok = result.errors.length === 0;
     return result;

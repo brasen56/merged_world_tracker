@@ -26,28 +26,173 @@
  * from day one so no migration is needed later.
  */
 
-import { getChatMeta, persistChatMeta, getChat, sendDateToMs } from '../core/index.js';
+import { getChatMeta, persistChatMeta, preserveQuarantinedRecords, getChat, sendDateToMs } from '../core/index.js';
 import { GROWTH_EVIDENCE_KEY } from './state.js';
+import { knowledgeEvidenceSchema } from './schema.js';
+import { fingerprintValue } from '../core/quarantine.js';
+import { clonePlainData } from '../core/schema.js';
 
 // ─── Evidence map (all NPCs in this chat) ─────────────────────────────────────
 
+// ─── Staged working copy (checked-commit boundary) ────────────────────────────
+//
+// getEvidenceMap() hands callers a DETACHED clone of the live map, staged once
+// and reused (same object) until the next commit, so the established
+// mutate-then-saveEvidenceMap() programming model is unchanged — but the
+// mutations land in the staged copy, never in chat metadata. saveEvidenceMap()
+// validates the STAGED value and only then replaces the live one — with a
+// fully DETACHED clone of the canonical value, since the validator's output
+// still shares its nested objects with the staged input it validated — so a
+// refused write (a fatal finding, or a quarantine container that refuses the
+// records) really does leave the previous value intact: there is nothing to
+// restore, because nothing was ever mutated in place, and a committed write
+// leaves the staged copy and live metadata sharing no object at any depth.
+//
+// _stagedEvidenceBase pins the live object the copy was staged from. If the
+// live value is replaced underneath us (chat switch, backup restore), a commit
+// is refused rather than clobbering the replacement with stale staged data.
+
+let _stagedEvidenceMap = null;
+let _stagedEvidenceBase = undefined;
+
+function _resetEvidenceStaging() {
+    _stagedEvidenceMap = null;
+    _stagedEvidenceBase = undefined;
+}
+
 /**
  * Get the evidence map for this chat: { npcName: EvidenceFile }.
- * Returns the live metadata object (mutate then call saveEvidenceMap()).
+ * Returns a DETACHED staged working copy (mutate, then call saveEvidenceMap()
+ * to validate and commit it — mutations never touch chat metadata directly).
+ *
+ * The same staged object is returned until the next commit, so callers may
+ * hold several references (the map, an evidence file, a nested array) across
+ * several mutations and they all see each other before the save.
  *
  * @returns {Object<string, EvidenceFile>}
  */
 export function getEvidenceMap() {
     const meta = getChatMeta();
-    if (!meta[GROWTH_EVIDENCE_KEY]) meta[GROWTH_EVIDENCE_KEY] = {};
-    return meta[GROWTH_EVIDENCE_KEY];
+    const stored = meta?.[GROWTH_EVIDENCE_KEY];
+    // Only a GENUINELY ABSENT map (undefined/null) is created eagerly — that
+    // write is lossless, and callers need a map to mutate before
+    // saveEvidenceMap() commits it. A PRESENT-but-invalid map ('' / 0 / any
+    // non-object) must survive the read untouched: replacing it here would
+    // destroy the raw value before the write seam could refuse on it, so the
+    // reader gets a DETACHED throwaway {} and saveEvidenceMap() keeps the
+    // previous value intact.
+    if (stored === undefined || stored === null) {
+        if (!meta) return {};
+        meta[GROWTH_EVIDENCE_KEY] = {};
+    } else if (typeof stored !== 'object' || Array.isArray(stored)) {
+        _resetEvidenceStaging();
+        return {};
+    }
+    const live = meta[GROWTH_EVIDENCE_KEY];
+    if (_stagedEvidenceMap !== null && _stagedEvidenceBase === live) {
+        return _stagedEvidenceMap;
+    }
+    _stagedEvidenceMap = clonePlainData(live);
+    _stagedEvidenceBase = live;
+    return _stagedEvidenceMap;
 }
 
 /**
- * Persist the evidence map to chat metadata.
+ * Commit the staged evidence map to chat metadata.
  * Call after mutating the object returned by getEvidenceMap().
+ *
+ * The evidence WRITE SEAM (design §8, Part 3): the COMPLETE staged map is
+ * validated by the registered knowledgeEvidence schema, and only a fully
+ * successful validation (with quarantine preservation accepted) commits —
+ * chat metadata is replaced wholesale, by a fully DETACHED clone of the
+ * canonical value (the validator's output shares nested objects with the
+ * staged input, so it must never be committed as-is). Because mutations only
+ * ever landed in the staged copy, every refusal (an unreadable proposal, or a
+ * quarantine container that declines the records) genuinely leaves the
+ * PREVIOUS stored value intact: there is nothing that was mutated in place
+ * and would need restoring. A record the schema rejects is quarantined
+ * (design §5.2) out of the committed map but preserved whole in the
+ * chat-local quarantine container, in the same write.
  */
 export function saveEvidenceMap() {
+    const meta = getChatMeta();
+    const live = meta?.[GROWTH_EVIDENCE_KEY];
+    // Nothing to validate when the store does not exist yet — getEvidenceMap()
+    // callers create it before mutating, and a save without a store is a no-op.
+    if (!live || typeof live !== 'object' || Array.isArray(live)) {
+        if (live !== undefined && live !== null) {
+            console.warn('[MWT:Knowledge] Evidence write refused — the evidence map is not an object; the previous value was kept.');
+        }
+        persistChatMeta();
+        return;
+    }
+    if (_stagedEvidenceMap === null || _stagedEvidenceBase !== live) {
+        // Either nothing was staged since the last commit, or the live value
+        // was replaced underneath us (chat switch / backup restore).
+        // Committing the staged copy now would clobber that replacement with
+        // stale data — refuse closed and drop the edit instead.
+        if (_stagedEvidenceMap !== null) {
+            console.warn('[MWT:Knowledge] Evidence write refused — the evidence map changed underneath an uncommitted edit; the edit was dropped and the current value was kept.');
+            _resetEvidenceStaging();
+        }
+        return;
+    }
+    const staged = _stagedEvidenceMap;
+    const validation = knowledgeEvidenceSchema.validate(staged);
+    for (const issue of validation.issues) {
+        console.warn(`[MWT:Knowledge] ${issue.severity}: ${issue.message}`);
+    }
+    if (validation.issues.some(issue => issue.severity === 'fatal')) {
+        // An unreadable proposal must not be committed: leave the previous
+        // (live) value intact (design §3.5 category 4). Nothing was mutated
+        // in place, so this refusal is already complete.
+        return;
+    }
+    // §5.2: the canonical commit is only allowed to land if rejected records
+    // were preserved. A refused quarantine container means they cannot be —
+    // keep the live map exactly as it is instead of replacing it.
+    const preserved = preserveQuarantinedRecords(knowledgeEvidenceSchema.id, validation.issues, {
+        sourceVersion: knowledgeEvidenceSchema.currentVersion,
+    });
+    if (!preserved.ok) {
+        console.warn(`[MWT:Knowledge] Evidence write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
+        return;
+    }
+    // CHECKED COMMIT: only now does chat metadata change — wholesale, to the
+    // canonical form of the staged copy. The live value's previous contents
+    // were never exposed to caller mutations, so the "previous value kept"
+    // promise holds by construction.
+    const canonical = validation.data;
+    // The validator builds its canonical value AROUND the staged input: fresh
+    // file shells, but the SAME nested objects (a file's meta container, the
+    // accepted raw/consolidated records, pass-through fields). Committing it
+    // directly would alias the staged graph INTO chat metadata — every later
+    // caller mutation on the object getEvidenceMap() still hands out (touch()
+    // stamping file.meta, an edit to a raw record, a push into a tier) would
+    // land in metadata BEFORE the next validation could see or refuse it.
+    // Commit a fully DETACHED clone instead, so live metadata and the staged
+    // copy share no object at any depth.
+    const committed = clonePlainData(canonical);
+    meta[GROWTH_EVIDENCE_KEY] = committed;
+    // Re-bind staging to the committed value and sync the canonical form back
+    // INTO the staged map in place (top-level identity preserved). Callers
+    // still holding the staged map keep the old live-object semantics: their
+    // map matches what was committed, and the next mutate→save cycle stages
+    // against the new base. The synced values come from the canonical
+    // PROPOSAL — a dead object no reader can reach — never from `committed`,
+    // so this sync cannot re-introduce aliasing with live metadata.
+    for (const key of Object.keys(staged)) {
+        if (!Object.prototype.hasOwnProperty.call(canonical, key)) delete staged[key];
+    }
+    for (const [key, value] of Object.entries(canonical)) {
+        if (staged[key] === value) continue;
+        let unchanged = false;
+        try {
+            unchanged = fingerprintValue(staged[key]) === fingerprintValue(value);
+        } catch { /* unfingerprintable ⇒ treat as changed */ }
+        if (!unchanged) staged[key] = value;
+    }
+    _stagedEvidenceBase = committed;
     persistChatMeta();
 }
 

@@ -40,11 +40,13 @@
  */
 
 import {
-    getChatMeta, persistChatMeta, getUserNames,
+    getChatMeta, persistChatMeta, preserveQuarantinedRecords, getUserNames,
     createSettingsManager, syncSharedConnectionSettings,
     getCurrentWorldState,
     getChat, getContextSafe,
 } from '../core/index.js';
+import { clonePlainData, prepareNextStoreValue } from '../core/schema.js';
+import { interioritySchema } from './schema.js';
 
 // ─── Aikobots v4 sparse-chat detection ───────────────────────────────────────
 //
@@ -218,39 +220,124 @@ export const state = {
 // ─── Data access (chat metadata) ─────────────────────────────────────────────
 
 /**
- * Get the interiority data object from chat metadata.
- * Creates it (with defaults) if it doesn't exist yet.
+ * Is this a usable store root (a plain object, not an array/primitive)?
+ * A value that fails this test may be corrupt evidence — it is NEVER replaced
+ * on the read path.
+ */
+function _isStoreRoot(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Get the interiority data object from chat metadata, as a DETACHED working
+ * copy.
+ *
+ * Reads never canonicalize the live store (the write seam owns that), and now
+ * never HAND OUT the live object either: a fully detached deep copy means a
+ * caller's mutations — nested arrays, perMessage records, scalars — cannot
+ * touch chat metadata before {@link saveInteriorityData} validates the
+ * proposal. This is what lets the write seam quarantine what a proposal
+ * displaces: a stored turnCounter of "RAW-BAD" is still sitting in the live
+ * value when incrementTurnCounter() commits 1, so the rejected raw value is
+ * preserved whole (§5.2) instead of being overwritten before validation ever
+ * sees it.
+ *
+ * What the caller gets:
+ *   - a genuinely ABSENT root (undefined/null) → a DETACHED canonical default
+ *     (the store is created only when a checked write commits it);
+ *   - an UNREADABLE root (a string/number/array that survived in metadata) →
+ *     a DETACHED default, while the stored raw value stays untouched for the
+ *     write seam to refuse closed on;
+ *   - a valid root → a DETACHED deep copy with invalid
+ *     `ledger`/`perMessage`/`deletedIntentions` containers sanitized, so
+ *     callers never crash on garbage — the live raw container values ride the
+ *     next checked write into quarantine.
+ *
+ * Mutating the copy only sticks when it is passed back to
+ * saveInteriorityData(); an unsaved mutation is simply discarded.
+ *
  * @returns {object}
  */
 export function getInteriorityData() {
-    const meta = getChatMeta();
-    if (!meta[META_KEY]) {
-        meta[META_KEY] = {
-            enabled: true,
-            ledger: [],
-            perMessage: {},
-        };
+    const raw = getChatMeta()?.[META_KEY];
+    if (!_isStoreRoot(raw)) {
+        return interioritySchema.createDefault();
     }
-    if (!Array.isArray(meta[META_KEY].ledger)) {
-        meta[META_KEY].ledger = [];
-    }
-    if (!meta[META_KEY].perMessage || typeof meta[META_KEY].perMessage !== 'object') {
-        meta[META_KEY].perMessage = {};
-    }
-    if (!Array.isArray(meta[META_KEY].deletedIntentions)) {
-        meta[META_KEY].deletedIntentions = [];
-    }
-    return meta[META_KEY];
+    const working = clonePlainData(raw);
+    if (!Array.isArray(working.ledger)) working.ledger = [];
+    if (!_isStoreRoot(working.perMessage)) working.perMessage = {};
+    if (!Array.isArray(working.deletedIntentions)) working.deletedIntentions = [];
+    return working;
 }
 
 /**
  * Save the interiority data object back to chat metadata and persist.
+ *
+ * The Interiority write seam (design §8, Part 3): the COMPLETE proposed next
+ * store is validated by the registered interiority schema before anything is
+ * persisted. The write either commits CANONICAL data or, on a fatal root
+ * problem, leaves the previous value intact. DEFER findings (legacy
+ * perMessage keys pending the chat-dependent conversion, design §7.5) do NOT
+ * refuse the write — the validator retained those entries, and freezing the
+ * module until conversion would deadlock the conversion itself; they are
+ * reported so the preparing state stays visible.
+ *
+ * Because reads no longer canonicalize the live store, the LIVE value is
+ * validated as this write's base: a present-but-unreadable root fails closed
+ * (the previous value is kept), and when the caller's proposal is a sanitized
+ * view that displaces invalid live containers, those containers' schema
+ * findings ride this same commit's quarantine preservation (§5.2) — the raw
+ * values stay recoverable instead of being silently replaced.
+ *
  * @param {object} data
+ * @returns {object} the committed canonical value, or the PREVIOUS value that
+ *   was kept on refusal (so callers that re-read stay correct).
  */
 export function saveInteriorityData(data) {
     const meta = getChatMeta();
-    meta[META_KEY] = data;
+    if (!meta) return undefined;
+    // Full-replacement seam: garbage input must never be silently swapped for
+    // the schema default — that would erase the live store on a bad caller.
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+        console.warn('[MWT:Interiority] Write refused — interiority data must be an object; the previous value was kept.');
+        return meta[META_KEY];
+    }
+    const live = meta[META_KEY];
+    const next = prepareNextStoreValue(interioritySchema, live, data);
+    if (!next.ok) {
+        console.warn('[MWT:Interiority] Write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);
+        return live;
+    }
+    for (const issue of next.issues) {
+        console.warn(`[MWT:Interiority] ${issue.severity}: ${issue.message}`);
+    }
+    // §5.2: reads hand out a fully DETACHED working copy, so every proposal
+    // displaces whatever it changed in the live value — invalid containers,
+    // records, or scalars (e.g. a stored "RAW-BAD" turnCounter) still sit in
+    // live metadata. Surface the live value's findings here — in the SAME
+    // commit — so those raw values are quarantined (preserved whole) exactly
+    // like records the validator rejects from the proposal itself. The guard
+    // only skips the extra pass for an in-place save (proposal IS the live
+    // object), which cannot happen through getInteriorityData() anymore but
+    // is kept for safety since this seam is exported.
+    let preserveIssues = next.issues;
+    if (live !== data && _isStoreRoot(live)) {
+        try {
+            preserveIssues = [...next.issues, ...interioritySchema.validate(live).issues];
+        } catch { /* a throwing validator on the live value must not block the
+                     already-validated proposal; its own findings ride below */ }
+    }
+    // §5.2: the canonical write is only allowed to commit if its rejected
+    // records were preserved. A refused quarantine container means they cannot
+    // be — leave the previous value intact instead.
+    const preserved = preserveQuarantinedRecords(interioritySchema.id, preserveIssues, { sourceVersion: interioritySchema.currentVersion });
+    if (!preserved.ok) {
+        console.warn(`[MWT:Interiority] Write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
+        return live;
+    }
+    meta[META_KEY] = next.data;
     persistChatMeta();
+    return next.data;
 }
 
 /**

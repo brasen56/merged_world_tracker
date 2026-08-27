@@ -36,6 +36,7 @@ import {
     quarantineIssue,
     repairIssue,
 } from '../core/schema.js';
+import { validateQuarantineStoreData } from '../core/quarantine.js';
 
 /** Chat-metadata key for the growth-evidence NPC map. */
 export const EVIDENCE_META_KEY = 'knowledge_growth_evidence';
@@ -176,7 +177,13 @@ export function validateKnowledgeCountersData(data) {
 /**
  * Validate a lorebook store's registry maps, relationship edges, and stance
  * maps. Only known fields survive — an unknown top-level key is dropped
- * rather than merged into a book, exactly as before.
+ * rather than merged into a book, exactly as before. The one container field
+ * is the store's EMBEDDED QUARANTINE (design §5.1): a global/scoped book is
+ * shared across chats, so its recovery records must live inside the store
+ * itself, never in one chat's metadata. It uses the same container shape and
+ * validator as the chat-local container; a container written by a NEWER MWT
+ * is refused with a FATAL finding (it blocks the store) instead of being
+ * normalized/downgraded.
  */
 export function validateKnowledgeStoreData(data) {
     const issues = [];
@@ -196,6 +203,16 @@ export function validateKnowledgeStoreData(data) {
             accepted.version = data.version;
         } else {
             issues.push(quarantineIssue('store-version-invalid', ['version'], 'Embedded store version must be a positive integer.', data.version, 'version'));
+        }
+    }
+    // Embedded quarantine container (design §5.1) — see the function comment.
+    // Canonical items are kept (deduplicated); the container validator's own
+    // findings ride along with their paths prefixed under 'quarantine'.
+    if (data.quarantine !== undefined) {
+        const checkedQuarantine = validateQuarantineStoreData(data.quarantine);
+        accepted.quarantine = checkedQuarantine.data;
+        for (const issue of checkedQuarantine.issues) {
+            issues.push({ ...issue, path: ['quarantine', ...issue.path] });
         }
     }
     for (const key of ['registry', 'stateRegistry']) {
@@ -428,7 +445,12 @@ export const knowledgeStoreSchema = defineStoreSchema({
     migrations: { 0: migrateKnowledgeStoreV0ToV1 },
     validate: validateKnowledgeStoreData,
     policy: defineIssuePolicy({
-        fatal: ['root-not-object'],
+        fatal: [
+            'root-not-object',
+            // The embedded quarantine container refuses a future version with
+            // a fatal finding (§3.5 cat 4) instead of being downgraded.
+            'future-version',
+        ],
         record: [
             'not-an-object',
             'empty-key',
@@ -441,6 +463,13 @@ export const knowledgeStoreSchema = defineStoreSchema({
             'relationship-missing-type',
             'stance-not-string',
             'store-version-invalid',
+            // Embedded-quarantine container findings (items the container
+            // validator rejects stay recoverable through their issue records).
+            'items-not-array',
+            'item-not-object',
+            'item-missing-fields',
+            'item-unrecoverable',
         ],
+        repair: ['fingerprint-mismatch'],
     }),
 });

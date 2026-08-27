@@ -18,8 +18,9 @@
  * unchanged.
  */
 
-import { getChatMeta, patchChatMeta } from '../core/index.js';
+import { getChatMeta, persistChatMeta, preserveQuarantinedRecords } from '../core/index.js';
 import { getSettings, saveSettings } from './settings.js';
+import { prepareNextStoreValue } from '../core/schema.js';
 import {
     SECTIONS,
     DEFAULT_SECTION,
@@ -34,6 +35,7 @@ import {
     sanitizeArc,
     sanitizeArcs,
     sectionKeyFromLabel,
+    storyPlannerSchema,
 } from './schema.js';
 
 export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel };
@@ -110,8 +112,37 @@ export function getPlanData() {
     return meta?.[CHAT_DATA_KEY] || {};
 }
 
+/**
+ * The Story Planner write seam (design §8, Part 3): the COMPLETE proposed next
+ * store — current data with the patch applied — is validated by the registered
+ * storyPlanner schema before anything is persisted. The write either commits
+ * CANONICAL data (a non-canonical arc or container quarantined out of the
+ * live value, its issue reported) or, on a fatal root problem, leaves the
+ * previous value intact. The canonical result REPLACES the stored value (a
+ * merge would resurrect a container the validator just rejected).
+ */
 export function setPlanData(patch) {
-    patchChatMeta(CHAT_DATA_KEY, patch);
+    const meta = getChatMeta();
+    if (!meta) return undefined;
+    const next = prepareNextStoreValue(storyPlannerSchema, meta[CHAT_DATA_KEY], patch);
+    if (!next.ok) {
+        console.warn('[MWT:StoryPlanner] Write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);
+        return meta[CHAT_DATA_KEY];
+    }
+    for (const issue of next.issues) {
+        console.warn(`[MWT:StoryPlanner] ${issue.severity}: ${issue.message}`);
+    }
+    // §5.2: the canonical write is only allowed to commit if its rejected
+    // records were preserved. A refused quarantine container means they cannot
+    // be — leave the previous value intact instead.
+    const preserved = preserveQuarantinedRecords(storyPlannerSchema.id, next.issues, { sourceVersion: storyPlannerSchema.currentVersion });
+    if (!preserved.ok) {
+        console.warn(`[MWT:StoryPlanner] Write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
+        return meta[CHAT_DATA_KEY];
+    }
+    meta[CHAT_DATA_KEY] = next.data;
+    persistChatMeta();
+    return next.data;
 }
 
 // Exported (Phase 4 diagnostics, §I.4.6) so the settings-provenance surfaces

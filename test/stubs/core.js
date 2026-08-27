@@ -288,6 +288,41 @@ export function patchChatMeta(key, patch, _persist = true, stamp = false) {
     return next;
 }
 
+// Mirror of core/metadata.js preserveQuarantinedRecords (Part 3 write-seam
+// quarantine preservation). Delegates to the REAL pure helpers — only the
+// metadata access is stubbed. A future-version container is refused unchanged
+// (never downgraded), and any other non-repair finding refuses the merge the
+// same way, exactly like the production function.
+import {
+    mergeQuarantineItems as _mergeQuarantineItems,
+    validateQuarantineStoreData as _validateQuarantineStoreData,
+    QUARANTINE_METADATA_KEY as _QUARANTINE_METADATA_KEY,
+} from '../../core/quarantine.js';
+import { collectQuarantineItems as _collectQuarantineItems } from '../../core/schema.js';
+
+export function preserveQuarantinedRecords(storeId, issues, { sourceVersion = null } = {}) {
+    if (!Array.isArray(issues) || issues.length === 0) return { ok: true, stored: 0 };
+    const items = _collectQuarantineItems(storeId, issues, { sourceVersion, detectedAt: Date.now() });
+    if (items.length === 0) return { ok: true, stored: 0 };
+    // An absent container is the normal pre-quarantine state; a future-version
+    // container or any other non-repair finding on a PRESENT one refuses the
+    // merge, exactly like the production function.
+    const rawContainer = _meta[_QUARANTINE_METADATA_KEY];
+    const existing = _validateQuarantineStoreData(rawContainer);
+    if (existing.issues.some(issue => issue.code === 'future-version')) {
+        return { ok: false, stored: 0, reason: 'quarantine-version-future' };
+    }
+    const lossy = rawContainer === undefined || rawContainer === null
+        ? undefined
+        : existing.issues.find(issue => issue.severity === 'quarantine' || issue.severity === 'fatal');
+    if (lossy) {
+        return { ok: false, stored: 0, reason: 'quarantine-container-invalid' };
+    }
+    const merged = _mergeQuarantineItems(existing.data.items, items);
+    _meta[_QUARANTINE_METADATA_KEY] = { version: existing.data.version, items: merged };
+    return { ok: true, stored: merged.length };
+}
+
 export function getLatestChronicleEntry() {
     const data = _meta.session_chronicle_data;
     if (!data?.snapshots?.length) return '';

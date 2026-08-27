@@ -22,6 +22,21 @@ import { collectBackup } from './collect.js';
 import { backupDataEqual, cloneBackupData, METADATA_KEYS } from './data.js';
 import { planRestore } from './restore.js';
 import {
+    isFutureManifest,
+    MANIFEST_METADATA_KEY,
+    MANIFEST_VERSION,
+    normalizeManifest,
+    stampStoreVersion,
+} from '../schema/manifest.js';
+import { STORE_SCHEMAS, CHAT_METADATA_SCHEMA_IDS } from '../schema/registry.js';
+import { isObject, ISSUE_SEVERITIES, prepareStore } from '../core/schema.js';
+import {
+    mergeQuarantineItems,
+    QUARANTINE_METADATA_KEY,
+    QUARANTINE_SCHEMA_VERSION,
+    validateQuarantineStoreData,
+} from '../core/quarantine.js';
+import {
     getRegistry,
     getStateRegistry,
 } from '../knowledge/registry.js';
@@ -32,10 +47,13 @@ import {
 import {
     assertHydrated,
     beginStoreTransaction,
+    canMergeStoreQuarantine,
     captureStoreState,
     flushBook,
+    getStoreQuarantineItems,
     isHydrated,
     isStoreEntry,
+    mergeStoreQuarantineItems,
     restoreStoreState,
     STORE_VERSION,
     withStoreLock,
@@ -109,6 +127,31 @@ function collectCurrentMetadataSections(meta = getChatMeta()) {
     return sections;
 }
 
+/**
+ * The schema version each chat-metadata store's data is actually at, read
+ * from the destination manifest for the restore planner: the CURRENT half of
+ * every merged section is prepared from its declared version so a legacy
+ * destination runs its migrations instead of being quarantined by the
+ * current-version validator (design §4.2/§7.7). A section the manifest has
+ * not stamped is LEGACY version 0 (the manifest's own rule, schema/manifest.js).
+ *
+ * The Knowledge lorebook store keeps its version inside the flushed store,
+ * not in the manifest; the hydrated cache always serves the book's
+ * established version, so the planner can prepare that half at exactly what
+ * the book holds.
+ */
+function collectCurrentVersions(meta = getChatMeta()) {
+    const manifest = normalizeManifest(meta?.[MANIFEST_METADATA_KEY] || {});
+    const versions = {};
+    for (const id of CHAT_METADATA_SCHEMA_IDS) {
+        versions[id] = Number.isInteger(manifest.sections[id]) && manifest.sections[id] > 0
+            ? manifest.sections[id]
+            : 0;
+    }
+    versions.knowledgeStore = STORE_VERSION;
+    return versions;
+}
+
 function hasKnowledgeStoreSection(envelope) {
     return Object.prototype.hasOwnProperty.call(envelope?.sections || {}, 'knowledgeStore');
 }
@@ -119,7 +162,7 @@ function collectCurrentKnowledgeStore() {
     if (!isHydrated(knowledgeBook) || !isHydrated(stateBook)) {
         return null;
     }
-    return {
+    const current = {
         version: STORE_VERSION,
         registry: getRegistry(),
         relationships: getRelationships(),
@@ -127,6 +170,19 @@ function collectCurrentKnowledgeStore() {
         stanceSources: getStanceSources(),
         stateRegistry: getStateRegistry(),
     };
+    // Embedded per-book quarantine (design §5.1), both books merged: the
+    // section the planner sees must match what the flush writes. Items carry
+    // path[0] ('registry' vs 'stateRegistry') so the commit can partition
+    // them back per book. Absent when no book holds recovery records — the
+    // exact historical section shape.
+    const quarantinedItems = mergeQuarantineItems(
+        getStoreQuarantineItems(knowledgeBook),
+        getStoreQuarantineItems(stateBook),
+    );
+    if (quarantinedItems.length > 0) {
+        current.quarantine = { version: QUARANTINE_SCHEMA_VERSION, items: quarantinedItems };
+    }
+    return current;
 }
 
 function addKnowledgeSkip(preview, record, reason) {
@@ -146,13 +202,64 @@ function hasLiveDestinationUid(entries, uid) {
 }
 
 /**
+ * Partition the import's Knowledge quarantine records per destination book
+ * (design §5.1): findings whose path addresses `stateRegistry` belong to the
+ * State Tracker book; everything else (registry, relationships, stances,
+ * stanceSources, the store itself) belongs to the Knowledge Tracker book.
+ *
+ * Two sources, deduplicated by content fingerprint: the incoming section's
+ * EMBEDDED container (recovery records the source book already carried, which
+ * the import validation canonicalized) and every fresh finding the validation
+ * quarantined — including, since the plan now re-prepares the merged value,
+ * records copied out of the CURRENT store that failed the current-version
+ * validator.
+ */
+function partitionKnowledgeQuarantine(preview) {
+    const embedded = preview.validation?.sections?.knowledgeStore?.quarantine;
+    const items = mergeQuarantineItems([], [
+        ...(isObject(embedded) && Array.isArray(embedded.items) ? embedded.items : []),
+        ...(preview.validation?.quarantine?.knowledgeStore || []),
+    ]);
+    const knowledgeQuarantine = [];
+    const stateQuarantine = [];
+    for (const item of items) {
+        (Array.isArray(item?.path) && item.path[0] === 'stateRegistry'
+            ? stateQuarantine
+            : knowledgeQuarantine).push(item);
+    }
+    return { knowledgeQuarantine, stateQuarantine };
+}
+
+/**
  * Resolve new registry names against the destination books. Unified backups do
  * not include lorebook text, so an unresolved name cannot be safely created;
  * it is omitted rather than persisting a null or source-local UID.
  */
 async function resolveKnowledgeStorePlan(preview, scope) {
     const planned = preview.plan.sections.knowledgeStore;
-    if (!planned) return { ok: true, changed: false };
+    // Knowledge quarantine rides the store flush even when the plan refused
+    // the section itself (§3.5 fatal): the import still owes its rejected
+    // records a home inside the affected book(s).
+    const { knowledgeQuarantine, stateQuarantine } = partitionKnowledgeQuarantine(preview);
+    const quarantineChanged = knowledgeQuarantine.length > 0 || stateQuarantine.length > 0;
+    if (!planned) {
+        if (!quarantineChanged) return { ok: true, changed: false };
+        const knowledgeBookOnly = getLorebookName();
+        const stateBookOnly = getStateLorebookName();
+        return {
+            ok: true,
+            changed: true,
+            data: {},
+            knowledgeBook: knowledgeBookOnly,
+            stateBook: stateBookOnly,
+            affectedBooks: [
+                ...(knowledgeQuarantine.length > 0 ? [knowledgeBookOnly] : []),
+                ...(stateQuarantine.length > 0 ? [stateBookOnly] : []),
+            ],
+            knowledgeQuarantine,
+            stateQuarantine,
+        };
+    }
     const exact = preview.plan.exactKnowledgeStore === true;
 
     const knowledgeBook = getLorebookName();
@@ -230,17 +337,22 @@ async function resolveKnowledgeStorePlan(preview, scope) {
 
     // Relationship maps have no UID and can safely retain their normal
     // append-only merge behavior. A changed map is still a store write.
+    // Quarantine additions are a store write too (§5.1/§5.2): preserving the
+    // import's rejected records inside the affected book is part of the commit.
     changed = changed
+        || quarantineChanged
         || JSON.stringify(current.relationships) !== JSON.stringify(resolved.relationships)
         || JSON.stringify(current.stances) !== JSON.stringify(resolved.stances)
         || JSON.stringify(current.stanceSources) !== JSON.stringify(resolved.stanceSources)
         || JSON.stringify(current.registry) !== JSON.stringify(resolved.registry)
         || JSON.stringify(current.stateRegistry) !== JSON.stringify(resolved.stateRegistry);
-    const knowledgeChanged = JSON.stringify(current.registry) !== JSON.stringify(resolved.registry)
+    const knowledgeChanged = knowledgeQuarantine.length > 0
+        || JSON.stringify(current.registry) !== JSON.stringify(resolved.registry)
         || JSON.stringify(current.relationships) !== JSON.stringify(resolved.relationships)
         || JSON.stringify(current.stances) !== JSON.stringify(resolved.stances)
         || JSON.stringify(current.stanceSources) !== JSON.stringify(resolved.stanceSources);
-    const stateChanged = JSON.stringify(current.stateRegistry) !== JSON.stringify(resolved.stateRegistry);
+    const stateChanged = stateQuarantine.length > 0
+        || JSON.stringify(current.stateRegistry) !== JSON.stringify(resolved.stateRegistry);
     preview.plan.sections.knowledgeStore = resolved;
     const result = {
         ok: true,
@@ -252,6 +364,11 @@ async function resolveKnowledgeStorePlan(preview, scope) {
             ...(knowledgeChanged ? [knowledgeBook] : []),
             ...(stateChanged ? [stateBook] : []),
         ],
+        // Per-book quarantine items for the flush to merge inside the store
+        // transaction (never the chat-local container — a shared book cannot
+        // be owned by one chat, §5.1).
+        knowledgeQuarantine,
+        stateQuarantine,
     };
     // Stash the resolution on the preview so a confirming commit can reuse it
     // instead of re-resolving (a third loadWorldInfo pass). The re-plan at
@@ -293,6 +410,33 @@ async function flushKnowledgeStore(commit, scope, exact) {
     // The restore's own writes below go through the
     // non-deferring _writeFieldDirect.
     beginStoreTransaction();
+    // ── Knowledge quarantine first (design §5.1/§5.2) ─────────────────────
+    //
+    // The import's rejected Knowledge records are preserved INSIDE the
+    // affected books, in the SAME flush as the store data — atomic with it
+    // and covered by the same rollback. Both books are checked BEFORE either
+    // is written, so a refusal (book not loaded, or its container was written
+    // by a newer MWT and must stay unchanged) fails the restore with nothing
+    // written rather than leaving a half-merged transaction behind.
+    const quarantineTargets = [
+        [commit.knowledgeBook, commit.knowledgeQuarantine],
+        [commit.stateBook, commit.stateQuarantine],
+    ].filter(([, items]) => Array.isArray(items) && items.length > 0);
+    for (const [book] of quarantineTargets) {
+        const writable = canMergeStoreQuarantine(book);
+        if (!writable.ok) {
+            return {
+                ok: false,
+                reason: 'knowledge-quarantine-refused',
+                refusedBook: book,
+                refusedReason: writable.reason,
+                error: `Could not preserve quarantined Knowledge records in "${book}" (${writable.reason}); the restore was cancelled before any write.`,
+            };
+        }
+    }
+    for (const [book, items] of quarantineTargets) {
+        mergeStoreQuarantineItems(book, items); // writability verified above
+    }
     if (commit.affectedBooks.includes(commit.knowledgeBook)) {
         if (commit.data.registry !== undefined) _writeFieldDirect(commit.knowledgeBook, 'registry', commit.data.registry);
         if (commit.data.relationships !== undefined) _writeFieldDirect(commit.knowledgeBook, 'relationships', commit.data.relationships);
@@ -464,6 +608,7 @@ export async function previewRestore(envelope, { modes = {}, exact = false, scop
         modes,
         currentIdentity: getChatIdentity(),
         currentMessageIds: collectCurrentMessageIds(),
+        currentVersions: collectCurrentVersions(),
         exact,
     });
     // Attach the resolved modes so fingerprintPreview can bind the token to the
@@ -489,7 +634,14 @@ export async function previewRestore(envelope, { modes = {}, exact = false, scop
     };
 }
 
-function exactSectionSummary(current, imported, sectionName) {
+function exactSectionSummary(current, imported, sectionName, { blocked = false } = {}) {
+    // §3.5: a destination section whose CURRENT half refused preparation is
+    // untouchable — the exact write must neither replace it with the import
+    // nor remove it, so the summary reports it as blocked instead of
+    // describing a write that will not happen.
+    if (blocked) {
+        return { mode: 'exact', action: 'blocked', replaced: 0, removed: 0, unchanged: 0, skipped: [], conflicts: 0 };
+    }
     const hasCurrent = Object.prototype.hasOwnProperty.call(current, sectionName);
     const hasImported = Object.prototype.hasOwnProperty.call(imported, sectionName);
     if (!hasImported) {
@@ -497,6 +649,40 @@ function exactSectionSummary(current, imported, sectionName) {
     }
     const unchanged = hasCurrent && backupDataEqual(current[sectionName], imported[sectionName]);
     return { mode: 'exact', action: unchanged ? 'unchanged' : 'replaced', replaced: unchanged ? 0 : 1, removed: 0, unchanged: unchanged ? 1 : 0, skipped: [], conflicts: 0 };
+}
+
+/**
+ * Would preparing this destination section as a merge CURRENT half refuse?
+ * (§3.5: an unreadable root, or a manifest version from the future.) Used by
+ * exact planning for removal candidates the merge planner never evaluated —
+ * a blocked store may not be deleted by the exact restore either.
+ *
+ * Returns the refusal as display-safe skipped entries ({ record, reason }) —
+ * the SAME shape the merge planner records in its summary.skipped (§10.3) —
+ * or [] when the section is writable, so the caller can attach the reason to
+ * the section's exact summary. The old boolean discarded prepareStore's fatal
+ * issue / future-version error, leaving a removal-only blocked section
+ * reported as "destination store refused" with an empty skipped-details list.
+ */
+function destinationSectionBlockedSkipped(sectionName, rawCurrent, currentVersions) {
+    const schema = STORE_SCHEMAS[sectionName];
+    if (!schema || rawCurrent === undefined || rawCurrent === null) return [];
+    const declaredVersion = Number.isInteger(currentVersions?.[sectionName])
+        ? currentVersions[sectionName]
+        : schema.currentVersion;
+    const prepared = prepareStore(schema, rawCurrent, { version: declaredVersion, deferPolicy: 'canonicalize' });
+    if (prepared.status !== 'blocked') return [];
+    // Same derivation as the merge planner's currentSkipped: FATAL/QUARANTINE
+    // issues name the record; a store-level error (a future version blocks
+    // before any issue is recorded) names the section instead.
+    const skipped = prepared.issues
+        .filter(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE
+            || issue.severity === ISSUE_SEVERITIES.FATAL)
+        .map(issue => ({ record: issue.identity ?? issue.record, reason: issue.message }));
+    if (skipped.length === 0 && prepared.error) {
+        skipped.push({ record: sectionName, reason: prepared.error.message });
+    }
+    return skipped;
 }
 
 /**
@@ -514,8 +700,35 @@ async function previewExactRestore(envelope, { modes = {}, scope = null } = {}) 
     // summary must be built from that resolved plan — not the raw validated
     // source, whose UIDs may not be satisfiable by any destination entry.
     const resolvedKnowledgeStore = preview.plan.sections.knowledgeStore;
+    // Destination sections the merge planner REFUSED to touch (§3.5: an
+    // unreadable root, a manifest version from the future). The exact write
+    // must preserve the same refusal — reintroducing the section from the
+    // import (or removing it, for a snapshot taken before it existed) would
+    // overwrite or destroy a store the planner judged unwritable. (The
+    // knowledgeStore lorebook flush governs its own blocked destination.)
+    const blockedSections = (Array.isArray(preview.plan.blockedSections) ? preview.plan.blockedSections : [])
+        .filter(sectionName => METADATA_SECTION_NAMES.includes(sectionName));
+    // Removal candidates the merge planner never evaluated (they are absent
+    // from the import, so its loop never reached them): an unreadable or
+    // future-version destination must not be DELETED by the exact restore
+    // either — check them with the same preparation the planner uses (§3.5).
+    const currentVersions = collectCurrentVersions();
+    // Removal-only blocked sections have no merge summary that could carry
+    // their refusal, so their display-safe reasons are collected here and
+    // attached to the exact summary below.
+    const removalBlockedSkipped = {};
+    for (const sectionName of METADATA_SECTION_NAMES) {
+        if (blockedSections.includes(sectionName)) continue;
+        if (Object.prototype.hasOwnProperty.call(imported, sectionName)) continue;
+        const skipped = destinationSectionBlockedSkipped(sectionName, current[sectionName], currentVersions);
+        if (skipped.length > 0) {
+            blockedSections.push(sectionName);
+            removalBlockedSkipped[sectionName] = skipped;
+        }
+    }
     const sections = {};
     for (const sectionName of METADATA_SECTION_NAMES) {
+        if (blockedSections.includes(sectionName)) continue;
         if (Object.prototype.hasOwnProperty.call(imported, sectionName)) {
             sections[sectionName] = cloneBackupData(imported[sectionName]);
         }
@@ -523,25 +736,80 @@ async function previewExactRestore(envelope, { modes = {}, scope = null } = {}) 
     if (Object.prototype.hasOwnProperty.call(imported, 'knowledgeStore')) {
         sections.knowledgeStore = cloneBackupData(resolvedKnowledgeStore);
     }
+    // §7.5: sections whose IMPORTED value is deferred (retained legacy
+    // per-message keys pending the privileged conversion). The exact write
+    // replaces the section with that retained data, so it may not be stamped
+    // current — and an existing stamp must be withheld.
+    const exactDeferredSections = METADATA_SECTION_NAMES.filter(sectionName => {
+        const entries = preview.validation.summaries[sectionName]?.deferred;
+        return Array.isArray(entries) && entries.length > 0;
+    });
     preview.plan = {
         ...preview.plan,
         sections,
         removeMetadataSections: METADATA_SECTION_NAMES
-            .filter(sectionName => !Object.prototype.hasOwnProperty.call(imported, sectionName)),
+            .filter(sectionName => !Object.prototype.hasOwnProperty.call(imported, sectionName))
+            // A blocked destination section is never removed either — removal
+            // is still a write to a store the planner refused to touch.
+            .filter(sectionName => !blockedSections.includes(sectionName)),
         exactKnowledgeStore: Object.prototype.hasOwnProperty.call(imported, 'knowledgeStore'),
+        // Every exact write replaces the section with the import's canonical
+        // data, so every written metadata section is a canonical rewrite —
+        // EXCEPT one whose imported value is DEFERRED (§7.5): retained
+        // legacy entries pending the privileged conversion are written but
+        // never stamped current, exactly like a merge. (Blocked sections are
+        // absent from `sections`, so they are neither written nor stamped.)
+        canonicalSections: METADATA_SECTION_NAMES
+            .filter(sectionName => Object.prototype.hasOwnProperty.call(sections, sectionName))
+            .filter(sectionName => !exactDeferredSections.includes(sectionName)),
+        // §7.5: deferred sections must also WITHHOLD any existing stamp the
+        // same transaction. Deferral derives SOLELY from the exact value
+        // actually being committed: the merge plan's deferrals describe the
+        // OLD destination half, which the exact write replaces wholesale —
+        // unioning them would leave a clean exact replacement unstamped
+        // merely because the outgoing store contained deferred keys.
+        deferredSections: exactDeferredSections
+            .filter(sectionName => !blockedSections.includes(sectionName)),
     };
     for (const sectionName of METADATA_SECTION_NAMES) {
-        preview.summary[sectionName] = exactSectionSummary(current, imported, sectionName);
+        const isBlocked = blockedSections.includes(sectionName);
+        const exactSummary = exactSectionSummary(current, imported, sectionName, { blocked: isBlocked });
+        // §3.5: a blocked destination's refusal reasons ride the exact summary
+        // too, so the confirmation explains why the section is left untouched.
+        // Merge-planner-blocked sections already carry theirs in the merge
+        // preview's summary; removal-only candidates (absent from the import,
+        // so the planner never examined them) take them from the destination
+        // preparation above instead of reporting an unexplained refusal.
+        if (isBlocked) {
+            const plannerSkipped = Array.isArray(preview.summary[sectionName]?.skipped)
+                ? preview.summary[sectionName].skipped
+                : [];
+            exactSummary.skipped = [...plannerSkipped, ...(removalBlockedSkipped[sectionName] || [])];
+        }
+        // §10.3 (Part 3): the exact summary must include quarantine results
+        // too — records the import validation refused were kept out of the
+        // snapshot data, and a preview that hides them would understate what
+        // the exact restore drops.
+        const importSkipped = preview.validation.summaries[sectionName]?.skipped;
+        if (Array.isArray(importSkipped) && importSkipped.length > 0) {
+            exactSummary.skipped = [...importSkipped, ...exactSummary.skipped];
+        }
+        preview.summary[sectionName] = exactSummary;
     }
     if (Object.prototype.hasOwnProperty.call(imported, 'knowledgeStore')) {
         const fullStore = collectCurrentKnowledgeStore() || {};
         // The store version lives on the section wrapper (storeVersion), not in
         // the data; exclude it so an unchanged exact
         // Knowledge restore reports "unchanged" rather than "replaced".
+        // The embedded quarantine containers are excluded too: they are
+        // MERGED (never replaced) inside the lorebook flush, and their item
+        // order differs between the collected and planned shapes, so comparing
+        // them would report a semantic no-op as "replaced".
         // Order-insensitive compare so key-order differences no longer report a
         // semantic no-op as "replaced".
-        const { version: _storeVersion, ...currentStoreData } = fullStore;
-        const unchanged = backupDataEqual(currentStoreData, sections.knowledgeStore);
+        const { version: _storeVersion, quarantine: _currentQuarantine, ...currentStoreData } = fullStore;
+        const { quarantine: _plannedQuarantine, ...plannedStoreData } = sections.knowledgeStore;
+        const unchanged = backupDataEqual(currentStoreData, plannedStoreData);
         preview.summary.knowledgeStore = {
             mode: 'exact',
             action: unchanged ? 'unchanged' : 'replaced',
@@ -622,6 +890,107 @@ async function restoreBackupInternal(envelope, {
 }
 
 /**
+ * The import's quarantine records destined for the CHAT-LOCAL container:
+ * per-section findings for the chat-metadata stores plus the chat-local half
+ * of the recovery items. `knowledgeStore` records are deliberately excluded —
+ * they ride the lorebook flush inside the affected book(s) instead (§5.1;
+ * planRestore partitioned them into validation.quarantine.knowledgeStore).
+ */
+function collectChatLocalImportQuarantine(preview) {
+    return [
+        ...Object.entries(preview.validation?.quarantine || {})
+            .filter(([sectionName]) => sectionName !== 'knowledgeStore')
+            .flatMap(([, items]) => items),
+        ...(preview.validation?.recovery?.items || []),
+    ];
+}
+
+/**
+ * The writable-container rule for the chat-local quarantine container on the
+ * restore's persistence paths — the SAME rule core/metadata.js
+ * preserveQuarantinedRecords enforces for write seams (design §5.2): a
+ * future-version container is refused unchanged (never downgraded), and a
+ * PRESENT container whose persisted shape produced non-repair findings (a
+ * malformed root/items list, or items the checker rejected as unrecoverable)
+ * is refused too — merging into the canonical form would replace the raw
+ * container and silently delete its recovery evidence. An ABSENT container is
+ * the normal pre-quarantine state, and repair-only findings (a recomputed
+ * fingerprint) stay writable.
+ *
+ * Shared by the restore preflight and the commit-time merge so the two can
+ * never disagree about which containers are writable.
+ *
+ * @param {*} rawContainer the persisted chat-local quarantine container
+ * @returns {{ ok: true, container: object } | { ok: false, reason: string, message: string }}
+ */
+function assessWritableQuarantineContainer(rawContainer) {
+    const existing = validateQuarantineStoreData(rawContainer);
+    const futureIssue = existing.issues.find(issue => issue.code === 'future-version');
+    if (futureIssue) {
+        return { ok: false, reason: 'quarantine-version-future', message: futureIssue.message };
+    }
+    const lossyIssue = rawContainer === undefined || rawContainer === null
+        ? undefined
+        : existing.issues.find(issue => issue.severity === ISSUE_SEVERITIES.QUARANTINE
+            || issue.severity === ISSUE_SEVERITIES.FATAL);
+    if (lossyIssue) {
+        return {
+            ok: false,
+            reason: 'quarantine-container-invalid',
+            message: `The chat quarantine container is malformed (${lossyIssue.message}) It was left unchanged; merging into it would delete the records it still holds.`,
+        };
+    }
+    return { ok: true, container: existing.data };
+}
+
+/**
+ * Preflight the destination chat-metadata containers a restore must write:
+ * the schema manifest and the chat-local quarantine container. A container
+ * written by a NEWER MWT makes the restore's bookkeeping refuse (stamping a
+ * future manifest throws by design; merging into a future quarantine
+ * container would downgrade it), and a PRESENT quarantine container with
+ * non-repair findings refuses the same way — the canonical merge would
+ * replace the malformed raw container and lose its recovery evidence — so
+ * the restore is refused UNCHANGED, before any transaction write, instead of
+ * failing (or corrupting) halfway through.
+ *
+ * The quarantine refusal applies ONLY when the plan actually needs to merge
+ * chat-local quarantine records (`needsQuarantineMerge`): a clean restore
+ * with no quarantine additions never touches that container, so an unrelated
+ * unwritable container must not block it. The store-scoped blocking rules (the
+ * manifest preflight, and the Knowledge books' own container check inside the
+ * flush) are unaffected.
+ *
+ * @param {object} meta live chat metadata
+ * @param {object} [options]
+ * @param {boolean} [options.needsQuarantineMerge] whether the plan merges
+ *   records into the chat-local quarantine container
+ * @returns {{ ok: boolean, reason?: string, message?: string }}
+ */
+function preflightDestinationContainers(meta, { needsQuarantineMerge = true } = {}) {
+    const manifest = meta[MANIFEST_METADATA_KEY];
+    if (isFutureManifest(manifest)) {
+        return {
+            ok: false,
+            reason: 'manifest-version-future',
+            message: `Schema manifest version ${manifest.manifestVersion} is newer than the supported version `
+                + `${MANIFEST_VERSION}. The restore was refused and the manifest was left unchanged — `
+                + 'upgrade MWT before restoring into this chat.',
+        };
+    }
+    if (!needsQuarantineMerge) return { ok: true };
+    const writable = assessWritableQuarantineContainer(meta[QUARANTINE_METADATA_KEY]);
+    if (!writable.ok) {
+        return {
+            ok: false,
+            reason: writable.reason,
+            message: `${writable.message} The restore was refused and the container was left unchanged.`,
+        };
+    }
+    return { ok: true };
+}
+
+/**
  * The serialized write phase of a restore. Runs under the store lock acquired by
  * restoreBackupInternal, so flushAll()/resetStoreCache() cannot interleave.
  */
@@ -649,11 +1018,51 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         };
     }
 
+    // ── Destination-container preflight (design §3.5 category 4) ──────────
+    //
+    // The manifest and the chat-local quarantine container are written by the
+    // SAME transaction as the section data, but their bookkeeping can REFUSE:
+    // stampStoreVersion() intentionally throws on a manifest from a newer MWT,
+    // and a future quarantine container must never be normalized into the
+    // current version by the merge (§5.1). Discovering either only AFTER the
+    // durable Knowledge flush left metadata mutated — or the store committed —
+    // with no rollback, because the transaction's guarded block had not
+    // started yet. Refuse unchanged here, before any write.
+    const meta = getChatMeta();
+    if (!meta) {
+        return { ok: false, committed: false, reason: 'metadata-unavailable', preview: commitPreview, preRestoreBackup };
+    }
+    const preflight = preflightDestinationContainers(meta, {
+        // Bug fix: a future chat quarantine container only blocks a restore
+        // whose plan actually MERGES records into that container. A clean
+        // restore (no quarantine additions) never writes it, so an unrelated
+        // future container must not block it — the refusal is scoped to plans
+        // that would otherwise downgrade the container mid-transaction.
+        needsQuarantineMerge: collectChatLocalImportQuarantine(commitPreview).length > 0,
+    });
+    if (!preflight.ok) {
+        return {
+            ok: false,
+            committed: false,
+            reason: preflight.reason,
+            warning: preflight.message,
+            preview: commitPreview,
+            preRestoreBackup,
+        };
+    }
+
     // The scope was just verified at
     // beforeCommit, covering the loadWorldInfo gap that resolveKnowledgeStorePlan
     // re-checks when it runs standalone. The ?? fallback keeps callers that hand
     // in a preview without a stashed resolution correct.
-    const knowledgeCommit = hasKnowledgeStoreSection(envelope)
+    //
+    // The plan is also resolved when the import carries Knowledge-store
+    // QUARANTINE records without a knowledgeStore section (a recovery export,
+    // or a backup written by the earlier implementation): those records ride
+    // the lorebook flush into the affected book(s) (§5.1) — resolveKnowledge-
+    // StorePlan handles a plan without the section as a quarantine-only commit.
+    const knowledgeCommit = (hasKnowledgeStoreSection(envelope)
+        || (commitPreview.validation?.quarantine?.knowledgeStore || []).length > 0)
         ? (commitPreview.knowledgeStoreCommit ?? await resolveKnowledgeStorePlan(commitPreview, scope))
         : { ok: true, changed: false };
     if (!knowledgeCommit.ok) {
@@ -673,38 +1082,123 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         return { ok: false, committed: false, preview: commitPreview, preRestoreBackup, ...knowledgeFlush };
     }
 
-    const meta = getChatMeta();
-    if (!meta) {
-        if (knowledgeFlush.persistedBooks.length > 0) {
-            await rollbackKnowledgeStore(knowledgeFlush.beforeStore, knowledgeFlush.persistedBooks);
-        }
-        return { ok: false, committed: false, reason: 'metadata-unavailable', preview: commitPreview, preRestoreBackup };
-    }
     // Snapshot the metadata values about to be overwritten so a persist failure
     // can roll them back in memory alongside the lorebook flush. A null sentinel
-    // marks a key that did not yet exist (so it can be deleted again on rollback).
+    // marks a key that did not yet exist (so it can be deleted again on
+    // rollback). The schema manifest and the quarantine container snapshot too:
+    // they are written in the SAME transaction as the section data (design
+    // §7.3/§7.7) — a version marker may never survive a rollback that reverts
+    // its data, or the manifest would claim a version the data no longer has.
+    const transactionKeys = [
+        ...METADATA_SECTION_NAMES.map(sectionName => METADATA_KEYS[sectionName]),
+        MANIFEST_METADATA_KEY,
+        QUARANTINE_METADATA_KEY,
+    ];
     const metaBefore = {};
-    for (const sectionName of METADATA_SECTION_NAMES) {
-        const key = METADATA_KEYS[sectionName];
+    for (const key of transactionKeys) {
         metaBefore[key] = Object.prototype.hasOwnProperty.call(meta, key)
             ? cloneBackupData(meta[key])
             : null;
     }
-    for (const sectionName of METADATA_SECTION_NAMES) {
-        if (!Object.prototype.hasOwnProperty.call(commitPreview.plan.sections, sectionName)) continue;
-        meta[METADATA_KEYS[sectionName]] = commitPreview.plan.sections[sectionName];
-    }
-    for (const sectionName of commitPreview.plan.removeMetadataSections || []) {
-        delete meta[METADATA_KEYS[sectionName]];
-    }
+    let mutationsStaged = false;
     try {
+        for (const sectionName of METADATA_SECTION_NAMES) {
+            if (!Object.prototype.hasOwnProperty.call(commitPreview.plan.sections, sectionName)) continue;
+            meta[METADATA_KEYS[sectionName]] = commitPreview.plan.sections[sectionName];
+        }
+        for (const sectionName of commitPreview.plan.removeMetadataSections || []) {
+            delete meta[METADATA_KEYS[sectionName]];
+        }
+        // ── Same-transaction schema bookkeeping (design §7.7, Part 3) ───────
+        //
+        // 1. Stamp the schema manifest for every section the restore actually
+        //    REWRITES with canonical data (plan.canonicalSections): the plan
+        //    re-prepares each completed section (backup/restore.js), so what it
+        //    carries is current-version canonical — but a keep/skip section
+        //    whose canonical value equals the stored value made NO canonical
+        //    change and must not be stamped; the manifest may never claim a
+        //    version for data this restore never prepared. The imported
+        //    sections were migrated to the CURRENT version during validation
+        //    (backup/validate.js prepareBackupSection), so the manifest and the
+        //    data land together in this one metadata object and are flushed by
+        //    the same save — the §7.3 atomicity rule. Exact restores that
+        //    REMOVE a section drop its stamp too, so the manifest never claims
+        //    a version for an absent store. The Knowledge lorebook store is
+        //    skipped: it keeps its embedded `version` inside the flushed store
+        //    itself. A section the restore left DEFERRED (§7.5) is written but
+        //    never stamped, and any EXISTING stamp is withheld (removed) in the
+        //    same transaction: the manifest may not claim the privileged
+        //    conversion ran on data that is still preparing.
+        const stampableSections = (Array.isArray(commitPreview.plan.canonicalSections)
+            ? commitPreview.plan.canonicalSections
+            : METADATA_SECTION_NAMES
+                .filter(sectionName => Object.prototype.hasOwnProperty.call(commitPreview.plan.sections, sectionName))
+        ).filter(sectionName => METADATA_SECTION_NAMES.includes(sectionName)
+            && Object.prototype.hasOwnProperty.call(commitPreview.plan.sections, sectionName));
+        const deferredSections = (Array.isArray(commitPreview.plan.deferredSections)
+            ? commitPreview.plan.deferredSections
+            : []
+        ).filter(sectionName => METADATA_SECTION_NAMES.includes(sectionName));
+        if (stampableSections.length > 0
+            || (commitPreview.plan.removeMetadataSections || []).length > 0
+            || deferredSections.length > 0) {
+            let manifest = normalizeManifest(meta[MANIFEST_METADATA_KEY]);
+            for (const sectionName of stampableSections) {
+                manifest = stampStoreVersion(manifest, sectionName, STORE_SCHEMAS[sectionName].currentVersion);
+            }
+            for (const sectionName of commitPreview.plan.removeMetadataSections || []) {
+                delete manifest.sections[sectionName];
+            }
+            for (const sectionName of deferredSections) {
+                delete manifest.sections[sectionName];
+            }
+            meta[MANIFEST_METADATA_KEY] = manifest;
+        }
+        // 2. Merge the import's CHAT-METADATA quarantine records into the
+        //    chat-local container — never replace it (records already
+        //    quarantined in this chat must survive a restore), and never drop
+        //    the import's rejected records (design §5.2: they were refused by
+        //    the same schema owner that validated the sections, so they stay
+        //    recoverable here). Fingerprints dedup a record that was
+        //    quarantined in both chats.
+        //
+        //    PARTITION first (§5.1): `knowledgeStore` findings are excluded —
+        //    they belong INSIDE the affected lorebook store(s), which a shared
+        //    global/scoped book makes impossible for one chat's metadata to
+        //    own. They ride the lorebook flush instead
+        //    (resolveKnowledgeStorePlan → flushKnowledgeStore). The same
+        //    partition applies to the RECOVERY items: a recovery export or an
+        //    older backup can carry store:'knowledgeStore' records, which
+        //    planRestore already routed to the book flush — only genuinely
+        //    chat-local records reach this merge.
+        const importQuarantine = collectChatLocalImportQuarantine(commitPreview);
+        if (importQuarantine.length > 0) {
+            // Validate (not normalize) the persisted container: the SAME
+            // writable-container rule as the preflight (and the write seams,
+            // §5.2) applies on this persistence path — a future-version
+            // container is refused (never downgraded), and a PRESENT container
+            // with non-repair findings is refused too, because merging into
+            // the canonical form would replace the malformed raw container and
+            // lose its recovery evidence. The preflight above already refused
+            // both, so a finding here means one appeared mid-transaction —
+            // throw so the guarded block rolls everything back instead of
+            // replacing it.
+            const writable = assessWritableQuarantineContainer(meta[QUARANTINE_METADATA_KEY]);
+            if (!writable.ok) throw new Error(writable.message);
+            meta[QUARANTINE_METADATA_KEY] = {
+                version: writable.container.version,
+                items: mergeQuarantineItems(writable.container.items, importQuarantine),
+            };
+        }
+        mutationsStaged = true;
         await persistChatMetaNow({ strict: true });
     } catch (err) {
-        // Metadata never reached disk. Reverse the in-memory metadata mutation
-        // and undo the already-durable lorebook flush so the failed restore
-        // leaves no partial commit behind.
-        for (const sectionName of METADATA_SECTION_NAMES) {
-            const key = METADATA_KEYS[sectionName];
+        // The durable write failed, or the staged bookkeeping refused after
+        // the lorebook flush. Reverse the in-memory metadata mutation and undo
+        // the already-durable lorebook flush so the failed restore leaves no
+        // partial commit behind — no exception in this transaction may bypass
+        // the rollback.
+        for (const key of transactionKeys) {
             if (metaBefore[key] === null) {
                 if (Object.prototype.hasOwnProperty.call(meta, key)) delete meta[key];
             } else {
@@ -717,7 +1211,7 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         return {
             ok: false,
             committed: false,
-            reason: 'metadata-persist-failed',
+            reason: mutationsStaged ? 'metadata-persist-failed' : 'metadata-commit-failed',
             partialCommit: knowledgeFlush.persistedBooks.length > 0,
             persistedBooks: knowledgeFlush.persistedBooks,
             ...storeRollback,

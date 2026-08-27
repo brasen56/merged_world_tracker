@@ -28,8 +28,10 @@ import {
     fieldsFromScanRecord,
 } from './lorebook.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
-import { isStoreEntry } from './store.js';
+import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
+import { checkRegistryRecord, knowledgeStoreSchema } from './schema.js';
+import { makeQuarantineItem } from '../core/quarantine.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
 
@@ -408,7 +410,55 @@ export async function importNpcs() {
             }
         }
 
+        // ── Recovery guarantee (design §5.2 + §5.1), up-front pass ──────────
+        //
+        // Part 3 (design §8): every registry record from a standalone import
+        // runs through the same schema-owned record check the backup import
+        // and the lorebook store use — an entry whose uid is neither null nor
+        // a non-negative integer is refused whole instead of being written
+        // into the registry. A refused record must also stay RECOVERABLE:
+        // it is quarantined INSIDE the affected lorebook store (a global/
+        // scoped book is shared, so one chat's metadata cannot own its
+        // recovery records, §5.1). This validation pass runs before ANY
+        // registry mutation, and if preserving the refused records fails
+        // (book not loaded, or its quarantine container was written by a
+        // newer MWT), the whole import blocks — losing a record is worse
+        // than refusing the import.
+        const refused = [];
         for (const [name, entry] of Object.entries(data.entries)) {
+            const recordIssue = checkRegistryRecord(entry);
+            if (recordIssue !== null) refused.push({ name, entry, recordIssue });
+        }
+        if (refused.length > 0) {
+            const preserved = mergeStoreQuarantineItems(getLorebookName(), refused.map(
+                ({ name, entry, recordIssue }) => makeQuarantineItem({
+                    store: knowledgeStoreSchema.id,
+                    path: ['registry', name],
+                    reasonCode: recordIssue.code,
+                    message: `Import refused NPC "${name}": ${recordIssue.message}`,
+                    raw: entry,
+                    sourceVersion: knowledgeStoreSchema.currentVersion,
+                }),
+            ));
+            if (!preserved.ok) {
+                throw new Error(
+                    `could not preserve ${refused.length} refused record(s) in the Knowledge store `
+                    + `(${preserved.reason}); the import was cancelled so no record is lost.`
+                );
+            }
+        }
+        const refusedNames = new Set(refused.map(({ name }) => name));
+
+        for (const [name, entry] of Object.entries(data.entries)) {
+            if (refusedNames.has(name)) {
+                console.warn(
+                    `[MWT:Knowledge] Import quarantined "${name}" in the Knowledge store: `
+                    + `${refused.find(r => r.name === name).recordIssue.message}`
+                );
+                // Counted (and reported) below as a quarantined record, never
+                // as "already tracked" — the same entry must not inflate both.
+                continue;
+            }
             if (registry[name] && registry[name].uid !== null && registry[name].uid !== undefined) {
                 skipped++;
                 continue;
@@ -486,6 +536,9 @@ export async function importNpcs() {
 
         let msg = `Imported ${imported} NPC(s).`;
         if (skipped > 0) msg += ` ${skipped} already tracked (skipped).`;
+        if (refused.length > 0) {
+            msg += ` ${refused.length} invalid record(s) quarantined in the Knowledge store for recovery.`;
+        }
         if (settingsImported) msg += ' Settings restored.';
         ktSetStatus(msg, 'success');
     } catch (err) {

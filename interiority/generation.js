@@ -1106,8 +1106,13 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     // §20: dormant entries are excluded from executed/dropped evaluation —
     // they never appear in the prompt's <open_intentions>, so any reference
     // to a dormant id is a hallucination that should be ignored.
+    // Reads hand out detached working copies, so re-read AFTER the wake and
+    // age mutators above committed — the pre-turn copy taken at the top of
+    // this function still shows woken entries as 'dormant' and their ages
+    // pre-increment.
+    const postWakeLedger = getInteriorityData().ledger;
     const ledgerIds = new Set(
-        data.ledger.filter(e => e.status !== 'dormant').map(e => e.id)
+        postWakeLedger.filter(e => e.status !== 'dormant').map(e => e.id)
     );
 
     // Build a lookup from id → turnsOpen for grace-period enforcement.
@@ -1116,7 +1121,7 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     // to arrive. The grace period forces intentions to survive at least
     // N turns before they can be removed.
     const ledgerAgeMap = new Map(
-        data.ledger.filter(e => e.status !== 'dormant')
+        postWakeLedger.filter(e => e.status !== 'dormant')
             .map(e => [e.id, e.turnsOpen || 0])
     );
 

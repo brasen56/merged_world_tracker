@@ -14,7 +14,7 @@ import {
 
 import {
     state, getSettings, saveSettings,
-    getInteriorityData, getLedger, getPerMessage, getPerMessageKeys,
+    getLedger, getPerMessage, getPerMessageKeys,
     getMsgKeyForIndex, buildKeyToIndexMap,
     removeLedgerEntries, updateLedgerEntry,
     addManualLedgerEntry, hasDuplicateIntention,
@@ -33,7 +33,10 @@ export function renderContent() {
     const el = getContentEl();
     if (!el) return;
 
-    getInteriorityData(); // ensure the interiority meta structure is initialized
+    // Reads return a safe working view now (the store itself is created only
+    // by a committed write), so getLedger()/getPerMessageKeys() below always
+    // see canonical containers — including on a chat whose store is absent or
+    // still holds invalid data the write seam will quarantine.
     const ledger = getLedger();
     const msgKeys = getPerMessageKeys();
 

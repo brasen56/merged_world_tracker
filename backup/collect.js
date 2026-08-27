@@ -33,8 +33,15 @@ import {
 import {
     hydrateCurrentBooks,
     isHydrated,
+    getStoreQuarantineContainerStatus,
+    getStoreQuarantineItems,
     STORE_VERSION,
 } from '../knowledge/store.js';
+import {
+    mergeQuarantineItems,
+    QUARANTINE_METADATA_KEY,
+    QUARANTINE_SCHEMA_VERSION,
+} from '../core/quarantine.js';
 
 /**
  * Resolve a human-readable label without assuming one particular ST fork's
@@ -122,11 +129,53 @@ export async function collectBackup({
             stanceSources: getStanceSources(),
             stateRegistry: getStateRegistry(),
         };
+        // The two books' EMBEDDED quarantine containers (design §5.1) merge
+        // into the section: the per-book quarantine stays with its store (it
+        // is not chat-local data), and items carry path[0] so a restore can
+        // partition them back per book. Present only when a book actually
+        // holds recovery records — envelopes without any keep the exact
+        // historical shape.
+        //
+        // A REFUSED container (written by a newer MWT, or malformed in a way
+        // this build cannot preserve) reads as "no items" through the items
+        // API — a backup built from that would silently omit recovery data
+        // while claiming to carry every quarantined record. An export must
+        // never do that: inspect the container status and abort visibly so the
+        // user keeps a trustworthy backup set instead of an incomplete one.
+        for (const bookName of [knowledgeBook, stateBook]) {
+            const containerStatus = getStoreQuarantineContainerStatus(bookName);
+            if (!containerStatus.ok) {
+                throw new Error(
+                    `Backup export cancelled because the "${bookName}" lorebook's quarantine recovery container `
+                    + `cannot be read safely (${containerStatus.reason}). Upgrade MWT (or repair the container) `
+                    + 'before exporting, so the backup cannot silently omit recovery records.'
+                );
+            }
+        }
+        const storeQuarantine = mergeQuarantineItems(
+            getStoreQuarantineItems(knowledgeBook),
+            getStoreQuarantineItems(stateBook),
+        );
+        if (storeQuarantine.length > 0) {
+            knowledgeStore.quarantine = { version: QUARANTINE_SCHEMA_VERSION, items: storeQuarantine };
+        }
     }
+
+    // Quarantine recovery data (design §5.3, Part 3): a backup must carry
+    // every quarantined record so a restore can never strand rejected data on
+    // the source chat. Only the chat-local container rides here — the
+    // Knowledge lorebook store's per-book quarantine stays embedded in its
+    // own store section (it is not chat-local data).
+    const quarantine = Object.prototype.hasOwnProperty.call(meta, QUARANTINE_METADATA_KEY)
+        && meta[QUARANTINE_METADATA_KEY] !== undefined
+        && meta[QUARANTINE_METADATA_KEY] !== null
+        ? meta[QUARANTINE_METADATA_KEY]
+        : undefined;
 
     return buildBackupEnvelope({
         metadata,
         knowledgeStore,
+        quarantine,
         identity: resolvedIdentity,
         createdAt: new Date().toISOString(),
         mwtVersion,

@@ -16,6 +16,7 @@ export {
     patchChatMeta,
     persistChatMeta,
     persistChatMetaNow,
+    preserveQuarantinedRecords,
     WORLD_STATE_METADATA_KEY,
 } from './metadata.js';
 export { notify } from './notifications.js';

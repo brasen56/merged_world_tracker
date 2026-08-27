@@ -152,6 +152,7 @@ export function formatSectionChangeBits(desc) {
     const bits = [];
     if (desc.kind === 'exact') {
         if (desc.action === 'removed') bits.push({ text: 'will be removed', tone: 'danger' });
+        else if (desc.action === 'blocked') bits.push({ text: 'left unchanged (destination store refused)', tone: 'warning' });
         else if (desc.action === 'unchanged') bits.push({ text: 'unchanged', tone: 'normal' });
         else bits.push({ text: `${desc.added} replaced`, tone: 'normal' });
     } else {
