@@ -42,6 +42,13 @@ import {
     QUARANTINE_METADATA_KEY,
     QUARANTINE_SCHEMA_VERSION,
 } from '../core/quarantine.js';
+import {
+    MANIFEST_METADATA_KEY,
+    MANIFEST_VERSION,
+    getStoredStoreVersion,
+    isFutureManifest,
+} from '../schema/manifest.js';
+import { CHAT_METADATA_SCHEMA_IDS } from '../schema/registry.js';
 
 /**
  * Resolve a human-readable label without assuming one particular ST fork's
@@ -102,6 +109,34 @@ export async function collectBackup({
             && meta[metadataKey] !== null) {
             metadata[sectionName] = meta[metadataKey];
         }
+    }
+
+    // The version each section's data is ACTUALLY at (design §3.3/§3.4). The
+    // collector exports stores raw — it never migrates — so the wrapper must
+    // report the source version, not the store's current one. A section the
+    // manifest has not stamped is legacy 0, which is every store in every chat
+    // until the runtime cutover (Part 6) starts stamping: a wrapper claiming
+    // the current version made the importer skip the 0 → 1 migration and
+    // quarantine exactly the legacy records that migration repairs.
+    // A manifest written by a NEWER MWT must abort the export outright. Reading
+    // it as "legacy 0" — what getStoredStoreVersion() deliberately does so
+    // defensive displays stay usable — is unsafe here: the collector exports
+    // stores raw, so a future manifest's stores may be in a shape this build
+    // cannot understand, and a backup stamped schemaVersion 0 would make a
+    // restore run the legacy 0 → 1 migration over them (discarding fields or
+    // records) instead of refusing the unknown version. Abort visibly, exactly
+    // as for the unreadable future quarantine containers below.
+    const manifest = meta[MANIFEST_METADATA_KEY];
+    if (isFutureManifest(manifest)) {
+        throw new Error(
+            `Backup export cancelled because the chat's schema manifest version ${manifest.manifestVersion} is newer `
+            + `than the supported version ${MANIFEST_VERSION}. The chat's stores may be in a format this build cannot `
+            + 'read, so the backup would declare them legacy version 0. Upgrade MWT before exporting.'
+        );
+    }
+    const sectionVersions = {};
+    for (const id of CHAT_METADATA_SCHEMA_IDS) {
+        sectionVersions[id] = getStoredStoreVersion(manifest, id);
     }
 
     let knowledgeStore;
@@ -176,6 +211,7 @@ export async function collectBackup({
         metadata,
         knowledgeStore,
         quarantine,
+        sectionVersions,
         identity: resolvedIdentity,
         createdAt: new Date().toISOString(),
         mwtVersion,

@@ -198,6 +198,7 @@ function checkQuarantineItems(items) {
                 severity: 'quarantine',
                 message: 'Quarantine item must be an object.',
                 record: item,
+                identity: index,
             });
             continue;
         }
@@ -208,7 +209,14 @@ function checkQuarantineItems(items) {
                 path: ['items', index],
                 severity: 'quarantine',
                 message: 'Quarantine item needs non-empty store and reasonCode strings.',
-                record: typeof item.id === 'string' ? item.id : index,
+                // §5.2 applies to quarantine's own records too: `record` is the
+                // COMPLETE rejected item (what a recovery export reconstructs
+                // from), and the display identity rides separately so summaries
+                // still print an identifier rather than the raw payload. These
+                // used to carry only the id, so re-quarantining a malformed
+                // recovery item preserved a bare string and lost the record.
+                record: item,
+                identity: typeof item.id === 'string' ? item.id : index,
             });
             continue;
         }
@@ -218,7 +226,8 @@ function checkQuarantineItems(items) {
                 path: ['items', index],
                 severity: 'quarantine',
                 message: 'Quarantine item needs a raw record and a non-empty message to support recovery.',
-                record: typeof item.id === 'string' ? item.id : index,
+                record: item,
+                identity: typeof item.id === 'string' ? item.id : index,
             });
             continue;
         }
@@ -234,6 +243,7 @@ function checkQuarantineItems(items) {
                 severity: 'repair',
                 message: `Supplied fingerprint "${item.fingerprint}" does not match its raw record's content fingerprint "${canonical.fingerprint}"; it was recomputed from the raw record.`,
                 record: typeof item.id === 'string' ? item.id : index,
+                identity: typeof item.id === 'string' ? item.id : index,
             });
         }
         usable.push(canonical);

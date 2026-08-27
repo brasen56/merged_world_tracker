@@ -145,7 +145,12 @@ export function saveEvidenceMap() {
     if (validation.issues.some(issue => issue.severity === 'fatal')) {
         // An unreadable proposal must not be committed: leave the previous
         // (live) value intact (design §3.5 category 4). Nothing was mutated
-        // in place, so this refusal is already complete.
+        // in place, so metadata is already correct — but the STAGED copy still
+        // holds the refused edit, and every later read returns that same
+        // object. Drop it so "the previous value was kept" is true of what the
+        // module reads next too, instead of the refused mutation persisting in
+        // the working copy and being re-proposed on every subsequent save.
+        _resetEvidenceStaging();
         return;
     }
     // §5.2: the canonical commit is only allowed to land if rejected records
@@ -156,6 +161,9 @@ export function saveEvidenceMap() {
     });
     if (!preserved.ok) {
         console.warn(`[MWT:Knowledge] Evidence write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
+        // Same rule as the fatal refusal above: drop the staged copy so the
+        // refused edit does not survive in what later reads hand back.
+        _resetEvidenceStaging();
         return;
     }
     // CHECKED COMMIT: only now does chat metadata change — wholesale, to the

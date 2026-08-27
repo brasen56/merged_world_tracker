@@ -83,16 +83,25 @@ export function validateChronicleData(data) {
  * output must reject a non-array itself, or the corrupt container is replaced
  * before anything can quarantine it. See migrateChronicleV0ToV1().
  *
+ * `prefix` scopes the generated ids to ONE list. The trash needs its own
+ * scope: `snapshots` and `_deletedBin` are separate lists that share this id
+ * space, and restoring an entry from the trash matches on id, so two records
+ * that happened to sit at the same index with the same content would collide
+ * across the two lists. `legacy` is the historical prefix and must not change
+ * — those ids are already persisted in live chats by the getSnapshots() repair.
+ *
  * @param {Array} snapshots raw snapshot list
+ * @param {object} [options]
+ * @param {string} [options.prefix='legacy'] id namespace for the generated ids
  * @returns {{ snapshots: object[], changed: boolean }}
  */
-export function backfillSnapshotIds(snapshots) {
+export function backfillSnapshotIds(snapshots, { prefix = 'legacy' } = {}) {
     let changed = false;
     const fixed = (Array.isArray(snapshots) ? snapshots : []).map((snapshot, index) => {
         if (!isObject(snapshot)) return snapshot;
         if (snapshot.id === undefined || snapshot.id === null || snapshot.id === '') {
             changed = true;
-            return { ...snapshot, id: `legacy-${index}-${fingerprintValue(snapshot)}` };
+            return { ...snapshot, id: `${prefix}-${index}-${fingerprintValue(snapshot)}` };
         }
         if (typeof snapshot.id !== 'string') {
             changed = true;
@@ -122,6 +131,15 @@ export function migrateChronicleV0ToV1(data) {
     // cutover. Left in place, `not-an-array` quarantines the raw value.
     if (Array.isArray(next.snapshots)) {
         next.snapshots = backfillSnapshotIds(next.snapshots).snapshots;
+    }
+    // The trash gets the SAME repair. The v1 validator checks `_deletedBin`
+    // with the same per-record rule as `snapshots`, so backfilling one list and
+    // not the other quarantined every id-less trash entry in a legacy chat —
+    // structurally identical records, opposite outcomes, and the user's Trash
+    // emptied on migration. §6.2 asks this step to re-cap the trash, not to
+    // evict it. Its ids are namespaced separately (see backfillSnapshotIds).
+    if (Array.isArray(next._deletedBin)) {
+        next._deletedBin = backfillSnapshotIds(next._deletedBin, { prefix: 'legacy-trash' }).snapshots;
     }
     return { data: next, issues: [] };
 }

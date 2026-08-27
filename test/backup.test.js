@@ -138,12 +138,47 @@ describe('unified backup Phase 1 pure core', () => {
         expect(negativeResult.errors[0]).toMatch(/not a positive integer/);
     });
 
-    test('rejects zero and negative section schema versions as invalid', () => {
+    test('accepts section schema version 0 as legacy and migrates it', () => {
+        // 0 is the manifest's "never stamped" marker (design §3.3), which the
+        // collector writes for any store the exporting chat has not migrated.
+        // The envelope gate must let it through so prepareStore() can run the
+        // 0 -> 1 migration; refusing it made the legacy path unreachable
+        // across the backup wire and restored legacy chats as empty.
+        // A real legacy chronicle: snapshots with no ids, which the 0 -> 1
+        // migration backfills deterministically. Declared as v1 they would all
+        // be quarantined and the section would restore EMPTY — the round-trip
+        // failure this marker exists to prevent.
+        const file = backup({
+            metadata: { chronicle: { snapshots: [{ text: 'legacy entry', createdAt: '2026-01-01' }] } },
+        });
+        file.sections.chronicle.schemaVersion = 0;
+        const result = validateBackupEnvelope(file);
+        expect(result.ok).toBe(true);
+        expect(result.summaries.chronicle.migrated).toBe(true);
+        expect(result.summaries.chronicle.skipped).toEqual([]);
+        expect(result.sections.chronicle.snapshots).toHaveLength(1);
+        expect(result.sections.chronicle.snapshots[0].id).toMatch(/^legacy-0-/);
+        // The 0 -> 1 migration also supplies the canonical containers the
+        // runtime already assumes.
+        expect(result.sections.chronicle._deletedBin).toEqual([]);
+    });
+
+    test('rejects negative section schema versions as invalid', () => {
         const file = backup();
-        file.sections.worldState.schemaVersion = 0;
+        file.sections.worldState.schemaVersion = -3;
         const result = validateBackupEnvelope(file);
         expect(result.ok).toBe(false);
-        expect(result.errors[0]).toMatch(/not a positive integer/);
+        expect(result.errors[0]).toMatch(/below the earliest supported version 0/);
+    });
+
+    test('rejects a knowledgeStore wrapper below version 1', () => {
+        // The lorebook store keeps its version INSIDE the store, not in the
+        // chat manifest, so it has no legacy-0 marker to honor.
+        const file = buildBackupEnvelope({ knowledgeStore: { version: 1, registry: {} } });
+        file.sections.knowledgeStore.storeVersion = 0;
+        const result = validateBackupEnvelope(file);
+        expect(result.ok).toBe(false);
+        expect(result.errors[0]).toMatch(/below the earliest supported version 1/);
     });
 
     test('quarantines registry records without a numeric uid and relationship edges missing fields', () => {
@@ -425,8 +460,19 @@ describe('unified backup Phase 2b metadata restore', () => {
 
         const undo = await undoLastRestore({ confirm: true });
         expect(undo).toMatchObject({ ok: true, committed: true });
-        expect(getFakeMeta().world_state_tracker_metadata).toEqual({ text: 'current state' });
+        // The undo restores through the same schema owner as any import, and
+        // the pre-restore snapshot declares the version the store was actually
+        // at — legacy 0, since nothing had stamped this chat's manifest. So the
+        // 0 -> 1 migration runs on the way back in and supplies the canonical
+        // default the runtime already assumed (getAutoSaveHistory() returned []
+        // for the absent field). The user's text is restored exactly.
+        expect(getFakeMeta().world_state_tracker_metadata).toEqual({ text: 'current state', autoSaveHistory: [] });
         expect(getFakeDownloadJsonCalls()).toHaveLength(2);
+        // The snapshot itself is the RAW pre-restore store, stamped v0.
+        expect(getFakeDownloadJsonCalls()[0].data.sections.worldState).toEqual({
+            schemaVersion: 0,
+            data: { text: 'current state' },
+        });
     });
 
     test('undo removes records that merge restore added', async () => {

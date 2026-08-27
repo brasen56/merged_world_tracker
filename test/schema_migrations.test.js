@@ -256,7 +256,12 @@ describe('mwt_schema_quarantine container and recovery export/import (design §5
         const container = validateQuarantineStoreData({ version: 1, items: [goodItem, hollow] });
         expect(container.data.items).toEqual([goodItem]);
         expect(container.stats.added).toBe(1);
-        expect(container.issues.map(issue => [issue.code, issue.record])).toEqual([['item-unrecoverable', 1]]);
+        // §5.2 applies to quarantine's own records: the finding carries the
+        // COMPLETE rejected item so a recovery export can reconstruct it, with
+        // the display identity (id, or the index when there is no id) separate
+        // so summaries print an identifier rather than the raw payload.
+        expect(container.issues.map(issue => [issue.code, issue.record, issue.identity]))
+            .toEqual([['item-unrecoverable', hollow, 1]]);
 
         const imported = importQuarantineItems({ kind: QUARANTINE_EXPORT_KIND, version: 1, items: [hollow, 42] });
         expect(imported.items).toEqual([]);

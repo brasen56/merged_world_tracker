@@ -295,9 +295,14 @@ describe('adapter surface — validateSection and the envelope', () => {
         expect(result.ok).toBe(false);
         expect(result.errors[0]).toBe('Section "worldState" version 2 is newer than supported version 1.');
 
+        // 0 is the LEGACY marker (design §3.3), not an invalid version: the
+        // gate accepts it so the 0 -> 1 migration can run on import.
         envelope.sections.worldState.schemaVersion = 0;
+        expect(validateBackupEnvelope(envelope).ok).toBe(true);
+
+        envelope.sections.worldState.schemaVersion = -1;
         expect(validateBackupEnvelope(envelope).errors[0])
-            .toBe('Section "worldState" version 0 is not a positive integer; the earliest supported version is 1.');
+            .toBe('Section "worldState" version -1 is below the earliest supported version 0.');
     });
 
     test('the knowledgeStore wrapper carries storeVersion and validates its data', () => {

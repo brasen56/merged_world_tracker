@@ -12,6 +12,364 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.8.1]
+
+### Fixed
+
+- **A future schema manifest aborts the export visibly instead of relabelling
+  future-format stores as legacy data** (`backup/collect.js`, `backup/index.js`).
+  `getStoredStoreVersion()` deliberately reads a manifest from a newer MWT as
+  "legacy 0" so defensive displays stay usable — but `collectBackup()` used that
+  same reading to stamp the backup's section wrappers, so a chat whose manifest
+  declares `manifestVersion: 99` exported successfully with every section
+  stamped `schemaVersion: 0`. Restoring that file made this build run the legacy
+  0 → 1 migration over future-format data instead of refusing the unknown
+  version, potentially discarding fields or records. The collector now detects
+  `isFutureManifest()` and cancels the export with an explicit error, exactly as
+  it already does for unreadable future quarantine containers, and the restore's
+  `manifest-version-future` refusal now runs before its pre-restore snapshot
+  export so a refused restore reports the designed refusal rather than the
+  export's abort (and downloads no snapshot for a restore that cannot proceed).
+
+Eight fixes from the fifth audit pass over Parts 1–3 (regression coverage in
+`test/schema_audit_round5.test.js`):
+
+- **A backup taken from a legacy chat no longer restores empty**
+  (`backup/collect.js`, `backup/data.js`, `backup/validate.js`). The export
+  stamped each section wrapper with its descriptor's `currentVersion` while
+  `collectBackup()` read the stores RAW — but the runtime cutover that stamps
+  the manifest is Part 6, so every live chat's stores are still at legacy 0.
+  The wrapper therefore told the importer "already migrated", `prepareStore()`
+  skipped the 0 → 1 step, and the v1 validator refused exactly what that
+  migration exists to repair: a legacy Chronicle round-tripped with **zero**
+  snapshots (every id-less record quarantined) and a legacy Story Planner with
+  no arcs at all. The collector now reports the version each store is actually
+  at, read from the chat's manifest through `getStoredStoreVersion()` (missing
+  ⇒ 0), and `validateBackupEnvelope()` accepts 0 for chat-metadata sections —
+  it previously refused it as "not a positive integer", which made the entire
+  legacy path unreachable across the backup wire even though the migrations
+  had shipped in Part 2. The lorebook store keeps a floor of 1 (its version
+  lives inside the store, not the manifest). **Compatibility note:** a backup
+  containing legacy sections is refused by an older MWT with a per-section
+  version error rather than silently mis-restored; backups from already-stamped
+  chats are unchanged and stay readable.
+- **A deferred store no longer drops the records its canonical value removed**
+  (`core/schema.js`). `prepareStore()` returned before collecting quarantine
+  items whenever a DEFER finding was present. That is right for the default
+  `pause` policy — the original is kept untouched — but the import/restore
+  boundary passes `deferPolicy: 'canonicalize'` and commits the canonical
+  value, which has already dropped everything the validator rejected. So an
+  import of an Interiority store with legacy per-message keys (the exact
+  population deferral exists for) plus any invalid ledger entry, tombstone, or
+  `turnCounter` listed those records in `summary.skipped` and then lost them:
+  canonical data committed, quarantine list empty. Both exits now run one
+  shared `preserveDetected()` helper, so a deferral suspends the version stamp
+  and nothing else — the §5.2 preservation, and the storage-ceiling refusal
+  that blocks rather than dropping, apply identically.
+- **Interiority reads stage their working copy instead of deep-cloning per
+  call** (`interiority/data.js`). The fourth pass's detach fix made
+  `getInteriorityData()` clone the whole store on every read, and every read
+  accessor goes through it. On a 400-message chat whose `perMessage` entries
+  carry the usual per-message `ledgerSnapshot` (~3 MB store) that measured
+  ~46 ms for a single `getLedger()`, 564 ms to open the Interiority tab (20 ×
+  `getPerMessage`) and 334 ms to build a generation prompt (one
+  `getRecentThoughtsForNpc` per roster NPC) — and `core/ui.js` calls
+  `getTotalTokens()` + `getLedgerCount()`, two full clones, on a 5-second
+  interval, so the extension blocked the main thread for ~90 ms every 5 seconds
+  while the user typed. The whole §7.2 budget, spent on copying. The copy is
+  now staged once against the live object's identity and reused until the next
+  commit (the model `knowledge/evidence.js` already used, and the shared-view
+  semantics callers had when reads returned the live object): 564 ms → 46 ms,
+  334 ms → 10 ms, and ten `getLedger()` calls → 0.1 ms. The commit also writes
+  a DETACHED clone, closing the aliasing hole that let a caller mutate a
+  returned ledger entry straight into metadata after the save.
+- **A refused write drops the staged copy** (`interiority/data.js`,
+  `knowledge/evidence.js`). Callers mutate the working copy in place and hand
+  it to the seam; on a refusal both seams returned without clearing it, so the
+  refused mutation stayed in the cached copy every later read returns and was
+  re-proposed on every subsequent save. "The previous value was kept" now
+  holds for what the module reads next, not only for what is in metadata.
+- **The standalone World State import prepares from legacy version 0**
+  (`world_state/data.js`, `world_state/render.js`). It was the one import path
+  that never ran `prepareStore()` — `parseWorldStateImport()` validated at the
+  current version — and `setWorldStateDataChecked()` stamped ALL external
+  findings with the destination's `currentVersion`. Both are the bugs the
+  fourth pass fixed for the Chronicle importer, unfixed in its twin: an
+  unversioned legacy archive's rejected records were recorded as current-version
+  data. The parser now prepares from a shared `LEGACY_IMPORT_VERSION`, and the
+  checked seam accepts a `{ issues, sourceVersion }` group exactly like
+  `setChronicleDataChecked()` (a bare array keeps the historical stamping).
+- **A legacy chat's Chronicle Trash survives its migration**
+  (`chronicle/schema.js`). `migrateChronicleV0ToV1()` backfilled ids on
+  `snapshots` but not `_deletedBin`, while the v1 validator checks both with
+  the same per-record rule — so structurally identical records got opposite
+  outcomes and every id-less trash entry was quarantined out of the store,
+  emptying the user's Trash on migration. §6.2 asks this step to re-cap the
+  trash, not evict it. `backfillSnapshotIds()` takes a `prefix` so the two
+  lists get separate id namespaces (restore-from-trash matches on id, so a
+  cross-list collision would alias two records).
+- **`collectCurrentVersions()` reads the manifest through its owner**
+  (`backup/index.js`). It re-derived the version map by indexing
+  `normalizeManifest()`'s output — which returns a FUTURE manifest UNCHANGED by
+  design, so its `sections` may be a shape this build has never seen, or absent.
+  Indexing it threw a TypeError out of `previewRestore()` before
+  `preflightDestinationContainers()` could report the refusal the design calls
+  for. It now calls the exported, guarded `getStoredStoreVersion()`.
+- **Quarantine preserves its own rejected records whole** (`core/quarantine.js`).
+  `item-missing-fields` / `item-unrecoverable` / `item-not-object` findings put
+  only the item's id (or index) in `record`, so re-quarantining a malformed
+  recovery item preserved a bare string — §5.2's "the complete invalid record,
+  not merely its ID" applied to quarantine itself. The complete item now rides
+  in `record` with the display identity separate, so summaries still print an
+  identifier rather than a raw payload.
+
+Also hardened, without a reproducible failure behind it:
+`commitHistorySnapshot()`'s corrupt-history branch (`world_state/data.js`) used
+to commit the caller's patch together with the container repair and then append
+into the LIVE array before the second write validated it. The repair now commits
+alone — carrying no caller data, so a refused snapshot write means the patch
+genuinely did not land — and the append runs on a detached copy.
+
+Three more integrity fixes from the fourth audit pass (regression coverage in
+`test/restore_quarantine_integrity.test.js`):
+
+- **Interiority no longer hands out the live store** (`interiority/data.js`).
+  When the containers had valid shapes, `getInteriorityData()` returned the
+  LIVE metadata object, so callers mutated chat metadata before
+  `saveInteriorityData()` validated — an invalid stored scalar (e.g. a
+  `turnCounter` of `"RAW-BAD"`) was overwritten in place by
+  `incrementTurnCounter()`, validation then saw only the repaired `1`, and no
+  quarantine record was ever created. Reads now return a fully DETACHED deep
+  working copy (invalid containers still sanitized on the copy), so anything
+  a proposal displaces stays in the live value for the same commit's
+  quarantine preservation (§5.2). `validateAndApply()`
+  (`interiority/generation.js`) re-reads the ledger after the wake/age
+  mutators commit — the pre-turn copy it held used to alias the live array —
+  so post-wake statuses and ages are evaluated exactly as before.
+- **Evidence now actually fails closed** (`knowledge/evidence.js`).
+  `getEvidenceMap()` returned the live metadata map and invited callers to
+  mutate it before `saveEvidenceMap()`, so a refused write (validation or
+  quarantine preservation) could not restore the promised previous value —
+  the mutation was already in metadata — and invalid nested evidence could be
+  overwritten before validation saw it. The seam is now a staged clone /
+  checked commit: reads hand out a stable DETACHED copy (mutations never
+  touch metadata), `saveEvidenceMap()` validates the staged value, and only a
+  fully accepted validation replaces the live map wholesale — with a fully
+  DETACHED clone of the canonical value, because the validator's output still
+  shares its nested objects (file meta containers, accepted records,
+  pass-through fields) with the staged input it validated: committing it
+  as-is, or syncing it back into the staged map, would have re-aliased the
+  staged graph into metadata, letting later held-reference edits (a
+  `touch()` meta stamp, a raw-record change, a tier push) land in metadata
+  before the next validation could see or refuse them. Refusals leave
+  the previous stored value intact by construction; a commit is also refused
+  when the live map was replaced underneath an uncommitted edit (chat switch
+  / restore) rather than clobbering the replacement, and committed findings
+  quarantine the invalid tiers they displace in the same write.
+- **Imported Chronicle findings keep their own source version**
+  (`chronicle/data.js`, `chronicle/import-export.js`, `core/schema.js`).
+  `setChronicleDataChecked()` combined the current store's findings with the
+  caller's external `preserveIssues` and stamped them ALL with Chronicle's
+  current version — but the standalone importer prepares an unversioned
+  legacy file as version 0, so its rejected snapshots were stored with
+  `sourceVersion: 1`. `collectQuarantineItems()` now honors a per-issue
+  integer `sourceVersion` override (one preservation call, one refusal
+  point), and the checked seam accepts an external group as
+  `{ issues, sourceVersion }` — a bare array keeps the historical
+  current-version stamping. The import passes its `LEGACY_IMPORT_VERSION`
+  constant (shared with the `prepareStore` version) so recovery metadata
+  always names the version the record actually came from.
+
+Two more integrity fixes from the third audit pass (regression coverage in
+`test/restore_quarantine_integrity.test.js`):
+
+- **The Chronicle import commits through a checked write**
+  (`chronicle/import-export.js`, `chronicle/data.js`). The standalone import
+  merged its rejected snapshots into the quarantine container BEFORE the
+  destination store was validated and then committed through the unchecked
+  setter, so with an unreadable current Chronicle the store kept its old
+  value while `msgSinceSnapshot` moved, injection was re-applied, the view
+  rerendered, the import reported success, and the quarantine records
+  stranded in a chat whose import never landed. The import now uses the new
+  `setChronicleDataChecked()` (a discriminated twin of the World State
+  checked seam that accepts external `preserveIssues`): the destination is
+  validated first, the file's findings ride the same commit, and
+  module/UI state only moves — with a success report — after the write is
+  confirmed. A refusal reports failure and mutates neither the store nor
+  the container.
+- **Interiority reads no longer erase invalid data before its write seam
+  sees it** (`interiority/data.js`). `getInteriorityData()` replaced a
+  falsey invalid root with defaults and overwrote invalid
+  `ledger`/`perMessage`/`deletedIntentions` containers in live metadata
+  while merely reading, so `saveInteriorityData()` validation received the
+  already-sanitized object and could never quarantine the rejected raw
+  values. Reads now return a safe working view (a detached canonical
+  default for an absent/unreadable root; a detached sanitized copy when a
+  container is invalid; the live object otherwise) and never write; the
+  store is created only by a committed write. `saveInteriorityData()`
+  validates against the LIVE value — an unreadable root fails closed — and
+  a sanitized proposal's displaced live containers ride the same commit's
+  quarantine preservation (§5.2), so the raw values stay recoverable.
+  Chronicle's `getChronicleData()` and Knowledge evidence's
+  `getEvidenceMap()` were audited under the same rule: both now initialize
+  only a genuinely absent root and hand a detached default back over a
+  present-but-invalid one instead of destroying it on read.
+
+Eight more integrity fixes from the second audit pass (regression coverage in
+`test/restore_quarantine_integrity.test.js`):
+
+- **The destination is migrated before merging** (`backup/restore.js`,
+  `backup/index.js`). The planner prepared only the imported half of each
+  section at its declared version and revalidated the completed value at the
+  current version — so a legacy Chronicle snapshot without an id was
+  quarantined by the v1 validator even though its v0 → v1 migration would have
+  backfilled a deterministic id, leaving valid legacy data inactive with the
+  wrong `sourceVersion`. The current half is now prepared from the version the
+  destination manifest actually declares (`planRestore`'s new
+  `currentVersions`, missing ⇒ legacy 0) before the merge, and records
+  quarantined out of the current half ride the commit's preservation (§5.2).
+  A migration the write persists is stamped (§7.7).
+- **Keep/skip restores no longer modify the kept section**
+  (`backup/restore.js`). A keep/skip value was revalidated and — when
+  canonicalization changed it — written, quarantined into, and stamped, even
+  though the preview said the section was not replaced (keeping World State
+  with an invalid `autoSaveHistory` removed and quarantined that field). A
+  keep/skip section is now omitted from the write plan entirely; integrity
+  repair is a separate operation.
+- **Quarantine refusal aborts the write** (`core/metadata.js`). A refused
+  quarantine merge returned 0 while every write-seam caller proceeded to
+  commit its canonical value — the rejected records were removed from the
+  store yet absent from quarantine. `preserveQuarantinedRecords()` now returns
+  an explicit `{ ok, stored, reason }` and every caller (World State,
+  Chronicle, Interiority, Story Planner, Knowledge counters/evidence, the
+  standalone imports) leaves the previous store intact when `ok` is false. A
+  present-but-malformed container is refused too (merging would canonicalize
+  its rejected records away); an absent container still merges normally, and
+  the test stub mirrors the contract.
+- **Clean restores are no longer blocked by unrelated quarantine**
+  (`backup/index.js`). The destination quarantine container was preflighted
+  unconditionally, so a future container blocked a clean restore that had no
+  quarantine additions and would never modify it. The refusal now applies only
+  when the plan actually merges chat-local quarantine; the manifest preflight
+  and the Knowledge books' own container checks are unchanged.
+- **Legacy Knowledge recovery data is store-owned again** (`backup/restore.js`,
+  `backup/index.js`). Top-level recovery items were appended wholesale to the
+  chat-local container, so a recovery export (or a backup written by the
+  earlier implementation) re-assigned `store:'knowledgeStore'` records to the
+  wrong owner. Recovery items are now partitioned by store alongside the
+  section findings: Knowledge records ride the lorebook flush into the
+  affected book(s), and the commit resolves the store plan for them even when
+  the backup carries no `knowledgeStore` section.
+- **Future book quarantine no longer disappears from exports**
+  (`backup/collect.js`, `knowledge/store.js`). `getStoreQuarantineItems()`
+  reads a refused (future/malformed) embedded container as "no items", so a
+  backup silently omitted all such recovery data while claiming to carry every
+  quarantined record. Exports now inspect each book's container status (new
+  `getStoreQuarantineContainerStatus()`) and abort visibly instead of emitting
+  an incomplete backup — including the pre-restore snapshot inside a restore.
+- **Malformed embedded recovery data is never overwritten**
+  (`knowledge/store.js`). The embedded-container merge refused only future
+  versions; for any other validation finding it merged into the canonical form
+  and overwrote the original container, silently deleting malformed existing
+  recovery items. Any non-repair finding that cannot itself be preserved is
+  now a failed merge, and the book is left untouched.
+- **Quarantined records are no longer reported as already tracked**
+  (`knowledge/staging.js`). The NPC import counted a refused record in
+  `skipped`, so an import with one invalid NPC reported both "1 already
+  tracked" and "1 invalid record quarantined" for the same entry. Refused
+  records are now reported once, as quarantined.
+
+Nine integrity fixes across the schema/quarantine/restore subsystem (regression
+coverage in `test/restore_quarantine_integrity.test.js`):
+- **The completed restore plan is revalidated** (`backup/restore.js`). Only the
+  incoming half of each section was ever prepared: merge functions could copy
+  malformed records out of the *current* store, and keep/skip returned the
+  current value wholesale — yet the commit wrote and stamped it current-version.
+  Every planned section now runs through `prepareStore()`: invalid records are
+  quarantined (riding the commit's quarantine merge, §5.2), a fatal result
+  leaves the section unwritten and unstamped, and the manifest is stamped only
+  for sections whose canonical value actually changed (`plan.canonicalSections`).
+- **Restore bookkeeping exceptions can no longer bypass rollback**
+  (`backup/index.js`). The destination manifest is preflighted (`isFutureManifest`
+  now exported) before any transaction write, and all metadata mutation and
+  manifest/quarantine bookkeeping runs inside the rollback-guarded block —
+  `stampStoreVersion()`'s deliberate throw on a future manifest used to leave
+  metadata mutated and a durable Knowledge flush un-rolled-back.
+- **A corrupt store root fails closed at the write seam** (`core/schema.js`).
+  `prepareNextStoreValue()` substituted the canonical default for any non-object
+  current value, so a World State root of `"CORRUPT ROOT"` plus a text patch
+  committed a fresh store and destroyed the unreadable original with `ok: true`.
+  Only a genuinely absent store starts from the default now; a present invalid
+  root fails closed preserving the previous value.
+- **Future quarantine containers are never downgraded** (`core/metadata.js`).
+  `preserveQuarantinedRecords()` used the tolerant normalizer on the write path,
+  so the first write with a quarantine finding could re-stamp a newer release's
+  container as v1. It now validates first and refuses a future container
+  unchanged (warns; nothing merged). The test stub mirrors the new behavior.
+- **Knowledge quarantine is owned by the affected lorebook store** (§5.1).
+  Flattening every section's findings into chat metadata wrongly claimed
+  `knowledgeStore` records for one chat even though global/scoped books are
+  shared. The Knowledge lorebook store now carries an embedded, schema-validated
+  `quarantine` container (`knowledge/schema.js`/`knowledge/store.js`); restore
+  findings are partitioned per book (`stateRegistry`-path items → the State
+  book) and merged atomically inside the store flush, backups carry the embedded
+  container with the `knowledgeStore` section, and only chat-metadata-store
+  findings reach the chat-local container. A future container inside a
+  destination book refuses the restore before any write.
+- **A future chat quarantine container refuses the restore unchanged**
+  (`backup/index.js`). The restore used to normalize-and-overwrite the
+  destination container directly, silently downgrading one written by a newer
+  MWT as soon as a single recovery item imported. It now preflights the
+  container and aborts (`quarantine-version-future`) before any transaction
+  write.
+- **World State imports no longer drop rejected recovery data**
+  (`world_state/data.js`, `world_state/render.js`). The archive validation
+  quarantined invalid records (e.g. a non-array `autoSaveHistory`) and then
+  discarded the findings, losing the raw values permanently.
+  `parseWorldStateImport()` returns its issues and the import handler preserves
+  the rejected records via `preserveQuarantinedRecords()` in the same commit.
+- **Refused Knowledge NPC imports are quarantined, not discarded**
+  (`knowledge/staging.js`). Invalid staging records were warned about and
+  dropped — the schema-owned check ran but the recovery guarantee did not hold.
+  Refused records are now quarantined inside the affected Knowledge lorebook
+  store (validated up front, before any registry mutation), and the import
+  blocks entirely if preserving them fails.
+- **The §7.2 migration budget is enforced on the tail, not the median**
+  (`test/schema_perf_harness.test.js`). A median-of-7 assertion could pass while
+  several measured migrations exceeded the 50 ms synchronous boundary. The
+  harness now asserts p95 over 20 runs (tolerating exactly one environment
+  outlier) and records median/p95/worst; baselines re-recorded in
+  `upcoming_work_misc/SCHEMA_PERF_BASELINES.md`.
+
+Three more integrity fixes (regression coverage in
+`test/restore_quarantine_integrity.test.js` and
+`test/remediation_followups.test.js`):
+- **Failed imports can no longer mutate quarantine state**
+  (`world_state/render.js`, `world_state/data.js`). The World State import
+  merged the archive's rejected records into the live quarantine container
+  *before* the checked write validated the destination, so a refused write (an
+  unreadable current store) kept the old World State but had already changed
+  its container. The archive's schema findings now ride the checked commit
+  itself (`commitHistorySnapshot()`/`setWorldStateDataChecked()` gained a
+  `preserveIssues` option): the destination is validated first, so a refused
+  import mutates neither the store nor the container, and a committed one
+  preserves the records in the same write.
+- **Section regeneration uses the checked commit path**
+  (`world_state/sections.js`). `regenerateSection()` still called
+  `pushToHistory()` and `setWorldStateData()` separately and ignored both
+  results, so a store that refused after the awaited generation/retry got the
+  injection applied, a success logged, and the uncommitted text returned (the
+  UI then reported the section as regenerated). The outgoing snapshot and the
+  updated document now commit through one `commitHistorySnapshot()`, and a
+  refusal returns null before any injection/provenance work.
+- **Removal-only blocked sections keep their refusal reason**
+  (`backup/index.js`). For a section present only in the destination, exact
+  planning's helper returned a bare boolean, discarding `prepareStore()`'s
+  fatal issue or future-version error — the exact preview said "destination
+  store refused" with an empty skipped-details list. The helper now returns
+  the refusal as a display-safe `{ record, reason }` entry (the same §10.3
+  shape the merge planner records), attached to that section's exact summary.
+
 ## [1.8.0]
 
 ### Added
@@ -82,6 +440,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pure 0 → 1 migrations for all seven authoritative stores, structured issue
   policies, and quarantine container validation plus recovery export/import
   shapes. All dry-run only: no live persistence behavior changes until Part 6.
+
+- Schema Validation (Part 3) — backup/import integration and the performance
+  harness. Backup section wrappers now carry their store's `currentVersion`
+  from the schema registry (replacing the one global `SECTION_SCHEMA_VERSION`);
+  every unified-backup import migrates each section from its declared version
+  through `prepareStore()` BEFORE validation and merge planning, so a restore
+  plan is always built against current-version canonical data (`migrated` /
+  `deferred` appear in summaries only when they apply); an unreadable or
+  future-versioned section now refuses the import instead of smuggling in an
+  empty replacement. The restore COMMIT is one transaction: section data, the
+  `mwt_schema_manifest` stamp for every restored section, and any quarantine
+  additions land in the same `chat_metadata` object and are flushed by the same
+  save — a failed persist rolls all three back together, so the manifest can
+  never end up ahead of its data. Quarantine recovery data now rides with every
+  backup export (top-level `quarantine` container) and MERGES into the
+  destination chat's container on restore, deduplicated by content
+  fingerprint — and records an import refuses are persisted to quarantine in
+  the same commit instead of being dropped. Module write seams (World State,
+  Chronicle, Story Planner, Interiority, Knowledge counters, Knowledge
+  evidence) now validate the COMPLETE proposed next store — commit canonical
+  data or leave the previous value intact — with rejected records preserved in
+  `mwt_schema_quarantine` via `preserveQuarantinedRecords()`; the live-object
+  evidence map is canonicalized in place so held references stay attached.
+  Standalone imports (Chronicle JSON with deterministic legacy-id backfill,
+  World State archives, Knowledge NPC staging) route through the same module
+  schemas. The pure O(stores) fast load gate landed as
+  `schema/gate.js runFastLoadGate()` (ready for the Part 6 runtime cutover),
+  and §7.2's budgets are now ENFORCED by `test/schema_perf_harness.test.js`
+  against a ~1,925-record reference fixture — fast gate p95 ≤ 5 ms, every 0 → 1
+  migration < 50 ms — with recorded baselines in
+  `upcoming_work_misc/SCHEMA_PERF_BASELINES.md` (all migrations pass with an
+  order of magnitude of headroom; none needs a module-local preparation state
+  on performance grounds). Merge/replace previews now include import-time
+  quarantine results in their skipped counts (§10.3).
 
 ### Fixed
 - **Interiority's preparation deferral no longer leaks into live user surfaces

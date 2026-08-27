@@ -8,7 +8,7 @@ import {
     getChatMeta, persistChatMeta, preserveQuarantinedRecords, escapeRegex,
 } from '../core/index.js';
 import { getSettings, saveSettings } from './settings.js';
-import { prepareNextStoreValue } from '../core/schema.js';
+import { prepareNextStoreValue, prepareStore } from '../core/schema.js';
 import { worldStateSchema } from './schema.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -145,13 +145,19 @@ export function getWorldStateData() {
  *
  * @param {object} patch fields to overlay on the current store value
  * @param {object} [options]
- * @param {object[]} [options.preserveIssues] EXTRA schema findings whose
- *   rejected records must be preserved in this same commit (design §5.2) even
- *   though they did not come from validating the proposed value — e.g. an
- *   import archive's findings. They ride the seam so the DESTINATION is
- *   validated first: a refused write mutates neither the store value nor the
- *   quarantine container, instead of the caller merging the container
- *   beforehand and stranding quarantine records when the write refuses.
+ * @param {object[]|{issues: object[], sourceVersion: number}} [options.preserveIssues]
+ *   EXTRA schema findings whose rejected records must be preserved in this
+ *   same commit (design §5.2) even though they did not come from validating
+ *   the proposed value — e.g. an import archive's findings. They ride the seam
+ *   so the DESTINATION is validated first: a refused write mutates neither the
+ *   store value nor the quarantine container, instead of the caller merging
+ *   the container beforehand and stranding quarantine records when the write
+ *   refuses. Pass a `{ issues, sourceVersion }` group to stamp those records
+ *   with the version their SOURCE was at (an unversioned standalone archive is
+ *   prepared from legacy version 0) rather than the destination's current
+ *   version; a bare array keeps the historical current-version stamping for
+ *   callers with no source version to report. Mirrors
+ *   chronicle/data.js setChronicleDataChecked().
  * @returns {{ ok: boolean, data, reason?: string, message?: string, issues?: object[] }}
  *   `ok: true` — `data` is the committed canonical value. `ok: false` —
  *   `data` is the PREVIOUS value that was kept, with `reason` naming the
@@ -173,8 +179,19 @@ export function setWorldStateDataChecked(patch, { preserveIssues = [] } = {}) {
     // records were preserved. A refused quarantine container means they cannot
     // be — leave the previous value intact instead. preserveIssues fold in
     // here — AFTER the destination validated — so a caller's external records
-    // are preserved by (and only by) a write that actually commits.
-    const preserved = preserveQuarantinedRecords(worldStateSchema.id, [...next.issues, ...preserveIssues], { sourceVersion: worldStateSchema.currentVersion });
+    // are preserved by (and only by) a write that actually commits. The
+    // external group carries the version its SOURCE was at: stamping an
+    // unversioned legacy archive's rejected records with the destination's
+    // current version would misreport where they came from. Tagging each
+    // external issue keeps this ONE preservation call — one refusal point.
+    const external = Array.isArray(preserveIssues)
+        ? { issues: preserveIssues, sourceVersion: worldStateSchema.currentVersion }
+        : {
+            issues: preserveIssues?.issues ?? [],
+            sourceVersion: preserveIssues?.sourceVersion ?? worldStateSchema.currentVersion,
+        };
+    const externalIssues = external.issues.map(issue => ({ ...issue, sourceVersion: external.sourceVersion }));
+    const preserved = preserveQuarantinedRecords(worldStateSchema.id, [...next.issues, ...externalIssues], { sourceVersion: worldStateSchema.currentVersion });
     if (!preserved.ok) {
         console.warn(`[MWT:WorldState] Write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
         return { ok: false, data: meta[CHAT_DATA_KEY], reason: preserved.reason, message: preserved.message };
@@ -293,6 +310,13 @@ export const MAX_IMPORT_CHARS = 200000;
 const WS_ARCHIVE_TYPE = 'world-state-archive';
 const WS_SETTINGS_TYPE = 'world-state-tracker-settings';
 
+// Standalone world-state archives predate the data-schema version marker, so
+// the import always prepares from legacy version 0. One constant feeds BOTH
+// the prepareStore version AND the quarantine sourceVersion the caller passes
+// to the checked seam, so a rejected record's recovery metadata always names
+// the version it actually came from. Twin of chronicle/import-export.js.
+export const LEGACY_IMPORT_VERSION = 0;
+
 /**
  * Parse and validate imported world-state content.
  *
@@ -362,20 +386,36 @@ export function parseWorldStateImport(rawText) {
     // `text` is quarantined by the schema rather than silently coerced; only
     // the canonical text may proceed (the archive format carries `text` plus
     // optional history, and the import takes the text alone).
-    const validation = worldStateSchema.validate(wsData);
-    const importText = typeof validation.data.text === 'string' ? validation.data.text : '';
+    //
+    // Full PREPARATION, not a bare validate: standalone archives carry no
+    // schema version, so they are prepared from LEGACY 0 exactly like the
+    // Chronicle standalone import (chronicle/import-export.js). Validating at
+    // the current version instead skipped the 0 -> 1 migration and — because
+    // the findings were then stamped with the destination's current version —
+    // recorded an unversioned legacy archive's rejected records as if they had
+    // come from current-version data.
+    const prepared = prepareStore(worldStateSchema, wsData, {
+        version: LEGACY_IMPORT_VERSION,
+        deferPolicy: 'canonicalize',
+    });
+    if (prepared.status === 'blocked') {
+        return { ok: false, reason: prepared.error?.message ?? 'World state archive failed schema validation.' };
+    }
+    const importText = typeof prepared.data.text === 'string' ? prepared.data.text : '';
     if (!importText.trim()) {
         return { ok: false, reason: 'File has no valid world state text.' };
     }
     // The schema findings ride along so the caller can preserve the rejected
     // raw values (e.g. an invalid autoSaveHistory) in the SAME import commit
-    // (§5.2). Previously they were discarded here and the rejected data was
-    // lost permanently even though the comment above promised a quarantine.
+    // (§5.2), tagged with the version they actually came from. Previously they
+    // were discarded here and the rejected data was lost permanently even
+    // though the comment above promised a quarantine.
     return {
         ok: true,
         kind: 'text',
         text: importText.slice(0, MAX_IMPORT_CHARS),
-        issues: validation.issues,
+        issues: prepared.issues,
+        sourceVersion: LEGACY_IMPORT_VERSION,
     };
 }
 
@@ -416,12 +456,21 @@ export function commitHistorySnapshot(snapshotText, patch = {}, { preserveIssues
     if (stored !== undefined && !Array.isArray(stored)) {
         // §5.2: a malformed (non-array) stored history must reach the schema
         // itself so its raw value is preserved in quarantine — substituting an
-        // empty array here would silently discard it. Canonicalize it through
-        // the checked seam first (this write carries the requested patch too);
-        // a refusal fails the whole snapshot like any other refused write.
-        const canonicalized = setWorldStateDataChecked({ ...patch, autoSaveHistory: stored }, { preserveIssues });
+        // empty array here would silently discard it. It cannot travel in the
+        // same patch as the snapshot (one field, two values), so the container
+        // repair goes first, ALONE: it carries no caller data, so if the
+        // snapshot write below refuses, `ok: false` is still honest — the
+        // patch never landed, and all that persisted is a repair the store
+        // owed itself. (Committing the caller's patch here too made the
+        // refusal a lie: the text had already moved.)
+        const canonicalized = setWorldStateDataChecked({ autoSaveHistory: stored });
         if (!canonicalized.ok) return canonicalized;
-        return appendHistorySnapshot(canonicalized.data.autoSaveHistory, snapshotText);
+        // Append on a DETACHED copy: canonicalized.data is now the live stored
+        // value, so pushing into its array would mutate chat metadata before
+        // the checked write below validates it.
+        return appendHistorySnapshot(
+            cloneStoredHistory(canonicalized.data.autoSaveHistory), snapshotText, patch, { preserveIssues },
+        );
     }
     return appendHistorySnapshot(cloneStoredHistory(stored), snapshotText, patch, { preserveIssues });
 }

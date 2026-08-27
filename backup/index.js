@@ -22,6 +22,7 @@ import { collectBackup } from './collect.js';
 import { backupDataEqual, cloneBackupData, METADATA_KEYS } from './data.js';
 import { planRestore } from './restore.js';
 import {
+    getStoredStoreVersion,
     isFutureManifest,
     MANIFEST_METADATA_KEY,
     MANIFEST_VERSION,
@@ -141,12 +142,16 @@ function collectCurrentMetadataSections(meta = getChatMeta()) {
  * the book holds.
  */
 function collectCurrentVersions(meta = getChatMeta()) {
-    const manifest = normalizeManifest(meta?.[MANIFEST_METADATA_KEY] || {});
     const versions = {};
     for (const id of CHAT_METADATA_SCHEMA_IDS) {
-        versions[id] = Number.isInteger(manifest.sections[id]) && manifest.sections[id] > 0
-            ? manifest.sections[id]
-            : 0;
+        // Read through the manifest module's own accessor rather than
+        // re-deriving it here. normalizeManifest() returns a FUTURE manifest
+        // UNCHANGED by design (§3.5 category 4), so its `sections` may be a
+        // shape this build has never seen — or absent entirely, in which case
+        // indexing it threw a TypeError out of previewRestore() before
+        // preflightDestinationContainers() could report the refusal the design
+        // actually calls for. getStoredStoreVersion() already guards that.
+        versions[id] = getStoredStoreVersion(meta?.[MANIFEST_METADATA_KEY], id);
     }
     versions.knowledgeStore = STORE_VERSION;
     return versions;
@@ -873,6 +878,27 @@ async function restoreBackupInternal(envelope, {
 
     const beforeBackup = assertRestoreScope(scope, exact);
     if (!beforeBackup.ok) return staleResult(preview, beforeBackup.reason);
+
+    // The MANIFEST half of the destination preflight runs BEFORE the pre-restore
+    // export: collectBackup() aborts on a future manifest (it cannot label the
+    // chat's stores), so without this the restore would surface that thrown
+    // export error instead of the designed manifest-version-future refusal —
+    // and would download a snapshot for a restore that is refused anyway. The
+    // quarantine-container half stays inside commitRestore, where the re-planned
+    // preview decides whether the plan merges into it at all.
+    const preflightMeta = getChatMeta();
+    if (preflightMeta) {
+        const manifestPreflight = preflightDestinationContainers(preflightMeta, { needsQuarantineMerge: false });
+        if (!manifestPreflight.ok) {
+            return {
+                ok: false,
+                committed: false,
+                reason: manifestPreflight.reason,
+                warning: manifestPreflight.message,
+                preview,
+            };
+        }
+    }
 
     const preRestoreBackup = await exportBackup({
         filename: `mwt_pre_restore_${safeFilenamePart(getChatIdentity().chatId)}_${Date.now()}.json`,

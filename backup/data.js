@@ -60,13 +60,35 @@ export function cloneBackupData(value, seen = new WeakMap()) {
     return result;
 }
 
-/** The wrapper version a section carries: its store descriptor's currentVersion. */
-function sectionVersion(sectionName) {
+/**
+ * The wrapper version a section carries: the version the SOURCE data is
+ * actually at, from the exporting chat's schema manifest — NOT the store's
+ * current version (design §3.4 + §3.3).
+ *
+ * The distinction is the whole point of the marker. Until the runtime cutover
+ * (Part 6) stamps the manifest, every live chat's stores are at LEGACY 0: an
+ * export that stamped `currentVersion` told the importer "already migrated",
+ * the import skipped `prepareStore`'s 0 → 1 step, and the v1 validator then
+ * refused everything that migration exists to repair — a legacy Chronicle
+ * restored with zero snapshots (every id-less record quarantined) and a legacy
+ * Story Planner restored with no arcs at all.
+ *
+ * A missing/invalid entry falls back to the descriptor's currentVersion, which
+ * keeps pure callers that have no manifest at hand (tests, the envelope
+ * builder used directly) on the historical behavior — the same convention
+ * `planRestore`'s `currentVersions` uses for the destination half.
+ */
+function sectionVersion(sectionName, versions) {
+    const declared = versions?.[sectionName];
+    if (Number.isInteger(declared) && declared >= 0) return declared;
     return STORE_SCHEMAS[sectionName]?.currentVersion ?? 1;
 }
 
-function section(data, sectionName) {
-    return { schemaVersion: sectionVersion(sectionName), data: cloneBackupData(data && typeof data === 'object' ? data : {}) };
+function section(data, sectionName, versions) {
+    return {
+        schemaVersion: sectionVersion(sectionName, versions),
+        data: cloneBackupData(data && typeof data === 'object' ? data : {}),
+    };
 }
 
 /**
@@ -78,11 +100,16 @@ function section(data, sectionName) {
  * `quarantine` is the optional chat-local quarantine recovery container
  * (design §5.3): recovery data rides with every backup so a restore can never
  * strand rejected records on the source chat.
+ * `sectionVersions` maps each chat-metadata section to the schema version its
+ * data is actually at, read from the exporting chat's manifest (missing ⇒
+ * legacy 0). Omit it and each section falls back to its store's
+ * currentVersion — see {@link sectionVersion}.
  */
 export function buildBackupEnvelope({
     metadata = {},
     knowledgeStore,
     quarantine,
+    sectionVersions = null,
     identity = null,
     createdAt = new Date().toISOString(),
     mwtVersion = null,
@@ -95,7 +122,7 @@ export function buildBackupEnvelope({
         if (Object.prototype.hasOwnProperty.call(metadata, key)
             && metadata[key] !== undefined
             && metadata[key] !== null) {
-            sections[key] = section(metadata[key], key);
+            sections[key] = section(metadata[key], key, sectionVersions);
         }
     }
     if (knowledgeStore !== undefined) {

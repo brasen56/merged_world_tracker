@@ -236,8 +236,17 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
             result.errors.push(`Section "${name}" has no valid version field.`);
             continue;
         }
-        if (version < 1) {
-            result.errors.push(`Section "${name}" version ${version} is not a positive integer; the earliest supported version is 1.`);
+        // Chat-metadata sections may declare LEGACY version 0 — the manifest's
+        // own "unstamped means 0" rule (design §3.3), which the collector now
+        // writes for any store the exporting chat never migrated. Refusing it
+        // here made the whole legacy path unreachable across the backup wire:
+        // prepareStore() has run 0 → 1 migrations since Part 2, but no
+        // envelope could ask for one. The lorebook store keeps a floor of 1 —
+        // its version lives inside the store, not the manifest, and the
+        // collector reads it from there.
+        const minVersion = name === 'knowledgeStore' ? 1 : 0;
+        if (version < minVersion) {
+            result.errors.push(`Section "${name}" version ${version} is below the earliest supported version ${minVersion}.`);
             continue;
         }
         if (version > maxVersion) {

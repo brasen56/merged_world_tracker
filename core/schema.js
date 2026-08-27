@@ -410,6 +410,42 @@ function findDeferIssue(issues) {
     return null;
 }
 
+/**
+ * Turn a preparation's issue list into quarantine items and enforce the
+ * storage ceiling — the ONE owner of "a value that drops rejected records may
+ * only be returned together with those records" (design §5.2).
+ *
+ * Shared by both prepareStore() exits that hand back canonical data: the
+ * ordinary valid/migrated result and the `deferPolicy: 'canonicalize'`
+ * deferral. Keeping them on one helper is what stops the two paths from
+ * drifting — the deferral used to return canonical data with an EMPTY
+ * quarantine list, so every record the validator rejected was dropped from
+ * the committed value with nothing preserved.
+ *
+ * @returns {{ items: object[], error: null|{ code: string, message: string } }}
+ *   `error` set means the records cannot be stored: the caller must block and
+ *   leave the original untouched rather than commit a value without them.
+ */
+function preserveDetected(descriptor, issues, { sourceVersion, detectedAt, existingQuarantine, maxQuarantineItems }) {
+    const items = collectQuarantineItems(descriptor.id, issues, { sourceVersion, detectedAt });
+    if (items.length > 0) {
+        const totalAfterMerge = mergeQuarantineItems(existingQuarantine, items).length;
+        if (totalAfterMerge > maxQuarantineItems) {
+            // Design §5.2: when quarantine cannot be stored safely, the
+            // original store is left untouched and the store blocks. The
+            // rejected record is never dropped to make room.
+            return {
+                items,
+                error: {
+                    code: 'quarantine-limit',
+                    message: `Store "${descriptor.id}" produced ${items.length} quarantine record(s) that cannot be stored; the original data was left unchanged.`,
+                },
+            };
+        }
+    }
+    return { items, error: null };
+}
+
 /** Build the tagged error that turns a fatal finding into a blocked result. */
 function makeFatalBlock(descriptor, issue) {
     const error = new Error(
@@ -473,7 +509,13 @@ function isUnchangedData(before, after) {
  *     The ONE caller that accepts deferred entries — the backup/import
  *     boundary, which retains them (design §7.7) — passes
  *     `deferPolicy: 'canonicalize'` so the canonical (retained-entries) value
- *     is returned alongside the status instead of `undefined`.
+ *     is returned alongside the status instead of `undefined`. That canonical
+ *     value drops whatever the validator rejected, so it carries `quarantined`
+ *     exactly like a valid/migrated result — a deferral suspends the version
+ *     stamp, never the §5.2 preservation of records the returned value no
+ *     longer contains. Only the default `'pause'` policy returns an empty
+ *     quarantine list, and only because it returns no data either: the
+ *     original store still holds those records.
  *   - Quarantine records are built from the combined migration and validation
  *     issue lists, so a record a migration step rejects stays recoverable
  *     exactly like one the validator rejects (design §5.2).
@@ -583,8 +625,27 @@ export function prepareStore(descriptor, input, options = {}) {
         // restore can commit the retained records now; the runtime load gate
         // (the default 'pause') still gets the untouched original instead.
         if (deferPolicy === 'canonicalize') {
+            // The canonical value DROPPED whatever the validator rejected, so
+            // this branch owes the same §5.2 preservation as a non-deferred
+            // result: a caller that commits `data` must be handed the items
+            // for the records that commit removes. Only the 'pause' policy
+            // may return an empty quarantine list — there the ORIGINAL is
+            // kept untouched, so the rejected records are still in the store
+            // and are re-derived after the chat-dependent conversion runs.
+            const preservation = preserveDetected(descriptor, issues, {
+                sourceVersion: fromVersion,
+                detectedAt: now,
+                existingQuarantine,
+                maxQuarantineItems,
+            });
+            if (preservation.error) {
+                result.status = 'blocked';
+                result.error = preservation.error;
+                return result;
+            }
             result.data = validation.data;
             result.changed = migrated || !isUnchangedData(input, validation.data);
+            result.quarantined = preservation.items;
         }
         return result;
     }
@@ -592,21 +653,18 @@ export function prepareStore(descriptor, input, options = {}) {
     // Quarantine records come from the combined migration and validation issue
     // lists, so a record a migration step rejects stays recoverable exactly
     // like one the validator rejects (design §5.2).
-    const detected = collectQuarantineItems(descriptor.id, issues, { sourceVersion: fromVersion, detectedAt: now });
-    if (detected.length > 0) {
-        const totalAfterMerge = mergeQuarantineItems(existingQuarantine, detected).length;
-        if (totalAfterMerge > maxQuarantineItems) {
-            // Design §5.2: when quarantine cannot be stored safely, the
-            // original store is left untouched and the store blocks. The
-            // rejected record is never dropped to make room.
-            result.error = {
-                code: 'quarantine-limit',
-                message: `Store "${descriptor.id}" produced ${detected.length} quarantine record(s) that cannot be stored; the original data was left unchanged.`,
-            };
-            result.issues = [...issues];
-            return result;
-        }
+    const preservation = preserveDetected(descriptor, issues, {
+        sourceVersion: fromVersion,
+        detectedAt: now,
+        existingQuarantine,
+        maxQuarantineItems,
+    });
+    if (preservation.error) {
+        result.error = preservation.error;
+        result.issues = [...issues];
+        return result;
     }
+    const detected = preservation.items;
 
     result.status = migrated ? 'migrated' : 'valid';
     // `changed` covers canonicalization, not just migration: validation can

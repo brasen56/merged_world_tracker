@@ -283,12 +283,25 @@ describe('Part 3 — restore commits data, manifest, and quarantine in one trans
         // the metadata, restore, and re-export: the second envelope's sections
         // must equal the first's — the round trip is stable, and the manifest
         // stamp survives the second export path without altering data.
+        //
+        // The MANIFEST is what makes the chat v1, not the shape of the data:
+        // the collector reports the version each store is actually at, so a
+        // chat with canonical data but no stamp is legacy 0 and its export
+        // says so. Stamping here is what a genuinely migrated chat carries.
         const meta = getFakeMeta();
         const canonical = canonicalMetadata();
+        const seededSections = {};
         for (const [name, value] of Object.entries(canonical)) {
             meta[STORE_SCHEMAS[name].metadataKey] = structuredClone(value);
+            seededSections[name] = STORE_SCHEMAS[name].currentVersion;
         }
+        meta[MANIFEST_METADATA_KEY] = { manifestVersion: 1, sections: seededSections };
         const first = await exportBackup({ download: false, includeKnowledgeStore: false });
+        // Every section declares the version the manifest stamped, so the
+        // import runs no migration and the round trip compares like with like.
+        for (const [name, wrapped] of Object.entries(first.sections)) {
+            expect(wrapped.schemaVersion).toBe(STORE_SCHEMAS[name].currentVersion);
+        }
         expect(Object.keys(first.sections).sort()).toEqual([
             'chronicle', 'interiority', 'knowledgeCounters', 'knowledgeEvidence', 'storyPlanner', 'worldState',
         ]);

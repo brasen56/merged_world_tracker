@@ -17,9 +17,9 @@ import {
 import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntities, EXPIRY_SECTIONS_DEFAULT } from './settings.js';
 import {
     state, SECTIONS, VARIETY_LABELS,
-    getWorldStateText, getWorldStateData, setWorldStateData,
+    getWorldStateText, getWorldStateData, setWorldStateData, setWorldStateDataChecked,
     parseWorldStateImport,
-    getAutoSaveHistory, pushToHistory,
+    getAutoSaveHistory, commitHistorySnapshot,
     isInjectionEnabled, isAutoRefreshEnabled, getAutoRefreshInterval,
     usesGlobalDefaults, setUsesGlobalDefaults, setWorldSetting,
     getMaxScanMessages, setProvenance, getProvenance,
@@ -105,11 +105,16 @@ export function scheduleEditorPersist() {
         // snapshot the outgoing text to history so it stays revertable — this
         // mirrors what the old explicit Save did. The guard ensures a burst of
         // keystrokes snapshots the baseline only once, not on every debounce.
-        if (!state.editSessionActive) {
-            if (prev?.trim()) pushToHistory(prev);
-            state.editSessionActive = true;
+        // One checked patch carries the baseline snapshot AND the edit; a
+        // refusal keeps the store intact and the burst un-snapshotted, so the
+        // next debounce retries instead of proceeding over an unwritten edit.
+        const snapshotBaseline = !state.editSessionActive;
+        const written = commitHistorySnapshot(snapshotBaseline ? prev : undefined, { text: val });
+        if (!written.ok) {
+            console.warn(`[MWT:WorldState] Editor persist refused (${written.reason ?? 'unknown reason'}) — the previous world state was kept.`);
+            return;
         }
-        setWorldStateData({ text: val });
+        if (snapshotBaseline) state.editSessionActive = true;
         state.isDirty = false;
         applyWorldStateInjection();
         updateArchiveButtonState();
@@ -189,8 +194,26 @@ async function importWorldState() {
     // kind === 'text' (from a recognized JSON archive or plain text).
     if (!confirm('Import this world state? It will replace the current one.')) return;
     const oldText = getWorldStateText();
-    if (oldText) pushToHistory(oldText);
-    setWorldStateData({ text: result.text });
+    // Checked write (design §8 + §5.2): ONE commit carries the outgoing text's
+    // history snapshot, the imported text, AND the archive's schema findings
+    // (e.g. an invalid autoSaveHistory) so its rejected records are preserved.
+    // The findings ride the checked seam itself — the store validates the
+    // destination BEFORE the quarantine container is touched, so a refused
+    // write (an unsafe current store, or a container that refuses the records)
+    // leaves BOTH the previous World State AND the container intact. The old
+    // standalone preserve ran first and could not be undone when the checked
+    // write refused, stranding quarantine records in a chat whose import
+    // reported failure.
+    // The archive's findings carry the version their SOURCE was at (an
+    // unversioned standalone archive is prepared from legacy 0), not the
+    // destination's current version.
+    const written = commitHistorySnapshot(oldText, { text: result.text }, {
+        preserveIssues: { issues: result.issues || [], sourceVersion: result.sourceVersion },
+    });
+    if (!written.ok) {
+        setStatus(state.modal, `Import failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+        return;
+    }
     applyWorldStateInjection();
     renderModalContent();
     setStatus(state.modal, 'Imported.', 'success', 3000);
@@ -199,8 +222,17 @@ async function importWorldState() {
 function clearWorldState() {
     if (!confirm('Clear the world state? A snapshot will be saved to history.')) return;
     const oldText = getWorldStateText();
-    if (oldText) pushToHistory(oldText);
-    setWorldStateData({ text: '' });
+    // Checked write (design §8): one patch carries BOTH the pre-clear history
+    // snapshot and the emptied text; the store can refuse it (an unsafe
+    // current value, or a quarantine container that refuses the rejected
+    // records). Only reset UI/injection state after the write is confirmed —
+    // otherwise the UI showed an empty editor while the previous World State
+    // remained in storage.
+    const written = commitHistorySnapshot(oldText, { text: '' });
+    if (!written.ok) {
+        setStatus(state.modal, `Clear failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+        return;
+    }
     state.isDirty = false;
     applyWorldStateInjection();
     renderModalContent();
@@ -233,7 +265,15 @@ function showRevertDiff() {
     });
 
     diffModal.querySelector('#mwt-ws-revert-confirm').addEventListener('click', () => {
-        setWorldStateData({ text: latest.text });
+        // Checked write (design §8): a refused store write must not update
+        // auto-save/injection/render state or report "Reverted." over the
+        // untouched previous value.
+        const written = setWorldStateDataChecked({ text: latest.text });
+        if (!written.ok) {
+            hideModal('mwt-ws-revert-modal');
+            setStatus(state.modal, `Revert failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+            return;
+        }
         state.autoSaveLastText = latest.text;
         state.isDirty = false;
         applyWorldStateInjection();
@@ -283,8 +323,18 @@ function showAutoSaveHistory() {
             });
             diffModal2.querySelector('#mwt-ws-restore-hist').addEventListener('click', () => {
                 const old = getWorldStateText();
-                if (old) pushToHistory(old);
-                setWorldStateData({ text: entry.text });
+                // Checked write (design §8): one patch carries BOTH the
+                // outgoing text's history snapshot and the restored entry; a
+                // refused store write must not update auto-save/injection/
+                // render state or report "Restored from history." over the
+                // untouched previous value.
+                const written = commitHistorySnapshot(old, { text: entry.text });
+                if (!written.ok) {
+                    hideModal('mwt-ws-hist-diff-modal');
+                    hideModal('mwt-ws-history-modal');
+                    setStatus(state.modal, `Restore failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+                    return;
+                }
                 state.autoSaveLastText = entry.text;
                 state.isDirty = false;
                 applyWorldStateInjection();
@@ -541,12 +591,19 @@ export function wireEvents() {
         const newText = state.modal.querySelector('#ws-editor')?.value || '';
         const currentText = getWorldStateText();
         if (newText !== currentText) {
-            pushToHistory(currentText);
+            // Checked write (design §8): one patch carries BOTH the outgoing
+            // text's history snapshot and the new text. A refusal keeps the
+            // previous world state (history included) and reports the failure —
+            // the UI must not claim "Saved." over an unwritten editor value.
+            const written = commitHistorySnapshot(currentText, { text: newText });
+            if (!written.ok) {
+                setStatus(state.modal, `Save failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+                return;
+            }
             state.autoSaveLastText = newText;
         }
         state.isDirty = false;
         state.editSessionActive = false;
-        setWorldStateData({ text: newText });
         applyWorldStateInjection();
         refreshRevertButton();
         updateArchiveButtonState();
@@ -560,7 +617,13 @@ export function wireEvents() {
         try {
             const editorEl = state.modal.querySelector('#ws-editor');
             if (editorEl && editorEl.value && editorEl.value !== getWorldStateText()) {
-                setWorldStateData({ text: editorEl.value });
+                // Checked write (design §8): a refused pre-sync must not begin
+                // the dependent refresh over an editor value that never landed.
+                const written = setWorldStateDataChecked({ text: editorEl.value });
+                if (!written.ok) {
+                    setStatus(state.modal, `Refresh cancelled: the world state store refused the editor pre-sync (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+                    return;
+                }
             }
             btn.disabled = true; btn.textContent = '⏳ Refreshing…';
             setStatus(state.modal, 'Generating world state…', 'info');
@@ -632,9 +695,16 @@ export function wireEvents() {
             // live text into history so it stays recoverable. Mirrors #ws-refresh.
             const editorBefore = state.modal.querySelector('#ws-editor');
             if (editorBefore && editorBefore.value && editorBefore.value !== getWorldStateText()) {
-                pushToHistory(getWorldStateText());
+                // Checked write (design §8): one patch carries BOTH the baseline
+                // history snapshot and the editor text; a refused pre-sync
+                // cancels the regeneration instead of rebuilding a section
+                // from text that never landed.
+                const written = commitHistorySnapshot(getWorldStateText(), { text: editorBefore.value });
+                if (!written.ok) {
+                    setStatus(state.modal, `Regeneration cancelled: the world state store refused the editor pre-sync (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+                    return;
+                }
                 state.autoSaveLastText = editorBefore.value;
-                setWorldStateData({ text: editorBefore.value });
             }
 
             const updated = await regenerateSection(sectionName, variety);
@@ -682,8 +752,14 @@ export function wireEvents() {
         });
         if (!changed) { setStatus(state.modal, 'No stale entries found.', 'info', 3000); return; }
         if (!confirm(`Remove ${report.length} stale entr${report.length === 1 ? 'y' : 'ies'} (${report.map(r => r.label).join(', ')})?`)) return;
-        pushToHistory(currentText);
-        setWorldStateData({ text: purged });
+        // Checked write (design §8): one patch carries BOTH the pre-purge
+        // history snapshot and the purged text; a refusal keeps both and
+        // reports the failure instead of claiming the purge succeeded.
+        const written = commitHistorySnapshot(currentText, { text: purged });
+        if (!written.ok) {
+            setStatus(state.modal, `Purge failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+            return;
+        }
         applyWorldStateInjection();
         renderModalContent();
         setStatus(state.modal, `Purged ${report.length} stale entr${report.length === 1 ? 'y' : 'ies'}.`, 'success', 3000);

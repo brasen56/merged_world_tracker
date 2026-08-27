@@ -228,6 +228,45 @@ function _isStoreRoot(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+// ─── Staged working copy (read cache) ────────────────────────────────────────
+//
+// getInteriorityData() hands out a DETACHED copy so callers cannot mutate chat
+// metadata before saveInteriorityData() validates. Cloning on EVERY read made
+// that copy O(store) per call, and the read accessors are the hot path: a
+// single getLedger() measured ~46 ms on a 400-message chat whose perMessage
+// entries carry the usual per-message ledgerSnapshot (~3 MB store), and
+// core/ui.js runs getTotalTokens() + getLedgerCount() — two full clones —
+// every 5 seconds, with renderThoughtsList() doing 20 more and the generation
+// prompt one per roster NPC. That is the whole §7.2 budget spent on copying.
+//
+// The copy is therefore STAGED once and reused (same object) while the live
+// store it was taken from is unchanged — the same model knowledge/evidence.js
+// uses, and the same shared-view semantics callers had back when reads handed
+// out the live object: several held references all see each other before the
+// save. A commit replaces the live object with a fresh one, so the identity
+// check below invalidates the cache on its own; a chat switch does too.
+let _stagedInteriority = null;
+let _stagedInteriorityBase = undefined;
+
+function _resetInteriorityStaging() {
+    _stagedInteriority = null;
+    _stagedInteriorityBase = undefined;
+}
+
+/**
+ * A REFUSED write drops the staged copy, so "the previous value was kept" is
+ * true of what the module goes on to read, not only of what is in metadata.
+ *
+ * Callers mutate the working copy in place and then hand it to the write seam.
+ * Without this, a refusal would leave those mutations sitting in the cached
+ * copy that every later read returns — the module would keep operating on data
+ * the seam declined to persist and re-propose it on every subsequent save. The
+ * next read re-stages from the untouched live store instead.
+ */
+function _refuseWrite() {
+    _resetInteriorityStaging();
+}
+
 /**
  * Get the interiority data object from chat metadata, as a DETACHED working
  * copy.
@@ -256,17 +295,29 @@ function _isStoreRoot(value) {
  * Mutating the copy only sticks when it is passed back to
  * saveInteriorityData(); an unsaved mutation is simply discarded.
  *
+ * The copy is STAGED, not rebuilt per call: the same object comes back while
+ * the live store is unchanged, so the read accessors stay O(1) instead of
+ * deep-cloning the whole store on every getLedger()/getPerMessage() (see the
+ * staging comment above). A committed write installs a new live object, which
+ * invalidates the cache by identity.
+ *
  * @returns {object}
  */
 export function getInteriorityData() {
     const raw = getChatMeta()?.[META_KEY];
     if (!_isStoreRoot(raw)) {
+        _resetInteriorityStaging();
         return interioritySchema.createDefault();
+    }
+    if (_stagedInteriority !== null && _stagedInteriorityBase === raw) {
+        return _stagedInteriority;
     }
     const working = clonePlainData(raw);
     if (!Array.isArray(working.ledger)) working.ledger = [];
     if (!_isStoreRoot(working.perMessage)) working.perMessage = {};
     if (!Array.isArray(working.deletedIntentions)) working.deletedIntentions = [];
+    _stagedInteriority = working;
+    _stagedInteriorityBase = raw;
     return working;
 }
 
@@ -300,12 +351,14 @@ export function saveInteriorityData(data) {
     // the schema default — that would erase the live store on a bad caller.
     if (data === null || typeof data !== 'object' || Array.isArray(data)) {
         console.warn('[MWT:Interiority] Write refused — interiority data must be an object; the previous value was kept.');
+        _refuseWrite();
         return meta[META_KEY];
     }
     const live = meta[META_KEY];
     const next = prepareNextStoreValue(interioritySchema, live, data);
     if (!next.ok) {
         console.warn('[MWT:Interiority] Write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);
+        _refuseWrite();
         return live;
     }
     for (const issue of next.issues) {
@@ -333,11 +386,21 @@ export function saveInteriorityData(data) {
     const preserved = preserveQuarantinedRecords(interioritySchema.id, preserveIssues, { sourceVersion: interioritySchema.currentVersion });
     if (!preserved.ok) {
         console.warn(`[MWT:Interiority] Write refused — quarantined records could not be preserved (${preserved.reason}); the previous value was kept.`);
+        _refuseWrite();
         return live;
     }
-    meta[META_KEY] = next.data;
+    // Commit a fully DETACHED clone. The validator builds its canonical value
+    // AROUND the proposal — fresh containers, but the SAME nested records — so
+    // committing `next.data` as-is would alias the caller's working copy into
+    // chat metadata, and a later edit to a held ledger entry or perMessage
+    // record would land in metadata before the next validation could see or
+    // refuse it. (The same aliasing the evidence seam closes.) Installing a new
+    // object also invalidates the read cache by identity, so the next read
+    // re-stages from what was actually committed.
+    const committed = clonePlainData(next.data);
+    meta[META_KEY] = committed;
     persistChatMeta();
-    return next.data;
+    return committed;
 }
 
 /**
