@@ -12,6 +12,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.8.4]
+
+### Added
+- Diagnostics: every captured API call now records **what caused it**. The
+  `api_call` telemetry carries a `trigger` (`message_received` / `swipe` /
+  `edit` / `manual` / `slash_command`, plus a `:dormant_poll` suffix for the
+  §20 poll's second call in the same turn) and `panic` — the state of the
+  master switch at the moment the request *fired*, not when it returned. The
+  Last-request tab shows both, with ⛔ next to a trigger whose request left
+  while the panic switch was already on.
+  Why: a "panic is on and Interiority is still spending tokens" report could
+  only be diagnosed by subtracting `durationMs` from `at` and lining the result
+  up against neighbouring `injection_applied` timestamps to infer the entry
+  point. Interiority has five entry points with three gating rules, and two of
+  them (💭 Generate and `/wt-thoughts`) pass `force: true` and bypass the panic
+  gate *by design* — so "a call fired during a panic window" is not by itself a
+  bug, and the trigger is the whole diagnosis. `panic` separates a gate leak
+  (request left after the switch was on) from a call that was merely still in
+  flight when the user flipped it.
+- Interiority: a gated generation now records a `generation_blocked`
+  diagnostics event naming its trigger. Previously a panic window produced no
+  interiority evidence at all, so "the gate held" and "the module never ran"
+  were indistinguishable in a user's screenshot.
+- Covered by `test/interiority_trigger_telemetry.test.js` (every entry point
+  stamps its own trigger, and the trigger never changes behaviour) and new
+  cases in `test/api_diagnostics.test.js` (fire-time panic capture, trigger
+  absent for modules that don't report one).
+- Prompt for Knowledge Tracker enforcement: plans/intentions were being entered as knowledge ledger items
+- Prompt for Interiority enforcement: Regards knowledge_ledger as background information, not to be reused as intentions
+
+
 ## [1.8.3]
 
 ### Fixed

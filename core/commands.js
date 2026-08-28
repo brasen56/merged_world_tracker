@@ -111,7 +111,13 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
             registerSlashCommand('wt-thoughts', async (_args, _command) => {
                 try {
                     if (typeof Interiority.triggerGenerate === 'function') {
-                        const result = await Interiority.triggerGenerate();
+                        // Named so the api_call telemetry can tell a slash
+                        // command apart from the 💭 button — both pass
+                        // `force`, so both spend tokens during a panic window
+                        // and only the trigger says which one did.
+                        const result = await Interiority.triggerGenerate({
+                            trigger: Interiority.TRIGGER?.SLASH_COMMAND ?? 'slash_command',
+                        });
                         if (result) return `Interiority generated: ${result.reactions.length} reaction(s).`;
                         return 'Interiority generated (no reactions this turn).';
                     }

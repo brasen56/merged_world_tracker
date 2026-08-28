@@ -511,6 +511,67 @@ describe('the intentions call can see scheduled intentions', () => {
     });
 });
 
+describe('new intentions require current evidence (knowledge_entry is background only)', () => {
+    // THE ROOT CAUSE of the stale-intention reports: the Knowledge Ledger
+    // can contain plan-shaped lines ("intends to ambush the caravan",
+    // recorded many turns ago). The model read them in <knowledge_entry> —
+    // which the old rules treated as a full fact source — and proposed them
+    // as new_intentions even though <recent_messages> showed the NPC doing
+    // nothing of the sort. The ledger must now be background evidence only:
+    // a new intention needs a NEW motivating event in the recent window —
+    // the decision itself may stay private — never a restated ledger line.
+
+    test('the system prompt grounds new intentions in recent messages', () => {
+        const prompt = buildSystemPrompt({ intentions: true });
+        expect(prompt).toContain('NEW INTENTIONS REQUIRE CURRENT EVIDENCE');
+        expect(prompt).toContain('BACKGROUND EVIDENCE ONLY');
+    });
+
+    test('evidence is a new motivating event; the decision may stay private', () => {
+        // [P1] The rule used to require the plan to be visibly formed or
+        // committed on-screen, which turned Interiority into explicit-plan
+        // extraction and suppressed genuinely hidden intentions. The
+        // MOTIVATION must be current; the decision need not be shown.
+        const prompt = buildSystemPrompt({ intentions: true });
+        expect(prompt).toContain('may remain entirely private');
+        expect(prompt).not.toContain('forming, deciding on, or committing');
+    });
+
+    test('the mere passage of time is not a motivating event', () => {
+        // Waking already-scheduled intentions for approaching dates is the
+        // dormant poll's job (§20) — never a reason to re-propose here.
+        const prompt = buildSystemPrompt({ intentions: true });
+        expect(prompt).toContain('passage of time');
+    });
+
+    test('thoughts-only calls never see the intention-evidence rule', () => {
+        expect(buildSystemPrompt({ thoughts: true, intentions: false }))
+            .not.toContain('NEW INTENTIONS REQUIRE CURRENT EVIDENCE');
+    });
+
+    test('the knowledge_entry block carries a background-evidence header', () => {
+        const content = buildUserContent({
+            npcBlocks: [{ name: 'Mara', knowledgeEntry: 'Intends to ambush the caravan (overheard, Day 3)' }],
+            recentMessages: 'Mara and Alex share a quiet breakfast.',
+        });
+        // The header sits next to the data: the plan-shaped ledger line
+        // above must not read as a plan Mara is currently forming.
+        expect(content).toContain('NOT proof of any current plan');
+    });
+
+    test('thoughts-only user content keeps the knowledge entry unannotated', () => {
+        // §15 input partition: on the thoughts side <knowledge_entry> IS the
+        // fact source, so no intention-related caveat is prepended there.
+        const content = buildUserContent({
+            npcBlocks: [{ name: 'Mara', knowledgeEntry: 'Keeps the larder keys on her belt.' }],
+            recentMessages: 'msg',
+            includeIntentions: false,
+        });
+        expect(content).not.toContain('NOT proof of any current plan');
+        expect(content).toContain('Keeps the larder keys on her belt.');
+    });
+});
+
 describe('dedup survives a user edit', () => {
 
     // THE BUG (reported from live use): an auto-generated scheduled intention

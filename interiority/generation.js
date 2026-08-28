@@ -496,7 +496,7 @@ function _formatRelationshipsForRoster(npcName, roster, getNpcRelationships) {
  */
 async function _runCall(roster, {
     thoughts = null, intentions = null, label = 'batched', useRichThoughtsContext = false,
-    virtuallyActiveIds = [],
+    virtuallyActiveIds = [], trigger = null,
 } = {}) {
     if (!hasValidSettings()) {
         console.warn(`[MWT:Interiority] No API connection configured (${label}).`);
@@ -558,7 +558,7 @@ async function _runCall(roster, {
         });
     }
 
-    return fetchAndParse(systemPrompt, userContent, apiSettings);
+    return fetchAndParse(systemPrompt, userContent, apiSettings, { trigger });
 }
 
 /**
@@ -566,10 +566,13 @@ async function _runCall(roster, {
  * v1 path — reads feature flags from settings (thoughts + intentions together).
  *
  * @param {string[]} roster
+ * @param {object} [opts]
+ * @param {string[]} [opts.virtuallyActiveIds]
+ * @param {string|null} [opts.trigger] - diagnostics: what caused this turn.
  * @returns {Promise<object|null>} parsed JSON result, or null on failure
  */
-export async function runBatchedCall(roster, { virtuallyActiveIds = [] } = {}) {
-    return _runCall(roster, { virtuallyActiveIds });
+export async function runBatchedCall(roster, { virtuallyActiveIds = [], trigger = null } = {}) {
+    return _runCall(roster, { virtuallyActiveIds, trigger });
 }
 
 // ─── Split-call mode (v2 §16) ────────────────────────────────────────────────
@@ -604,7 +607,7 @@ export async function runBatchedCall(roster, { virtuallyActiveIds = [] } = {}) {
  *   which NPCs get rich thoughts, not a cost throttle.
  * @returns {Promise<{intentionsResult: object|null, thoughtsResult: object|null}>}
  */
-export async function runSplitCall(roster, { force = false, virtuallyActiveIds = [] } = {}) {
+export async function runSplitCall(roster, { force = false, virtuallyActiveIds = [], trigger = null } = {}) {
     const settings = getSettings();
 
     // Respect the feature toggles. Split mode runs two specialized calls, but
@@ -638,7 +641,7 @@ export async function runSplitCall(roster, { force = false, virtuallyActiveIds =
     const [intentionsRes, thoughtsRes] = await Promise.all([
         wantIntentions
             ? _runCall(roster, {
-                thoughts: false, intentions: true, label: 'intentions', virtuallyActiveIds,
+                thoughts: false, intentions: true, label: 'intentions', virtuallyActiveIds, trigger,
             })
                 .catch(err => {
                     console.error('[MWT:Interiority] Intentions call failed:', err);
@@ -646,7 +649,7 @@ export async function runSplitCall(roster, { force = false, virtuallyActiveIds =
                 })
             : Promise.resolve(null),
         runThoughts
-            ? _runCall(thoughtsRoster, { thoughts: true, intentions: false, label: 'thoughts', useRichThoughtsContext: true })
+            ? _runCall(thoughtsRoster, { thoughts: true, intentions: false, label: 'thoughts', useRichThoughtsContext: true, trigger })
                 .catch(err => {
                     console.error('[MWT:Interiority] Thoughts call failed:', err);
                     return null;
@@ -781,7 +784,7 @@ export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
  * @param {string[]} roster
  * @returns {Promise<object|null>}
  */
-export async function runStrictCalls(roster, virtuallyActiveIds = []) {
+export async function runStrictCalls(roster, virtuallyActiveIds = [], { trigger = null } = {}) {
     if (!hasValidSettings()) {
         console.warn('[MWT:Interiority] No API connection configured.');
         return null;
@@ -818,7 +821,7 @@ export async function runStrictCalls(roster, virtuallyActiveIds = []) {
             includeIntentions: wantIntentions,
         });
 
-        const result = await fetchAndParse(systemPrompt, userContent, settings);
+        const result = await fetchAndParse(systemPrompt, userContent, settings, { trigger });
         if (result && Array.isArray(result.npcs)) {
             allNpcs.push(...result.npcs);
             // Alias-aware: the per-NPC call may be answered with a fuller
@@ -852,7 +855,7 @@ export async function runStrictCalls(roster, virtuallyActiveIds = []) {
  * @returns {Promise<string[]>} IDs proposed for waking; proposals are committed
  *   by the orchestrator only after the main generation validates successfully.
  */
-export async function runDormantPoll() {
+export async function runDormantPoll({ trigger = null } = {}) {
     const dormant = getDormantLedger();
     if (dormant.length === 0) return [];
 
@@ -874,7 +877,12 @@ export async function runDormantPoll() {
         worldTime,
     });
 
-    const result = await fetchAndParse(systemPrompt, userContent, settings);
+    // The poll is a second call inside the SAME turn, so it carries the turn's
+    // trigger with a suffix rather than a cause of its own — otherwise a turn
+    // that polls looks like two unrelated spends in the telemetry.
+    const result = await fetchAndParse(systemPrompt, userContent, settings, {
+        trigger: trigger ? `${trigger}:dormant_poll` : null,
+    });
     if (!result || !Array.isArray(result.intentions)) {
         console.warn('[MWT:Interiority] Dormant poll returned no valid result.');
         return [];
@@ -910,7 +918,7 @@ export async function runDormantPoll() {
  * @param {object} settings
  * @returns {Promise<object|null>}
  */
-async function fetchAndParse(systemPrompt, userContent, settings) {
+async function fetchAndParse(systemPrompt, userContent, settings, { trigger = null } = {}) {
     const resolved = resolveApiCall({ moduleSettings: settings });
 
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -921,6 +929,9 @@ async function fetchAndParse(systemPrompt, userContent, settings) {
                 userContent,
                 settings: resolved.settings,
                 retries: 1,
+                // Rides down to captureApiCall so the api_call telemetry names
+                // what caused the spend, not just that a spend happened.
+                trigger,
             });
             cleaned = normaliseOutput(raw);
             const result = parseJsonLenient(cleaned);

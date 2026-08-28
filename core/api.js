@@ -13,6 +13,29 @@ function apiModule(settings) {
     return settings?.module || settings?.moduleKey || 'api';
 }
 
+/**
+ * Is the master panic switch on RIGHT NOW?
+ *
+ * Sampled at dispatch AND immediately before every outbound attempt (the
+ * first request and each retry), and stored on the call summary as `panic`.
+ * The summary reports true if ANY sample was on. Without it a captured call
+ * cannot answer the only question that matters during a "panic is on but it
+ * still spent tokens" report: did a gate leak, or did the user flip the
+ * switch while a call that legitimately started was still in flight?
+ * `panic: true` means some request left AFTER the switch was on — a gate
+ * leaked (at dispatch, after the awaited Connection Manager module load, or
+ * on a retry that fired mid-backoff). `panic: false` next to a long
+ * `durationMs` means the call was already in flight when the switch flipped,
+ * which is expected and not a bug.
+ */
+function panicNow() {
+    try {
+        return getGlobalSettings().injectionMasterOff === true;
+    } catch {
+        return false;
+    }
+}
+
 function usageSummary(usage) {
     if (!usage || typeof usage !== 'object') return null;
     return {
@@ -30,11 +53,18 @@ function errorClass(err) {
     return err ? (err.name || 'Error') : 'Error';
 }
 
-function captureApiCall({ startedAt, settings, mode, name, attempts, status, finishReason, usage, error }) {
+function captureApiCall({ startedAt, panicObserved, trigger, settings, mode, name, attempts, status, finishReason, usage, error }) {
     recordApiCall({
         module: apiModule(settings),
         mode,
         model: name,
+        // What caused this call. Only modules that thread a cause down to the
+        // fetch supply one (Interiority does); omitted elsewhere rather than
+        // recorded as a misleading null.
+        ...(trigger ? { trigger } : {}),
+        // True when the switch was on at dispatch OR when any single outbound
+        // attempt left — either way a request left under panic.
+        panic: panicObserved === true,
         durationMs: Date.now() - startedAt,
         retries: Math.max(0, attempts - 1),
         status,
@@ -142,8 +172,14 @@ export async function fetchFromApi({
     userContent,
     settings,
     retries = 2,
+    trigger = null,
 }) {
     const startedAt = Date.now();
+    // Panic latch: sampled at dispatch and again immediately before every
+    // outbound attempt. Once observed on, it stays on for the summary — a
+    // retry that leaves after the switch flipped mid-backoff must not read
+    // as panic:false. See panicNow() for what `panic` means in a report.
+    let panicSeen = panicNow();
     let attempts = 0;
     let status = null;
     let finishReason = null;
@@ -184,6 +220,7 @@ export async function fetchFromApi({
     try {
         const apiContent = await retryAsync(retries, async (attempt) => {
         attempts = attempt + 1;
+        panicSeen = panicNow() || panicSeen;
         console.log(`[MWT API] POST ${endpoint} model=${settings.modelName} attempt=${attempt}`);
         const response = await fetch(endpoint, {
             method: 'POST',
@@ -277,10 +314,10 @@ export async function fetchFromApi({
 
         return content;
         });
-        captureApiCall({ startedAt, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage });
+        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage });
         return apiContent;
     } catch (error) {
-        captureApiCall({ startedAt, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage, error });
+        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage, error });
         throw error;
     }
 }
@@ -297,8 +334,14 @@ export async function fetchFromApi({
  * @param {number} [opts.retries=2]
  * @returns {Promise<string>} the raw content string
  */
-export async function fetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2 }) {
+export async function fetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2, trigger = null }) {
     const startedAt = Date.now();
+    // Panic latch: sampled at dispatch and again immediately before every
+    // outbound attempt. The dispatch sample PRECEDES the awaited shared.js
+    // module load below — the switch can flip during that load, or during a
+    // retry backoff — so per-attempt sampling is what keeps the summary
+    // honest. See panicNow() for what `panic` means in a report.
+    let panicSeen = panicNow();
     let attempts = 0;
     let status = null;
     let finishReason = null;
@@ -343,6 +386,7 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
     try {
         const cmText = await retryAsync(retries, async (attempt) => {
         attempts = attempt + 1;
+        panicSeen = panicNow() || panicSeen;
         console.log(`[MWT API] Using Connection Profile: ${profileId}, attempt=${attempt}`);
         const result = await ConnectionManagerRequestService.sendRequest(
             profileId,
@@ -419,10 +463,10 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
             console.warn(`[MWT API] Connection profile request failed (attempt ${attempt + 1}): ${err.message}. Retrying in ${delay}ms...`);
         },
         });
-        captureApiCall({ startedAt, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage });
+        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage });
         return cmText;
     } catch (error) {
-        captureApiCall({ startedAt, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage, error });
+        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage, error });
         throw error;
     }
 }

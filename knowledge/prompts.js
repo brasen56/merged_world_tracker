@@ -9,6 +9,7 @@ export const SCAN_SYSTEM_PROMPT = `You are a scanner for an ongoing roleplay. Yo
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Do NOT write narration, dialogue, or roleplay continuation.
+- The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER record the tracked NPC's OWN unresolved plans or commitments — nothing this NPC "plans to", "will", "intends to", or "agrees to" DO. Facts about OTHER people's promises and commitments ARE allowed (e.g. "Dorothy promised to arrive Monday" — the promise already happened; whether it is kept is not a fact yet). Record any planned action only AFTER it happens (e.g. "met the informant at the docks on Day 3" — never "will meet the informant"). The NPC's own unresolved plans are tracked by a different system; ledger lines about them go stale and mislead later reads.
 
 OUTPUT FORMAT:
 {
@@ -16,13 +17,13 @@ OUTPUT FORMAT:
     { "name": "Full Name", "species": "Human/Elf/etc", "tone": "2-3 word communication style", "perceived_as": "how they present", "descriptor": "3-5 word physical/role descriptor", "first_seen": "location and in-world date/time" }
   ],
   "new_major": [
-    { "name": "Full Name", "species": "Human/Elf/etc", "tone": "2-3 word communication style", "perceived_as": "how they present", "descriptor": "3-5 word physical/role descriptor", "first_seen": "location and in-world date/time", "initial_knowledge": [{ "fact": "concrete fact", "source": "how they know it", "date": "in-world date" }] }
+    { "name": "Full Name", "species": "Human/Elf/etc", "tone": "2-3 word communication style", "perceived_as": "how they present", "descriptor": "3-5 word physical/role descriptor", "first_seen": "location and in-world date/time", "initial_knowledge": [{ "fact": "concrete established fact (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date" }] }
   ],
   "update_minor": [
     { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" } }
   ],
   "update_major": [
-    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows", "source": "how they know it", "date": "in-world date if known" }] }
+    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date if known" }] }
   ]
 }
 
@@ -56,6 +57,7 @@ export const NPC_UPDATE_PROMPT = `You are a continuity tracker for an ongoing ro
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Do NOT invent information not established in the messages.
+- The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER write this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to" DO something) into new_knowledge; record such an event only after it happens. Facts about OTHER people's promises are established facts and are allowed. The NPC's own future plans are tracked by a different system.
 - If no new information exists, return empty arrays.
 
 OUTPUT FORMAT:
@@ -66,7 +68,7 @@ OUTPUT FORMAT:
     "descriptor": "updated descriptor if appearance/role changed, else null"
   },
   "new_knowledge": [
-    { "fact": "concrete new fact this NPC learned or now knows", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
+    { "fact": "concrete new fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
 }`;
 
@@ -80,6 +82,7 @@ export const DOSSIER_SCAN_SYSTEM_PROMPT = `You are a scanner for an ongoing role
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Do NOT write narration, dialogue, or roleplay continuation.
+- The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER record the tracked NPC's OWN unresolved plans or commitments — nothing this NPC "plans to", "will", "intends to", or "agrees to" DO. Facts about OTHER people's promises and commitments ARE allowed (e.g. "Dorothy promised to arrive Monday" — the promise already happened; whether it is kept is not a fact yet). Record any planned action only AFTER it happens (e.g. "met the informant at the docks on Day 3" — never "will meet the informant"). The NPC's own unresolved plans are tracked by a different system; ledger lines about them go stale and mislead later reads.
 
 OUTPUT FORMAT:
 {
@@ -104,7 +107,7 @@ OUTPUT FORMAT:
       "agenda": "their main agenda in the story right now",
       "secrets": "A SINGLE STRING: tiered secrets the NPC guards (never narrate unless disclosed). Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
       "canon_lock": "A SINGLE STRING: 3-5 immutable facts that must never change across appearances, separated by semicolons",
-      "initial_knowledge": [{ "fact": "concrete fact", "source": "how they know it", "date": "in-world date" }]
+      "initial_knowledge": [{ "fact": "concrete established fact (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date" }]
     }
   ],
   "update_minor": [
@@ -128,7 +131,7 @@ OUTPUT FORMAT:
         "secrets": "Revise the tiered secrets string when: a NEW secret surfaces; a secret is DISCLOSED in narration (remove it — once known it is no longer a secret; fold any lasting consequence into background); or a secret's premise has RESOLVED or become obsolete because the in-world event it hinges on has passed (drop it). Also re-tier a secret if story pressure changed how buried it is. Else null (FILL if currently missing/empty).",
         "canon_lock": "updated value or null if unchanged"
       },
-      "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows", "source": "how they know it", "date": "in-world date if known" }]
+      "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date if known" }]
     }
   ]
 }
@@ -185,6 +188,7 @@ export const DOSSIER_UPDATE_PROMPT = `You are a continuity tracker for an ongoin
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Do NOT invent information not established in the messages.
+- The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER write this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to" DO something) into new_knowledge; record such an event only after it happens. Facts about OTHER people's promises are established facts and are allowed. The NPC's own future plans are tracked by a different system.
 - FILL MISSING FIELDS: If a dossier field is MISSING or EMPTY in <current_entry>, infer it from the messages and established facts and provide a value. Only output null for a field that already has a real value and has genuinely not changed.
 - If no new information exists AND all fields are already filled, return null fields.
 
@@ -206,7 +210,7 @@ OUTPUT FORMAT:
     "canon_lock": "updated canon lock if a new immutable fact was established, else null (FILL if currently missing/empty)"
   },
   "new_knowledge": [
-    { "fact": "concrete new fact this NPC learned or now knows", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
+    { "fact": "concrete new fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
 }`;
 
@@ -221,6 +225,7 @@ ABSOLUTE RULES:
 - Preserve every fact already in <current_entry> — do not drop or contradict established canon.
 - Fill in EVERY dossier field below. Draw concrete inferences from the messages, world state, and the NPC's established behavior.
 - Do NOT invent facts that contradict the messages. If a field is truly unknowable, give your best grounded inference based on what IS established.
+- The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER add this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to") to new_knowledge, and when consolidating the existing ledger, DROP this NPC's own plan-shaped lines instead of carrying them forward; record an event only after it happens. Facts about OTHER people's promises are established facts and stay. Future plans are tracked by a different system.
 
 OUTPUT FORMAT:
 {
@@ -240,7 +245,7 @@ OUTPUT FORMAT:
     "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons"
   },
     "new_knowledge": [
-    { "fact": "concrete fact this NPC knows (from existing ledger + new)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
+    { "fact": "concrete established fact this NPC knows (from existing ledger + new; past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
 }`;
 

@@ -76,6 +76,12 @@ export function normaliseApiCall(raw, now) {
         module: (typeof raw.module === 'string' && raw.module) ? raw.module : 'api',
         mode: (typeof raw.mode === 'string' && raw.mode) ? raw.mode : null,
         model: raw.model == null ? null : String(raw.model),
+        // What caused the call, and whether the master panic switch was already
+        // on when it FIRED. Only modules that thread a cause down to the fetch
+        // set `trigger` (Interiority does), so null is the normal reading for
+        // every other module — it does not mean "no cause".
+        trigger: (typeof raw.trigger === 'string' && raw.trigger) ? raw.trigger : null,
+        panic: raw.panic === true,
         durationMs: finiteNonNeg(raw.durationMs),
         retries: finiteNonNeg(raw.retries) ?? 0,
         status: raw.status == null ? null : (Number.isFinite(Number(raw.status)) ? Number(raw.status) : null),

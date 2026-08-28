@@ -85,6 +85,11 @@ describe('normaliseApiCall', () => {
             module: 'world_state',
             mode: 'custom',
             model: 'gpt-test-1',
+            // Modules that don't thread a cause down to the fetch normalise to
+            // null here; `panic` is global, so it always normalises to a
+            // boolean rather than being absent for older captures.
+            trigger: null,
+            panic: false,
             durationMs: 830,
             retries: 0,
             status: 200,
@@ -106,7 +111,7 @@ describe('normaliseApiCall', () => {
         const c = normaliseApiCall({
             module: 123, mode: 7, model: 'm', durationMs: 'slow', retries: -3,
             status: 'x', finish_reason: '', usage: { prompt_tokens: 'n/a' },
-            errorClass: '_noRetry', ok: 1, at: 'when?',
+            errorClass: '_noRetry', ok: 1, at: 'when?', trigger: 42, panic: 'yes',
         }, NOW);
         expect(c.module).toBe('api');            // non-string module → the capture default
         expect(c.mode).toBeNull();
@@ -116,6 +121,8 @@ describe('normaliseApiCall', () => {
         expect(c.finish_reason).toBeNull();      // empty string → null
         expect(c.usage).toBeNull();              // no finite member → no usage
         expect(c.errorClass).toBe('_noRetry');
+        expect(c.trigger).toBeNull();            // non-string trigger → null
+        expect(c.panic).toBe(false);             // strictly boolean
         expect(c.ok).toBe(false);                // strictly boolean
         expect(c.at).toBeNull();
         expect(c.ageSec).toBeNull();

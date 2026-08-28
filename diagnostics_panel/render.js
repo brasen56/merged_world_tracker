@@ -980,6 +980,10 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
             <table class="mwt-diag-env-table mwt-diag-env-kv">
                 <tbody>
                     ${kv('module', escapeHtml(last.module))}
+                    ${kv('trigger', last.trigger ? `<code>${escapeHtml(last.trigger)}</code>` : dim('— (module does not report one)'))}
+                    ${kv('panic switch when fired', last.panic
+                        ? '<span class="mwt-diag-badge mwt-diag-badge--fail">ON</span>'
+                        : '<span class="mwt-diag-badge mwt-diag-badge--ok">off</span>')}
                     ${kv('mode', last.mode ? `${escapeHtml(last.mode)} — ${escapeHtml(LR_MODE_LABELS[last.mode] ?? 'unknown capture mode')}` : dim('—'))}
                     ${kv('model / profile', last.model != null ? `<code>${escapeHtml(last.model)}</code>` : dim('—'))}
                     ${kv('HTTP status', last.status != null ? escapeHtml(String(last.status)) : dim('—'))}
@@ -1002,6 +1006,7 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
             <td>${escapeHtml(formatTime(c.at ?? s.generatedAt ?? Date.now()))}</td>
             <td class="mwt-diag-dim">${escapeHtml(formatRequestAge(c.ageSec))}</td>
             <td>${escapeHtml(c.module)}</td>
+            <td${c.panic ? ' title="The panic switch was already ON when this request fired."' : ''}>${c.trigger ? escapeHtml(c.trigger) : '—'}${c.panic ? ' ⛔' : ''}</td>
             <td class="mwt-diag-dim">${escapeHtml(c.mode ?? '—')}</td>
             <td>${c.model != null ? escapeHtml(c.model) : dim('—')}</td>
             <td>${c.status != null ? escapeHtml(String(c.status)) : dim('—')}</td>
@@ -1017,7 +1022,7 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
         <p class="mwt-diag-env-subheading">History — newest first (the store keeps the last ${escapeHtml(String(s.capacity ?? '?'))} calls)</p>
         <table class="mwt-diag-health-table">
             <thead>
-                <tr><th>Time</th><th>Age</th><th>Module</th><th>Mode</th><th>Model</th><th>HTTP</th><th>Result</th><th>Dur</th><th>Ret</th><th>Finish</th><th>Tokens</th></tr>
+                <tr><th>Time</th><th>Age</th><th>Module</th><th>Trigger</th><th>Mode</th><th>Model</th><th>HTTP</th><th>Result</th><th>Dur</th><th>Ret</th><th>Finish</th><th>Tokens</th></tr>
             </thead>
             <tbody>${historyRows}</tbody>
         </table>
@@ -1043,8 +1048,12 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
             ${warningList}
             ${lastCard}
             ${historySection}
+            <p class="mwt-diag-note">⛔ next to a trigger means the panic switch was already ON when that request fired. That is a gate leak for
+                <code>message_received</code> / <code>swipe</code> / <code>edit</code>, and expected for <code>manual</code> / <code>slash_command</code>
+                — the 💭 Generate button and <code>/wt-thoughts</code> are explicit user intent and bypass the switch by design. A call with panic
+                <em>off</em> but a long duration was simply still in flight when the switch was flipped, which is not a leak.</p>
             <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. Telemetry by construction: the capture records ABOUT a call — module,
-                mode, model/profile, HTTP status, duration, retries, finish_reason, token usage, error class — and NEVER the prompt, API key, custom
+                trigger, panic state, mode, model/profile, HTTP status, duration, retries, finish_reason, token usage, error class — and NEVER the prompt, API key, custom
                 headers, or response body, so there is no content to gate here (the report checkbox above changes nothing on this tab). It is in-memory
                 only and resets on reload. This pane renders redactLastRequestSnapshot() output — the same secret-scrubbed guarantee. Same data in the console: <code>MWT.diagnostics.lastRequest()</code> — its return value is secret-scrubbed
                 (model/profile strings can quote a secret, so every string routes through core/redaction.js) — or the raw telemetry-only copies

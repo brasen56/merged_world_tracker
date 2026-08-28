@@ -17,6 +17,19 @@ const MAX_LEDGER_NAME = 120;
 const MAX_LEDGER_FIELD = 500;
 const MAX_LEDGER_SINCE = 100;
 
+/**
+ * Inline header prepended to <knowledge_entry> whenever intentions are part
+ * of the call. Live-use reports: the model mined plan-shaped ledger lines
+ * ("intends to ambush the caravan", possibly recorded many turns earlier)
+ * for "new" intentions that <recent_messages> did not support, resurrecting
+ * stale plans as fresh intentions. The system prompt carries the full
+ * contract (the NEW INTENTIONS REQUIRE CURRENT EVIDENCE rule in
+ * buildSystemPrompt); this one-liner keeps the reminder next to the data it
+ * constrains. Thoughts-only calls skip it — there <knowledge_entry> IS the
+ * fact source by design (§15 input partition).
+ */
+const KNOWLEDGE_BACKGROUND_HEADER = '(Background evidence — what this NPC knew, as of when it was recorded. May inform motive; NOT proof of any current plan.)';
+
 /** Cap a string to a maximum length, trimming if needed. */
 function cap(text, max) {
     return truncateText(String(text ?? ''), max);
@@ -53,7 +66,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
     })();
 
     const contextLine = wantIntentions
-        ? 'You will receive, for each NPC: their knowledge ledger / dossier entry, their current open intentions, any plans they have already scheduled, and a window of recent story messages.'
+        ? 'You will receive, for each NPC: their knowledge ledger / dossier entry (background evidence only — never sufficient on its own to justify a new intention), their current open intentions, any plans they have already scheduled, and a window of recent story messages.'
         : 'You will receive, for each NPC: their knowledge ledger / dossier entry and a window of recent story messages.';
 
     // ── Rules ──
@@ -73,6 +86,14 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
         rules.push(`   - "dropped": ONLY if the NPC has EXPLICITLY abandoned or cancelled the intention (said so, or clearly changed their mind). A changed situation, a delay, a new complication, or the trigger not arriving yet is NOT a drop — the intention waits.`);
         rules.push(`   - "open" (default): if there is ANY doubt whether the action is completed or the intention is truly abandoned, leave it open. Do not list it. It carries forward automatically.`);
         rules.push(`   - When in doubt between open and executed/dropped: choose open.`);
+        // [P1] Evidence is required for the MOTIVATION, not the decision:
+        // demanding the plan be visibly formed or committed on-screen turned
+        // Interiority into explicit-plan extraction and suppressed genuinely
+        // hidden intentions. A new intention now needs a NEW event or
+        // circumstance in the window; the decision itself may stay private.
+        // The mere passage of time never counts — waking already-scheduled
+        // intentions for approaching dates is the dormant poll's job (§20).
+        rules.push(`${++n}. NEW INTENTIONS REQUIRE CURRENT EVIDENCE. Propose a new intention ONLY when <recent_messages> contains a NEW event or circumstance that would motivate this NPC to form a plan — a threat, an opportunity, a slight, a loss, a reveal, a changed situation. The NPC does NOT need to announce, show, or decide anything on-screen: hidden intentions are the point, and the decision itself may remain entirely private. But the MOTIVATION must be new and present in this window — the mere passage of time (a deadline or festival drawing near) is NOT a motivating event; already-scheduled intentions are woken by a separate system, never re-proposed here. <knowledge_entry> is BACKGROUND EVIDENCE ONLY: it may explain a motive, but a plan-shaped line there is a historical record, not a motivating event — NEVER create an intention by restating or paraphrasing a line from <knowledge_entry> when no new cause has appeared. A stale intention is worse than a missing one.`);
         rules.push(`${++n}. New intentions require BOTH a concrete "action" AND a specific "trigger" condition (the event or circumstance when the NPC will act). Vague triggers like "soon" or "when the time is right" are not acceptable — use concrete, verifiable conditions.`);
         rules.push(`${++n}. INTENTION HORIZON — for each new intention, classify when it will fire:`);
         rules.push(`   - "immediate": the trigger could be met any turn now (e.g. "next time Jonah leaves the house"). Use for event-conditional or situational triggers.`);
@@ -175,7 +196,13 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
     for (const npc of npcBlocks) {
         parts.push(buildTag('npc', { name: npc.name }));
         if (npc.knowledgeEntry) {
-            parts.push(wrapTag('knowledge_entry', npc.knowledgeEntry));
+            // Prepend the background-evidence header whenever intentions are
+            // in play, so a plan-shaped ledger line cannot masquerade as a
+            // plan the NPC is forming now.
+            const body = includeIntentions !== false
+                ? `${KNOWLEDGE_BACKGROUND_HEADER}\n${npc.knowledgeEntry}`
+                : npc.knowledgeEntry;
+            parts.push(wrapTag('knowledge_entry', body));
         } else {
             parts.push(wrapTag('knowledge_entry', '(No knowledge tracker entry for this NPC.)'));
         }

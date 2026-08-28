@@ -19,7 +19,7 @@
 import {
     getChat, getContextSafe, estimateTokens,
     captureScope, assertSameScope,
-    injectionAllowed,
+    injectionAllowed, record,
 } from '../core/index.js';
 
 import {
@@ -47,6 +47,32 @@ import {
     renderContent, renderAllThoughtBlocks, clearAllThoughtBlocks,
     renderThoughtBlockForMessage,
 } from './render.js';
+
+// ─── Generation triggers (diagnostics) ───────────────────────────────────────
+
+/**
+ * What caused a generation. Threaded from each entry point down to
+ * captureApiCall (core/api.js), which stamps it onto the api_call telemetry
+ * next to `panic` (the master switch's state when the request fired).
+ *
+ * This exists because the api_call row alone cannot answer the question a
+ * "panic is on and it is STILL spending tokens" report actually asks. The
+ * module has four automatic-looking entry points with different gating, and
+ * two of them (`MANUAL`, `SLASH_COMMAND`) pass `force: true` and legitimately
+ * bypass the panic gate — so "an interiority call happened during a panic
+ * window" is not by itself a bug, and which trigger it was IS the diagnosis.
+ *
+ * Stable strings — they are read by users out of the diagnostics panel and
+ * quoted in bug reports. Do not rename.
+ */
+export const TRIGGER = Object.freeze({
+    MESSAGE_RECEIVED: 'message_received', // auto, gated (router + gate)
+    SWIPE: 'swipe',                       // auto, gated (gate only)
+    EDIT: 'edit',                         // auto, gated (gate only)
+    MANUAL: 'manual',                     // 💭 Generate button — force, UNGATED
+    SLASH_COMMAND: 'slash_command',       // /wt-thoughts — force, UNGATED
+    UNKNOWN: 'unknown',                   // a caller that forgot to say
+});
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -159,7 +185,7 @@ export function onMessageReceived(msgIdx) {
     const targetKey = getOrCreateMsgKeyForIndex(targetIdx);
 
     // Serialize through the work queue so generations never overlap.
-    queueWork(() => generateForCurrentMessage(targetKey));
+    queueWork(() => generateForCurrentMessage(targetKey, { trigger: TRIGGER.MESSAGE_RECEIVED }));
 }
 
 /**
@@ -174,9 +200,13 @@ export function onMessageReceived(msgIdx) {
  *
  * @param {object} [opts]
  * @param {boolean} [opts.force=true] - bypass the thoughtsInterval throttle
+ * @param {string} [opts.trigger='manual'] - diagnostics label for the caller.
+ *   Defaults to the 💭 Generate button; `/wt-thoughts` passes its own. Both
+ *   bypass the panic gate (`force`), so the api_call telemetry has to name
+ *   WHICH of them spent the tokens.
  */
-export async function triggerGenerate({ force = true } = {}) {
-    return queueWork(() => generateForCurrentMessage(null, { force }));
+export async function triggerGenerate({ force = true, trigger = TRIGGER.MANUAL } = {}) {
+    return queueWork(() => generateForCurrentMessage(null, { force, trigger }));
 }
 
 /**
@@ -199,8 +229,11 @@ export async function triggerGenerate({ force = true } = {}) {
  * @param {boolean} [opts.force=false] - user-initiated: bypass the §21
  *   `thoughtsInterval` throttle so an explicit request always runs thoughts.
  *   Automatic (MESSAGE_RECEIVED) generation leaves this false and stays throttled.
+ * @param {string} [opts.trigger] - one of TRIGGER.*: what caused this
+ *   generation. Rides down to captureApiCall (core/api.js) so every api_call
+ *   row in diagnostics names its own cause. Never affects behaviour.
  */
-async function generateForCurrentMessage(targetKey, { force = false } = {}) {
+async function generateForCurrentMessage(targetKey, { force = false, trigger = TRIGGER.UNKNOWN } = {}) {
     // PANIC GATE: every automatic entry point into this function must respect
     // the master panic switch (injectionMasterOff) and the per-module disable.
     // MESSAGE_RECEIVED is already gated in core/event_router.js, but the
@@ -215,7 +248,18 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
     // explicit user intent — may bypass it. Cleanup/rollback never flows
     // through here, so the INTERIORITY-04 contract is unaffected.
     if (!force && !injectionAllowed('Interiority')) {
-        console.log('[MWT:Interiority] Generation skipped — injection disabled (panic switch on or module off).');
+        console.log(`[MWT:Interiority] Generation skipped (trigger: ${trigger}) — injection disabled (panic switch on or module off).`);
+        // Breadcrumb in the diagnostics ring so the panel can show the gate
+        // WORKING. Without it a panic window produces no interiority evidence
+        // at all, and "no api_call" is indistinguishable from "module never
+        // ran" — which is exactly the ambiguity that made the swipe-path leak
+        // (1.8.3) so hard to pin down from a user's screenshot.
+        record({
+            level: 'info',
+            module: 'interiority',
+            event: 'generation_blocked',
+            detail: { trigger, reason: 'injection-disabled' },
+        });
         return null;
     }
 
@@ -290,7 +334,7 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         const wantIntentions = settings.generateIntentions !== false;
         if (wantIntentions && isDormantPollDue()) {
             try {
-                proposedWakeIds = await runDormantPoll();
+                proposedWakeIds = await runDormantPoll({ trigger });
                 // INTERIORITY-02: The dormant poll awaits an API call. Assert
                 // scope after it returns. The poll is proposal-only, so there
                 // is no ledger write to leak if the chat changed.
@@ -325,7 +369,7 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
         let intentionsEvaluatedRoster = [];
         if (useSplit) {
             console.log('[MWT:Interiority] Split mode ON — running parallel intentions + thoughts calls.');
-            const { intentionsResult, thoughtsResult } = await runSplitCall(roster, { force, virtuallyActiveIds: proposedWakeIds });
+            const { intentionsResult, thoughtsResult } = await runSplitCall(roster, { force, virtuallyActiveIds: proposedWakeIds, trigger });
             // INTERIORITY-02: Cross-chat guard after the parallel pair completes.
             if (!assertSameScope(scopeBefore).ok) {
                 console.log('[MWT:Interiority] Results discarded — chat changed during split API call.');
@@ -340,9 +384,9 @@ async function generateForCurrentMessage(targetKey, { force = false } = {}) {
             intentionsEvaluatedRoster = getEvaluatedNpcNames(intentionsResult, roster);
         } else {
             if (settings.mode === 'strict') {
-                result = await runStrictCalls(roster, proposedWakeIds);
+                result = await runStrictCalls(roster, proposedWakeIds, { trigger });
             } else {
-                result = await runBatchedCall(roster, { virtuallyActiveIds: proposedWakeIds });
+                result = await runBatchedCall(roster, { virtuallyActiveIds: proposedWakeIds, trigger });
             }
 
             // INTERIORITY-02: Cross-chat guard: discard if the user switched
@@ -642,7 +686,9 @@ function invalidateAndMaybeRegenerate(msgIdx, eventName) {
         if (isFreshSwipeSlot) {
             console.log(`[MWT:Interiority] ${eventName} opened a fresh swipe slot — deferring generation to MESSAGE_RECEIVED.`);
         } else {
-            queueWork(() => generateForCurrentMessage(msgKey));
+            queueWork(() => generateForCurrentMessage(msgKey, {
+                trigger: eventName === 'MESSAGE_SWIPED' ? TRIGGER.SWIPE : TRIGGER.EDIT,
+            }));
         }
     }
 }

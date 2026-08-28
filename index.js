@@ -690,6 +690,7 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
 // The render.js "Generate Now" button dispatches these custom events.
 
 document.addEventListener('mwt:interiority-generate', () => {
+    // trigger defaults to TRIGGER.MANUAL — this listener IS the 💭 button.
     Interiority.triggerGenerate?.();
 });
 
