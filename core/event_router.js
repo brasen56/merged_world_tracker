@@ -113,8 +113,12 @@ export function routeMessageDeleted(modules, settings, deletedIndex) {
 }
 
 /**
- * Dispatch a MESSAGE_SWIPED event. Awareness / cleanup only — never gated by
- * the panic switch (no counter to drift; swipe never starts a generation).
+ * Dispatch a MESSAGE_SWIPED event. Cleanup always runs — never gated by the
+ * panic switch (no counter to drift; INTERIORITY-04 keeps ledger rollback
+ * live). Interiority MAY follow its cleanup with a regeneration (swipe
+ * navigation on the last message); that GENERATION is gated inside
+ * generateForCurrentMessage (interiority/index.js), not here, so the panic
+ * switch stops the API call without suppressing rollback.
  *
  * @param {object} modules — { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority }
  *   (only WorldState, Chronicle, and Interiority have swipe handlers)
@@ -128,8 +132,12 @@ export function routeMessageSwiped(modules, settings, swipedIndex) {
 }
 
 /**
- * Dispatch a MESSAGE_EDITED event. Awareness / cleanup only — never gated by
- * the panic switch (no counter to drift; edit never starts a generation).
+ * Dispatch a MESSAGE_EDITED event. Cleanup always runs — never gated by the
+ * panic switch (no counter to drift; INTERIORITY-04 keeps ledger rollback
+ * live). Interiority MAY follow its cleanup with a regeneration (edit of the
+ * last message); that GENERATION is gated inside generateForCurrentMessage
+ * (interiority/index.js), not here, so the panic switch stops the API call
+ * without suppressing rollback.
  *
  * @param {object} modules — { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority }
  *   (only WorldState, Chronicle, and Interiority have edit handlers)

@@ -19,6 +19,7 @@
 import {
     getChat, getContextSafe, estimateTokens,
     captureScope, assertSameScope,
+    injectionAllowed,
 } from '../core/index.js';
 
 import {
@@ -200,6 +201,24 @@ export async function triggerGenerate({ force = true } = {}) {
  *   Automatic (MESSAGE_RECEIVED) generation leaves this false and stays throttled.
  */
 async function generateForCurrentMessage(targetKey, { force = false } = {}) {
+    // PANIC GATE: every automatic entry point into this function must respect
+    // the master panic switch (injectionMasterOff) and the per-module disable.
+    // MESSAGE_RECEIVED is already gated in core/event_router.js, but the
+    // swipe/edit handler (invalidateAndMaybeRegenerate) queues a regeneration
+    // whenever the LAST message was swiped to an existing slot or edited — and
+    // the router deliberately does NOT gate MESSAGE_SWIPED/MESSAGE_EDITED
+    // (INTERIORITY-04 keeps rollback/cleanup running during a panic window),
+    // so without this check that regeneration burned API calls while the user
+    // believed everything was off. This is the single choke point for all
+    // automatic API calls the module makes (batched/strict/split AND the
+    // dormant poll). Only `force` — the 💭 Generate button / /wt-thoughts,
+    // explicit user intent — may bypass it. Cleanup/rollback never flows
+    // through here, so the INTERIORITY-04 contract is unaffected.
+    if (!force && !injectionAllowed('Interiority')) {
+        console.log('[MWT:Interiority] Generation skipped — injection disabled (panic switch on or module off).');
+        return null;
+    }
+
     const ctx = getContextSafe();
     if (!ctx) return null;
 

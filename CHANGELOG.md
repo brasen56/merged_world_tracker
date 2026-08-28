@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.8.3]
+
+### Fixed
+- Added a panic gate for interiority to stop it from making API calls on swipe. Note: The Generate button CAN still make calls while panic is active.
+- Knowledge Tracker: relationship graph "Scroll to zoom" (and background-drag
+  panning) never visibly worked. `wireRelationshipGraphInteractions` seeded its
+  pan/zoom state from `svg.viewBox.baseVal.w/.h`, but `SVGRect` exposes
+  `width`/`height` — there are no `w`/`h` properties — so the state started as
+  `{w: undefined, h: undefined}` and the first wheel/pan event wrote an invalid
+  `NaN NaN NaN NaN` viewBox that browsers silently discard, leaving the graph
+  stuck at its previous zoom. The state is now parsed from the viewBox
+  attribute (`x y w h`) instead. Covered by
+  `test/relationship_graph_zoom.test.js`, whose fake `SVGRect` faithfully
+  exposes only `x/y/width/height`.
+
 
 ## [1.8.2]
 

@@ -1888,9 +1888,17 @@ function renderRelationshipGraph() {
 }
 
 function wireRelationshipGraphInteractions(svg, data) {
-    const viewBox = svg.viewBox.baseVal;
-    // Clone to make mutable if baseVal is read-only (some engines)
-    const vbState = { x: viewBox.x, y: viewBox.y, w: viewBox.w, h: viewBox.h };
+    // Seed pan/zoom state from the viewBox ATTRIBUTE, not svg.viewBox.baseVal.
+    // SVGRect exposes `width`/`height` — there are no `w`/`h` properties — so
+    // the previous `baseVal.w`/`baseVal.h` reads silently produced `undefined`,
+    // and the wheel/pan handlers then wrote an invalid "NaN NaN NaN NaN"
+    // viewBox string that browsers discard outright. The graph kept rendering
+    // with its last valid viewBox, which made "Scroll to zoom" (and background
+    // panning) do nothing at all. Parsing the attribute is deterministic and
+    // engine-independent.
+    const [vbX, vbY, vbW, vbH] = (svg.getAttribute('viewBox') || '0 0 600 400')
+        .trim().split(/\s+/).map(Number);
+    const vbState = { x: vbX, y: vbY, w: vbW, h: vbH };
 
     // Node dragging
     let dragNode = null;
