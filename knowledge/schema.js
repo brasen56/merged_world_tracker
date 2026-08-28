@@ -14,10 +14,12 @@
  * Part 1 scope: exact port of the backup/validate.js rules onto structured
  * issues. Part 2 adds the 0 -> 1 migrations (canonical defaults current
  * accessors already assume; receipt-tuple normalization), the embedded-store
- * `version` preservation, and the per-store issue policies. Deep
- * evidence/reference checks (design §6.3) and full lorebook-store contract
- * checks (§6.7) arrive with Parts 3 and 4. Pure by contract (see
- * core/schema.js).
+ * `version` preservation, and the per-store issue policies. Part 4 completes
+ * the full lorebook-store contract (design §6.7): profileUid checks,
+ * relationship/stance source enums, normalized-name-collision pruning,
+ * relationship-target reference findings, and the recorded [MWT:store] ghost
+ * repair inside the 0 -> 1 migration that knowledge/store.js's hydration gate
+ * runs before a book becomes writable.
  *
  * The metadataKey literals mirror backup/data.js METADATA_KEYS and the
  * module's own state.js keys; test/schema_parity.test.js pins them together.
@@ -32,6 +34,8 @@ import {
     isFiniteNumber,
     isNonEmptyString,
     isObject,
+    ISSUE_SEVERITIES,
+    makeIssue,
     mergeStats,
     quarantineIssue,
     repairIssue,
@@ -49,6 +53,37 @@ export const STORE_SENTINEL = '[MWT:store]';
 
 /** Lorebook-store version — bumped only on a breaking change to the shape. */
 export const KNOWLEDGE_STORE_VERSION = 1;
+
+/**
+ * NPC-registry key normalization for the store schema's §6.7 checks: the
+ * normalized-name-collision check (two keys differing only in case or
+ * surrounding whitespace resolve to the same entity, so the later one is
+ * ambiguous and cannot stay in the live view) and the relationship-target
+ * reference check (a casing difference must not read as a dangling target).
+ *
+ * Must stay identical to registry.js `normalizeRegistryName()` — the
+ * accessor's case-insensitive resolution step. It is duplicated here rather
+ * than imported because module schemas stay pure by contract (imports only
+ * core/schema.js and core/quarantine.js); test/knowledge_store_hydration.test.js
+ * pins the two together so they cannot drift.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+export function normalizeStoreKeyName(name) {
+    return String(name ?? '').toLowerCase().trim();
+}
+
+/**
+ * The provenance values a relationship edge `source` or a stance-source value
+ * may carry (design §6.7 source enums). An ABSENT source stays valid: a record
+ * with no `source` predates provenance and reads as manual — the fail-safe
+ * direction documented in relationships.js.
+ *
+ * Must stay in lockstep with relationships.js SOURCE_AUTO/SOURCE_MANUAL;
+ * test/knowledge_store_hydration.test.js pins the two together.
+ */
+export const RELATIONSHIP_SOURCE_VALUES = Object.freeze(['auto', 'manual']);
 
 /** The four non-negative finite cadence counters. */
 export const COUNTER_KEYS = [
@@ -82,21 +117,34 @@ export function checkConsolidated(record) {
 // A registry/state-registry record's load-bearing field is `uid`. A null uid
 // is an intentional orphan (the destination entry was deleted but the name is
 // retained); a negative or fractional uid is never valid live state.
+// `profileUid` (design §6.7) is parallel: absent (never linked), null
+// (unlinked), or a non-negative uid into the NPC Profiles lorebook — anything
+// else is a pointer no code path could ever follow.
 // Destination resolution later decides whether a record can be restored.
 export function checkRegistryRecord(record) {
     if (!isObject(record)) return { code: 'registry-not-object', message: 'Registry entry must be an object.' };
     if (record.uid !== null && (!Number.isInteger(record.uid) || record.uid < 0)) {
         return { code: 'registry-invalid-uid', message: 'Registry entry uid must be null or a non-negative integer.' };
     }
+    if (record.profileUid !== undefined && record.profileUid !== null
+        && (!Number.isInteger(record.profileUid) || record.profileUid < 0)) {
+        return { code: 'registry-invalid-profile-uid', message: 'Registry entry profileUid must be null or a non-negative integer.' };
+    }
     return null;
 }
 
 // Relationship edges are rendered by their `target` and `type`; an edge
-// missing either cannot be displayed or reconciled.
+// missing either cannot be displayed or reconciled. `source` records who
+// wrote the edge (design §6.7 source enums): only the exact 'auto'/'manual'
+// values exist — a record with no source predates provenance and reads as
+// manual, but a value outside the enum was never written by any MWT build.
 export function checkRelationshipEdge(edge) {
     if (!isObject(edge)) return { code: 'relationship-not-object', message: 'Relationship edge must be an object.' };
     if (!isNonEmptyString(edge.target)) return { code: 'relationship-missing-target', message: 'Relationship edge target must be a non-empty string.' };
     if (!isNonEmptyString(edge.type)) return { code: 'relationship-missing-type', message: 'Relationship edge type must be a non-empty string.' };
+    if (edge.source !== undefined && !RELATIONSHIP_SOURCE_VALUES.includes(edge.source)) {
+        return { code: 'relationship-invalid-source', message: `Relationship edge source must be "auto" or "manual" (or absent).` };
+    }
     return null;
 }
 
@@ -176,14 +224,21 @@ export function validateKnowledgeCountersData(data) {
 
 /**
  * Validate a lorebook store's registry maps, relationship edges, and stance
- * maps. Only known fields survive — an unknown top-level key is dropped
- * rather than merged into a book, exactly as before. The one container field
- * is the store's EMBEDDED QUARANTINE (design §5.1): a global/scoped book is
- * shared across chats, so its recovery records must live inside the store
- * itself, never in one chat's metadata. It uses the same container shape and
- * validator as the chat-local container; a container written by a NEWER MWT
- * is refused with a FATAL finding (it blocks the store) instead of being
- * normalized/downgraded.
+ * maps (the full design §6.7 contract). Only known fields survive — an
+ * unknown top-level key is dropped rather than merged into a book, exactly as
+ * before. The one container field is the store's EMBEDDED QUARANTINE
+ * (design §5.1): a global/scoped book is shared across chats, so its
+ * recovery records must live inside the store itself, never in one chat's
+ * metadata. It uses the same container shape and validator as the chat-local
+ * container; a container written by a NEWER MWT is refused with a FATAL
+ * finding (it blocks the store) instead of being normalized/downgraded.
+ *
+ * Part 4 additions: registry records carry the `profileUid` pointer contract;
+ * relationship-edge and stance-source values must come from the provenance
+ * enum; NPC-registry keys that collide after name normalization are
+ * quarantined (the first key wins — state-registry keys are deliberately
+ * exempt, see the check itself); relationship edges whose target names no
+ * registry key stay in the live data with a REFERENCE finding.
  */
 export function validateKnowledgeStoreData(data) {
     const issues = [];
@@ -221,6 +276,40 @@ export function validateKnowledgeStoreData(data) {
         accepted[key] = checked.data;
         mergeStats(stats, checked.stats);
         issues.push(...checked.issues);
+        // Normalized-name collisions (design §6.7): two keys that normalize to
+        // the same name ("Mara" / "mara ") resolve to the same entity for
+        // every accessor, so the second and later colliders are ambiguous.
+        // The first key in insertion order wins; each loser leaves the live
+        // view with its complete record preserved (§5.2).
+        //
+        // `registry` ONLY. The check is licensed by resolveRegistryKey()'s
+        // case-insensitive step, which the NPC registry has and the STATE
+        // registry does not: every state-tracker access is an exact-key
+        // lookup (registry.js setStateTrackerEnabled/…/bumpStateTrackerTimestamp,
+        // render.js's tracker cards), and the register UI takes a trimmed
+        // free-text name with no case-insensitive dedup. "Weather" and
+        // "weather" are therefore two SEPARATE trackers, each addressable and
+        // each pointing at its own entry — pruning one would drop live state
+        // and orphan its lorebook entry, which is the duplicate/orphan failure
+        // this store exists to prevent. If the state registry ever gains a
+        // case-insensitive resolver, this list grows with it.
+        if (key !== 'registry') continue;
+        const claimed = new Set();
+        for (const name of Object.keys(accepted[key])) {
+            const normalized = normalizeStoreKeyName(name);
+            if (claimed.has(normalized)) {
+                issues.push(quarantineIssue(
+                    'registry-name-collides',
+                    [key, name],
+                    `"${name}" collides with another ${key} key after name normalization.`,
+                    accepted[key][name],
+                    name,
+                ));
+                delete accepted[key][name];
+            } else {
+                claimed.add(normalized);
+            }
+        }
     }
     if (data.relationships !== undefined) {
         if (!isObject(data.relationships)) {
@@ -245,17 +334,62 @@ export function validateKnowledgeStoreData(data) {
             }
         }
     }
-    for (const [key, label] of [['stances', 'Stance'], ['stanceSources', 'Stance source']]) {
-        if (data[key] === undefined) continue;
+    // Relationship targets (design §6.7): an edge whose target names no
+    // registry key is dangling. It is RETAINED — a reference finding, not a
+    // rejected record (design §3.5 category 3) — because the edge still
+    // renders, and dropping it would lose the user's statement about their
+    // story. Names compare with the accessor's case-insensitive normalization
+    // (normalizeStoreKeyName), so a casing difference is not a false positive.
+    // Skipped when the registry is absent (e.g. a State book): there is
+    // nothing to resolve against.
+    if (accepted.registry && accepted.relationships) {
+        const knownNames = new Set(Object.keys(accepted.registry).map(normalizeStoreKeyName));
+        for (const [name, edges] of Object.entries(accepted.relationships)) {
+            for (let index = 0; index < edges.length; index++) {
+                const edge = edges[index];
+                if (!knownNames.has(normalizeStoreKeyName(edge.target))) {
+                    issues.push(makeIssue({
+                        code: 'relationship-target-unknown',
+                        path: ['relationships', name, index],
+                        severity: ISSUE_SEVERITIES.REFERENCE,
+                        message: `Relationship target "${edge.target}" is not in the registry.`,
+                        record: edge,
+                        identity: name,
+                    }));
+                }
+            }
+        }
+    }
+    if (data.stances !== undefined) {
+        // Stance text is free-form (a preset suggestion, not an enum a newer
+        // build could not extend) — only its type is checked.
         const checked = checkRecordMap(
-            data[key],
-            label,
-            value => (typeof value === 'string' ? null : { code: 'stance-not-string', message: `${label} value must be a string.` }),
-            { path: [key] },
+            data.stances,
+            'Stance',
+            value => (typeof value === 'string' ? null : { code: 'stance-not-string', message: 'Stance value must be a string.' }),
+            { path: ['stances'] },
         );
-        accepted[key] = checked.data;
+        accepted.stances = checked.data;
         mergeStats(stats, checked.stats);
         issues.push(...checked.issues);
+    }
+    if (data.stanceSources !== undefined) {
+        // Stance sources share the relationship provenance enum (design §6.7):
+        // 'auto' or 'manual', with absent never occurring (setStance always
+        // writes one) but tolerated as a legacy record.
+        const checkedSources = checkRecordMap(
+            data.stanceSources,
+            'Stance source',
+            value => {
+                if (typeof value !== 'string') return { code: 'stance-not-string', message: 'Stance source value must be a string.' };
+                if (!RELATIONSHIP_SOURCE_VALUES.includes(value)) return { code: 'stance-source-invalid', message: 'Stance source must be "auto" or "manual".' };
+                return null;
+            },
+            { path: ['stanceSources'] },
+        );
+        accepted.stanceSources = checkedSources.data;
+        mergeStats(stats, checkedSources.stats);
+        issues.push(...checkedSources.issues);
     }
     return { data: accepted, issues, stats };
 }
@@ -368,9 +502,12 @@ export function migrateKnowledgeCountersV0ToV1(data) {
 }
 
 /**
- * v0 -> v1 lorebook store: stamp the embedded version when absent so every
- * persisted store carries its schema marker (design §4.1). A PRESENT value is
- * never touched here — an invalid one is reported by the v1 validator.
+ * v0 -> v1 lorebook store (design §6.7): remove registry records whose NAME is
+ * the store sentinel — ghosts left by "Import from Lorebook" runs that predate
+ * isStoreEntry() — as an explicitly recorded repair, then stamp the embedded
+ * version only after the surviving store is canonical. A PRESENT version
+ * value is never touched here — an invalid one is reported by the v1
+ * validator and heals on the following load's migration.
  */
 export function migrateKnowledgeStoreV0ToV1(data) {
     // Fatal-root policy (design §3.5, category 4): a non-object root is
@@ -378,8 +515,23 @@ export function migrateKnowledgeStoreV0ToV1(data) {
     // with an empty store here.
     if (!isObject(data)) return { data, issues: [] };
     const next = { ...data };
+    const issues = [];
+    if (isObject(next.registry)) {
+        for (const name of Object.keys(next.registry)) {
+            if (name.startsWith(STORE_SENTINEL)) {
+                issues.push(repairIssue(
+                    'registry-store-ghost',
+                    ['registry', name],
+                    `Removed the "${STORE_SENTINEL}" ghost record left by a pre-fix lorebook import.`,
+                    next.registry[name],
+                    name,
+                ));
+                delete next.registry[name];
+            }
+        }
+    }
     if (next.version === undefined) next.version = KNOWLEDGE_STORE_VERSION;
-    return { data: next, issues: [] };
+    return { data: next, issues };
 }
 
 // ─── Descriptors ─────────────────────────────────────────────────────────────
@@ -456,12 +608,16 @@ export const knowledgeStoreSchema = defineStoreSchema({
             'empty-key',
             'registry-not-object',
             'registry-invalid-uid',
+            'registry-invalid-profile-uid',
+            'registry-name-collides',
             'relationships-not-object',
             'relationships-not-array',
             'relationship-not-object',
             'relationship-missing-target',
             'relationship-missing-type',
+            'relationship-invalid-source',
             'stance-not-string',
+            'stance-source-invalid',
             'store-version-invalid',
             // Embedded-quarantine container findings (items the container
             // validator rejects stay recoverable through their issue records).
@@ -470,6 +626,14 @@ export const knowledgeStoreSchema = defineStoreSchema({
             'item-missing-fields',
             'item-unrecoverable',
         ],
-        repair: ['fingerprint-mismatch'],
+        // §3.5 category 3: structurally valid data retained with a finding.
+        reference: [
+            'relationship-target-unknown',
+        ],
+        repair: [
+            'fingerprint-mismatch',
+            // The recorded [MWT:store] ghost removal (design §6.7).
+            'registry-store-ghost',
+        ],
     }),
 });

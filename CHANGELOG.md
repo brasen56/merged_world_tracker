@@ -12,6 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+
+## [1.8.2]
+
+### Added
+
+- Schema Validation (Part 4) — the Knowledge lorebook store's hydration is
+  now schema-owned and fail-closed (design §6.7 of the schema validation
+  plan). `hydrateBook()` runs parse → version gate → migration → validation
+  through the same `prepareStore()` runner backup/import uses, and only then
+  sets `hydrated = true`; a store written by a NEWER MWT is refused untouched
+  (previously any non-number version was silently re-stamped, and a future
+  version loaded writable). Legacy `chat_metadata` seeds are validated BEFORE
+  adoption — rejected records land in the book's embedded quarantine
+  container, persisted by the same save as the migrated data — and the
+  commit, quarantine merge, and flush run as one critical section under the
+  store lock: a failed flush rolls the cache back wholesale, so the untouched
+  on-disk store stays the recoverable state, the book stays un-writable, and
+  the idempotent migration simply retries on the next load. The §6.7 record
+  contract is complete: `profileUid` null-or-non-negative-integer checks,
+  relationship-edge and stance-source provenance enums, NPC-registry
+  normalized-name collision pruning (first key wins, colliders preserved
+  whole in quarantine — the State Tracker registry is exempt, since its
+  accessors are exact-key lookups and two case-differing names are two real
+  trackers), relationship-target reference findings (retained, not
+  rejected), and the `[MWT:store]` ghost removal recorded as a repair inside
+  the 0 → 1 migration instead of a silent in-place scrub. A cache reset that
+  lands between hydration's read and its commit retires the slot and the
+  commit abandons quietly, rather than reporting a persistence failure the
+  store was never in. Coverage: `test/knowledge_store_hydration.test.js`.
+
 ## [1.8.1]
 
 ### Fixed

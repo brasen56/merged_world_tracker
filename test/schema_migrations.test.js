@@ -40,6 +40,7 @@ import {
 } from '../schema/manifest.js';
 import { SCHEMA_STORE_IDS, STORE_SCHEMAS } from '../schema/registry.js';
 import { backfillSnapshotIds } from '../chronicle/schema.js';
+import { STORE_SENTINEL } from '../knowledge/schema.js';
 
 // ─── Real-world legacy fixtures (one per store) ──────────────────────────────
 //
@@ -87,7 +88,14 @@ const LEGACY_FIXTURES = {
         perMessage: { 'mu-abc': { generatedAt: 1 } },
     },
     knowledgeStore: {
-        registry: { Mara: { uid: 3 } },
+        // Includes the real-world legacy ghost: "Import from Lorebook" runs
+        // that predate isStoreEntry() registered the store entry itself as an
+        // NPC under the sentinel name (Part 4 makes its removal a recorded
+        // repair inside the 0 -> 1 migration).
+        registry: {
+            Mara: { uid: 3 },
+            [STORE_SENTINEL]: { uid: 0, keywords: [STORE_SENTINEL] },
+        },
         relationships: {},
     },
 };
@@ -427,6 +435,24 @@ describe('Part 2 migrations — every legacy fixture migrates without touching l
         expect(result.data.registry).toEqual({ Mara: { uid: 3 } });
     });
 
+    test('knowledgeStore: [MWT:store] ghost records are removed as an explicitly recorded repair', () => {
+        // Design §6.7 migration: the ghost leaves the live registry but is
+        // reported as a repair-severity issue with the complete raw record,
+        // never silently dropped. Quarantine stays empty — a repair retains
+        // its data in the reported issue, it does not reject a record.
+        const result = dryRun('knowledgeStore', structuredClone(LEGACY_FIXTURES.knowledgeStore));
+        expect(result.status).toBe('migrated');
+        const repair = result.issues.find(issue => issue.code === 'registry-store-ghost');
+        expect(repair).toBeTruthy();
+        expect(repair.severity).toBe('repair');
+        expect(repair.record).toEqual({ uid: 0, keywords: [STORE_SENTINEL] });
+        expect(result.quarantined.filter(item => item.reasonCode === 'registry-store-ghost')).toEqual([]);
+        // Idempotent: canonical v1 data carries no ghost to remove.
+        const again = prepareStore(STORE_SCHEMAS.knowledgeStore, result.data, { version: 1 });
+        expect(again.status).toBe('valid');
+        expect(again.issues.some(issue => issue.code === 'registry-store-ghost')).toBe(false);
+    });
+
     test('storyPlanner: the legacy text blob becomes arcs; original text retained', () => {
         const result = dryRun('storyPlanner', LEGACY_FIXTURES.storyPlanner);
         expect(result.status).toBe('migrated');
@@ -616,7 +642,7 @@ const POLICY_BATTERIES = {
     knowledgeCounters: [null, { messageCounter: -1, npcMessageCounter: 'x' }],
     storyPlanner: [null, { arcs: 'x' }, { history: 'x' }, { arcs: ['junk', { id: '' }, { id: 'a', title: 1, body: 1, section: 'nope', status: 'nope', beats: 'x', beatIndex: -1, turnsSinceAdvance: 'x', createdAt: 'x', updatedAt: 'x' }] }],
     interiority: [null, { ledger: 'x' }, { ledger: [{}, { id: 'i' }] }, { deletedIntentions: [{ id: 't', npc: 'n', actions: 'x', triggers: [1] }] }, { perMessage: 'x' }, { perMessage: { bad: {}, 'mu-': {} } }, { perMessage: { 'sd-legacy': {}, '3': {}, 'mu-ok': {} } }, { turnCounter: 'x' }],
-    knowledgeStore: [null, { registry: 'x' }, { registry: { g: 'junk', b: { uid: -1 } } }, { relationships: 'x' }, { relationships: { r: 'x', s: [{ target: '' }, { target: 't' }, 'junk'] } }, { stances: { a: 3 } }, { stanceSources: { a: 3 } }, { version: 0 }, { quarantine: 'x' }, { quarantine: { version: 2 } }, { quarantine: { items: 'x' } }, { quarantine: { items: [{}, { store: 'x' }, { store: 'x', reasonCode: 'y' }] } }],
+    knowledgeStore: [null, { registry: 'x' }, { registry: { g: 'junk', b: { uid: -1 } } }, { registry: { Mara: { uid: 0, profileUid: -1 } } }, { registry: { Mara: { uid: 0 }, mara: { uid: 1 } } }, { relationships: 'x' }, { relationships: { r: 'x', s: [{ target: '' }, { target: 't' }, 'junk'] } }, { registry: { t: { uid: 1 } }, relationships: { r: [{ target: 't', type: 'x', source: 'weird' }] } }, { registry: { A: { uid: 0 } }, relationships: { A: [{ target: 'Ghost', type: 'x' }] } }, { stances: { a: 3 } }, { stanceSources: { a: 3 } }, { stanceSources: { a: 'weird' } }, { version: 0 }, { quarantine: 'x' }, { quarantine: { version: 2 } }, { quarantine: { items: 'x' } }, { quarantine: { items: [{}, { store: 'x' }, { store: 'x', reasonCode: 'y' }] } }],
 };
 
 describe('structured record/reference/fatal policies per store (design §3.5)', () => {

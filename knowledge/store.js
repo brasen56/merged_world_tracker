@@ -48,6 +48,10 @@ import {
     QUARANTINE_SCHEMA_VERSION,
     validateQuarantineStoreData,
 } from '../core/quarantine.js';
+// The pure preparation runner (design §4.2) — the same engine backup/import
+// and the write seams use, so hydration can never drift onto separate rules
+// (design §8: "never let backup validation and runtime validation drift").
+import { prepareStore } from '../core/schema.js';
 
 // The lorebook-store sentinel and version are owned by the module schema
 // (knowledge/schema.js) so the schema registry and the runtime can never
@@ -55,6 +59,7 @@ import {
 import {
     STORE_SENTINEL,
     KNOWLEDGE_STORE_VERSION,
+    knowledgeStoreSchema,
 } from './schema.js';
 
 import {
@@ -277,13 +282,44 @@ function scrubStoreGhosts(data) {
 // ─── Hydration ──────────────────────────────────────────────────────────────
 
 /**
- * Load a book's store into the cache.
+ * Load a book's store into the cache through the schema owner (Part 4, design
+ * §6.7).
  *
- * When the book has no store entry yet, `seed` is adopted as the starting data
- * and written through immediately. That is the migration path off
+ * The four stages run IN ORDER and all of them must succeed before
+ * `hydrated = true` is set:
+ *
+ *   1. parse        the [MWT:store] entry's JSON (corrupt JSON blocks);
+ *   2. version      a store written by a NEWER MWT is refused untouched
+ *                   (§3.5 category 4) — never coerced, never partially read.
+ *                   A missing/invalid version reads as legacy 0;
+ *   3. migration    the schema's 0 -> 1 step (ghost repair, version stamp);
+ *   4. validation   the full §6.7 record contract; rejected records are
+ *                   preserved in the book's EMBEDDED quarantine (§5.1), never
+ *                   silently dropped.
+ *
+ * A blocked stage (fatal root, failed migration, future version, quarantine
+ * that cannot be stored) leaves the book un-hydrated — reads stay empty and
+ * `assertHydrated()` refuses writes, which is the safe direction: treating
+ * unreadable data as "no NPCs known" is what rebuilds books as duplicates.
+ *
+ * Acceptance (Part 4): a store becomes WRITABLE only after its migration is
+ * durably persisted. The commit, the quarantine merge, and the flush run as
+ * ONE critical section under the store lock (serialized with restore
+ * transactions and cache resets); if the flush fails, the cache rolls back
+ * wholesale to the pre-hydration slot and the untouched on-disk original
+ * stays the recoverable state. The migration is idempotent, so the next
+ * hydration simply re-runs it. A cache reset that lands between this
+ * function's IO and its commit retires the slot; the commit then abandons
+ * quietly rather than reporting a failure the store was never in.
+ *
+ * When the book has no store entry yet, `seed` is adopted as the starting
+ * data and written through immediately. That is the migration path off
  * `chat_metadata`: callers pass the legacy per-chat values, and the first
- * hydration moves them into the book. Seeding only ever happens when the book
- * has no store — an existing store is never overwritten by a seed.
+ * hydration moves them into the book. The seed is VALIDATED BEFORE ADOPTION —
+ * it goes through the same 0 -> 1 migration and §6.7 validation, so records
+ * the validator rejects land in the book's quarantine, never in the live
+ * registry. Seeding only ever happens when the book has no store — an
+ * existing store is never overwritten by a seed.
  *
  * @param {string} bookName
  * @param {object} [seed] — legacy data to adopt if the book has no store yet
@@ -328,22 +364,14 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
         return s.data;
     }
 
+    // ── Stage 1: parse ──────────────────────────────────────────────────────
     const entry = findStoreEntry(wi);
+    let source;
+    let seedAdoption = false;
     if (entry) {
+        let parsed;
         try {
-            const parsed = JSON.parse(entry.content || '{}');
-            s.data = (parsed && typeof parsed === 'object') ? parsed : blankStore();
-            // Written on flush purely as a human-readable hint — not data.
-            delete s.data._note;
-            if (typeof s.data.version !== 'number') s.data.version = STORE_VERSION;
-            s.hydrated = true;
-            s.dirty = false;
-            if (scrubStoreGhosts(s.data)) {
-                console.log(`[MWT:Knowledge] store: removed a "${STORE_SENTINEL}" ghost NPC from "${bookName}".`);
-                s.dirty = true;
-                scheduleFlush(bookName);
-            }
-            return s.data;
+            parsed = JSON.parse(entry.content || '{}');
         } catch (err) {
             // A corrupt store is the one case where we must NOT silently fall
             // back to empty — that would look like "no NPCs known" and rebuild
@@ -355,25 +383,206 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
             );
             return s.data;
         }
+        source = parsed;
+        if (source && typeof source === 'object' && !Array.isArray(source) && source._note !== undefined) {
+            // Written on flush purely as a human-readable hint — not data.
+            // Stripped BEFORE preparation so its round-tripped presence never
+            // reads as a change worth persisting on every load.
+            source = { ...source };
+            delete source._note;
+        }
+    } else {
+        // No store entry yet: adopt the legacy chat_metadata values — raw, so
+        // stages 2–4 validate the seed BEFORE it enters the store (§6.7). The
+        // 0 -> 1 migration owns stamping the version and scrubbing ghosts, so
+        // what enters the book is the canonical accepted store, never the
+        // seed as-is.
+        source = seed || {};
+        seedAdoption = true;
     }
 
-    // No store entry yet. Adopt the legacy chat_metadata values if any were
-    // supplied, then persist so the migration is durable.
-    const seeded = { ...blankStore(), ...(seed || {}) };
-    scrubStoreGhosts(seeded);
-    s.data = seeded;
-    s.hydrated = true;
-    s.dirty = false;
+    // ── Stages 2–4: version gate, migration, validation (pure runner) ───────
+    // A missing or invalid embedded version reads as legacy 0 (the migration
+    // stamps it); a NEWER version is refused untouched by the runner.
+    const storedVersion = Number.isInteger(source?.version) && source.version > 0 ? source.version : 0;
+    const prepared = prepareStore(knowledgeStoreSchema, source, { version: storedVersion });
+    if (prepared.status !== 'valid' && prepared.status !== 'migrated') {
+        // Blocked (fatal root, failed migration, future version, quarantine
+        // that cannot be stored) — or deferred, which no knowledgeStore code
+        // emits today but must still fail closed if one ever appears. The
+        // original is untouched; the book stays un-hydrated so writes are
+        // blocked and the reason is visible in the console and diagnostics.
+        const code = prepared.error?.code ?? 'deferred';
+        console.error(
+            `[MWT:Knowledge] store: "${bookName}" could not be prepared for use ` +
+            `(${code}); the original ${STORE_SENTINEL} entry was left unchanged. ` +
+            `Writes are blocked until this is resolved.`
+        );
+        record({
+            level: 'warn',
+            module: 'knowledge',
+            event: code === 'future-version' ? 'schema_blocked_future_version' : 'schema_migration_failed',
+            detail: { store: 'knowledgeStore', book: bookName, code, fromVersion: prepared.fromVersion },
+        });
+        return s.data;
+    }
 
-    const hasSeedData = Object.keys(seed || {}).some(k => {
-        const v = seed[k];
-        return v && typeof v === 'object' && Object.keys(v).length > 0;
+    // ── Stage 5: durable commit under the store lock ────────────────────────
+    // Install the accepted store, merge the quarantine additions into the
+    // book's embedded container, and flush BEFORE the book becomes writable —
+    // one critical section, serialized against restore transactions and cache
+    // resets, with a wholesale rollback when the flush fails. Nothing legit
+    // can write into the slot mid-section: creation paths assertHydrated()
+    // first and it is still false here.
+    return withStoreLock(async () => {
+        // The slot was resolved BEFORE this function's awaits (getWiScript,
+        // loadWorldInfo, and the queue behind this lock). A resetStoreCache()
+        // that took the lock in between cleared `_cache`, so `s` is now
+        // detached from it: committing here would write into an object no
+        // accessor reads, and flushBook() — which resolves the slot from
+        // `_cache` — would find nothing, return false, and report a
+        // persistence failure for a store that was never at risk (a red
+        // console error plus a schema_persist_failed event on an ordinary
+        // double chat change). Abandon this hydration quietly instead. The
+        // reset that replaced the slot is followed by its own hydration, and
+        // preparation is pure, so nothing is lost by redoing it there.
+        if (_cache.get(bookName) !== s) {
+            record({
+                level: 'debug',
+                module: 'knowledge',
+                event: 'schema_hydration_abandoned',
+                detail: { store: 'knowledgeStore', book: bookName, reason: 'cache-reset' },
+            });
+            return _cache.get(bookName)?.data ?? blankStore();
+        }
+
+        const before = { data: s.data, hydrated: s.hydrated, dirty: s.dirty };
+
+        let next = prepared.data;
+        if (prepared.quarantined.length > 0) {
+            // Per-book quarantine (§5.1): the rejected records ride INSIDE the
+            // store entry, persisted by the same save as the migrated data —
+            // the pair is all-or-nothing (§7.3's single-write rule, applied to
+            // the lorebook's own persistence system).
+            const container = next.quarantine;
+            const existingItems = container && typeof container === 'object' && !Array.isArray(container)
+                && Array.isArray(container.items)
+                ? container.items
+                : [];
+            next = {
+                ...next,
+                [STORE_QUARANTINE_FIELD]: {
+                    version: QUARANTINE_SCHEMA_VERSION,
+                    items: mergeQuarantineItems(existingItems, prepared.quarantined),
+                },
+            };
+        }
+
+        // Compatibility lazy repair (Part 2 leaves the runtime call in place
+        // until the central path owns every repair): a CURRENT-version store
+        // can still carry a ghost, e.g. one written by an older build whose
+        // own scrub flush failed. v0 stores had theirs recorded as a repair
+        // issue by the migration above.
+        const ghostRemoved = !seedAdoption && storedVersion >= knowledgeStoreSchema.currentVersion
+            ? scrubStoreGhosts(next)
+            : false;
+
+        const hasSeedData = seedAdoption && Object.keys(seed || {}).some(k => {
+            const v = seed[k];
+            return v && typeof v === 'object' && Object.keys(v).length > 0;
+        });
+        // A seed persists only when it carried something worth migrating —
+        // creating a book and entry for a blank store is waste. An existing
+        // store persists exactly when preparation changed something, the
+        // quarantine merge did, or the compatibility scrub did, so canonical
+        // repairs are saved once instead of being rediscovered every load.
+        const needsPersist = seedAdoption
+            ? hasSeedData
+            : (prepared.changed || prepared.quarantined.length > 0 || ghostRemoved);
+
+        s.data = next;
+        s.dirty = false;
+        if (needsPersist) {
+            if (seedAdoption) {
+                console.log(`[MWT:Knowledge] store: migrating legacy chat metadata into "${bookName}".`);
+            }
+            let persisted = false;
+            try {
+                // Non-locking leaf by design: the lock is already held here.
+                persisted = await flushBook(bookName);
+            } catch (err) {
+                console.warn(`[MWT:Knowledge] store: hydration flush of "${bookName}" failed:`, err?.message || err);
+            }
+            if (!persisted) {
+                // Roll back wholesale. The disk original is untouched (the
+                // save failed), so the cache must not serve the migrated
+                // value either — writes would build on a store that never
+                // reached disk. Restoring the pre-hydration slot keeps the
+                // book un-writable (Part 4 acceptance), and the idempotent
+                // migration simply re-runs on the next hydration.
+                if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+                s.data = before.data;
+                s.hydrated = before.hydrated;
+                s.dirty = before.dirty;
+                if (before.dirty) scheduleFlush(bookName);
+                console.error(
+                    `[MWT:Knowledge] store: could not persist the prepared store for ` +
+                    `"${bookName}" — the book stays un-hydrated (writes blocked) and the ` +
+                    `original entry was left unchanged. This will be retried on the next load.`
+                );
+                record({
+                    level: 'warn',
+                    module: 'knowledge',
+                    event: 'schema_persist_failed',
+                    detail: { store: 'knowledgeStore', book: bookName },
+                });
+                return s.data;
+            }
+        }
+
+        // All four stages succeeded and the migration (if any) is durable:
+        // only now does the book become writable.
+        s.hydrated = true;
+        // Report a migration only when one was actually WRITTEN. An empty
+        // seed for a book with no store entry also reads as version 0 and
+        // comes back status 'migrated', but nothing is persisted and no book
+        // is created — announcing it would log a migration that never
+        // happened for both books on every chat change of a fresh install or
+        // any scoped book, which is exactly the noise the diagnostics ring
+        // must not carry. Outside the seed path a migration always sets
+        // `changed`, so this never hides a real one.
+        if (prepared.status === 'migrated' && needsPersist) {
+            console.log(`[MWT:Knowledge] store: migrated "${bookName}" to schema version ${prepared.toVersion}.`);
+            record({
+                level: 'info',
+                module: 'knowledge',
+                event: 'schema_migrated',
+                detail: {
+                    store: 'knowledgeStore',
+                    book: bookName,
+                    fromVersion: prepared.fromVersion,
+                    toVersion: prepared.toVersion,
+                },
+            });
+        }
+        if (prepared.quarantined.length > 0) {
+            // Counts only (§5.2): never log quarantined record content.
+            console.warn(
+                `[MWT:Knowledge] store: quarantined ${prepared.quarantined.length} record(s) from ` +
+                `"${bookName}" — preserved in the book's store entry for recovery.`
+            );
+            record({
+                level: 'warn',
+                module: 'knowledge',
+                event: 'schema_quarantined',
+                detail: { store: 'knowledgeStore', book: bookName, count: prepared.quarantined.length },
+            });
+        }
+        if (ghostRemoved) {
+            console.log(`[MWT:Knowledge] store: removed a "${STORE_SENTINEL}" ghost NPC from "${bookName}".`);
+        }
+        return s.data;
     });
-    if (hasSeedData) {
-        console.log(`[MWT:Knowledge] store: migrating legacy chat metadata into "${bookName}".`);
-        await flushBook(bookName);
-    }
-    return s.data;
 }
 
 /** Has this book's store been loaded into the cache? */

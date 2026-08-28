@@ -236,6 +236,10 @@ describe('validator parity — interiority', () => {
 
 describe('validator parity — knowledge lorebook store', () => {
     test('registry, relationships, and stances match legacy behavior including dropped unknown keys', () => {
+        // Part 4 (design §6.7): stance-source values now come from the
+        // provenance enum ('auto'/'manual'), so a filler string like 'seen'
+        // is quarantined instead of passing through — covered separately in
+        // test/knowledge_store_hydration.test.js.
         const result = validateKnowledgeStore({
             registry: { Good: { uid: 7 }, Bad: { type: 'minor' } },
             relationships: {
@@ -244,14 +248,14 @@ describe('validator parity — knowledge lorebook store', () => {
                 NotArray: 'x',
             },
             stances: { A: 'warm', B: 3 },
-            stanceSources: { A: 'seen' },
+            stanceSources: { A: 'manual' },
             foreign: 'dropped',
         });
         expect(result.data).toEqual({
             registry: { Good: { uid: 7 } },
             relationships: { Good: [{ target: 'Kira', type: 'ally' }], Vague: [] },
             stances: { A: 'warm' },
-            stanceSources: { A: 'seen' },
+            stanceSources: { A: 'manual' },
         });
         expect(result.added).toBe(4);
         expect(result.skipped).toEqual([
