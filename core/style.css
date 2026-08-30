@@ -410,6 +410,74 @@ a:focus-visible {
     font-size: 11px;
 }
 
+/* ─── Paused-store module banner (schema plan Part 5, §5.4) ──────────────── */
+/* The red banner at the top of a paused module's OWN tab. Like the panic
+   switch it must be impossible to screenshot past, but it is per-module and
+   carries the store's reason + actions (Retry, recovery export). It renders
+   inside the module tab (not the diagnostics panel) because the actions are
+   writes and Diagnostics is read-only by contract. */
+.mwt-pause-banner {
+    background: rgba(239, 83, 80, 0.18);
+    border: 2px solid var(--mwt-error);
+    color: var(--mwt-error);
+    border-radius: var(--mwt-radius);
+    padding: 0;
+    margin: 0 0 12px 0;
+    overflow: hidden;
+}
+
+.mwt-pause-banner-head {
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 12px;
+    background: rgba(239, 83, 80, 0.28);
+    letter-spacing: 0.02em;
+}
+
+.mwt-pause-banner-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border-top: 1px solid rgba(239, 83, 80, 0.45);
+}
+
+.mwt-pause-banner-reason {
+    flex: 1 1 320px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mwt-error);
+}
+
+.mwt-pause-banner-note {
+    display: block;
+    margin-top: 4px;
+    font-weight: 400;
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.mwt-pause-banner-actions {
+    display: flex;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+/* The ❤️ Health paused banner variant (same state, the diagnostics surface):
+   the panic-switch treatment, minus the code affordances. */
+.mwt-diag-paused {
+    font-weight: 500;
+}
+
+/* ─── Scope & storage schema-status section (Part 5, §9.1) ───────────────── */
+
+.mwt-diag-scope-schema {
+    margin-top: 16px;
+}
+
+
 .mwt-diag-health-table,
 .mwt-diag-env-table {
     width: 100%;

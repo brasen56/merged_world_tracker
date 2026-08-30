@@ -48,6 +48,9 @@ import { collectLogSnapshot, redactLogSnapshot, logLevelCount } from './diagnost
 // return redaction gate behind the 🛡️ Integrity sub-tab (on-demand read-only
 // checks over lorebooks + chat metadata). Same direct-import rule.
 import { collectIntegritySnapshot, redactIntegritySnapshot } from './diagnostics_panel/integrity.js';
+// Schema plan Part 5 (§9.1): the schema-status collector behind the Scope &
+// storage tab's schema section and the MWT.diagnostics.schemaStatus() bridge.
+import { collectSchemaStatusSnapshot, redactSchemaStatusSnapshot } from './diagnostics_panel/schema_status.js';
 // Diagnostics Phase 13 — Copy-report finalize: the D1 report the 📋 Copy
 // Report button produces (sections = Phase 0–4 accessors + the tab accessors,
 // redacted through the Phase 5 layer). The console bridge's report() returns
@@ -68,7 +71,13 @@ import * as Knowledge from './knowledge/index.js';
 import * as StoryPlanner from './story_planner/index.js';
 import * as Interiority from './interiority/index.js';
 import { exportBackup, previewRestore, restoreBackup, undoLastRestore, fingerprintPreview } from './backup/index.js';
-import { renderBackupPanel, wireBackupEvents } from './backup/render.js';
+import { renderBackupPanel, wireBackupEvents, describeRecoveryExportResult } from './backup/render.js';
+// Schema plan Part 5 — the visible paused-state surface (§5.4) and the
+// recovery export/clear actions (§5.3). The banner renders in each module's
+// OWN tab (Diagnostics is read-only by contract — it shows the same state in
+// 🗂️ Scope & storage and ❤️ Health, but the actions live here).
+import { renderPausedStoresBanner, retryStore } from './core/schema_status.js';
+import { collectQuarantineStatus, exportRecoveryData, clearQuarantineData } from './backup/recovery.js';
 // Diagnostics panel shell (Phase 5): the 🩺 tab inside this modal, its redaction
 // layer (core/redaction.js), and the D1 copy-report shape.
 import { renderDiagnosticsPanel, wireDiagnosticsPanel } from './diagnostics_panel/render.js';
@@ -407,9 +416,14 @@ function buildTabContent(tab) {
     if (tab.id === 'settings') return renderSettingsTab();
     // Diagnostics Phase 5 — the panel shell (placeholders for tabs 1–7).
     if (tab.id === 'diagnostics') return renderDiagnosticsPanel();
+    // Part 5 (§5.4): the paused-store banner leads the module's own tab. It
+    // returns '' for a healthy module, so an unchanged tab renders exactly as
+    // before. The modal is rebuilt on every open, which is this banner's
+    // refresh model (the same D2 open-and-read rule the Diagnostics tabs use).
+    const pauseBanner = renderPausedStoresBanner(tab.id);
     const renderFn = tab.module?.getModuleRender?.() || tab.module?.render;
-    if (typeof renderFn === 'function') return renderFn();
-    return '';
+    if (typeof renderFn === 'function') return pauseBanner + renderFn();
+    return pauseBanner;
 }
 
 let modal = null;
@@ -476,6 +490,41 @@ function renderModal() {
     // Wire the Backup/Restore control (lives in the Settings tab). The body is
     // rebuilt on every open, so rebind each render like the module wire-events.
     wireBackupEvents(modal);
+
+    // Part 5 (§5.4): wire the paused-store banner's actions — the module's
+    // OWN tab owns Retry and the recovery export (never the read-only
+    // Diagnostics panel). The body is rebuilt on every open, so rebind here
+    // like the backup control; buttons carry data-mwt-pause-* attributes.
+    const pauseRetryBtns = modal.querySelectorAll('[data-mwt-pause-retry]');
+    pauseRetryBtns.forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const storeId = btn.dataset.mwtPauseRetry;
+            btn.disabled = true;
+            const previousLabel = btn.textContent;
+            btn.textContent = 'Retrying…';
+            try {
+                const result = await retryStore(storeId);
+                if (result.ok) {
+                    setStatus(modal, `Retry succeeded — the store resumed. Re-open this tab to refresh it.`, 'success', 6000);
+                } else {
+                    setStatus(modal, `Retry did not clear the pause: ${result.message || result.reason || 'the store is still blocked'}`, 'error', 9000);
+                }
+            } finally {
+                btn.disabled = false;
+                btn.textContent = previousLabel;
+            }
+        });
+    });
+    const pauseExportBtns = modal.querySelectorAll('[data-mwt-pause-export]');
+    pauseExportBtns.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            // One wording owner (backup/render.js describeRecoveryExportResult):
+            // an `unreadable` refusal surfaces its message as an error, never
+            // the "nothing was rejected" info line — same as the Backup panel.
+            const { message, tone } = describeRecoveryExportResult(exportRecoveryData());
+            setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
+        });
+    });
 
     // Wire the Diagnostics panel shell (lives in the 🩺 Diagnostics tab).
     // Same rebind-every-render rule as the backup control above.
@@ -1294,6 +1343,61 @@ window.MWT.backup = {
     fingerprintPreview,
 };
 
+// ── Recovery console namespace (schema plan Part 5, design §5.3) ────────────
+//
+// The quarantine recovery surface. Quarantined records are preserved whole,
+// never injected, and never deleted — these tools list them, export them as a
+// repairable JSON file, and (explicitly confirmed) clear them. The clear is
+// deliberately console-only until a mutating recovery UI is designed: the
+// literal { confirm: 'CLEAR' } token IS the confirmation.
+//
+// Usage:
+//   MWT.recovery.status()                      // list/count per store (read-only)
+//   MWT.recovery.export()                      // download the recovery JSON
+//   MWT.recovery.clear({ confirm: 'CLEAR' })   // clear the chat-local container
+//   MWT.recovery.clear({ confirm: 'CLEAR', includeKnowledgeStore: true })
+//                                             // …and each hydrated book's embedded container
+window.MWT.recovery = {
+    status: () => {
+        const status = collectQuarantineStatus();
+        console.table(status.stores.map((s) => ({
+            store: s.id,
+            quarantined: s.count,
+            home: s.embedded ? 'inside the lorebook store' : 'chat recovery container',
+        })));
+        console.log(
+            `[MWT] Quarantine status — ${status.total} record(s) preserved across ${status.stores.length} store(s)` +
+            (status.knowledgeBooks.length ? ` (hydrated books: ${status.knowledgeBooks.join(', ')})` : '') +
+            '. Records are never deleted or injected. Export: MWT.recovery.export(). ' +
+            'Clear (DELETES the records — export first!): MWT.recovery.clear({ confirm: \'CLEAR\' }).'
+        );
+        if (status.chatContainer?.unknown) {
+            console.warn(
+                '[MWT] The chat recovery container was written by a NEWER version of MWT — its records are ' +
+                'preserved but cannot be read, counted, or exported by this build. Upgrade MWT to read them; ' +
+                'the confirmed clear can still remove the container whole.'
+            );
+        }
+        return status;
+    },
+    export: ({ download = true } = {}) => {
+        const result = exportRecoveryData({ download });
+        if (!result.ok) {
+            console.log(result.message
+                || '[MWT] No quarantined records to export — nothing has been rejected for this chat/session.');
+            return result;
+        }
+        console.log(
+            `[MWT] Recovery export: ${result.count} record(s) → ${result.filename}. ` +
+            'Each item carries store, path, reasonCode, message, the RAW record, sourceVersion, detectedAt, and a ' +
+            'fingerprint — enough to repair a record externally and re-import it through Backup → Restore, where the ' +
+            'normal validated path checks it like any other data. The full envelope is on the return value.'
+        );
+        return result;
+    },
+    clear: (options = {}) => clearQuarantineData(options),
+};
+
 // ── Diagnostics console namespace (Phases 0–4) ──────────────────────────────
 //
 // Read-only, in-memory peek at the capture the diagnostics panel will later
@@ -1321,6 +1425,7 @@ window.MWT.backup = {
 //   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
 //   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
 //   MWT.diagnostics.scope()                     // the 🗂️ Scope & storage tab snapshot (which books + why)
+//   MWT.diagnostics.schemaStatus()              // the schema-status section: versions, gate state, quarantine counts, paused reasons
 //   MWT.diagnostics.log({ level: 'warn' })      // the 📋 Log tab snapshot (ring + counts; redacted return)
 //   MWT.diagnostics.integrity()                 // the 🛡️ Integrity tab snapshot (on-demand checks; async, redacted return)
 //   await MWT.diagnostics.report()              // the FULL D1 Markdown report the 📋 Copy Report button copies
@@ -1615,6 +1720,37 @@ window.MWT.diagnostics = {
         return snap;
     },
 
+    // Schema plan Part 5 (§9.1): the schema-status snapshot behind the Scope &
+    // storage tab's schema section — per registered store: stored vs. current
+    // version, the fast-gate state (ready/preparing/blocked/unknown),
+    // migration-persisted, the quarantined-record count, and the SAME
+    // plain-language pause reason a paused module's own banner shows. Read-only
+    // and O(stores); deep validation stays on the 🛡️ Integrity tab's Run
+    // button. SAFE BY DEFAULT: what this RETURNS is
+    // redactSchemaStatusSnapshot() output — metadata by construction (no
+    // quarantined record content), every string still secret-scrubbed.
+    schemaStatus: () => {
+        const snap = redactSchemaStatusSnapshot(collectSchemaStatusSnapshot());
+        for (const w of snap.warnings || []) {
+            console.warn(`[MWT] ${w.level === 'fail' ? '⛔' : '⚠'} [${w.id}] ${w.text}`);
+        }
+        console.table([...(snap.rows || []), snap.knowledgeStore].map((r) => ({
+            store: r?.id,
+            present: r?.present,
+            'stored/current': `${r?.storedVersion ?? '?'} / ${r?.currentVersion ?? '?'}`,
+            state: r?.id === 'knowledgeStore'
+                ? `${r?.hydration ?? '?'}${r?.paused ? ' ⛔ PAUSED' : ''}`
+                : `${r?.state ?? '?'}${r?.paused ? ' ⛔ PAUSED' : ''}${r?.migrationPersisted ? ' (migration persisted)' : ''}`,
+            quarantined: r?.quarantineCount ?? 0,
+        })));
+        console.log(
+            '[MWT] Schema status for MWT v' + snap.mwtVersion + ' — read-only, O(stores). A PAUSED or BLOCKED store ' +
+            'pauses only its own module (its tab carries the banner with Retry + recovery export). Quarantined records ' +
+            'export any time via MWT.recovery.export(); the confirmed clear is MWT.recovery.clear({ confirm: \'CLEAR\' }).'
+        );
+        return snap;
+    },
+
     // Phase 9 — Tab 4 Injection (design §I.5 Tab 4): the same snapshot the 💉
     // Injection sub-tab renders — per module: on/off · gate · resolved
     // role/depth WITH provenance · token estimate · the Phase 2 registered
@@ -1832,6 +1968,6 @@ window.MWT.diagnostics = {
     },
 };
 
-console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,injectionStatus,lastRequest,log,integrity,report,clear}');
+console.log('[MWT] Diagnostics console API ready: MWT.diagnostics.{events,apiCalls,lastApiCall,lastApiCalls,lastRuns,injections,injection,settingsProvenance,health,environment,scope,schemaStatus,injectionStatus,lastRequest,log,integrity,report,clear}; recovery tools: MWT.recovery.{status,export,clear}');
 
 console.log('[MWT] Merged World Tracker extension loaded.');

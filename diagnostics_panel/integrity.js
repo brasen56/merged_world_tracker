@@ -21,13 +21,15 @@
  * one render; never a render loop and never on open).
  *
  * ── Store enumeration ─────────────────────────────────────────────────────────
- * The per-store `validateSection()` rows are enumerated from the
- * `METADATA_KEYS` whitelist (`backup/data.js`) — NOT a second hand-maintained
- * list (phases doc Phase 12 deliverable). `validateSection()` itself is reused
- * as-is from backup/validate.js; this collector only feeds it the live section
- * data and summarises the result. The Knowledge lorebook-store section is
- * deliberately NOT validated here: it is not a chat-metadata section, and the
- * phases doc scopes this tab to the METADATA_KEYS whitelist.
+ * The per-store validation rows are enumerated from the SCHEMA REGISTRY
+ * (`schema/registry.js`, design §9.2 of the schema validation plan — never a
+ * second hand-maintained list; the registry ids equal the backup section
+ * names and the `METADATA_KEYS` keys). `validateSectionWithIssues()` is the
+ * backup validator's registry adapter reused as-is; this collector only feeds
+ * it the live section data and summarises the result. The Knowledge lorebook
+ * store is validated as its own row WHEN RELIABLY HYDRATED (§9.2): its data
+ * lives inside the book's [MWT:store] entry, read through the read-only cache
+ * peek; an un-hydrated book renders a dim not-checked row, never a finding.
  *
  * ── Reliability guard on an empty profile book ───────────────────────────────
  * `listProfileEntries()` returns [] both for a genuinely empty book and for a
@@ -77,11 +79,18 @@ import { redactForReport } from '../core/redaction.js';
 // unit-testable in Node (the last_request.js / log.js precedent).
 import { collectKnownSecrets } from './report.js';
 
-// Store enumeration — the METADATA_KEYS whitelist (phases doc: "do NOT
-// maintain a second list"). Labels are presentation-only decoration carried
-// WITH the derived entries so renderers never need their own mapping.
-import { METADATA_KEYS } from '../backup/data.js';
-import { validateSection } from '../backup/validate.js';
+// Store enumeration — THE schema registry (schema plan Part 5, design §9.2:
+// "Enumerate schemas from schema/registry.js, not a second list"). The
+// registry ids intentionally equal the backup section names AND the
+// METADATA_KEYS keys, so deriving here changes no behaviour today while
+// making the registry the single owner of the list. The Knowledge lorebook
+// store is validated as its own row below (it is not a chat-metadata
+// section). Labels are presentation-only decoration carried WITH the derived
+// entries so renderers never need their own mapping.
+import { CHAT_METADATA_SCHEMA_IDS, STORE_SCHEMAS } from '../schema/registry.js';
+import { validateSectionWithIssues } from '../backup/validate.js';
+import { resolveKnowledgeBooks } from './schema_status.js';
+import { peekStore, peekStoreData } from '../knowledge/store.js';
 
 import { listProfileEntries } from '../knowledge/lorebook.js';
 import { getRegistry, resolveRegistryKey, normalizeRegistryName } from '../knowledge/registry.js';
@@ -98,15 +107,16 @@ import { getLedger, getDeletedIntentions, isIntentionDeleted } from '../interior
 export const INTEGRITY_SAMPLE_LIMIT = 5;
 
 /**
- * The per-store validation rows, enumerated from the `METADATA_KEYS`
- * whitelist (backup/data.js) at module load — the phases doc's "do NOT
- * maintain a second list" rule. If a store is ever added to METADATA_KEYS, it
- * appears here automatically; the labels below only decorate the derived
- * list and carry no enumeration meaning of their own.
+ * The per-store validation rows, enumerated from the schema registry
+ * (`CHAT_METADATA_SCHEMA_IDS`, keyed by each descriptor's `metadataKey`) at
+ * module load — design §9.2's "not a second list" rule, one owner
+ * (schema/registry.js) for backup, runtime, and Diagnostics. If a store is
+ * ever registered, it appears here automatically; the labels below only
+ * decorate the derived list and carry no enumeration meaning of their own.
  */
-export const INTEGRITY_STORE_SPECS = Object.freeze(Object.entries(METADATA_KEYS).map(([id, key]) => ({
+export const INTEGRITY_STORE_SPECS = Object.freeze(CHAT_METADATA_SCHEMA_IDS.map((id) => ({
     id,
-    key,
+    key: STORE_SCHEMAS[id].metadataKey,
     label: {
         worldState: '🌍 World State',
         chronicle: '📜 Chronicle',
@@ -179,10 +189,16 @@ const countOf = (block) => (block && typeof block.count === 'number' ? block.cou
  * @param {function(string, string): boolean} [deps.isIntentionDeleted] — the
  *        live npc+action tombstone match rule (reused, not mirrored)
  * @param {function(string, *): object} [deps.validateSection] — reused as-is
- *        from backup/validate.js
+ *        from backup/validate.js (validateSectionWithIssues: { summary,
+ *        issues })
  * @param {Array<{id: string, key: string, label: string}>} [deps.stores] — the
  *        store rows to validate (default INTEGRITY_STORE_SPECS, derived from
- *        the METADATA_KEYS whitelist)
+ *        the schema registry)
+ * @param {function(): { books: Array<{ name: string, role: 'knowledge'|'state' }>, mode: string }|null} [deps.knowledgeBooks] —
+ *        read-only resolution of BOTH Knowledge-store books (default
+ *        resolveKnowledgeBooks)
+ * @param {function(string): object|null} [deps.knowledgePeek] — peekStore
+ * @param {function(string): object|null} [deps.knowledgePeekData] — peekStoreData
  * @returns {Promise<object>} the snapshot (see the field docs below)
  */
 export async function collectIntegritySnapshot(deps = {}) {
@@ -195,8 +211,20 @@ export async function collectIntegritySnapshot(deps = {}) {
         getLedger: ledger = getLedger,
         getDeletedIntentions: deletions = getDeletedIntentions,
         isIntentionDeleted: isDeleted = isIntentionDeleted,
-        validateSection: validate = validateSection,
+        // §9.2: { summary, issues } per store — validateSectionWithIssues(),
+        // one validation pass feeding the historical summary AND the
+        // structured codes/paths. An old-shape validateSection() return (a
+        // bare summary) still works: `issues` reads as [] and the codes
+        // columns render empty rather than breaking the tab.
+        validateSection: validate = validateSectionWithIssues,
         stores = INTEGRITY_STORE_SPECS,
+        // The Knowledge lorebook-store rows (§9.2: "include it when reliably
+        // hydrated") — one per book, since the store spans BOTH the Knowledge
+        // and the State Tracker book. All read-only; null resolution or a
+        // null peek degrades to a dim "not checked" row, never an error.
+        knowledgeBooks = resolveKnowledgeBooks,
+        knowledgePeek = peekStore,
+        knowledgePeekData = peekStoreData,
     } = deps;
 
     const errors = [];
@@ -223,7 +251,10 @@ export async function collectIntegritySnapshot(deps = {}) {
 
     const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
     const regEntries = isObj(reg) ? Object.entries(reg) : [];
-    const evidenceMap = isObj(meta[METADATA_KEYS.knowledgeEvidence]) ? meta[METADATA_KEYS.knowledgeEvidence] : {};
+    // The evidence section's metadata key comes from the registry descriptor —
+    // the same single owner the store rows use (§9.2).
+    const evidenceKey = STORE_SCHEMAS.knowledgeEvidence.metadataKey;
+    const evidenceMap = isObj(meta[evidenceKey]) ? meta[evidenceKey] : {};
     const evidenceEntries = Object.entries(evidenceMap).filter(([, file]) => isObj(file));
     const profileUids = new Set(profileEntries.map((e) => e?.uid));
     // The reliability guard: an empty entry list is indistinguishable from a
@@ -369,6 +400,53 @@ export async function collectIntegritySnapshot(deps = {}) {
         }
         return reasons;
     };
+    // §9.2 structured codes: aggregate the finding issues by `code`, keeping
+    // each code's count and first path — the machine-readable half of the
+    // per-store report (reason strings are the human half, above). Raw issue
+    // RECORDS never enter the snapshot.
+    const issueCodeSample = (issues) => {
+        const byCode = new Map();
+        for (const issue of Array.isArray(issues) ? issues : []) {
+            if (!issue || typeof issue !== 'object') continue;
+            const code = String(issue.code ?? 'unknown');
+            const entry = byCode.get(code) ?? {
+                code,
+                count: 0,
+                path: Array.isArray(issue.path) ? issue.path.join('.') : '',
+            };
+            entry.count += 1;
+            byCode.set(code, entry);
+        }
+        return [...byCode.values()]
+            .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code))
+            .slice(0, INTEGRITY_SAMPLE_LIMIT);
+    };
+    // One row from one { summary, issues } validation result.
+    const storeRow = (spec, raw, extra = {}) => {
+        const checked = validate(spec.id, raw);
+        const summary = checked && typeof checked === 'object' && 'summary' in checked
+            ? (checked.summary ?? {})
+            : (checked ?? {});
+        const issues = Array.isArray(checked?.issues) ? checked.issues : [];
+        const deferred = Array.isArray(summary.deferred) ? summary.deferred : [];
+        return {
+            id: spec.id,
+            label: spec.label,
+            key: spec.key,
+            present: true,
+            added: summary.added ?? 0,
+            updated: summary.updated ?? 0,
+            skippedCount: Array.isArray(summary.skipped) ? summary.skipped.length : 0,
+            conflicts: summary.conflicts ?? 0,
+            reasons: sampleReasons(summary.skipped),
+            preparing: deferred.length > 0,
+            deferredCount: deferred.length,
+            deferredReasons: sampleReasons(deferred),
+            warning: typeof summary.warning === 'string' ? summary.warning : null,
+            issueCodes: issueCodeSample(issues),
+            ...extra,
+        };
+    };
     const storeValidations = await guard('storeValidations', () => {
         const rows = stores.map((spec) => {
             const raw = meta[spec.key];
@@ -376,24 +454,66 @@ export async function collectIntegritySnapshot(deps = {}) {
             if (!present) {
                 return { id: spec.id, label: spec.label, key: spec.key, present: false };
             }
-            const checked = validate(spec.id, raw);
-            const deferred = Array.isArray(checked.deferred) ? checked.deferred : [];
-            return {
-                id: spec.id,
-                label: spec.label,
-                key: spec.key,
-                present: true,
-                added: checked.added ?? 0,
-                updated: checked.updated ?? 0,
-                skippedCount: Array.isArray(checked.skipped) ? checked.skipped.length : 0,
-                conflicts: checked.conflicts ?? 0,
-                reasons: sampleReasons(checked.skipped),
-                preparing: deferred.length > 0,
-                deferredCount: deferred.length,
-                deferredReasons: sampleReasons(deferred),
-                warning: typeof checked.warning === 'string' ? checked.warning : null,
-            };
+            return storeRow(spec, raw);
         });
+
+        // The Knowledge lorebook store (§9.2: "include it when reliably
+        // hydrated"). Its data lives inside each book's [MWT:store] entry,
+        // not chat metadata — and the store spans BOTH books (Knowledge +
+        // State Tracker): each resolved book gets its own row, validated
+        // from the read-only cache copy when that book is hydrated and
+        // rendered as a dim NOT-CHECKED row otherwise (an un-hydrated book
+        // is the ordinary early/async state, never a finding: nothing was
+        // validated, so nothing is counted).
+        const lorebookSpec = (role) => role === 'state'
+            ? { id: 'knowledgeStore', label: '🧠 State Tracker lorebook store', key: '(lorebook [MWT:store] entry)' }
+            : { id: 'knowledgeStore', label: '🧠 Knowledge lorebook store', key: '(lorebook [MWT:store] entry)' };
+        const notCheckedRow = (spec, book, reason, warning = null) => ({
+            id: spec.id, label: spec.label, key: spec.key,
+            present: false, lorebook: true, book, checked: false,
+            reason,
+            added: 0, updated: 0, skippedCount: 0, conflicts: 0,
+            reasons: [], preparing: false, deferredCount: 0, deferredReasons: [],
+            warning, issueCodes: [],
+        });
+        const resolution = knowledgeBooks?.() ?? null;
+        const books = (Array.isArray(resolution?.books) ? resolution.books : [])
+            .filter((b) => typeof b?.name === 'string' && b.name);
+        if (books.length === 0) {
+            // Resolution degraded: one anonymous not-checked row — never an
+            // error (the legacy single-row shape).
+            rows.push(notCheckedRow(lorebookSpec('knowledge'), null, 'not-hydrated'));
+        } else {
+            for (const book of books) {
+                const role = book.role === 'state' ? 'state' : 'knowledge';
+                const spec = lorebookSpec(role);
+                const peek = knowledgePeek?.(book.name) ?? null;
+                if (peek?.hydrated === true) {
+                    const data = knowledgePeekData?.(book.name);
+                    if (data && data.__unserializable !== true) {
+                        rows.push(storeRow(spec, data, {
+                            lorebook: true,
+                            book: book.name,
+                            role,
+                            storeVersion: typeof peek.version === 'number' ? peek.version : null,
+                        }));
+                    } else {
+                        rows.push({
+                            ...notCheckedRow(
+                                spec,
+                                book.name,
+                                'store-unserializable',
+                                'The book\'s cached store data could not be serialised for validation.',
+                            ),
+                            present: true,
+                        });
+                    }
+                } else {
+                    rows.push(notCheckedRow(spec, book.name, 'not-hydrated'));
+                }
+            }
+        }
+
         const skippedTotal = rows.reduce((sum, r) => sum + (r.skippedCount || 0), 0);
         const conflictsTotal = rows.reduce((sum, r) => sum + (r.conflicts || 0), 0);
         const deferredTotal = rows.reduce((sum, r) => sum + (r.deferredCount || 0), 0);

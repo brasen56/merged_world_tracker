@@ -15,6 +15,10 @@ import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpSt
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
 import { resetStoreCache, hydrateCurrentBooks } from './store.js';
+// The §5.4 Retry seam: Knowledge's Retry action re-runs hydration (the one
+// preparation path this module owns today). Direct import — see store.js's
+// pause-wiring note about the test-only barrel→stub alias.
+import { setStoreRetryHandler, getPauseState } from '../core/schema_status.js';
 import { runContinuousCaptureAll } from './growth.js';
 import { runRelationshipExtract, syncRelationshipsToLorebook } from './relationships.js';
 import {
@@ -85,6 +89,15 @@ export function init(parentModal) {
         state.stateContentEl = null;
     }
     initNotificationPanel();
+    // The §5.4 Retry action for a paused knowledgeStore: re-run the current
+    // books' hydration (privileged orchestration, not queued module work — a
+    // queued job would be declined by the very pause it exists to clear, plan
+    // §7.5). A successful re-hydration resumes the store inside
+    // hydrateCurrentBooks(); the return value says whether the pause is gone.
+    setStoreRetryHandler('knowledgeStore', async () => {
+        await hydrateCurrentBooks();
+        return getPauseState('knowledgeStore') === null;
+    });
     // Load the registry stores for whatever chat is already open. Without this,
     // a user who reloads (or upgrades) while sitting in a chat would have no
     // hydrated store until they switched chats, and every write would be

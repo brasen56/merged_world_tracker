@@ -24,6 +24,10 @@
 import { MWT_VERSION } from '../core/version.js';
 import { getGlobalSettings, injectionAllowed } from '../core/settings.js';
 import { getLastApiCall, getLastRun } from '../core/diagnostics.js';
+// The §5.4 paused-state registry (schema plan Part 5): a paused module's row
+// must carry the SAME reason its own tab's banner shows. Direct import — the
+// barrel→stub alias trap (§II.3) applies to the singleton read here too.
+import { getPausedStores, isPauseForCurrentScope, STORE_MODULE_IDS } from '../core/schema_status.js';
 import * as WorldState from '../world_state/index.js';
 import * as Chronicle from '../chronicle/index.js';
 import * as Knowledge from '../knowledge/index.js';
@@ -185,6 +189,8 @@ export function resolveLastRun(id, { lastApiCall, lastRun }) {
  * @param {object} [deps.settings] — the global settings object
  * @param {function(string): boolean} [deps.allowed] — injectionAllowed
  * @param {object} [deps.diagnostics] — { lastApiCall, lastRun } accessors
+ * @param {function(): Array} [deps.pausedStores] — the §5.4 pause registry
+ *        (default getPausedStores; current-scope filtering is applied here)
  * @param {string} [deps.version]
  * @param {function(): number} [deps.now]
  * @returns {{generatedAt: number, mwtVersion: string, injectionMasterOff:
@@ -200,7 +206,20 @@ export function collectHealthSnapshot({
     diagnostics = { lastApiCall: getLastApiCall, lastRun: getLastRun },
     version = MWT_VERSION,
     now = Date.now,
+    pausedStores = getPausedStores,
 } = {}) {
+    // §5.4: a paused store's reason reaches this tab from the one registry,
+    // so the banner, Scope & storage, and this row can never disagree. Only
+    // pauses about the CURRENT chat/scope paint a module row — another chat's
+    // pause is not this chat's state.
+    const pausedByModule = new Map();
+    try {
+        for (const pause of (pausedStores() ?? []).filter(isPauseForCurrentScope)) {
+            const modId = pause.module ?? STORE_MODULE_IDS[pause.store] ?? null;
+            if (modId && !pausedByModule.has(modId)) pausedByModule.set(modId, pause);
+        }
+    } catch { /* a registry failure must never blank the tab */ }
+
     const rows = HEALTH_MODULE_SPECS.map((spec) => {
         const errors = [];
         // Per-field guard: call() degrades one cell to a fallback value and
@@ -221,6 +240,7 @@ export function collectHealthSnapshot({
         const auto = call('auto', () => normaliseAutoStatus(mod[spec.autoStatus]?.() ?? null), null);
         const lastRun = call('lastRun', () => resolveLastRun(spec.id, diagnostics), null);
         const gate = call('gate', () => allowed(spec.moduleKey), false);
+        const pause = pausedByModule.get(spec.id) ?? null;
 
         return {
             id: spec.id,
@@ -241,6 +261,15 @@ export function collectHealthSnapshot({
             tokenKind: spec.tokenKind,
             auto,
             lastRun,
+            // §5.4: the store-level pause, with the module banner's exact
+            // message — a paused module must never read as ordinary
+            // inactivity on this tab.
+            paused: pause ? {
+                store: pause.store,
+                reasonCode: pause.reasonCode,
+                message: pause.message,
+                since: pause.since,
+            } : null,
             ...(errors.length ? { errors } : {}),
         };
     });

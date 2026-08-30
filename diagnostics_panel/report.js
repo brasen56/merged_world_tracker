@@ -44,6 +44,10 @@ import { redactForReport } from '../core/redaction.js';
 import { collectHealthSnapshot } from './health.js';
 import { collectEnvironmentSnapshot, loadSharedModule } from './environment.js';
 import { collectScopeSnapshot } from './scope_storage.js';
+// Schema plan Part 5 (§9.3 "safe report output"): the schema-status snapshot
+// (versions, gate states, quarantine counts, paused reasons — metadata by
+// construction, quarantined record CONTENT never enters it).
+import { collectSchemaStatusSnapshot } from './schema_status.js';
 import { collectInjectionSnapshot } from './injection.js';
 import { collectIntegritySnapshot } from './integrity.js';
 
@@ -288,6 +292,12 @@ export async function collectReportSections() {
             collectEnvironmentSnapshot({ sharedModule: await loadSharedModule() })),
 
         guarded('scope', 'Scope & storage (Phase 8 — which lorebooks, and why)', () => collectScopeSnapshot()),
+
+        // Part 5 (§9.1/§9.3): the schema-status snapshot — per-store versions,
+        // fast-gate classification, migration-persisted flags, quarantine
+        // counts, and paused-store reasons. Metadata by construction; every
+        // string still routes through buildReport()'s redaction gate.
+        guarded('schemaStatus', 'Schema status (Part 5 — versions, migration state, quarantine)', () => collectSchemaStatusSnapshot()),
 
         // The Phase 9 snapshot carries each module's recorded payload under
         // `modules[].snapshot.payload` — a CONTENT_KEY, so the panel's opt-in

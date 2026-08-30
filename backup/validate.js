@@ -107,6 +107,36 @@ export function validateSection(name, data) {
     return validateSectionData(schema.id, data);
 }
 
+/**
+ * Validate one named section, returning BOTH the historical backup summary and
+ * the RAW structured issues (schema plan Part 5, design §9.2: the Integrity
+ * tab reports "structured issue codes, paths, counts, and top-N reason
+ * strings"). One validation pass feeds both shapes — deriving the codes from
+ * the summary would lose paths/severities, re-running the validator for them
+ * would double the O(entries) work.
+ *
+ * Same contract as validateSection() for the summary half; `issues` is the
+ * module schema's issue list ({ severity, code, path, message, identity,
+ * record } shapes — the `record` field carries rejected raw data and is the
+ * CALLER's to keep out of user-facing surfaces).
+ *
+ * @param {string} name registered section id
+ * @param {*} data the section's raw data
+ * @returns {{ summary: object, issues: object[] }}
+ */
+export function validateSectionWithIssues(name, data) {
+    const schema = getStoreSchema(name);
+    if (!schema) {
+        return {
+            summary: { data: {}, added: 0, updated: 0, skipped: [], conflicts: 0, warning: `Unknown backup section "${name}" was ignored.` },
+            issues: [],
+        };
+    }
+    const validation = schema.validate(data);
+    return { summary: { data: validation.data, ...toBackupSummary(validation) }, issues: validation.issues };
+}
+
+
 // ─── Import preparation (design §7.7, Part 3) ────────────────────────────────
 
 /**

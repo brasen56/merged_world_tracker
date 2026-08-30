@@ -26,6 +26,9 @@ import {
     restoreBackup,
     undoLastRestore,
 } from './index.js';
+// Schema plan Part 5 (§5.3): the "Download recovery data" action — every
+// quarantined record this chat/session holds, as a repairable JSON file.
+import { exportRecoveryData } from './recovery.js';
 
 const SUMMARY_MODAL_ID = 'mwt-backup-summary-modal';
 
@@ -282,7 +285,11 @@ export function renderBackupPanel() {
                 <button id="mwt-bk-export" class="mwt-btn" data-backup-action="export">⬇ Export Backup</button>
                 <button id="mwt-bk-restore" class="mwt-btn" data-backup-action="restore">⬆ Restore from File…</button>
                 <button id="mwt-bk-undo" class="mwt-btn" data-backup-action="undo" title="Replay the pre-restore snapshot captured this session">↩ Undo Last Restore</button>
+                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download every quarantined record this chat/session holds, as JSON — repair outside MWT and re-import through Restore. Quarantined records are also included in every backup.">🧯 Download recovery data</button>
             </div>
+            <p style="color:var(--mwt-text-dim);font-size:11px;margin:8px 0 0">
+                Recovery data = records MWT refused to load (kept whole, never injected). Diagnostics → 🗂️ Scope &amp; storage shows the per-store counts.
+            </p>
         </div>
     `;
 }
@@ -643,6 +650,62 @@ async function commitRestore() {
     setStatus(modal, `Restore did not complete: ${detail}`, 'error');
 }
 
+// ─── Recovery export (schema plan Part 5, §5.3) ──────────────────────────────
+
+/**
+ * The single user-facing message + tone for a recovery-export result (§5.3).
+ *
+ * ONE owner by design (§5.4's one-owner rule, applied to wording): the Backup
+ * panel's button and every paused-module banner render this, so the two
+ * surfaces can never disagree about a refusal — in particular an
+ * `unreadable: true` result (unreadable chat container, export refused) must
+ * surface its message as an ERROR, never collapse into the "nothing was
+ * rejected" info line.
+ *
+ * Pure presenter: no DOM, no barrel imports — unit-tested directly.
+ *
+ * @param {object} result — exportRecoveryData()'s return value
+ * @returns {{ message: string, tone: 'success'|'error'|'info' }}
+ */
+export function describeRecoveryExportResult(result) {
+    if (!result || typeof result !== 'object') {
+        return { message: 'Recovery export failed: unexpected result.', tone: 'error' };
+    }
+    if (result.ok) {
+        return {
+            message: `Recovery data downloaded (${result.count} quarantined record(s)). Repair outside MWT and re-import through Backup → Restore — the checked path validates them like any other data.`,
+            tone: 'success',
+        };
+    }
+    if (result.unreadable) {
+        return {
+            message: result.message
+                || 'Refused: some quarantined records cannot be read by this build and were not exported. They are preserved unchanged.',
+            tone: 'error',
+        };
+    }
+    return {
+        message: 'No quarantined records to export — nothing has been rejected for this chat/session.',
+        tone: 'info',
+    };
+}
+
+async function handleRecoveryExport() {
+    if (state.busy) return;
+    setBusy(true);
+    try {
+        const result = await exportRecoveryData();
+        // One wording owner: an `unreadable` refusal surfaces its message as
+        // an error, never the "nothing was rejected" info line.
+        const { message, tone } = describeRecoveryExportResult(result);
+        setBackupStatus(message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
+    } catch (err) {
+        setBackupStatus(`Recovery export failed: ${err?.message || err}`, 'error');
+    } finally {
+        setBusy(false);
+    }
+}
+
 // ─── Wiring ───────────────────────────────────────────────────────────────────
 
 /**
@@ -656,4 +719,5 @@ export function wireBackupEvents(modal) {
     panel.querySelector('#mwt-bk-export')?.addEventListener('click', () => { handleExport(); });
     panel.querySelector('#mwt-bk-restore')?.addEventListener('click', () => { handleRestorePick(); });
     panel.querySelector('#mwt-bk-undo')?.addEventListener('click', () => { handleUndo(); });
+    panel.querySelector('#mwt-bk-recovery')?.addEventListener('click', () => { handleRecoveryExport(); });
 }

@@ -104,6 +104,10 @@ import { buildReport, collectReportSections, collectKnownSecrets } from './repor
 import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
 import { collectScopeSnapshot } from './scope_storage.js';
+// Schema plan Part 5 (§9.1): the schema-status collector + renderer behind the
+// Scope & storage tab's new schema section (stored/current versions, gate
+// state, migration persisted, quarantine counts, paused reasons).
+import { collectSchemaStatusSnapshot } from './schema_status.js';
 // Direct core/diagnostics.js import (NOT the barrel) per the §II.3 alias-trap
 // rule: the payload reveal must read the REAL Phase 2 snapshot store, and the
 // Phase 11 log reveal must read the REAL Phase 0 ring.
@@ -313,9 +317,15 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
         const errFlag = r.errors?.length
             ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(r.errors.join('\n'))}">⚠</span>`
             : '';
+        // §5.4: a paused module is PAUSED on this row — never readable as
+        // ordinary off/busy inactivity. The banner below repeats the message
+        // because the badge alone would hide it behind a tooltip.
+        const pauseFlag = r.paused
+            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(String(r.paused.message || r.paused.reasonCode))}">⛔ PAUSED</span>`
+            : '';
         return `
             <tr class="${classes.join(' ')}" data-module="${r.id}">
-                <td class="mwt-diag-health-module">${r.label}${errFlag}</td>
+                <td class="mwt-diag-health-module">${r.label}${pauseFlag}${errFlag}</td>
                 <td>${r.enabled ? badge('on', 'ok') : badge('off', 'dim')}</td>
                 <td>${r.injectionAllowed ? badge('open', 'ok') : badge('blocked', 'fail')}</td>
                 <td>${r.busy ? badge('busy', 'warn') : '<span class="mwt-diag-dim">idle</span>'}</td>
@@ -324,6 +334,18 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
                 <td>${lastRunCell(r.lastRun)}</td>
             </tr>`;
     }).join('');
+
+    // §5.4: the paused-state banner — the same module-authored reason the
+    // module's own tab banner shows, so a paused module is unmistakable on
+    // this tab too (the panic-switch treatment: a state that explains "why is
+    // this module doing nothing" leads the pane whenever it applies).
+    const pausedRows = rows.filter((r) => r.paused);
+    const pausedBanner = pausedRows.length
+        ? `<div class="mwt-diag-panic mwt-diag-paused">
+            ${pausedRows.map((r) => `⛔ <strong>${r.label} is PAUSED</strong> — <span title="${escapeHtml(String(r.paused.reasonCode))}">${escapeHtml(String(r.paused.message || r.paused.reasonCode))}</span>`).join('<br>')}
+            The module stopped itself rather than use data it cannot trust; its own tab has the banner, a Retry, and the recovery export. Other modules are unaffected.
+        </div>`
+        : '';
 
     // The panic switch is rendered unmissably (design §I.5 Tab 1): it is the
     // one global state that makes every "why is nothing injecting" report a
@@ -350,6 +372,7 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
                 <span class="mwt-diag-health-stat">read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}</span>
             </div>
             ${panicBanner}
+            ${pausedBanner}
             <table class="mwt-diag-health-table">
                 <thead>
                     <tr><th>Module</th><th>On</th><th>Gate</th><th>Busy</th><th>Tokens</th><th>Auto</th><th>Last run</th></tr>
@@ -691,11 +714,154 @@ export function renderScopeSnapshot(snapshot, { formatTime = (ts) => new Date(ts
 }
 
 /**
+ * Render the schema-status snapshot (schema plan Part 5, design §9.1): one
+ * table row per registered store — stored version vs. current supported
+ * version, the fast-gate state (ready/preparing/blocked/unknown), whether a
+ * migration was persisted, the quarantined-record count, and for a paused
+ * store the SAME plain-language reason its module banner shows — plus the
+ * Knowledge lorebook store's hydration row, a quarantine footer with the
+ * recovery-export pointer, and the verdict banner over it all.
+ *
+ * Read-only DISPLAY (§9.1's boundary): Retry and quarantine-clear actions are
+ * named in the notes but wired in the module's own tab and the MWT.recovery
+ * console namespace, never here.
+ *
+ * @param {object} snapshot — collectSchemaStatusSnapshot() output
+ * @param {{formatTime?: function(number): string}} [opts]
+ * @returns {string} innerHTML for the section
+ */
+export function renderSchemaStatusSnapshot(snapshot, { formatTime = (ts) => new Date(ts).toLocaleTimeString() } = {}) {
+    const s = snapshot || {};
+    const rows = Array.isArray(s.rows) ? s.rows : [];
+    const knowledge = s.knowledgeStore || {};
+    const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+    const totals = s.totals || {};
+
+    const badge = (text, tone) => `<span class="mwt-diag-badge mwt-diag-badge--${tone}">${escapeHtml(text)}</span>`;
+    const dim = (text) => `<span class="mwt-diag-dim">${text}</span>`;
+
+    // The chat-metadata store rows. State badge tones: ready = ok (and shows
+    // "migration persisted" when the manifest proves it); prepare = amber
+    // "will migrate" (the ordinary pre-cutover legacy state); blocked/paused =
+    // fail — §5.4's "never reads as ordinary inactivity".
+    const stateCell = (row) => {
+        if (row.paused) {
+            return `${badge('⛔ PAUSED', 'fail')} ${dim(`<code>${escapeHtml(String(row.paused.reasonCode))}</code>`)}<div class="mwt-diag-dim mwt-diag-int-reasons">${escapeHtml(String(row.paused.message || ''))}</div>`;
+        }
+        if (row.state === 'ready') {
+            return row.migrationPersisted
+                ? `${badge('ready', 'ok')} ${dim('migration persisted')}`
+                : badge('ready', 'ok');
+        }
+        if (row.state === 'prepare') {
+            return `${badge('will migrate', 'warn')} ${dim(escapeHtml(String(row.reason ?? '')))}`;
+        }
+        if (row.state === 'blocked') {
+            return `${badge('BLOCKED', 'fail')} ${dim(escapeHtml(String(row.reason ?? '')))}`;
+        }
+        if (row.state === 'unknown') {
+            return `${badge('unknown', 'warn')} ${dim('manifest from a newer MWT')}`;
+        }
+        return dim(row.state ?? '?');
+    };
+    const versionCell = (row) => row.present
+        ? `${escapeHtml(String(row.storedVersion ?? '?'))} / ${escapeHtml(String(row.currentVersion ?? '?'))}`
+        : dim('—');
+
+    const tableRows = rows.map((row) => `
+        <tr>
+            <td>${escapeHtml(String(row.label ?? row.id ?? '?'))}</td>
+            <td>${row.present ? badge('present', 'dim') : dim('absent')}</td>
+            <td>${versionCell(row)}</td>
+            <td>${stateCell(row)}</td>
+            <td>${row.quarantineCount > 0 ? badge(String(row.quarantineCount), 'warn') : dim('0')}</td>
+        </tr>`).join('');
+
+    // The Knowledge lorebook store rows: the store spans BOTH books
+    // (Knowledge + State Tracker), so each resolved book gets its own row —
+    // its version lives inside the book's [MWT:store] entry and its state is
+    // the cache's hydration state. The pause is store-level (§5.4) and
+    // renders on each row.
+    const knowledgeBookStateCell = (book) => {
+        if (knowledge.paused) {
+            return `${badge('⛔ PAUSED', 'fail')} ${dim(`<code>${escapeHtml(String(knowledge.paused.reasonCode))}</code>`)}<div class="mwt-diag-dim mwt-diag-int-reasons">${escapeHtml(String(knowledge.paused.message || ''))}</div>`;
+        }
+        if (book.hydration === 'loaded') {
+            const version = book.storedVersion === book.currentVersion
+                ? dim('at current version')
+                : `${escapeHtml(String(book.storedVersion ?? '?'))} vs ${escapeHtml(String(book.currentVersion ?? '?'))}`;
+            return `${badge('loaded', 'ok')} ${version}`;
+        }
+        if (book.hydration === 'failed') {
+            return `${badge('load failed', 'fail')} ${dim('writes blocked')}`;
+        }
+        return `${badge('not loaded yet', 'warn')} ${dim('hydration runs on chat change')}`;
+    };
+    const knowledgeBooks = Array.isArray(knowledge.books) && knowledge.books.length > 0
+        ? knowledge.books
+        : [knowledge];
+    const knowledgeRowsHtml = knowledgeBooks.map((b) => `
+        <tr>
+            <td>${escapeHtml(String(knowledge.label ?? 'Knowledge lorebook store'))}${b.role === 'state' ? dim(' · State Tracker book') : ''}${b.book ? dim(` (${escapeHtml(String(b.book))})`) : ''}</td>
+            <td>${b.present ? badge('present', 'dim') : dim('no cache yet')}</td>
+            <td>${escapeHtml(String(b.storedVersion ?? '?'))} / ${escapeHtml(String(b.currentVersion ?? '?'))}</td>
+            <td>${knowledgeBookStateCell(b)}</td>
+            <td>${b.quarantineCount > 0 ? badge(String(b.quarantineCount), 'warn') : dim('0')}</td>
+        </tr>`).join('');
+
+    const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
+        <li>${w.level === 'fail' ? '⛔' : '⚠'} ${escapeHtml(String(w.text ?? ''))}</li>`).join('')}</ul>` : '';
+
+    // §5.3 discipline in the footer: a zero count is only "no records" when
+    // every home could be read. A container this build cannot read (newer
+    // MWT) or could not fully parse must never be presented as an assertion
+    // that recovery data is absent — the count is unavailable, not zero.
+    const chatQ = s.chatQuarantine || {};
+    const unreadableChatQuarantine = chatQ.unknown === true;
+    const unparseableChatQuarantine = !unreadableChatQuarantine
+        && Number(chatQ.containerIssues) > 0 && (Number(chatQ.items) || 0) === 0;
+    const quarantineFooter = (totals.quarantine ?? 0) > 0
+        ? `<p class="mwt-diag-note"><strong>${escapeHtml(String(totals.quarantine ?? 0))} quarantined record(s)</strong> across these stores — preserved whole, never injected, never deleted. Export them any time with the <strong>⬇ Download recovery data</strong> button (the Backup panel in ⚙️ Settings, a paused module's banner, or <code>MWT.recovery.export()</code>); repair outside MWT and re-import through Backup → Restore. This tab is read-only by contract — the clear action is <code>MWT.recovery.clear({ confirm: 'CLEAR' })</code> in the console.${unreadableChatQuarantine ? ' This chat\'s own recovery container is unreadable (written by a NEWER MWT) and may hold additional records this build cannot read or count.' : ''}</p>`
+        : unreadableChatQuarantine
+            ? `<p class="mwt-diag-note"><strong>Quarantine count unavailable:</strong> this chat's recovery (quarantine) container was written by a NEWER version of MWT, so it may hold quarantined records this build cannot read or count — the zeros above cannot rule them out. Nothing was deleted: the records are preserved unchanged; upgrade MWT to read and export them (<strong>⬇ Download recovery data</strong> refuses rather than download an incomplete file).</p>`
+            : unparseableChatQuarantine
+                ? `<p class="mwt-diag-note"><strong>Quarantine count unavailable:</strong> this chat's recovery (quarantine) container is malformed, so it may hold quarantined records this build could not read or count — the zeros above cannot rule them out. Nothing was deleted; the container is preserved whole.</p>`
+                : `<p class="mwt-diag-note">No quarantined records. (If any appear, they are preserved whole and exportable with <strong>⬇ Download recovery data</strong> — never silently deleted.)</p>`;
+
+    const errorNote = Array.isArray(s.errors) && s.errors.length
+        ? `<p class="mwt-diag-note">⚠ Some fields degraded: ${escapeHtml(s.errors.join('; '))}</p>`
+        : '';
+
+    return `
+        <div class="mwt-diag-scope-schema" data-diag-schema-status="1">
+            <p class="mwt-diag-env-subheading">Schema status — versions, migration state &amp; quarantine (read-only)</p>
+            <div class="mwt-diag-scope-banner mwt-diag-scope-banner--${s.bannerLevel === 'fail' ? 'fail' : (s.bannerLevel === 'ok' ? 'ok' : 'warn')}">
+                <strong>${s.bannerLevel === 'ok' ? '✅' : (s.bannerLevel === 'fail' ? '⛔' : '⚠️')} Schema status: ${escapeHtml(String(totals.ready ?? '?'))} ready · ${escapeHtml(String(totals.preparing ?? '?'))} to migrate · ${escapeHtml(String(totals.blocked ?? '?'))} blocked · ${escapeHtml(String(totals.paused ?? '?'))} paused</strong>
+                <div class="mwt-diag-scope-banner-note">${s.bannerLevel === 'ok'
+                    ? `Every present store is at its current schema version. Read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}.`
+                    : `A store that cannot be safely read pauses its own module — the reason is on the row and in that module's tab banner. Read at ${escapeHtml(formatTime(s.generatedAt ?? Date.now()))}.`}</div>
+            </div>
+            ${warningList}
+            <table class="mwt-diag-env-table">
+                <thead><tr><th>Store</th><th>Data</th><th>stored / current version</th><th>Schema state</th><th>Quarantined</th></tr></thead>
+                <tbody>${tableRows}${knowledgeRowsHtml}</tbody>
+            </table>
+            ${quarantineFooter}
+            ${errorNote}
+        </div>
+    `;
+}
+
+/**
  * Collect + render the Scope & storage pane under the Environment pane. Called
  * at markup-build time inside renderDiagnosticsPanel() — the modal is rebuilt
  * on every open, which is this tab's refresh model (decision D2). Fully
  * synchronous; a total collection failure degrades to an error card, never a
  * broken panel.
+ *
+ * Part 5: the pane is now TWO sections — the Phase 8 books/bindings snapshot
+ * and the §9.1 schema-status section — each collected and degraded
+ * independently, so one failing never blanks the other.
  *
  * @returns {string} innerHTML for the Scope & storage sub-tab pane
  */
@@ -711,7 +877,18 @@ export function renderScopePane() {
             </div>
         `;
     }
-    return renderScopeSnapshot(snapshot);
+    let schemaSection;
+    try {
+        schemaSection = renderSchemaStatusSnapshot(collectSchemaStatusSnapshot());
+    } catch (err) {
+        schemaSection = `
+            <div class="mwt-diag-placeholder">
+                <span class="mwt-diag-placeholder-badge">Schema status unavailable</span>
+                <p>Collecting the schema-status snapshot failed: ${escapeHtml(String(err?.message || err))}</p>
+            </div>
+        `;
+    }
+    return renderScopeSnapshot(snapshot) + schemaSection;
 }
 
 // ─── Tab 4: Injection (Phase 9) ───────────────────────────────────────────────
@@ -1467,9 +1644,13 @@ export function renderIntegritySnapshot(snapshot, { formatTime = (ts) => new Dat
         if (num(r.skippedCount) !== '0' || num(r.conflicts) !== '0') {
             statusBits.push(badge(`${num(r.skippedCount)} skipped / ${num(r.conflicts)} conflicts`, 'warn'));
         }
-        const statusCell = r?.present === false
-            ? dim('absent')
-            : (statusBits.length ? statusBits.join(' ') : badge('ok', 'ok'));
+        const statusCell = r?.checked === false
+            ? dim(r?.reason === 'not-hydrated'
+                ? 'not checked — book not hydrated yet'
+                : (r?.warning ?? 'not checked'))
+            : (r?.present === false
+                ? dim('absent')
+                : (statusBits.length ? statusBits.join(' ') : badge('ok', 'ok')));
         const reasonStrings = [
             ...(Array.isArray(r?.deferredReasons) ? r.deferredReasons : []),
             ...(Array.isArray(r?.reasons) ? r.reasons : []),
@@ -1477,11 +1658,22 @@ export function renderIntegritySnapshot(snapshot, { formatTime = (ts) => new Dat
         const reasons = reasonStrings.length
             ? `<div class="mwt-diag-dim mwt-diag-int-reasons">${reasonStrings.map((x) => `“${escapeHtml(String(x))}”`).join(' · ')}</div>`
             : '';
+        // §9.2 structured codes: code ×count with the first path, capped at
+        // the sample limit by the collector — the machine-readable finding
+        // identifiers, complementing the reason strings.
+        const codes = (Array.isArray(r?.issueCodes) ? r.issueCodes : []).map((c) =>
+            `<code>${escapeHtml(String(c?.code ?? '?'))}</code>×${num(c?.count)}${c?.path ? dim(`@${escapeHtml(String(c.path))}`) : ''}`).join(' ');
+        const codeLine = codes ? `<div class="mwt-diag-dim mwt-diag-int-reasons">${codes}</div>` : '';
+        const nameCell = escapeHtml(String(r?.label ?? r?.id ?? '?'))
+            + (r?.lorebook === true && r?.book ? ` ${dim(escapeHtml(String(r.book)))}` : '')
+            + ` ${dim(`<code>${escapeHtml(String(r?.key ?? ''))}</code>`)}`;
         return `
             <tr>
-                <td>${escapeHtml(String(r?.label ?? r?.id ?? '?'))} ${dim(`<code>${escapeHtml(String(r?.key ?? ''))}</code>`)}</td>
-                <td>${r?.present === false ? dim('never written this chat') : `${num(r?.added)} in / ${num(r?.updated)} upd`}</td>
-                <td>${statusCell}${reasons}</td>
+                <td>${nameCell}</td>
+                <td>${r?.present === false
+                    ? (r?.lorebook === true ? dim('in this chat\'s lorebook') : dim('never written this chat'))
+                    : `${num(r?.added)} in / ${num(r?.updated)} upd`}</td>
+                <td>${statusCell}${reasons}${codeLine}</td>
             </tr>`;
     }).join('');
 
@@ -1544,7 +1736,7 @@ export function renderIntegritySnapshot(snapshot, { formatTime = (ts) => new Dat
             ${card('Store validation (validateSection per store)', { count: (s.storeValidations?.skippedTotal || 0) + (s.storeValidations?.conflictsTotal || 0), more: 0, sample: [] }, {
                 columns: '<th>Store</th><th>records</th><th>validateSection()</th>',
                 rowsHtml: storeRows, zeroText: 'Every present store section passed validateSection() with nothing quarantined.',
-                note: 'The chat-metadata stores, enumerated from the <code>METADATA_KEYS</code> whitelist (<code>backup/data.js</code>) — records a backup import would refuse are quarantined here with the validator\u2019s own reasons. A store paused pending a one-time compatibility update renders as <preparing> — its data was left unchanged and nothing was quarantined.',
+                note: 'Every registered store (enumerated from <code>schema/registry.js</code> — the same single list backup and runtime use), plus the Knowledge lorebook store when its book is hydrated. Records a validator refuses are quarantined with the validator\u2019s own reasons and structured codes/paths — the raw rejected records never appear here (they live in quarantine, exportable with <code>MWT.recovery.export()</code>). A store paused pending a one-time compatibility update renders as <preparing> — its data was left unchanged and nothing was quarantined.',
             })}
             ${card('Interiority ledger integrity', { count: intCount, more: 0, sample: [] }, {
                 columns: '<th>check</th><th>rows</th>',

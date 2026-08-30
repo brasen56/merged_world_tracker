@@ -42,6 +42,8 @@ import {
     copyIntegritySnapshotJson,
 } from '../diagnostics_panel/render.js';
 import { METADATA_KEYS } from '../backup/data.js';
+// Part 5 (§9.2): the registry is the enumeration source the specs derive from.
+import { CHAT_METADATA_SCHEMA_IDS } from '../schema/registry.js';
 import { resetCoreStubs } from './stubs/core.js';
 
 beforeEach(() => {
@@ -134,9 +136,15 @@ describe('integritySample', () => {
 });
 
 describe('INTEGRITY_STORE_SPECS', () => {
-    test('is enumerated from the METADATA_KEYS whitelist — no second list to drift', () => {
+    test('is enumerated from the schema registry — no second list to drift (§9.2)', () => {
+        // Part 5: the enumeration source moved from the METADATA_KEYS
+        // whitelist to schema/registry.js — the registry is the single owner
+        // (ids AND metadata keys). The METADATA_KEYS equivalence still holds
+        // and is pinned here, because the two agreeing IS the invariant that
+        // made the switch safe.
         expect(INTEGRITY_STORE_SPECS.map((s) => s.id)).toEqual(Object.keys(METADATA_KEYS));
         expect(INTEGRITY_STORE_SPECS.map((s) => s.key)).toEqual(Object.values(METADATA_KEYS));
+        expect(INTEGRITY_STORE_SPECS.map((s) => s.id)).toEqual(CHAT_METADATA_SCHEMA_IDS);
         for (const spec of INTEGRITY_STORE_SPECS) {
             expect(typeof spec.label).toBe('string');
             expect(spec.label.length).toBeGreaterThan(0);
@@ -155,11 +163,51 @@ describe('collectIntegritySnapshot', () => {
         expect(snap.warnings).toEqual([]);
         expect(snap.totals.findings).toBe(0);
         expect(snap.errors).toBeUndefined();
+        // Part 5 (§9.2): the Knowledge lorebook store now has its OWN rows —
+        // one per book, since the store spans the Knowledge AND the State
+        // Tracker book. Neither is hydrated in this Node world, so both are
+        // dim not-checked readings, never findings and never counted as
+        // present.
         expect(snap.storeValidations.sections.map((r) => [r.id, r.present])).toEqual([
             ['worldState', false], ['chronicle', false], ['knowledgeEvidence', false],
             ['knowledgeCounters', false], ['storyPlanner', false], ['interiority', false],
+            ['knowledgeStore', false], ['knowledgeStore', false],
         ]);
         expect(snap.totals.sectionsPresent).toBe(0);
+        const knowledgeRows = snap.storeValidations.sections.filter((r) => r.id === 'knowledgeStore');
+        expect(knowledgeRows.map((r) => r.book)).toEqual(['Knowledge Tracker', 'State Tracker']);
+        for (const row of knowledgeRows) {
+            expect(row.checked).toBe(false);
+            expect(row.reason).toBe('not-hydrated');
+        }
+    });
+
+    test('the Knowledge lorebook store validates BOTH books when both are hydrated', async () => {
+        const snap = await collectIntegritySnapshot(deps(world(), {
+            knowledgeBooks: () => ({
+                books: [
+                    { name: 'Knowledge Tracker', role: 'knowledge' },
+                    { name: 'State Tracker', role: 'state' },
+                ],
+                mode: 'global',
+            }),
+            knowledgePeek: () => ({ hydrated: true, dirty: false, version: 1 }),
+            knowledgePeekData: (name) => (name === 'State Tracker'
+                ? { version: 1, stateRegistry: { Weather: { uid: 3 } } }
+                : { version: 1, registry: { Mara: { uid: 1 } }, relationships: {} }),
+        }));
+        const lorebookRows = snap.storeValidations.sections.filter((r) => r.id === 'knowledgeStore');
+        expect(lorebookRows).toHaveLength(2);
+        expect(lorebookRows.map((r) => r.book)).toEqual(['Knowledge Tracker', 'State Tracker']);
+        expect(lorebookRows[0].label).toContain('Knowledge lorebook store');
+        expect(lorebookRows[1].label).toContain('State Tracker lorebook store');
+        // Both validated from their read-only cache copies.
+        for (const row of lorebookRows) {
+            expect(row.checked).not.toBe(false);
+            expect(row.present).toBe(true);
+            expect(row.lorebook).toBe(true);
+            expect(row.storeVersion).toBe(1);
+        }
     });
 
     test('duplicate profiles: counts entries, samples per group, flags the referenced uid', async () => {

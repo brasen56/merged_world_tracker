@@ -1,0 +1,429 @@
+/**
+ * core/schema_status.js — The visible paused-state surface (design §5.4) and
+ * the schema diagnostic events (§9.3) of SCHEMA_VALIDATION_MIGRATIONS_PLAN.md.
+ *
+ * Part 5. A store that cannot be prepared blocks ONLY its own module, and that
+ * block must never read as ordinary inactivity. This module is the ONE owner
+ * of that state, so every surface reads the same reason and the surfaces can
+ * never disagree:
+ *
+ *   - the affected module's own tab renders renderPausedStoresBanner() — a red
+ *     banner with a Retry action and the recovery export (§5.4: "offers
+ *     recovery export and a Retry action"; the Diagnostics panel is read-only
+ *     by contract, so the ACTION lives in the module's tab, never there);
+ *   - 🗂️ Scope & storage and ❤️ Health read getPauseState()/getPausedStores()
+ *     and show the same message (design §9.1);
+ *   - ONE user notification per chat/scope — never repeated toasts (§5.4).
+ *
+ * The registry is in-memory and session-scoped, exactly like the diagnostics
+ * ring: a pause is derived state (the store on disk is untouched — that is the
+ * point of pausing), so it is re-derived on every load rather than persisted.
+ *
+ * Purity is orchestration-level, not schema-level: this module deliberately
+ * imports the diagnostics ring, the toast helper, and the scope resolver — the
+ * things design §3.1 keeps OUT of the pure schema engine — because events,
+ * notifications, and banners are orchestration. It must never be imported from
+ * core/schema.js, core/quarantine.js, schema/*, or a module schema.
+ *
+ * Who calls pauseStore(): the preparation paths that can block a store. Today
+ * that is Knowledge lorebook hydration (knowledge/store.js hydrateBook()); the
+ * Part 6 runtime cutover adds the chat-metadata gate. resumeStore() is called
+ * by the same paths when a later load clears the block, and by retryStore()
+ * when a Retry handler succeeds.
+ */
+
+import { record } from './diagnostics.js';
+import { notify } from './notifications.js';
+import { getChatIdentity, getEpoch } from './scope.js';
+import { escapeHtml } from './diff.js';
+
+// ─── Store ↔ module mapping (the one shared mapping) ─────────────────────────
+//
+// Store ids are the schema/registry.js keys; module ids are the Health-tab /
+// API-telemetry keys (HEALTH_MODULE_SPECS ids, underscore-spelled). The main
+// modal's TABS ids are the hyphen spellings of the same ids; every consumer
+// normalises via moduleId() so the two spellings cannot fork the mapping.
+
+/** Registered store id → owning module id. */
+export const STORE_MODULE_IDS = Object.freeze({
+    worldState: 'world_state',
+    chronicle: 'chronicle',
+    knowledgeEvidence: 'knowledge',
+    knowledgeCounters: 'knowledge',
+    knowledgeStore: 'knowledge',
+    storyPlanner: 'story_planner',
+    interiority: 'interiority',
+});
+
+/** Owning module id → every registered store id that module owns. */
+export const MODULE_STORE_IDS = Object.freeze(
+    Object.entries(STORE_MODULE_IDS).reduce((acc, [storeId, modId]) => {
+        (acc[modId] ??= []).push(storeId);
+        return acc;
+    }, {}),
+);
+
+/** Display labels for the module ids (banner + Health wording). */
+export const MODULE_LABELS = Object.freeze({
+    world_state: 'World State',
+    chronicle: 'Chronicle',
+    knowledge: 'Knowledge',
+    story_planner: 'Story Planner',
+    interiority: 'Interiority',
+});
+
+/**
+ * Canonicalise a module id: the Health/API spelling ('world_state') and the
+ * main-modal tab spelling ('world-state') are the same module.
+ *
+ * @param {string} id
+ * @returns {string}
+ */
+export function moduleId(id) {
+    return String(id ?? '').replace(/-/g, '_');
+}
+
+// ─── Schema diagnostic events (design §9.3) ──────────────────────────────────
+
+/**
+ * The Part 5 event names. Details carry store/version/count/error-class
+ * metadata, never user prose — recordSchemaEvent() enforces that with an
+ * allowlist, because a detail object assembled at a rejection site is one
+ * refactor away from carrying the rejected record itself.
+ */
+export const SCHEMA_DIAGNOSTIC_EVENTS = Object.freeze({
+    MIGRATED: 'schema_migrated',
+    REPAIRED: 'schema_repaired',
+    QUARANTINED: 'schema_quarantined',
+    BLOCKED_FUTURE_VERSION: 'schema_blocked_future_version',
+    MIGRATION_FAILED: 'schema_migration_failed',
+    PERSIST_FAILED: 'schema_persist_failed',
+    STORE_PAUSED: 'schema_store_paused',
+    STORE_RESUMED: 'schema_store_resumed',
+    QUARANTINE_CLEARED: 'schema_quarantine_cleared',
+});
+
+/**
+ * The only detail fields a schema event may carry (§9.3: "store/version/count/
+ * error-class metadata, not user prose"). `book` is a lorebook NAME — the same
+ * identity class the Scope & storage tab displays. Everything else a caller
+ * passes is dropped on the floor.
+ */
+const EVENT_DETAIL_ALLOWLIST = Object.freeze([
+    'store', 'book', 'version', 'fromVersion', 'toVersion', 'count',
+    'code', 'reasonCode', 'via', 'reason',
+]);
+
+/**
+ * Record one schema diagnostic event with a content-safe detail. Never throws
+ * (the record() contract): a diagnostics failure must never break the feature
+ * it observes.
+ *
+ * @param {string} event — one of SCHEMA_DIAGNOSTIC_EVENTS
+ * @param {object} [detail] — allowlisted fields only; extras are dropped
+ * @param {{ level?: string, module?: string }} [options]
+ * @returns {void}
+ */
+export function recordSchemaEvent(event, detail = {}, { level = 'info', module = 'schema' } = {}) {
+    const safe = {};
+    for (const key of EVENT_DETAIL_ALLOWLIST) {
+        const value = detail?.[key];
+        if (value === undefined || value === null) continue;
+        safe[key] = typeof value === 'number' || typeof value === 'boolean' ? value : String(value);
+    }
+    try {
+        record({ level, module, event, detail: safe });
+    } catch { /* never block the caller */ }
+}
+
+// ─── The paused-state registry ───────────────────────────────────────────────
+// Module-level singleton state (the core/scope.js _epoch pattern). Cleared on
+// page reload; reset between tests via _resetPausedStores().
+
+/**
+ * @type {Map<string, {
+ *   store: string, module: string|null, reasonCode: string, message: string,
+ *   scopeKey: string, since: number, version: number|null, count: number|null,
+ * }>}
+ */
+const _paused = new Map();
+
+/** `${store}::${scopeKey}` pairs that already fired their one notification. */
+const _notifiedScopes = new Set();
+
+/** Retry handlers per store id — the Part 6 seam (and Knowledge's today). */
+const _retryHandlers = new Map();
+
+/**
+ * The scope dimension of "one notification per chat/scope". Chat identity key
+ * when the build can identify the chat; the character/group key when it cannot
+ * (a fork without usable chat ids would otherwise mint a unique `unknown:N`
+ * per call and re-notify on every detection); the operation epoch as the last
+ * resort. Injectable for tests via _setScopeKeyResolver().
+ */
+let _resolveScopeKey = defaultResolveScopeKey;
+
+function defaultResolveScopeKey() {
+    try {
+        const identity = getChatIdentity();
+        if (identity && identity.isUnknown === false) return identity.key;
+        if (identity?.characterKey) return identity.characterKey;
+        if (identity?.groupKey) return identity.groupKey;
+    } catch { /* fall through to the epoch */ }
+    return `epoch:${getEpoch()}`;
+}
+
+/**
+ * Pause a store: it stops its module's writes, the banner goes up, ONE toast
+ * fires for this chat/scope.
+ *
+ * Idempotent per (store, scope, reasonCode): re-detecting the same block on a
+ * retry keeps the original `since` and records no second event. A DIFFERENT
+ * reasonCode for the same scope replaces the record and records a new
+ * transition event (the registry state must describe the CURRENT block) — but
+ * the toast is still not repeated: §5.4's rule is one notification per
+ * chat/scope, full stop.
+ *
+ * @param {string} storeId registered store id (e.g. 'knowledgeStore')
+ * @param {object} [info]
+ * @param {string} [info.module] owning module id (defaults via the mapping)
+ * @param {string} [info.reasonCode] stable machine code (e.g. 'future-version')
+ * @param {string} [info.message] the plain-language banner text — MODULE-AUTHORED
+ *        wording in the §5.4 style; the same string reaches the banner, Scope &
+ *        storage, and Health. Never put quarantined record content in it.
+ * @param {number|null} [info.version] the store version at the block, when known
+ * @param {number|null} [info.count] record-count context (e.g. quarantined), when known
+ * @returns {object|null} a copy of the stored pause state
+ */
+export function pauseStore(storeId, {
+    module: moduleParam,
+    reasonCode = 'paused',
+    message = '',
+    version = null,
+    count = null,
+} = {}) {
+    if (typeof storeId !== 'string' || !storeId) return null;
+    const scopeKey = _resolveScopeKey();
+    const previous = _paused.get(storeId);
+    const sameBlock = Boolean(previous)
+        && previous.scopeKey === scopeKey
+        && previous.reasonCode === reasonCode;
+
+    const entry = {
+        store: storeId,
+        module: typeof moduleParam === 'string' && moduleParam
+            ? moduleId(moduleParam)
+            : (STORE_MODULE_IDS[storeId] ?? null),
+        reasonCode: String(reasonCode),
+        message: String(message ?? ''),
+        scopeKey,
+        since: sameBlock ? previous.since : Date.now(),
+        version: typeof version === 'number' ? version : null,
+        count: typeof count === 'number' ? count : null,
+    };
+    _paused.set(storeId, entry);
+
+    // The event is the in-session record of the TRANSITION; a repeated
+    // detection of the same block is not news.
+    if (!sameBlock) {
+        recordSchemaEvent(SCHEMA_DIAGNOSTIC_EVENTS.STORE_PAUSED, {
+            store: storeId,
+            reasonCode: entry.reasonCode,
+            version: entry.version,
+            count: entry.count,
+        }, { level: 'warn' });
+    }
+
+    // ONE notification per chat/scope (§5.4): `${store}::${scopeKey}` is
+    // remembered for the session, so retries and re-detections never repeat
+    // the toast — whatever reason code they carry.
+    const notifiedKey = `${storeId}::${scopeKey}`;
+    if (!_notifiedScopes.has(notifiedKey)) {
+        _notifiedScopes.add(notifiedKey);
+        const label = MODULE_LABELS[entry.module] ?? entry.store;
+        try {
+            notify(
+                `MWT: ${label} is paused`,
+                entry.message || `The ${label} store for this chat could not be safely prepared. Its data was left unchanged.`,
+                'error',
+            );
+        } catch { /* never block the pause on a toast */ }
+    }
+
+    return { ...entry };
+}
+
+/**
+ * Clear a store's pause — a later load that succeeded, or a Retry that worked.
+ * Records `schema_store_resumed` only when a pause actually existed.
+ *
+ * @param {string} storeId
+ * @param {{ via?: string }} [options] — 'load' (default) or 'retry', for the event
+ * @returns {boolean} whether a pause was cleared
+ */
+export function resumeStore(storeId, { via = 'load' } = {}) {
+    if (!_paused.has(storeId)) return false;
+    _paused.delete(storeId);
+    recordSchemaEvent(SCHEMA_DIAGNOSTIC_EVENTS.STORE_RESUMED, {
+        store: storeId,
+        via,
+    }, { level: 'info' });
+    return true;
+}
+
+/**
+ * @param {string} storeId
+ * @returns {object|null} a copy of the pause state, or null when not paused
+ */
+export function getPauseState(storeId) {
+    const entry = _paused.get(storeId);
+    return entry ? { ...entry } : null;
+}
+
+/**
+ * @returns {object[]} copies of every paused store's state, in pause order
+ */
+export function getPausedStores() {
+    return [..._paused.values()].map((entry) => ({ ...entry }));
+}
+
+/**
+ * Is a pause record about the CURRENT chat/scope? A pause recorded for another
+ * chat must not paint this chat's banner — the store is re-derived on every
+ * chat switch, so the other chat's state is not this surface's state.
+ *
+ * @param {object} pause — a getPauseState() record
+ * @returns {boolean}
+ */
+export function isPauseForCurrentScope(pause) {
+    if (!pause?.scopeKey) return false;
+    return pause.scopeKey === _resolveScopeKey();
+}
+
+// ─── The Retry seam ──────────────────────────────────────────────────────────
+
+/**
+ * Register the store's Retry handler — the re-preparation path its module
+ * owns. Knowledge registers its re-hydration today; the Part 6 cutover
+ * registers the chat-metadata preparation. Registration is idempotent.
+ *
+ * @param {string} storeId
+ * @param {function(): (boolean|Promise<boolean>)} handler — resolves whether
+ *        the block cleared (a resumeStore() inside the handler is honoured too)
+ */
+export function setStoreRetryHandler(storeId, handler) {
+    if (typeof storeId !== 'string' || !storeId) return;
+    if (typeof handler === 'function') _retryHandlers.set(storeId, handler);
+    else _retryHandlers.delete(storeId);
+}
+
+/**
+ * Run the module's Retry action for a paused store. Without a registered
+ * handler this reports `no-retry-path` and changes nothing — an honest answer
+ * beats a button that silently does nothing.
+ *
+ * @param {string} storeId
+ * @returns {Promise<{ ok: boolean, reason?: string, message?: string, resumed?: boolean }>}
+ */
+export async function retryStore(storeId) {
+    const state = getPauseState(storeId);
+    if (!state) return { ok: true, resumed: false, reason: 'not-paused' };
+    const handler = _retryHandlers.get(storeId);
+    if (typeof handler !== 'function') {
+        return {
+            ok: false,
+            reason: 'no-retry-path',
+            message: `No automatic retry path is registered for "${storeId}" in this build. The pause clears when the underlying data is fixed and the chat is reloaded.`,
+        };
+    }
+    let handlerOk = false;
+    try {
+        handlerOk = (await handler()) === true;
+    } catch (err) {
+        return { ok: false, reason: 'retry-failed', message: String(err?.message || err) };
+    }
+    // The handler may clear the pause itself (a successful re-preparation
+    // calls resumeStore()); honour that, and clear it here when it only
+    // reported success.
+    if (handlerOk && getPauseState(storeId) !== null) {
+        resumeStore(storeId, { via: 'retry' });
+    }
+    const resumed = getPauseState(storeId) === null;
+    return resumed
+        ? { ok: true, resumed: true }
+        : { ok: false, resumed: false, reason: 'still-paused', message: 'The retry ran, but the store is still blocked. The banner above and Diagnostics → 🗂️ Scope & storage carry the reason.' };
+}
+
+// ─── The module banner (§5.4 — the module's own tab) ─────────────────────────
+
+/**
+ * The unmissable banner for a module's own tab: one row per paused store that
+ * belongs to THIS chat/scope, each with its Retry button and the recovery
+ * export. Returns '' when nothing is paused — a healthy tab renders exactly as
+ * before (an always-visible empty banner would train users to ignore banners).
+ *
+ * Buttons carry data-mwt-pause-* attributes; index.js wires them once per
+ * modal render (the modal body is rebuilt on every open). They are the §5.4
+ * actions and they live HERE, in the module's tab — never in Diagnostics,
+ * which is read-only by contract.
+ *
+ * @param {string} rawModuleId — a HEALTH_MODULE_SPECS id or a TABS id
+ * @returns {string} HTML, '' when no store of that module is paused
+ */
+export function renderPausedStoresBanner(rawModuleId) {
+    const id = moduleId(rawModuleId);
+    const storeIds = MODULE_STORE_IDS[id] ?? [];
+    const paused = storeIds
+        .map((storeId) => getPauseState(storeId))
+        .filter((pause) => pause && isPauseForCurrentScope(pause));
+    if (paused.length === 0) return '';
+
+    const label = MODULE_LABELS[id] ?? id;
+    const rows = paused.map((pause) => {
+        const reason = pause.message
+            || `its saved data could not be safely prepared (${pause.reasonCode}).`;
+        return `
+        <div class="mwt-pause-banner-row" data-mwt-pause-row="${escapeHtml(pause.store)}">
+            <div class="mwt-pause-banner-reason">
+                <strong>${escapeHtml(label)} is paused for this chat</strong> — ${escapeHtml(reason)}
+                <span class="mwt-pause-banner-note">Your original data was not changed, and other modules are unaffected. This is not ordinary inactivity: the module stopped itself rather than use data it cannot trust.</span>
+            </div>
+            <div class="mwt-pause-banner-actions">
+                <button type="button" class="mwt-btn" data-mwt-pause-retry="${escapeHtml(pause.store)}" title="Re-run this store's preparation">↻ Retry</button>
+                <button type="button" class="mwt-btn" data-mwt-pause-export="1" title="Download every quarantined record as JSON, so it can be repaired outside MWT and re-imported through the checked path">⬇ Download recovery data</button>
+            </div>
+        </div>`;
+    }).join('');
+
+    return `
+    <div class="mwt-pause-banner" data-mwt-pause-banner="${escapeHtml(id)}" role="alert">
+        <div class="mwt-pause-banner-head">⛔ Paused store — action needed</div>
+        ${rows}
+    </div>`;
+}
+
+// ─── Test-only seams ─────────────────────────────────────────────────────────
+
+/**
+ * Override the pause scope-key resolver (the core/diagnostics.js
+ * _setScopeKeyResolver pattern). Pass a function, or null/omit to restore the
+ * default.
+ * @internal — deterministic test stamping only.
+ */
+export function _setScopeKeyResolver(fn) {
+    _resolveScopeKey = typeof fn === 'function' ? fn : defaultResolveScopeKey;
+}
+
+/**
+ * Wipe the paused-state registry and the notification ledger. Mirrors
+ * core/diagnostics.js _resetDiagnostics().
+ * @internal — test isolation only; production code must not call this.
+ */
+export function _resetPausedStores() {
+    _paused.clear();
+    _notifiedScopes.clear();
+    _retryHandlers.clear();
+    _resolveScopeKey = defaultResolveScopeKey;
+}
+
+
