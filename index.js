@@ -517,11 +517,14 @@ function renderModal() {
     });
     const pauseExportBtns = modal.querySelectorAll('[data-mwt-pause-export]');
     pauseExportBtns.forEach((btn) => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
+            // The export is async (it hydrates the resolved Knowledge books
+            // first when a chat switch left their loads still in flight), so
+            // await it before describing the result.
             // One wording owner (backup/render.js describeRecoveryExportResult):
             // an `unreadable` refusal surfaces its message as an error, never
             // the "nothing was rejected" info line — same as the Backup panel.
-            const { message, tone } = describeRecoveryExportResult(exportRecoveryData());
+            const { message, tone } = describeRecoveryExportResult(await exportRecoveryData());
             setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
         });
     });
@@ -1377,11 +1380,40 @@ window.MWT.recovery = {
                 'preserved but cannot be read, counted, or exported by this build. Upgrade MWT to read them; ' +
                 'the confirmed clear can still remove the container whole.'
             );
+        } else if (Number(status.chatContainer?.containerIssues) > 0) {
+            // A malformed same-version container is lossy even when some items
+            // remained readable: validation DROPPED the unreadable entries, so
+            // the counts above are a floor, never a total — and zero readable
+            // items must not read as "nothing was rejected".
+            const readable = Number(status.chatContainer?.items) || 0;
+            console.warn(
+                readable > 0
+                    ? `[MWT] The chat recovery container is malformed: ${readable} record(s) were read, but entries ` +
+                      'this build could not read were dropped from the counts above — treat them as a known minimum, ' +
+                      'not a total. Nothing was deleted; the container is preserved whole, and MWT.recovery.export() ' +
+                      'refuses rather than download an incomplete file.'
+                    : '[MWT] The chat recovery container is malformed, so it may hold quarantined records this build ' +
+                      'could not read or count — the zeros above cannot rule them out. Nothing was deleted; the ' +
+                      'container is preserved whole, and MWT.recovery.export() refuses rather than download an ' +
+                      'incomplete file.'
+            );
+        }
+        const blockedBooks = Array.isArray(status.knowledgeBookBlocks) ? status.knowledgeBookBlocks : [];
+        if (blockedBooks.length > 0) {
+            console.warn(
+                `[MWT] ${blockedBooks.length} resolved Knowledge-store book(s) cannot be read right now ` +
+                `(${blockedBooks.map((b) => `"${b.book}": ${b.reason}`).join(', ')}) — their embedded recovery ` +
+                'records are preserved in the books but invisible to this build, so MWT.recovery.export() refuses ' +
+                'rather than download an incomplete file. Reopen the chat (or resolve the Knowledge tab\'s store ' +
+                'banner) and check again.'
+            );
         }
         return status;
     },
-    export: ({ download = true } = {}) => {
-        const result = exportRecoveryData({ download });
+    export: async ({ download = true } = {}) => {
+        // Async: the export hydrates the resolved Knowledge books first when a
+        // chat switch left their loads still in flight (§5.3 hydrate-first).
+        const result = await exportRecoveryData({ download });
         if (!result.ok) {
             console.log(result.message
                 || '[MWT] No quarantined records to export — nothing has been rejected for this chat/session.');

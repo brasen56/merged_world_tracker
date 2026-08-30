@@ -63,6 +63,7 @@ import { describeRecoveryExportResult } from '../backup/render.js';
 import {
     STORE_COMMENT,
     STORE_SENTINEL,
+    STORE_VERSION,
     hydrateBook,
     hydrateCurrentBooks,
     isHydrated,
@@ -86,6 +87,7 @@ import { QUARANTINE_METADATA_KEY, makeQuarantineItem } from '../core/quarantine.
 // The stubbed barrel seams (fake meta, fake downloads, captured toasts).
 import {
     resetCoreStubs,
+    setFakeContextExtras,
     getFakeMeta,
     getFakeDownloadJsonCalls,
     getFakeNotifications,
@@ -454,6 +456,10 @@ describe('collectSchemaStatusSnapshot (§9.1)', () => {
         expect(loaded.knowledgeStore.books[1].quarantineCount).toBe(2);
         expect(loaded.knowledgeStore.quarantineCount).toBe(3);
         expect(loaded.bannerLevel).toBe('ok');
+        // A loaded book counts as READY in the totals — the banner must not
+        // read "0 ready" beside two healthy books. `blocked` already counted
+        // failed books; `ready` used to ignore the healthy side entirely.
+        expect(loaded.totals.ready).toBe(2);
 
         // One book failing fails the aggregate, names the book in its own
         // warning, and counts toward the blocked total — even when the
@@ -477,6 +483,8 @@ describe('collectSchemaStatusSnapshot (§9.1)', () => {
         expect(failed.knowledgeStore.hydration).toBe('failed');
         expect(failed.bannerLevel).toBe('fail');
         expect(failed.totals.blocked).toBe(1);
+        // Only the healthy book counts as ready; the failed one is blocked.
+        expect(failed.totals.ready).toBe(1);
         expect(failed.warnings.some((w) => w.id === 'knowledge-store-failed:State Tracker' && w.level === 'fail')).toBe(true);
         expect(failed.warnings.some((w) => w.id === 'knowledge-store-failed:Knowledge Tracker')).toBe(false);
 
@@ -492,6 +500,50 @@ describe('collectSchemaStatusSnapshot (§9.1)', () => {
         expect(early.knowledgeStore.hydration).toBe('not-attempted');
         expect(early.knowledgeStore.books).toHaveLength(1);
         expect(early.knowledgeStore.books[0].book).toBeNull();
+    });
+
+    test('a failed Knowledge book reports the observed on-disk version, never the blank placeholder', () => {
+        // A failed slot's `version` is the blank placeholder's — an on-disk
+        // v99 store must render "99 / 1" beside its pause, not "1 / 1".
+        const observed = collectSchemaStatusSnapshot(schemaDeps({}, {
+            knowledge: {
+                books: () => ({
+                    books: [
+                        { name: 'Knowledge Tracker', role: 'knowledge' },
+                        { name: 'State Tracker', role: 'state' },
+                    ],
+                    mode: 'global',
+                }),
+                peek: (name) => (name === 'Knowledge Tracker'
+                    ? { hydrated: false, dirty: false, version: 1, fields: [], observedVersion: 99 }
+                    : { hydrated: true, dirty: false, version: 1, fields: [] }),
+                peekData: () => ({}),
+                currentVersion: STORE_SCHEMAS.knowledgeStore.currentVersion,
+            },
+        }));
+        const failed = observed.knowledgeStore.books.find((b) => b.book === 'Knowledge Tracker');
+        expect(failed.hydration).toBe('failed');
+        expect(failed.storedVersion).toBe(99);
+
+        // Without an observed version (corrupt JSON, failed load) a failed
+        // book reports null — "1 / 1" must never render from the placeholder.
+        const unknowable = collectSchemaStatusSnapshot(schemaDeps({}, {
+            knowledge: {
+                books: () => ({
+                    books: [
+                        { name: 'Knowledge Tracker', role: 'knowledge' },
+                        { name: 'State Tracker', role: 'state' },
+                    ],
+                    mode: 'global',
+                }),
+                peek: (name) => (name === 'Knowledge Tracker'
+                    ? { hydrated: false, dirty: false, version: 1, fields: [], observedVersion: null }
+                    : { hydrated: true, dirty: false, version: 1, fields: [] }),
+                peekData: () => ({}),
+                currentVersion: STORE_SCHEMAS.knowledgeStore.currentVersion,
+            },
+        }));
+        expect(unknowable.knowledgeStore.books.find((b) => b.book === 'Knowledge Tracker').storedVersion).toBeNull();
     });
 
     test('redactSchemaStatusSnapshot returns a scrubbed copy with no shared references', () => {
@@ -598,6 +650,56 @@ describe('Health + Scope & storage surfaces (§5.4/§9.1)', () => {
         expect(html).toContain('Quarantine count unavailable');
     });
 
+    test('a malformed container with zero readable items and a NON-ZERO total qualifies the footer too', () => {
+        // The Knowledge book holds records while the chat container's items
+        // were ALL dropped by validation: the total is non-zero, so the
+        // "N quarantined record(s)" footer renders — and must carry the same
+        // caveat the future-version case gets, never assert completeness.
+        const meta = { [QUARANTINE_METADATA_KEY]: { version: 1, items: 'not-an-array' } };
+        const snap = collectSchemaStatusSnapshot(schemaDeps(meta, {
+            knowledge: {
+                books: () => ({
+                    books: [
+                        { name: 'Knowledge Tracker', role: 'knowledge' },
+                        { name: 'State Tracker', role: 'state' },
+                    ],
+                    mode: 'global',
+                }),
+                peek: () => ({ hydrated: true, dirty: false, version: STORE_SCHEMAS.knowledgeStore.currentVersion }),
+                peekData: (name) => name === 'Knowledge Tracker'
+                    ? { version: 1, quarantine: { version: 1, items: [item('knowledgeStore', { bad: true })] } }
+                    : { version: 1 },
+                currentVersion: STORE_SCHEMAS.knowledgeStore.currentVersion,
+            },
+        }));
+        expect(snap.totals.quarantine).toBe(1);
+        const html = renderSchemaStatusSnapshot(snap, { formatTime: () => 'T' });
+        // The >0-total footer — the total still shows…
+        expect(html).toContain('1 quarantined record');
+        // …but now qualified: the chat container's records could not be read,
+        // so the total is not a complete one. Not the zero-total variant.
+        expect(html).toContain('NONE of its records could be read');
+        expect(html).not.toContain('Quarantine count unavailable');
+    });
+
+    test('a malformed container WITH readable records warns — the count is a known minimum, not a total', () => {
+        // One valid item beside one malformed one: validation DROPPED the
+        // malformed entry, so the displayed count is a lower bound the
+        // snapshot must not present as complete.
+        const meta = { [QUARANTINE_METADATA_KEY]: { version: 1, items: [item('chronicle', { id: 1 }), 'junk'] } };
+        const snap = collectSchemaStatusSnapshot(schemaDeps(meta));
+        expect(snap.chatQuarantine).toMatchObject({ present: true, items: 1, unknown: false });
+        expect(snap.chatQuarantine.containerIssues).toBeGreaterThan(0);
+        const warning = snap.warnings.find((w) => w.id === 'chat-quarantine-container-invalid');
+        expect(warning?.level).toBe('warn');
+        expect(warning?.text).toContain('known minimum');
+        const html = renderSchemaStatusSnapshot(snap, { formatTime: () => 'T' });
+        // The readable count still shows…
+        expect(html).toContain('1 quarantined record');
+        // …but the footer qualifies it as a floor, never as a complete total.
+        expect(html).toContain('known minimum');
+    });
+
     test('a fail verdict renders the FAIL banner style, not the warn one', () => {
         pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'saved by a NEWER MWT.' });
         const html = renderSchemaStatusSnapshot(
@@ -657,11 +759,16 @@ describe('backup/recovery.js (§5.3)', () => {
         expect(status.knowledgeBooks).toContain('Knowledge Tracker');
     });
 
-    test('exportRecoveryData downloads a repairable envelope with full metadata', () => {
+    test('exportRecoveryData downloads a repairable envelope with full metadata', async () => {
         const raw = { id: 'snap-1', text: 'The duke swept out of the room.' };
         getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 1, items: [item('chronicle', raw)] };
+        // The resolved Knowledge/State books must be loaded: the export
+        // inspects every currently resolved book (the unified-backup guard)
+        // and refuses while any of them cannot be read.
+        _setCacheForTests('Knowledge Tracker', { version: 1, registry: {} });
+        _setCacheForTests('State Tracker', { version: 1, stateRegistry: {} });
 
-        const result = exportRecoveryData();
+        const result = await exportRecoveryData();
 
         expect(result.ok).toBe(true);
         expect(result.count).toBe(1);
@@ -681,9 +788,15 @@ describe('backup/recovery.js (§5.3)', () => {
         expect(getFakeNotifications().some((n) => n.title === 'MWT: recovery data downloaded')).toBe(true);
     });
 
-    test('exportRecoveryData with zero records refuses rather than downloading an empty box', () => {
-        const result = exportRecoveryData();
+    test('exportRecoveryData with zero records refuses rather than downloading an empty box', async () => {
+        _setCacheForTests('Knowledge Tracker', { version: 1, registry: {} });
+        _setCacheForTests('State Tracker', { version: 1, stateRegistry: {} });
+        const result = await exportRecoveryData();
         expect(result).toMatchObject({ ok: false, empty: true, count: 0 });
+        // The plain zero-count refusal — not one of the unreadable/invalid
+        // guards, which carry their own markers.
+        expect(result.unreadable).toBeUndefined();
+        expect(result.invalid).toBeUndefined();
         expect(getFakeDownloadJsonCalls()).toHaveLength(0);
     });
 
@@ -795,17 +908,17 @@ describe('backup/recovery.js (§5.3)', () => {
         expect(collectRecoveryItems()).toEqual([]);
     });
 
-    test('export refuses honestly when the only home is an unreadable container', () => {
+    test('export refuses honestly when the only home is an unreadable container', async () => {
         getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 99, records: { not: 'an items array' } };
 
-        const result = exportRecoveryData();
+        const result = await exportRecoveryData();
         expect(result).toMatchObject({ ok: false, empty: true, unreadable: true, count: 0 });
         expect(result.message).toContain('NEWER');
         // The refusal downloads nothing.
         expect(getFakeDownloadJsonCalls()).toHaveLength(0);
     });
 
-    test('export also refuses when readable records exist beside the unreadable container', () => {
+    test('export also refuses when readable records exist beside the unreadable container', async () => {
         // The refusal must not depend on the readable count: Knowledge
         // quarantine records alongside a future chat container would export a
         // file that looks complete while silently omitting the unreadable
@@ -818,13 +931,177 @@ describe('backup/recovery.js (§5.3)', () => {
             quarantine: { version: 1, items: [item('knowledgeStore', { bad: true })] },
         });
 
-        const result = exportRecoveryData();
+        const result = await exportRecoveryData();
         expect(result).toMatchObject({ ok: false, empty: true, unreadable: true, count: 0 });
         // The refusal names the held-back readable records — it must never
         // read as "nothing was rejected".
         expect(result.message).toContain('NEWER');
         expect(result.message).toContain('1 readable quarantined record');
         expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+    });
+
+    test('export refuses on a malformed chat container that still has readable records — the file would look complete', async () => {
+        // One canonical item plus a malformed one ('junk'): canonical
+        // validation reports and DROPS the malformed item, so the export
+        // would carry 1 record while presenting itself as complete.
+        _setCacheForTests('Knowledge Tracker', { version: 1, registry: {} });
+        _setCacheForTests('State Tracker', { version: 1, stateRegistry: {} });
+        getFakeMeta()[QUARANTINE_METADATA_KEY] = {
+            version: 1,
+            items: [item('chronicle', { id: 1 }), 'junk'],
+        };
+
+        const result = await exportRecoveryData();
+        expect(result).toMatchObject({ ok: false, empty: true, invalid: true, count: 0 });
+        expect(result.message).toContain('malformed');
+        // The held-back readable records are named — never "nothing was rejected".
+        expect(result.message).toContain('1 readable quarantined record');
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+        // The UI wording owner surfaces it as an error, never the info line.
+        const described = describeRecoveryExportResult(result);
+        expect(described.tone).toBe('error');
+        expect(described.message).toContain('malformed');
+    });
+
+    test('export refuses on an all-malformed chat container instead of reporting "nothing was rejected"', async () => {
+        _setCacheForTests('Knowledge Tracker', { version: 1, registry: {} });
+        _setCacheForTests('State Tracker', { version: 1, stateRegistry: {} });
+        getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 1, items: 'not-an-array' };
+
+        const result = await exportRecoveryData();
+        expect(result).toMatchObject({ ok: false, empty: true, invalid: true, count: 0 });
+        expect(result.message).toContain('malformed');
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+    });
+
+    test('export refuses while a resolved book\'s store cannot load — completeness over optimism', async () => {
+        getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 1, items: [item('chronicle', { id: 1 })] };
+        // The export hydrates first now (see the next test), so "un-hydrated"
+        // alone no longer refuses it. Force the load to GENUINELY fail: no
+        // world-info module at all (the tried-and-failed state), so both
+        // books stay un-hydrated no matter how often the export retries.
+        state.wiScript = null;
+
+        const result = await exportRecoveryData();
+        expect(result).toMatchObject({ ok: false, empty: true, unreadable: true, count: 0 });
+        expect(result.blockedBooks.map((b) => b.book)).toEqual(['Knowledge Tracker', 'State Tracker']);
+        expect(result.message).toContain('not loaded');
+        // The readable chat records are held back and named, never exported alone.
+        expect(result.message).toContain('1 readable quarantined record');
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+    });
+
+    test('export refuses when a book is blocked by a future STORE version — its embedded records are invisible', async () => {
+        const wi = makeFakeWorldInfo();
+        state.wiScript = wi;
+        wi.books.set('Knowledge Tracker', {
+            entries: {
+                0: {
+                    uid: 0, comment: STORE_COMMENT, key: [], disable: true,
+                    content: JSON.stringify({ version: 99, registry: {} }),
+                },
+            },
+        });
+        // The blocked hydration leaves the book un-hydrated (and pauses the
+        // store) — exactly the state collection cannot see through.
+        await hydrateBook('Knowledge Tracker', {});
+        expect(isHydrated('Knowledge Tracker')).toBe(false);
+        getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 1, items: [item('chronicle', { id: 1 })] };
+
+        const result = await exportRecoveryData();
+        expect(result).toMatchObject({ ok: false, empty: true, unreadable: true, count: 0 });
+        expect(result.blockedBooks.some((b) => b.book === 'Knowledge Tracker')).toBe(true);
+        expect(result.message).toContain('Knowledge Tracker');
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+    });
+
+    test('the export hydrates first in the post-chat-switch window instead of falsely refusing', async () => {
+        // reloadStores('chat change') is deliberately fire-and-forget, so
+        // right after a switch both books are un-hydrated while their loads
+        // are still in flight — and treating that transient window as a
+        // blocker refused every export issued in it ("a load that has not
+        // finished yet"). Both books exist and are readable, so the export
+        // must hydrate them itself and proceed (the backup/collect.js
+        // pattern) rather than demand a retry.
+        wiFake = makeFakeWorldInfo();
+        state.wiScript = wiFake;
+        setBookStore('Knowledge Tracker', {
+            version: STORE_VERSION,
+            registry: {},
+            quarantine: { version: 1, items: [item('knowledgeStore', { bad: true })] },
+        });
+        setBookStore('State Tracker', { version: STORE_VERSION, stateRegistry: {} });
+        getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 1, items: [item('chronicle', { id: 1 })] };
+        // No cache slots — exactly the state the chat switch leaves behind.
+        expect(isHydrated('Knowledge Tracker')).toBe(false);
+        expect(isHydrated('State Tracker')).toBe(false);
+
+        const result = await exportRecoveryData();
+
+        // The export's hydrate-first step loaded both books itself…
+        expect(isHydrated('Knowledge Tracker')).toBe(true);
+        expect(isHydrated('State Tracker')).toBe(true);
+        // …so the completeness guard found every home readable and proceeded.
+        expect(result.ok).toBe(true);
+        expect(result.count).toBe(2);
+        expect(getFakeDownloadJsonCalls()).toHaveLength(1);
+    });
+
+    test('a CHARACTER scope export covers the character\'s own books, never the global ones', async () => {
+        // Regression for the resolver's identity source: the pre-move home
+        // fed the explainer core/scope.js identities — whose
+        // getCharacterIdentity requires a ctx argument (called with none it
+        // returned null → fallback-global) and whose getChatIdentity returns
+        // {chatId,…} with no .key/.name. Under character scope that resolved
+        // the GLOBAL books, which this chat never hydrates — the export would
+        // have refused forever. The scoped books must be the ones inspected.
+        saveSettings({ scope: 'character' });
+        setFakeContextExtras({
+            characterId: 0,
+            characters: [{ name: 'Seraphina', avatar: 'sera.png' }],
+        });
+        // The character's derived books, hydrated and holding a record…
+        _setCacheForTests('Knowledge Tracker - Seraphina', {
+            version: 1,
+            registry: {},
+            quarantine: { version: 1, items: [item('knowledgeStore', { bad: true })] },
+        });
+        _setCacheForTests('State Tracker - Seraphina', { version: 1, stateRegistry: {} });
+        // …while the GLOBAL books deliberately have NO cache slot: the old,
+        // mis-resolved path would have blocked on them and refused.
+        getFakeMeta()[QUARANTINE_METADATA_KEY] = { version: 1, items: [item('chronicle', { id: 1 })] };
+
+        const result = await exportRecoveryData();
+
+        expect(result.ok).toBe(true);
+        expect(result.count).toBe(2);
+        expect(result.blockedBooks).toBeUndefined();
+        expect(getFakeDownloadJsonCalls()).toHaveLength(1);
+    });
+
+    test('export refuses when a hydrated book\'s embedded container was written by a newer MWT', async () => {
+        _setCacheForTests('Knowledge Tracker', {
+            version: 1,
+            registry: {},
+            quarantine: { version: 99, items: [item('knowledgeStore', { bad: true })] },
+        });
+        _setCacheForTests('State Tracker', { version: 1, stateRegistry: {} });
+
+        const result = await exportRecoveryData();
+        expect(result).toMatchObject({ ok: false, empty: true, unreadable: true, count: 0 });
+        expect(result.blockedBooks).toEqual([
+            { book: 'Knowledge Tracker', role: 'knowledge', reason: 'quarantine-version-future' },
+        ]);
+        expect(result.message).toContain('NEWER');
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+    });
+
+    test('status names resolved books whose embedded records cannot be seen (knowledgeBookBlocks)', () => {
+        _setCacheForTests('Knowledge Tracker', { version: 1, registry: {} });
+
+        const status = collectQuarantineStatus({ now: () => 1 });
+        expect(status.knowledgeBookBlocks.map((b) => b.book)).toEqual(['State Tracker']);
+        expect(status.knowledgeBookBlocks[0].reason).toBe('store-not-hydrated');
     });
 
     test('the unfiltered clear removes a future-version container whole, without parsing it', async () => {
@@ -853,6 +1130,15 @@ describe('describeRecoveryExportResult', () => {
         const { message, tone } = describeRecoveryExportResult({ ok: false, unreadable: true });
         expect(tone).toBe('error');
         expect(message).toContain('Refused');
+    });
+
+    test('a malformed-container refusal (invalid) surfaces its message as an error', () => {
+        const { message, tone } = describeRecoveryExportResult({
+            ok: false, empty: true, invalid: true, exportedAt: 1, count: 0,
+            message: 'Refused: the chat recovery container is malformed.',
+        });
+        expect(tone).toBe('error');
+        expect(message).toContain('malformed');
     });
 
     test('a plain empty result stays the info "nothing was rejected" line', () => {
@@ -940,6 +1226,65 @@ describe('Knowledge hydration pause wiring (the live blocked paths)', () => {
 
         expect(isHydrated(LOREBOOK_NAME)).toBe(false);
         expect(getPauseState('knowledgeStore')).toMatchObject({ reasonCode: 'store-json-invalid' });
+    });
+
+    test('a failed future-version hydration preserves the observed on-disk version on the slot', async () => {
+        setBookStore(LOREBOOK_NAME, { version: 99, registry: { Mara: { uid: 1 } } });
+
+        await hydrateBook(LOREBOOK_NAME, {});
+
+        const peek = peekStore(LOREBOOK_NAME);
+        expect(peek.hydrated).toBe(false);
+        // `version` is the blank placeholder's (the blocked source is never
+        // adopted into the cache); observedVersion is what was on disk.
+        expect(peek.version).toBe(STORE_VERSION);
+        expect(peek.observedVersion).toBe(99);
+    });
+
+    test('a corrupt-JSON failure reports observedVersion null — the version could not be read', async () => {
+        wiFake.books.set(LOREBOOK_NAME, {
+            entries: {
+                0: { uid: 0, comment: STORE_COMMENT, key: [], disable: true, content: '{not json' },
+            },
+        });
+
+        await hydrateBook(LOREBOOK_NAME, {});
+
+        expect(peekStore(LOREBOOK_NAME).hydrated).toBe(false);
+        expect(peekStore(LOREBOOK_NAME).observedVersion).toBeNull();
+    });
+
+    test('a successful load clears the observed version — the canonical version is live again', async () => {
+        setBookStore(LOREBOOK_NAME, { version: 99, registry: {} });
+        await hydrateBook(LOREBOOK_NAME, {});
+        expect(peekStore(LOREBOOK_NAME).observedVersion).toBe(99);
+
+        // Repair the book on disk and retry: the slot hydrates and the
+        // failure breadcrumb must not survive the successful load.
+        setBookStore(LOREBOOK_NAME, { version: STORE_VERSION, registry: { Mara: { uid: 1 } } });
+        await hydrateBook(LOREBOOK_NAME, {});
+        const peek = peekStore(LOREBOOK_NAME);
+        expect(peek.hydrated).toBe(true);
+        expect(peek.observedVersion).toBeNull();
+        expect(peek.version).toBe(STORE_VERSION);
+    });
+
+    test('the live snapshot shows the observed version beside the pause — never the placeholder', async () => {
+        setBookStore(LOREBOOK_NAME, { version: 99, registry: {} });
+        setBookStore(STATE_LOREBOOK_NAME, { version: STORE_VERSION, stateRegistry: {} });
+        await hydrateBook(LOREBOOK_NAME, {});
+        await hydrateBook(STATE_LOREBOOK_NAME, {});
+
+        // Default deps — the real read-only resolver + real peekStore: an
+        // on-disk v99 Knowledge book renders "99 / 1" beside its pause, not
+        // the blank placeholder's "1 / 1".
+        const snap = collectSchemaStatusSnapshot();
+        const row = snap.knowledgeStore.books.find((b) => b.book === LOREBOOK_NAME);
+        expect(row.hydration).toBe('failed');
+        expect(row.storedVersion).toBe(99);
+        expect(snap.knowledgeStore.paused).toMatchObject({ reasonCode: 'future-version' });
+        const html = renderSchemaStatusSnapshot(snap, { formatTime: () => 'T' });
+        expect(html).toContain('99 / 1');
     });
 
     test('a later successful load of BOTH books resumes the store (§5.4)', async () => {

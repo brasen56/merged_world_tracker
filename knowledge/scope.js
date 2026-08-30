@@ -289,3 +289,197 @@ export function getStateLorebookName() { return resolveBookNames().state; }
 
 /** Current NPC Profiles lorebook name. */
 export function getProfileLorebookName() { return resolveBookNames().profiles; }
+
+// ─── Resolution explainer (the read-only mirror of resolveBookNames) ──────────
+
+/**
+ * Explain which lorebook names the current scope resolves to, and why —
+ * WITHOUT resolving: no binding is saved, nothing is persisted.
+ * Branch-for-branch mirror of resolveBookNames() above.
+ *
+ * Lives HERE, beside the resolver and the identity helpers it mirrors, so
+ * every consumer imports downward: the diagnostics panel's Scope & storage
+ * tab renders it, and backup/recovery.js's §5.3 completeness guard resolves
+ * the books it must cover through resolveKnowledgeBooks() below. A knowledge-
+ * scope rule that the recovery export fail-closes on must not be owned by a
+ * UI panel module — and the identities here are the zero-arg `{ key, name }`
+ * flavours resolveBookNames() itself feeds the binding lookup
+ * (core/scope.js's getChatIdentity mints non-comparable nonce keys for
+ * unknown chats and its getCharacterIdentity requires a ctx argument, so
+ * feeding those to this explainer mis-resolved character/chat scopes to the
+ * GLOBAL books).
+ *
+ * @param {object} [parts]
+ * @param {string} [parts.scope] — the raw `scope` setting value
+ * @param {{ key: string, name: string, isGroup?: boolean }|null} [parts.character]
+ * @param {{ key: string, name: string }|null} [parts.chat]
+ * @param {object} [parts.bindings] — settings.bookBindings snapshot
+ * @param {function(string|null): object} [parts.derive] — deriveBookNames (injectable)
+ * @param {function(string): string} [parts.hash] — shortHash (injectable)
+ * @returns {{ scope: string, valid: boolean, mode: string, identityKey: string|null,
+ *            identityName: string|null, books: {knowledge: string, state: string,
+ *            profiles: string}, note: string, wouldSaveBinding: boolean }}
+ */
+export function explainBookResolution({
+    scope,
+    character = null,
+    chat = null,
+    bindings = {},
+    derive = deriveBookNames,
+    hash = shortHash,
+} = {}) {
+    const valid = SCOPES.includes(scope);
+    const normalized = valid ? scope : 'global';
+
+    if (!valid) {
+        return {
+            scope: normalized,
+            valid: false,
+            mode: 'global',
+            identityKey: null,
+            identityName: null,
+            books: derive(null),
+            note: `Scope setting "${String(scope)}" is not one of global|character|chat — resolveBookNames() treats it as 'global' (the safe fallback). Fix it in Knowledge → Settings.`,
+            wouldSaveBinding: false,
+        };
+    }
+
+    if (normalized === 'global') {
+        return {
+            scope: normalized,
+            valid: true,
+            mode: 'global',
+            identityKey: null,
+            identityName: null,
+            books: derive(null),
+            note: "Scope is 'global' — one shared set of books for every chat and character (the legacy behaviour, and the default).",
+            wouldSaveBinding: false,
+        };
+    }
+
+    const identity = normalized === 'chat' ? chat : character;
+    if (!identity) {
+        return {
+            scope: normalized,
+            valid: true,
+            mode: 'fallback-global',
+            identityKey: null,
+            identityName: null,
+            books: derive(null),
+            note: `Scope is "${normalized}" but the current ${normalized} could not be identified — resolveBookNames() silently falls back to the GLOBAL books (Phase 3 site 4). Everything keeps working, but data lands in the SHARED books instead of this ${normalized}'s own.`,
+            wouldSaveBinding: false,
+        };
+    }
+
+    const existing = bindings[identity.key];
+    if (existing?.knowledge && existing?.state && existing?.profiles) {
+        return {
+            scope: normalized,
+            valid: true,
+            mode: 'saved-binding',
+            identityKey: identity.key,
+            identityName: identity.name ?? null,
+            books: { knowledge: existing.knowledge, state: existing.state, profiles: existing.profiles },
+            note: `Identity ${identity.key} has a saved binding — the books were resolved when this ${normalized} was first seen and survive a card rename (bindings key on the stable identity, never the display name).`,
+            wouldSaveBinding: false,
+        };
+    }
+
+    let names = derive(identity.name);
+
+    // A name that sanitises to nothing (e.g. a card called "???") would collide
+    // with the global books. resolveBookNames() falls back explicitly rather
+    // than silently sharing — and deliberately does NOT bind, so the global
+    // names are used until the identity becomes nameable.
+    if (names.knowledge === LOREBOOK_NAME) {
+        return {
+            scope: normalized,
+            valid: true,
+            mode: 'sanitize-fallback-global',
+            identityKey: identity.key,
+            identityName: identity.name ?? null,
+            books: names,
+            note: `"${identity.name}" sanitises to nothing usable in a lorebook filename, so resolveBookNames() uses the GLOBAL books for this ${normalized} — deliberately unbound (a binding would collide with the global names).`,
+            wouldSaveBinding: false,
+        };
+    }
+
+    // Two different cards can share a display name; both would derive the same
+    // book name and silently share one book. resolveBookNames() disambiguates
+    // with a stable discriminator drawn from the identity key.
+    const takenByOthers = new Set(
+        Object.entries(bindings)
+            .filter(([key]) => key !== identity.key)
+            .map(([, value]) => value?.knowledge)
+            .filter(Boolean)
+    );
+    if (takenByOthers.has(names.knowledge)) {
+        names = derive(`${identity.name} (${hash(identity.key)})`);
+        return {
+            scope: normalized,
+            valid: true,
+            mode: 'collision-disambiguated',
+            identityKey: identity.key,
+            identityName: identity.name ?? null,
+            books: names,
+            note: `"${identity.name}" collides with another binding's book name — resolveBookNames() appends a stable discriminator from the identity key, so this card gets its own books despite the shared display name.`,
+            wouldSaveBinding: true,
+        };
+    }
+
+    return {
+        scope: normalized,
+        valid: true,
+        mode: 'newly-derived',
+        identityKey: identity.key,
+        identityName: identity.name ?? null,
+        books: names,
+        note: `No binding saved for ${identity.key} yet — these book names are what the next resolve will derive from "${identity.name}" and SAVE. This tab derives them read-only: nothing was persisted by looking.`,
+        wouldSaveBinding: true,
+    };
+}
+
+// ─── Knowledge book resolution (read-only) ────────────────────────────────────
+
+/**
+ * Resolve the CURRENT Knowledge-store book names READ-ONLY — BOTH of them:
+ * the store spans the Knowledge book and the State Tracker book (the two
+ * hydration targets in knowledge/store.js hydrateCurrentBooks()), so a
+ * surface that inspects only one misses the other book's version, hydration
+ * failure, and embedded quarantine. (Built on the explainBookResolution()
+ * mirror — never resolveBookNames(), which is a writer that saves a binding
+ * on first sight of an identity, and a read-only surface must never persist
+ * anything.)
+ *
+ * Shared by the §9.1 Schema status collector, the Integrity tab, AND
+ * backup/recovery.js's §5.3 completeness guard, so the books the diagnostics
+ * surfaces report can never drift from the books the recovery export must
+ * cover.
+ *
+ * @returns {{ books: Array<{ name: string, role: 'knowledge'|'state' }>, mode: string }|null}
+ *         null when resolution degrades
+ */
+export function resolveKnowledgeBooks() {
+    try {
+        const settings = getSettings() || {};
+        const resolution = explainBookResolution({
+            scope: settings.scope,
+            character: getCharacterIdentity(),
+            chat: getChatIdentity(),
+            bindings: settings.bookBindings && typeof settings.bookBindings === 'object'
+                ? settings.bookBindings
+                : {},
+        });
+        const resolved = resolution?.books ?? {};
+        const books = [];
+        if (typeof resolved.knowledge === 'string' && resolved.knowledge) {
+            books.push({ name: resolved.knowledge, role: 'knowledge' });
+        }
+        if (typeof resolved.state === 'string' && resolved.state) {
+            books.push({ name: resolved.state, role: 'state' });
+        }
+        return books.length > 0 ? { books, mode: resolution.mode } : null;
+    } catch {
+        return null;
+    }
+}

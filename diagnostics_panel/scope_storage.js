@@ -15,11 +15,13 @@
  * is also a WRITER: on first sight of an identity it saves a binding via
  * saveSettings(). The diagnostics panel is read-only by contract (design §I.1,
  * validation baseline §II.6) — opening a tab must never persist a binding.
- * So `explainBookResolution()` mirrors resolveBookNames()'s decision tree using
- * only the pure helpers (`deriveBookNames`, `shortHash`) plus a settings
- * SNAPSHOT, and reports which mode production resolution would take —
- * including that a binding WOULD be saved on the next real resolve. The mirror
- * is deliberately kept branch-for-branch so the two cannot drift silently.
+ * So `explainBookResolution()` (defined in knowledge/scope.js beside the
+ * resolver it mirrors, imported here downward and re-exported for established
+ * import sites) mirrors resolveBookNames()'s decision tree using only the pure
+ * helpers (`deriveBookNames`, `shortHash`) plus a settings SNAPSHOT, and
+ * reports which mode production resolution would take — including that a
+ * binding WOULD be saved on the next real resolve. The mirror is deliberately
+ * kept branch-for-branch so the two cannot drift silently.
  *
  * DOM-free by design (the Phase 6 health.js pattern): the snapshot is a plain
  * object, the markup lives in diagnostics_panel/render.js, every dependency is
@@ -38,10 +40,11 @@ import { getEpoch } from '../core/scope.js';
 import { getEvents } from '../core/diagnostics.js';
 import { getContextSafe } from '../core/context.js';
 
+// The resolution explainer now lives in knowledge/scope.js, beside the
+// resolver it mirrors — this tab imports it downward like every other
+// consumer (see the file header and the re-export below).
 import {
-    SCOPES,
-    deriveBookNames,
-    shortHash,
+    explainBookResolution,
     getCharacterIdentity,
     getChatIdentity,
 } from '../knowledge/scope.js';
@@ -51,6 +54,14 @@ import {
 } from '../knowledge/state.js';
 import { getSettings } from '../knowledge/settings.js';
 import { peekStore, STORE_VERSION } from '../knowledge/store.js';
+
+// Re-exported from the one-owner home (knowledge/scope.js): the two-book
+// read-only resolver and the explainer it builds on live beside
+// resolveBookNames(), so backup/recovery.js's fail-closed §5.3 completeness
+// guard, Integrity, and this panel all import DOWNWARD — backup/ must not
+// reach into a UI module for a knowledge-scope rule the export refuses over.
+// Established import sites keep working unchanged.
+export { explainBookResolution, resolveKnowledgeBooks } from '../knowledge/scope.js';
 
 // ─── Book specs ───────────────────────────────────────────────────────────────
 
@@ -246,143 +257,6 @@ export function classifyBookActivation(name, active, { injectable = true } = {})
     };
 }
 
-// ─── Resolution explainer (the read-only mirror of resolveBookNames) ──────────
-
-/**
- * Explain which lorebook names the current scope resolves to, and why —
- * WITHOUT resolving: no binding is saved, nothing is persisted (see the file
- * header). Branch-for-branch mirror of knowledge/scope.js resolveBookNames().
- *
- * @param {object} [parts]
- * @param {string} [parts.scope] — the raw `scope` setting value
- * @param {{ key: string, name: string, isGroup?: boolean }|null} [parts.character]
- * @param {{ key: string, name: string }|null} [parts.chat]
- * @param {object} [parts.bindings] — settings.bookBindings snapshot
- * @param {function(string|null): object} [parts.derive] — deriveBookNames (injectable)
- * @param {function(string): string} [parts.hash] — shortHash (injectable)
- * @returns {{ scope: string, valid: boolean, mode: string, identityKey: string|null,
- *            identityName: string|null, books: {knowledge: string, state: string,
- *            profiles: string}, note: string, wouldSaveBinding: boolean }}
- */
-export function explainBookResolution({
-    scope,
-    character = null,
-    chat = null,
-    bindings = {},
-    derive = deriveBookNames,
-    hash = shortHash,
-} = {}) {
-    const valid = SCOPES.includes(scope);
-    const normalized = valid ? scope : 'global';
-
-    if (!valid) {
-        return {
-            scope: normalized,
-            valid: false,
-            mode: 'global',
-            identityKey: null,
-            identityName: null,
-            books: derive(null),
-            note: `Scope setting "${String(scope)}" is not one of global|character|chat — resolveBookNames() treats it as 'global' (the safe fallback). Fix it in Knowledge → Settings.`,
-            wouldSaveBinding: false,
-        };
-    }
-
-    if (normalized === 'global') {
-        return {
-            scope: normalized,
-            valid: true,
-            mode: 'global',
-            identityKey: null,
-            identityName: null,
-            books: derive(null),
-            note: "Scope is 'global' — one shared set of books for every chat and character (the legacy behaviour, and the default).",
-            wouldSaveBinding: false,
-        };
-    }
-
-    const identity = normalized === 'chat' ? chat : character;
-    if (!identity) {
-        return {
-            scope: normalized,
-            valid: true,
-            mode: 'fallback-global',
-            identityKey: null,
-            identityName: null,
-            books: derive(null),
-            note: `Scope is "${normalized}" but the current ${normalized} could not be identified — resolveBookNames() silently falls back to the GLOBAL books (Phase 3 site 4). Everything keeps working, but data lands in the SHARED books instead of this ${normalized}'s own.`,
-            wouldSaveBinding: false,
-        };
-    }
-
-    const existing = bindings[identity.key];
-    if (existing?.knowledge && existing?.state && existing?.profiles) {
-        return {
-            scope: normalized,
-            valid: true,
-            mode: 'saved-binding',
-            identityKey: identity.key,
-            identityName: identity.name ?? null,
-            books: { knowledge: existing.knowledge, state: existing.state, profiles: existing.profiles },
-            note: `Identity ${identity.key} has a saved binding — the books were resolved when this ${normalized} was first seen and survive a card rename (bindings key on the stable identity, never the display name).`,
-            wouldSaveBinding: false,
-        };
-    }
-
-    let names = derive(identity.name);
-
-    // A name that sanitises to nothing (e.g. a card called "???") would collide
-    // with the global books. resolveBookNames() falls back explicitly rather
-    // than silently sharing — and deliberately does NOT bind, so the global
-    // names are used until the identity becomes nameable.
-    if (names.knowledge === LOREBOOK_NAME) {
-        return {
-            scope: normalized,
-            valid: true,
-            mode: 'sanitize-fallback-global',
-            identityKey: identity.key,
-            identityName: identity.name ?? null,
-            books: names,
-            note: `"${identity.name}" sanitises to nothing usable in a lorebook filename, so resolveBookNames() uses the GLOBAL books for this ${normalized} — deliberately unbound (a binding would collide with the global names).`,
-            wouldSaveBinding: false,
-        };
-    }
-
-    // Two different cards can share a display name; both would derive the same
-    // book name and silently share one book. resolveBookNames() disambiguates
-    // with a stable discriminator drawn from the identity key.
-    const takenByOthers = new Set(
-        Object.entries(bindings)
-            .filter(([key]) => key !== identity.key)
-            .map(([, value]) => value?.knowledge)
-            .filter(Boolean)
-    );
-    if (takenByOthers.has(names.knowledge)) {
-        names = derive(`${identity.name} (${hash(identity.key)})`);
-        return {
-            scope: normalized,
-            valid: true,
-            mode: 'collision-disambiguated',
-            identityKey: identity.key,
-            identityName: identity.name ?? null,
-            books: names,
-            note: `"${identity.name}" collides with another binding's book name — resolveBookNames() appends a stable discriminator from the identity key, so this card gets its own books despite the shared display name.`,
-            wouldSaveBinding: true,
-        };
-    }
-
-    return {
-        scope: normalized,
-        valid: true,
-        mode: 'newly-derived',
-        identityKey: identity.key,
-        identityName: identity.name ?? null,
-        books: names,
-        note: `No binding saved for ${identity.key} yet — these book names are what the next resolve will derive from "${identity.name}" and SAVE. This tab derives them read-only: nothing was persisted by looking.`,
-        wouldSaveBinding: true,
-    };
-}
-
 // ─── Snapshot collector ───────────────────────────────────────────────────────
 
 /**
@@ -503,7 +377,16 @@ export function collectScopeSnapshot({
             storeState,
             hydrated: peek?.hydrated === true,
             dirty: peek?.dirty === true,
-            storeVersion: typeof peek?.version === 'number' ? peek.version : null,
+            // A FAILED slot's `version` is the blank placeholder's — hydrateBook
+            // never adopts a blocked source into the cache — so an on-disk v99
+            // store would render "v1" beside its load-failed badge. The slot
+            // preserves the version observed on disk at the failure
+            // (peekStore's observedVersion, null when it could not be read);
+            // that — or null — is what a failed book reports, matching the §9.1
+            // schema-status collector so the two tables can never disagree.
+            storeVersion: peek !== null && peek.hydrated !== true
+                ? (typeof peek.observedVersion === 'number' ? peek.observedVersion : null)
+                : (typeof peek?.version === 'number' ? peek.version : null),
             currentStoreVersion,
             active: act.active,
             activeIn: Array.isArray(act.activeIn) ? act.activeIn : [],

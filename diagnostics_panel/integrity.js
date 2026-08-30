@@ -89,7 +89,11 @@ import { collectKnownSecrets } from './report.js';
 // entries so renderers never need their own mapping.
 import { CHAT_METADATA_SCHEMA_IDS, STORE_SCHEMAS } from '../schema/registry.js';
 import { validateSectionWithIssues } from '../backup/validate.js';
-import { resolveKnowledgeBooks } from './schema_status.js';
+// The two-book read-only resolver — imported from its one-owner home in
+// knowledge/scope.js (beside resolveBookNames(), whose read-only mirror it
+// builds on), the same source backup/recovery.js's §5.3 guard and the §9.1
+// Schema status collector use.
+import { resolveKnowledgeBooks } from '../knowledge/scope.js';
 import { peekStore, peekStoreData } from '../knowledge/store.js';
 
 import { listProfileEntries } from '../knowledge/lorebook.js';

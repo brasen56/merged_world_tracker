@@ -28,7 +28,6 @@
 
 import { MWT_VERSION } from '../core/version.js';
 import { getChatMeta } from '../core/context.js';
-import { getCharacterIdentity, getChatIdentity } from '../core/scope.js';
 import { redactForReport } from '../core/redaction.js';
 // Live secret VALUES for the scrub list (the integrity.js cycle pattern — safe
 // because both sides only reference the other's bindings inside function
@@ -43,8 +42,11 @@ import { MANIFEST_METADATA_KEY } from '../schema/manifest.js';
 // The pause registry (§5.4) and the quarantine container read (§5.3).
 import { getPausedStores, isPauseForCurrentScope } from '../core/schema_status.js';
 import { readChatQuarantineContainer } from '../backup/recovery.js';
-import { explainBookResolution } from './scope_storage.js';
-import { getSettings } from '../knowledge/settings.js';
+// The read-only book resolver (the explainBookResolution() mirror's two-book
+// wrapper) — its one-owner home is knowledge/scope.js (beside the resolver it
+// mirrors), shared with backup/recovery.js's §5.3 completeness guard, so this
+// tab's book rows and the recovery export inspect the same books.
+import { resolveKnowledgeBooks } from '../knowledge/scope.js';
 import { peekStore, peekStoreData } from '../knowledge/store.js';
 import { knowledgeStoreSchema } from '../knowledge/schema.js';
 
@@ -60,46 +62,6 @@ export const SCHEMA_STATUS_LABELS = Object.freeze({
     interiority: '🎭 Interiority',
     knowledgeStore: '🧠 Knowledge lorebook store',
 });
-
-// ─── Knowledge book resolution (read-only) ────────────────────────────────────
-
-/**
- * Resolve the CURRENT Knowledge-store book names READ-ONLY — BOTH of them:
- * the store spans the Knowledge book and the State Tracker book (the two
- * hydration targets in knowledge/store.js hydrateCurrentBooks()), so a
- * surface that inspects only one misses the other book's version, hydration
- * failure, and embedded quarantine. (The scope_storage.js
- * explainBookResolution mirror — never resolveBookNames(), which is a writer
- * that saves a binding on first sight of an identity, and opening a
- * diagnostics tab must never persist anything.)
- *
- * @returns {{ books: Array<{ name: string, role: 'knowledge'|'state' }>, mode: string }|null}
- *         null when resolution degrades
- */
-export function resolveKnowledgeBooks() {
-    try {
-        const settings = getSettings() || {};
-        const resolution = explainBookResolution({
-            scope: settings.scope,
-            character: getCharacterIdentity(),
-            chat: getChatIdentity(),
-            bindings: settings.bookBindings && typeof settings.bookBindings === 'object'
-                ? settings.bookBindings
-                : {},
-        });
-        const resolved = resolution?.books ?? {};
-        const books = [];
-        if (typeof resolved.knowledge === 'string' && resolved.knowledge) {
-            books.push({ name: resolved.knowledge, role: 'knowledge' });
-        }
-        if (typeof resolved.state === 'string' && resolved.state) {
-            books.push({ name: resolved.state, role: 'state' });
-        }
-        return books.length > 0 ? { books, mode: resolution.mode } : null;
-    } catch {
-        return null;
-    }
-}
 
 // ─── Collector ────────────────────────────────────────────────────────────────
 
@@ -239,7 +201,16 @@ export function collectSchemaStatusSnapshot({
             hydration: peek === null
                 ? 'not-attempted'
                 : (peek.hydrated === true ? 'loaded' : 'failed'),
-            storedVersion: typeof peek?.version === 'number' ? peek.version : null,
+            // A FAILED slot's `version` is the blank placeholder's —
+            // hydrateBook never adopts the blocked source into the cache, so
+            // an on-disk v99 store would otherwise render "1 / 1" beside its
+            // future-version pause. The slot separately preserves the version
+            // observed on disk at the failure (peekStore's observedVersion,
+            // null when it could not be read); that — or null — is what a
+            // failed book reports, never the placeholder.
+            storedVersion: peek !== null && peek.hydrated !== true
+                ? (typeof peek.observedVersion === 'number' ? peek.observedVersion : null)
+                : (typeof peek?.version === 'number' ? peek.version : null),
             currentVersion: typeof knowledge.currentVersion === 'number' ? knowledge.currentVersion : null,
             quarantineCount: call(`knowledge.quarantine:${name}`, () => {
                 const data = knowledge.peekData?.(name);
@@ -332,17 +303,24 @@ export function collectSchemaStatusSnapshot({
         });
     }
     // A container this build cannot fully read must never let the panel assert
-    // that recovery data is absent (§5.3's "never silently reported as fewer
-    // records than it holds"). The future-version container is the canonical
-    // case; a broken container with zero readable items is the same hazard.
+    // that recovery data is absent or completely counted (§5.3's "never
+    // silently reported as fewer records than it holds"). The future-version
+    // container is the canonical case; a malformed container is the same
+    // hazard at ZERO readable items — and at ONE OR MORE readable items the
+    // malformed entries were DROPPED by validation, so the displayed count is
+    // a lower bound the snapshot must not present as a total.
     if (chatQuarantineState.unknown) {
         warnings.push({
             id: 'chat-quarantine-unreadable',
             level: 'warn',
             text: `This chat's recovery (quarantine) container was written by a NEWER version of MWT, so it may hold quarantined records this build cannot read — the 0 counts in the table cannot rule them out. Nothing was deleted: the records are preserved unchanged, and upgrading MWT reads and exports them.`,
         });
-    } else if (chatQuarantineState.containerIssues > 0 && chatQuarantineState.items === 0) {
-        warnings.push({
+    } else if (chatQuarantineState.containerIssues > 0) {
+        warnings.push(chatQuarantineState.items > 0 ? {
+            id: 'chat-quarantine-container-invalid',
+            level: 'warn',
+            text: `This chat's recovery (quarantine) container is malformed: ${chatQuarantineState.items} record(s) could be read, but entries this build could not read were dropped by validation — the counts in the table are a known minimum, and the container may hold additional unreadable records. Nothing was deleted; the container is preserved whole.`,
+        } : {
             id: 'chat-quarantine-container-invalid',
             level: 'warn',
             text: `This chat's recovery (quarantine) container is malformed, so it may hold quarantined records this build could not read — the 0 counts in the table cannot rule them out. Nothing was deleted; the container is preserved whole.`,
@@ -357,7 +335,17 @@ export function collectSchemaStatusSnapshot({
         // totals omit the State Tracker book's state unless aggregated here.
         stores: rows.length + knowledgeRow.books.length,
         present: rows.filter((r) => r.present).length + knowledgeRow.books.filter((b) => b.present).length,
-        ready: rows.filter((r) => r.state === 'ready' && r.present).length,
+        // A LOADED book counts as ready: hydration prepares the store through
+        // the schema engine and persists any migration BEFORE the slot becomes
+        // hydrated, so a loaded book is at the current version by construction
+        // (an un-persistable migration blocks the load → 'failed' → blocked
+        // below). That is also why `preparing` deliberately gains NO book term
+        // — a book can never sit between versions. Before this fix a healthy
+        // book pair rendered beside "0 ready · 0 to migrate · 0 blocked" while
+        // `blocked` counted a failed book: a book could appear on the blocked
+        // side of the banner but never the ready side.
+        ready: rows.filter((r) => r.state === 'ready' && r.present).length
+            + knowledgeRow.books.filter((b) => b.hydration === 'loaded').length,
         preparing: rows.filter((r) => r.state === 'prepare').length,
         blocked: rows.filter((r) => r.state === 'blocked').length
             + knowledgeRow.books.filter((b) => b.hydration === 'failed').length,

@@ -186,6 +186,34 @@ describe('collectScopeSnapshot — header, books, bindings', () => {
         expect(snap.warnings).toEqual([]);
     });
 
+    test('a FAILED book reports the version observed on disk, never the placeholder', () => {
+        const snap = collectScopeSnapshot(deps({
+            storeApi: {
+                peekStore: (name) => (name.startsWith('Knowledge')
+                    ? { hydrated: false, dirty: false, version: 1, fields: [], observedVersion: 99 }
+                    : { hydrated: true, dirty: false, version: 1, fields: [] }),
+            },
+        }));
+        const byId = Object.fromEntries(snap.books.map((b) => [b.id, b]));
+        expect(byId.knowledge.storeState).toBe('failed');
+        // peek.version is blankStore()'s placeholder after a blocked load; the
+        // on-disk v99 the failed load observed is what the table must show
+        // (the §9.1 schema-status collector's rule, applied here too).
+        expect(byId.knowledge.storeVersion).toBe(99);
+        expect(byId.state.storeVersion).toBe(1);
+    });
+
+    test('a failed book whose on-disk version could not be read reports null, never the placeholder', () => {
+        const snap = collectScopeSnapshot(deps({
+            storeApi: {
+                peekStore: () => ({ hydrated: false, dirty: false, version: 1, fields: [], observedVersion: null }),
+            },
+        }));
+        const byId = Object.fromEntries(snap.books.map((b) => [b.id, b]));
+        expect(byId.knowledge.storeState).toBe('failed');
+        expect(byId.knowledge.storeVersion).toBeNull();
+    });
+
     test('bindings are listed with the current one marked', () => {
         const binding = { knowledge: 'KT - A', state: 'ST - A', profiles: 'NP - A' };
         const snap = collectScopeSnapshot(deps({
@@ -606,6 +634,20 @@ describe('renderScopeSnapshot — banner tones, badges, escaping', () => {
             storeApi: { peekStore: () => ({ hydrated: true, dirty: false, version: 0, fields: [] }) },
         })), { formatTime: T });
         expect(html).toContain('<td>v0');
+        expect(html).toContain('(code: v1)');
+    });
+
+    test('a FAILED book shows the observed on-disk version, not the blank placeholder', () => {
+        const html = renderScopeSnapshot(collectScopeSnapshot(deps({
+            storeApi: {
+                peekStore: (name) => (name.startsWith('Knowledge')
+                    ? { hydrated: false, dirty: false, version: 1, fields: [], observedVersion: 99 }
+                    : { hydrated: true, dirty: false, version: 1, fields: [] }),
+            },
+        })), { formatTime: T });
+        expect(html).toContain('>load failed<');
+        // v99 was on disk; the placeholder v1 must not masquerade as it.
+        expect(html).toContain('<td>v99');
         expect(html).toContain('(code: v1)');
     });
 

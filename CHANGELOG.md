@@ -12,6 +12,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.8.5]
+
+### Added
+- **Schema validation + migrations — Part 5: the visible paused state, diagnostics,
+  and recovery export** (design §5.3/§5.4/§9 of the schema validation plan; lands
+  before the Part 6 runtime cutover so the state the cutover can produce is
+  already visible when it first occurs).
+  - **`core/schema_status.js`** — the ONE owner of the paused-store state
+    (§5.4): `pauseStore()`/`resumeStore()` plus a per-store Retry seam, so the
+    module banner, 🗂️ Scope & storage, ❤️ Health, and the console can never
+    disagree about the reason. ONE user notification per chat/scope — never
+    repeated toasts. §9.3 schema events (`schema_store_paused`,
+    `schema_store_resumed`, `schema_quarantine_cleared`, …) go through
+    `recordSchemaEvent()`, whose detail allowlist makes "store/version/count
+    metadata, never user prose" a structural guarantee.
+  - **Knowledge lorebook hydration now pauses visibly** (`knowledge/store.js`):
+    a blocked hydration (future store version, corrupt store JSON, failed book
+    load, unpersistable migration) pauses `knowledgeStore`; the red banner in
+    Knowledge's own tab carries the reason plus **↻ Retry** (re-runs hydration —
+    privileged orchestration, not queued module work) and **⬇ Download recovery
+    data**. A later load of BOTH books resumes the store — one book hydrating
+    can never clear the other book's pause. New read-only accessors
+    `peekStoreData()` / `getHydratedBooks()` / `clearStoreQuarantine()`.
+  - **🗂️ Scope & storage** gained a **Schema status** section (§9.1): per
+    registered store — stored vs. current version, the pure fast-gate
+    classification (ready / will-migrate / blocked / unknown), whether a
+    migration was persisted, the quarantined-record count, the Knowledge
+    lorebook store's hydration + version, and the SAME pause reason the module
+    banner shows. Read-only by contract. Console twin:
+    `MWT.diagnostics.schemaStatus()`.
+  - **🛡️ Integrity** enumerates its per-store rows from **`schema/registry.js`**
+    (§9.2 — never a second list), validates the **Knowledge lorebook store when
+    reliably hydrated** (a dim not-checked row otherwise — never a finding), and
+    reports structured **issue codes × count @ path** alongside the reason
+    strings (`backup/validate.js validateSectionWithIssues()` — one validation
+    pass feeds both shapes).
+  - **❤️ Health** rows carry a ⛔ PAUSED badge with the banner's exact message,
+    and a paused-module banner leads the pane.
+  - **Recovery export + confirmed clear** (§5.3, `backup/recovery.js`):
+    **"⬇ Download recovery data"** in the Settings → Backup panel (and on every
+    paused-module banner) exports every quarantined record — chat-local
+    container plus each hydrated book's embedded container, deduplicated — as a
+    `mwt-quarantine-export` JSON with store/path/reasonCode/raw
+    record/sourceVersion/detectedAt/fingerprint: enough metadata to repair a
+    record externally and re-import it through the validated Backup → Restore
+    path. The clear is console-only by design, with a literal confirmation
+    token: `MWT.recovery.clear({ confirm: 'CLEAR' })` (per-store filter and
+    embedded-container clearing opt-in); `MWT.recovery.status()` /
+    `MWT.recovery.export()` complete the namespace.
+  - The 📋 Copy Report gained a **Schema status** section (safe output: metadata
+    by construction, redaction-gated). Coverage:
+    `test/schema_status_surface.test.js` (65 tests).
+
+### Fixed
+- **Character/chat scopes resolved the WRONG books in Schema status,
+  Integrity, and the recovery export** (the `resolveKnowledgeBooks()`
+  identity source, now in `knowledge/scope.js`). The two-book resolver was
+  fed the `core/scope.js` identity flavours — whose `getCharacterIdentity(ctx)`
+  requires a context argument (called with none it ALWAYS returned null →
+  character scope fell back to inspecting the GLOBAL books) and whose
+  `getChatIdentity()` returns `{ chatId, characterKey, groupKey }` with no
+  `.key`/`.name` the explainer reads (chat scope mis-resolved the same way).
+  Schema status and Integrity therefore inspected the global books under a
+  character/chat scope, and — once the recovery export's fail-closed §5.3
+  guard consumed the same resolver — every export under a non-global scope
+  would have blocked forever on global books the chat never hydrates. The
+  resolver and the `explainBookResolution()` mirror it builds on now live in
+  `knowledge/scope.js` beside `resolveBookNames()` (so `backup/` no longer
+  imports from a UI panel module — diagnostics and backup both import
+  downward), using knowledge/scope.js's zero-arg `{ key, name }` identity
+  helpers. Coverage: the character-scope export test in
+  `test/schema_status_surface.test.js` (every suite previously exported only
+  under `scope: 'global'`).
+- **Schema status banner: healthy Knowledge books never counted as ready**
+  (`diagnostics_panel/schema_status.js`). `totals.ready` summed only the
+  chat-metadata store rows, so two loaded books rendered beside "✅ Schema
+  status: 0 ready · 0 to migrate · 0 blocked" while `blocked` DID count a
+  failed book — a book could appear on the blocked side of the banner but
+  never the ready side. A loaded book now counts as ready; it is at the
+  current version by construction (hydration migrates and persists before the
+  slot hydrates — an un-persistable migration blocks the load), which is also
+  why "to migrate" deliberately gains no book term.
+
+
 ## [1.8.4]
 
 ### Added

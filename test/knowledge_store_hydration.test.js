@@ -31,9 +31,10 @@ import {
 import {
     STORE_SENTINEL, STORE_COMMENT, isStoreEntry,
     hydrateBook, hydrateCurrentBooks, isHydrated, assertHydrated,
-    readField, flushBook, getStoreQuarantineItems, resetStoreCache,
+    readField, flushBook, getStoreQuarantineItems, resetStoreCache, peekStore,
     _clearCacheForTests,
 } from '../knowledge/store.js';
+import { bumpEpoch } from '../core/scope.js';
 import {
     KNOWLEDGE_STORE_VERSION,
     RELATIONSHIP_SOURCE_VALUES,
@@ -436,6 +437,53 @@ describe('Part 4: flush failure rolls the hydration back (§6.7 acceptance)', ()
         expect(data.version).toBe(KNOWLEDGE_STORE_VERSION);
         expect(savedStoreOf('Book A').version).toBe(KNOWLEDGE_STORE_VERSION);
         expect(savedStoreOf('Book A').registry).toEqual({ Mara: { uid: 1 } });
+    });
+
+    test('a chat switch between the two book hydrations aborts the stale orchestration', async () => {
+        // Chat A: the knowledge book is healthy, and the chat still carries a
+        // legacy state seed waiting to be adopted by the State book.
+        setBookStore(LOREBOOK_NAME, { version: 1, registry: { Mara: { uid: 1 } } });
+        getFakeMeta()[STATE_REGISTRY_KEY] = { Weather: { uid: 7 } };
+
+        // Park the FIRST book's load; while it is pending the chat switches,
+        // exactly as the root CHAT_CHANGED handler orders it: bumpEpoch()
+        // invalidates in-flight scope tokens FIRST, then Knowledge's
+        // fire-and-forget reloadStores() runs resetStoreCache() (its own
+        // hydration would follow).
+        let releaseLoad;
+        let announce;
+        const entered = new Promise((resolve) => { announce = resolve; });
+        const gate = new Promise((resolve) => { releaseLoad = resolve; });
+        const realLoad = wiFake.loadWorldInfo.bind(wiFake);
+        wiFake.loadWorldInfo = async (name) => {
+            if (name === LOREBOOK_NAME) {
+                announce();
+                await gate;
+            }
+            return realLoad(name);
+        };
+
+        const pending = hydrateCurrentBooks();
+        await entered;                 // the knowledge hydration is parked on its load
+        bumpEpoch();                   // the root handler's first statement
+        await resetStoreCache();       // …then the reload's cache retirement
+        releaseLoad();
+        await pending;
+
+        // The stale orchestration was abandoned BETWEEN the books: the State
+        // book was never hydrated — no slot was created, the previous chat's
+        // legacy seed was never adopted, nothing was written to disk.
+        expect(peekStore(STATE_LOREBOOK_NAME)).toBeNull();
+        expect(storeEntryOf(STATE_LOREBOOK_NAME)).toBeNull();
+        expect(wiFake.books.has(STATE_LOREBOOK_NAME)).toBe(false);
+        expect(getEvents({ module: 'knowledge' }).some(e => e.event === 'schema_hydration_abandoned')).toBe(true);
+
+        // The new chat's own reload does the work under the fresh scope — the
+        // seed is adopted by the NEW invocation, not the stale one.
+        await hydrateCurrentBooks();
+        expect(isHydrated(LOREBOOK_NAME)).toBe(true);
+        expect(isHydrated(STATE_LOREBOOK_NAME)).toBe(true);
+        expect(savedStoreOf(STATE_LOREBOOK_NAME).stateRegistry).toEqual({ Weather: { uid: 7 } });
     });
 
     test('a failed force re-read restores the previously good hydrated slot', async () => {

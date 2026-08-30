@@ -12,7 +12,16 @@
  *     record, sourceVersion, detectedAt, and fingerprint — enough metadata to
  *     edit a record externally and re-import it through the validated
  *     backup/import path (a restore merges envelope.quarantine tolerantly and
- *     can never be blocked by it, backup/validate.js);
+ *     can never be blocked by it, backup/validate.js). Async + hydrate-first:
+ *     the fire-and-forget post-chat-switch hydration window is not a blocker —
+ *     an un-hydrated resolved book is awaited into the cache first, and only a
+ *     load that still has not landed refuses. It REFUSES (downloading
+ *     nothing) whenever any home cannot be read completely: a future-version
+ *     or malformed chat container, a currently resolved Knowledge/State book
+ *     that is not loaded or whose embedded container is refused, or a book
+ *     resolution that itself failed (the books to cover are then unknown) —
+ *     the §5.3 contract says every quarantined record is in the file, so an
+ *     incomplete file must never present itself as complete;
  *   - clearQuarantineData() — the explicit clear with confirmation. Console-
  *     only by design (§5.3: "preferably console-only until a mutating recovery
  *     UI is designed"): `MWT.recovery.clear({ confirm: 'CLEAR' })`. The
@@ -43,8 +52,19 @@ import { recordSchemaEvent, SCHEMA_DIAGNOSTIC_EVENTS } from '../core/schema_stat
 import {
     clearStoreQuarantine,
     getHydratedBooks,
+    getStoreQuarantineContainerStatus,
     getStoreQuarantineItems,
+    hydrateCurrentBooks,
+    isHydrated,
 } from '../knowledge/store.js';
+// The read-only book resolver — its one-owner home is knowledge/scope.js
+// (beside resolveBookNames(), whose explainBookResolution() mirror it builds
+// on — resolveBookNames() itself is a writer and recovery must stay
+// read-only). Shared with the §9.1 Schema status collector and the Integrity
+// tab, so the books the diagnostics surfaces report are exactly the books
+// this export must cover; knowledge/ is also the natural layer for a
+// knowledge-scope rule a fail-closed export refuses over.
+import { resolveKnowledgeBooks } from '../knowledge/scope.js';
 
 // ─── Reading ─────────────────────────────────────────────────────────────────
 
@@ -83,10 +103,56 @@ export function readChatQuarantineContainer(meta = getChatMeta()) {
 }
 
 /**
+ * Every currently resolved Knowledge/State book whose embedded recovery
+ * records this build cannot see right now (§5.3's completeness contract,
+ * made inspectable): a book whose store is not loaded — including a book
+ * BLOCKED by a future store version, which is necessarily un-hydrated — or
+ * whose embedded container was refused (written by a newer MWT, or malformed
+ * in a way this build cannot preserve). Read-only resolution (never
+ * resolveBookNames(), the writer), same as the unified-backup guard in
+ * backup/collect.js.
+ *
+ * A resolution that itself FAILS (settings, identity, or the explainer
+ * degrade — resolveKnowledgeBooks() returns null) is an explicit blocker too,
+ * never "no books to inspect": the set of books this export must cover is then
+ * UNKNOWN, and proceeding would fail open exactly like an omitted book.
+ *
+ * @returns {Array<{ book: string, role: string, reason: string }>} empty when
+ *          every resolved book is loaded and its container readable; a single
+ *          'book-resolution-failed' entry when resolution itself failed
+ */
+export function collectKnowledgeBookBlocks() {
+    const blocks = [];
+    const resolved = resolveKnowledgeBooks();
+    if (!resolved) {
+        // Fail-closed: `?.books ?? []` here would convert a degraded
+        // resolution into an empty list, and the export would proceed as
+        // though every Knowledge/State book were readable without knowing
+        // which books must be inspected. One synthetic block names the
+        // failure; exportRecoveryData() refuses over it.
+        blocks.push({ book: '(unresolved)', role: 'knowledge', reason: 'book-resolution-failed' });
+        return blocks;
+    }
+    for (const book of resolved.books) {
+        const status = getStoreQuarantineContainerStatus(book.name);
+        if (!status.ok) {
+            blocks.push({ book: book.name, role: book.role, reason: status.reason ?? 'unknown' });
+        }
+    }
+    return blocks;
+}
+
+/**
  * Every quarantined record this chat/session can see: the chat-local container
  * plus each hydrated lorebook book's embedded container (§5.1's two homes),
  * deduplicated by content fingerprint (the same record detected through both
  * homes exports once).
+ *
+ * The collection deliberately reads only books this SESSION actually loaded
+ * (getHydratedBooks()) — a book blocked by a future store version is
+ * necessarily absent from it, which is why exportRecoveryData() separately
+ * inspects every currently resolved book and refuses rather than download a
+ * file that would silently omit that book's records.
  *
  * @returns {object[]} quarantine items (makeQuarantineItem shape)
  */
@@ -119,6 +185,7 @@ export function collectRecoveryItems() {
  *   total: number,
  *   chatContainer: { present: boolean, items: number, containerIssues: number, unknown: boolean },
  *   knowledgeBooks: string[],
+ *   knowledgeBookBlocks: Array<{ book: string, role: string, reason: string }>,
  * }}
  */
 export function collectQuarantineStatus({ now = Date.now } = {}) {
@@ -150,10 +217,52 @@ export function collectQuarantineStatus({ now = Date.now } = {}) {
             unknown: chat.unknown,
         },
         knowledgeBooks: books,
+        // §5.3 completeness, visible on the status surface: every currently
+        // resolved book whose embedded recovery records this build cannot see
+        // right now (store not loaded — including a future-version block — or
+        // a refused container), or a single 'book-resolution-failed' entry
+        // when the books to inspect could not even be resolved. Empty when
+        // every resolved book is readable; MWT.recovery.status() warns over it
+        // and exportRecoveryData() refuses over it.
+        knowledgeBookBlocks: collectKnowledgeBookBlocks(),
     };
 }
 
 // ─── Export (§5.3 — "Download recovery data") ────────────────────────────────
+
+/**
+ * Hydrate-first seam (the backup/collect.js pattern): onChatChanged() fires
+ * reloadStores('chat change') deliberately fire-and-forget, so right after a
+ * chat switch BOTH resolved books can legitimately be un-hydrated while their
+ * loads are still in flight. Treating that transient window as a blocker made
+ * ⬇ Download recovery data refuse with "…cannot be read completely" on every
+ * export issued inside it — a false refusal, not data safety (fail-closed
+ * remains the direction once a load has actually FAILED). So the export
+ * awaits hydrateCurrentBooks() first and lets the unchanged completeness
+ * guard judge the state it finds AFTER the attempt: still-un-hydrated books
+ * (a load error, a future store version) block exactly as before.
+ *
+ * A resolution that itself FAILS (null) is deliberately not hydrated around —
+ * collectKnowledgeBookBlocks() reports it as its own explicit
+ * 'book-resolution-failed' blocker, never a silent empty book set.
+ */
+async function hydrateResolvedBooksForExport() {
+    let resolved = null;
+    try {
+        resolved = resolveKnowledgeBooks();
+    } catch {
+        return; // named by the guard — never a silent empty book set
+    }
+    if (!resolved) return;
+    const needsHydration = resolved.books.some((book) => !isHydrated(book.name));
+    if (!needsHydration) return;
+    try {
+        await hydrateCurrentBooks();
+    } catch {
+        // A throwing orchestration leaves the books un-hydrated: the guard
+        // below refuses and names them — the fail-closed direction.
+    }
+}
 
 /**
  * Build + download the recovery export: a `mwt-quarantine-export` envelope
@@ -171,14 +280,47 @@ export function collectQuarantineStatus({ now = Date.now } = {}) {
  * itself as complete while silently omitting them — the §5.3 contract says
  * EVERY quarantined record is included, so nothing is downloaded at all.
  *
+ * A MALFORMED same-version chat container is refused with `invalid: true` for
+ * the same reason (any lossy container issue, not only a future version):
+ * canonical validation DROPS unreadable items, so a container mixing one valid
+ * item with one malformed item would export a file that appears complete
+ * while omitting the malformed record — and an all-malformed container would
+ * instead report that nothing was rejected. Both lie; nothing downloads.
+ *
+ * The Knowledge lorebook store is guarded the same way (the unified-backup
+ * pattern, backup/collect.js): every currently resolved Knowledge/State book
+ * must be loaded with a readable embedded container — and resolution must
+ * succeed at all: a failed resolution (resolveKnowledgeBooks() → null) refuses
+ * with a 'book-resolution-failed' blocker, because the books whose records
+ * must be covered are then unknown. A book blocked by a
+ * future STORE version is necessarily un-hydrated, so collection cannot see
+ * its records — an export built from the readable homes would silently omit
+ * them. The refusal carries `blockedBooks` naming each book and reason.
+ *
+ * HYDRATE-FIRST (async): reloadStores('chat change') is deliberately
+ * fire-and-forget (knowledge/index.js), so immediately after a chat switch
+ * BOTH resolved books can be un-hydrated while their loads are in flight —
+ * treating that transient window as a blocker refused every export issued in
+ * it ("a load that has not finished yet") with no way for the user to do
+ * anything but wait. The export therefore awaits hydrateCurrentBooks() when a
+ * resolved book is un-hydrated and lets the UNCHANGED fail-closed guard above
+ * judge the state it finds AFTER the attempt: a book still un-hydrated (a load
+ * error, a future store version) blocks exactly as before, so only the false
+ * refusal in the hydration window goes away.
+ *
  * @param {object} [options]
  * @param {boolean} [options.download=true] — download via downloadJson(); the
  *        envelope is returned either way (the console tool prints it)
  * @param {string} [options.filename]
- * @returns {{ ok: boolean, empty?: boolean, unreadable?: boolean, message?: string,
- *            exportedAt: number, count: number, filename?: string, data?: object }}
+ * @returns {Promise<{ ok: boolean, empty?: boolean, unreadable?: boolean, invalid?: boolean,
+ *            blockedBooks?: Array<{ book: string, role: string, reason: string }>,
+ *            message?: string, exportedAt: number, count: number, filename?: string,
+ *            data?: object }>}
  */
-export function exportRecoveryData({ download = true, filename } = {}) {
+export async function exportRecoveryData({ download = true, filename } = {}) {
+    // The post-chat-switch hydration window (see the JSDoc): give the loads a
+    // chance to land before the completeness guard judges them.
+    await hydrateResolvedBooksForExport();
     const items = collectRecoveryItems();
     const chat = readChatQuarantineContainer();
     const exportedAt = Date.now();
@@ -201,6 +343,56 @@ export function exportRecoveryData({ download = true, filename } = {}) {
             message: 'Refused: the chat recovery container was written by a NEWER version of MWT, so its records cannot be read or exported by this build. They are preserved unchanged — upgrade MWT to export them, or remove the whole container with MWT.recovery.clear({ confirm: \'CLEAR\' }).'
                 + (items.length > 0
                     ? ` The ${items.length} readable quarantined record(s) this build CAN see (for example the Knowledge lorebook store's) were not exported either — a recovery file missing the unreadable ones would present itself as complete.`
+                    : ''),
+        };
+    }
+    // ANY lossy container issue refuses, not only a future version: canonical
+    // validation drops malformed items, so a same-version container holding a
+    // valid item beside a malformed one would export a file that appears
+    // complete while silently omitting the malformed record — and with zero
+    // readable items the zero-count refusal below would instead report that
+    // nothing was rejected. Both are lies about the container's contents.
+    if (chat.containerIssues > 0) {
+        return {
+            ok: false,
+            empty: true,
+            invalid: true,
+            exportedAt,
+            count: 0,
+            message: 'Refused: the chat recovery container is malformed, so some of its records cannot be read by this build — they were NOT exported. They are preserved unchanged in the container; repair it (or upgrade MWT) and export again.'
+                + (items.length > 0
+                    ? ` The ${items.length} readable quarantined record(s) this build CAN see were not exported either — a recovery file missing the malformed ones would present itself as complete.`
+                    : ''),
+        };
+    }
+    // The Knowledge-store completeness guard (the unified-backup pattern,
+    // backup/collect.js): collection reads only books getHydratedBooks()
+    // returns, so a book blocked by a future STORE version — necessarily
+    // un-hydrated — is invisible to it, as is any book whose embedded
+    // container this build must refuse. An export built from the readable
+    // homes would silently omit those books' records while presenting itself
+    // as complete, so nothing downloads and each blocked book is named.
+    const blockedBooks = collectKnowledgeBookBlocks();
+    if (blockedBooks.length > 0) {
+        const reasonText = {
+            'store-not-hydrated': 'its store is not loaded by this build — blocked by a NEWER MWT version, a load error, or a load that has not finished yet',
+            'quarantine-version-future': 'its embedded recovery container was written by a NEWER version of MWT',
+            'quarantine-container-invalid': 'its embedded recovery container is malformed in a way this build cannot safely read',
+            'book-resolution-failed': 'the Knowledge/State book names could not be resolved (settings or identity unreadable), so the books whose records must be covered are unknown',
+        };
+        const list = blockedBooks
+            .map((b) => `"${b.book}" (${reasonText[b.reason] ?? b.reason})`)
+            .join('; ');
+        return {
+            ok: false,
+            empty: true,
+            unreadable: true,
+            blockedBooks,
+            exportedAt,
+            count: 0,
+            message: `Refused: the Knowledge lorebook store's recovery data cannot be read completely — ${list}. Records inside those books are preserved unchanged; reopen the chat so the stores load (see the Knowledge tab's banner if a store is blocked), or upgrade MWT, then export again.`
+                + (items.length > 0
+                    ? ` The ${items.length} readable quarantined record(s) this build CAN see were not exported either — a recovery file missing the unreadable ones would present itself as complete.`
                     : ''),
         };
     }

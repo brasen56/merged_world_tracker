@@ -815,13 +815,30 @@ export function renderSchemaStatusSnapshot(snapshot, { formatTime = (ts) => new 
     // §5.3 discipline in the footer: a zero count is only "no records" when
     // every home could be read. A container this build cannot read (newer
     // MWT) or could not fully parse must never be presented as an assertion
-    // that recovery data is absent — the count is unavailable, not zero.
+    // that recovery data is absent — the count is unavailable, not zero. And
+    // when a malformed container still yielded READABLE records, the shown
+    // count is a known minimum: validation dropped the entries it could not
+    // read, so the total must never be presented as complete either.
     const chatQ = s.chatQuarantine || {};
     const unreadableChatQuarantine = chatQ.unknown === true;
-    const unparseableChatQuarantine = !unreadableChatQuarantine
-        && Number(chatQ.containerIssues) > 0 && (Number(chatQ.items) || 0) === 0;
+    // ANY lossy container read (containerIssues > 0), with or without
+    // readable items left.
+    const lossyChatQuarantine = !unreadableChatQuarantine && Number(chatQ.containerIssues) > 0;
+    const lossyChatItems = Number(chatQ.items) || 0;
+    const unparseableChatQuarantine = lossyChatQuarantine && lossyChatItems === 0;
+    // The >0-total footer must qualify BOTH malformed-container shapes, not
+    // only the one that still yielded readable records: with a Knowledge book
+    // holding records while the chat container's items were ALL dropped, the
+    // footer used to assert "N quarantined record(s) … preserved whole" with
+    // no caveat — the future-version case got its appended sentence, this one
+    // did not. Same §5.3 discipline, same place.
+    const lossyChatNote = lossyChatQuarantine
+        ? (lossyChatItems > 0
+            ? ` This chat's own recovery container is also malformed: ${lossyChatItems} record(s) were read from it, but entries this build could not read were dropped from the count — treat the total as a known minimum, not a complete one.`
+            : ` This chat's own recovery container is malformed and NONE of its records could be read — it may hold quarantined records this build cannot count, so the total above covers only the readable homes. Nothing was deleted; the container is preserved whole.`)
+        : '';
     const quarantineFooter = (totals.quarantine ?? 0) > 0
-        ? `<p class="mwt-diag-note"><strong>${escapeHtml(String(totals.quarantine ?? 0))} quarantined record(s)</strong> across these stores — preserved whole, never injected, never deleted. Export them any time with the <strong>⬇ Download recovery data</strong> button (the Backup panel in ⚙️ Settings, a paused module's banner, or <code>MWT.recovery.export()</code>); repair outside MWT and re-import through Backup → Restore. This tab is read-only by contract — the clear action is <code>MWT.recovery.clear({ confirm: 'CLEAR' })</code> in the console.${unreadableChatQuarantine ? ' This chat\'s own recovery container is unreadable (written by a NEWER MWT) and may hold additional records this build cannot read or count.' : ''}</p>`
+        ? `<p class="mwt-diag-note"><strong>${escapeHtml(String(totals.quarantine ?? 0))} quarantined record(s)</strong> across these stores — preserved whole, never injected, never deleted. Export them any time with the <strong>⬇ Download recovery data</strong> button (the Backup panel in ⚙️ Settings, a paused module's banner, or <code>MWT.recovery.export()</code>); repair outside MWT and re-import through Backup → Restore. This tab is read-only by contract — the clear action is <code>MWT.recovery.clear({ confirm: 'CLEAR' })</code> in the console.${unreadableChatQuarantine ? ' This chat\'s own recovery container is unreadable (written by a NEWER MWT) and may hold additional records this build cannot read or count.' : ''}${lossyChatNote}</p>`
         : unreadableChatQuarantine
             ? `<p class="mwt-diag-note"><strong>Quarantine count unavailable:</strong> this chat's recovery (quarantine) container was written by a NEWER version of MWT, so it may hold quarantined records this build cannot read or count — the zeros above cannot rule them out. Nothing was deleted: the records are preserved unchanged; upgrade MWT to read and export them (<strong>⬇ Download recovery data</strong> refuses rather than download an incomplete file).</p>`
             : unparseableChatQuarantine

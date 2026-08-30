@@ -414,6 +414,8 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
             reasonCode: 'world-info-unavailable',
             message: `SillyTavern's World Info system is not available, so the Knowledge lorebook "${bookName}" cannot be read. Your data was not changed.`,
         });
+        // The failure-state breadcrumb: no version could be observed.
+        s.observedVersion = null;
         return s.data;
     }
 
@@ -445,6 +447,8 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
             reasonCode: 'book-load-failed',
             message: `its lorebook "${bookName}" could not be loaded (see the console for the load error). Your data was not changed. Retry in a moment, or check the World Info file.`,
         });
+        // The load never reached the entry, so no version could be observed.
+        s.observedVersion = null;
         return s.data;
     }
 
@@ -474,6 +478,8 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
                 reasonCode: 'store-json-invalid',
                 message: `the tracker entry in its lorebook "${bookName}" is not valid JSON, so MWT cannot safely read it. Your data was not changed. Fix or remove the ${STORE_SENTINEL} entry in SillyTavern's World Info editor, then retry.`,
             });
+            // Corrupt JSON: the on-disk version could not be determined.
+            s.observedVersion = null;
             return s.data;
         }
         source = parsed;
@@ -529,6 +535,11 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
                 ? `its Knowledge lorebook "${bookName}" was saved by a NEWER version of MWT (v${prepared.fromVersion}; this build supports up to v${knowledgeStoreSchema.currentVersion}). Your data was not changed — upgrade MWT to read it, or open this chat on the newer install.`
                 : `its Knowledge lorebook "${bookName}" could not be safely prepared for use (${code}). Your data was not changed. Export a backup from the newer/working install if you have one, then retry.`,
         });
+        // Preserve the on-disk version this failure observed (99 for a
+        // future-version block), separately from the blank placeholder data
+        // the slot keeps — peekStore surfaces it so a diagnostics row can
+        // render "99 / 1" instead of the placeholder's "1 / 1".
+        s.observedVersion = Number.isInteger(prepared.fromVersion) ? prepared.fromVersion : null;
         return s.data;
     }
 
@@ -624,6 +635,10 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
                 s.hydrated = before.hydrated;
                 s.dirty = before.dirty;
                 if (before.dirty) scheduleFlush(bookName);
+                // The disk original is untouched, so the version this load
+                // DID observe is what a still-un-hydrated slot reports
+                // (ignored whenever the rollback restored a hydrated slot).
+                s.observedVersion = Number.isInteger(prepared.fromVersion) ? prepared.fromVersion : null;
                 console.error(
                     `[MWT:Knowledge] store: could not persist the prepared store for ` +
                     `"${bookName}" — the book stays un-hydrated (writes blocked) and the ` +
@@ -652,6 +667,9 @@ export async function hydrateBook(bookName, seed = {}, force = false) {
         // All four stages succeeded and the migration (if any) is durable:
         // only now does the book become writable.
         s.hydrated = true;
+        // The canonical `data.version` is live again — no stale failure
+        // breadcrumb may survive a successful load.
+        s.observedVersion = null;
         // NOTE: no resumeStore() here. The knowledgeStore id spans TWO books
         // (Knowledge Tracker + State Tracker); one book hydrating must not
         // clear a pause the OTHER book's block raised. hydrateCurrentBooks()
@@ -735,7 +753,9 @@ export function assertHydrated(bookName, context = 'write') {
  *
  * @param {string} bookName
  * @returns {{ hydrated: boolean, dirty: boolean, version: number|null,
- *            fields: string[] }|null} — null when the book has no cache slot
+ *            fields: string[], observedVersion: number|null }|null} — null
+ *            when the book has no cache slot; observedVersion is the on-disk
+ *            version a FAILED load saw (null when it could not be read)
  */
 export function peekStore(bookName) {
     const s = _cache.get(bookName);
@@ -745,6 +765,14 @@ export function peekStore(bookName) {
         dirty: s.dirty === true,
         version: typeof s.data?.version === 'number' ? s.data.version : null,
         fields: Object.keys(s.data ?? {}),
+        // The on-disk version OBSERVED at a failed load, kept separately from
+        // the live data (design §5.3's "observed, not canonical" rule): a
+        // failed slot's `data` is the blank placeholder — hydrateBook never
+        // adopts the blocked source — so `version` reports the CURRENT
+        // version, not the book's. Surfaces displaying a stored version for an
+        // un-hydrated slot must read this instead; null when the version could
+        // not be observed (corrupt JSON, failed load, no world-info module).
+        observedVersion: Number.isInteger(s.observedVersion) ? s.observedVersion : null,
     };
 }
 
@@ -1438,6 +1466,9 @@ export function _setCacheForTests(bookName, data) {
     s.data = { ...blankStore(), ...data };
     s.hydrated = true;
     s.dirty = false;
+    // A seeded slot is healthy by construction — never keep a previous
+    // failed attempt's observed-version breadcrumb on it.
+    s.observedVersion = null;
 }
 
 /** Test seam: clear the cache without flushing. */

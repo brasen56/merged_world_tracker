@@ -677,7 +677,7 @@ export function describeRecoveryExportResult(result) {
             tone: 'success',
         };
     }
-    if (result.unreadable) {
+    if (result.unreadable || result.invalid) {
         return {
             message: result.message
                 || 'Refused: some quarantined records cannot be read by this build and were not exported. They are preserved unchanged.',
