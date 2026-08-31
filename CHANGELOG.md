@@ -12,9 +12,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [1.8.6]
+
+### Added
+
+- **Schema validation + migrations — Part 6: the runtime chat-metadata cutover**
+  (design §7 of the schema validation plan — the step that makes the schema
+  manifest authoritative at runtime; the risky part everything before it made
+  survivable).
+  - **`schema/runtime.js applySchemaLoadGate()`** — the §7.4 synchronous flow,
+    run on EVERY startup (before the five `init(null)` calls) and chat change
+    (inside the `CHAT_CHANGED` handler, after `bumpEpoch()`, adding **no
+    await**): the pure fast gate classifies every present chat-metadata store,
+    `prepareStore()` runs the migrations for prepare stores, and the migrated
+    data, the manifest version stamp, and any quarantine additions land in the
+    SAME `chat_metadata` object behind ONE persist call (§7.3 — a dropped
+    debounced save re-runs idempotently and can never leave "manifest says v1,
+    data is v0"; a throwing persist is recorded via `schema_persist_failed`,
+    never fatal). A READY chat writes nothing — the §7.2 fast path adds no
+    save. Blocked stores (future version, unreadable root, quarantine
+    container refusal, manifest from a NEWER MWT) pause ONLY their module and
+    keep the untouched original as the recoverable state; a healthy later load
+    clears a stale pause.
+  - **A paused module declines its own work (§7.4)** — `core/event_router.js`
+    takes an injected decline predicate (events are never globally queued or
+    discarded; the declined module logs why); the World State / Chronicle /
+    Story Planner / Interiority injection seams clear the slot instead of
+    reading unprepared data; and the six write seams (World State, Chronicle,
+    Story Planner, Interiority, Knowledge counters, Knowledge evidence) refuse
+    while paused, so no module write validates an unprepared value at the
+    current version and silently replaces it (the §12 downgrade).
+  - **`core/schema_status.js`** gained the Part 6 decline checks —
+    `isStorePausedForCurrentScope()`, `isModulePausedForCurrentScope()` (the
+    router's predicate, handling every module-key spelling), and
+    `isStoreWriteBlocked()` — plus the §7.5 privileged-preparation window that
+    lets exactly the runtime gate's conversion write pass the pause it exists
+    to clear.
+  - **`runSchemaPreparations()`** — the §7.5 privileged path for deferred
+    stores: Interiority's chat-dependent legacy per-message key conversion
+    moved off its own `queueWork` (`init()`/`onChatChanged()`/
+    `onMoreMessagesLoaded()` — a queued recovery job would be declined by the
+    very pause it exists to clear) into orchestration that opens the
+    privileged window, runs the conversion, and re-runs the gate — a clean
+    result commits data + manifest atomically and resumes the module; a
+    surviving deferral stays a visible **preparing** state. Scope-guarded with
+    Knowledge's epoch-first semantics, so a chat switch mid-conversion
+    discards the re-gate and the new chat re-derives.
+  - **`registerSchemaGateRetryHandlers()`** — the §5.4 Retry button now works
+    for every chat-metadata store: Retry re-runs the gate and the privileged
+    preparations, and keeps the banner up when the block survives.
+  - **Lazy compatibility writes retired**: Chronicle's `getSnapshots()` and
+    Story Planner's `getArcs()` never persist from a read path anymore (the
+    gate owns the persisted repair); both keep their in-memory read fallbacks.
+  - Coverage: `test/schema_runtime_gate.test.js` (22 tests — startup,
+    chat-switch sync, §7.3 one-save atomicity, per-store blocking, deferral +
+    privileged conversion, chat-switch discard, persistence failure,
+    idempotent re-runs, decline/write-seam guards, Retry) and the static
+    purity guard extension in `test/schema_engine.test.js` (no pure schema
+    module may import the runtime orchestration).
+
+### Fixed
+- **A paused module's chat-change handler was skipped ENTIRELY, leaving the
+  previous chat's prompt injection active in the blocked chat** (the CHAT_CHANGED
+  dispatch in `index.js`). Those handlers also perform scope-independent
+  cleanup — clearing the old injection, cancelling auto-refresh/auto-generate
+  and editor-persist timers, dropping Interiority's DOM thought blocks, and
+  resetting transient UI state — so switching from a healthy chat to a blocked
+  one kept the healthy chat's World State / Chronicle / Story Planner /
+  Interiority prompt riding along. Each module now exposes
+  `onChatChangedWhilePaused()`: exactly that safe half (the injection
+  appliers' paused branch clears the slot), with zero reads of the blocked
+  store — the hydration half stays skipped exactly as before, and the resume
+  initializers still own the post-Retry re-hydration. Coverage:
+  `test/paused_chat_cleanup.test.js`.
+- **A Retry could resume stores whose owning modules were never
+  re-initialized** (`schema/runtime.js`). One `applySchemaLoadGate()` run can
+  resume several stores at once (repairing a future-version manifest makes
+  every affected store ready), but the Retry wrapper only re-ran the resume
+  initializer for the store whose button was clicked — the other modules
+  stayed unpaused with the stale in-memory state their skipped chat-change
+  hydration left behind, and their next event persisted it over the repaired
+  data. The retry handler and the §7.5 re-gate now snapshot the paused set
+  before the run and run every resumed store's initializer afterwards (the
+  run-once-per-pause-generation memo keeps each owning module to a single
+  re-hydration). Coverage: the multi-resume Retry test in
+  `test/schema_runtime_gate.test.js`.
+- **Resuming several stores of ONE module re-initialized it once per store id,
+  overlapping the same re-hydration** (`core/schema_status.js`). The run-once
+  memo for resume initializers was keyed by store id, but index.js registers
+  the module's `onChatChanged()` for every store the module owns — so a gate
+  run resuming Knowledge's two chat-metadata stores (with `knowledgeStore`
+  resuming in the same window through its own path) invoked the same
+  asynchronous reset/hydration once per store id, and the overlapping starts
+  raced to rebuild the same in-memory state. The memo is now keyed by the
+  OWNING module — once per pause generation per module — so whichever store
+  ids a resume reports, and however many paths observe it, the module
+  re-hydrates exactly once. Coverage: the same-module resume tests in
+  `test/schema_runtime_gate.test.js` and `test/schema_status_surface.test.js`.
+- **Manual World State generation still bypassed the pause**
+  (`world_state/refresh.js`, `world_state/sections.js`). The Refresh button,
+  `/wt-refresh`, and `regenerateSection()` reach their API-spending choke
+  points without the event router's decline predicate, so a paused store was
+  read and one or more API calls spent before the checked write finally
+  refused. Both choke points now refuse first — auto refresh declines
+  silently, manual paths throw the same repairable "paused for this chat"
+  error the other modules use. Coverage: `test/schema_pause_bypass.test.js`.
+- **Manual Knowledge scans still ran while the module was paused**
+  (`knowledge/index.js`). `/wt-scan` (`triggerScan()`) and `scanAndAccept()`
+  bypass the router without checking any of the module's three pause states:
+  a blocked lorebook store was scanned through its blank placeholder, and a
+  counters/evidence-only pause still let `scanAndAccept()` modify lorebook
+  entries. Both entry points now refuse up front — `triggerScan()` throws the
+  repairable error, `scanAndAccept()` returns its empty "nothing happened"
+  array — before reading state or spending the API call. Coverage:
+  `test/schema_pause_bypass.test.js`.
+- **A PARTIAL module resume consumed the resume-initializer run-once memo too
+  early** (`core/schema_status.js runStoreResumeInitializer()`). One Knowledge
+  store resuming while a sibling stayed paused for the same chat ran the
+  module's `onChatChanged()` initializer immediately — re-hydrating against
+  the still-blocked sibling — and marked the module-keyed run-once memo, so
+  when the final store later resumed WITHOUT a new pause transition the memo
+  suppressed the required re-hydration and the module kept stale in-memory
+  state (its next event would persist it over the repaired store). The
+  initializer now runs — and the memo is only consumed — when NO store of that
+  module remains paused for the current scope; a sibling paused for another
+  chat/scope never defers (the pause registry is per chat/scope). Coverage:
+  the partial-resume tests in `test/schema_status_surface.test.js`.
+- **The NPC Growth modal survived a chat switch** (`knowledge/index.js`).
+  Both chat-change paths removed only `#kt-view-modal`; `#kt-growth-modal` is
+  independently appended to `document.body` and kept displaying the previous
+  chat's evidence and profile — and on an unpaused destination chat its
+  still-live handlers could save that old profile or edit evidence against
+  the new chat's stores. Both `onChatChanged()` and
+  `onChatChangedWhilePaused()` now remove it (pure DOM removal — the paused
+  half still performs no store read). Coverage: the modal-drop tests in
+  `test/paused_chat_cleanup.test.js`.
+- **Continuous capture still bypassed the pause guard**
+  (`knowledge/growth.js runContinuousCapture()`). The lower-level choke point
+  every capture path flows through (Capture's delta pass, the auto cadence,
+  Catch Up) was exported without `refuseIfGrowthPaused()`, so a direct caller
+  could read the paused stores and spend the API call before the evidence
+  write seam refused the result — the same false-success
+  ("Capture complete: +1 observation" over a write that never landed) these
+  guards exist to prevent. The guard now fires first, before the
+  settings/registry reads; the automatic path is still declined by the router
+  before it ever gets there. Coverage: `test/schema_pause_bypass.test.js`.
+
 ## [1.8.5]
 
 ### Added
+
 - **Schema validation + migrations — Part 5: the visible paused state, diagnostics,
   and recovery export** (design §5.3/§5.4/§9 of the schema validation plan; lands
   before the Part 6 runtime cutover so the state the cutover can produce is

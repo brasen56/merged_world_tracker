@@ -15,6 +15,11 @@ import {
     truncateText,
     setStatus,
 } from '../core/index.js';
+// Part 6 (§7.4) pause guard + the store id it checks. Direct import (not the
+// barrel) so the REAL pause singleton is read even under the test
+// barrel→stub alias — the same rule the injection seam follows.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+import { worldStateSchema } from './schema.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL, getPinnedEntities } from './settings.js';
@@ -158,6 +163,19 @@ export async function refreshWorldState(isAuto = false) {
     if (!hasValidSettings()) {
         console.warn('[MWT:WorldState] Cannot refresh — settings incomplete');
         return null;
+    }
+
+    // Part 6 (§7.4): the manual refresh button, /wt-refresh, and the scheduled
+    // auto-refresh all re-enter this API-spending choke point without the
+    // event router's decline predicate. Refuse while the store is paused —
+    // BEFORE reading the unprepared store or spending the API call (the
+    // checked write would refuse afterwards anyway; declining here keeps
+    // that refusal free). Auto runs decline silently (the router declines
+    // those anyway); manual runs say why, mirroring the other modules.
+    if (isStorePausedForCurrentScope(worldStateSchema.id)) {
+        console.log('[MWT:WorldState] Refresh skipped — the store is paused for this chat (schema preparation).');
+        if (isAuto) return null;
+        throw new Error('World State is paused for this chat — its data could not be safely prepared, so nothing was generated. Use Retry in the banner after repairing the data.');
     }
 
     // WORLD-STATE-01: Capture the scope before any async operation. The old

@@ -544,6 +544,22 @@ export function onChatChanged() {
     console.log('[MWT:Interiority] Chat changed — state reset.');
 }
 
+/**
+ * The scope-INDEPENDENT half of onChatChanged(), run by index.js's
+ * CHAT_CHANGED handler while the interiority store is paused for this chat
+ * (Part 6 §7.4/§5.4). Clears the previous chat's DOM thought blocks and
+ * injection (the applier's paused branch) without one read of the blocked
+ * store — no ledger purge (its write seam would refuse), and no re-render of
+ * thought blocks from a store that was never prepared. The index.js modal
+ * re-render shows the pause banner in the tab.
+ */
+export function onChatChangedWhilePaused() {
+    state.contentEl = null;
+    clearAllThoughtBlocks();
+    applyIntentionsInjection();
+    console.log('[MWT:Interiority] Chat changed while paused — injection cleared, thought blocks cleared (store hydration skipped).');
+}
+
 // ─── Swipe / edit / delete rollback (§9) ─────────────────────────────────────
 
 /**

@@ -34,6 +34,11 @@ import {
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
     getStableHistoryEnd,
 } from '../core/index.js';
+// Part 6 (§7.4) pause guard for the Growth profiler's direct entry points.
+// Direct import (not the barrel) so the REAL pause singleton is read even under
+// the test barrel→stub alias — the same rule knowledge/index.js applies to its
+// own pause imports.
+import { isModulePausedForCurrentScope } from '../core/schema_status.js';
 import { hasValidSettings } from './settings.js';
 import { getRegistry, getProfileUid, setProfileUid } from './registry.js';
 import { loadEntryContent, loadProfileContent, writeProfileToLorebook, ktFetchFromApi } from './lorebook.js';
@@ -49,6 +54,35 @@ import {
 } from './evidence.js';
 import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
 import { expandIlsSummaries, isIlsSummary, normalizeSendDate } from './ils_compat.js';
+
+// ─── Part 6 pause guard (§7.4) ────────────────────────────────────────────────
+
+/**
+ * The Growth profiler's direct entry points (the growth modal's buttons and any
+ * direct caller of the exported run* / regenerateProfile functions) bypass the
+ * event router's decline predicate, so they must refuse HERE — before reading
+ * state or spending the API call. ANY of the module's three stores being paused
+ * stops the work: the evidence write seam (saveEvidenceMap) would refuse the
+ * capture anyway — but only AFTER the API spend, with the button reporting
+ * "Capture complete: +1 observation" over a write that never landed — and the
+ * lorebook/profile writes would build on unprepared data. The lower-level
+ * runContinuousCapture() choke point is guarded too: every capture path —
+ * Capture's delta pass, the auto cadence (runContinuousCaptureAll via
+ * onMessageReceived, itself declined by the router before it gets here), and
+ * Catch Up — flows through it, so a direct caller of it refuses just as
+ * early.
+ *
+ * This cannot reuse knowledgePaused() from knowledge/index.js — index.js
+ * imports growth.js, so that import would be circular. The check is identical:
+ * isModulePausedForCurrentScope('knowledge') covers all three Knowledge stores.
+ *
+ * @throws {Error} when Knowledge is paused for the current chat/scope
+ */
+function refuseIfGrowthPaused() {
+    if (!isModulePausedForCurrentScope('knowledge')) return;
+    console.log('[MWT:Knowledge] Growth profiler skipped — the module is paused for this chat (schema preparation).');
+    throw new Error('Knowledge is paused for this chat — its data could not be safely prepared, so the growth profiler did not run. Use Retry in the banner after repairing the data.');
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -474,6 +508,7 @@ export async function generatePsychoanalyzeProfile(name, observations, curatedEn
  * @returns {Promise<{observations: Array, portrait: string, curatedEntry: string}>}
  */
 export async function runPsychoanalyzeProfile(name) {
+    refuseIfGrowthPaused();
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
@@ -526,8 +561,14 @@ export async function runPsychoanalyzeProfile(name) {
  * @param {string} name — NPC name
  * @param {string} profileText — profile prose
  * @returns {Promise<{success:boolean, uid?:number, error?:string}>}
+ * @throws {Error} when Knowledge is paused for the current chat/scope (see
+ *   refuseIfGrowthPaused). Throwing is deliberate: the Save button's
+ *   non-throwing failure branch reads `result.error` — a silent
+ *   {success:false} here would flash "Save failed: undefined", while the throw
+ *   reaches the handler's catch and flashes the repairable pause message.
  */
 export async function saveProfile(name, profileText) {
+    refuseIfGrowthPaused();
     const existingUid = getProfileUid(name);
     const result = await writeProfileToLorebook(name, profileText, existingUid);
     if (result.success) {
@@ -587,6 +628,7 @@ export async function loadProfile(name) {
  * @returns {Promise<{observations: Array, profile: string, canon: string, captureStats: {added:number, skipped:number}}>}
  */
 export async function runGrowthProfile(name) {
+    refuseIfGrowthPaused();
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
@@ -677,6 +719,7 @@ export async function runGrowthProfile(name) {
  *   this as "already up to date" rather than an error.
  */
 export async function runCaptureOnly(name) {
+    refuseIfGrowthPaused();
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
@@ -824,6 +867,7 @@ export async function consolidateEvidence(name) {
  *   is the size of the tier afterwards.
  */
 export async function runConsolidation(name) {
+    refuseIfGrowthPaused();
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
@@ -848,6 +892,7 @@ export async function runConsolidation(name) {
  * @returns {Promise<{observations: Array, profile: string, canon: string}>}
  */
 export async function regenerateProfile(name) {
+    refuseIfGrowthPaused();
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
@@ -975,13 +1020,20 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
  *
  * Returns null if there's nothing new to capture (delta too small). Never
  * throws on "no observations found" — continuous capture is best-effort and
- * runs silently in the background.
+ * runs silently in the background. (The pause refusal is the one deliberate
+ * exception: see refuseIfGrowthPaused.)
  *
  * @param {string} name — NPC name (must exist in the registry)
  * @returns {Promise<{added:number, skipped:number, maxTs:number}|null>}
  *   null = nothing to capture (delta too small or NPC not in recent messages)
+ * @throws {Error} when Knowledge is paused for the current chat/scope — this
+ *   is the LOWER-LEVEL choke point every capture path flows through (Capture's
+ *   delta pass, the auto cadence, and Catch Up), so a direct caller cannot
+ *   read the paused stores or spend the API call only for the evidence write
+ *   seam to refuse the result afterwards.
  */
 export async function runContinuousCapture(name, opts = {}) {
+    refuseIfGrowthPaused();
     if (!hasValidSettings()) return null;
 
     const registry = getRegistry();
@@ -1160,6 +1212,7 @@ export async function runContinuousCaptureAll() {
  * @returns {Promise<{added:number, skipped:number, expandedSummaries:number, maxTs:number}|null>}
  */
 export async function runIlsBackfillCapture(name, opts = {}) {
+    refuseIfGrowthPaused();
     if (!hasValidSettings()) throw new Error('No API connection configured.');
 
     const registry = getRegistry();
@@ -1402,6 +1455,7 @@ const SUCCESSES_BEFORE_GROW = 3;
  *   error" which read backwards when Phase 1 failed but Phase 2 succeeded).
  */
 export async function runCatchUpCapture(name, onProgress) {
+    refuseIfGrowthPaused();
     if (!hasValidSettings()) throw new Error('No API connection configured.');
 
     const registry = getRegistry();

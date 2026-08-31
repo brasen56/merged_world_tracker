@@ -671,8 +671,10 @@ const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority };
 // the module's onChatChanged() must re-run against the now-canonical store,
 // or the first event after the resume persists the stale in-memory state over
 // the repaired data. core/schema_status.js runStoreResumeInitializer() drives
-// these; knowledge's three store ids share one initializer (the module, not
-// the store, owns the re-hydration).
+// these, deduped by OWNING MODULE (its run-once memo is module-keyed):
+// knowledge's three store ids share one initializer — the module, not the
+// store, owns the re-hydration — so a resume reporting several of them
+// re-hydrates the module exactly once.
 const MODULE_BY_MODULE_ID = Object.freeze({
     world_state: WorldState,
     chronicle: Chronicle,
@@ -713,11 +715,19 @@ if (eventSource && event_types?.CHAT_CHANGED) {
         // banner owns the explanation, and the resume initializers registered
         // above re-run the module's onChatChanged() when the store actually
         // resumes (retryStore / the §7.5 preparation landing).
-        if (!isModulePausedForCurrentScope('WorldState')) WorldState.onChatChanged();
-        if (!isModulePausedForCurrentScope('Chronicle')) Chronicle.onChatChanged();
-        if (!isModulePausedForCurrentScope('Knowledge')) Knowledge.onChatChanged();
-        if (!isModulePausedForCurrentScope('StoryPlanner')) StoryPlanner.onChatChanged();
-        if (!isModulePausedForCurrentScope('Interiority')) Interiority.onChatChanged();
+        //
+        // Skipping the handler ENTIRELY, though, also skipped its
+        // scope-INDEPENDENT cleanup: the previous chat's World State /
+        // Chronicle / Story Planner / Interiority injection stayed registered
+        // in the blocked chat, pending auto-refresh/auto-generate timers kept
+        // running, and Interiority's old thought blocks stayed in the DOM.
+        // Each module therefore exposes onChatChangedWhilePaused() — exactly
+        // that safe half (each injection applier's paused branch clears its
+        // slot), without one read of the blocked store.
+        for (const [moduleKey, mod] of Object.entries(modules)) {
+            if (isModulePausedForCurrentScope(moduleKey)) mod.onChatChangedWhilePaused?.();
+            else mod.onChatChanged();
+        }
         if (modal?.style.display === 'flex') {
             renderModal();
             if (activeTab) modal.querySelector(`.mwt-tab-btn[data-tab="${activeTab}"]`)?.click();

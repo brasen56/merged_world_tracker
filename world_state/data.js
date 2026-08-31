@@ -9,6 +9,10 @@ import {
 } from '../core/index.js';
 import { getSettings, saveSettings } from './settings.js';
 import { prepareNextStoreValue, prepareStore } from '../core/schema.js';
+// Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias — the same
+// rule knowledge/store.js applies to pauseStore.
+import { isStoreWriteBlocked } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -167,6 +171,15 @@ export function getWorldStateData() {
 export function setWorldStateDataChecked(patch, { preserveIssues = [] } = {}) {
     const meta = getChatMeta();
     if (!meta) return { ok: false, data: undefined, reason: 'metadata-unavailable' };
+    // Part 6: a store paused by the runtime schema gate keeps its untouched
+    // original as the recoverable state — validating the unprepared value at
+    // the current version and replacing it would be a silent downgrade
+    // (exactly what design §12 forbids). The ONLY exception is the §7.5
+    // privileged-preparation window (schema/runtime.js).
+    if (isStoreWriteBlocked(worldStateSchema.id)) {
+        console.warn('[MWT:WorldState] Write refused — the store is paused for this chat (schema preparation); the previous value was kept.');
+        return { ok: false, data: meta[CHAT_DATA_KEY], reason: 'store-paused' };
+    }
     const next = prepareNextStoreValue(worldStateSchema, meta[CHAT_DATA_KEY], patch);
     if (!next.ok) {
         console.warn('[MWT:WorldState] Write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);

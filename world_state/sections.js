@@ -10,6 +10,11 @@ import {
     captureRevision, sameRevision,
     truncateText,
 } from '../core/index.js';
+// Part 6 (§7.4) pause guard + the store id it checks. Direct import (not the
+// barrel) so the REAL pause singleton is read even under the test
+// barrel→stub alias.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+import { worldStateSchema } from './schema.js';
 
 import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings, getPinnedEntities } from './settings.js';
@@ -125,6 +130,15 @@ export async function regenerateSection(sectionName, variety = 2) {
     }
     if (state.wstIsRefreshing) {
         throw new Error('World State is already refreshing.');
+    }
+
+    // Part 6 (§7.4): the section-regen button reaches this API-spending choke
+    // point without the event router's decline predicate. Refuse while the
+    // store is paused — before reading the unprepared store or spending the
+    // API call (the checked commit would refuse afterwards anyway).
+    if (isStorePausedForCurrentScope(worldStateSchema.id)) {
+        console.warn('[MWT:WorldState] Cannot regenerate section — the store is paused for this chat (schema preparation).');
+        throw new Error('World State is paused for this chat — its data could not be safely prepared, so nothing was generated. Use Retry in the banner after repairing the data.');
     }
 
     // WORLD-STATE-01: Section regeneration had NO chat guard at all — a stale

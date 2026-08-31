@@ -184,6 +184,29 @@ export function onChatChanged() {
     console.log('[MWT:Chronicle] Chat changed — state reset.');
 }
 
+/**
+ * The scope-INDEPENDENT half of onChatChanged(), run by index.js's
+ * CHAT_CHANGED handler while the chronicle store is paused for this chat
+ * (Part 6 §7.4/§5.4). Resets transient session/UI state and clears the
+ * previous chat's injection (applyInjection()'s paused branch) without one
+ * read of the blocked store — no counter restore, no receipt bookkeeping,
+ * no persistMsgSinceSnapshot() (the write seam would refuse anyway).
+ */
+export function onChatChangedWhilePaused() {
+    state.isGenerating = false;
+    state.isMainGenerating = false;
+    state.selectedSnapshotId = null;
+    state.consolidateMode = false;
+    state.consolidateBaseId = null;
+    state.bulkDeleteMode = false;
+    state.checkedForMerge.clear();
+    state.pendingSearch = '';
+    state._lastStatusMsg = '';
+    state._lastStatusLevel = '';
+    applyInjection();
+    console.log('[MWT:Chronicle] Chat changed while paused — injection cleared, transient state reset (store hydration skipped).');
+}
+
 // ─── Swipe / edit / delete awareness ─────────────────────────────────────────
 // Keep the auto-snapshot counter and anchor in sync when the user mutates the
 // chat history, so tracking doesn't drift after edits/deletes/swipes.

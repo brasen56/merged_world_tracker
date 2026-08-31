@@ -388,7 +388,14 @@ const _resumeInitializers = new Map();
 /** Bumped by every pauseStore() — the pause "generation" the run-once memo below keys on. */
 let _pauseTransitions = 0;
 
-/** storeId → the _pauseTransitions value at that store's last initializer run. */
+/**
+ * Owning MODULE id → the _pauseTransitions value at that module's last
+ * initializer run. Keyed by module, not store id: index.js registers the
+ * module's onChatChanged() for EVERY store the module owns (Knowledge owns
+ * three store ids), so a store-keyed memo would let one resume generation
+ * start the same asynchronous re-hydration once per store id, overlapping
+ * itself.
+ */
 const _resumeInitRunAt = new Map();
 
 /**
@@ -405,10 +412,20 @@ export function setStoreResumeInitializer(storeId, fn) {
 }
 
 /**
- * Run the store's resume initializer, at most once per pause generation: the
- * Retry flow and the §7.5 re-gate can both observe one resume, and the
- * module's onChatChanged must not run twice for the same pause. A failing
- * initializer is logged, never thrown — the resume itself already succeeded.
+ * Run the store's resume initializer, at most once per pause generation AND at
+ * most once per owning module — and only once the WHOLE module has resumed:
+ * the Retry flow and the §7.5 re-gate can both observe one resume, and one
+ * resume can report several store ids of the SAME module — Knowledge's three
+ * share one onChatChanged initializer — so the module's onChatChanged must
+ * not run twice for the same pause, whichever store id the resume path
+ * reports. Nor may it run while a sibling store of the same module is still
+ * paused for this scope: the initializer is the MODULE's re-hydration, and
+ * running it against a still-blocked sibling would both re-derive state from
+ * unprepared data and consume the run-once memo, so the sibling's later
+ * resume — which starts no new pause generation — would find the memo spent
+ * and skip the one re-hydration the module still owes (stale in-memory state
+ * outliving the final resume). A failing initializer is logged, never thrown —
+ * the resume itself already succeeded.
  *
  * @param {string} storeId
  * @returns {Promise<void>}
@@ -416,8 +433,25 @@ export function setStoreResumeInitializer(storeId, fn) {
 export async function runStoreResumeInitializer(storeId) {
     const fn = _resumeInitializers.get(storeId);
     if (typeof fn !== 'function') return;
-    if (_resumeInitRunAt.get(storeId) === _pauseTransitions) return;
-    _resumeInitRunAt.set(storeId, _pauseTransitions);
+    // The memo key is the OWNING module (the store id only for unmapped
+    // stores): the initializer registered per store IS the module's
+    // onChatChanged, so its identity — and the run-once dedupe with it — is
+    // the module's, not each store's.
+    const memoKey = STORE_MODULE_IDS[storeId] ?? storeId;
+    // Wait until the whole module has resumed: while ANY store of that module
+    // is still paused for the CURRENT scope, return WITHOUT running the
+    // initializer and WITHOUT marking the memo — the module's last
+    // current-scope resume then finds the memo still armed and re-hydrates
+    // exactly once. (A sibling paused for ANOTHER chat/scope never defers:
+    // the registry is per chat/scope, and that pause is not this surface's
+    // state.)
+    const moduleStoreIds = MODULE_STORE_IDS[memoKey] ?? [storeId];
+    if (moduleStoreIds.some((id) => isStorePausedForCurrentScope(id))) {
+        console.log(`[MWT:schema] Resume re-initialization for "${storeId}" deferred — another store of module "${memoKey}" is still paused for this chat.`);
+        return;
+    }
+    if (_resumeInitRunAt.get(memoKey) === _pauseTransitions) return;
+    _resumeInitRunAt.set(memoKey, _pauseTransitions);
     try {
         await fn();
     } catch (err) {

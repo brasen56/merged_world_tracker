@@ -68,6 +68,30 @@ export function onChatChanged() {
     console.log('[MWT:WorldState] Chat changed — state reset.');
 }
 
+/**
+ * The scope-INDEPENDENT half of onChatChanged(), run by index.js's
+ * CHAT_CHANGED handler while the worldState store is paused for this chat
+ * (Part 6 §7.4/§5.4). The full handler is skipped because its hydration would
+ * restore counters and bookkeeping from the BLOCKED store value, but skipping
+ * it entirely used to leave the previous chat's cleanup undone: the old
+ * injection stayed registered in the new chat, and pending refresh/editor
+ * timers kept running against it. This path performs exactly that cleanup
+ * without one read of the blocked store — the applier's paused branch clears
+ * the slot, and the flags/timers below are module-internal state.
+ */
+export function onChatChangedWhilePaused() {
+    state.isDirty = false;
+    state.autoRefreshQueued = false;
+    if (state.autoRefreshDeferTimer) { clearTimeout(state.autoRefreshDeferTimer); state.autoRefreshDeferTimer = null; }
+    // Drop any pending editor-persist so edits typed against the previous chat
+    // are not written into the newly-loaded one (same rule as onChatChanged).
+    if (state.editorPersistTimer) { clearTimeout(state.editorPersistTimer); state.editorPersistTimer = null; }
+    state.editSessionActive = false;
+    // The paused branch of the applier clears the previous chat's injection.
+    applyWorldStateInjection();
+    console.log('[MWT:WorldState] Chat changed while paused — injection cleared, timers cancelled (store hydration skipped).');
+}
+
 // ─── Swipe / edit / delete awareness ─────────────────────────────────────────
 // Keep the auto-refresh counter accurate when the user mutates chat history.
 // NOTE: swipe/edit intentionally do NOT re-trigger a refresh — only the

@@ -60,6 +60,7 @@ import {
     pauseStore,
     resumeStore,
     getPauseState,
+    getPausedStores,
     setStoreRetryHandler,
     beginPrivilegedPreparation,
     endPrivilegedPreparation,
@@ -387,6 +388,41 @@ export function applySchemaLoadGate({
     return result;
 }
 
+// ─── Collecting a gate run's resumes (the Part 6 out-of-band re-init seam) ────
+
+/**
+ * Snapshot the currently paused store ids before a gate run, so every store
+ * the run RESUMES can be initialized afterwards. One applySchemaLoadGate()
+ * call can resume several stores at once — repairing a future-version
+ * manifest makes every affected store ready by §7.1's trust rule — and each
+ * resumed store's owning module needs its out-of-band re-initialization, not
+ * just the one whose Retry button was clicked. Otherwise those modules stay
+ * unpaused with the stale in-memory state their skipped chat-change hydration
+ * left behind, and their next event persists it over the repaired store.
+ */
+function snapshotPausedStores() {
+    return getPausedStores().map((pause) => pause.store);
+}
+
+/**
+ * Run the resume initializer for every store that was paused in the snapshot
+ * and is no longer paused now. runStoreResumeInitializer()'s
+ * run-once-per-pause-generation memo is keyed by OWNING MODULE, keeping each
+ * module's onChatChanged() to a single re-run even when several paths observe
+ * the same resume (the Retry wrapper, the §7.5 re-gate, and this collector
+ * can all see one resume) or when one resume reports several store ids of the
+ * same module — this loop visits each of knowledge's store ids, and they
+ * share one initializer, so the dedupe must be by module or the same
+ * asynchronous re-hydration starts once per store id and overlaps itself.
+ */
+async function initializeResumedStores(pausedBefore) {
+    for (const storeId of pausedBefore) {
+        if (getPauseState(storeId) === null) {
+            await runStoreResumeInitializer(storeId);
+        }
+    }
+}
+
 // ─── The §7.5 privileged preparation path ────────────────────────────────────
 
 /**
@@ -440,16 +476,17 @@ export async function runSchemaPreparations(options = {}) {
         if (!preparationScopeStillCurrent(scope)) return ids;
         // Re-run the gate: conversion done, the store either prepares clean
         // (commits + stamps + resumes) or defers again (stays paused).
-        const wasPaused = getPauseState(id) !== null;
+        const pausedBefore = snapshotPausedStores();
         applySchemaLoadGate(options);
         // Part 6: a resume HERE happens out of band — CHAT_CHANGED already ran
-        // past this module's onChatChanged() hydration while the store was
-        // still paused. Re-initialize the module from the now-canonical store
-        // (run-once per pause generation), so the next event does not persist
-        // the stale in-memory state over the repaired data.
-        if (wasPaused && getPauseState(id) === null) {
-            await runStoreResumeInitializer(id);
-        }
+        // past every still-paused module's onChatChanged() hydration while its
+        // store was paused. And ONE gate run can resume several stores, not
+        // just the deferred one being converted (a repaired manifest clears
+        // every affected store's stale pause). Re-initialize EVERY resumed
+        // store's owning module from the now-canonical store (run-once per
+        // pause generation), so no module persists the stale in-memory state
+        // over the repaired data.
+        await initializeResumedStores(pausedBefore);
     }
     return ids;
 }
@@ -460,15 +497,26 @@ export async function runSchemaPreparations(options = {}) {
  * Register the Retry handler for every chat-metadata store: re-run the
  * synchronous gate and the privileged preparations, then report whether this
  * store's block cleared. retryStore() records the resume event when the
- * handler resolves true; a store that re-blocks keeps its banner.
+ * handler resolves true; a store that re-blocks keeps its banner. The handler
+ * also re-initializes every OTHER store the same gate run resumed (one
+ * repaired manifest can release several blocks at once), so no module keeps
+ * the stale in-memory state its skipped chat-change hydration left behind.
  *
  * Idempotent; index.js calls it once at startup.
  */
 export function registerSchemaGateRetryHandlers() {
     for (const id of CHAT_METADATA_SCHEMA_IDS) {
         setStoreRetryHandler(id, async () => {
+            const pausedBefore = snapshotPausedStores();
             applySchemaLoadGate();
             await runSchemaPreparations();
+            // One gate run can resume SEVERAL stores — repairing a
+            // future-version manifest makes every affected store ready — and
+            // retryStore() re-initializes only the store whose Retry button
+            // was clicked. Collect every store this run resumed and
+            // initialize each owning module once (the run-once memo absorbs
+            // the overlap with retryStore()'s own initializer run).
+            await initializeResumedStores(pausedBefore);
             return getPauseState(id) === null;
         });
     }

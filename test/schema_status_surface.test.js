@@ -34,6 +34,8 @@ import {
     isPauseForCurrentScope,
     setStoreRetryHandler,
     retryStore,
+    setStoreResumeInitializer,
+    runStoreResumeInitializer,
     renderPausedStoresBanner,
     recordSchemaEvent,
     _setScopeKeyResolver,
@@ -272,6 +274,97 @@ describe('retryStore (the §5.4 Retry seam)', () => {
         await expect(retryStore('storyPlanner')).resolves.toMatchObject({
             ok: false, reason: 'retry-failed', message: 'boom',
         });
+    });
+});
+
+// ─── Part 6 — the resume re-initialization seam ───────────────────────────────
+
+describe('runStoreResumeInitializer (the Part 6 out-of-band re-init seam)', () => {
+    test('one module, several resumed stores: the shared initializer runs exactly once', async () => {
+        // index.js registers the module's onChatChanged() as the resume
+        // initializer for EVERY store id Knowledge owns. When all three
+        // resume in one pause generation, the collector loop
+        // (schema/runtime.js initializeResumedStores) invokes the initializer
+        // once per store id — the run-once memo is keyed by the OWNING
+        // MODULE, so the same asynchronous re-hydration cannot start three
+        // times and overlap itself.
+        const knowledgeStores = MODULE_STORE_IDS.knowledge;
+        expect(knowledgeStores).toHaveLength(3);
+        for (const storeId of knowledgeStores) {
+            pauseStore(storeId, { reasonCode: 'future-version', message: 'x' });
+        }
+        let runs = 0;
+        const sharedInitializer = () => { runs += 1; };
+        for (const storeId of knowledgeStores) {
+            setStoreResumeInitializer(storeId, sharedInitializer);
+        }
+        for (const storeId of knowledgeStores) {
+            resumeStore(storeId);
+        }
+
+        // Exactly the initializeResumedStores() loop: one call per resumed
+        // store id, in order.
+        for (const storeId of knowledgeStores) {
+            await runStoreResumeInitializer(storeId);
+        }
+        expect(runs).toBe(1);
+    });
+
+    test('a NEW pause generation re-arms the memo — the module re-hydrates again', async () => {
+        pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'x' });
+        let runs = 0;
+        setStoreResumeInitializer('knowledgeStore', () => { runs += 1; });
+        resumeStore('knowledgeStore');
+        await runStoreResumeInitializer('knowledgeStore');
+        expect(runs).toBe(1);
+
+        // The store blocks again and resumes — a new pause generation — so
+        // the module's re-hydration must run again: once per generation,
+        // never once ever.
+        pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'x' });
+        resumeStore('knowledgeStore');
+        await runStoreResumeInitializer('knowledgeStore');
+        expect(runs).toBe(2);
+    });
+
+    test('a PARTIAL module resume defers the initializer — it runs when the last current-scope store resumes', async () => {
+        // One Knowledge store resumes while a sibling stays paused for this
+        // scope: running the module initializer now would re-hydrate against
+        // the still-blocked sibling AND consume the module-keyed run-once
+        // memo, so the sibling's later resume (which starts no new pause
+        // generation) would find the memo spent and skip the re-hydration
+        // entirely — stale in-memory state outliving the final resume.
+        pauseStore('knowledgeEvidence', { reasonCode: 'future-version', message: 'x' });
+        pauseStore('knowledgeCounters', { reasonCode: 'future-version', message: 'x' });
+        let runs = 0;
+        const sharedInitializer = () => { runs += 1; };
+        setStoreResumeInitializer('knowledgeEvidence', sharedInitializer);
+        setStoreResumeInitializer('knowledgeCounters', sharedInitializer);
+
+        resumeStore('knowledgeEvidence');
+        await runStoreResumeInitializer('knowledgeEvidence');
+        expect(runs).toBe(0); // deferred — knowledgeCounters is still paused
+
+        // The final resume, with NO pause transition in between, must still
+        // owe (and run) the module's one re-hydration.
+        resumeStore('knowledgeCounters');
+        await runStoreResumeInitializer('knowledgeCounters');
+        expect(runs).toBe(1);
+    });
+
+    test('a sibling paused for ANOTHER chat/scope never defers this chat\'s re-hydration', async () => {
+        // knowledgeCounters blocked in a DIFFERENT chat is not this surface's
+        // state (the pause registry is per chat/scope) — it must not delay
+        // this chat's re-hydration of the module.
+        scope('chat:elsewhere');
+        pauseStore('knowledgeCounters', { reasonCode: 'future-version', message: 'x' });
+        scope('chat:part5');
+        pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'x' });
+        let runs = 0;
+        setStoreResumeInitializer('knowledgeStore', () => { runs += 1; });
+        resumeStore('knowledgeStore');
+        await runStoreResumeInitializer('knowledgeStore');
+        expect(runs).toBe(1);
     });
 });
 

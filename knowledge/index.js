@@ -22,7 +22,7 @@ import { resetStoreCache, hydrateCurrentBooks } from './store.js';
 // The §5.4 Retry seam: Knowledge's Retry action re-runs hydration (the one
 // preparation path this module owns today). Direct import — see store.js's
 // pause-wiring note about the test-only barrel→stub alias.
-import { setStoreRetryHandler, getPauseState } from '../core/schema_status.js';
+import { setStoreRetryHandler, getPauseState, isModulePausedForCurrentScope } from '../core/schema_status.js';
 import { runContinuousCaptureAll } from './growth.js';
 import { runRelationshipExtract, syncRelationshipsToLorebook } from './relationships.js';
 import {
@@ -533,7 +533,12 @@ export function onChatChanged() {
     state.unreadGrowthEvidenceCount = 0;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     hideNotificationPanel();
-    document.querySelectorAll('#kt-view-modal').forEach(m => m.remove());
+    // Both modals are appended to document.body and outlive the tab render —
+    // the view modal AND the Growth modal. The Growth modal carries the
+    // previous chat's evidence/profile, and its still-live handlers (Save to
+    // Lorebook, evidence editing) would act on the NEW chat's stores, so it
+    // must be dropped with the same stroke.
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal').forEach(m => m.remove());
 
     // Re-point the registry stores at whatever lorebooks the new chat resolves
     // to. This is fire-and-forget because onChatChanged is synchronous, but it
@@ -541,6 +546,34 @@ export function onChatChanged() {
     // that would create an entry refuses to run (see store.assertHydrated) —
     // which is the intended behaviour, not a race to be ignored.
     reloadStores('chat change');
+}
+
+/**
+ * The scope-INDEPENDENT half of onChatChanged(), run by index.js's
+ * CHAT_CHANGED handler while ANY Knowledge store is paused for this chat
+ * (Part 6 §7.4/§5.4). Drops the previous chat's staging state, notification
+ * panel, and orphaned view modals without one read of the blocked stores —
+ * no counter restore, no reloadStores() (that is the hydration the pause
+ * exists to prevent; the Retry seam owns the re-hydration once it lands).
+ */
+export function onChatChangedWhilePaused() {
+    state.isRunning = false;
+    state.stagingItems = [];
+    state.activeItemId = null;
+    state.activeSubTab = 'staging';
+    state._cachedTokenCount = 0;
+    state.notificationEntries = {};
+    // Reset the growth evidence badge counter for the new chat — unread
+    // evidence from the previous chat shouldn't follow the user here.
+    state.unreadGrowthEvidenceCount = 0;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+    hideNotificationPanel();
+    // The Growth modal is dropped with the view modal — pure DOM removal, no
+    // store read (otherwise it survives the switch displaying the previous
+    // chat's evidence/profile, and its handlers would edit that old evidence
+    // against the new chat's stores; see onChatChanged).
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal').forEach(m => m.remove());
+    console.log('[MWT:Knowledge] Chat changed while paused — staging/UI state reset (store hydration skipped).');
 }
 
 /**
@@ -717,7 +750,27 @@ export { syncGlobalSettings };
 
 // ─── Slash commands & macros ─────────────────────────────────────────────────
 
+/**
+ * Part 6 (§7.4) pause guard for Knowledge's direct entry points: /wt-scan and
+ * scanAndAccept() bypass the event router's decline predicate, so they must
+ * refuse HERE — before reading state or spending the API call. ANY of the
+ * module's three stores being paused stops the work: a blocked lorebook store
+ * would be scanned through its blank placeholder, and a counters- or
+ * evidence-only pause must still stop scanAndAccept() from modifying lorebook
+ * entries while Knowledge is supposed to decline its work.
+ *
+ * @returns {boolean} true when the entry point must stop right here
+ */
+function knowledgePaused() {
+    if (!isModulePausedForCurrentScope('knowledge')) return false;
+    console.log('[MWT:Knowledge] Scan skipped — the module is paused for this chat (schema preparation).');
+    return true;
+}
+
 export async function triggerScan() {
+    if (knowledgePaused()) {
+        throw new Error('Knowledge is paused for this chat — its data could not be safely prepared, so nothing was scanned. Use Retry in the banner after repairing the data.');
+    }
     return runScan();
 }
 
@@ -740,6 +793,10 @@ export async function triggerScan() {
  *   (true) or `skipReason` (string) so callers can report what happened
  */
 export async function scanAndAccept() {
+    // Part 6 (§7.4): same refusal as triggerScan() — and this unattended path
+    // WRITES, so a paused module must not even build proposals out of the
+    // blocked stores. The empty array is its "nothing happened" contract.
+    if (knowledgePaused()) return [];
     const scanResult = await runScan();
     const items = buildStagingItems(scanResult);
     const { writeToLorebook, writeStateTracker } = await import('./lorebook.js');

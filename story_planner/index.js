@@ -14,6 +14,11 @@
  */
 
 import { syncSharedConnectionSettings, notify, getChat, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
+// Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL pause
+// singleton is read even under the test barrel→stub alias — the same rule
+// story_planner/generation.js follows.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+import { storyPlannerSchema } from './schema.js';
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
@@ -177,6 +182,21 @@ export function onChatChanged() {
     console.log('[MWT:StoryPlanner] Chat changed — state reset.');
 }
 
+/**
+ * The scope-INDEPENDENT half of onChatChanged(), run by index.js's
+ * CHAT_CHANGED handler while the storyPlanner store is paused for this chat
+ * (Part 6 §7.4/§5.4). Cancels the pending auto-generate timer (its own scope
+ * check would discard the result, but the API call would still be spent) and
+ * clears the previous chat's injection via the applier's paused branch —
+ * without one read of the blocked store (no counter restore, no
+ * persistAutoCounter(); the write seam would refuse anyway).
+ */
+export function onChatChangedWhilePaused() {
+    if (state.autoTimer) { clearTimeout(state.autoTimer); state.autoTimer = null; }
+    applyPlanInjection();
+    console.log('[MWT:StoryPlanner] Chat changed while paused — injection cleared, auto timer cancelled (store hydration skipped).');
+}
+
 // ─── Delete awareness ────────────────────────────────────────────────────────
 
 /**
@@ -294,6 +314,19 @@ export function listBeats() {
  * @returns {{ok: boolean, message: string}}
  */
 export function markBeatPlanted(n) {
+    // Part 6 (§7.4): /wt-beat bypasses the event router's decline predicate,
+    // and while paused the write seam (setPlanData) keeps the previous value
+    // while updateArc still returns its merged arc — advanceBeat would look
+    // successful and the command would reply "— planted." over a write that
+    // never landed. Refuse before any state is read. (Non-throwing contract:
+    // core/commands.js prints result.message verbatim.)
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) {
+        console.warn('[MWT:StoryPlanner] Cannot mark a beat planted — the store is paused for this chat (schema preparation).');
+        return {
+            ok: false,
+            message: 'Story Planner is paused for this chat — its data could not be safely prepared. Use ⬇ Download recovery data to repair it, then press Retry in the Story Planner tab.',
+        };
+    }
     const beats = listBeats();
     if (!beats.length) return { ok: false, message: 'No arcs are waiting on a setup beat.' };
 

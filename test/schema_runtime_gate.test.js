@@ -630,4 +630,74 @@ describe('registerSchemaGateRetryHandlers (the Retry button)', () => {
         expect(again).toMatchObject({ ok: true, reason: 'not-paused' });
         expect(rehydrated).toEqual(['chronicle']);
     });
+
+    test('a Retry whose gate run resumes OTHER stores re-initializes their modules too', async () => {
+        const meta = getFakeMeta();
+        // One future-version manifest blocks BOTH stores in the same gate run.
+        meta[MANIFEST_METADATA_KEY] = { manifestVersion: 1, sections: { chronicle: 99, storyPlanner: 99 } };
+        meta[KEY.chronicle] = { snapshots: [] };
+        meta[KEY.storyPlanner] = { text: '## Immediate Hooks\n- [x] One arc title\n  body' };
+        registerSchemaGateRetryHandlers();
+
+        applySchemaLoadGate({ persist: () => {} });
+        expect(getPauseState('chronicle')).not.toBeNull();
+        expect(getPauseState('storyPlanner')).not.toBeNull();
+
+        const rehydrated = [];
+        setStoreResumeInitializer('chronicle', () => { rehydrated.push('chronicle'); });
+        setStoreResumeInitializer('storyPlanner', () => { rehydrated.push('storyPlanner'); });
+
+        // The manifest is repaired out-of-band — every affected store becomes
+        // ready in ONE gate run — but the user pressed Retry on Chronicle's
+        // banner only. Story Planner's module must not stay unpaused with the
+        // stale in-memory state its skipped chat-change hydration left behind.
+        meta[MANIFEST_METADATA_KEY] = stampedManifest(['chronicle', 'storyPlanner']);
+        const result = await retryStore('chronicle');
+
+        expect(result).toMatchObject({ ok: true, resumed: true });
+        expect(getPauseState('chronicle')).toBeNull();
+        expect(getPauseState('storyPlanner')).toBeNull();
+        // BOTH owning modules were re-hydrated — each exactly once (the
+        // run-once memo absorbs the overlap with retryStore()'s own call).
+        expect(rehydrated.slice().sort()).toEqual(['chronicle', 'storyPlanner']);
+    });
+
+    test('one resume of SEVERAL stores of the SAME module re-initializes it exactly once', async () => {
+        const meta = getFakeMeta();
+        // One future-version manifest blocks BOTH knowledge chat-metadata
+        // stores — one module — in the same gate run.
+        meta[MANIFEST_METADATA_KEY] = { manifestVersion: 1, sections: { knowledgeEvidence: 99, knowledgeCounters: 99 } };
+        meta[KEY.knowledgeEvidence] = { Mara: { npc: 'Mara', raw: [], consolidated: [], meta: {} } };
+        meta[KEY.knowledgeCounters] = { messageCounter: 3 };
+        registerSchemaGateRetryHandlers();
+
+        applySchemaLoadGate({ persist: () => {} });
+        expect(getPauseState('knowledgeEvidence')).not.toBeNull();
+        expect(getPauseState('knowledgeCounters')).not.toBeNull();
+
+        // index.js registers the module's onChatChanged() as the resume
+        // initializer for EVERY store id Knowledge owns — one shared
+        // initializer across all three.
+        let runs = 0;
+        const sharedInitializer = () => { runs += 1; };
+        for (const storeId of ['knowledgeEvidence', 'knowledgeCounters', 'knowledgeStore']) {
+            setStoreResumeInitializer(storeId, sharedInitializer);
+        }
+
+        // The manifest is repaired out-of-band — both stores become ready in
+        // ONE gate run — and the user presses Retry on either banner.
+        meta[MANIFEST_METADATA_KEY] = stampedManifest(['knowledgeEvidence', 'knowledgeCounters']);
+        const result = await retryStore('knowledgeEvidence');
+
+        expect(result).toMatchObject({ ok: true, resumed: true });
+        expect(getPauseState('knowledgeEvidence')).toBeNull();
+        expect(getPauseState('knowledgeCounters')).toBeNull();
+        // initializeResumedStores() visits BOTH resumed store ids and
+        // retryStore() re-invokes the clicked one's — every one of those
+        // calls resolves to Knowledge.onChatChanged(), so the module-keyed
+        // run-once memo must collapse them into ONE re-hydration (a
+        // store-keyed memo would start the same async reset/hydration twice,
+        // overlapping itself).
+        expect(runs).toBe(1);
+    });
 });
