@@ -17,6 +17,9 @@ import {
 
 import { backfillSnapshotIds, chronicleSchema } from './schema.js';
 import { prepareNextStoreValue } from '../core/schema.js';
+// Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStoreWriteBlocked } from '../core/schema_status.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -298,6 +301,15 @@ function chronicleReadDefaults() {
 export function setChronicleDataChecked(patch, { preserveIssues = [] } = {}) {
     const meta = getChatMeta();
     if (!meta) return { ok: false, data: undefined, reason: 'metadata-unavailable' };
+    // Part 6: a store paused by the runtime schema gate keeps its untouched
+    // original as the recoverable state — a module write would validate the
+    // unprepared value at the current version and replace it (a silent
+    // downgrade for a future-version store, exactly what §12 forbids). The
+    // only exception is the §7.5 privileged-preparation window.
+    if (isStoreWriteBlocked(chronicleSchema.id)) {
+        console.warn('[MWT:Chronicle] Write refused — the store is paused for this chat (schema preparation); the previous value was kept.');
+        return { ok: false, data: meta[CHRONICLE_KEY], reason: 'store-paused' };
+    }
     const next = prepareNextStoreValue(chronicleSchema, meta[CHRONICLE_KEY], patch);
     if (!next.ok) {
         console.warn('[MWT:Chronicle] Write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);
@@ -345,12 +357,13 @@ export function setChronicleData(patch) {
 
 export function getSnapshots() {
     const raw = getChronicleData().snapshots || [];
-    // Part 2 (schema plan): the repair logic moved to chronicle/schema.js
+    // Part 2 (schema plan) moved the repair logic to chronicle/schema.js
     // backfillSnapshotIds() — the single owner shared with the v0 -> v1
-    // migration. This compatibility call site stays for now and still
-    // persists the fix on read; the runtime cutover (Part 6) retires it.
-    const { snapshots: fixed, changed } = backfillSnapshotIds(raw);
-    if (changed) setChronicleData({ snapshots: fixed });
+    // migration. Part 6 retired the persist-on-read: the runtime gate
+    // (schema/runtime.js) migrates the store BEFORE any module read, so the
+    // backfill here is a read-only in-memory idempotence net (changed is
+    // always false for gated data), never a write from a read path.
+    const { snapshots: fixed } = backfillSnapshotIds(raw);
     return fixed;
 }
 

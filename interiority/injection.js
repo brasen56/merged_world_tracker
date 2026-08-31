@@ -13,6 +13,9 @@
 import {
     applyExtensionPromptInjection, getGlobalSettings, injectionAllowed,
 } from '../core/index.js';
+// Part 6 injection pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import { INJECTION_HEADER, formatLedgerForInjection } from './prompts.js';
 import { INJECTION_KEY, INJECTION_TAG, getLedger, getInteriorityData, getActiveLedger, getDormantLedger } from './data.js';
@@ -59,6 +62,27 @@ export function resolveInjectionPlacement() {
  * narrator never spends attention on a trigger that cannot be met yet.
  */
 export function applyIntentionsInjection() {
+    // Part 6: a store paused by the runtime schema gate is never read — the
+    // ledger IS the unprepared store (or its legacy per-message keys are the
+    // pending conversion), so a paused Interiority injects nothing and clears
+    // whatever a pre-pause state left registered (§7.4).
+    const paused = isStorePausedForCurrentScope('interiority');
+    if (paused) {
+        console.log('[MWT:Interiority] Injection cleared — the store is paused for this chat (schema preparation).');
+        const placement = resolveInjectionPlacement();
+        const globalSettings = getGlobalSettings();
+        applyExtensionPromptInjection({
+            key: INJECTION_KEY,
+            header: INJECTION_HEADER,
+            body: '',
+            enabled: false,
+            fallbackDepth: placement.depth.value,
+            globalRole: placement.role.value,
+            wrapperTag: INJECTION_TAG,
+            useTags: globalSettings.structuralBoundaries !== false,
+        });
+        return;
+    }
     const data = getInteriorityData();
     const enabled = data.enabled !== false && injectionAllowed('Interiority');
     const globalSettings = getGlobalSettings();

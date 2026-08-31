@@ -7,6 +7,10 @@
 
 import { getChat, escapeRegex, estimateTokens, getChatMeta, persistChatMeta, preserveQuarantinedRecords, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
 import { prepareNextStoreValue } from '../core/schema.js';
+// Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias — the same
+// rule store.js applies to pauseStore.
+import { isStoreWriteBlocked } from '../core/schema_status.js';
 import { knowledgeCountersSchema } from './schema.js';
 
 import { state, COUNTERS_META_KEY } from './state.js';
@@ -53,6 +57,15 @@ const SPENT_RECEIPT_WINDOW = 10;
 export function persistCounters() {
     const meta = getChatMeta();
     if (!meta) return undefined;
+    // Part 6: a store paused by the runtime schema gate keeps its untouched
+    // original as the recoverable state — a module write would validate the
+    // unprepared value at the current version and replace it (a silent
+    // downgrade for a future-version store, exactly what §12 forbids). The
+    // only exception is the §7.5 privileged-preparation window.
+    if (isStoreWriteBlocked(knowledgeCountersSchema.id)) {
+        console.warn('[MWT:Knowledge] Counter write refused — the store is paused for this chat (schema preparation); the previous value was kept.');
+        return meta[COUNTERS_META_KEY];
+    }
     const next = prepareNextStoreValue(knowledgeCountersSchema, meta[COUNTERS_META_KEY], {
         messageCounter: state.messageCounter,
         npcMessageCounter: state.npcMessageCounter,

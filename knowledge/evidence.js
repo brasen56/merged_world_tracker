@@ -31,6 +31,9 @@ import { GROWTH_EVIDENCE_KEY } from './state.js';
 import { knowledgeEvidenceSchema } from './schema.js';
 import { fingerprintValue } from '../core/quarantine.js';
 import { clonePlainData } from '../core/schema.js';
+// Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStoreWriteBlocked } from '../core/schema_status.js';
 
 // ─── Evidence map (all NPCs in this chat) ─────────────────────────────────────
 
@@ -117,6 +120,16 @@ export function getEvidenceMap() {
 export function saveEvidenceMap() {
     const meta = getChatMeta();
     const live = meta?.[GROWTH_EVIDENCE_KEY];
+    // Part 6: a store paused by the runtime schema gate keeps its untouched
+    // original as the recoverable state — a module write would validate the
+    // unprepared value at the current version and replace it (a silent
+    // downgrade for a future-version store, exactly what §12 forbids). The
+    // only exception is the §7.5 privileged-preparation window.
+    if (isStoreWriteBlocked(knowledgeEvidenceSchema.id)) {
+        console.warn('[MWT:Knowledge] Evidence write refused — the store is paused for this chat (schema preparation); the previous value was kept.');
+        _resetEvidenceStaging();
+        return;
+    }
     // Nothing to validate when the store does not exist yet — getEvidenceMap()
     // callers create it before mutating, and a save without a store is a no-op.
     if (!live || typeof live !== 'object' || Array.isArray(live)) {

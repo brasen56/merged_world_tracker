@@ -17,6 +17,11 @@ import {
 
 import { applyWorldStateInjection } from '../world_state/index.js';
 
+// Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+import { chronicleSchema } from './schema.js';
+
 import { CHRONICLE_SYSTEM_PROMPT, CONSOLIDATE_SYSTEM_PROMPT } from './prompts.js';
 
 import {
@@ -138,9 +143,28 @@ function stripToEntry(text) {
     return i > 0 ? text.slice(i).trim() : text;
 }
 
+/**
+ * Part 6 (§7.4): manual/direct entry points (the Generate / Regenerate /
+ * Consolidate buttons) bypass the event router's decline predicate, so every
+ * API-spending choke point in this file must refuse while the chronicle store
+ * is paused. Generating would read the unprepared store, spend an API call,
+ * and then have setChronicleData()'s refused write hide that the "successful"
+ * snapshot was never saved (the bookkeeping reset below would compound the
+ * loss). Say the refusal out loud so the button never looks like a no-op.
+ *
+ * @returns {boolean} true when the entry point must stop right here
+ */
+function chroniclePaused() {
+    if (!isStorePausedForCurrentScope(chronicleSchema.id)) return false;
+    console.log('[MWT:Chronicle] Generation skipped — the store is paused for this chat (schema preparation).');
+    scSetStatus('Chronicle is paused for this chat — its data could not be safely prepared, so nothing was generated. Use Retry in the banner after repairing the data.', 'error');
+    return true;
+}
+
 // ─── Generate snapshot ───────────────────────────────────────────────────────
 
 export async function generateSnapshot() {
+    if (chroniclePaused()) return null;
     if (state.isGenerating) { scSetStatus('Generation already in progress.', 'error'); return null; }
     if (state.isMainGenerating) {
         // Verify against actual ST state — the event-tracked flag can get stale
@@ -281,6 +305,7 @@ export async function generateSnapshot() {
 // ─── Regenerate snapshot ─────────────────────────────────────────────────────
 
 export async function regenerateSnapshot(snapshotId) {
+    if (chroniclePaused()) return;
     if (state.isGenerating || state.isMainGenerating) { scSetStatus('Wait for current generation to finish.', 'error'); return; }
     const snapshots = getSnapshots();
     const idx = snapshots.findIndex(s => s.id === snapshotId);
@@ -389,6 +414,7 @@ export async function regenerateSnapshot(snapshotId) {
 // ─── Consolidate entries ─────────────────────────────────────────────────────
 
 export async function consolidateEntries(ids, baseId = null) {
+    if (chroniclePaused()) return;
     if (state.isGenerating) { scSetStatus('Generation in progress.', 'error'); return; }
     if (!ids || ids.length < 2) { scSetStatus('Select at least 2 entries.', 'error'); return; }
     const snapshots = getSnapshots();

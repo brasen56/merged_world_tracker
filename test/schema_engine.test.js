@@ -630,4 +630,14 @@ describe('schema modules stay pure', () => {
             expect(text, file).not.toMatch(/\b(document|window|globalThis|SillyTavern|getContext)\s*\./);
         }
     });
+
+    // Part 6: schema/runtime.js is the persistence/pause orchestration (the
+    // §3.1 things the pure engine must not do). The pure modules must never
+    // import it, or the engine would gain persistence/pause behavior transitively.
+    test('no pure schema module imports the runtime cutover orchestration', () => {
+        for (const file of SCHEMA_FILES) {
+            const text = readFileSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), 'utf8');
+            expect(text, file).not.toMatch(/['"]\.{1,2}\/(?:schema\/)?runtime\.js['"]/);
+        }
+    });
 });

@@ -45,7 +45,14 @@ import {
     getCurrentWorldState,
     getChat, getContextSafe,
 } from '../core/index.js';
+// §7.5 scope discipline (migrateIndexKeys): direct import (not the barrel) so
+// the REAL scope module is read even under the test barrel→stub alias — the
+// same rule the write-seam guard below applies.
+import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { clonePlainData, prepareNextStoreValue } from '../core/schema.js';
+// Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStoreWriteBlocked } from '../core/schema_status.js';
 import { interioritySchema } from './schema.js';
 
 // ─── Aikobots v4 sparse-chat detection ───────────────────────────────────────
@@ -341,12 +348,29 @@ export function getInteriorityData() {
  * values stay recoverable instead of being silently replaced.
  *
  * @param {object} data
+ * @param {object} [options]
+ * @param {object} [options.privileged] the §7.5 privileged-preparation
+ *   capability (schema/runtime.js → migrateIndexKeys): only the conversion's
+ *   own commit presents it, and it is the only write that passes the paused
+ *   seam while that window is open.
  * @returns {object} the committed canonical value, or the PREVIOUS value that
  *   was kept on refusal (so callers that re-read stay correct).
  */
-export function saveInteriorityData(data) {
+export function saveInteriorityData(data, { privileged = null } = {}) {
     const meta = getChatMeta();
     if (!meta) return undefined;
+    // Part 6: a store paused by the runtime schema gate keeps its untouched
+    // original as the recoverable state — a module write would validate the
+    // unprepared value at the current version and replace it. The ONLY
+    // exception is the §7.5 privileged-preparation capability, which is how
+    // this module's own legacy-key conversion (migrateIndexKeys) commits while
+    // paused: schema/runtime.js drives it as privileged orchestration and
+    // hands it the capability to present at exactly this commit.
+    if (isStoreWriteBlocked(interioritySchema.id, privileged)) {
+        console.warn('[MWT:Interiority] Write refused — the store is paused for this chat (schema preparation); the previous value was kept.');
+        _refuseWrite();
+        return meta[META_KEY];
+    }
     // Full-replacement seam: garbage input must never be silently swapped for
     // the schema default — that would erase the live store on a bad caller.
     if (data === null || typeof data !== 'object' || Array.isArray(data)) {
@@ -1439,11 +1463,29 @@ export function getPerMessageKeys() {
  * Keys already in "mu-*" form are left as-is. The `keyMigrationDone` flag
  * prevents redundant work on subsequent calls.
  *
+ * Scope discipline (Part 6, the §7.5 privileged path): this conversion is the
+ * one chat-DEPENDENT preparation, and its hydration await is a real CHAT_CHANGED
+ * window. The scope is captured before that await and re-asserted immediately
+ * after it (before the live chat is read) and again before the commit: a chat
+ * switch mid-conversion must abandon the conversion, never re-key the outgoing
+ * chat's store against the new chat's messages and save it into the new chat's
+ * metadata. The runtime gate's post-conversion check (schema/runtime.js) can
+ * discard its own re-gate but can never undo a store write — the converter
+ * owns preventing it.
+ *
+ * @param {object} [privileged] the §7.5 privileged-preparation capability
+ *   (from schema/runtime.js) presented at the single commit write; without it
+ *   the paused write seam refuses the conversion's save.
  * @returns {number} count of keys migrated
  */
-export async function migrateIndexKeys() {
+export async function migrateIndexKeys(privileged = null) {
     const data = getInteriorityData();
     if (data.keyMigrationDone) return 0;
+
+    // Capture the scope BEFORE the hydration await: `data` belongs to THIS
+    // chat, and everything after the await reads the live chat array and
+    // commits through the CURRENT chat_metadata.
+    const scopeBefore = captureScope();
 
     // Aikobots v4 sparse-chat guard: on the fork, the client chat array keeps
     // the full logical .length but only loaded ranges are hydrated. Iterating
@@ -1453,6 +1495,19 @@ export async function migrateIndexKeys() {
     // isChatHydrated() always returns true.
     if (!(await isChatHydrated())) {
         console.log('[MWT:Interiority] Key migration deferred — chat not fully hydrated yet.');
+        return 0;
+    }
+
+    // The await above is exactly where CHAT_CHANGED can fire. Verify the
+    // captured scope BEFORE reading the post-await chat: on a mismatch the
+    // live chat belongs to a DIFFERENT chat than `data`, and proceeding would
+    // re-key the outgoing chat's store with the new chat's messages and assign
+    // it to the new chat's metadata. Abandon — the new chat's own gate
+    // re-derives its conversion from scratch. (scopeStillCurrent's §7.5
+    // semantics: the epoch is always authoritative; identity is compared only
+    // when the capture could identify the chat.)
+    if (!scopeStillCurrent(scopeBefore).ok) {
+        console.log('[MWT:Interiority] Key migration abandoned — the chat changed during the hydration check; nothing was written.');
         return 0;
     }
 
@@ -1531,9 +1586,15 @@ export async function migrateIndexKeys() {
         dropped++;
     }
 
+    // And again before committing anything — a belt-and-braces assert for any
+    // future await that lands inside the loop above.
+    if (!scopeStillCurrent(scopeBefore).ok) {
+        console.log('[MWT:Interiority] Key migration abandoned — the chat changed before the commit; nothing was written.');
+        return 0;
+    }
     data.perMessage = newPerMessage;
     data.keyMigrationDone = true;
-    saveInteriorityData(data);
+    saveInteriorityData(data, { privileged });
 
     if (migrated > 0 || dropped > 0) {
         console.log(`[MWT:Interiority] Key migration: ${migrated} migrated, ${dropped} orphaned entr${dropped === 1 ? 'y' : 'ies'} dropped.`);

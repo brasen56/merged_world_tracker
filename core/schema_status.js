@@ -26,10 +26,16 @@
  * core/schema.js, core/quarantine.js, schema/*, or a module schema.
  *
  * Who calls pauseStore(): the preparation paths that can block a store. Today
- * that is Knowledge lorebook hydration (knowledge/store.js hydrateBook()); the
- * Part 6 runtime cutover adds the chat-metadata gate. resumeStore() is called
- * by the same paths when a later load clears the block, and by retryStore()
- * when a Retry handler succeeds.
+ * that is Knowledge lorebook hydration (knowledge/store.js hydrateBook()) and
+ * the Part 6 runtime chat-metadata gate (schema/runtime.js). resumeStore() is
+ * called by the same paths when a later load clears the block, and by
+ * retryStore() when a Retry handler succeeds.
+ *
+ * Part 6 also added the DECLINE checks every consumer asks of this registry —
+ * isStorePausedForCurrentScope() / isModulePausedForCurrentScope() (events,
+ * injection, generation) and isStoreWriteBlocked() (write seams) — plus the
+ * §7.5 privileged-preparation window that lets the runtime gate's conversion
+ * write pass the very pause it exists to clear.
  */
 
 import { record } from './diagnostics.js';
@@ -222,6 +228,10 @@ export function pauseStore(storeId, {
         count: typeof count === 'number' ? count : null,
     };
     _paused.set(storeId, entry);
+    // Every pause is a new "generation" for the resume-initializer run-once
+    // memo (see runStoreResumeInitializer): the module may be re-initialized
+    // once per pause, never twice for the same one.
+    _pauseTransitions += 1;
 
     // The event is the in-session record of the TRANSITION; a repeated
     // detection of the same block is not news.
@@ -349,9 +359,70 @@ export async function retryStore(storeId) {
         resumeStore(storeId, { via: 'retry' });
     }
     const resumed = getPauseState(storeId) === null;
+    if (resumed) {
+        // Part 6: the paused module's chat-change hydration was skipped (its
+        // onChatChanged would have read counters and bookkeeping out of the
+        // blocked value); the first event after this resume would otherwise
+        // persist that stale in-memory state over the repaired store.
+        // Re-derive it now — once per pause generation.
+        await runStoreResumeInitializer(storeId);
+    }
     return resumed
         ? { ok: true, resumed: true }
         : { ok: false, resumed: false, reason: 'still-paused', message: 'The retry ran, but the store is still blocked. The banner above and Diagnostics → 🗂️ Scope & storage carry the reason.' };
+}
+
+// ─── The resume re-initialization seam (Part 6) ───────────────────────────────
+
+/**
+ * Resume initializers per store id: the owning module's chat-change
+ * re-hydration. While a store is paused, index.js does NOT run the module's
+ * onChatChanged() — it would hydrate counters and bookkeeping from the
+ * blocked value and hold them stale in memory. When the pause clears OUT OF
+ * BAND (a successful Retry, or the §7.5 privileged preparation landing long
+ * after CHAT_CHANGED already passed), the store's initializer re-derives the
+ * module's in-memory state from the now-canonical store.
+ */
+const _resumeInitializers = new Map();
+
+/** Bumped by every pauseStore() — the pause "generation" the run-once memo below keys on. */
+let _pauseTransitions = 0;
+
+/** storeId → the _pauseTransitions value at that store's last initializer run. */
+const _resumeInitRunAt = new Map();
+
+/**
+ * Register (or, with any non-function, clear) the owning module's resume
+ * initializer for one store. Idempotent.
+ *
+ * @param {string} storeId
+ * @param {(function(): (void|Promise<void>))|null} fn
+ */
+export function setStoreResumeInitializer(storeId, fn) {
+    if (typeof storeId !== 'string' || !storeId) return;
+    if (typeof fn === 'function') _resumeInitializers.set(storeId, fn);
+    else _resumeInitializers.delete(storeId);
+}
+
+/**
+ * Run the store's resume initializer, at most once per pause generation: the
+ * Retry flow and the §7.5 re-gate can both observe one resume, and the
+ * module's onChatChanged must not run twice for the same pause. A failing
+ * initializer is logged, never thrown — the resume itself already succeeded.
+ *
+ * @param {string} storeId
+ * @returns {Promise<void>}
+ */
+export async function runStoreResumeInitializer(storeId) {
+    const fn = _resumeInitializers.get(storeId);
+    if (typeof fn !== 'function') return;
+    if (_resumeInitRunAt.get(storeId) === _pauseTransitions) return;
+    _resumeInitRunAt.set(storeId, _pauseTransitions);
+    try {
+        await fn();
+    } catch (err) {
+        console.warn(`[MWT:schema] Resume re-initialization for "${storeId}" failed:`, err?.message || err);
+    }
 }
 
 // ─── The module banner (§5.4 — the module's own tab) ─────────────────────────
@@ -402,6 +473,155 @@ export function renderPausedStoresBanner(rawModuleId) {
     </div>`;
 }
 
+// ─── Part 6: the decline checks + the privileged-preparation window ──────────
+//
+// The runtime chat-metadata cutover (schema/runtime.js) pauses stores BEFORE
+// module handlers run. Those pauses are only honest if the paused module
+// actually declines work, so the two questions every consumer asks live HERE,
+// beside the registry they read:
+
+/**
+ * Is this store paused for the CURRENT chat/scope? The one read surface for
+ * "should this module decline its own work (events, injection, generation)
+ * for this store right now?" — a pause recorded for another chat is not this
+ * surface's state (the store is re-derived on every chat switch).
+ *
+ * @param {string} storeId registered store id
+ * @returns {boolean}
+ */
+export function isStorePausedForCurrentScope(storeId) {
+    const pause = getPauseState(storeId);
+    return Boolean(pause) && isPauseForCurrentScope(pause);
+}
+
+/**
+ * Is ANY store of this module paused for the current chat/scope? The
+ * message-event router's decline predicate (Part 6): a module whose store is
+ * blocked declines its own work while every other module keeps running
+ * (design §7.4 — blocking is per store, never global).
+ *
+ * @param {string} rawModuleId a HEALTH_MODULE_SPECS id, a TABS id, or a router
+ *        module key ('WorldState', 'Chronicle', …) — normalised like
+ *        renderPausedStoresBanner() does
+ * @returns {boolean}
+ */
+const ROUTER_MODULE_KEY_ALIASES = Object.freeze({
+    worldstate: 'world_state',
+    storyplanner: 'story_planner',
+});
+
+export function isModulePausedForCurrentScope(rawModuleId) {
+    const normalized = moduleId(rawModuleId).toLowerCase();
+    const id = ROUTER_MODULE_KEY_ALIASES[normalized] ?? normalized;
+    const storeIds = MODULE_STORE_IDS[id];
+    if (!storeIds) return false;
+    return storeIds.some((storeId) => isStorePausedForCurrentScope(storeId));
+}
+
+/**
+ * The §7.5 privileged-preparation registry: while a deferred store's
+ * chat-dependent conversion runs, the ORCHESTRATION (schema/runtime.js) — not
+ * the paused module — performs the one write that clears the deferral. The
+ * module's write seam stays declined for everyone else; this window is the
+ * only way the conversion's own save passes it. Without it the privileged
+ * path would deadlock against the very pause it exists to clear (the same
+ * deadlock §7.5 warns about for queueWork).
+ *
+ * The window is a CAPABILITY, not a flag: beginPrivilegedPreparation() hands
+ * the orchestration a scope-bound token, and only the single commit write
+ * that presents that exact token passes isStoreWriteBlocked(). While the
+ * converter is awaiting hydration the window is therefore CLOSED to every
+ * other write to the store — UI work, cleanup, or a newly switched chat —
+ * and overlapping conversions each keep their own privilege (releasing one
+ * never closes the other's).
+ */
+const _privilegedPreparations = new Map(); // storeId → Set<capability token>
+
+let _privilegeTokenNonce = 0;
+
+/**
+ * Open the privileged-preparation window for one store and receive its
+ * capability. Only the §7.5 orchestration calls this; the capability must
+ * reach {@link endPrivilegedPreparation} in a finally (so the window can never
+ * leak) and be handed to the conversion's single commit write.
+ *
+ * @param {string} storeId
+ * @returns {object|null} the scope-bound capability ({ store, token, scopeKey,
+ *   epoch }), or null for an invalid store id
+ */
+export function beginPrivilegedPreparation(storeId) {
+    if (typeof storeId !== 'string' || !storeId) return null;
+    const token = `privileged-preparation:${++_privilegeTokenNonce}`;
+    let tokens = _privilegedPreparations.get(storeId);
+    if (!tokens) {
+        tokens = new Set();
+        _privilegedPreparations.set(storeId, tokens);
+    }
+    tokens.add(token);
+    return { store: storeId, token, scopeKey: _resolveScopeKey(), epoch: getEpoch() };
+}
+
+/**
+ * Release one privileged-preparation capability (the §7.5 orchestration's
+ * finally). Also accepts a bare store id as the legacy close-everything form:
+ * that closes every window the store still has open.
+ *
+ * @param {object|string} capability the value beginPrivilegedPreparation()
+ *   returned, or a store id
+ */
+export function endPrivilegedPreparation(capability) {
+    if (capability === null || capability === undefined) return;
+    const storeId = typeof capability === 'string' ? capability : capability.store;
+    const tokens = _privilegedPreparations.get(storeId);
+    if (!tokens) return;
+    if (typeof capability === 'string') {
+        _privilegedPreparations.delete(storeId);
+        return;
+    }
+    tokens.delete(capability.token);
+    if (tokens.size === 0) _privilegedPreparations.delete(storeId);
+}
+
+/**
+ * Does this capability still open one store's privileged window? It must be a
+ * live token (never released), captured at the CURRENT epoch, and bound to the
+ * CURRENT scope key — a chat switch retires it, so a conversion left over
+ * from the outgoing chat can never unlock the newly switched chat's seam.
+ *
+ * @param {object} capability
+ * @returns {boolean}
+ */
+function isPrivilegedPreparationWrite(capability) {
+    if (!capability || typeof capability !== 'object') return false;
+    const tokens = _privilegedPreparations.get(capability.store);
+    if (!tokens || !tokens.has(capability.token)) return false;
+    if (capability.epoch !== getEpoch()) return false;
+    return capability.scopeKey === _resolveScopeKey();
+}
+
+/**
+ * The WRITE-SEAM guard (Part 6): may this store be written right now? A store
+ * paused for the current scope keeps its untouched original as the
+ * recoverable state — a module write would validate the unprepared value at
+ * the current version and replace it (for a future-version store, a silent
+ * downgrade, exactly what §12 forbids) — so the seam refuses. The ONLY
+ * exception is the §7.5 privileged-preparation capability: the conversion's
+ * own commit presents the capability the orchestration handed it, and nothing
+ * else — no capability, a released one, or one captured before a chat switch
+ * — passes.
+ *
+ * @param {string} storeId registered store id
+ * @param {object} [capability] the §7.5 capability presented by the privileged
+ *   commit (schema/runtime.js → the converter → the module write seam).
+ *   Ordinary module writes pass nothing and stay refused for the whole
+ *   window, including while the converter is awaiting hydration.
+ * @returns {boolean} true when the write must be refused
+ */
+export function isStoreWriteBlocked(storeId, capability = null) {
+    if (!isStorePausedForCurrentScope(storeId)) return false;
+    return !isPrivilegedPreparationWrite(capability);
+}
+
 // ─── Test-only seams ─────────────────────────────────────────────────────────
 
 /**
@@ -423,6 +643,10 @@ export function _resetPausedStores() {
     _paused.clear();
     _notifiedScopes.clear();
     _retryHandlers.clear();
+    _privilegedPreparations.clear();
+    _resumeInitializers.clear();
+    _resumeInitRunAt.clear();
+    _pauseTransitions = 0;
     _resolveScopeKey = defaultResolveScopeKey;
 }
 

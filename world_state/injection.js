@@ -5,6 +5,9 @@
  */
 
 import { applyExtensionPromptInjection, getGlobalSettings, wrapInTag, injectionAllowed, truncateText } from '../core/index.js';
+// Part 6 injection pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import { getSettings } from './settings.js';
 import {
@@ -178,6 +181,24 @@ export function resolveInjectionPlacement() {
 // ─── Core injection ──────────────────────────────────────────────────────────
 
 export function applyWorldStateInjection() {
+    // Part 6: a store paused by the runtime schema gate is never read — no
+    // module injects an unprepared store (§7.4). Clearing the slot (the same
+    // thing every disabled path does) also drops anything a pre-pause state
+    // left registered, so nothing stale rides along.
+    if (isStorePausedForCurrentScope('worldState')) {
+        const placement = resolveInjectionPlacement();
+        console.log('[MWT:WorldState] Injection cleared — the store is paused for this chat (schema preparation).');
+        applyExtensionPromptInjection({
+            key: EXTENSION_PROMPT_KEY,
+            header: '',
+            body: '',
+            enabled: false,
+            fallbackDepth: placement.depth.value,
+            globalRole: placement.role.value,
+            useTags: false,
+        });
+        return;
+    }
     const text = getWorldStateText();
     const enabled = isInjectionEnabled() && injectionAllowed('WorldState');
     const placement = resolveInjectionPlacement();

@@ -76,7 +76,16 @@ import { renderBackupPanel, wireBackupEvents, describeRecoveryExportResult } fro
 // recovery export/clear actions (§5.3). The banner renders in each module's
 // OWN tab (Diagnostics is read-only by contract — it shows the same state in
 // 🗂️ Scope & storage and ❤️ Health, but the actions live here).
-import { renderPausedStoresBanner, retryStore } from './core/schema_status.js';
+import { renderPausedStoresBanner, retryStore, isModulePausedForCurrentScope, setStoreResumeInitializer, STORE_MODULE_IDS } from './core/schema_status.js';
+// Schema plan Part 6 — the runtime chat-metadata cutover (§7): the synchronous
+// load gate + atomic migration commit that runs on every startup and chat
+// change BEFORE the module handlers, the §7.5 privileged preparation for
+// deferred stores, and the Retry handlers for chat-metadata stores.
+import {
+    applySchemaLoadGate,
+    runSchemaPreparations,
+    registerSchemaGateRetryHandlers,
+} from './schema/runtime.js';
 import { collectQuarantineStatus, exportRecoveryData, clearQuarantineData } from './backup/recovery.js';
 // Diagnostics panel shell (Phase 5): the 🩺 tab inside this modal, its redaction
 // layer (core/redaction.js), and the D1 copy-report shape.
@@ -656,18 +665,59 @@ function openMwtModal(tabId) {
 
 const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority };
 
+// Part 6 (§5.4/§7.5): the out-of-band resume seam. When a paused store
+// resumes through Retry or the privileged §7.5 preparation — long after
+// CHAT_CHANGED already skipped the paused module's hydration (see below) —
+// the module's onChatChanged() must re-run against the now-canonical store,
+// or the first event after the resume persists the stale in-memory state over
+// the repaired data. core/schema_status.js runStoreResumeInitializer() drives
+// these; knowledge's three store ids share one initializer (the module, not
+// the store, owns the re-hydration).
+const MODULE_BY_MODULE_ID = Object.freeze({
+    world_state: WorldState,
+    chronicle: Chronicle,
+    knowledge: Knowledge,
+    story_planner: StoryPlanner,
+    interiority: Interiority,
+});
+for (const [resumeStoreId, resumeModuleId] of Object.entries(STORE_MODULE_IDS)) {
+    const resumeModule = MODULE_BY_MODULE_ID[resumeModuleId];
+    if (typeof resumeModule?.onChatChanged === 'function') {
+        setStoreResumeInitializer(resumeStoreId, () => resumeModule.onChatChanged());
+    }
+}
+
 // ─── Event hooks ─────────────────────────────────────────────────────────────
 
 if (eventSource && event_types?.CHAT_CHANGED) {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         bumpEpoch(); // Tier 0.2 — invalidate all in-flight scope tokens BEFORE module handlers
         console.log('[MWT] Chat changed — resetting state.');
+        // Schema plan Part 6 (§7.4): the synchronous fast load gate runs BEFORE
+        // any module handler, so no module reads or injects an unprepared
+        // store. Migrations that pass the §7.2 budget commit here — data,
+        // manifest stamp, and quarantine additions in ONE save (§7.3); a
+        // blocked store pauses ONLY its own module. This adds NO await:
+        // CHAT_CHANGED stays synchronous by contract.
+        applySchemaLoadGate();
+        // §7.5: chat-dependent preparations (Interiority's legacy-key
+        // conversion) run as privileged orchestration, fire-and-forget — the
+        // deferred module is already paused (preparing) above.
+        runSchemaPreparations().catch(err => console.warn('[MWT] Schema preparation after chat change failed:', err?.message || err));
         const activeTab = modal?.querySelector('.mwt-tab-btn.active')?.dataset.tab;
-        WorldState.onChatChanged();
-        Chronicle.onChatChanged();
-        Knowledge.onChatChanged();
-        StoryPlanner.onChatChanged();
-        Interiority.onChatChanged();
+        // Part 6 (§7.4/§5.4): a module paused by the runtime gate does NOT run
+        // its chat-change hydration. Its onChatChanged() would restore
+        // counters and bookkeeping from the BLOCKED store value and hold them
+        // in memory; after an out-of-band repair + Retry, the first event
+        // would persist that stale state over the repaired store. The pause
+        // banner owns the explanation, and the resume initializers registered
+        // above re-run the module's onChatChanged() when the store actually
+        // resumes (retryStore / the §7.5 preparation landing).
+        if (!isModulePausedForCurrentScope('WorldState')) WorldState.onChatChanged();
+        if (!isModulePausedForCurrentScope('Chronicle')) Chronicle.onChatChanged();
+        if (!isModulePausedForCurrentScope('Knowledge')) Knowledge.onChatChanged();
+        if (!isModulePausedForCurrentScope('StoryPlanner')) StoryPlanner.onChatChanged();
+        if (!isModulePausedForCurrentScope('Interiority')) Interiority.onChatChanged();
         if (modal?.style.display === 'flex') {
             renderModal();
             if (activeTab) modal.querySelector(`.mwt-tab-btn[data-tab="${activeTab}"]`)?.click();
@@ -677,7 +727,10 @@ if (eventSource && event_types?.CHAT_CHANGED) {
 
 if (eventSource && event_types?.MESSAGE_RECEIVED) {
     eventSource.on(event_types.MESSAGE_RECEIVED, (...args) => {
-        routeMessageReceived(modules, getSettings(), extractMessageIndex(args[0]));
+        // Part 6: the decline predicate — a module whose store is paused by
+        // the runtime schema gate declines its own message-event work and says
+        // so, while every other module keeps running (§7.4).
+        routeMessageReceived(modules, getSettings(), extractMessageIndex(args[0]), isModulePausedForCurrentScope);
     });
 }
 
@@ -706,7 +759,7 @@ if (eventSource && event_types?.MESSAGE_DELETED) {
     eventSource.on(event_types.MESSAGE_DELETED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_DELETED (index: ${idx}) — routing to modules.`);
-        routeMessageDeleted(modules, getSettings(), idx);
+        routeMessageDeleted(modules, getSettings(), idx, isModulePausedForCurrentScope);
     });
 }
 
@@ -714,14 +767,15 @@ if (eventSource && event_types?.MESSAGE_SWIPED) {
     eventSource.on(event_types.MESSAGE_SWIPED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_SWIPED (index: ${idx}) — checking anchor / scheduling refresh.`);
-        routeMessageSwiped(modules, getSettings(), idx);
+        routeMessageSwiped(modules, getSettings(), idx, isModulePausedForCurrentScope);
     });
 }
 
 // ─── Sparse-chat: MORE_MESSAGES_LOADED (Aikobots v4 fork) ─────────────────────
 // When older chat ranges are hydrated, re-render thought blocks for newly
-// visible messages and retry deferred key migration. On upstream ST this event
-// doesn't exist, so the guard skips silently.
+// visible messages and retry the privileged schema preparation (a deferral
+// that survived because the chat was not fully hydrated). On upstream ST this
+// event doesn't exist, so the guard skips silently.
 
 if (eventSource && event_types?.MORE_MESSAGES_LOADED) {
     eventSource.on(event_types.MORE_MESSAGES_LOADED, () => {
@@ -734,7 +788,7 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
     eventSource.on(event_types.MESSAGE_EDITED, (...args) => {
         const idx = extractMessageIndex(args[0]);
         console.log(`[MWT] MESSAGE_EDITED (index: ${idx}) — checking anchor / scheduling refresh.`);
-        routeMessageEdited(modules, getSettings(), idx);
+        routeMessageEdited(modules, getSettings(), idx, isModulePausedForCurrentScope);
     });
 }
 
@@ -782,6 +836,16 @@ commands.setupMacros();
 // Start module runtime (injection, auto-save timers, notification panels).
 // Modules are re-initialized with a modal reference when the user opens the
 // MWT modal for the first time.
+//
+// Schema plan Part 6 (§7.6): the runtime load gate runs BEFORE module
+// injection — no module initializes against unprepared data. Startup MAY
+// await (index.js already top-level-awaits script.js), so the §7.5 privileged
+// preparation (Interiority's chat-dependent legacy-key conversion) is awaited
+// here too; on chat change the same pair runs synchronously + fire-and-forget.
+applySchemaLoadGate();
+await runSchemaPreparations();
+registerSchemaGateRetryHandlers();
+
 WorldState.init(null);
 Chronicle.init(null);
 Knowledge.init(null);

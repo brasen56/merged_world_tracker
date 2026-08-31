@@ -16,6 +16,10 @@ import {
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
+// Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+import { storyPlannerSchema } from './schema.js';
 import {
     state, getArcs, setArcs, pushPlanToHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
@@ -174,6 +178,18 @@ function validateOutput(text, expectHeader = true) {
  * @returns {Promise<object[]|null>} the new arc list, or null if skipped/failed
  */
 export async function generatePlan(isAuto = false) {
+    // Part 6 (§7.4): the pause gate is a data-integrity stop — generation
+    // would read the unprepared store, spend an API call, and have its
+    // refused write (setArcs under the paused seam) mask the loss. Manual
+    // entry points (the Generate button, /wt-plan) bypass the event router's
+    // decline predicate, so the choke point itself must refuse.
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) {
+        console.warn('[MWT:StoryPlanner] Cannot generate — the store is paused for this chat (schema preparation).');
+        // Stay silent for auto-runs (the router declines those anyway), but
+        // tell the user when they clicked Generate.
+        if (isAuto) return null;
+        throw new Error('Story Planner is paused for this chat — its data could not be safely prepared. Use ⬇ Download recovery data to repair it, then press Retry in the Story Planner tab.');
+    }
     if (state.isGenerating) {
         if (isAuto) return null;
         throw new Error('Story plan is already generating.');

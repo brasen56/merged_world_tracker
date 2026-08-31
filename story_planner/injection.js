@@ -8,6 +8,9 @@ import {
     getGlobalSettings, estimateTokens,
     applyExtensionPromptInjection, injectionAllowed,
 } from '../core/index.js';
+// Part 6 injection pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import { STORY_PLAN_INJECTION_HEADER, buildStoryPlanHeader } from './prompts.js';
 import {
@@ -128,7 +131,13 @@ export function resolveInjectionPlacement() {
 // ─── Core injection ──────────────────────────────────────────────────────────
 
 export function applyPlanInjection() {
-    const enabled = isInjectionEnabled() && injectionAllowed('StoryPlanner');
+    // Part 6: a store paused by the runtime schema gate is never read — no
+    // module injects an unprepared store (§7.4). Clearing the slot (the same
+    // thing every disabled path does) also drops anything a pre-pause state
+    // left registered, so nothing stale rides along.
+    const paused = isStorePausedForCurrentScope('storyPlanner');
+    if (paused) console.log('[MWT:StoryPlanner] Injection cleared — the store is paused for this chat (schema preparation).');
+    const enabled = !paused && isInjectionEnabled() && injectionAllowed('StoryPlanner');
     const body = enabled ? buildInjectionBody() : '';
     const globalSettings = getGlobalSettings();
 
@@ -151,7 +160,10 @@ export function applyPlanInjection() {
         useTags,
     });
 
-    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", push "${getEnforcement()}", ${getArcsForInjection().length} arcs, ${body.length} chars at depth ${placement.depth.value}`);
+    // When paused, do not even read the arc list for the log — a paused store
+    // is never read (§7.4).
+    const arcCount = paused ? 0 : getArcsForInjection().length;
+    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", push "${getEnforcement()}", ${arcCount} arcs, ${body.length} chars at depth ${placement.depth.value}`);
 }
 
 // ─── Token estimate ──────────────────────────────────────────────────────────

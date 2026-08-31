@@ -6,9 +6,9 @@
  *
  * The plan is stored as an array of structured arc objects (see ARC SHAPE in
  * ./schema.js) rather than one opaque blob of text. Plans authored before that
- * change are migrated by the schema's v0 -> v1 migration; the lazy on-read
- * conversion in {@link getArcs} remains only as a temporary compatibility
- * path until the runtime cutover (Part 6 of the schema plan).
+ * change are migrated by the schema's v0 -> v1 migration, which the runtime
+ * gate (schema/runtime.js, Part 6 of the schema plan) runs on load; getArcs()
+ * keeps only a read-only parse fallback, never a write.
  *
  * Arc canonicalization (sanitizeArc/sanitizeArcs), the section/status
  * vocabulary, the arc-id factory, the beat-index clamp, and the markdown plan
@@ -21,6 +21,9 @@
 import { getChatMeta, persistChatMeta, preserveQuarantinedRecords } from '../core/index.js';
 import { getSettings, saveSettings } from './settings.js';
 import { prepareNextStoreValue } from '../core/schema.js';
+// Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
+// pause singleton is read even under the test barrel→stub alias.
+import { isStoreWriteBlocked } from '../core/schema_status.js';
 import {
     SECTIONS,
     DEFAULT_SECTION,
@@ -124,6 +127,15 @@ export function getPlanData() {
 export function setPlanData(patch) {
     const meta = getChatMeta();
     if (!meta) return undefined;
+    // Part 6: a store paused by the runtime schema gate keeps its untouched
+    // original as the recoverable state — a module write would validate the
+    // unprepared value at the current version and replace it (a silent
+    // downgrade for a future-version store, exactly what §12 forbids). The
+    // only exception is the §7.5 privileged-preparation window.
+    if (isStoreWriteBlocked(storyPlannerSchema.id)) {
+        console.warn('[MWT:StoryPlanner] Write refused — the store is paused for this chat (schema preparation); the previous value was kept.');
+        return meta[CHAT_DATA_KEY];
+    }
     const next = prepareNextStoreValue(storyPlannerSchema, meta[CHAT_DATA_KEY], patch);
     if (!next.ok) {
         console.warn('[MWT:StoryPlanner] Write refused — the proposed update failed schema validation; the previous value was kept.', next.issues);
@@ -471,12 +483,15 @@ export function mergeRegeneratedArcs(previous, incoming) {
 // ─── Arc access + migration ──────────────────────────────────────────────────
 
 /**
- * Read the arc list, migrating a legacy single-blob plan on first access.
+ * Read the arc list.
  *
- * Mirrors the lazy-migration precedent in chronicle/data.js (legacy snapshot id
- * backfill on read). The old `text` field is deliberately left in place rather
- * than deleted — the migration is a parse, and keeping the original means a bad
- * parse is recoverable instead of destructive.
+ * Part 6 retired the lazy text-to-arcs migration this function used to perform
+ * on first read: the runtime gate (schema/runtime.js) runs the schema's v0→v1
+ * migration — same parser, same "keep the original text" recovery rule —
+ * BEFORE any module read. What remains is a read-only parse fallback for a
+ * store the gate cannot have stamped (an absent `arcs` beside legacy text),
+ * so the plan stays displayable without ANY write from a read path; the
+ * central migration owns the persisted conversion.
  */
 export function getArcs() {
     const data = getPlanData();
@@ -485,11 +500,7 @@ export function getArcs() {
     const legacy = typeof data.text === 'string' ? data.text : '';
     if (!legacy.trim()) return [];
 
-    const migrated = parsePlanTextToArcs(legacy);
-    if (migrated.length === 0) return [];
-    setPlanData({ arcs: migrated, _migratedFromText: true });
-    console.log(`[MWT:StoryPlanner] Migrated legacy plan → ${migrated.length} arcs (original text retained).`);
-    return migrated;
+    return parsePlanTextToArcs(legacy);
 }
 
 export function setArcs(arcs) {

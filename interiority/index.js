@@ -30,11 +30,20 @@ import {
     buildKeyToIndexMap,
     purgeUserLedgerEntries,
     restoreLedgerSnapshot, restoreInnerStatesSnapshot,
-    migrateIndexKeys,
     isChatHydrated,
     incrementTurnCounter, restoreTurnCounter, isDormantPollDue,
     getTurnCounter, getDormantLedger, getDormantPollInterval,
 } from './data.js';
+// Part 6 (§7.5): the privileged preparation path that owns the legacy-key
+// conversion retries (onMoreMessagesLoaded). schema/runtime.js imports
+// ./data.js for the converter itself; this file never feeds it back, so the
+// dependency stays acyclic.
+import { runSchemaPreparations } from '../schema/runtime.js';
+// Part 6 (§7.4) pause guard + the store id it checks. Direct imports (not the
+// barrel) so the REAL pause singleton is read even under the test
+// barrel→stub alias — the same rule data.js applies to the write seam.
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+import { interioritySchema } from './schema.js';
 
 import {
     buildSceneRoster, runBatchedCall, runStrictCalls, validateAndApply,
@@ -82,12 +91,13 @@ export function init(parentModal) {
         state.contentEl = null;
         renderContent();
     }
-    // Migrate legacy numeric-index and send_date perMessage keys to stable
-    // UUID keys. This runs once per chat (guarded by data.keyMigrationDone)
-    // and is essential for Inline Summary compatibility — old keys reference
-    // positions that no longer match the (possibly shrunk) chat array.
-    // migrateIndexKeys is now async (defers on sparse-chat forks until hydrated)
-    queueWork(migrateIndexKeys);
+    // Part 6: the legacy numeric-index / send_date perMessage key conversion is
+    // NOT queued here anymore. The runtime schema gate (schema/runtime.js) owns
+    // it as privileged §7.5 orchestration — index.js runs the gate (and its
+    // privileged preparation) BEFORE the module inits, so a deferred store is
+    // paused (preparing) before this module ever reads it, and queueing the
+    // conversion on the paused module's own work queue would deadlock its own
+    // recovery. Init does not need to schedule anything for it.
     // Clean up any user-owned ledger entries the roster filter let through.
     purgeLeakedUserEntries();
     applyIntentionsInjection();
@@ -234,6 +244,26 @@ export async function triggerGenerate({ force = true, trigger = TRIGGER.MANUAL }
  *   row in diagnostics names its own cause. Never affects behaviour.
  */
 async function generateForCurrentMessage(targetKey, { force = false, trigger = TRIGGER.UNKNOWN } = {}) {
+    // Part 6 (§7.4): the pause is a data-integrity stop, not a preference —
+    // even `force` (the 💭 Generate button / /wt-thoughts) may not spend an
+    // API call against a store the runtime schema gate has not prepared:
+    // validateAndApply's writes would be refused by the paused seam and the
+    // turn's thoughts would be silently lost. Direct/manual entry points
+    // bypass the router's decline predicate, so this choke point checks it.
+    if (isStorePausedForCurrentScope(interioritySchema.id)) {
+        console.log(`[MWT:Interiority] Generation skipped (trigger: ${trigger}) — the store is paused for this chat (schema preparation).`);
+        // Breadcrumb in the diagnostics ring (same reason the panic gate
+        // records one): without it "no api_call" is indistinguishable from
+        // "the module never ran" when a user reports the button dead.
+        record({
+            level: 'info',
+            module: 'interiority',
+            event: 'generation_blocked',
+            detail: { trigger, reason: 'store-paused' },
+        });
+        return null;
+    }
+
     // PANIC GATE: every automatic entry point into this function must respect
     // the master panic switch (injectionMasterOff) and the per-module disable.
     // MESSAGE_RECEIVED is already gated in core/event_router.js, but the
@@ -497,9 +527,10 @@ export function onChatChanged() {
     // the flag false here shows stale "idle" UI and (if the work queue were
     // ever removed) could allow overlapping calls. Mirrors story_planner.
     state.contentEl = null;
-    // Migrate legacy keys for this chat (no-op if already done).
-    // migrateIndexKeys is async — fire-and-forget; it defers on sparse-chat forks.
-    queueWork(migrateIndexKeys);
+    // Part 6: the legacy key conversion for the new chat is NOT queued here —
+    // the root CHAT_CHANGED handler runs the runtime schema gate (and its
+    // privileged §7.5 preparation) BEFORE this handler, so the store is either
+    // already prepared or paused (preparing) by the time Interiority runs.
     // Clear DOM thought blocks from the previous chat
     clearAllThoughtBlocks();
     // Re-render thought blocks for the new chat
@@ -713,13 +744,20 @@ export function onMessageEdited(editedIndex) {
 
 /**
  * Older chat ranges were hydrated (Aikobots v4 fork event). Re-render thought
- * blocks for newly-visible messages and retry deferred key migration.
+ * blocks for newly-visible messages and re-run the privileged preparation —
+ * a deferral that survived because the chat was not fully hydrated now has
+ * its precondition.
+ *
+ * The retry goes through schema/runtime.js runSchemaPreparations() (the §7.5
+ * privileged path), NOT this module's own work queue: a deferred store is
+ * paused, and a queued recovery job would be declined by the very pause it
+ * exists to clear.
  *
  * On upstream ST this is never called (the event doesn't exist).
  */
 export function onMoreMessagesLoaded() {
-    // Retry key migration (it defers if chat wasn't hydrated — now it may be)
-    queueWork(migrateIndexKeys);
+    // Retry the privileged preparation (it defers if chat wasn't hydrated — now it may be)
+    runSchemaPreparations();
     // Re-render thought blocks for newly hydrated messages
     renderAllThoughtBlocks();
     console.log('[MWT:Interiority] MORE_MESSAGES_LOADED — re-rendered thought blocks for newly hydrated messages.');

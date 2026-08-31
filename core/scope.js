@@ -268,6 +268,36 @@ export function assertSameScope(token, ctx) {
     return { ok: true, reason: 'same-scope' };
 }
 
+/**
+ * Is a scope captured before an await still current, using the §7.5
+ * (privileged-preparation) semantics: the EPOCH is always checked —
+ * CHAT_CHANGED bumps it synchronously, so a real chat switch can never slip
+ * through — but the identity comparison runs only when the capture actually
+ * identified the chat.
+ *
+ * This is deliberately weaker than {@link assertSameScope} for one case:
+ * getChatIdentity() issues a fresh nonce for every UNKNOWN identity (two
+ * unknowns must never compare equal), so requiring identity equality on a
+ * host without a usable chat id would mark every await stale and no
+ * long-running operation could ever complete there. The epoch is the
+ * authoritative signal on such hosts; when the capture DID know the chat,
+ * identity equality is required as well.
+ *
+ * For callers whose commit writes chat data (never for callers that only
+ * display a result): pair this with a direct scope check in the commit path.
+ *
+ * @param {ScopeToken} token — the token returned by `captureScope()`
+ * @param {object} [ctx] — SillyTavern context (defaults to getContextSafe())
+ * @returns {{ ok: boolean, reason: string }}
+ */
+export function scopeStillCurrent(token, ctx) {
+    if (!token) return { ok: false, reason: 'no-token' };
+    if (getEpoch() !== token.epoch) return { ok: false, reason: 'epoch-changed' };
+    if (token.identity?.isUnknown !== false) return { ok: true, reason: 'epoch-only' };
+    const result = assertSameScope(token, ctx);
+    return result.ok ? { ok: true, reason: 'same-scope' } : result;
+}
+
 // ─── Convenience: weak-key replacement ────────────────────────────────────────
 
 /**
