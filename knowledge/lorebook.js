@@ -26,6 +26,10 @@ import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
 import { findEntryUidByNpcIdentity } from './reconcile.js';
+import { validateHistoryRecords } from '../schema/secondary.js';
+// Part 7 diagnostics wiring: direct import (not the barrel) so the REAL
+// schema-event surface is used even under the test barrel→stub alias.
+import { recordSchemaEvent, schemaEventForSeverity } from '../core/schema_status.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
 
@@ -44,11 +48,53 @@ try {
 // which independently assign UIDs starting at 0 — don't collide in
 // localStorage.  The lorebook name is passed explicitly to every call.
 
+// Part 7 (schema plan §2.2): history findings surface once per session in
+// the diagnostics ring (§9.3) — getHistory()/pushHistory() are hot paths, so
+// the core/ui.js float-position dedup pattern applies here too, with one
+// difference that matters: float positions live in ONE key, but history keys
+// are per-book-per-uid (`kt_history_<lorebook>_<uid>`). Deduping on the code
+// alone would let the first malformed record silence every other corrupted
+// key for the whole session — the event carries `store: key`, so the dedup
+// has to be keyed on the pair or all but one book/uid go unreported.
+const _reportedHistoryIssues = new Set();
+function reportHistoryIssues(issues, key) {
+    for (const issue of issues) {
+        const dedupKey = `${key}|${issue.code}`;
+        if (_reportedHistoryIssues.has(dedupKey)) continue;
+        _reportedHistoryIssues.add(dedupKey);
+        // Severity picks the event: a RETAINED finding must not be logged as
+        // schema_quarantined (see schemaEventForSeverity).
+        recordSchemaEvent(schemaEventForSeverity(issue.severity), {
+            store: key,
+            code: issue.code,
+            reasonCode: String(issue.path?.[0] ?? issue.code),
+        });
+    }
+}
+
+/**
+ * Read + validate one history key. An unparseable record (truncated quota
+ * write) reads as the root finding — an empty, quarantined live view —
+ * instead of vanishing into a bare catch. The stored raw value is left
+ * untouched (it is the recovery copy); the next push converges the key.
+ */
+function readHistoryRecords(key) {
+    let raw;
+    try {
+        raw = JSON.parse(localStorage.getItem(key) || '[]');
+    } catch { raw = null; }
+    const validated = validateHistoryRecords(raw);
+    reportHistoryIssues(validated.issues, key);
+    return validated;
+}
+
 export function pushHistory(uid, content, lorebook = getLorebookName()) {
     if (uid === null || uid === undefined) return;
     const key = HISTORY_KEY_PREFIX + lorebook + '_' + uid;
-    let history = [];
-    try { history = JSON.parse(localStorage.getItem(key) || '[]'); } catch { history = []; }
+    // Part 7 (schema plan §2.2): validate the stored list before rewriting
+    // it, so a malformed record converges away on this push instead of being
+    // copied forward forever. The stored key is the recovery copy.
+    const history = readHistoryRecords(key).data;
     history.unshift({ ts: Date.now(), content, msgIdx: getChat()?.length || 0 });
     if (history.length > 50) history.length = 50;
     try { localStorage.setItem(key, JSON.stringify(history)); } catch { /* quota */ }
@@ -56,7 +102,11 @@ export function pushHistory(uid, content, lorebook = getLorebookName()) {
 
 export function getHistory(uid, lorebook = getLorebookName()) {
     if (uid === null || uid === undefined) return [];
-    try { return JSON.parse(localStorage.getItem(HISTORY_KEY_PREFIX + lorebook + '_' + uid) || '[]'); } catch { return []; }
+    try {
+        // Part 7: invalid records are filtered from the live view; the
+        // stored key stays untouched until the next push converges it.
+        return readHistoryRecords(HISTORY_KEY_PREFIX + lorebook + '_' + uid).data;
+    } catch { return []; }
 }
 
 // ─── Message helpers ─────────────────────────────────────────────────────────

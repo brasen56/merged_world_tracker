@@ -874,12 +874,19 @@ function cancelInlineAdd() {
  * seen by the narrator model.
  *
  * @param {number} msgIdx - chat-array index of the message
+ * @param {string|null} [msgKey=null] - the message's stable perMessage key,
+ *   for callers that already know it. renderAllThoughtBlocks() resolves
+ *   key → index up front and hands the key back through here; re-resolving
+ *   via getMsgKeyForIndex() would re-scan the whole chat per message (its
+ *   duplicate-stamp check is O(chat)), making an all-keys render
+ *   O(keys × chat). Omitted/null → resolved from the index as before.
  */
-export function renderThoughtBlockForMessage(msgIdx) {
+export function renderThoughtBlockForMessage(msgIdx, msgKey = null) {
     // Resolve the stable perMessage key for this index, then look up the data.
     // perMessage is keyed by UUID (mu-*) or send_date (sd-*), so the lookup
-    // survives chat shifts.
-    const msgKey = getMsgKeyForIndex(msgIdx);
+    // survives chat shifts. Callers that already hold the key (the
+    // renderAllThoughtBlocks loop) pass it in to skip the re-resolve.
+    const key = msgKey ?? getMsgKeyForIndex(msgIdx);
 
     // INTERIORITY-01: Find the message element and remove any existing thought
     // block BEFORE checking perMessage metadata. If a swipe/edit/empty-
@@ -894,8 +901,8 @@ export function renderThoughtBlockForMessage(msgIdx) {
     const existing = msgEl.querySelector('.mwt-int-msg-thoughts');
     if (existing) existing.remove();
 
-    if (!msgKey) return;
-    const pm = getPerMessage(msgKey);
+    if (!key) return;
+    const pm = getPerMessage(key);
     if (!pm || !pm.reactions || pm.reactions.length === 0) return;
 
     // Build the thought block
@@ -934,8 +941,9 @@ export function renderThoughtBlockForMessage(msgIdx) {
  *
  * Iterates over stable perMessage keys, resolves each to its current
  * chat-array index via buildKeyToIndexMap(), and renders the thought
- * block on the matching DOM element. Thoughts whose messages have been
- * removed entirely (not in the chat array) are silently skipped.
+ * block on the matching DOM element — passing the key through so the
+ * per-message render doesn't re-resolve it. Thoughts whose messages have
+ * been removed entirely (not in the chat array) are silently skipped.
  */
 export function renderAllThoughtBlocks() {
     const keys = getPerMessageKeys();
@@ -943,7 +951,11 @@ export function renderAllThoughtBlocks() {
     for (const key of keys) {
         const idx = keyToIndex.get(key);
         if (idx != null) {
-            renderThoughtBlockForMessage(idx);
+            // Hand the key this loop already resolved back to the renderer —
+            // letting it re-resolve per message would re-scan the chat (the
+            // duplicate-stamp check in getMsgKeyForIndex) for every key,
+            // O(keys × chat) per render.
+            renderThoughtBlockForMessage(idx, key);
         }
     }
 }

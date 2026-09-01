@@ -2,11 +2,9 @@
 
 **What MWT 2.0's data work is, and what it means for you — explained without the jargon.**
 
-> **Status:** This guide describes the data-safety work planned for **MWT 2.0**.
-> The version you're running today doesn't work this way yet, and nothing about
-> your setup needs to change right now. This page exists so that when 2.0
-> arrives, you already know what it does, why it exists, and what you'll
-> (mostly not) see.
+> **Status:** This guide describes the data-safety work that **ships in
+> MWT 2.0.0**. If you're on 2.0 or newer, everything here is already at
+> work underneath your chats — nothing about your setup needs to change.
 >
 > No coding knowledge is needed for any of this. If a word here is new to you,
 > jump to the [glossary](#glossary-plain-words) at the bottom.
@@ -90,8 +88,10 @@ called **quarantine**, where:
 - it's counted and listed for you, with the reason it was set aside;
 - it is never sent to the AI's prompt;
 - it's included in MWT backups, and can be exported any time with a
-  **"Download recovery data"** button, so it can be repaired outside MWT and
-  imported back through the normal, checked path.
+  **"Download recovery data"** button, which also records *where* the record
+  belongs — so it can be repaired outside MWT and put back through the
+  normal, checked path (see
+  [Recovering a quarantined record](#recovering-a-quarantined-record)).
 
 The other ninety-nine entries keep working normally.
 
@@ -124,14 +124,112 @@ No — and the design makes *silent* loss impossible. Concretely:
 - Records that fail checking are **preserved** in quarantine, whole, with the
   reason they were rejected — not dropped on the floor.
 - Quarantined records are **included in backups** and exportable at any time.
-- A quarantined record won't be used by its module until you restore or
-  re-import it — but you'll always know it's there, and you can always get it
-  back. You will never discover a missing entry by accident, weeks later.
+- A quarantined record won't be used by its module until you put it back
+  ([here's how](#recovering-a-quarantined-record)) — but you'll always know
+  it's there, and you can always get it back. You will never discover a
+  missing entry by accident, weeks later.
 
 The honest trade-off: a quarantined record is *inactive* until recovered. The
 point of the system is that "inactive and recoverable" replaces the old
 possible outcomes — "silently skipped," "behaves weirdly," or "corrupts
 something nearby."
+
+---
+
+## Recovering a quarantined record
+
+Recovering a record is a deliberate, manual edit — MWT will never guess at a
+repair on your behalf. It takes five steps, and you need a text editor.
+
+**One thing to know first:** the "Download recovery data" file is **evidence,
+not a restore file.** Handing it straight to Restore is rejected
+(*"Unrecognized backup type"*) — it doesn't describe a chat, it describes the
+records that were set aside. What it gives you is each record *plus the
+address it came from*.
+
+**1. See what's quarantined.** Diagnostics → 🗂️ Scope & storage shows the
+per-store counts, and each record carries the reason it was set aside.
+
+**2. Download the recovery data.** Backup → 🧯 **Download recovery data**
+(or `MWT.recovery.export()` in the browser console). Each entry under `items`
+carries:
+
+| Field | What it tells you |
+|---|---|
+| `store` | which module's data it belongs to (e.g. `worldState`) |
+| `path` | where inside that store it sat |
+| `raw` | the record itself, exactly as it was found |
+| `message` | why it was rejected — this is your repair instruction |
+| `detectedAt`, `sourceVersion`, `fingerprint` | when it was set aside, and from which format |
+
+**3. Repair the record.** Edit `raw` until it matches what `message` says was
+wrong — a missing field, a number stored as text, a date that isn't one.
+
+**4. Put it back through a backup.** Export a fresh backup (Backup →
+⬇ Export Backup) and open it in your text editor. Each entry under `sections`
+is a small **wrapper** around the real data — the records do not sit directly
+on the section:
+
+```json
+"sections": {
+  "chronicle":      { "schemaVersion": 1, "data": { "… that store's records …": {} } },
+  "knowledgeStore": { "storeVersion": 1, "data": { "…": {} } }
+}
+```
+
+Place the repaired record **inside the `data`** of the entry named by its
+`store`, at the position named by its `path` — a record with
+`store: "chronicle"` and `path: ["snapshots", 3]` belongs at
+`sections.chronicle.data.snapshots[3]`. (The `knowledgeStore` wrapper is the
+one naming exception: it says `storeVersion` where the others say
+`schemaVersion`.) Placing the record anywhere else — for example as a sibling
+*next to* `data` on the section entry — will be silently ignored by the
+restore: only what sits beneath `data` is read. Restore that backup. This is
+the "normal, checked path": your repair is validated on the way in exactly
+like every other record, so a fix that's still wrong gets caught rather than
+trusted.
+
+> Pasting the record into the backup's own `quarantine` field instead will
+> **not** bring it back. That field is bookkeeping — a restore deliberately
+> merges it back into quarantine, so records rejected in one chat aren't lost
+> when you restore another.
+
+**5. Clear the old copy.** The original stays quarantined until you remove it.
+In the browser console:
+
+```js
+MWT.recovery.status()                                          // check what's there (both homes — see below)
+MWT.recovery.clear({ confirm: 'CLEAR' })                       // clear this chat/session
+MWT.recovery.clear({ confirm: 'CLEAR', store: 'worldState' })  // …or just one store
+```
+
+**Two homes, one option worth knowing about.** By default, the clear commands
+above empty only the **chat-local quarantine container** — this chat's
+records. Knowledge records are *also* embedded in each lorebook's own
+recovery container (shared and global books carry their own), and those stay
+exactly where they are unless you explicitly ask:
+
+```js
+MWT.recovery.clear({ confirm: 'CLEAR', includeKnowledgeStore: true })
+```
+
+That empties the embedded container of **every lorebook MWT currently has
+loaded** — including records that other chats placed in those same books —
+so run `MWT.recovery.status()` first (it lists both homes, with per-book
+counts) and keep the export from step 2. Lorebooks that aren't currently
+loaded keep their records; they'll show up in `status()` again the next time
+they're opened.
+
+Clearing **deletes MWT's only copy** of those records, so keep the file from
+step 2. The typed `'CLEAR'` is the confirmation — a dialog can be dismissed by
+accident, a typed argument can't.
+
+### Or: do nothing
+
+This is a perfectly good option. A quarantined record is *inactive*, not lost.
+It stays in the drawer, it keeps riding along in every backup you make, and
+you can come back to it whenever — or never. Nothing degrades while it sits
+there.
 
 ---
 
@@ -184,6 +282,19 @@ The one lorebook piece involved is the `[MWT:store]` bookkeeping entry (see
 the README) — it gets the same versioning and checking, and each book carries
 its own recovery drawer, so shared and global books are protected too.
 
+## What about settings and other browser-stored bits?
+
+The same idea covers the smaller things MWT saves outside your chats: your
+settings (global and per-module), floating-button positions, Knowledge
+edit-history lists, and the invisible per-message ID stamps Interiority uses
+to keep thoughts attached to the right messages. From 2.0 these are checked
+too — with one deliberate difference: they are **config, not story data**, so
+they fail *open*. A damaged settings record quietly falls back to its
+defaults (and says so in the 📋 Log), a damaged position or history record is
+filtered from the view until the next save rewrites it, and nothing ever
+pauses a module or deletes what's stored. Settings saved by a newer MWT are
+read as-is rather than rewritten.
+
 ## What if the data is newer than my MWT?
 
 From 2.0 onward, if MWT opens a chat or imports a backup that was saved by a
@@ -224,7 +335,7 @@ update — this one included — fully recoverable from your side.
 | **Migration** | An automatic, one-time, tested procedure that converts older-format data to the current format. |
 | **Quarantine** | The lost-and-found drawer: records that failed checking are kept whole, counted, listed with a reason, never injected, and exportable. |
 | **Paused (blocked) store** | The safety state where one module visibly stops itself rather than use data it can't trust. Other modules are unaffected. |
-| **Recovery export** | A "Download recovery data" file containing quarantined records, so they can be repaired and re-imported through the normal checked path. |
+| **Recovery export** | A "Download recovery data" file containing quarantined records *and the address each one came from*. It is evidence, not a restore file — you repair a record and put it back via a backup. |
 | **Diagnostics** | MWT's built-in, read-only panel where versions, module states, and quarantine counts are shown. |
 
 ---

@@ -11,7 +11,7 @@
 import { getContextSafe } from './core/context.js';
 import { escapeHtml } from './core/diff.js';
 import { bumpEpoch } from './core/scope.js';
-import { createSettingsManager } from './core/settings.js';
+import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings.js';
 import { createModal, showModal, setStatus } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
 import { createCommands } from './core/commands.js';
@@ -171,52 +171,12 @@ if (!macroRegistry) {
 
 const { getSettings, saveSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
-    defaults: {
-        apiUrl: '',
-        apiKey: '',
-        modelName: '',
-        maxTokens: 2000,
-        temperature: 0.3,
-        topP: 1.0,
-        frequencyPenalty: 0,
-        presencePenalty: 0,
-        customHeaders: '',
-        connectionProfileId: '',
-        // Newest messages to defer from ordinary tracker history scans. The
-        // current user/assistant exchange can still be swiped or discarded.
-        recentHistoryExclude: 2,
-        // Per-module injection settings
-        worldStateDepth: 4,
-        worldStateRole: 'system',
-        chronicleDepth: 4,
-        chronicleRole: 'system',
-        // Structural boundaries: wrap injected blocks in XML tags for clarity
-        structuralBoundaries: true,
-        // Floating button visibility
-        showFloatWorld: true,
-        showFloatChronicle: true,
-        showFloatKnowledge: true,
-        showFloatStoryPlanner: true,
-        showFloatInteriority: true,
-        showFloatSettings: true,
-        collapseFloatButtons: false,
-        buttonStyle: 'modern', // 'modern' | 'classic'
-        // Per-tracker enable (default on). When false, that tracker stops
-        // injecting + scanning but its floating icon stays visible with a red ✕
-        // so it can be re-enabled via right-click. The icon's *presence* is
-        // controlled independently by the showFloatX settings above.
-        enableWorldState: true,
-        enableChronicle: true,
-        enableKnowledge: true,
-        enableStoryPlanner: true,
-        enableInteriority: true,
-        // Interiority injection depth/role (same neighborhood as world state)
-        interiorityDepth: 1,
-        interiorityRole: 'system',
-        // Global "stop injecting / scanning everything" panic switch.
-        // Flipped by right-clicking the ⚙️ floating button.
-        injectionMasterOff: false,
-    },
+    // The shared global field-level catalog (core/settings.js) — the SAME
+    // catalog the canonical accessor (getGlobalSettings) validates against,
+    // so the saver and the reader can never disagree about a field's type.
+    // This manager merges it as PUBLIC defaults: the Settings tab has always
+    // materialized every field.
+    defaults: GLOBAL_SETTINGS_DEFAULTS,
     logPrefix: '[MWT]',
 });
 
@@ -1496,8 +1456,11 @@ window.MWT.recovery = {
         console.log(
             `[MWT] Recovery export: ${result.count} record(s) → ${result.filename}. ` +
             'Each item carries store, path, reasonCode, message, the RAW record, sourceVersion, detectedAt, and a ' +
-            'fingerprint — enough to repair a record externally and re-import it through Backup → Restore, where the ' +
-            'normal validated path checks it like any other data. The full envelope is on the return value.'
+            'fingerprint — store + path are the ADDRESS the repaired record goes back to. This file is not itself ' +
+            'restorable (Restore takes an mwt-chat-backup envelope): repair the record into the matching sections ' +
+            'entry of a real backup and restore that, where the normal validated path checks it like any other ' +
+            'data. See DATA_SAFETY_GUIDE.md → "Recovering a quarantined record". The full envelope is on the ' +
+            'return value.'
         );
         return result;
     },

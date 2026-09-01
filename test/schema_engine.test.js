@@ -597,9 +597,11 @@ describe('schema modules stay pure', () => {
     const SCHEMA_FILES = [
         'core/schema.js',
         'core/quarantine.js',
+        'core/settings_schema.js',
         'schema/manifest.js',
         'schema/registry.js',
         'schema/gate.js',
+        'schema/secondary.js',
         'world_state/schema.js',
         'chronicle/schema.js',
         'knowledge/schema.js',
@@ -613,11 +615,14 @@ describe('schema modules stay pure', () => {
             const text = readFileSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), 'utf8');
             // core/quarantine.js is deliberately import-free; every other file
             // must have at least one allowed import for this sweep to be real.
+            // Part 7: core-level pure schema modules (core/settings_schema.js)
+            // may import the same-layer engine ('./schema.js'); schema/secondary.js
+            // joins the registry/manifest set.
             const specifiers = [...text.matchAll(/(?:from\s|import\s)['"]([^'"]+)['"]/g)].map(match => match[1]);
             checkedImports += specifiers.length;
             for (const specifier of specifiers) {
                 expect(specifier, `${file} imports ${specifier}`).toMatch(
-                    /^(\.\/quarantine\.js|\.\.\/core\/(schema|quarantine)\.js|\.\.\/(world_state|chronicle|knowledge|story_planner|interiority)\/schema\.js|\.\/(?:registry|manifest)\.js)$/,
+                    /^(\.\/(?:schema|quarantine)\.js|\.\.\/core\/(?:schema|quarantine)\.js|\.\.\/(?:world_state|chronicle|knowledge|story_planner|interiority)\/schema\.js|\.\/(?:registry|manifest|secondary)\.js)$/,
                 );
             }
         }

@@ -9,10 +9,17 @@
  *     store (Scope & storage displays it; nothing here mutates anything);
  *   - exportRecoveryData() — the "Download recovery data" JSON action. The
  *     export carries every item's store, path, reasonCode, message, raw
- *     record, sourceVersion, detectedAt, and fingerprint — enough metadata to
- *     edit a record externally and re-import it through the validated
- *     backup/import path (a restore merges envelope.quarantine tolerantly and
- *     can never be blocked by it, backup/validate.js). Async + hydrate-first:
+ *     record, sourceVersion, detectedAt, and fingerprint — store + path being
+ *     the ADDRESS a repaired record goes back to. Note what this file is NOT:
+ *     a restore input. Restore takes an `mwt-chat-backup` envelope
+ *     (backup/validate.js rejects any other `type`), and a backup's own
+ *     `envelope.quarantine` is BOOKKEEPING — a restore merges it tolerantly
+ *     back into the quarantine container (backup/index.js), never into live
+ *     data, so records rejected in one chat survive a restore from another.
+ *     Recovery therefore means editing the repaired record into the matching
+ *     `sections` entry of a real backup and restoring that, which is what puts
+ *     it through the normal validated path. DATA_SAFETY_GUIDE.md walks a user
+ *     through it under "Recovering a quarantined record". Async + hydrate-first:
  *     the fire-and-forget post-chat-switch hydration window is not a blocker —
  *     an un-hydrated resolved book is awaited into the cache first, and only a
  *     load that still has not landed refuses. It REFUSES (downloading
@@ -410,7 +417,7 @@ export async function exportRecoveryData({ download = true, filename } = {}) {
         count: items.length,
     }, { level: 'info' });
     try {
-        notify('MWT: recovery data downloaded', `${items.length} quarantined record(s) exported. Repair them outside MWT and re-import through Backup → Restore — the checked path validates them like any other data.`, 'info');
+        notify('MWT: recovery data downloaded', `${items.length} quarantined record(s) exported. Each item's "store" and "path" say where it belongs. This file is not itself restorable — repair the record into a backup's matching section and restore that backup. See DATA_SAFETY_GUIDE.md.`, 'info');
     } catch { /* never block the export on a toast */ }
     return { ok: true, exportedAt, count: items.length, filename: name, data };
 }

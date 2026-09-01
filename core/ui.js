@@ -9,6 +9,8 @@
 
 import { escapeHtml } from './diff.js';
 import { notify } from './notifications.js';
+import { recordSchemaEvent, schemaEventForSeverity } from './schema_status.js';
+import { validateFloatPositions } from '../schema/secondary.js';
 
 // ─── API Settings Field Renderer ────────────────────────────────────────────
 
@@ -155,14 +157,65 @@ const FLOAT_BUTTONS = [
 
 const FLOAT_POSITIONS_KEY = 'mwt_float_positions';
 
-function loadFloatPositions() {
-    try {
-        const raw = localStorage.getItem(FLOAT_POSITIONS_KEY);
-        return raw ? JSON.parse(raw) : {};
-    } catch { return {}; }
+// Part 7 (schema plan §2.2): the saved positions are validated through
+// schema/secondary.js before use. Findings are surfaced once per session in
+// the diagnostics ring (§9.3) — loadFloatPositions() runs at setup. One key,
+// so per-code dedup is per-record dedup here (knowledge/lorebook.js, whose
+// history keys are per-book-per-uid, must additionally key on the store).
+//
+// The event follows the finding's SEVERITY: an unknown-button-id entry is
+// RETAINED, and reporting that as schema_quarantined would claim data was set
+// aside for recovery when nothing was removed.
+const _reportedFloatIssues = new Set();
+function reportFloatPositionIssues(issues) {
+    for (const issue of issues) {
+        if (_reportedFloatIssues.has(issue.code)) continue;
+        _reportedFloatIssues.add(issue.code);
+        recordSchemaEvent(schemaEventForSeverity(issue.severity), {
+            store: FLOAT_POSITIONS_KEY,
+            code: issue.code,
+            reasonCode: String(issue.path?.[0] ?? issue.code),
+        });
+    }
 }
 
-function saveFloatPosition(btnId, left, top) {
+/**
+ * Load + validate the saved float-button positions (schema plan §2.2/Part 7).
+ * Invalid entries are dropped from the live view only — the stored raw value
+ * is left untouched, and the next drag rewrite converges the key. Entries for
+ * button ids this build no longer has are retained (with a finding).
+ * Exported for the secondary-persistence wiring tests.
+ */
+export function loadFloatPositions() {
+    let raw;
+    try {
+        const text = localStorage.getItem(FLOAT_POSITIONS_KEY);
+        if (!text) return {};
+        try {
+            raw = JSON.parse(text);
+        } catch {
+            // An unparseable record (truncated quota write, disk corruption)
+            // reads as the FATAL root result — an empty live view with a
+            // reported finding — instead of vanishing into a bare catch:
+            // the same promise settings and Knowledge edit-history make for
+            // this exact case. The stored raw value stays untouched (it is
+            // the recovery copy); the next drag rewrite converges the key.
+            raw = null;
+        }
+    } catch { return {}; }
+    const validated = validateFloatPositions(raw, {
+        allowedIds: FLOAT_BUTTONS.map(cfg => cfg.id),
+    });
+    reportFloatPositionIssues(validated.issues);
+    return validated.data;
+}
+
+/**
+ * Save one button's position, rewriting the whole key from the validated
+ * live view (so dropped-invalid entries stay dropped). Exported alongside
+ * loadFloatPositions() for the wiring tests.
+ */
+export function saveFloatPosition(btnId, left, top) {
     try {
         const positions = loadFloatPositions();
         positions[btnId] = { left, top };

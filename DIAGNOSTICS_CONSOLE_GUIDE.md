@@ -359,6 +359,15 @@ flashed and disappeared", and any report where the sequence of what MWT did
 matters — the epoch stamps make cross-chat-switch corruptions visible as a
 row-by-row timeline.
 
+**Schema events ride here too** (MWT 2.0): `schema_migrated`,
+`schema_repaired`, `schema_quarantined`, `schema_blocked_future_version`,
+`schema_store_paused` / `schema_store_resumed`, `schema_quarantine_cleared`,
+and — for MWT's own settings and browser-local records (Part 7) —
+`schema_settings_invalid`. Their details are allowlisted to
+store/version/count/reason metadata only (never rejected-record prose), and
+each finding is recorded once per session per code, so the ring never floods
+from hot paths like settings reads.
+
 ### `integrity()` (Phase 12) — do my stores reference things that exist?
 
 The same snapshot the 🛡️ Integrity tab renders when its **▶ Run** button is

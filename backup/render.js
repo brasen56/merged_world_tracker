@@ -285,7 +285,7 @@ export function renderBackupPanel() {
                 <button id="mwt-bk-export" class="mwt-btn" data-backup-action="export">⬇ Export Backup</button>
                 <button id="mwt-bk-restore" class="mwt-btn" data-backup-action="restore">⬆ Restore from File…</button>
                 <button id="mwt-bk-undo" class="mwt-btn" data-backup-action="undo" title="Replay the pre-restore snapshot captured this session">↩ Undo Last Restore</button>
-                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download every quarantined record this chat/session holds, as JSON — repair outside MWT and re-import through Restore. Quarantined records are also included in every backup.">🧯 Download recovery data</button>
+                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download every quarantined record this chat/session holds, as JSON — each item's store + path say where it belongs. The file is evidence, not a restore file: repair the record into a backup's matching section, then restore that backup (DATA_SAFETY_GUIDE.md). Quarantined records also ride in every backup.">🧯 Download recovery data</button>
             </div>
             <p style="color:var(--mwt-text-dim);font-size:11px;margin:8px 0 0">
                 Recovery data = records MWT refused to load (kept whole, never injected). Diagnostics → 🗂️ Scope &amp; storage shows the per-store counts.
@@ -673,7 +673,7 @@ export function describeRecoveryExportResult(result) {
     }
     if (result.ok) {
         return {
-            message: `Recovery data downloaded (${result.count} quarantined record(s)). Repair outside MWT and re-import through Backup → Restore — the checked path validates them like any other data.`,
+            message: `Recovery data downloaded (${result.count} quarantined record(s)). Each item's "store" and "path" say where it belongs. This file is not itself restorable — repair the record into a backup's matching section and restore that backup. See DATA_SAFETY_GUIDE.md → "Recovering a quarantined record".`,
             tone: 'success',
         };
     }

@@ -111,7 +111,10 @@ So you can tell "fine" from "found it":
   right after a page reload is normal; the recorder starts empty.
 - **📋 Log** — no `warn` or `error` rows. A quiet log is the goal. Recovery
   entries log as `warn` — one or two isn't a crisis, but they often explain
-  "weird" data.
+  "weird" data. (MWT 2.0 also logs its data-layer events here — one
+  `schema_settings_invalid` / `schema_repaired` row means a settings record
+  or browser-local record failed checking and was safely handled; the same
+  row never repeats twice in a session.)
 - **🗂️ Scope & storage** — mode is `global`, `saved-binding`, or
   `newly-derived`. The amber "Knowledge injects through lorebook entries"
   note is **always** shown; it's informational, not an error.

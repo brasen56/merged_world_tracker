@@ -52,8 +52,12 @@ import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { clonePlainData, prepareNextStoreValue } from '../core/schema.js';
 // Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
-import { isStoreWriteBlocked } from '../core/schema_status.js';
+import { isStoreWriteBlocked, recordSchemaEvent, SCHEMA_DIAGNOSTIC_EVENTS } from '../core/schema_status.js';
 import { interioritySchema } from './schema.js';
+// Part 7 (schema plan §2.2): the mwt_uuid stamps are MWT-owned persistence
+// on chat messages — validated by schema/secondary.js, the one owner of the
+// secondary-persistence vocabulary (direct import, not the barrel).
+import { isValidMessageUuid, MESSAGE_UUID_EXTRA_KEY, SECONDARY_ISSUE_CODES } from '../schema/secondary.js';
 
 // ─── Aikobots v4 sparse-chat detection ───────────────────────────────────────
 //
@@ -144,7 +148,7 @@ const MSG_KEY_PREFIX = 'mu-';
 const LEGACY_SD_KEY_PREFIX = 'sd-';
 
 /** Property name under which we store the UUID in msg.extra. */
-const MSG_UUID_EXTRA_KEY = 'mwt_uuid';
+const MSG_UUID_EXTRA_KEY = MESSAGE_UUID_EXTRA_KEY;
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -1295,6 +1299,42 @@ function persistChat() {
     else if (ctx?.saveChat) ctx.saveChat();
 }
 
+// ─── Duplicate-UUID detection (Part 7, schema plan §2.2) ─────────────────────
+//
+// validateMessageUuids() (schema/secondary.js) reports duplicate mwt_uuid
+// stamps read-only; these seams make the runtime enforce the same rule: the
+// FIRST occurrence owns a stamp, and any later duplicate is restamped before
+// it can share perMessage data with the owner.
+
+/**
+ * Index of the FIRST message carrying this UUID stamp, or -1 when none does.
+ * Malformed stamps never match, and sparse-chat holes are skipped.
+ *
+ * @param {Array} chat the chat message array
+ * @param {string} uuid a valid UUID stamp
+ * @returns {number}
+ */
+function firstUuidOwnerIndex(chat, uuid) {
+    for (let i = 0; i < chat.length; i++) {
+        const stamp = chat[i]?.extra?.[MSG_UUID_EXTRA_KEY];
+        if (isValidMessageUuid(stamp) && stamp === uuid) return i;
+    }
+    return -1;
+}
+
+// Duplicate-stamp repairs surface once per session in the diagnostics ring
+// (§9.3) — the core/ui.js float-position pattern; generation is a hot path.
+const _reportedUuidIssues = new Set();
+function reportUuidIssueOnce(code, reasonCode) {
+    if (_reportedUuidIssues.has(code)) return;
+    _reportedUuidIssues.add(code);
+    recordSchemaEvent(SCHEMA_DIAGNOSTIC_EVENTS.REPAIRED, {
+        store: MESSAGE_UUID_EXTRA_KEY,
+        code,
+        reasonCode,
+    });
+}
+
 /**
  * Resolve a chat-array index to a stable perMessage key.
  *
@@ -1315,9 +1355,14 @@ export function getMsgKeyForIndex(msgIdx) {
     const chat = getChat();
     const msg = chat[msgIdx];
     if (!msg) return null;
-    // Primary: UUID stamped in msg.extra
-    if (msg.extra?.[MSG_UUID_EXTRA_KEY]) {
-        return `${MSG_KEY_PREFIX}${msg.extra[MSG_UUID_EXTRA_KEY]}`;
+    // Primary: UUID stamped in msg.extra (validated — Part 7: a malformed
+    // stamp cannot address a message, so it is treated as absent rather
+    // than keyed off garbage like `mu-123`). A DUPLICATE stamp addresses
+    // only its first owner — a later duplicate falls through to send_date
+    // so reads never alias two messages' perMessage entries.
+    const uuid = msg.extra?.[MSG_UUID_EXTRA_KEY];
+    if (isValidMessageUuid(uuid) && firstUuidOwnerIndex(chat, uuid) === msgIdx) {
+        return `${MSG_KEY_PREFIX}${uuid}`;
     }
     // Fallback: send_date (for messages not yet stamped)
     if (msg.send_date) {
@@ -1347,12 +1392,25 @@ export function getOrCreateMsgKeyForIndex(msgIdx) {
     const msg = chat[msgIdx];
     if (!msg) return null;
 
-    // If UUID already exists, return it (no mutation, no save)
-    if (msg.extra?.[MSG_UUID_EXTRA_KEY]) {
-        return `${MSG_KEY_PREFIX}${msg.extra[MSG_UUID_EXTRA_KEY]}`;
+    // If a usable UUID already exists — and this message is its FIRST owner —
+    // return it (no mutation, no save). A duplicate stamp (two messages
+    // sharing one mwt_uuid, exactly what validateMessageUuids() reports)
+    // aliases their perMessage entries; the first occurrence keeps the stamp
+    // (the validator's convention) and a later duplicate falls through to
+    // the restamp below, so the two can never share perMessage data.
+    const existing = msg.extra?.[MSG_UUID_EXTRA_KEY];
+    if (isValidMessageUuid(existing) && firstUuidOwnerIndex(chat, existing) === msgIdx) {
+        return `${MSG_KEY_PREFIX}${existing}`;
     }
 
-    // Stamp a new UUID and persist
+    // Stamp a new UUID and persist. A present-but-MALFORMED stamp (Part 7:
+    // non-string / empty) is overwritten — it cannot address a message, and
+    // leaving it would key every future read off garbage. A VALID-but-
+    // DUPLICATE stamp is overwritten too (this message is not the first
+    // owner) and the collision is reported once per session (§9.3).
+    if (isValidMessageUuid(existing)) {
+        reportUuidIssueOnce(SECONDARY_ISSUE_CODES.MSG_UUID_DUPLICATE, String(msgIdx));
+    }
     const uuid = generateUuid();
     if (!msg.extra) msg.extra = {};
     msg.extra[MSG_UUID_EXTRA_KEY] = uuid;
@@ -1375,9 +1433,15 @@ export function buildKeyToIndexMap() {
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
         if (!msg) continue;
-        // Primary: UUID key
-        if (msg.extra?.[MSG_UUID_EXTRA_KEY]) {
-            map.set(`${MSG_KEY_PREFIX}${msg.extra[MSG_UUID_EXTRA_KEY]}`, i);
+        // Primary: UUID key (validated — Part 7: malformed stamps never
+        // enter the map; validateMessageUuids() reports them as findings).
+        // A duplicate stamp maps to its FIRST occurrence — the owner
+        // convention the seams enforce by restamping later duplicates —
+        // instead of silently keeping the last one.
+        const uuid = msg.extra?.[MSG_UUID_EXTRA_KEY];
+        if (isValidMessageUuid(uuid)) {
+            const uuidKey = `${MSG_KEY_PREFIX}${uuid}`;
+            if (!map.has(uuidKey)) map.set(uuidKey, i);
         }
         // Legacy: send_date key (coexists with UUID until migration)
         if (msg.send_date) {

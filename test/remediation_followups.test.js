@@ -430,6 +430,77 @@ describe('INTERIORITY-01 — stale thought blocks are removed from the DOM', () 
     });
 });
 
+// ─── bugs_temp #1 — pre-resolved keys in the thought render loop ──────────────
+
+describe('thought-block rendering uses the pre-resolved key (no O(keys × chat) re-scan)', () => {
+    /**
+     * Same minimal DOM stand-in as INTERIORITY-01 above, indexed by mesid so
+     * renderAllThoughtBlocks can find each message element. querySelector
+     * returns null for both the stale-block and the .mes_text lookups, so a
+     * rendered block lands in `_appended` via the msgEl fallback.
+     */
+    function stubChatDom(msgCount) {
+        const msgEls = [];
+        for (let i = 0; i < msgCount; i++) {
+            const el = {
+                _appended: [],
+                querySelector: () => null,
+                appendChild: (node) => el._appended.push(node),
+            };
+            msgEls.push(el);
+        }
+        const chatEl = {
+            querySelector: (sel) => {
+                const m = /^\.mes\[mesid="(\d+)"\]$/.exec(sel);
+                return m ? (msgEls[Number(m[1])] ?? null) : null;
+            },
+        };
+        globalThis.document = {
+            getElementById: (id) => (id === 'chat' ? chatEl : null),
+            createElement: () => ({ className: '', innerHTML: '' }),
+            dispatchEvent: vi.fn(),
+        };
+        return msgEls;
+    }
+
+    beforeEach(() => {
+        resetCoreStubs();
+        _resetEpoch();
+        // See the CHRONICLE-03 beforeEach: without a chat id every scope
+        // capture is identity-unknown and guards discard for the wrong reason.
+        globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'chat-A' }) };
+    });
+
+    test('renderAllThoughtBlocks renders the entry under the key that resolved the message', async () => {
+        // Message 0 owns BOTH a uuid key ('mu-u1') and a legacy send_date key
+        // ('sd-d1'), but only the legacy entry has data. Re-resolving the
+        // index prefers 'mu-u1' — the empty entry — and would skip the
+        // render; the loop must use the key it already resolved (which is
+        // also what makes it O(chat) instead of O(keys × chat)).
+        setFakeChat([{ mes: 'hello', send_date: 'd1', extra: { mwt_uuid: 'u1' } }]);
+        const msgEls = stubChatDom(1);
+        const { setPerMessage } = await import('../interiority/data.js');
+        setPerMessage('sd-d1', { reactions: [{ npc: 'Mara', thought: 'the market again' }] });
+
+        const { renderAllThoughtBlocks } = await import('../interiority/render.js');
+        renderAllThoughtBlocks();
+
+        expect(msgEls[0]._appended).toHaveLength(1);
+    });
+
+    test('without a passed key the renderer still resolves the index itself', async () => {
+        setFakeChat([{ mes: 'hello', send_date: 'd1', extra: { mwt_uuid: 'u1' } }]);
+        const msgEls = stubChatDom(1);
+        const { setPerMessage } = await import('../interiority/data.js');
+        setPerMessage('mu-u1', { reactions: [{ npc: 'Mara', thought: 'the square' }] });
+
+        const { renderThoughtBlockForMessage } = await import('../interiority/render.js');
+        renderThoughtBlockForMessage(0);
+
+        expect(msgEls[0]._appended).toHaveLength(1);
+    });
+});
+
 // ─── Follow-up review (small, previously open) ───────────────────────────────
 //
 // Three items the first follow-up pass left open. KNOWLEDGE-01's case/whitespace

@@ -42,6 +42,7 @@ import { record } from './diagnostics.js';
 import { notify } from './notifications.js';
 import { getChatIdentity, getEpoch } from './scope.js';
 import { escapeHtml } from './diff.js';
+import { ISSUE_SEVERITIES } from './schema.js';
 
 // ─── Store ↔ module mapping (the one shared mapping) ─────────────────────────
 //
@@ -107,6 +108,9 @@ export const SCHEMA_DIAGNOSTIC_EVENTS = Object.freeze({
     STORE_PAUSED: 'schema_store_paused',
     STORE_RESUMED: 'schema_store_resumed',
     QUARANTINE_CLEARED: 'schema_quarantine_cleared',
+    // Part 7 (§2.2): a stored SETTINGS record was unreadable and its module
+    // fell back to defaults (settings fail open — nothing is paused).
+    SETTINGS_INVALID: 'schema_settings_invalid',
 });
 
 /**
@@ -140,6 +144,36 @@ export function recordSchemaEvent(event, detail = {}, { level = 'info', module =
     try {
         record({ level, module, event, detail: safe });
     } catch { /* never block the caller */ }
+}
+
+/**
+ * Map a validation issue's SEVERITY to the §9.3 event that describes what
+ * actually happened to the data.
+ *
+ * Part 7's secondary-persistence seams (core/ui.js float positions,
+ * knowledge/lorebook.js edit history) report findings straight from the shared
+ * core/schema.js vocabulary, where the severities do NOT all mean the same
+ * thing to a reader of the Log tab:
+ *
+ *   - QUARANTINE — the record was dropped from the live view and the raw value
+ *     is preserved (for these stores the untouched storage key IS the recovery
+ *     copy), so `schema_quarantined` is exactly right;
+ *   - FATAL — an unreadable ROOT: the whole record is dropped from the live
+ *     view with the raw left in storage. Same contract, same event;
+ *   - REFERENCE — structurally valid but dangling, and RETAINED. Reporting this
+ *     as `schema_quarantined` would tell the user data was set aside for
+ *     recovery when nothing was removed at all, so it reports as
+ *     `schema_repaired`: a finding was recorded, the data is still there.
+ *     (The same catch-all core/settings.js eventForIssueCode() applies.)
+ *
+ * @param {string} severity — an ISSUE_SEVERITIES value
+ * @returns {string} a SCHEMA_DIAGNOSTIC_EVENTS value
+ */
+export function schemaEventForSeverity(severity) {
+    if (severity === ISSUE_SEVERITIES.QUARANTINE || severity === ISSUE_SEVERITIES.FATAL) {
+        return SCHEMA_DIAGNOSTIC_EVENTS.QUARANTINED;
+    }
+    return SCHEMA_DIAGNOSTIC_EVENTS.REPAIRED;
 }
 
 // ─── The paused-state registry ───────────────────────────────────────────────

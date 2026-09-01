@@ -570,9 +570,9 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 
 - **Chat data** (world state text, chronicle entries, growth evidence store, story plan text, interiority ledger + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
 - **Lorebook bookkeeping** (NPC registry, state tracker registry, relationships) lives inside the Knowledge Tracker and State Tracker lorebooks themselves, in a single disabled entry titled `[MWT:store]` — see [the section below](#the-mwtstore-entry--what-it-is-and-why-its-there) for exactly what it is and why it can never reach your prompt
-- **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback
-- **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID
-- **Floating button positions** are stored in `localStorage`
+- **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback — validated and version-stamped as of 2.0 (a bad record repairs itself; your values are never silently deleted)
+- **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID — malformed records are filtered from the view as of 2.0 and the list heals itself on the next edit
+- **Floating button positions** are stored in `localStorage` — validated as of 2.0 (an unreadable record just resets the buttons to their anchored spots)
 - **NPC Growth Profile evidence** uses a two-tier append-only store in chat metadata (`raw[]` → `consolidated[]` → `archived[]`), with per-NPC watermarks for continuous incremental capture and ILS backfill. Profile text is saved to a separate "NPC Profiles" lorebook with `profileUid` cross-references in the NPC registry
 - Chat data is per-chat — switching chats loads that chat's world state, chronicle, growth evidence, story plan, and interiority ledger. The Knowledge Tracker's lorebooks follow its **Scope** setting (global / per-character / per-chat), and each book carries its own registry so books never cross-contaminate
 
@@ -599,7 +599,7 @@ If you open a Knowledge Tracker or State Tracker lorebook in the World Info edit
 
 ### Data safety in MWT 2.0 — validation, migrations, and quarantine, explained
 
-MWT 2.0 adds a safety layer under everything the extension saves. Saved data is checked before it's used, chats in older formats upgrade themselves automatically the first time you open them, and a record MWT can't safely understand is set aside for recovery — preserved, reported, and exportable — instead of being skipped, mangled, or fed to the AI. A problem pauses at most one module, visibly, with a banner and a Retry; your prose and lorebook content are never touched or judged. This isn't in the current release yet — the full plain-language guide, written for non-programmers, is in **[DATA_SAFETY_GUIDE.md](DATA_SAFETY_GUIDE.md)**.
+MWT 2.0 adds a safety layer under everything the extension saves. Saved data is checked before it's used, chats in older formats upgrade themselves automatically the first time you open them, and a record MWT can't safely understand is set aside for recovery — preserved, reported, and exportable — instead of being skipped, mangled, or fed to the AI. A problem pauses at most one module, visibly, with a banner and a Retry; your prose and lorebook content are never touched or judged. The same checking now covers MWT's own settings and its browser-local records (floating-button positions, Knowledge edit history, and the per-message ID stamps Interiority keeps): those are validated with the same vocabulary but fail open — a problem falls back to defaults or filters the bad record, never pauses a module, and never deletes what's stored. The full plain-language guide, written for non-programmers, is in **[DATA_SAFETY_GUIDE.md](DATA_SAFETY_GUIDE.md)**.
 
 
 **Credits/Inspirations:**

@@ -12,6 +12,197 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.0.0 - Unreleased (Final Schema Validation)]
+
+### Fixed
+
+- **Five Part 7 follow-up bugs** (found in post-Part 7 review; each pinned by
+  new tests in `test/settings_schema.test.js` and
+  `test/secondary_persistence.test.js`):
+  - **[P1] Duplicate `mwt_uuid` stamps no longer alias messages**
+    (`interiority/data.js`). A non-empty stamp was trusted without checking
+    whether another message already owned it, so `getOrCreateMsgKeyForIndex()`
+    handed two messages the same `mu-*` key and `buildKeyToIndexMap()`
+    silently kept the last one — exactly the collision UUIDs exist to prevent
+    (`validateMessageUuids()` detected it with no production caller). The
+    seams now enforce first-owner-wins: the first occurrence keeps the stamp,
+    a later duplicate is restamped with a fresh UUID at the write seam and
+    reported once per session (`schema_repaired`, code
+    `message-uuid-duplicate`); reads (`getMsgKeyForIndex`) fall back to
+    `send_date` for a non-owner duplicate, and `buildKeyToIndexMap()` maps a
+    duplicate `mu-*` key to its first occurrence only.
+  - **[P2] Invalid JSON in a settings record now produces its diagnostic
+    event** (`core/settings.js`). `JSON.parse` ran before validation and the
+    outer catch only logged a console warning, so a truncated localStorage
+    record fell back to defaults with no `schema_settings_invalid` event.
+    Parse failures are now converted into a content-safe structured finding
+    (new `settings-record-unparseable` code in `core/settings_schema.js`),
+    deduplicated once per session per code like every validator finding —
+    on both the main-key and the legacy-key paths.
+  - **[P2] Legacy reads no longer silently downgrade future-version
+    settings** (`core/settings.js`). The one-time legacy migration stamped the
+    current version and wrote the record merely because `getSettings()` ran —
+    a v99 record could become v1 on a read. The migration is now skipped
+    entirely for `future-version` results, matching the main-key path's
+    §12 no-silent-downgrade guarantee (a deliberate save remains the ordinary
+    downgrade path).
+  - **[P2] Global settings reads are validated** (`core/settings.js`).
+    `getGlobalSettings()` returned the raw persisted object — unvalidated, and
+    leaking the persistence-internal `schemaVersion` marker to injection
+    placement, panic gating, API fallback, and diagnostics. It now routes
+    through a dedicated settings manager (the shared canonical accessor):
+    root/version validated, fail-open findings, marker stripped. Its defaults
+    catalog is deliberately empty — consumers distinguish "user set a global
+    value" from "not set" (the global-wins depth precedence), so the accessor
+    must not materialize type-defaults; the field-level catalog stays with the
+    manager index.js uses to save.
+  - **[P2] Knowledge edit-history findings are reported**
+    (`knowledge/lorebook.js`). `validateHistoryRecords()` findings were discarded
+    (`getHistory()`/`pushHistory()` kept only `.data`), so no
+    `schema_quarantined` event ever fired despite the Part 7 diagnostics
+    claims. Findings now surface once per session per store+code, and an
+    unparseable key reports the root finding instead of vanishing into a bare
+    catch. The dedup is keyed on the STORE as well as the code because history
+    keys are namespaced per book AND per uid (`kt_history_<lorebook>_<uid>`) —
+    deduping on the code alone (the single-key float-position pattern) would
+    let the first malformed record silence every other corrupted key for the
+    session, reinstating most of the gap this fix closes.
+- **The all-message thought render no longer re-scans the chat per key**
+  (`interiority/render.js`). The duplicate-stamp guard added to
+  `getMsgKeyForIndex()` made it O(chat) per call, and
+  `renderAllThoughtBlocks()` invoked it once per perMessage key after
+  having already resolved key → index through `buildKeyToIndexMap()` —
+  O(keys × chat) per CHAT_CHANGED render (~14ms at 5000 messages / 1500
+  keys). The loop now hands the key it already resolved to
+  `renderThoughtBlockForMessage(idx, key)` (new optional second parameter;
+  omitted → resolved from the index exactly as before). One deliberate
+  display-only semantic: a legacy `sd-*` entry whose message also owns a
+  stamped uuid now renders under the key that resolved it instead of being
+  hidden by the re-resolve preferring the (possibly empty) `mu-*` key. The
+  one-time migration loop (`migrateIndexKeys`) keeps resolving per legacy
+  key — it runs once per chat and only pays the scan for messages that
+  already carry stamps.
+- **`getGlobalSettings()` JSDoc no longer overstates the copy**
+  (`core/settings.js`). It claimed "a fresh copy — never the live persisted
+  reference", true at the top level only: `validateStoredSettings` assigns
+  non-scalar values by reference and the manager's spreads are shallow, so
+  nested objects (`bookBindings`, `activation`) are shared references into
+  the persisted record. The doc now says so and tells callers to copy a
+  nested object before writing to it — nothing relied on the old wording.
+- **Three second-round review bugs** (re-review of the fixes above; pinned by
+  new tests in `test/settings_schema.test.js` and
+  `test/secondary_persistence.test.js`):
+  - **[P1] Global settings field types are now validated**
+    (`core/settings.js`). The canonical accessor's deliberately-empty
+    defaults catalog left `validateStoredSettings` with no scalar type
+    catalog, so malformed present fields passed through unchanged — a
+    hand-edited `injectionMasterOff: "false"` (a truthy string) silently
+    stopped every module via `injectionAllowed()`, with no finding.
+    Validation defaults are now separated from public default-merging: the
+    real field-level catalog (new exported `GLOBAL_SETTINGS_DEFAULTS`, now
+    also the single source of the Settings tab's defaults in `index.js`)
+    validates present fields through two new `createSettingsManager` options
+    (`validationDefaults` + `resetToAbsent` in `core/settings_schema.js`:
+    numeric strings coerce, an unusable value is treated as *not set* — so
+    nothing materializes and the absent-field precedence contract holds).
+    Schema-event dedup also moved from per-manager to per-STORE, so the two
+    managers reading `merged_world_tracker` no longer double-report the
+    same store+code.
+  - **[P2] Invalid float-position JSON now reports its finding**
+    (`core/ui.js`). `JSON.parse` failures bypassed `validateFloatPositions()`
+    and returned `{}` from a bare catch — `mwt_float_positions` was the one
+    secondary store still silently swallowing an unparseable record. A parse
+    failure now reads as the fatal root result
+    (`float-positions-root-not-object`, surfaced once per session through
+    the severity-mapped event) before the empty live view is returned —
+    the same promise settings and Knowledge edit-history already make.
+  - **DATA_SAFETY_GUIDE recovery steps corrected.** The backup `sections`
+    entries are wrappers, so a recovered record's `path` applies beneath
+    `sections[store].data` (`knowledgeStore` uses `storeVersion`) — the old
+    wording could lead users to place the record next to `data`, where
+    restore silently ignores it. The recovery-clear commands are also now
+    documented as chat-local only: Knowledge records embedded in lorebooks
+    need `includeKnowledgeStore: true`, which empties every currently
+    hydrated book's embedded container (un-hydrated books keep theirs).
+
+### Added
+
+- **Schema validation + migrations — Part 7 (final): secondary persistence,
+  documentation, and the 2.0 release** (design §2.2/§11 of the schema
+  validation plan — the coverage pass over everything MWT owns that is NOT
+  a chat-metadata/lorebook store, plus the release decision).
+  - **Settings schema/version support — `core/settings_schema.js`** (pure,
+    same structured-issue vocabulary as the store validators). Every
+    settings record read through `createSettingsManager()` — global and all
+    five module managers, automatically — is now validated and versioned:
+    the persisted copy carries an internal `schemaVersion` marker stamped
+    on save (never leaked into `getSettings()`, whose
+    `{ ...defaults, ...saved }` contract is unchanged); reads are
+    non-destructive (the stored record is the recovery copy) and repairs
+    converge on the next save. Policy is deliberately FAIL-OPEN where a
+    store would fail CLOSED: settings are config, not chat data — an
+    unreadable record falls back to defaults with a finding, a
+    future-version record is read as-is and never rewritten by a read
+    (§12's no-silent-downgrade rule; a deliberate save on the older build
+    is the ordinary, field-preserving downgrade path), type mismatches
+    repair (numeric strings coerce, unusable values reset to default,
+    booleans are never coerced from strings), and unknown keys are
+    retained. No raw record is embedded in issues — settings can carry API
+    keys, and the storage itself is the recovery copy. A manager can
+    override via the new `schema: { version, validate }` option.
+  - **Secondary local-storage + message-UUID validation —
+    `schema/secondary.js`** (pure; the one owner of §2.2's remaining
+    bullets: `mwt_float_positions`, `kt_history_*`, and `msg.extra.mwt_uuid`
+    stamps). Policy is read-side repair in the same issue vocabulary:
+    validators return the canonical live view, the stored raw value is
+    left untouched, and no prose is embedded in findings (edit-history
+    content is user prose). Wired at the seams: `core/ui.js
+    loadFloatPositions()` drops invalid entries and retains
+    unknown-button ones (the next drag rewrite converges the key);
+    Knowledge edit history (`knowledge/lorebook.js getHistory()/
+    pushHistory()`) filters malformed records on read and stops copying
+    them forward on the next push; and Interiority's UUID seams
+    (`getMsgKeyForIndex` / `getOrCreateMsgKeyForIndex` /
+    `buildKeyToIndexMap`) now validate stamps before trusting them — a
+    malformed `mwt_uuid` is treated as absent (send_date fallback) or
+    restamped, so garbage keys like `mu-123` can no longer address a
+    message. `validateMessageUuids(chat)` is the read-only diagnostic for
+    malformed/duplicate stamps.
+  - **Diagnostics visibility** — the §9.3 event set gained
+    `schema_settings_invalid` (a stored settings record was unreadable and
+    its module fell back to defaults; settings fail open, nothing pauses)
+    and the Part 7 seams reuse `schema_repaired`,
+    `schema_blocked_future_version`, and `schema_quarantined`. Which event a
+    secondary-persistence finding reports as follows its SEVERITY, via the
+    shared `schemaEventForSeverity()` in `core/schema_status.js`: a
+    QUARANTINE or a FATAL root drops the record from the live view with the
+    raw left in storage (`schema_quarantined`), but a REFERENCE finding — a
+    dangling entry that is RETAINED, like a saved position for a button id
+    this build no longer has — reports as `schema_repaired`, because logging
+    it as a quarantine would tell the user data was set aside for recovery
+    when nothing was removed. Every finding is reported ONCE per session per
+    store+code — `getSettings()` is a hot path and history reads are frequent,
+    so the ring is never flooded — and all of them surface in the 📋 Log tab /
+    Copy Report like every other schema event.
+  - **Documentation** — README's "Data safety in MWT 2.0" section and
+    DATA_SAFETY_GUIDE.md updated from "planned" to shipping (including the
+    new settings/local-storage coverage); the Diagnostics guides note the
+    new log events; BACKUP_RESTORE_DESIGN.md notes that the
+    not-backed-up browser-local records now carry validation coverage; the
+    main TODO ticks the schema subsystem off.
+  - Coverage: `test/settings_schema.test.js` (32 tests — the pure
+    validator, version stamping/refusal, the no-leak contract, event
+    dedupe, legacy migration) + `test/secondary_persistence.test.js`
+    (22 tests — the three validators, float/history convergence, and the
+    UUID seams), plus `core/settings_schema.js` and `schema/secondary.js`
+    added to the static purity guard in `test/schema_engine.test.js`.
+- **The 2.0 version decision** — per the plan's versioning note ("Only
+  Part 6 changes runtime behavior… decide the version at Part 7"), the
+  Part 6 runtime cutover earns the major bump: `package.json`,
+  `manifest.json`, and `core/version.js` move to **2.0.0** together. What
+  the 2.0 data layer means for users, in plain language, is
+  DATA_SAFETY_GUIDE.md.
+
 ## [1.8.6]
 
 ### Added
