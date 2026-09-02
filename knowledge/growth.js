@@ -167,7 +167,10 @@ function bigrams(tokens) {
  */
 function quoteMatchesMessage(needle, needleBigrams, msg) {
     if (!msg || !msg.mes) return false;
-    const haystack = normalizeForMatch(stripNonNarrative(msg.mes));
+    // preserveOffScreen:false — must match the SAME text the evidence prompt
+    // was shown (getIndexedMessages and friends strip the sealed block for
+    // Knowledge), so a quote drawn from an off-screen log line never verifies.
+    const haystack = normalizeForMatch(stripNonNarrative(msg.mes, { preserveOffScreen: false }));
     if (!haystack) return false;
     if (haystack.includes(needle)) return true; // exact contiguous span (fast path)
     if (needleBigrams.length === 0) return false;
@@ -263,7 +266,9 @@ export function getIndexedMessages(count = EVIDENCE_MESSAGE_WINDOW) {
         // real originals first. (Item 1 fix.)
         if (isIlsSummary(msg)) continue;
         const name = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
-        const text = stripNonNarrative(msg.mes).trim();
+        // preserveOffScreen:false — Knowledge sees no actor/witness semantics
+        // for the sealed off-screen log; it strips like any tracker block.
+        const text = stripNonNarrative(msg.mes, { preserveOffScreen: false }).trim();
         if (!text) continue;
         lines.push(`[${i}] ${name}: ${text}`);
     }
@@ -999,7 +1004,8 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
     let maxTs = sinceTs ?? 0;
     for (const { msg, idx, ts } of window) {
         const name = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
-        const text = stripNonNarrative(msg.mes).trim();
+        // preserveOffScreen:false — sealed off-screen log stays out of Knowledge.
+        const text = stripNonNarrative(msg.mes, { preserveOffScreen: false }).trim();
         if (!text) continue;
         lines.push(`[${idx}] ${name}: ${text}`);
         if (ts > maxTs) maxTs = ts;
@@ -1288,7 +1294,8 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         const msg = entry.msg;
         if (!msg || !msg.mes || msg.is_system) continue;
         const name2 = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
-        const text = stripNonNarrative(msg.mes).trim();
+        // preserveOffScreen:false — sealed off-screen log stays out of Knowledge.
+        const text = stripNonNarrative(msg.mes, { preserveOffScreen: false }).trim();
         if (!text) continue;
         // Mark expanded originals so the user can distinguish them in logs.
         const tag = entry.fromSummary ? '[restored]' : '';

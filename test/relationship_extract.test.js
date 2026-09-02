@@ -374,4 +374,30 @@ describe('runRelationshipExtract — chat-switch guard', () => {
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(result.edgesAdded).toBe(0);
     });
+
+    test('the prompt window strips the sealed Off-Screen Events log (Knowledge opt-out)', async () => {
+        // Relationship extraction is a Knowledge call site: its prompt carries
+        // no actor/witness partition rules, so an unwitnessed off-screen
+        // meeting must never reach the evidence window (it would seed a false
+        // relationship edge). `strip: true` also drops preset tracker blocks.
+        setFakeChat([
+            {
+                mes: 'Mara and Jonah argue by the docks.\n<details><summary>📡 <b>Off-Screen Events</b></summary>- Tomas → burned the letters (unwitnessed)</details>',
+                name: 'Narrator',
+                is_user: false,
+            },
+            { mes: 'tail one', name: 'Narrator', is_user: false },
+            { mes: 'tail two', name: 'Narrator', is_user: false },
+        ]);
+        mockFetch.mockResolvedValue(PAYLOAD);
+
+        await runRelationshipExtract();
+
+        // Only the settled first message reaches the model, and its sealed
+        // log is stripped while the narrative survives.
+        const userContent = mockFetch.mock.calls[0][1];
+        expect(userContent).toContain('Mara and Jonah argue by the docks');
+        expect(userContent).not.toContain('Off-Screen Events');
+        expect(userContent).not.toContain('burned the letters');
+    });
 });

@@ -28,7 +28,7 @@ import { assembleNpcBlocks, buildSceneRoster, resolveUserNames, isUserName } fro
 import { purgeUserLedgerEntries } from '../interiority/data.js';
 import { _setCacheForTests, _clearCacheForTests } from '../knowledge/store.js';
 import { saveSettings as saveKnowledgeSettings } from '../knowledge/settings.js';
-import { buildUserContent, buildSystemPrompt } from '../interiority/prompts.js';
+import { buildUserContent, buildSystemPrompt, buildThoughtsSystemPrompt, INJECTION_HEADER } from '../interiority/prompts.js';
 import { purgeLeakedUserEntries } from '../interiority/index.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 
@@ -787,5 +787,48 @@ describe('restoreInnerStatesSnapshot', () => {
         restoreInnerStatesSnapshot(null);
         restoreInnerStatesSnapshot('nonsense');
         expect(getInnerState('Mara')).toBe('wary');
+    });
+});
+
+// ─── Off-Screen Events sealing (v2.1.1) ─────────────────────────
+
+describe('off-screen events are sealed to the acting NPC and named witnesses', () => {
+    test('the unified prompt permits the acting NPC, not merely named witnesses', () => {
+        const prompt = buildSystemPrompt({ thoughts: true, intentions: false });
+        // The partition rule must name BOTH the actor and explicit witnesses —
+        // "named as witnesses" alone sealed the actor's own action from the actor.
+        expect(prompt).toContain('Off-Screen Events module block');
+        expect(prompt).toContain('NPC who performed the logged action');
+        expect(prompt).toContain('explicitly names as witnesses');
+    });
+
+    test('the intentions-only split-call prompt carries the partition rule too', () => {
+        const prompt = buildSystemPrompt({ thoughts: false, intentions: true });
+        // runSplitCall runs intentions as its own call whose window still shows
+        // the sealed log (getStrippedRecentMessages preserves it by default).
+        // Without the shared partition rule, "NEW INTENTIONS REQUIRE CURRENT
+        // EVIDENCE" would read an unwitnessed off-screen log line as a valid
+        // motivating event for any roster NPC.
+        expect(prompt).toContain('Off-Screen Events module block');
+        expect(prompt).toContain('NPC who performed the logged action');
+        expect(prompt).toContain('explicitly names as witnesses');
+    });
+
+    test('the rich-thoughts prompt carries the same partition rule', () => {
+        const prompt = buildThoughtsSystemPrompt();
+        // splitThoughts path: <recent_messages> is NOT all shared history —
+        // the sealed log is visible only to the acting NPC and named witnesses.
+        expect(prompt).toContain('SEALED logs, not shared history');
+        expect(prompt).toContain('Only the acting NPC or a named witness');
+    });
+
+    test('the narrator injection never sanctions invisible execution', () => {
+        // The old header told the narrator to "let it happen invisibly
+        // off-screen" when no module block existed — no receipt entered
+        // history, so the intention stayed open and was re-demanded forever.
+        expect(INJECTION_HEADER).not.toContain('invisibly off-screen');
+        expect(INJECTION_HEADER).toContain('create one');
+        expect(INJECTION_HEADER).toContain('Never execute invisibly');
+        expect(INJECTION_HEADER).toContain('demanded again next turn');
     });
 });

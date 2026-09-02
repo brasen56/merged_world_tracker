@@ -75,6 +75,17 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
 
     rules.push(`${++n}. Output ONLY valid JSON. No markdown fences, no prose before or after.`);
 
+    // Shared actor/witness partition for <recent_messages>. The window comes
+    // from getStrippedRecentMessages(), which PRESERVES the sealed Off-Screen
+    // Events block by default (it is real in-world history), so EVERY call
+    // that reasons from the window needs this rule — not just thoughts.
+    // runSplitCall runs intentions as its own call with no thought rules;
+    // without the partition here, its "NEW INTENTIONS REQUIRE CURRENT
+    // EVIDENCE" rule would read an unwitnessed off-screen log line as a valid
+    // motivating event for any roster NPC — the same leak class the thoughts
+    // side sealed, closed on the intention-creation side too.
+    rules.push(`${++n}. Events inside an Off-Screen Events module block (a details block titled "Off-Screen Events") happened only for the NPC who performed the logged action and any NPCs the line explicitly names as witnesses — to every other NPC they did not happen, and they are NEVER valid evidence for any judgment about them.`);
+
     if (wantThoughts) {
         rules.push(`${++n}. Each NPC may react ONLY to events they could personally witness in <recent_messages>. Facts are limited to their <knowledge_entry> and witnessed events.`);
         rules.push(`${++n}. An NPC may NEVER reference, know, or allude to another NPC's thoughts, secrets, or hidden intentions. Each NPC's mind is sealed.`);
@@ -82,7 +93,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
 
     if (wantIntentions) {
         rules.push(`${++n}. Evaluate each open intention from the <open_intentions> list. The DEFAULT outcome is "open" (carry forward) — only mark "executed" or "dropped" when there is clear, unmistakable evidence:`);
-        rules.push(`   - "executed": ONLY if the recent messages show the NPC has ALREADY COMPLETED the action in full, on-screen. Discussing, planning, preparing for, deciding to do, or beginning the action is NOT execution. The action must be done.`);
+        rules.push(`   - "executed": ONLY if the recent messages show the NPC has ALREADY COMPLETED the action in full — either enacted in narrative prose or logged as completed in an Off-Screen Events module block (a details block titled "Off-Screen Events"). Discussing, planning, preparing for, deciding to do, or beginning the action is NOT execution. The action must be done.`);
         rules.push(`   - "dropped": ONLY if the NPC has EXPLICITLY abandoned or cancelled the intention (said so, or clearly changed their mind). A changed situation, a delay, a new complication, or the trigger not arriving yet is NOT a drop — the intention waits.`);
         rules.push(`   - "open" (default): if there is ANY doubt whether the action is completed or the intention is truly abandoned, leave it open. Do not list it. It carries forward automatically.`);
         rules.push(`   - When in doubt between open and executed/dropped: choose open.`);
@@ -266,6 +277,7 @@ export function buildThoughtsSystemPrompt() {
     rules.push(`   - Facts may come ONLY from <knowledge_entry> and events the NPC personally witnessed in <recent_messages>.`);
     rules.push(`   - Voice, tone, and disposition come ONLY from <character_core>.`);
     rules.push(`   - An NPC may NEVER reference, know, or allude to another NPC's thoughts, secrets, hidden intentions, or inner state. Each NPC's mind is sealed.`);
+    rules.push(`   - Off-Screen Events module blocks (details blocks titled "Off-Screen Events") are SEALED logs, not shared history. A logged line happened ONLY for the NPC who performed the action and any NPCs the line explicitly names as witnesses — to every other NPC it did not happen. Only the acting NPC or a named witness may react to, reference, or be affected by a sealed event.`);
 
     rules.push(`${++n}. Each NPC gets at most ONE thought. "thought" may be null if nothing noteworthy is happening inside them (Omission Over Filler — silence beats a caption).`);
 
@@ -408,7 +420,7 @@ export function buildThoughtsUserContent({ npcBlocks, recentMessages, worldTime,
  * Build the injection header for the narrator-facing intentions block.
  * This is the bracket header that goes inside the <mwt_npc_intentions> tag.
  */
-export const INJECTION_HEADER = `[NPC intentions ledger — live, hidden NPC plans. For every entry whose trigger condition is met in the current scene, that NPC MUST perform the action on-screen in this response, fully committed. Do not narrate these entries, reference them, or let other characters know them — they surface ONLY as the owning NPC's actions. If an entry describes something that has already occurred in the story, treat it as stale bookkeeping — ignore it silently; never mention, re-perform, or correct it.]`;
+export const INJECTION_HEADER = `[NPC intentions ledger — live, hidden NPC plans. For every entry whose trigger condition is met, that NPC MUST complete the action this turn, fully committed. If the NPC is present in the current scene, perform it on-screen. If the NPC is elsewhere, execute it off-screen and log the completed action in the Off-Screen Events module block at the end of the response (a details block titled "Off-Screen Events") instead of cutting away in prose — if no such block exists yet, create one; that log line is the receipt proving the action happened, and an off-screen action with no log line leaves no evidence and will be demanded again next turn. Never execute invisibly, never cut away in prose, never defer. Do not narrate these entries, reference them, or let other characters know them — they surface ONLY as the owning NPC's actions (on-screen) or as an off-screen log line. If an entry describes something that has already occurred in the story, treat it as stale bookkeeping — ignore it silently; never mention, re-perform, or correct it.]`;
 
 /**
  * Format the ledger into the flat arrow-notation lines for injection.

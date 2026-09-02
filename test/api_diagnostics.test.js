@@ -219,7 +219,7 @@ describe('fetchViaConnectionProfile diagnostics', () => {
 });
 
 // ─── Panic sampled at every outbound attempt ─────────────────────────────────
-// [P1] bugs_temp.md: the panic sample used to be taken once at dispatch and
+// [P1] Panic sampling: the panic sample used to be taken once at dispatch and
 // reused across retries — and on the CM path it preceded the awaited shared.js
 // module load, so panic could turn on before sendRequest or a later retry
 // actually left while the summary still said panic:false. The summary now

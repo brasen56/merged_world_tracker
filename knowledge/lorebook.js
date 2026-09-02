@@ -120,9 +120,13 @@ export function getRecentMessages(count = 50) {
     if (!filtered.length) return null;
     // Strip non-narrative blocks (preset trackers, old chatter, time tags)
     // so tracker secrets don't launder into knowledge scan context.
+    // Off-Screen Events blocks are stripped TOO (preserveOffScreen:false):
+    // the Knowledge prompts carry no actor/witness partition rules for that
+    // sealed log, so an unwitnessed off-screen event mentioning a tracked
+    // NPC must never be recorded as knowledge that NPC learned.
     return filtered.map(m => {
         const name = m.is_user ? (m.name || 'User') : (m.name || 'Assistant');
-        return `${name}: ${stripNonNarrative(m.mes)}`;
+        return `${name}: ${stripNonNarrative(m.mes, { preserveOffScreen: false })}`;
     }).join('\n');
 }
 

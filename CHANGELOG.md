@@ -12,7 +12,250 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [2.0.0 - Unreleased (Final Schema Validation)]
+## [2.1.1]
+
+### Fixed
+
+- **Off-Screen Events cross-module fallout** (the three v2.1.1
+  items; each pinned by new tests in `test/strip.test.js`,
+  `test/interiority.test.js`, and `test/recent_scan_exclude.test.js`):
+  - **[P1] Invisible execution has no receipt and will repeat**
+    (`interiority/prompts.js` `INJECTION_HEADER`). When no Off-Screen Events
+    module existed, the narrator was told to "let it happen invisibly
+    off-screen" — nothing entered chat history, Interiority had no evidence
+    to mark the intention executed, and the injection demanded it again every
+    turn. The header now requires the narrator to CREATE the details block
+    ("Off-Screen Events") when absent and log the completed action in it:
+    the log line is the machine-readable execution receipt the evaluation
+    prompt already recognizes, so the execute → evidence → close loop always
+    closes. Invisible execution is now explicitly forbidden.
+  - **[P1] Rich Thoughts can read sealed off-screen events**
+    (`interiority/prompts.js` `buildThoughtsSystemPrompt`). Preserving
+    Off-Screen Events blocks changed what the split-thoughts call sees, but
+    its prompt still treated all of `<recent_messages>` as shared witnessed
+    history — every roster NPC could react to sealed events. The INPUT
+    PARTITION rule now states the block is sealed: a logged line happened
+    only for the acting NPC and any NPCs the line explicitly names as
+    witnesses. The unified prompt's witness rule was aligned to permit the
+    acting NPC as well (the old "named as witnesses" wording sealed the
+    actor's own action from the actor).
+  - **[P1] Shared preservation can contaminate Knowledge ledgers**
+    (`core/strip.js`). The shared sanitizer's off-screen exception exposed
+    the sealed block to Knowledge, whose scan/update/enrichment prompts have
+    no actor/witness semantics — an unwitnessed event mentioning another NPC
+    could be recorded as knowledge that NPC learned. Preservation is now an
+    explicit per-consumer option (`preserveOffScreen`, default `true`), and
+    every Knowledge call site (lorebook scan/update/enrich windows, growth
+    evidence capture + quote verification) passes `false` so the sealed block
+    strips like any other details block. World State, Chronicle, Story
+    Planner, and Interiority keep ingesting the block by default.
+- **Manual 🔄 Refresh no longer fans out into N sequential LLM calls for users
+  who never enabled delta mode** (`world_state/refresh.js`). The chunked
+  catch-up upgrade (v2.1.1) fired for EVERYONE whose refresh watermark had an
+  uncovered gap — with shipped defaults (deltaMode off, autoRefresh off), one
+  🔄 click after a long roleplay session could chain 8–12 uncapped full
+  generations with no opt-out and no per-pass progress. The upgrade is now
+  gated on `isDeltaModeEnabled()`: delta users keep the honest gap replay,
+  while the default profile keeps the plain one-click/one-generation refresh
+  over the `maxScanMessages` window it configured. Catch-up runs are
+  additionally capped at 8 generation passes per run (delta users included) —
+  the stop is honest (each pass stamps the watermark where its chunk ended)
+  and a status message says to click Refresh again to continue the replay.
+  Pinned by new tests in `test/world_state_delta.test.js`.
+- **The intentions-only split-call prompt now carries the off-screen
+  partition rule** (`interiority/prompts.js`). The actor/witness rule lived
+  only in the thoughts branch, but `runSplitCall` runs intentions as its own
+  call whose message window still preserves the sealed Off-Screen Events
+  block — so "NEW INTENTIONS REQUIRE CURRENT EVIDENCE" could read an
+  unwitnessed off-screen log line as a valid motivating event for any roster
+  NPC (the same leak class the thoughts side sealed). The partition rule is
+  now shared by both branches. Pinned by a new test in
+  `test/interiority.test.js`.
+- **Automatic relationship extraction now strips its evidence window**
+  (`knowledge/relationships.js`). It read the last 50 settled messages raw —
+  every `<details>` block included, sealed off-screen log included — making
+  it the one Knowledge call site that did not pass
+  `{ preserveOffScreen: false }` (an unwitnessed off-screen meeting could
+  seed a false relationship edge). It now strips like every other Knowledge
+  call site, `core/strip.js`'s consumer list reflects it, and the test stub
+  mirrors `getRecentMessages`'s `strip`/`preserveOffScreen` options. Pinned
+  by a new test in `test/relationship_extract.test.js`.
+- **Delta patch protocol round-out** (`world_state/delta.js`):
+  - `buildRefreshStatusDelta`'s JSDoc no longer claims `msgIndex` is "current
+    chat length" — it is the stable-history end (the whole point of the
+    watermark fix).
+  - `parseDeltaPatch` matches every marker regex against the trimmed line: an
+    indented `### UPDATE:` used to die as a preamble error while an indented
+    `### NO CHANGES` parsed fine. Indented unknown ALL-CAPS markers are still
+    rejected.
+  - `applyDeltaPatch` re-inserts a previously-omitted section at its canonical
+    `SECTIONS` position instead of appending it at the document's end, so
+    patched documents no longer drift from template order until the next full
+    reconciliation.
+- **Guard + UI polish**: `refreshWorldStateDelta` also refuses while a
+  catch-up loop is active, mirroring `refreshWorldState`'s guard (defensive:
+  the loop currently never yields between passes, but one added `await` would
+  open the gap). The ⚡ Delta button's `finally` re-derives its disabled state
+  via `updateArchiveButtonState()` instead of unconditionally enabling — the
+  editor-pre-sync refusal early return no longer leaves it clickable on an
+  empty document.
+
+### Changed
+
+- All references to a temporary bug-list working file were removed from code
+  comments, test titles, and this changelog — the file was never part of the
+  repository, so every citation was a dead pointer. Each comment now carries
+  its rationale inline (e.g. "the frozen-evidence rule", "the
+  watermark-preservation rule").
+
+## [2.1.0]
+
+### Fixed
+
+- **Delta mode hardening** (bugs found in the §3-F review pass):
+  - **The delta scan is now built from the refresh watermark, not the latest
+    `maxScanMessages`** (`getMessagesSinceForScan()` in
+    `world_state/refresh.js`). Previously an on-demand ⚡ Delta after a longer
+    gap silently omitted the oldest unseen events and then stamped the
+    document as freshly updated — hiding the gap forever. When the whole
+    unseen interval cannot fit inside one scan budget (message count OR the
+    20k-character cap), the delta declines BEFORE spending a call: scheduled
+    runs fall back to a full refresh in the same cycle, manual runs get a
+    `DeltaPatchError` pointing at 🔄 Refresh.
+  - **Refresh watermarks record where the scan actually ends.**
+    `deltaStatus.lastRefreshAtMsg` now stamps the stable-history end
+    (`getStableHistoryEnd()`) for full refreshes, deltas, and section regens —
+    not chat length, which includes the configurable in-flight tail that is
+    never scanned. `deriveDocumentStatus()`/`getDocumentStatus()` compare
+    like-for-like, so the in-flight tail no longer counts toward staleness.
+  - **Manual edits keep their status.** `refreshWorldStateDelta()` previously
+    only checked that a baseline digest existed; since the ⚡ Delta button
+    pre-persists live editor changes, an edited document could pass, get
+    patched, and receive a fresh digest covering the whole document —
+    appearing merely delta-updated although its manual content was never
+    reconciled. The precondition now compares digests: manual runs are
+    rejected with a pointer to the full Refresh, auto runs escalate to one
+    (same policy as `planAutoRefresh`'s `manual-edits-since-refresh`).
+  - **Partial updates no longer clear the manual signal.** New
+    `buildPartialRefreshStatus()` (`world_state/delta.js`), used by both the
+    delta writes and section regeneration, stamps a fresh digest ONLY when the
+    incoming document still matched its previous refresh digest. When other
+    sections carry manual edits (or the document is a legacy import with no
+    baseline), the old digest is kept — the document keeps reporting ✏️
+    manually edited until a full refresh reconciles it — while the refresh
+    kind, watermark, and reconciliation cadence still advance.
+  - **Patch markers can no longer leak into section content.**
+    `parseDeltaPatch()` recognizes protocol-looking ALL-CAPS markers BEFORE
+    body accumulation (inside operations too, not just in preamble position),
+    rejects `### NO CHANGES` mixed with any operation (before, between, or
+    inside one), rejects content attached to `### REMOVE`, and rejects
+    duplicate operations for the same section. The delta OVERRIDE prompt now
+    states those rules explicitly so first-attempt compliance improves.
+- **Delta mode + refresh follow-up fixes** (each pinned
+  by new tests in `test/world_state_delta.test.js`):
+  - **[P1] Section regeneration no longer advances the global watermark**
+    (`world_state/sections.js`). It reconciled exactly ONE section but stamped
+    `lastRefreshAtMsg` at the stable-history end, so the next delta started
+    after that point and permanently skipped messages that had changed OTHER
+    sections. A partial update now re-stamps the PREVIOUS watermark; the next
+    delta re-scans the intervening messages cheaply (at worst answering
+    "### NO CHANGES" for the already-regenerated section), and a full refresh
+    or catch-up advances the watermark as usual.
+  - **[P1] The oversized-gap fallback now actually covers the skipped
+    interval** (`world_state/refresh.js`). It used to call a plain full
+    refresh, which reads only the latest `maxScanMessages` and then stamps the
+    document reconciled through the current scan end — permanently hiding the
+    oldest unseen messages. A full refresh now detects when the last watermark
+    sits before the sliding window's start and upgrades itself to a chunked
+    CATCH-UP (`runCatchUpWorldStateRefresh`): the unseen interval is replayed
+    through the model oldest→newest in budget-sized passes (each ≤20k
+    characters, each pass building on the previous document), and every pass's
+    checked write stamps the watermark where ITS chunk ended — partial
+    progress is honest, and a failed later pass never stamps over the
+    remaining gap. A message too large for any window is handled by the
+    truncation-with-marker rule of the round 3 group below.
+  - **[P2] Grounding now checks the exact window the model saw**
+    (`world_state/refresh.js`). The delta patch was generated from the
+    watermark-derived scan window, but the grounding gate re-read the sliding
+    latest-N window after the API await — messages arriving mid-await could
+    push the oldest evidence out of the re-read, stripping or rejecting
+    legitimate patch content. Validation now uses the generation window
+    verbatim (the full refresh and section regeneration freeze their scan
+    text before the first await for the same reason — retries, grounding,
+    and catch-up passes all reuse it).
+  - **[P2] A valid zero watermark goes stale again** (`world_state/delta.js`).
+    A full refresh in a short chat legitimately records stable-history end 0;
+    treating 0 as "no watermark" left `msgsSinceRefresh` null forever, so the
+    document never reported stale as settled messages accumulated. The
+    missing-digest branch already distinguishes never-refreshed documents, so
+    the difference is now computed from zero normally.
+- **Catch-up honesty fixes** (each pinned by new tests
+  in `test/world_state_delta.test.js`):
+  - **[P1] A message too large for any window is scanned truncated, never
+    skipped-and-stamped** (`world_state/refresh.js` `nextCatchUpChunk()`).
+    When one message's scan line alone exceeded the 20k-character budget, the
+    catch-up advanced `to` past it without including any of its content — the
+    following pass/status write then stamped a watermark beyond that message,
+    and the document could report fully reconciled despite never processing
+    it (a console warning is not coverage). The chunk now carries the
+    message's leading portion with an explicit partial-coverage marker
+    (`[…partial message — … leading portion only]`), so the model reconciles
+    what fits and can see the coverage was partial; progress no longer
+    depends on stamping over unscanned content.
+  - **[P1] Catch-up replays a frozen target, not a moving one**
+    (`world_state/refresh.js` `runCatchUpWorldStateRefresh()`). The loop
+    recomputed the stable-history end after every API pass, so messages that
+    kept settling while a long catch-up ran extended the target and queued
+    additional full-generation passes with no fixed upper bound. The target
+    end is now captured once when the catch-up begins (the live end can only
+    ever LOWER it, if the chat shrank mid-replay); messages settling
+    afterwards stay beyond the final watermark and are covered by the next
+    (cheap) delta cycle.
+
+### Added
+
+- **Low-cost delta mode for World State** (TODO §3-F; source:
+  `Audit_Reports/Potential_Improvements.md` §3). Full refreshes are expensive —
+  auto-refresh now has an incremental mode that asks the model ONLY for the
+  sections that changed and applies a strictly validated patch.
+  - **New module `world_state/delta.js`** (leaf, mirrors provenance.js):
+    the patch protocol (`### UPDATE: <Section>` / `### REMOVE: <Section>` /
+    `### NO CHANGES` — parsed and validated against the canonical section
+    list; unknown sections/markers, empty bodies, and any tampering with
+    `## Current Scene` are rejected), the delta prompts (strict OVERRIDE block
+    on the normal system prompt, `### Previous World State` + recent messages
+    user message), and the document-status bookkeeping.
+  - **Document status surfaced in the UI** (PI §3's ask): a chip next to the
+    toolbar word count shows 🟢 fully reconciled / 🟡 delta-updated (×N since
+    full) / ✏️ manually edited / 🔴 stale relative to chat / ⚪ empty. Manual
+    edits are detected by digest comparison (`captureRevision`) against the
+    last refresh's committed digest — every out-of-band write path (manual
+    Save, import, revert, editor debounce persist) is covered without hook
+    calls. `getDocumentStatus()` is exported from `world_state/index.js` for
+    the diagnostics console / future dashboard.
+  - **Periodic full reconciliation**: after `deltaReconcileEvery` (default 5)
+    consecutive partial updates — deltas AND section regens, which now stamp
+    the status too — the next scheduled refresh is a full one. Scheduled runs
+    also route to full when there is no document yet, no refresh baseline
+    (imported/legacy), or manual edits are pending. A patch that fails
+    validation twice escalates to a full refresh in the same cycle instead of
+    leaving the document unfreshened.
+  - **Same guard discipline as the full refresh** (`refreshWorldStateDelta` /
+    `runScheduledWorldStateRefresh` in `world_state/refresh.js`): busy flag,
+    settings check, paused-store decline, scope assert after every await,
+    same-chat revision guard, grounding gate on the patched document (strict
+    discards / soft strips; no extra retry — cost is the point), and ONE
+    checked write carrying text + history snapshot + status atomically.
+    Status rides the store as `deltaStatus` (unknown-key passthrough — no
+    schema change; backup/restore carries it automatically). New `removeSection()`
+    in `world_state/data.js` (twin of `replaceSection`) backs `### REMOVE`.
+  - **Settings + UI**: `deltaMode` (off by default), `deltaReconcileEvery`,
+    `deltaStaleAfterMsgs` in a new "⚡ Delta Refresh (Low-cost Mode)" settings
+    block, plus a ⚡ Delta toolbar button for on-demand incremental updates.
+    Tests: `test/world_state_delta.test.js` (52 tests).
+
+
+## [2.0.0]
 
 ### Fixed
 

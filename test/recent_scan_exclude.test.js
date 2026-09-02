@@ -237,3 +237,40 @@ describe('world_state provenance — the excluded tail is not "touched"', () => 
         expect(prov.entities.mara.lastTouchedMsg).toBe(1);
     });
 });
+
+// v2.1.1 off-screen sealing: the Off-Screen Events block is preserved by the shared
+// sanitizer for consumers that understand its actor/witness semantics, but the
+// Knowledge module opts out — its prompts would otherwise record an
+// unwitnessed sealed event as knowledge a mentioned NPC "learned".
+describe('off-screen events block — Knowledge windows strip it (sealed-log opt-out)', () => {
+    beforeEach(() => resetCoreStubs());
+
+    const CHAT_WITH_SEALED_LOG = [
+        { id: 'm0', name: 'User', is_user: true, mes: 'old user 1' },
+        { id: 'm1', name: 'Mara', mes: 'old ai 1' },
+        { id: 'm2', name: 'User', is_user: true, mes: 'old user 2' },
+        {
+            id: 'm3', name: 'Mara',
+            mes: 'The kitchen went quiet.\n<details><summary>Tracker</summary>secret dashboard</details>\n<details><summary>📡 <b>Off-Screen Events</b></summary>- Tomas → burned the letters (unwitnessed)</details>',
+        },
+        { id: 'm4', name: 'User', is_user: true, mes: 'LATEST USER' },
+        { id: 'm5', name: 'Mara', mes: 'LATEST AI' },
+    ];
+
+    test('knowledge getRecentMessages strips the sealed log along with trackers', async () => {
+        setFakeChat(CHAT_WITH_SEALED_LOG);
+        const { getRecentMessages: getKnowledgeRecentMessages } = await import('../knowledge/lorebook.js');
+        const text = getKnowledgeRecentMessages(50);
+        expect(text).toContain('The kitchen went quiet.');
+        expect(text).not.toContain('burned the letters');
+        expect(text).not.toContain('secret dashboard');
+    });
+
+    test('growth getIndexedMessages strips the sealed log too', async () => {
+        setFakeChat(CHAT_WITH_SEALED_LOG);
+        const { getIndexedMessages } = await import('../knowledge/growth.js');
+        const text = getIndexedMessages(80);
+        expect(text).toContain('The kitchen went quiet.');
+        expect(text).not.toContain('burned the letters');
+    });
+});

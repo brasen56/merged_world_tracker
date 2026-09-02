@@ -1,6 +1,6 @@
 /**
  * test/restore_quarantine_integrity.test.js — Regression coverage for the
- * nine integrity fixes tracked in bugs_temp.md:
+ * nine first-round integrity fixes:
  *
  *   1. planRestore re-prepares every COMPLETED section (merges can copy
  *      malformed records out of the current store; keep/skip returns the
@@ -24,7 +24,7 @@
  *   9. (test/schema_perf_harness.test.js — the harness itself now enforces
  *      the §7.2 migration budget with a p95 tail, not the median.)
  *
- * Round 2 (the later four bugs tracked in bugs_temp.md):
+ * Round 2 (the later four bugs):
  *
  *  10. A blocked CURRENT preparation (fatal root, future declared version)
  *      makes the section unwritable immediately — the merge helpers can no
@@ -38,7 +38,7 @@
  *  13. The World State import uses a checked write: a refused store write
  *      reports failure and keeps the previous value instead of "Imported.".
  *
- * Round 3 (four later bugs tracked in bugs_temp.md):
+ * Round 3 (four later bugs):
  *
  *  14. Exact planning preserves the planner's blocked destination sections —
  *      no overwrite, no removal — and derives deferral solely from the exact
@@ -52,7 +52,7 @@
  *      the preview describes the actual write plan, never an addition that
  *      cannot occur.
  *
- * Round 4 (the current three bugs tracked in bugs_temp.md):
+ * Round 4 (three later bugs):
  *
  *  17. The World State import passes the archive's schema findings INTO the
  *      checked commit, so the destination is validated before the quarantine
@@ -64,7 +64,7 @@
  *      the merge planner never examined it) keeps its refusal reason in the
  *      exact summary's skipped list.
  *
- * Round 5 (the current two bugs tracked in bugs_temp.md):
+ * Round 5 (two later bugs):
  *
  *  19. The Chronicle import uses a checked write carrying the import file's
  *      findings: a refused store write mutates neither the store, the
@@ -250,7 +250,7 @@ describe('restore/quarantine integrity fixes', () => {
         expect(getFakeMeta().session_chronicle_data.snapshots).toHaveLength(1);
     });
 
-    // ── Keep/skip never writes the section (bugs_temp #2) ────────────────────
+    // ── Keep/skip never writes the section ────────────────────
 
     test('keep mode leaves an invalid field in the kept section untouched — no repair, no quarantine, no stamp', async () => {
         getFakeMeta().world_state_tracker_metadata = {
@@ -277,7 +277,7 @@ describe('restore/quarantine integrity fixes', () => {
         expect(getFakeMeta()[MANIFEST_METADATA_KEY]?.sections?.worldState).toBeUndefined();
     });
 
-    // ── The destination half is migrated before merging (bugs_temp #1) ───────
+    // ── The destination half is migrated before merging ───────
 
     test('a legacy v0 Chronicle snapshot is migrated (deterministic id) instead of quarantined', async () => {
         // A legacy destination: no manifest stamp ⇒ version 0, and its
@@ -358,7 +358,7 @@ describe('restore/quarantine integrity fixes', () => {
         expect(getFakeMeta().session_chronicle_data).toBeUndefined();
     });
 
-    test('a clean restore is not blocked by an unrelated future chat quarantine container (bugs_temp #4)', async () => {
+    test('a clean restore is not blocked by an unrelated future chat quarantine container', async () => {
         const futureContainer = {
             version: 9,
             items: [{
@@ -435,7 +435,7 @@ describe('restore/quarantine integrity fixes', () => {
         });
 
         // The restore can never reach the flush: the PRE-RESTORE backup
-        // export aborts visibly first (bugs_temp #6) — a backup built from a
+        // export aborts visibly first — a backup built from a
         // refused book container would silently omit its recovery records.
         // Either way the restore is refused with NOTHING written.
         await expect(restoreBackup(file, { confirm: true })).rejects.toThrow(/cannot be read safely/);
@@ -449,7 +449,7 @@ describe('restore/quarantine integrity fixes', () => {
         expect(getRegistry()).toEqual({});
     });
 
-    // ── Malformed embedded recovery data is never overwritten (bugs_temp #7)
+    // ── Malformed embedded recovery data is never overwritten
 
     test('a malformed embedded container refuses the merge and leaves the book untouched', async () => {
         knowledgeState.wiScript = fakeWorldInfo();
@@ -478,7 +478,7 @@ describe('restore/quarantine integrity fixes', () => {
         expect(getRegistry()['Broken uid']).toBeUndefined();
     });
 
-    // ── Recovery data ownership follows the store (bugs_temp #5) ─────────────
+    // ── Recovery data ownership follows the store ─────────────
 
     test('recovery records for the Knowledge store ride the lorebook flush, never the chat container', async () => {
         knowledgeState.wiScript = fakeWorldInfo();
@@ -517,7 +517,7 @@ describe('restore/quarantine integrity fixes', () => {
         expect(chatItems.filter(item => item.store === 'knowledgeStore')).toEqual([]);
     });
 
-    // ── Exports never silently omit refused recovery data (bugs_temp #6) ──────
+    // ── Exports never silently omit refused recovery data ──────
 
     test('an export aborts visibly when a book holds a refused quarantine container', async () => {
         _setCacheForTests('Knowledge Tracker', {
@@ -604,7 +604,7 @@ describe('restore/quarantine integrity fixes', () => {
         expect(getStoreQuarantineItems('Knowledge Tracker')).toEqual([]);
     });
 
-    // ── Quarantined records are not double-reported (bugs_temp #8) ────────────
+    // ── Quarantined records are not double-reported ────────────
 
     test('a refused import record is not also reported as already tracked', async () => {
         knowledgeState.wiScript = fakeWorldInfo();

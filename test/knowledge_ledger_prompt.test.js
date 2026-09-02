@@ -9,7 +9,7 @@
  *
  * Fix at the source: every Knowledge prompt that emits ledger facts must
  * scope them to established past/present facts. The ban was later narrowed
- * (bugs_temp.md [P2]): only the tracked NPC's OWN unresolved plans are
+ * (later narrowed, P2): only the tracked NPC's OWN unresolved plans are
  * forbidden — facts about OTHER people's promises ("Dorothy promised to
  * arrive Monday") are established present facts and ARE allowed, since
  * users curate the lorebooks for stale references themselves. These tests

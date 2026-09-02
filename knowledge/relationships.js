@@ -379,7 +379,14 @@ export async function runRelationshipExtract() {
         return emptyExtractResult();
     }
 
-    const recentMessages = getRecentMessages({ maxMessages: 50, stableHistory: true });
+    // Knowledge prompt — no actor/witness partition rules for the sealed
+    // Off-Screen Events log (unlike interiority), so this call site must
+    // strip: an unwitnessed off-screen meeting must never seed a relationship
+    // edge. `strip: true` also removes preset trackers/old chatter from the
+    // evidence window, and `preserveOffScreen: false` opts the sealed log out
+    // of the strip exception — the same policy as every other Knowledge call
+    // site (see core/strip.js).
+    const recentMessages = getRecentMessages({ maxMessages: 50, stableHistory: true, strip: true, preserveOffScreen: false });
     if (!recentMessages) throw new Error('No recent messages to scan for relationships.');
 
     const rosterSection = `<known_npcs>\n${knownNames.map(n => `- ${n}`).join('\n')}\n</known_npcs>`;
