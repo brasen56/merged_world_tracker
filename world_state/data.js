@@ -100,6 +100,19 @@ export function replaceSection(text, sectionName, newContent) {
     return (text.trim() + '\n\n' + trimmed).trim();
 }
 
+/**
+ * Remove one "## Section" block from the document entirely. Twin of
+ * replaceSection (same WORLD-STATE-06 line-anchored pattern); used by the
+ * delta-refresh patch protocol (world_state/delta.js "### REMOVE:").
+ * A missing section is a no-op — the caller decides whether that matters.
+ */
+export function removeSection(text, sectionName) {
+    const escaped = escapeRegex(sectionName);
+    const pattern = new RegExp(`(?:^|\\n)## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
+    if (!pattern.test(text)) return text;
+    return text.replace(pattern, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // ─── Mutable shared state ────────────────────────────────────────────────────
 
 export const state = {

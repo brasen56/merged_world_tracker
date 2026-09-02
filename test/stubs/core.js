@@ -45,6 +45,9 @@
 // phases call record() through the barrel. _resetDiagnostics stays out of the
 // production barrel — only this test stub reaches it.
 import { _resetDiagnostics, recordInjection } from '../../core/diagnostics.js';
+// Real sanitizer (leaf module, no SillyTavern deps) — getRecentMessages below
+// must mirror core/context.js's strip/preserveOffScreen options.
+import { stripNonNarrative } from '../../core/strip.js';
 
 let _chat = [];
 let _meta = {};
@@ -163,6 +166,8 @@ export function getRecentMessages({
     maxMessages = 50,
     maxChars = 500000,
     filterSystem = false,
+    strip = false,
+    preserveOffScreen = true,
     excludeLast = 0,
     stableHistory = false,
 } = {}) {
@@ -176,7 +181,8 @@ export function getRecentMessages({
     for (let i = slice.length - 1; i >= 0; i--) {
         const msg = slice[i];
         const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
-        const text = String(msg?.mes || '').trim();
+        let text = String(msg?.mes || '').trim();
+        if (strip) text = stripNonNarrative(text, { preserveOffScreen });
         if (!text) continue;
         const line = `${name}: ${text}`;
         if (total + line.length > maxChars) break;

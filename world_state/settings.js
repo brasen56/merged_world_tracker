@@ -45,6 +45,16 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
         // Grounding gate (§5.3) — off by default, non-destructive mode when enabled.
         groundingEnabled: false,
         groundingMode: 'soft', // 'soft' | 'strict'
+        // Delta refresh (TODO §3-F / PI §3) — off by default. When on, the
+        // scheduled auto-refresh asks the model only for changed sections and
+        // applies a validated patch; a full refresh runs when there is no
+        // baseline, after manual edits, and every `deltaReconcileEvery`
+        // consecutive partial updates.
+        deltaMode: false,
+        deltaReconcileEvery: 5,
+        // When the document chip reports "stale relative to chat": messages
+        // since the last refresh of any kind (full or delta).
+        deltaStaleAfterMsgs: 15,
         // Comma-separated names that never expire and are never flagged as
         // ungrounded (e.g. the protagonist/POV character).
         pinnedEntities: '',

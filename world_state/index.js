@@ -14,7 +14,7 @@
  *   render.js    — UI rendering, event wiring, archive/import/clear, revert/diff
  */
 
-import { syncSharedConnectionSettings, estimateTokens, getChat, getOrCreateReceiptIdentity } from '../core/index.js';
+import { syncSharedConnectionSettings, estimateTokens, getChat, getStableHistoryEnd, getOrCreateReceiptIdentity } from '../core/index.js';
 
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -31,6 +31,7 @@ import {
     refreshWorldState, onMessageReceived, restartAutoSaveTimer,
 } from './refresh.js';
 import { render, wireEvents } from './render.js';
+import { deriveDocumentStatus } from './delta.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -217,6 +218,20 @@ export function getAutoRefreshStatus() {
         counter: state.autoRefreshCounter,
         interval: getAutoRefreshInterval(),
     };
+}
+
+/**
+ * TODO §3-F: the document's reconciliation status for external surfaces
+ * (diagnostics console, future dashboard):
+ *   kind — 'empty' | 'manual' | 'stale' | 'delta' | 'reconciled'
+ * plus the facts behind it (msgsSinceRefresh, deltasSinceFull, …).
+ */
+export function getDocumentStatus() {
+    // Like-for-like with the watermark stamps (refresh.js / sections.js):
+    // those record the stable-history END, so staleness must be measured from
+    // the same point — the in-flight tail is never scanned and must not count
+    // as "messages since the refresh".
+    return deriveDocumentStatus({ currentMsgIndex: getStableHistoryEnd() });
 }
 
 export function syncGlobalSettings(patch) {

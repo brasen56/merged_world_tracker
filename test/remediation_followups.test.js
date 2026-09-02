@@ -344,7 +344,7 @@ describe('WORLD-STATE-09 — the editor debounce is scoped to its own chat', () 
         const { scheduleEditorPersist } = await import('../world_state/render.js');
 
         // An unreadable store root makes the checked write fail closed
-        // (bugs_temp round 3: the debounce used the unchecked wrapper and
+        // (the round-3 fix: the debounce used the unchecked wrapper and
         // updated UI state regardless of whether storage accepted the write).
         getFakeMeta().world_state_tracker_metadata = 'CORRUPT ROOT';
         state.modal = fakeModalWithEditor('Chat A state, edited.');
@@ -430,7 +430,7 @@ describe('INTERIORITY-01 — stale thought blocks are removed from the DOM', () 
     });
 });
 
-// ─── bugs_temp #1 — pre-resolved keys in the thought render loop ──────────────
+// ─── Pre-resolved keys in the thought render loop ──────────────
 
 describe('thought-block rendering uses the pre-resolved key (no O(keys × chat) re-scan)', () => {
     /**

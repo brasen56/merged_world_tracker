@@ -26,6 +26,7 @@ import {
 import { applyWorldStateInjection } from './injection.js';
 import { getRecentMessagesForScan } from './refresh.js';
 import { buildProvenance, groundingGate } from './provenance.js';
+import { getDeltaStatus, buildPartialRefreshStatus } from './delta.js';
 
 export { extractOnlySection, replaceSection };
 
@@ -83,9 +84,17 @@ OVERRIDE FOR THIS GENERATION:
 // prompt's PREV_STATE_BUDGET.
 const SECTION_CONTEXT_BUDGET = 30000;
 
-function buildSectionUserMessage(sectionName) {
+/**
+ * @param {string} sectionName — the section being regenerated.
+ * @param {string} scanText — the scan window this generation is built from.
+ *  Frozen by the caller before the first await so the initial attempt, the
+ *  grounding retry, and the grounding gate all see the EXACT evidence the
+ *  model was given — never a re-read window that messages arriving mid-await
+ *  may have shifted (the frozen-evidence rule, same fix as the delta/full paths).
+ */
+function buildSectionUserMessage(sectionName, scanText) {
     const fullState = truncateText(getWorldStateText().trim() || 'None yet.', SECTION_CONTEXT_BUDGET);
-    const recent = getRecentMessagesForScan() || 'No recent messages.';
+    const recent = scanText || 'No recent messages.';
     return [
         '### Full Current World State (for context only — do not include in output)',
         fullState,
@@ -163,10 +172,17 @@ export async function regenerateSection(sectionName, variety = 2) {
 
         const sectionSettings = { ...s, temperature };
 
+        // Frozen-evidence rule (follow-up): freeze the scan window BEFORE the first
+        // await. The generation prompt, the grounding retry, and the grounding
+        // gate must all work from the exact same evidence — a re-read after
+        // the API await could lose the oldest part of this window to messages
+        // that arrived meanwhile, stripping names the model legitimately used.
+        const scanWindowText = getRecentMessagesForScan();
+
         const _wsApi3 = resolveApiCall({ moduleSettings: sectionSettings });
         const raw = await _wsApi3.fetchFn({
             systemPrompt: buildSectionSystemPrompt(sectionName, variety),
-            userContent: buildSectionUserMessage(sectionName),
+            userContent: buildSectionUserMessage(sectionName, scanWindowText),
             settings: _wsApi3.settings,
             retries: 1,
         });
@@ -212,7 +228,7 @@ export async function regenerateSection(sectionName, variety = 2) {
         // refresh path so the two agree.
         if (s.groundingEnabled) {
             let grounding = groundingGate(cleaned, {
-                scanText: getRecentMessagesForScan(),
+                scanText: scanWindowText,
                 priorText,
                 pinned: getPinnedEntities(s),
                 mode: s.groundingMode,
@@ -222,7 +238,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                 const _wsApiRetry = resolveApiCall({ moduleSettings: sectionSettings });
                 const rawRetry = await _wsApiRetry.fetchFn({
                     systemPrompt: buildSectionSystemPrompt(sectionName, variety),
-                    userContent: buildSectionUserMessage(sectionName) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
+                    userContent: buildSectionUserMessage(sectionName, scanWindowText) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
                     settings: _wsApiRetry.settings,
                     retries: 1,
                 });
@@ -247,7 +263,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                 }
                 cleaned = extractOnlySection(textRetry, sectionName) || textRetry.trim();
                 grounding = groundingGate(cleaned, {
-                    scanText: getRecentMessagesForScan(),
+                    scanText: scanWindowText,
                     priorText,
                     pinned: getPinnedEntities(s),
                     mode: s.groundingMode,
@@ -261,7 +277,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                     }
                     console.warn(`[MWT:WorldState] Grounding gate still rejected section after retry (${grounding.reason}) — soft mode, stripping.`);
                     grounding = groundingGate(cleaned, {
-                        scanText: getRecentMessagesForScan(),
+                        scanText: scanWindowText,
                         priorText,
                         pinned: getPinnedEntities(s),
                         mode: 'soft',
@@ -292,7 +308,30 @@ export async function regenerateSection(sectionName, variety = 2) {
         // keeps the previous document, exactly like the guards above. (A blank
         // outgoing document skips the history snapshot, preserving the old
         // `if (docNow?.trim())` no-op.)
-        const written = commitHistorySnapshot(docNow, { text: updated });
+        //
+        // Delta-status bookkeeping (TODO §3-F) rides the same patch, but a
+        // section regen may stamp a fresh digest ONLY when the incoming
+        // document was still reconciled (its digest matched the last
+        // refresh's). When other sections carry manual edits,
+        // buildPartialRefreshStatus keeps the OLD digest so the document keeps
+        // reporting as manually edited — one model-reconciled section must not
+        // clear that signal — while the kind and reconciliation cadence still
+        // advance.
+        //
+        // The watermark deliberately does NOT advance (watermark-preservation
+        // rule): this
+        // run reconciled exactly ONE section from the sliding scan window, so
+        // stamping the stable-history end here would let the next delta start
+        // AFTER it and permanently skip messages that changed OTHER sections.
+        // Re-stamping the previous watermark keeps the unseen interval
+        // scannable; the next delta re-reads it cheaply (at worst answering
+        // "### NO CHANGES" for this already-regenerated section), and a full
+        // refresh or catch-up advances the watermark as usual.
+        const prevStatus = getDeltaStatus();
+        const written = commitHistorySnapshot(docNow, {
+            text: updated,
+            deltaStatus: buildPartialRefreshStatus(prevStatus, docNow, updated, prevStatus.lastRefreshAtMsg),
+        });
         if (!written.ok) {
             console.warn(`[MWT:WorldState] Section "${sectionName}" regeneration refused at the store write (${written.reason ?? 'unknown reason'}) — the previous world state was kept.`);
             return null;

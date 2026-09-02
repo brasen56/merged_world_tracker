@@ -27,9 +27,65 @@ import {
 import {
     applyWorldStateInjection, getHookMode, buildInjectionPreview,
 } from './injection.js';
-import { refreshWorldState, restartAutoSaveTimer } from './refresh.js';
+import { refreshWorldState, refreshWorldStateDelta, restartAutoSaveTimer } from './refresh.js';
 import { regenerateSection } from './sections.js';
 import { buildProvenance, getStalenessReport, purgeStaleEntries } from './provenance.js';
+import { deriveDocumentStatus, getDeltaReconcileEvery, getDeltaStaleAfterMsgs } from './delta.js';
+
+// ─── Document status chip (TODO §3-F / PI §3) ────────────────────────────────
+// Surfaces whether the document is fully reconciled / delta-updated / manually
+// edited / stale relative to chat. The facts come from delta.js's
+// deriveDocumentStatus(); this maps them to the chip's emoji + label + color.
+
+const DOC_STATUS_STYLES = {
+    reconciled: { color: '#22c55e' },   // green
+    delta: { color: '#eab308' },        // yellow
+    manual: { color: '#38bdf8' },       // blue
+    stale: { color: '#f87171' },        // red
+    empty: { color: 'var(--mwt-text-dim)' },
+};
+
+function documentStatusPresentation(status) {
+    switch (status.kind) {
+        case 'reconciled':
+            return {
+                emoji: '🟢',
+                title: `Fully reconciled by a full refresh${status.msgsSinceRefresh !== null ? ` — ${status.msgsSinceRefresh} message(s) ago` : ''}.`,
+                label: 'Fully reconciled',
+            };
+        case 'delta':
+            return {
+                emoji: '🟡',
+                title: `Delta-updated — ${status.deltasSinceFull} partial update(s) since the last full refresh. A full reconciliation runs automatically every ${getDeltaReconcileEvery()}.`,
+                label: `Delta ×${status.deltasSinceFull}`,
+            };
+        case 'manual':
+            return {
+                emoji: '✏️',
+                title: 'Manually edited (or imported) since the last refresh — not LLM-reconciled yet.',
+                label: 'Manually edited',
+            };
+        case 'stale':
+            return {
+                emoji: '🔴',
+                title: `Stale — ${status.msgsSinceRefresh} message(s) since the last refresh (threshold ${getDeltaStaleAfterMsgs()}).`,
+                label: `Stale · ${status.msgsSinceRefresh} msgs`,
+            };
+        default:
+            return { emoji: '⚪', title: 'No world state yet.', label: 'No state' };
+    }
+}
+
+export function refreshDocumentStatusChip() {
+    if (!state.modal) return;
+    const chip = state.modal.querySelector('#ws-doc-status');
+    if (!chip) return;
+    const status = deriveDocumentStatus();
+    const presentation = documentStatusPresentation(status);
+    chip.textContent = `${presentation.emoji} ${presentation.label}`;
+    chip.title = presentation.title;
+    chip.style.color = DOC_STATUS_STYLES[status.kind]?.color || '';
+}
 
 // ─── Editor stat helpers ─────────────────────────────────────────────────────
 
@@ -55,6 +111,10 @@ export function updateEditorStats() {
         const autoInterval = getAutoRefreshInterval();
         toolbarStats.textContent = `${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoRefreshCounter}/${autoInterval} msgs` : ''}`;
     }
+
+    // Document status chip (TODO §3-F): recompute on every stats refresh so
+    // it tracks edits, refreshes, and chat growth between re-renders.
+    refreshDocumentStatusChip();
 }
 
 export function refreshRevertButton() {
@@ -124,8 +184,13 @@ export function scheduleEditorPersist() {
 
 function updateArchiveButtonState() {
     if (!state.modal) return;
+    const hasText = !!getWorldStateText()?.trim();
     const btn = state.modal.querySelector('#ws-archive');
-    if (btn) btn.disabled = !getWorldStateText()?.trim();
+    if (btn) btn.disabled = !hasText;
+    // The ⚡ Delta button shares the precondition: no document, no baseline
+    // to patch (TODO §3-F).
+    const deltaBtn = state.modal.querySelector('#ws-delta-refresh');
+    if (deltaBtn) deltaBtn.disabled = !hasText;
 }
 
 export function refreshButtonLabels() {
@@ -413,13 +478,15 @@ export function render() {
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
             <button id="ws-refresh" class="mwt-btn mwt-btn-primary">🔄 Refresh</button>
+            <button id="ws-delta-refresh" class="mwt-btn" ${!text?.trim() ? 'disabled' : ''} title="Delta refresh: ask the model only for changed sections and apply a validated patch (cheap). Needs an existing refresh baseline.">⚡ Delta</button>
             <button id="ws-save" class="mwt-btn">💾 Save</button>
             <button id="ws-revert" class="mwt-btn" ${getAutoSaveHistory().length === 0 ? 'disabled' : ''}>⏪ Revert</button>
             <button id="ws-history" class="mwt-btn">📋 History</button>
             <button id="ws-archive" class="mwt-btn" ${!text?.trim() ? 'disabled' : ''}>📦 Export</button>
             <button id="ws-import" class="mwt-btn">📥 Import</button>
             <button id="ws-clear" class="mwt-btn mwt-btn-danger">🗑️ Clear</button>
-            <span id="ws-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoRefreshCounter}/${autoInterval} msgs` : ''}</span>
+            <span id="ws-doc-status" class="mwt-text-sm" style="margin-left:auto;line-height:28px;white-space:nowrap" title=""></span>
+            <span id="ws-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoRefreshCounter}/${autoInterval} msgs` : ''}</span>
         </div>
 
         <div class="mwt-form-row">
@@ -519,6 +586,38 @@ export function render() {
                 <div>
                     <input id="ws-pinned-entities" class="mwt-input" type="text" value="${escapeHtml(s.pinnedEntities || '')}" placeholder="e.g. Protagonist Name, Companion Name">
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Comma-separated names that never expire and are never flagged as ungrounded.</p>
+                </div>
+            </div>
+        </details>
+
+        <details class="mwt-mt-8">
+            <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">⚡ Delta Refresh (Low-cost Mode)</summary>
+            <div class="mwt-settings-grid mwt-mt-8">
+                <label class="mwt-label">Delta Mode</label>
+                <div>
+                    <label class="mwt-text-sm" style="display:flex;align-items:center;gap:6px">
+                        <input id="ws-delta-enabled" type="checkbox" ${s.deltaMode ? 'checked' : ''}>
+                        Use cheap delta refreshes for the scheduled auto-refresh
+                    </label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Off by default. When on, the scheduled auto-refresh asks the model only for the sections that changed and applies a validated patch, instead of regenerating the whole document. A full refresh still runs for the first generation, after manual edits, and on the reconciliation cadence below. The ⚡ Delta button always runs a delta on demand.</p>
+                </div>
+
+                <label class="mwt-label">Full Refresh Every</label>
+                <div>
+                    <div class="mwt-flex mwt-gap-4" style="align-items:center">
+                        <input id="ws-delta-reconcile-every" class="mwt-input" type="number" value="${s.deltaReconcileEvery ?? 5}" min="1" max="50" style="max-width:100px">
+                        <span class="mwt-text-sm mwt-text-dim">delta update(s)</span>
+                    </div>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Periodic reconciliation: after this many consecutive delta (or section) updates, the next scheduled refresh is a full one. Default 5.</p>
+                </div>
+
+                <label class="mwt-label">Stale After (msgs)</label>
+                <div>
+                    <div class="mwt-flex mwt-gap-4" style="align-items:center">
+                        <input id="ws-delta-stale-after" class="mwt-input" type="number" value="${s.deltaStaleAfterMsgs ?? 15}" min="1" style="max-width:100px">
+                        <span class="mwt-text-sm mwt-text-dim">message(s)</span>
+                    </div>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">The status chip next to the word count reports the document as stale once this many messages have arrived since the last refresh of any kind. Default 15.</p>
                 </div>
             </div>
         </details>
@@ -641,6 +740,47 @@ export function wireEvents() {
             setStatus(state.modal, `Error: ${err.message}`, 'error');
         } finally {
             btn.disabled = false; btn.textContent = '🔄 Refresh';
+        }
+    });
+
+    // Delta refresh (TODO §3-F) — on-demand incremental update. Mirrors
+    // #ws-refresh (editor pre-sync included) but calls the cheap patch path.
+    state.modal.querySelector('#ws-delta-refresh')?.addEventListener('click', async () => {
+        const btn = state.modal.querySelector('#ws-delta-refresh');
+        try {
+            const editorEl = state.modal.querySelector('#ws-editor');
+            if (editorEl && editorEl.value && editorEl.value !== getWorldStateText()) {
+                // Checked write (design §8): a refused pre-sync must not begin
+                // the dependent refresh over an editor value that never landed.
+                const written = setWorldStateDataChecked({ text: editorEl.value });
+                if (!written.ok) {
+                    setStatus(state.modal, `Delta refresh cancelled: the world state store refused the editor pre-sync (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error');
+                    return;
+                }
+            }
+            btn.disabled = true; btn.textContent = '⏳ Patching…';
+            setStatus(state.modal, 'Generating delta patch…', 'info');
+            const text = await refreshWorldStateDelta();
+            if (text === null) { setStatus(state.modal, 'Delta refresh aborted.', 'info'); return; }
+            const editor = state.modal.querySelector('#ws-editor');
+            if (editor) editor.value = text;
+            state.autoSaveLastText = text; state.isDirty = false; state.editSessionActive = false;
+            updateArchiveButtonState();
+            updateEditorStats();
+            refreshRevertButton();
+            refreshProvenancePanel();
+            setStatus(state.modal, 'Delta refresh complete.', 'success', 3000);
+        } catch (err) {
+            // A patch-protocol failure is expected occasionally — point the
+            // user at the full Refresh instead of a bare error.
+            setStatus(state.modal, `Delta refresh failed: ${err.message}${err.name === 'DeltaPatchError' ? ' — run a full 🔄 Refresh instead.' : ''}`, 'error', 8000);
+        } finally {
+            btn.disabled = false; btn.textContent = '⚡ Delta';
+            // Re-derive the disabled state instead of unconditionally
+            // enabling: the editor-pre-sync early return above can leave the
+            // store empty, and updateArchiveButtonState() would disable the
+            // Delta button there (no document → no baseline to patch).
+            updateArchiveButtonState();
         }
     });
 
@@ -785,6 +925,10 @@ export function wireEvents() {
         const groundingMode = state.modal.querySelector('#ws-grounding-mode')?.value || 'soft';
         const pinnedEntities = state.modal.querySelector('#ws-pinned-entities')?.value.trim() || '';
 
+        const deltaMode = !!state.modal.querySelector('#ws-delta-enabled')?.checked;
+        const deltaReconcileEvery = Math.min(50, Math.max(1, parseInt(state.modal.querySelector('#ws-delta-reconcile-every')?.value, 10) || 5));
+        const deltaStaleAfterMsgs = Math.max(1, parseInt(state.modal.querySelector('#ws-delta-stale-after')?.value, 10) || 15);
+
         // Both empty is fine — the module then falls back to the global API
         // settings (see resolveApiCall). Only a *partial* config is an error,
         // since it would silently mix module and global connection fields.
@@ -808,6 +952,9 @@ export function wireEvents() {
             groundingEnabled,
             groundingMode,
             pinnedEntities,
+            deltaMode,
+            deltaReconcileEvery,
+            deltaStaleAfterMsgs,
         });
         applyWorldStateInjection();
         restartAutoSaveTimer();
