@@ -14,6 +14,7 @@
   - [🗺️ Story Planner](#-story-planner)
   - [💭 Interiority](#-interiority)
   - [Shared Core](#shared-core)
+  - [🩺 Diagnostics](#-diagnostics)
   - [Slash Commands & Macros](#slash-commands--macros)
   - [Mobile & Touch](#mobile--touch)
 - [Installation](#installation)
@@ -70,6 +71,8 @@ Maintains a live, structured document describing the current state of the rolepl
 - **LLM-Powered Refresh** — Generates a full world state document from recent chat messages using a carefully tuned system prompt
 - **Auto-Refresh** — Automatically re-scans every N messages (configurable interval)
 - **Per-Section Regeneration** — Regenerate individual sections (e.g., just "Plot Seeds" or "Key Character States") without refreshing the entire document
+- **⚡ Delta Refresh (Low-Cost Mode)** — Instead of regenerating the whole document, a delta refresh asks the model only for the sections that changed and applies a strictly validated patch protocol (`### UPDATE:` / `### REMOVE:` / `### NO CHANGES` — malformed patches are rejected, never half-applied). Off by default; turn it on in World State settings to use it for the scheduled auto-refresh, or run it on demand with the **⚡ Delta** button. A full refresh still runs when there is no baseline document, after manual edits, and on a configurable reconciliation cadence (default: every 5 consecutive partial updates)
+- **Document Status Chip** — A live chip above the editor says where the document stands: 🟢 **Fully reconciled** (last full refresh), 🟡 **Delta ×N** (N partial updates since the last full refresh), ✏️ **Manually edited** (edited or imported since the last refresh, not yet LLM-reconciled), or 🔴 **Stale · N msgs** (N messages since the last refresh of any kind; threshold configurable, default 15)
 - **Variety Control** — Adjust regeneration variety from *Conservative* (1) to *Chaotic* (5) for creative exploration
 - **Structured Sections** including:
   - Current Scene (date, time, present characters, situation)
@@ -130,7 +133,10 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 - **State Trackers** — Register special lorebook entries as state trackers that can be automatically updated by the LLM based on recent messages
 - **NPC Promotion/Demotion** — Promote minor NPCs to major (adds Knowledge Ledger) or demote major to minor
 - **NPC Merging** — Merge duplicate NPC entries into one
+- **📋 Dossier Mode** *(Knowledge settings, off by default)* — Scans produce richer major-NPC entries: Role, Where to Find, Appearance, Voice, Background, Personality, Read on PC, Current Agenda, Secrets, and a Canon Lock for fields you hand-curate
+- **🎯 Per-Field Dossier Refresh** — Major NPCs in Dossier Mode have a **🎯 Fields** button that opens a per-field picker showing each section's current value and a staleness chip (a per-field watermark tracks when it was last examined; a field counts as stale after 30 messages). **Select stale** bulk-checks everything stale; **Refresh selected** asks the model to re-derive *only* the chosen fields — everything else is preserved verbatim, Canon-Locked fields are skipped, and the merged result goes through the normal staging review
 - **Relationship Tracking** — Define and track relationships between NPCs (ally, enemy, friend, rival, family, etc.)
+- **🕘 Relationship Recent Changes** — Automatic extraction and manual edits alike are logged to a session-scoped Recent Changes panel on the Relationships tab (newest first, 🤖 auto / ✍️ you origin badges, ages, clear log). The completion toast names *who* changed and *to what*, not just counts. Per-NPC stance rows collapse behind a "Stances toward {{user}} (N)" header so a large cast doesn't push the graph and edge list off-screen
 - **Relationship Graph View** — Visual force-directed node/edge graph with color-coded relationship types, draggable nodes, pan/zoom, and a list-view toggle
 - **Notification Panel** — Floating, draggable notification panel alerts you to new scan results
 - **Auto-Trigger** — Automatically run state tracker scans every N messages (with cooldown to avoid re-updating recently changed trackers)
@@ -205,6 +211,23 @@ All five modules share a common infrastructure:
 - **Context Helpers** — Safe access to SillyTavern context, chat data, metadata, token estimation, and player name resolution
 - **Sync to Modules** — Push global API settings to all modules at once
 - **Injection Helpers** — Shared extension-prompt injection with optional XML structural-boundary wrapping
+- **Schema Validation & Self-Repair** — Every store MWT persists (chat metadata, lorebook registries, settings, browser-local records) is version-stamped and validated on load. Old formats migrate themselves automatically, a store that can't be safely understood pauses at most its own module (visibly, with a banner) rather than corrupting data, and rejected records are quarantined — preserved, reported, and exportable — never silently dropped or fed to the AI. See [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained)
+- **Unified Backup & Restore** — A Backup / Restore panel in the Settings tab exports every module's chat data as one versioned JSON envelope. Restore runs a two-step dry run (preview the exact per-section changes, then confirm), with an Undo that replays the in-memory pre-restore snapshot; quarantined records can be exported separately as recovery data
+
+### 🩺 Diagnostics
+
+A read-only **🩺 Diagnostics** tab inside the MWT modal answers "what is MWT actually doing?" without devtools. It is in-memory only (nothing is persisted; the buffer clears on reload) and opening it never changes state:
+
+- **❤️ Health** — One row per module: enabled, injection gate, busy state, token estimates, auto-cadence countdowns, last run
+- **🌐 Environment** — MWT + SillyTavern versions, feature detection, and the raw context-field probe (fork compatibility)
+- **🗂️ Scope & storage** — Which lorebooks this chat resolves to and *why*, per-book hydration and store versions, saved bindings, and fallback-to-global warnings
+- **💉 Injection** — Per-module on/off, gate, resolved role/depth with provenance, token estimate, and the exact payload last registered with SillyTavern
+- **📡 Last request** — The most recent LLM request per module (statuses, retries, timings — never API keys)
+- **📋 Log** — Rolling in-memory event buffer with severity filtering
+- **🛡️ Integrity** — Schema/quarantine status across stores, plus recovery-data export
+- **📋 Copy Report** — One click bundles everything into redacted, paste-ready Markdown. Chat text is included only if you explicitly opt in; API keys and secrets are redacted either way
+
+Everything the tab shows (and more) is also available via the `MWT.diagnostics.*` console API. Full references: **[DIAGNOSTICS_GUIDE.md](DIAGNOSTICS_GUIDE.md)** and **[DIAGNOSTICS_CONSOLE_GUIDE.md](DIAGNOSTICS_CONSOLE_GUIDE.md)**.
 
 ### Slash Commands & Macros
 
@@ -359,8 +382,10 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 5. Toggle **🔌 Injection** to include the world state in every prompt
 6. Toggle **🔄 Auto** to automatically refresh every N messages
 7. Use **Section Regenerate** (select a section, set variety, click **🎲 Regenerate Section**) to refresh individual sections
-8. Use **⏪ Revert** to restore a previous version from auto-save history, or **📋 History** to browse all snapshots
-9. Use **📄 Preview Injection** to see exactly what will be injected
+8. Use **⚡ Delta** for a cheap incremental update — the model is asked only for changed sections and returns a validated patch. It needs an existing document as the baseline (the button is disabled without one); on a malformed patch it fails safe and suggests a full 🔄 Refresh instead
+9. Watch the **document status chip** (🟢 reconciled / 🟡 delta / ✏️ manual / 🔴 stale) — hover it for the exact message counts and delta tally behind the status
+10. Use **⏪ Revert** to restore a previous version from auto-save history, or **📋 History** to browse all snapshots
+11. Use **📄 Preview Injection** to see exactly what will be injected
 
 ### Session Chronicle
 
@@ -393,9 +418,10 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
    - Click **✗ Dismiss** to discard
 4. View tracked NPCs in the **Minor** and **Major** tabs
 5. Click any NPC to view/edit their lorebook entry, manage relationships, or promote/demote
-6. The **Relationships** tab has a force-directed graph view (default) and a list view — toggle with the Graph/List button. Drag nodes, scroll to zoom, and click a node to open that NPC
-7. The **State Trackers** tab shows registered state tracker entries that can be updated via LLM
-8. Enable **Auto-Trigger** in module settings to run state tracker scans automatically every N messages (with a cooldown to avoid re-updating recently changed trackers)
+6. Major NPCs in **Dossier Mode** have a **🎯 Fields** button — pick individual stale fields (each shows its current value and a staleness chip), **Select stale** checks them all, and **Refresh selected** re-derives only those fields. The merged result is staged for review like any scan
+7. The **Relationships** tab has a force-directed graph view (default) and a list view — toggle with the Graph/List button. Drag nodes, scroll to zoom, and click a node to open that NPC. The 🕘 **Recent Changes** collapsible logs every relationship mutation this session — auto-extractions and your manual edits alike
+8. The **State Trackers** tab shows registered state tracker entries that can be updated via LLM
+9. Enable **Auto-Trigger** in module settings to run state tracker scans automatically every N messages (with a cooldown to avoid re-updating recently changed trackers)
 
 > **Seeing a `[MWT:store]` entry in your lorebook?** That's MWT's registry for that book — a disabled, keyword-less entry that costs 0 tokens and is never sent to the AI. Full explanation in [Data Storage](#the-mwtstore-entry--what-it-is-and-why-its-there).
 
@@ -463,13 +489,24 @@ merged_world_tracker/
 │   ├── api.js            # OpenAI-compatible + Connection Profile API client with retry
 │   ├── commands.js       # Slash command and macro registration
 │   ├── context.js        # SillyTavern context, chat, metadata, token helpers
+│   ├── diagnostics.js    # In-memory diagnostics ring buffer + last-run map (read-only, never persisted)
 │   ├── diff.js           # LCS line/word diff computation and HTML rendering
+│   ├── event_router.js   # SillyTavern message-event routing (pure dispatch decisions)
 │   ├── file.js           # Download / file-pick helpers
 │   ├── injection.js      # Extension prompt injection helpers + XML tag wrapping
+│   ├── message_identity.js # Stable message UUIDs that survive swipes/regens (receipt dedup)
 │   ├── metadata.js       # Chat metadata access (world state / chronicle / registry)
 │   ├── modal.js          # Modal lifecycle, status bar, button bar helpers
 │   ├── notifications.js  # Toast notifications
+│   ├── prompt.js         # Prompt-boundary + payload-budget helpers
+│   ├── quarantine.js     # Quarantine store — records refused by validation, kept whole for recovery
+│   ├── redaction.js      # Secret redaction (API keys etc.) for diagnostics reports
+│   ├── revision.js       # Revision digests — manual-edit detection and undo snapshots
+│   ├── schema.js         # Shared validation vocabulary: issues, migrations, store preparation
+│   ├── schema_status.js  # Schema event surfacing + per-store pause/banner state
+│   ├── scope.js          # Chat/character identity resolution + operation epochs (scope guards)
 │   ├── settings.js       # Settings manager factory (extension_settings + localStorage)
+│   ├── settings_schema.js # Settings-record versioning + validation (fail-open, never destructive)
 │   ├── strip.js          # Non-narrative content stripping for scanner contexts
 │   └── ui.js             # API field renderer, floating button bar, drawer, wand menu
 ├── world_state/          # World State Tracker module
@@ -478,9 +515,12 @@ merged_world_tracker/
 │   ├── settings.js       # Settings manager and defaults (leaf)
 │   ├── prompts.js        # System prompt template (leaf)
 │   ├── injection.js      # Prompt injection + Plot Seeds hook-mode headers
-│   ├── refresh.js        # Full refresh, auto-refresh scheduling, auto-save timer
+│   ├── delta.js          # Delta refresh: patch protocol, document status bookkeeping, delta-vs-full planning
+│   ├── provenance.js     # Entity provenance tracking, stale-entry expiry, grounding gate
+│   ├── schema.js         # Store descriptor + record validators
+│   ├── refresh.js        # Full + delta refresh, auto-refresh scheduling, auto-save timer
 │   ├── sections.js       # Per-section regeneration
-│   └── render.js         # UI rendering, events, archive/import, revert/diff, preview
+│   └── render.js         # UI rendering, events, archive/import, revert/diff, preview, status chip
 ├── chronicle/            # Session Chronicle module
 │   ├── index.js          # Orchestrator — public API and lifecycle hooks
 │   ├── data.js           # Constants, state, settings, data access, anchor helpers (leaf)
@@ -488,16 +528,23 @@ merged_world_tracker/
 │   ├── injection.js      # Prompt injection logic
 │   ├── snapshots.js      # Generation, validation, CRUD, world state sync
 │   ├── import-export.js  # JSON / Markdown export and import
+│   ├── schema.js         # Store descriptor + record validators
 │   └── render.js         # All UI rendering
 ├── knowledge/            # Knowledge Tracker module (NPCs + State Trackers + Growth Profile)
 │   ├── index.js          # Public API barrel — lifecycle, slash commands, macros
 │   ├── state.js          # Constants, shared mutable state, content helpers (leaf)
 │   ├── settings.js       # Settings manager + settings panel (leaf)
+│   ├── schema.js         # Store descriptors + record validators (registry, counters, [MWT:store])
+│   ├── scope.js          # Lorebook scope resolution (global / per-character / per-chat)
+│   ├── store.js          # Per-lorebook [MWT:store] registry read/write
+│   ├── activation.js     # Switch MWT's lorebooks on/off in SillyTavern's World Info slots
+│   ├── reconcile.js      # Import/restore lorebook identity helpers (UID resolution)
+│   ├── dossier_status.js # Per-field dossier staleness watermarks (🎯 Fields picker)
 │   ├── prompts.js        # NPC scan, state-update, evidence, profile, and consolidation prompts
 │   ├── registry.js       # NPC + State Tracker registry operations (chat metadata)
 │   ├── lorebook.js       # Lorebook read/write, scan, state update, staging enrichment, profile persistence
 │   ├── staging.js        # Build staging items from scan results
-│   ├── relationships.js  # Relationship storage and graph layout computation
+│   ├── relationships.js  # Relationship storage, change logging, and graph layout computation
 │   ├── evidence.js       # Two-tier evidence store (raw/consolidated/archived), ILS watermark tracking, user overrides
 │   ├── growth.js         # Evidence capture + quote verification, profile generation, continuous incremental capture, consolidation orchestrator
 │   ├── ils_compat.js     # InlineSummary (ILS) de-summarize backfill — read-only ILS originals resolution for verbatim evidence capture
@@ -517,6 +564,35 @@ merged_world_tracker/
     ├── generation.js     # Context assembly, batched/strict API calls, validation
     ├── injection.js      # <mwt_npc_intentions> extension-prompt injection
     └── render.js         # Settings UI + per-message thought block rendering
+```
+
+The tree above lists the five user-facing modules; three more support directories keep the data-safety layer and diagnostics running (see [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained) and [🩺 Diagnostics](#-diagnostics)):
+
+```
+├── schema/               # Schema validation & migrations engine
+│   ├── registry.js       # One registry for every authoritative MWT store schema
+│   ├── gate.js           # Synchronous O(stores) load classification (ready / prepare / blocked)
+│   ├── runtime.js        # Chat-metadata load-gate orchestration (migrate, pause, persist atomically)
+│   ├── manifest.js       # mwt_schema_manifest container schema + version helpers
+│   └── secondary.js      # Pure validators for secondary persistence (button floats, edit history, message UUIDs)
+├── backup/               # Unified backup/restore module (Settings tab panel)
+│   ├── index.js          # Public backup API — binds the pure planner to live metadata/lorebooks
+│   ├── collect.js        # Runtime collection of a chat's MWT data
+│   ├── data.js           # Pure backup-envelope data model (no SillyTavern dependencies)
+│   ├── restore.js        # Pure restore strategies + dry-run planner (plans only, never writes)
+│   ├── validate.js       # Compatibility adapter over the schema registry
+│   ├── recovery.js       # Quarantine recovery export/clear — refused records stay recoverable
+│   └── render.js         # Backup / Restore panel UI
+└── diagnostics_panel/    # 🩺 Diagnostics tab (read-only, in-memory)
+    ├── render.js         # Panel shell, sub-tab strip, Health/Environment panes, Copy Report
+    ├── health.js         # ❤️ Health snapshot (per-module status)
+    ├── environment.js    # 🌐 Environment snapshot (versions, feature detection)
+    ├── scope_storage.js  # 🗂️ Scope & storage snapshot (lorebook resolution, store versions)
+    ├── injection.js      # 💉 Injection snapshot (resolved placement + recorded payloads)
+    ├── last_request.js   # 📡 Last-request snapshot (API telemetry)
+    ├── log.js            # 📋 Log snapshot + redaction gate
+    ├── integrity.js      # 🛡️ Integrity snapshot (schema/quarantine status)
+    └── report.js         # Copy-report Markdown shape
 ```
 
 ### Module Communication
