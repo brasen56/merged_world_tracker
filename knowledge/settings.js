@@ -170,7 +170,7 @@ export function showKnowledgeSettings() {
         </div>
         <div style="margin-top:12px">
             <label><input type="checkbox" id="kt-cfg-dossier-mode" ${s.dossierMode ? 'checked' : ''}> 📋 Dossier Mode (richer NPC entries)</label>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, NPC scans capture detailed dossier fields (role, appearance, voice, background, personality, secrets, agenda, canon lock, etc.). Major NPCs gain an <strong>📋 Enrich</strong> button to fill in all dossier fields from chat history. Entries stay in the same lorebook. Off = the minimal format.</p>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, NPC scans capture detailed dossier fields (role, appearance, voice, background, personality, secrets, agenda, canon lock, etc.). Major NPCs gain an <strong>📋 Enrich</strong> button to fill in all dossier fields from chat history, and a <strong>🎯 Fields</strong> button to refresh individual stale fields. Entries stay in the same lorebook. Off = the minimal format.</p>
         </div>
         <div style="margin-top:12px">
             <label><input type="checkbox" id="kt-cfg-growth-auto" ${s.growthAutoCaptureEnabled ? 'checked' : ''}> 🌱 Auto-capture growth evidence (continuous)</label>

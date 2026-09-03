@@ -213,7 +213,7 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
         pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'blocked' });
         Knowledge.onChatChangedWhilePaused();
 
-        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal');
+        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal');
         expect(viewModal.remove).toHaveBeenCalled();
         expect(growthModal.remove).toHaveBeenCalled();
     });
@@ -233,7 +233,7 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
 
         Knowledge.onChatChanged();
 
-        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal');
+        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal');
         expect(viewModal.remove).toHaveBeenCalled();
         expect(growthModal.remove).toHaveBeenCalled();
         // reloadStores() is fire-and-forget and fully guarded; let its tail

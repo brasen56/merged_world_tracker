@@ -13,7 +13,7 @@ import {
     stripNonNarrative, getStableHistoryEnd,
 } from '../core/index.js';
 
-import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT } from './prompts.js';
+import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT, DOSSIER_FIELD_REFRESH_PROMPT } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
     TRACKER_SENTINEL,
@@ -815,6 +815,30 @@ export function countDossierFields(content) {
 }
 
 /**
+ * Extract each dossier field's current raw value from an entry, keyed by field
+ * key. Missing/absent fields read as null. Used by the per-field refresh UI
+ * (the 🎯 Fields picker) and to build the <refresh_fields> request block, so
+ * the model sees the exact text it is re-deriving.
+ *
+ * @param {string} content
+ * @returns {Record<string, string|null>} field key → trimmed value or null
+ */
+export function extractDossierFieldValues(content) {
+    const values = {};
+    if (typeof content !== 'string') {
+        for (const f of DOSSIER_FIELDS) values[f.key] = null;
+        return values;
+    }
+    for (const f of DOSSIER_FIELDS) {
+        const re = new RegExp(`^${f.label}:\\s*(.*)$`, 'im');
+        const m = content.match(re);
+        const raw = m ? m[1].trim() : '';
+        values[f.key] = raw || null;
+    }
+    return values;
+}
+
+/**
  * Apply a partial dossier update (from DOSSIER_UPDATE_PROMPT result) to existing
  * content. Only non-null fields are replaced; unknown fields are ignored.
  */
@@ -1216,6 +1240,157 @@ export async function runNpcEnrich(name, uid) {
         };
     }
 }
+
+// ─── Dossier per-field refresh (TODO §3) ─────────────────────────────────────
+
+/**
+ * Filter a user/UI-supplied list of dossier field keys down to the ones a
+ * model-driven field refresh may actually touch, enforcing the two ownership
+ * boundaries from the TODO:
+ *
+ *   1. `canon_lock` is user-authored immutable canon — ALWAYS excluded, never
+ *      auto-overwritten by any generation path.
+ *   2. For NPCs with a growth profile, `personality` is owned by the
+ *      evidence/growth system (the `hasEvidenceFile(name)` partition from
+ *      NPC_GROWTH_BLUEPRINT.md §"The split-brain resolution") — excluded so a
+ *      field-scoped refresh cannot reintroduce the telephone loop.
+ *
+ * Unknown keys and duplicates are dropped; the result keeps canonical
+ * DOSSIER_FIELDS order.
+ *
+ * @param {string[]|string} fieldKeys — requested field keys (raw UI input)
+ * @param {string} name — canonical NPC name (drives the growth check)
+ * @returns {{requested: string[], skipped: Array<{key: string, reason: string}>}}
+ */
+export function sanitizeDossierRefreshFields(fieldKeys, name) {
+    const knownKeys = DOSSIER_FIELDS.map(f => f.key);
+    const growthOwnsPersonality = hasEvidenceFile(name);
+    const requested = [];
+    const skipped = [];
+    const seen = new Set();
+    const input = Array.isArray(fieldKeys) ? fieldKeys : [fieldKeys];
+    for (const key of input) {
+        if (typeof key !== 'string' || !key) continue;
+        if (!knownKeys.includes(key)) {
+            skipped.push({ key, reason: 'not a dossier field' });
+            continue;
+        }
+        if (seen.has(key)) continue; // duplicate — first occurrence wins
+        if (key === 'canon_lock') {
+            skipped.push({ key, reason: 'canon_lock is user-authored canon — edit it manually; it is never model-refreshed' });
+            continue;
+        }
+        if (key === 'personality' && growthOwnsPersonality) {
+            skipped.push({ key, reason: 'personality is owned by the Growth profile system for this NPC (see 🌱 Growth)' });
+            continue;
+        }
+        seen.add(key);
+        requested.push(key);
+    }
+    requested.sort((a, b) => knownKeys.indexOf(a) - knownKeys.indexOf(b));
+    return { requested, skipped };
+}
+
+/**
+ * Refresh ONLY specific dossier fields of one NPC (TODO §3 "Per-field / partial
+ * dossier refresh"). The World State delta-mode concept applied to a single
+ * NPC's dossier: the request lists the exact fields (with their current values)
+ * in a <refresh_fields> block, DOSSIER_FIELD_REFRESH_PROMPT re-derives just
+ * those, and the response is scoped to the requested keys before merging —
+ * everything else in the entry is preserved byte-for-byte by
+ * buildUpdatedDossierContent's null-skipping merge.
+ *
+ * Like runNpcUpdate: label-verified load (a uid pointing at another NPC's
+ * entry refuses to run), relationship block stripped, 2-attempt retry on
+ * invalid JSON. The result is NOT written — callers stage it for review.
+ *
+ * @param {string} name - canonical NPC name
+ * @param {number} uid - Knowledge lorebook UID
+ * @param {string[]|string} fieldKeys - dossier field keys to refresh
+ * @returns {Promise<{currentContent:string, merged:string, fields:object, requestedFields:string[], skippedFields:Array<{key:string,reason:string}>, dossierMode:boolean}>}
+ */
+export async function runDossierFieldRefresh(name, uid, fieldKeys) {
+    if (!hasValidSettings()) throw new Error('No API connection configured.');
+    // Label-verified load — same guard as runNpcUpdate: never feed another
+    // NPC's dossier in as refresh context.
+    const rawContent = await loadEntryContent(uid, name);
+    if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
+    const currentContent = stripRelationshipBlock(rawContent);
+    if (!isDossierEntry(currentContent)) {
+        throw new Error(`Entry for "${name}" is not in dossier format — use 📋 Enrich to convert it first.`);
+    }
+    const { requested, skipped } = sanitizeDossierRefreshFields(fieldKeys, name);
+    if (requested.length === 0) {
+        throw new Error('No refreshable dossier fields selected (canon lock is manual-only; personality belongs to 🌱 Growth when a profile exists).');
+    }
+    const recentMessages = getRecentMessages();
+    const worldState = getCurrentWorldState();
+    if (!recentMessages) throw new Error('No recent messages.');
+    // Show the model the exact text it is re-deriving — null marks fields the
+    // entry doesn't carry yet (the refresh may fill them).
+    const currentValues = extractDossierFieldValues(currentContent);
+    const refreshBlock = {};
+    for (const key of requested) refreshBlock[key] = currentValues[key] ?? null;
+    const userContent = [
+        `<entity>${name}</entity>`,
+        `<current_entry>\n${currentContent}\n</current_entry>`,
+        '',
+        worldState ? `<world_state>\n${worldState}\n</world_state>` : '',
+        '',
+        '<recent_messages>',
+        recentMessages,
+        '</recent_messages>',
+        '',
+        '<refresh_fields>',
+        JSON.stringify(refreshBlock, null, 2),
+        '</refresh_fields>',
+        '',
+        '='.repeat(60),
+        `Refresh ONLY the fields listed in <refresh_fields> for ${name}. Output only JSON.`,
+    ].filter(Boolean).join('\n');
+
+    // Retry loop — mirrors runNpcUpdate / runNpcEnrich's 2-attempt pattern. A
+    // truncated response (max_tokens cut off) or a non-object parse gets one
+    // more chance with an explicit reminder appended.
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        let raw, cleaned, result;
+        try {
+            const fetchContent = attempt === 1
+                ? userContent
+                : userContent + `\n\n[REMINDER: Your previous response was truncated or invalid JSON. Output ONLY valid JSON with just the requested field keys, no prose.]`;
+            raw = await ktFetchFromApi(DOSSIER_FIELD_REFRESH_PROMPT, fetchContent);
+            cleaned = normaliseOutput(raw);
+            result = parseJsonLenient(cleaned);
+            if (!result || typeof result !== 'object' || Array.isArray(result)) {
+                throw new Error('response was not a JSON object');
+            }
+        } catch (err) {
+            lastError = err;
+            console.warn(`[MWT:Knowledge] runDossierFieldRefresh JSON parse failed (attempt ${attempt}): ${err.message}`);
+            if (attempt < 2) continue;
+            throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
+        }
+
+        // Scope enforcement (defense in depth): keep ONLY the requested keys —
+        // a model that answers with canon_lock, growth-owned personality, or
+        // any unrequested field has those values discarded here, before the
+        // merge. An empty string counts as "no value" (null) so a lazy blank
+        // answer cannot wipe an existing line.
+        const src = (result.fields && typeof result.fields === 'object' && !Array.isArray(result.fields))
+            ? result.fields
+            : {};
+        const fields = {};
+        for (const key of requested) {
+            const v = src[key];
+            fields[key] = (v === undefined || v === null || v === '') ? null : v;
+        }
+        const merged = buildUpdatedDossierContent(currentContent, fields, []);
+        return { currentContent, merged, fields, requestedFields: requested, skippedFields: skipped, dossierMode: true };
+    }
+}
+
+
 
 /**
  * Serialise asynchronous tracker work onto a single promise chain.

@@ -249,6 +249,29 @@ OUTPUT FORMAT:
   ]
 }`;
 
+// ─── Dossier per-field refresh prompt ─────────────────────────────────────────
+// Used by the "🎯 Fields" action (TODO §3 "Per-field / partial dossier refresh").
+// Unlike DOSSIER_UPDATE_PROMPT (which re-examines the whole dossier), this
+// prompt re-derives ONLY the fields the user selected — the request lists them
+// in a <refresh_fields> block and the code enforces the same scope on the
+// response, so the model cannot touch anything else.
+
+export const DOSSIER_FIELD_REFRESH_PROMPT = `You are a continuity tracker for an ongoing roleplay. The user selected SPECIFIC dossier fields of one NPC to re-examine. Your job is to output updated values for ONLY those fields, using the existing entry and the recent messages.
+
+ABSOLUTE RULES:
+- Output ONLY valid JSON. Nothing before or after it. No code fences.
+- Output ONLY the field keys listed in <refresh_fields>. Any other key in your output is discarded — especially "canon_lock" (user-authored canon, never model-updated) and "personality" (owned by the Growth profile system when not listed).
+- Do NOT invent information not established in the messages or already present in <current_entry>.
+- For each listed field: output the current best value — the existing value reconciled with anything newer in the messages. If the messages add nothing new, echo the existing value (or fill it in if it is missing or empty). Use null ONLY if the field is genuinely unknowable.
+- Secrets follow the tiered format already in the entry: add NEW secrets, drop secrets DISCLOSED in narration or made obsolete by events, and re-tier when story pressure changed how buried a secret is.
+
+OUTPUT FORMAT:
+{
+  "fields": {
+    "<only the keys listed in <refresh_fields>>": "the reconciled value, or null if genuinely unknowable"
+  }
+}`;
+
 // ─── NPC Growth Profile prompts ──────────────────────────────────────────────
 // Implements the evidence-driven personality system from NPC_GROWTH_BLUEPRINT.md.
 //

@@ -9,7 +9,7 @@
 
 import {
     RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END,
-    RELATIONSHIP_TYPES, USER_STANCES,
+    RELATIONSHIP_TYPES, USER_STANCES, state,
 } from './state.js';
 import { getRegistry, getRegistryEntry, getAllNpcNames } from './registry.js';
 import { getLorebookName } from './scope.js';
@@ -357,7 +357,85 @@ function emptyExtractResult() {
         affectedNpcs: new Set(),
         edgesAdded: 0, edgesUpdated: 0, stancesSet: 0,
         skipped: 0, skippedManual: 0, skippedNeutral: 0,
+        changes: [],
     };
+}
+
+// ─── Recent-changes log (session-scoped) ─────────────────────────────────────
+//
+// The auto-extract cadence used to announce "+2 relationship(s), ~1 updated" —
+// counts with no WHO or TO WHAT. The extract result now carries a `changes`
+// array with one record per applied mutation, and those records land here so
+// the Relationships tab can show "Recent Changes" with names and old → new
+// values.
+//
+// Deliberately NOT persisted into the lorebook store: every store field is
+// schema-validated, versioned, and carried by the backup/restore merge
+// planner, and a session review list is not worth that surface. The log lives
+// in shared runtime state — it survives sub-tab navigation and modal
+// open/close, resets on chat change (changes belong to the chat they happened
+// in), and is capped so a long session cannot grow it unboundedly.
+
+/** Newest-first cap for the recent-changes log. */
+export const REL_CHANGE_LOG_CAP = 40;
+
+/** Stamp + prepend change records to the session log, newest first. */
+export function recordRelationshipChanges(changes, origin = 'auto') {
+    const list = Array.isArray(changes) ? changes : [];
+    if (list.length === 0) return;
+    const ts = Date.now();
+    // Stamp the batch, then splice it in as ONE newest-first block so records
+    // keep their emitted order within the batch (edge 1, edge 2, stance…).
+    const stamped = [];
+    for (const c of list) {
+        if (!c || typeof c !== 'object') continue;
+        stamped.push({ ...c, ts, origin });
+    }
+    if (stamped.length === 0) return;
+    state.relRecentChanges.unshift(...stamped);
+    if (state.relRecentChanges.length > REL_CHANGE_LOG_CAP) {
+        state.relRecentChanges.length = REL_CHANGE_LOG_CAP;
+    }
+}
+
+export function getRecentRelationshipChanges() { return state.relRecentChanges; }
+
+export function clearRecentRelationshipChanges() { state.relRecentChanges = []; }
+
+/**
+ * Format one change record as a human line, shared by the completion toast and
+ * the Recent Changes panel so the two can never disagree about phrasing.
+ *
+ *   edge added:    "Mara → Jonah: friend (childhood friends)"
+ *   edge updated:  "Mara → Jonah: rival (was friend)"
+ *   notes-only:    "Mara → Jonah: friend (met at the docks)"
+ *   edge removed:  "Mara → Jonah: removed (was friend)"
+ *   stance set:    "Beck toward {{user}}: hostile (was wary)"
+ *   stance cleared:"Beck toward {{user}}: cleared (was wary)"
+ *
+ * @param {object} c - a change record from applyExtractedRelationships or the
+ *   manual editor logging sites
+ * @returns {string}
+ */
+export function describeRelationshipChange(c) {
+    if (!c || typeof c !== 'object') return '';
+    const notes = c.notes ? ` (${String(c.notes).slice(0, 40)})` : '';
+    // "(was X)" only when the type ACTUALLY changed: applyExtractedRelationships
+    // records notes-only updates too, and those would otherwise read as
+    // "friend (was friend)" — the notes fall through in the tail instead.
+    const was = (c.previousType && c.previousType !== c.type) ? ` (was ${c.previousType})` : '';
+    if (c.kind === 'edge') {
+        if (c.action === 'removed') return `${c.from} → ${c.to}: removed${was}`;
+        return `${c.from} → ${c.to}: ${c.type}${was || notes}`;
+    }
+    if (c.kind === 'stance') {
+        const label = `toward {{user}}`;
+        if (c.action === 'cleared') {
+            return `${c.npc} ${label}: cleared${c.previousStance ? ` (was ${c.previousStance})` : ''}`;
+        }
+        return `${c.npc} ${label}: ${c.stance}${c.previousStance ? ` (was ${c.previousStance})` : ''}`;
+    }
+    return '';
 }
 
 /**
@@ -437,7 +515,7 @@ export async function runRelationshipExtract() {
  * unit-tested without an API call.
  *
  * @param {{edges?:Array, stances?:Array}} result
- * @returns {{affectedNpcs:Set<string>, edgesAdded:number, edgesUpdated:number, stancesSet:number, skipped:number}}
+ * @returns {{affectedNpcs:Set<string>, edgesAdded:number, edgesUpdated:number, stancesSet:number, skipped:number, changes:Array<object>}}
  */
 export function applyExtractedRelationships(result) {
     const affected = new Set();
@@ -445,6 +523,9 @@ export function applyExtractedRelationships(result) {
     const stanceSet = new Set(USER_STANCES);
     let edgesAdded = 0, edgesUpdated = 0, stancesSet = 0;
     let skipped = 0, skippedManual = 0, skippedNeutral = 0;
+    // One record per APPLIED mutation (who, what, and what it used to be) —
+    // feeds the completion toast and the Recent Changes panel.
+    const changes = [];
 
     // ── Edges ──
     const edges = Array.isArray(result?.edges) ? result.edges : [];
@@ -473,14 +554,17 @@ export function applyExtractedRelationships(result) {
             if (!isEdgeAutoManaged(existing)) { skippedManual++; continue; }
             // Only mutate + count when something actually changes.
             if (existing.type !== type || existing.notes !== notes) {
+                const previousType = existing.type;
                 updateRelationship(fromName, toName, type, notes, SOURCE_AUTO);
                 edgesUpdated++;
                 affected.add(fromName);
+                changes.push({ kind: 'edge', action: 'updated', from: fromName, to: toName, type, previousType, notes });
             }
         } else {
             addRelationship(fromName, toName, type, notes, SOURCE_AUTO);
             edgesAdded++;
             affected.add(fromName);
+            changes.push({ kind: 'edge', action: 'added', from: fromName, to: toName, type, notes });
         }
     }
 
@@ -503,8 +587,9 @@ export function applyExtractedRelationships(result) {
             setStance(name, stance, SOURCE_AUTO);
             stancesSet++;
             affected.add(name);
+            changes.push({ kind: 'stance', action: 'set', npc: name, stance, previousStance: current });
         }
     }
 
-    return { affectedNpcs: affected, edgesAdded, edgesUpdated, stancesSet, skipped, skippedManual, skippedNeutral };
+    return { affectedNpcs: affected, edgesAdded, edgesUpdated, stancesSet, skipped, skippedManual, skippedNeutral, changes };
 }

@@ -36,6 +36,9 @@ import {
     getStance, setStance, getStances,
     isEdgeAutoManaged, isStanceAutoManaged, toggleEdgeSource, toggleStanceSource,
     SOURCE_AUTO, SOURCE_MANUAL,
+    describeRelationshipChange, recordRelationshipChanges,
+    getRecentRelationshipChanges, clearRecentRelationshipChanges,
+    REL_CHANGE_LOG_CAP,
 } from '../knowledge/relationships.js';
 
 // runRelationshipExtract pulls ktFetchFromApi off lorebook.js via a dynamic
@@ -58,6 +61,9 @@ function seedRegistry(names) {
 beforeEach(() => {
     resetCoreStubs();
     _clearCacheForTests();
+    // The recent-changes log is a session singleton in knowledge/state.js —
+    // reset it so each test starts with an empty log.
+    clearRecentRelationshipChanges();
     // Mark the knowledge book hydrated and seed a registry so writes are
     // accepted and getRegistryEntry has entries to resolve against.
     _setCacheForTests(getLorebookName(), { registry: seedRegistry(['Mara', 'Jonah', 'Beck']) });
@@ -297,6 +303,147 @@ describe('applyExtractedRelationships — robustness', () => {
         const r = applyExtractedRelationships({ edges: 'nope', stances: 42 });
         expect(r.edgesAdded).toBe(0);
         expect(r.stancesSet).toBe(0);
+    });
+
+    test('a no-op result carries an empty changes array', () => {
+        const r = applyExtractedRelationships({});
+        expect(r.changes).toEqual([]);
+    });
+});
+
+describe('extract result `changes` — who changed, and to what', () => {
+    // The completion toast and the Recent Changes panel both render these
+    // records, so "Mara → Jonah: friend" must be derivable from the extract
+    // result alone — no second store read, no guessing from the counters.
+    test('records an added edge with from/to/type/notes', () => {
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'friend', notes: 'childhood' }] });
+        expect(r.changes).toEqual([
+            { kind: 'edge', action: 'added', from: 'Mara', to: 'Jonah', type: 'friend', notes: 'childhood' },
+        ]);
+    });
+
+    test('records an updated edge with the previous type', () => {
+        addRelationship('Mara', 'Jonah', 'friend', '', SOURCE_AUTO);
+        const r = applyExtractedRelationships({ edges: [{ from: 'Mara', to: 'Jonah', type: 'rival', notes: '' }] });
+        expect(r.changes).toEqual([
+            { kind: 'edge', action: 'updated', from: 'Mara', to: 'Jonah', type: 'rival', previousType: 'friend', notes: '' },
+        ]);
+    });
+
+    test('records a first-time stance with no previous value', () => {
+        const r = applyExtractedRelationships({ stances: [{ npc: 'Beck', stance: 'wary' }] });
+        expect(r.changes).toEqual([
+            { kind: 'stance', action: 'set', npc: 'Beck', stance: 'wary', previousStance: '' },
+        ]);
+    });
+
+    test('records a stance change with the previous value', () => {
+        setStance('Beck', 'friendly', SOURCE_AUTO);
+        const r = applyExtractedRelationships({ stances: [{ npc: 'Beck', stance: 'hostile' }] });
+        expect(r.changes).toEqual([
+            { kind: 'stance', action: 'set', npc: 'Beck', stance: 'hostile', previousStance: 'friendly' },
+        ]);
+    });
+
+    test('records nothing for protected manual records and neutral non-findings', () => {
+        addRelationship('Mara', 'Jonah', 'family', ''); // manual → protected
+        const r = applyExtractedRelationships({
+            edges: [{ from: 'Mara', to: 'Jonah', type: 'rival' }, { from: 'Mara', to: 'Beck', type: 'neutral' }],
+            stances: [{ npc: 'Jonah', stance: 'neutral' }],
+        });
+        expect(r.changes).toEqual([]);
+    });
+
+    test('one record per applied mutation — counts and records agree', () => {
+        const r = applyExtractedRelationships({
+            edges: [
+                { from: 'Mara', to: 'Jonah', type: 'friend' },
+                { from: 'Jonah', to: 'Beck', type: 'mentor' },
+            ],
+            stances: [{ npc: 'Mara', stance: 'wary' }],
+        });
+        expect(r.changes).toHaveLength(r.edgesAdded + r.edgesUpdated + r.stancesSet);
+        expect(r.changes).toHaveLength(3);
+    });
+});
+
+describe('describeRelationshipChange — shared phrasing for toast + panel', () => {
+    test('formats an added edge (with notes)', () => {
+        expect(describeRelationshipChange({ kind: 'edge', action: 'added', from: 'Mara', to: 'Jonah', type: 'friend', notes: 'childhood' }))
+            .toBe('Mara → Jonah: friend (childhood)');
+    });
+
+    test('formats an updated edge with "(was X)"', () => {
+        expect(describeRelationshipChange({ kind: 'edge', action: 'updated', from: 'Mara', to: 'Jonah', type: 'rival', previousType: 'friend', notes: '' }))
+            .toBe('Mara → Jonah: rival (was friend)');
+    });
+
+    test('formats a notes-only update without "(was X)" — the type did not change', () => {
+        expect(describeRelationshipChange({ kind: 'edge', action: 'updated', from: 'Mara', to: 'Jonah', type: 'friend', previousType: 'friend', notes: 'met at the docks' }))
+            .toBe('Mara → Jonah: friend (met at the docks)');
+    });
+
+    test('formats a removed edge', () => {
+        expect(describeRelationshipChange({ kind: 'edge', action: 'removed', from: 'Mara', to: 'Jonah', previousType: 'friend' }))
+            .toBe('Mara → Jonah: removed (was friend)');
+    });
+
+    test('formats a first-time stance without a "(was …)" suffix', () => {
+        expect(describeRelationshipChange({ kind: 'stance', action: 'set', npc: 'Beck', stance: 'wary', previousStance: '' }))
+            .toBe('Beck toward {{user}}: wary');
+    });
+
+    test('formats a stance change with "(was X)"', () => {
+        expect(describeRelationshipChange({ kind: 'stance', action: 'set', npc: 'Beck', stance: 'hostile', previousStance: 'wary' }))
+            .toBe('Beck toward {{user}}: hostile (was wary)');
+    });
+
+    test('formats a cleared stance', () => {
+        expect(describeRelationshipChange({ kind: 'stance', action: 'cleared', npc: 'Beck', previousStance: 'wary' }))
+            .toBe('Beck toward {{user}}: cleared (was wary)');
+    });
+
+    test('truncates long notes and returns "" for junk records', () => {
+        expect(describeRelationshipChange({ kind: 'edge', action: 'added', from: 'A', to: 'B', type: 'ally', notes: 'x'.repeat(100) }))
+            .toBe(`A → B: ally (${'x'.repeat(40)})`);
+        expect(describeRelationshipChange(null)).toBe('');
+        expect(describeRelationshipChange({})).toBe('');
+    });
+});
+
+describe('recent-changes session log', () => {
+    test('stamps records with ts + origin, newest batch first', () => {
+        const t0 = Date.now();
+        recordRelationshipChanges([{ kind: 'stance', action: 'set', npc: 'Mara', stance: 'wary', previousStance: '' }], 'auto');
+        recordRelationshipChanges([{ kind: 'edge', action: 'added', from: 'Mara', to: 'Jonah', type: 'friend', notes: '' }], 'manual');
+        const log = getRecentRelationshipChanges();
+        expect(log).toHaveLength(2);
+        // Newest batch on top, order preserved within a batch.
+        expect(log[0]).toMatchObject({ kind: 'edge', action: 'added', origin: 'manual' });
+        expect(log[1]).toMatchObject({ kind: 'stance', action: 'set', origin: 'auto' });
+        expect(log[0].ts).toBeGreaterThanOrEqual(t0);
+        expect(log[1].ts).toBeLessThanOrEqual(log[0].ts);
+    });
+
+    test('caps the log at REL_CHANGE_LOG_CAP entries, dropping the oldest', () => {
+        for (let i = 0; i < REL_CHANGE_LOG_CAP + 5; i++) {
+            recordRelationshipChanges([{ kind: 'stance', action: 'set', npc: `Npc${i}`, stance: 'wary', previousStance: '' }], 'auto');
+        }
+        const log = getRecentRelationshipChanges();
+        expect(log).toHaveLength(REL_CHANGE_LOG_CAP);
+        // The most recent entry survived…
+        expect(log[0].npc).toBe(`Npc${REL_CHANGE_LOG_CAP + 4}`);
+        // …and the oldest five were dropped.
+        expect(log.some(c => c.npc === 'Npc0')).toBe(false);
+    });
+
+    test('clear empties the log and no-op records change nothing', () => {
+        recordRelationshipChanges([], 'auto');
+        recordRelationshipChanges(null, 'manual');
+        expect(getRecentRelationshipChanges()).toHaveLength(0);
+        recordRelationshipChanges([{ kind: 'stance', action: 'set', npc: 'Mara', stance: 'wary', previousStance: '' }], 'auto');
+        clearRecentRelationshipChanges();
+        expect(getRecentRelationshipChanges()).toHaveLength(0);
     });
 });
 

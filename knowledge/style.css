@@ -1548,6 +1548,107 @@
     opacity: 1;
 }
 
+/* ── Collapsible sections (Recent Changes / Stances toward {{user}}) ──────── */
+
+.kt-rel-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* One row: caret + title + count badge (+ optional hint). Rendered as a
+   <button> so it is keyboard-focusable like every other control in the tab. */
+.kt-rel-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    color: var(--mwt-text);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mwt-font);
+    padding: 6px 10px;
+    text-align: left;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.kt-rel-section-header:hover {
+    background: var(--mwt-hover, rgba(255, 255, 255, 0.06));
+    border-color: var(--mwt-accent);
+}
+
+.kt-rel-section-caret {
+    color: var(--mwt-text-dim);
+    font-size: 11px;
+    width: 12px;
+    flex: none;
+}
+
+.kt-rel-section-title {
+    font-weight: 600;
+}
+
+.kt-rel-count-badge {
+    font-size: 11px;
+    color: var(--mwt-accent);
+    background: rgba(74, 158, 255, 0.15);
+    border-radius: 10px;
+    padding: 0 8px;
+    flex: none;
+}
+
+.kt-rel-section-hint {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    margin-left: auto;
+}
+
+/* Recent-changes rows: origin icon + description + age, one line. */
+.kt-rel-change-row {
+    gap: 8px;
+}
+
+.kt-rel-change-origin {
+    flex: none;
+    font-size: 12px;
+    cursor: default;
+}
+
+.kt-rel-change-desc {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-rel-change-age {
+    flex: none;
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+}
+
+.kt-rel-changes-clear {
+    align-self: flex-end;
+    background: transparent;
+    border: 1px solid var(--mwt-border);
+    border-radius: 4px;
+    color: var(--mwt-text-dim);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--mwt-font);
+    padding: 2px 8px;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.kt-rel-changes-clear:hover {
+    color: var(--sc-danger);
+    border-color: var(--sc-danger);
+}
+
 /* ── Relationship graph view ────────────────────────────────────────────── */
 
 .kt-rel-view-toggle {
@@ -2207,3 +2308,111 @@
     outline: none;
     border-color: rgba(168, 85, 247, 0.6);
 }
+
+/* ─── Dossier per-field refresh modal (TODO §3) ───────────────────────────── */
+
+.kt-dossier-refresh-modal .mwt-modal-panel {
+    max-width: 640px;
+    max-height: 85vh;
+}
+
+.kt-dossier-refresh-modal .mwt-modal-body {
+    overflow-y: auto;
+}
+
+.kt-dfr-hint {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+    line-height: 1.5;
+}
+
+.kt-dfr-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-dfr-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.kt-dfr-row:hover {
+    border-color: var(--mwt-accent);
+}
+
+.kt-dfr-row--locked {
+    cursor: default;
+    opacity: 0.65;
+}
+
+.kt-dfr-row--locked:hover {
+    border-color: var(--mwt-border);
+}
+
+.kt-dfr-row > input[type='checkbox'] {
+    margin-top: 3px;
+    flex: none;
+}
+
+.kt-dfr-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-dfr-row-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--mwt-text);
+}
+
+.kt-dfr-row-value {
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+    overflow-wrap: anywhere;
+}
+
+.kt-dfr-row-note {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    font-style: italic;
+}
+
+.kt-dfr-chip {
+    flex: none;
+    align-self: center;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--mwt-border);
+    white-space: nowrap;
+}
+
+.kt-dfr-chip--stale {
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.45);
+    background: rgba(251, 191, 36, 0.08);
+}
+
+.kt-dfr-chip--fresh {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.35);
+    background: rgba(74, 222, 128, 0.06);
+}
+
+.kt-dfr-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+

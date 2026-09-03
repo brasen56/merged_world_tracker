@@ -53,6 +53,17 @@ export const state = {
     activeSubTab: 'staging',
     /** Relationship sub-tab view mode: 'graph' | 'list' */
     relViewMode: 'graph',
+    /** Whether the "Stances toward {{user}}" list is expanded. Collapsed by
+     *  default: with a large NPC cast the per-NPC stance rows otherwise push
+     *  the graph/edge list far down the tab. */
+    relStancesExpanded: false,
+    /** Whether the "Recent Changes" list is expanded. Collapsed by default —
+     *  the completion toast already names the changes; the panel is review. */
+    relChangesExpanded: false,
+    /** Session-scoped log of recent relationship changes (newest first),
+     *  maintained by knowledge/relationships.js recordRelationshipChanges().
+     *  NOT persisted — see the note there. */
+    relRecentChanges: [],
     /** Cached graph layout data for drag interactions */
     _graphData: null,
     /** Current staging proposals */

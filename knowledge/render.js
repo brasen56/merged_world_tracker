@@ -22,16 +22,23 @@ import {
 import {
     loadEntryContent, loadStateTrackerEntry,
     runScan, runStateUpdate, runNpcUpdate, runNpcEnrich,
+    runDossierFieldRefresh, DOSSIER_FIELDS, extractDossierFieldValues, isDossierEntry,
     buildUpdatedMinorContent,
     buildPromotedContent, buildDemotedContent,
     enrichStagingItem, writeToLorebook, writeStateTracker,
 } from './lorebook.js';
 import {
-    getRelationships, updateRelationship, removeRelationship,
+    recordDossierFieldRefresh, deleteDossierFieldStatus,
+    getDossierFieldStaleness, DOSSIER_STALE_AFTER_MSGS,
+} from './dossier_status.js';
+import {
+    getRelationships, getNpcRelationships, updateRelationship, removeRelationship,
     removeAllRelationshipsFor,
-    getStances, setStance,
+    getStances, getStance, setStance,
     isEdgeAutoManaged, isStanceAutoManaged, toggleEdgeSource, toggleStanceSource,
     syncRelationshipsToLorebook, syncAllRelationshipsToLorebooks,
+    describeRelationshipChange, getRecentRelationshipChanges,
+    recordRelationshipChanges, clearRecentRelationshipChanges,
 } from './relationships.js';
 import {
     buildStagingItems, exportNpcs, importNpcs, importFromLorebooks,
@@ -79,6 +86,22 @@ async function handleAccept(item, text, keywords, _el) {
                 lastUpdated: Date.now(),
             };
             saveRegistry(reg);
+            // TODO §3 (per-field dossier refresh): stamp per-field watermarks so
+            // the 🎯 Fields picker can mark staleness. A field-refresh item
+            // stamps every field it re-examined (requestedFields); an Enrich
+            // item refreshFields covers all of them; any other dossier-mode
+            // proposal stamps the fields it actually rewrote (non-null). This
+            // is bookkeeping only — it must never fail the accept itself.
+            try {
+                if (Array.isArray(item.refreshFields) && item.refreshFields.length > 0) {
+                    recordDossierFieldRefresh(regKey, item.refreshFields);
+                } else if (item.dossierMode === true && item.fields && typeof item.fields === 'object' && !Array.isArray(item.fields)) {
+                    const rewritten = DOSSIER_FIELDS.map(f => f.key).filter(k => item.fields[k] != null);
+                    if (rewritten.length > 0) recordDossierFieldRefresh(regKey, rewritten);
+                }
+            } catch (stampErr) {
+                console.warn('[MWT:Knowledge] Dossier field-status stamp skipped:', stampErr?.message || stampErr);
+            }
         }
         state.stagingItems = state.stagingItems.filter(i => i.id !== item.id);
         if (state.activeItemId === item.id) state.activeItemId = null;
@@ -457,6 +480,7 @@ function renderNpcListContent(type, entries) {
                     <button class="mwt-btn kt-npc-update" data-name="${escapeHtml(name)}" data-type="${type}">Update</button>
                     ${type === 'minor' ? `<button class="mwt-btn kt-npc-promote" data-name="${escapeHtml(name)}">⬆ Promote</button>` : ''}
                     ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)">📋 Enrich</button>` : ''}
+                    ${showEnrich ? `<button class="mwt-btn kt-npc-fields" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Refresh individual dossier fields (agenda, appearance, secrets, …)">🎯 Fields</button>` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations">🌱 Growth</button>` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}">⬇ Demote</button>` : ''}
                     <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}">📖 View</button>
@@ -523,6 +547,9 @@ function wireNpcListEvents(el, _type) {
                     keywords: reg.keywords || [name], uid: reg.uid,
                     fields: result.fields, newKnowledge: result.newKnowledge || [],
                     dossierMode: true,
+                    // Enrich rewrites EVERY dossier field — accept should stamp
+                    // all of them fresh (TODO §3 staleness watermarks).
+                    refreshFields: DOSSIER_FIELDS.map(f => f.key),
                 });
                 const stagedItem = state.stagingItems[state.stagingItems.length - 1];
                 state.activeItemId = stagedItem.id;
@@ -532,6 +559,17 @@ function wireNpcListEvents(el, _type) {
                 ktSetStatus(`Dossier enrichment for "${name}" staged for review.`, 'success');
             } catch (err) { ktSetStatus(`Enrich failed: ${err.message}`, 'error'); }
             finally { btn.disabled = false; btn.textContent = '📋 Enrich'; }
+        });
+    });
+
+    el.querySelectorAll('.kt-npc-fields').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            // Double-click guard (the Enrich pattern): the picker modal only
+            // exists after an awaited lorebook read, so two rapid clicks would
+            // stack two #kt-dossier-refresh-modal nodes with the same id.
+            btn.disabled = true;
+            try { await openDossierFieldRefreshModal(btn.dataset.name); }
+            finally { btn.disabled = false; }
         });
     });
 
@@ -604,11 +642,33 @@ function wireNpcListEvents(el, _type) {
             const reg = getRegistry();
             delete reg[name];
             saveRegistry(reg);
+            // Capture what the relationship wipe below removes BEFORE removing
+            // it, so the Recent Changes panel can log it — this is a manual
+            // mutation path, and the panel claims a full session audit.
+            const removedRelChanges = [];
+            for (const edge of getNpcRelationships(name)) {
+                removedRelChanges.push({ kind: 'edge', action: 'removed', from: name, to: edge.target, previousType: edge.type });
+            }
+            for (const [from, targets] of Object.entries(getRelationships())) {
+                for (const edge of targets) {
+                    if (edge.target === name) removedRelChanges.push({ kind: 'edge', action: 'removed', from, to: name, previousType: edge.type });
+                }
+            }
+            const previousStance = getStance(name);
+            if (previousStance) removedRelChanges.push({ kind: 'stance', action: 'cleared', npc: name, previousStance });
             removeAllRelationshipsFor(name);
             setStance(name, '');
+            if (removedRelChanges.length > 0) recordRelationshipChanges(removedRelChanges, 'manual');
             // Clean up the evidence file (Slice 2) so chat metadata doesn't
             // accumulate orphaned evidence for removed NPCs.
             import('./evidence.js').then(({ deleteEvidenceFile }) => deleteEvidenceFile(name));
+            // Same for the per-field dossier staleness watermarks (TODO §3).
+            // Like the accept-path stamp, this is bookkeeping only — a throw
+            // here must never fail the removal itself (it would skip the
+            // re-render below).
+            try { deleteDossierFieldStatus(name); } catch (err) {
+                console.warn('[MWT:Knowledge] Dossier field-status cleanup skipped:', err?.message || err);
+            }
             renderNpcsSubTab();
         });
     });
@@ -1527,6 +1587,197 @@ async function openNpcViewModal(name) {
     viewModal.querySelector('.kt-history-backdrop').addEventListener('click', () => viewModal.remove());
 }
 
+// ─── Dossier per-field refresh modal (TODO §3) ───────────────────────────────
+
+/** Build one field row's staleness chip class + text. */
+function dossierStalenessChip(staleness) {
+    if (!staleness.known) return { cls: 'kt-dfr-chip--stale', text: 'never tracked' };
+    if (staleness.stale) {
+        return { cls: 'kt-dfr-chip--stale', text: staleness.msgsSince === null ? 'stale' : `stale · ${staleness.msgsSince} msgs ago` };
+    }
+    return { cls: 'kt-dfr-chip--fresh', text: staleness.msgsSince === null ? 'fresh' : `fresh · ${staleness.msgsSince} msgs ago` };
+}
+
+/**
+ * The per-field dossier refresh picker. Lists every DOSSIER_FIELDS section of
+ * one NPC's entry with its current value, a staleness chip (message-count
+ * watermark), and the two ownership locks: canon_lock is user-authored canon
+ * (manual-only), and personality is owned by the Growth profile system when
+ * the NPC has an evidence file. "Select stale" pre-checks every stale,
+ * selectable field (the bulk "refresh stale fields" action); "Refresh
+ * selected" runs runDossierFieldRefresh and stages the result for the normal
+ * review flow — nothing is written to the lorebook from this modal.
+ */
+async function openDossierFieldRefreshModal(name) {
+    // One picker at a time (the id is a singleton): the awaited lorebook read
+    // below means button-level disabling alone cannot close every race, and a
+    // second node with the same id would stack Escape handlers.
+    if (document.getElementById('kt-dossier-refresh-modal')) return;
+    const reg = getRegistry()[name];
+    if (!reg?.uid && reg?.uid !== 0) { ktSetStatus(`No UID for "${name}".`, 'error'); return; }
+    // Label-verified load — never show another NPC's dossier under this name.
+    const content = await loadEntryContent(reg.uid, name);
+    if (!content) { ktSetStatus(`Could not load entry for "${name}".`, 'error'); return; }
+    if (!isDossierEntry(content)) {
+        ktSetStatus(`"${name}" is not in dossier format — use 📋 Enrich to convert it first.`, 'error');
+        return;
+    }
+    const { hasEvidenceFile } = await import('./evidence.js');
+    const growthOwnsPersonality = hasEvidenceFile(name);
+    const values = extractDossierFieldValues(content);
+    const rows = DOSSIER_FIELDS.map(f => {
+        const staleness = getDossierFieldStaleness(name, f.key);
+        const lockedCanon = f.key === 'canon_lock';
+        const growthField = f.key === 'personality' && growthOwnsPersonality;
+        return {
+            key: f.key,
+            label: f.label,
+            value: values[f.key],
+            staleness,
+            selectable: !lockedCanon && !growthField,
+            note: lockedCanon
+                ? '🔒 user-authored canon — edit it manually; never model-refreshed'
+                : growthField
+                    ? '🌱 owned by the Growth profile system (evidence-driven)'
+                    : null,
+        };
+    });
+
+    const modal = document.createElement('div');
+    modal.id = 'kt-dossier-refresh-modal';
+    modal.className = 'mwt-modal kt-dossier-refresh-modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="mwt-modal-backdrop"></div>
+        <div class="mwt-modal-panel">
+            <div class="mwt-modal-header">
+                <h3>🎯 Refresh fields — ${escapeHtml(name)}</h3>
+                <button class="mwt-modal-close" title="Close">&times;</button>
+            </div>
+            <div class="mwt-modal-body">
+                <p class="kt-dfr-hint">Pick the dossier fields to re-derive from recent messages; everything else is left untouched. A field is flagged stale once ${DOSSIER_STALE_AFTER_MSGS} new messages have arrived since it was last written or re-verified (or when it has never been tracked).</p>
+                <div class="kt-dfr-rows">
+                    ${rows.map(r => {
+                        const chip = dossierStalenessChip(r.staleness);
+                        const checked = r.selectable && r.staleness.stale ? 'checked' : '';
+                        const disabled = r.selectable ? '' : 'disabled';
+                        return `<label class="kt-dfr-row${r.selectable ? '' : ' kt-dfr-row--locked'}">
+                            <input type="checkbox" class="kt-dfr-field" data-key="${escapeHtml(r.key)}" ${checked} ${disabled} />
+                            <span class="kt-dfr-row-main">
+                                <span class="kt-dfr-row-label">${escapeHtml(r.label)}</span>
+                                <span class="kt-dfr-row-value">${r.value ? escapeHtml(r.value.slice(0, 140)) + (r.value.length > 140 ? '…' : '') : '<em>(not set)</em>'}</span>
+                                ${r.note ? `<span class="kt-dfr-row-note">${r.note}</span>` : ''}
+                            </span>
+                            <span class="kt-dfr-chip ${chip.cls}">${chip.text}</span>
+                        </label>`;
+                    }).join('')}
+                </div>
+            </div>
+            <div class="mwt-modal-statusbar kt-dfr-footer">
+                <button class="mwt-btn kt-dfr-select-stale">Select stale</button>
+                <button class="mwt-btn kt-dfr-clear">Clear all</button>
+                <span style="flex:1"></span>
+                <button class="mwt-btn mwt-btn-primary kt-dfr-run" title="Re-derive the selected fields from recent messages and stage the result for review">🔄 Refresh selected</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+
+    const cleanup = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
+    modal.querySelector('.mwt-modal-close').addEventListener('click', cleanup);
+    modal.querySelector('.mwt-modal-backdrop').addEventListener('click', cleanup);
+    document.addEventListener('keydown', onKey);
+    // core/modal.js convention: anything that removes this node WITHOUT going
+    // through cleanup() (e.g. the chat-change sweep) detaches the document-
+    // level key handler through this property instead of leaking one listener
+    // per refresh run.
+    modal._cleanupKeyHandler = () => document.removeEventListener('keydown', onKey);
+    wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup);
+}
+
+/**
+ * Wire the picker modal's footer actions: checkbox count on the run button,
+ * "Select stale" (bulk), "Clear all", and the run flow itself — which calls
+ * runDossierFieldRefresh and stages the merged result into the standard
+ * review pipeline (staging tab, diff, Accept writes). Stale-but-unchanged
+ * results still stamp the re-verified watermarks.
+ *
+ * @param {() => void} cleanup - the opener's full teardown (node + Escape
+ *   handler). Both run-flow exits must go through it, never a bare
+ *   modal.remove(), or the document-level key listener leaks.
+ */
+function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
+    const runBtn = modal.querySelector('.kt-dfr-run');
+    const updateRunBtn = () => {
+        const selected = modal.querySelectorAll('.kt-dfr-field:checked').length;
+        runBtn.textContent = selected > 0 ? `🔄 Refresh selected (${selected})` : '🔄 Refresh selected';
+        runBtn.disabled = selected === 0;
+    };
+    modal.querySelectorAll('.kt-dfr-field').forEach(cb => cb.addEventListener('change', updateRunBtn));
+    modal.querySelector('.kt-dfr-select-stale').addEventListener('click', () => {
+        // Bulk "refresh stale fields": check every selectable stale row.
+        modal.querySelectorAll('.kt-dfr-field').forEach(cb => {
+            const row = rows.find(r => r.key === cb.dataset.key);
+            cb.checked = !!row && row.selectable && row.staleness.stale;
+        });
+        updateRunBtn();
+    });
+    modal.querySelector('.kt-dfr-clear').addEventListener('click', () => {
+        modal.querySelectorAll('.kt-dfr-field').forEach(cb => { cb.checked = false; });
+        updateRunBtn();
+    });
+    updateRunBtn();
+
+    runBtn.addEventListener('click', async () => {
+        const selected = [...modal.querySelectorAll('.kt-dfr-field:checked')].map(cb => cb.dataset.key);
+        if (selected.length === 0) return;
+        try {
+            runBtn.disabled = true; runBtn.textContent = '⏳…';
+            const result = await runDossierFieldRefresh(name, reg.uid, selected);
+            // The field-refresh prompt ECHOES unchanged values instead of
+            // returning null (the Update prompt's convention), so "nothing
+            // changed" cannot be read off the field values — a byte-identical
+            // merge is the no-change signal and takes the re-verify path.
+            const hasChanges = result.merged !== result.currentContent;
+            if (!hasChanges) {
+                // Nothing new — but the selected fields were still re-examined,
+                // so stamp them fresh rather than leaving them flagged stale.
+                try { recordDossierFieldRefresh(name, result.requestedFields); } catch { /* bookkeeping */ }
+                ktSetStatus(`No new info for the selected fields of "${name}" — marked re-verified.`, 'info');
+                cleanup();
+                return;
+            }
+            state.stagingItems.push({
+                id: `dossier-fields-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                type: 'major', action: 'update', name, data: {},
+                proposedContent: result.merged,
+                existingContent: result.currentContent,
+                mergedContent: result.merged,
+                keywords: reg.keywords || [name], uid: reg.uid,
+                fields: result.fields, newKnowledge: [],
+                dossierMode: true,
+                // What the user asked to refresh — accept stamps these watermarks.
+                refreshFields: result.requestedFields,
+            });
+            const stagedItem = state.stagingItems[state.stagingItems.length - 1];
+            state.activeItemId = stagedItem.id;
+            state.activeSubTab = 'staging';
+            addNotificationEntry(stagedItem);
+            renderNpcsSubTab();
+            if (result.skippedFields.length > 0) {
+                ktSetStatus(`Field refresh for "${name}" staged (${result.skippedFields.length} field(s) skipped as locked).`, 'info');
+            } else {
+                ktSetStatus(`Field refresh for "${name}" staged for review.`, 'success');
+            }
+            cleanup();
+        } catch (err) {
+            ktSetStatus(`Field refresh failed: ${err.message}`, 'error');
+            runBtn.disabled = false;
+            updateRunBtn();
+        }
+    });
+}
+
 // ─── Relationship sub-tab ────────────────────────────────────────────────────
 
 const REL_EDGE_COLORS = {
@@ -1559,6 +1810,53 @@ function renderRelationshipContent() {
     // Collect unique types present for the legend
     const presentTypes = [...new Set(allEdges.map(e => e.type))];
 
+    // ── Collapsible: Recent Changes ──
+    // The auto-extract toast names up to three changes; this log keeps the full
+    // session history (auto AND manual) for review. Session-scoped — cleared on
+    // chat change, never persisted.
+    const recentChanges = getRecentRelationshipChanges();
+    const changesSection = recentChanges.length > 0 ? `
+        <div class="kt-rel-section">
+            <button class="kt-rel-section-header" id="kt-rel-changes-toggle" title="${state.relChangesExpanded ? 'Collapse' : 'Expand'} the recent-changes log for this session">
+                <span class="kt-rel-section-caret">${state.relChangesExpanded ? '▾' : '▸'}</span>
+                <span class="kt-rel-section-title">🕘 Recent Changes</span>
+                <span class="kt-rel-count-badge">${recentChanges.length}</span>
+                <span class="kt-rel-section-hint">this session — auto &amp; manual</span>
+            </button>
+            ${state.relChangesExpanded ? `
+            <div class="kt-rel-list kt-rel-changes-list">
+                ${recentChanges.map(c => `
+                <div class="kt-rel-row kt-rel-change-row">
+                    <span class="kt-rel-change-origin" title="${c.origin === 'manual' ? 'Changed by you' : 'Changed by auto-extraction'}">${c.origin === 'manual' ? '✍️' : '🤖'}</span>
+                    <span class="kt-rel-change-desc">${escapeHtml(describeRelationshipChange(c))}</span>
+                    <span class="kt-rel-change-age">${escapeHtml(formatHistoryAge(c.ts || Date.now()))}</span>
+                </div>`).join('')}
+                <button class="kt-rel-changes-clear" id="kt-rel-changes-clear" title="Clear this session's change log">Clear log</button>
+            </div>` : ''}
+        </div>` : '';
+
+    // ── Collapsible: Stances toward {{user}} ──
+    // Collapsed by default: with a large NPC cast the per-NPC stance rows
+    // otherwise push the graph and edge list far down the tab.
+    const stancesSection = stanceEntries.length ? `
+        <div class="kt-rel-section">
+            <button class="kt-rel-section-header" id="kt-rel-stances-toggle" title="${state.relStancesExpanded ? 'Collapse' : 'Expand'} the per-NPC stance list">
+                <span class="kt-rel-section-caret">${state.relStancesExpanded ? '▾' : '▸'}</span>
+                <span class="kt-rel-section-title">Stances toward {{user}}</span>
+                <span class="kt-rel-count-badge">${stanceEntries.length}</span>
+            </button>
+            ${state.relStancesExpanded ? `<div class="kt-rel-list">${stanceEntries.map(([n, s]) => {
+                 const locked = !isStanceAutoManaged(n);
+                 return `<div class="kt-rel-row">
+                 <span class="kt-rel-from">${escapeHtml(n)}</span>
+                 <span class="kt-rel-type">${escapeHtml(s)}</span>
+                 <span class="kt-rel-notes">toward {{user}}</span>
+                 <button class="kt-stance-lock ${locked ? 'locked' : ''}" data-name="${escapeHtml(n)}" title="${locked ? 'Locked — you set this, so auto-extraction will not change it. Click to hand it back to auto-updating.' : 'Auto-managed — extraction may update this. Click to lock it.'}">${locked ? '🔒' : '🔓'}</button>
+                 <button class="kt-stance-clear" data-name="${escapeHtml(n)}" title="Clear stance">✕</button>
+             </div>`;
+             }).join('')}</div>` : ''}
+        </div>` : '';
+
     return `
        <div class="kt-rel-container">
            <div class="kt-rel-toolbar">
@@ -1584,16 +1882,8 @@ function renderRelationshipContent() {
                <button id="kt-stance-set" class="mwt-btn mwt-btn-primary">Set</button>
                <span style="flex:1;min-width:160px;font-size:11px;color:var(--mwt-text-dim)">How far this NPC pushes before backing off. Unset NPCs fall back to persona.</span>
             </div>
-            ${stanceEntries.length ? `<div class="kt-rel-list">${stanceEntries.map(([n, s]) => {
-                     const locked = !isStanceAutoManaged(n);
-                     return `<div class="kt-rel-row">
-                     <span class="kt-rel-from">${escapeHtml(n)}</span>
-                     <span class="kt-rel-type">${escapeHtml(s)}</span>
-                     <span class="kt-rel-notes">toward {{user}}</span>
-                     <button class="kt-stance-lock ${locked ? 'locked' : ''}" data-name="${escapeHtml(n)}" title="${locked ? 'Locked — you set this, so auto-extraction will not change it. Click to hand it back to auto-updating.' : 'Auto-managed — extraction may update this. Click to lock it.'}">${locked ? '🔒' : '🔓'}</button>
-                     <button class="kt-stance-clear" data-name="${escapeHtml(n)}" title="Clear stance">✕</button>
-                 </div>`;
-                 }).join('')}</div>` : ''}
+            ${changesSection}
+            ${stancesSection}
             ${allEdges.length === 0 ? '<div class="kt-empty">No relationships tracked yet.</div>' : (viewMode === 'graph' ? `
                 <div class="kt-rel-graph-wrap">
                     <svg id="kt-rel-graph" class="kt-rel-graph" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -2069,6 +2359,23 @@ function wireRelationshipEvents(el) {
         });
     });
 
+    // Collapsible section toggles — Recent Changes and the stance list. Pure
+    // view state, persisted in memory only, so no store write or re-sync.
+    el.querySelector('#kt-rel-changes-toggle')?.addEventListener('click', () => {
+        state.relChangesExpanded = !state.relChangesExpanded;
+        renderNpcsSubTab();
+    });
+
+    el.querySelector('#kt-rel-changes-clear')?.addEventListener('click', () => {
+        clearRecentRelationshipChanges();
+        renderNpcsSubTab();
+    });
+
+    el.querySelector('#kt-rel-stances-toggle')?.addEventListener('click', () => {
+        state.relStancesExpanded = !state.relStancesExpanded;
+        renderNpcsSubTab();
+    });
+
     // Render the graph SVG now that the container is in the DOM
     if (state.relViewMode === 'graph') {
         requestAnimationFrame(() => renderRelationshipGraph());
@@ -2087,7 +2394,10 @@ function wireRelationshipEvents(el) {
         const npcNames = getAllNpcNames();
         if (!npcNames.includes(from)) { ktSetStatus(`"${from}" is not a known NPC.`, 'error'); return; }
         if (!npcNames.includes(to)) { ktSetStatus(`"${to}" is not a known NPC.`, 'error'); return; }
+        // Capture the prior edge (if any) so the Recent Changes log can say "was X".
+        const previous = getNpcRelationships(from).find(r => r.target === to);
         updateRelationship(from, to, type, notes);
+        recordRelationshipChanges([{ kind: 'edge', action: previous ? 'updated' : 'added', from, to, type, previousType: previous?.type, notes }], 'manual');
         state._graphData = null; // invalidate cached layout
         try {
             const result = await syncRelationshipsToLorebook(from);
@@ -2109,7 +2419,9 @@ function wireRelationshipEvents(el) {
         const stance = el.querySelector('#kt-stance-value')?.value;
         if (!name || !stance) { ktSetStatus('Select an NPC and a stance.', 'error'); return; }
         if (!getAllNpcNames().includes(name)) { ktSetStatus(`"${name}" is not a known NPC.`, 'error'); return; }
+        const previousStance = getStance(name);
         setStance(name, stance);
+        recordRelationshipChanges([{ kind: 'stance', action: 'set', npc: name, stance, previousStance }], 'manual');
         try {
             const result = await syncRelationshipsToLorebook(name);
             if (result.success) ktSetStatus(`"${name}" is now ${stance} toward {{user}}.`, 'success');
@@ -2139,7 +2451,9 @@ function wireRelationshipEvents(el) {
     el.querySelectorAll('.kt-stance-clear').forEach(btn => {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
+            const previousStance = getStance(name);
             setStance(name, '');
+            recordRelationshipChanges([{ kind: 'stance', action: 'cleared', npc: name, previousStance }], 'manual');
             try { await syncRelationshipsToLorebook(name); } catch { /* entry may be gone */ }
             renderNpcsSubTab();
         });
@@ -2150,7 +2464,9 @@ function wireRelationshipEvents(el) {
             const from = btn.dataset.from;
             const to = btn.dataset.to;
             if (!confirm(`Remove relationship: ${from} → ${to}?`)) return;
+            const previousType = getNpcRelationships(from).find(r => r.target === to)?.type;
             removeRelationship(from, to);
+            recordRelationshipChanges([{ kind: 'edge', action: 'removed', from, to, previousType }], 'manual');
             state._graphData = null; // invalidate cached layout
             try { await syncRelationshipsToLorebook(from); } catch { /* ignore */ }
             renderNpcsSubTab();

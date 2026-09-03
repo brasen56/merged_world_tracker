@@ -12,6 +12,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.2.0]
+
+### Added
+
+- **Relationship "Recent Changes" tracking + detailed toast, and a collapsible
+  stances list** (Knowledge → Relationships tab). Automatic relationship
+  extraction used to announce counts only ("+2 relationship(s), ~1 updated") —
+  the toast never said WHO changed or TO WHAT, and there was no way to review
+  what the cadence had done after the toast faded. `applyExtractedRelationships`
+  (`knowledge/relationships.js`) now returns a `changes` array with one record
+  per applied mutation (edge added/updated with from→to, type, and previous
+  type; stance set with the NPC, stance, and previous stance), and the
+  completion toast names the first three changes with a "+N more" tail. The
+  records also land in a new **🕘 Recent Changes** collapsible section on the
+  Relationships tab (newest first, 🤖 auto / ✍️ you origin badges, ages, Clear
+  log) — manual edits there (add/update edge, set/clear stance, remove edge) are
+  logged too, so the panel is a full session audit. The log is session-scoped
+  runtime state (`relRecentChanges` in `knowledge/state.js`, capped at 40,
+  cleared on chat change) and deliberately NOT persisted: every lorebook-store
+  field is schema-validated and carried by the backup/restore merge planner,
+  which a review list doesn't justify. Formatting lives in one shared
+  `describeRelationshipChange()` so the toast and the panel can't disagree.
+  The per-NPC **stance rows are now behind a "Stances toward {{user}} (N)"
+  collapsible header** (collapsed by default, count badge, remembered per
+  session) — with a large NPC cast they previously pushed the graph and edge
+  list far down the tab. Tests in `test/relationship_extract.test.js`.
+
+- **Per-field / partial dossier refresh for Knowledge NPCs** (TODO §3 "F —
+  Per-field / partial dossier refresh"; source: user ticket, cross-ref PI §3
+  World State delta mode). Dossier fields go stale individually — an NPC's
+  agenda moves on, their appearance changes — but until now the Update path
+  always re-examined the whole entry. Major NPCs in Dossier Mode now have a
+  **🎯 Fields** button that opens a per-field picker: each dossier section
+  (Role, Where to Find, Appearance, Voice, Background, Personality, Read on PC,
+  Current Agenda, Secrets, Canon Lock, Image Tags) is listed with its current
+  value and a staleness chip driven by a new per-field watermark
+  (last-updated timestamp + message count, stored in the
+  `knowledge_tracker_counters` chat-metadata store value the same way World
+  State's `deltaStatus` rides its store — no schema change). "Select stale"
+  pre-checks every stale field (the bulk "refresh stale fields" action) and
+  "Refresh selected" asks the model to re-derive ONLY the chosen fields
+  (new `DOSSIER_FIELD_REFRESH_PROMPT` + `runDossierFieldRefresh`), staging the
+  merged result in the normal review pipeline — everything not selected is
+  preserved byte-for-byte. Both ownership boundaries are enforced in the
+  sanitizer AND on the response: `canon_lock` is user-authored canon and is
+  never model-refreshed, and `personality` is excluded for NPCs with a growth
+  evidence file (`hasEvidenceFile`) so the evidence/growth "split-brain"
+  partition (NPC_GROWTH_BLUEPRINT.md) is preserved. Accepting any dossier-mode
+  proposal (update, enrich, scan merge, field refresh) now stamps field
+  watermarks, so staleness stays honest; removing an NPC cleans them up; the
+  picker modal is dropped on chat switch like the view/growth modals. New
+  module `knowledge/dossier_status.js`; tests in
+  `test/dossier_field_refresh.test.js`.
+
+### Fixed
+
+- **Per-field dossier refresh + paused-chat follow-ups** (each pinned by new
+  tests in `test/dossier_field_refresh.test.js`): the 🎯 Fields picker's
+  "nothing new" detection borrowed the Update path's null-check idiom, but
+  `DOSSIER_FIELD_REFRESH_PROMPT` *echoes* unchanged values instead of
+  returning null — so an ordinary no-change refresh staged a byte-identical
+  diff and the nicer "marked re-verified" branch (the one that stamps the
+  watermarks fresh) almost never fired; change detection now compares the
+  merged entry against the current one. The run flow's two shortcut exits
+  called `modal.remove()` directly, leaking one document-level Escape listener
+  per refresh run — they now go through the opener's `cleanup()`, the modal
+  carries `_cleanupKeyHandler` (the core/modal.js convention), and both
+  chat-change sweeps detach it too. `deleteDossierFieldStatus` skipped the
+  Part 6 pause guard its stamp sibling has, so removing an NPC while the
+  counters store was paused would validate and commit an unprepared store
+  value — deletes are write seams too (same contract as `saveEvidenceMap`),
+  and that refusal branch now has test coverage. Double-clicking 🎯 Fields
+  before its awaited lorebook read resolved stacked two picker modals with
+  the same id (button disabling for the open, plus a singleton guard).
+  `onChatChangedWhilePaused` also reset everything except the session
+  relationship-change log — the one thing `onChatChanged` flags as
+  "actively misleading" when stale — it is cleared with the same stroke now.
+
+- **Relationship change-log polish** (tests in
+  `test/relationship_extract.test.js`): a notes-only edge update (same
+  relationship type, new notes) rendered as "Mara → Jonah: friend (was
+  friend)" — the "(was X)" tail now only appears when the type actually
+  changed, letting the notes fall through instead. Removing an NPC from the
+  registry silently wiped its relationship edges and stance with no entry in
+  the 🕘 Recent Changes panel, against its "full session audit" claim — the
+  wipe (and the stance clear beside it) is now logged like every other manual
+  mutation, and the per-field watermark cleanup beside it is wrapped so a
+  bookkeeping throw can never fail the removal itself.
+
 ## [2.1.1]
 
 ### Fixed

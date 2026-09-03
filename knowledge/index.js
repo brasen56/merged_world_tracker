@@ -24,7 +24,7 @@ import { resetStoreCache, hydrateCurrentBooks } from './store.js';
 // pause-wiring note about the test-only barrel→stub alias.
 import { setStoreRetryHandler, getPauseState, isModulePausedForCurrentScope } from '../core/schema_status.js';
 import { runContinuousCaptureAll } from './growth.js';
-import { runRelationshipExtract, syncRelationshipsToLorebook } from './relationships.js';
+import { runRelationshipExtract, syncRelationshipsToLorebook, recordRelationshipChanges, clearRecentRelationshipChanges, describeRelationshipChange } from './relationships.js';
 import {
     renderNpcsSubTab,
     addNotificationEntry, removeNotificationEntry,
@@ -461,7 +461,7 @@ export function onMessageReceived({ countMessage = true } = {}) {
                         console.log('[MWT:Knowledge] Relationship extract discarded — chat changed during API call.');
                         return;
                     }
-                    const { affectedNpcs, edgesAdded, edgesUpdated, stancesSet, skippedManual, skippedNeutral } = extract;
+                    const { affectedNpcs, edgesAdded, edgesUpdated, stancesSet, skippedManual, skippedNeutral, changes: changeRecords } = extract;
                     // Re-sync only the affected NPCs so the managed block reflects the
                     // new edges/stances. Skips entries whose content didn't change.
                     let synced = 0;
@@ -482,16 +482,26 @@ export function onMessageReceived({ countMessage = true } = {}) {
                         `Protected ${skippedManual} hand-entered record(s); dropped ${skippedNeutral} "neutral" non-finding(s).`
                     );
                     if (changes > 0) {
+                        // Feed the session "Recent Changes" log on the Relationships
+                        // tab so who/what survives past the transient toast.
+                        recordRelationshipChanges(changeRecords, 'auto');
                         // Refresh the open sub-tab so the Relationships list and
                         // graph show the new edges instead of going stale until
                         // the user navigates away and back.
                         renderNpcsSubTab();
                         const { notify } = await import('../core/index.js');
-                        const parts = [];
-                        if (edgesAdded) parts.push(`+${edgesAdded} relationship(s)`);
-                        if (edgesUpdated) parts.push(`~${edgesUpdated} updated`);
-                        if (stancesSet) parts.push(`${stancesSet} stance(s) toward {{user}}`);
-                        notify('Knowledge Tracker', `🔗 Relationships logged: ${parts.join(', ')}.`, 'success');
+                        // Name the changes, not just the counts — "relationships
+                        // changed" without who/to-what forces the user to diff the
+                        // graph by hand. First 3, then "+N more".
+                        const detailLines = (changeRecords || [])
+                            .map(describeRelationshipChange)
+                            .filter(Boolean)
+                            .slice(0, 3);
+                        const extra = changes - detailLines.length;
+                        const detail = detailLines.length
+                            ? `: ${detailLines.join('; ')}${extra > 0 ? `; +${extra} more` : ''}`
+                            : '';
+                        notify('Knowledge Tracker', `🔗 Relationships logged${detail}.`, 'success');
                     }
                 } catch (err) {
                     console.warn('[MWT:Knowledge] Relationship extract failed:', err.message);
@@ -523,6 +533,10 @@ export function onChatChanged() {
     const chat = getChat() || [];
     state.lastChatLength = chat.length;
     state.isRunning = false;
+    // Recent relationship changes belong to the chat they happened in — under
+    // non-global scope the relationship store itself is per-chat, so a stale
+    // log from the previous chat would be actively misleading.
+    clearRecentRelationshipChanges();
     state.stagingItems = [];
     state.activeItemId = null;
     state.activeSubTab = 'staging';
@@ -537,8 +551,10 @@ export function onChatChanged() {
     // the view modal AND the Growth modal. The Growth modal carries the
     // previous chat's evidence/profile, and its still-live handlers (Save to
     // Lorebook, evidence editing) would act on the NEW chat's stores, so it
-    // must be dropped with the same stroke.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal').forEach(m => m.remove());
+    // must be dropped with the same stroke. _cleanupKeyHandler first (the
+    // core/modal.js convention) so the sweep also detaches any document-level
+    // Escape listener a removed modal left behind — a bare remove() leaks it.
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
 
     // Re-point the registry stores at whatever lorebooks the new chat resolves
     // to. This is fire-and-forget because onChatChanged is synchronous, but it
@@ -558,6 +574,10 @@ export function onChatChanged() {
  */
 export function onChatChangedWhilePaused() {
     state.isRunning = false;
+    // Same reasoning as onChatChanged's clear: a stale change log from the
+    // previous chat is actively misleading, and clearing it is a pure
+    // in-memory assignment — nothing about the pause blocks it.
+    clearRecentRelationshipChanges();
     state.stagingItems = [];
     state.activeItemId = null;
     state.activeSubTab = 'staging';
@@ -571,8 +591,10 @@ export function onChatChangedWhilePaused() {
     // The Growth modal is dropped with the view modal — pure DOM removal, no
     // store read (otherwise it survives the switch displaying the previous
     // chat's evidence/profile, and its handlers would edit that old evidence
-    // against the new chat's stores; see onChatChanged).
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal').forEach(m => m.remove());
+    // against the new chat's stores; see onChatChanged). _cleanupKeyHandler
+    // first (the core/modal.js convention) so the sweep also detaches any
+    // document-level Escape listener a removed modal left behind.
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
     console.log('[MWT:Knowledge] Chat changed while paused — staging/UI state reset (store hydration skipped).');
 }
 
