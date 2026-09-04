@@ -7,6 +7,14 @@
 import {
     escapeHtml, renderLineDiff, notify,
 } from '../core/index.js';
+// Direct import (not the barrel): the chat-scope guard must read the REAL
+// core/scope.js epoch/identity state under the test barrel→stub alias — the
+// same rule knowledge/identity.js follows for its write paths. scopeStillCurrent
+// carries the §7.5 semantics a UI path needs: the epoch (bumped synchronously
+// by CHAT_CHANGED) is always checked, the chat identity only when the capture
+// could actually identify the chat, so hosts without a usable chat id are not
+// falsely marked stale on every await.
+import { captureScope, scopeStillCurrent } from '../core/scope.js';
 
 import {
     RELATIONSHIP_TYPES, USER_STANCES, TRACKER_SENTINEL,
@@ -865,65 +873,116 @@ function wireStateTrackerEvents(el) {
  * @param {string} name — NPC name
  * @param {HTMLButtonElement} triggerBtn — the button that launched the modal
  */
+// In-flight singleton guard for openGrowthProfileModal. The modal node only
+// exists once its opening awaits resolve, so the DOM-level singleton check
+// below cannot see a second click that lands inside that window — two rapid
+// clicks used to stack two #kt-growth-modal nodes (duplicate ids, Escape
+// handlers fighting over one close).
+let growthModalOpening = false;
+
 async function openGrowthProfileModal(name, triggerBtn) {
-    // Opening a Growth Profile modal = the user is now reviewing evidence.
-    // Clear the unread counter so the floating-button pulse stops, and
-    // dispatch mwt:busy-changed so the button updates immediately.
-    if (state.unreadGrowthEvidenceCount !== 0) {
-        state.unreadGrowthEvidenceCount = 0;
-        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
-    }
+    // Singleton: never two Growth modals. The DOM check covers a modal that
+    // already finished opening; the in-flight flag covers the await window
+    // before the node exists — a race openIdentityModal /
+    // openDossierFieldRefreshModal's id checks cannot see.
+    if (growthModalOpening || document.getElementById('kt-growth-modal')) return;
+    growthModalOpening = true;
+    try {
+        // Opening a Growth Profile modal = the user is now reviewing evidence.
+        // Clear the unread counter so the floating-button pulse stops, and
+        // dispatch mwt:busy-changed so the button updates immediately.
+        if (state.unreadGrowthEvidenceCount !== 0) {
+            state.unreadGrowthEvidenceCount = 0;
+            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        }
 
-    // Load what's already in evidence + the last profile — all READ-ONLY
-    // (synchronous reads from chat metadata + one local lorebook read).
-    // No API calls fire here.
-    const { loadProfile } = await import('./growth.js');
-    const { getEvidenceForProfile, getEvidenceSummary, getUserOverrides } = await import('./evidence.js');
+        // Chat-scope guard. The chat-change sweeps (knowledge/index.js)
+        // remove #kt-growth-modal on a chat switch, but they cannot remove a
+        // modal that does not exist yet: without this check a chat change
+        // during the opening awaits appended the OLD chat's modal into the
+        // NEW chat, where its evidence editing and Save-to-Lorebook handlers
+        // acted on the new chat's stores. Capture before the first await;
+        // recheck after each one (§7.5: epoch always, identity when known).
+        const scope = captureScope();
 
-    const observations = getEvidenceForProfile(name);
-    const summary = getEvidenceSummary(name);
-    const overrides = getUserOverrides(name);
-    let existingProfile = null;
-    try { existingProfile = await loadProfile(name); } catch { /* ignore load errors */ }
+        // Load what's already in evidence + the last profile — all READ-ONLY
+        // (synchronous reads from chat metadata + one local lorebook read).
+        // No API calls fire here.
+        const { loadProfile } = await import('./growth.js');
+        const { getEvidenceForProfile, getEvidenceSummary, getUserOverrides } = await import('./evidence.js');
 
-    // Build the modal with the read-only state already populated (no spinner).
-    const modal = document.createElement('div');
-    modal.id = 'kt-growth-modal';
-    modal.className = 'mwt-modal kt-growth-modal';
-    modal.style.display = 'flex';
-    modal.innerHTML = `
-        <div class="mwt-modal-backdrop"></div>
-        <div class="mwt-modal-panel">
-            <div class="mwt-modal-header">
-                <h3>🌱 Growth Profile — ${escapeHtml(name)}</h3>
-                <button class="mwt-modal-close" title="Close">&times;</button>
-            </div>
-            <div class="mwt-modal-body">
-                <div class="kt-growth-status">
-                    <span class="kt-growth-status-text">${renderGrowthStatusText(summary, existingProfile)}</span>
+        // Stale after the module awaits → the reads below would already be
+        // reading the NEW chat's stores with the OLD chat's intent; discard
+        // the open entirely.
+        if (!scopeStillCurrent(scope).ok) {
+            console.log('[MWT:Knowledge] Growth Profile modal discarded — the chat changed while it was opening.');
+            return;
+        }
+
+        const observations = getEvidenceForProfile(name);
+        const summary = getEvidenceSummary(name);
+        const overrides = getUserOverrides(name);
+        let existingProfile = null;
+        try { existingProfile = await loadProfile(name); } catch { /* ignore load errors */ }
+
+        // Final recheck, immediately before the append: this is the last
+        // moment the modal is invisible to the chat-change sweep, so a stale
+        // append here would land the old chat's evidence in the new chat.
+        if (!scopeStillCurrent(scope).ok) {
+            console.log('[MWT:Knowledge] Growth Profile modal discarded — the chat changed while it was opening.');
+            return;
+        }
+
+        // Build the modal with the read-only state already populated (no spinner).
+        const modal = document.createElement('div');
+        modal.id = 'kt-growth-modal';
+        modal.className = 'mwt-modal kt-growth-modal';
+        modal.style.display = 'flex';
+        modal.innerHTML = `
+            <div class="mwt-modal-backdrop"></div>
+            <div class="mwt-modal-panel">
+                <div class="mwt-modal-header">
+                    <h3>🌱 Growth Profile — ${escapeHtml(name)}</h3>
+                    <button class="mwt-modal-close" title="Close">&times;</button>
                 </div>
-                <div class="kt-growth-content"></div>
-            </div>
-            <div class="mwt-modal-statusbar">
-                <span class="mwt-status"></span>
-            </div>
-        </div>`;
-    document.body.appendChild(modal);
+                <div class="mwt-modal-body">
+                    <div class="kt-growth-status">
+                        <span class="kt-growth-status-text">${renderGrowthStatusText(summary, existingProfile)}</span>
+                    </div>
+                    <div class="kt-growth-content"></div>
+                </div>
+                <div class="mwt-modal-statusbar">
+                    <span class="mwt-status"></span>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
 
-    const closeBtn = modal.querySelector('.mwt-modal-close');
-    const contentEl = modal.querySelector('.kt-growth-content');
-    const cleanup = () => modal.remove();
-    closeBtn.addEventListener('click', cleanup);
-    // Backdrop click intentionally does NOT close this modal — the
-    // evidence/profile view is easy to dismiss by accident, so require the ×
-    // button or Escape.
-    const onKey = (e) => { if (e.key === 'Escape') { cleanup(); document.removeEventListener('keydown', onKey); } };
-    document.addEventListener('keydown', onKey);
+        const closeBtn = modal.querySelector('.mwt-modal-close');
+        const contentEl = modal.querySelector('.kt-growth-content');
+        // Same lifecycle contract as core/modal.js's createModal and the dossier
+        // refresh modal below: EVERY close path detaches the document-level Escape
+        // listener. The old `cleanup = () => modal.remove()` leaked one keydown
+        // handler per open-and-×-close (onKey only detached itself inside its own
+        // Escape branch), and the chat-change sweep could not detach it either —
+        // it only knows the _cleanupKeyHandler convention.
+        const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
+        const cleanup = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
+        closeBtn.addEventListener('click', cleanup);
+        // Backdrop click intentionally does NOT close this modal — the
+        // evidence/profile view is easy to dismiss by accident, so require the ×
+        // button or Escape.
+        document.addEventListener('keydown', onKey);
+        // core/modal.js convention: lets the chat-change sweeps (knowledge/index.js)
+        // detach this listener when they remove the modal without cleanup().
+        modal._cleanupKeyHandler = () => document.removeEventListener('keydown', onKey);
 
-    // Render the read-only state immediately. The profile editor shows the
-    // existing profile (or an empty editor + hint if none has been generated).
-    contentEl.innerHTML = renderGrowthProfileContent(name, observations, existingProfile || '', '', false, existingProfile, null, overrides);
-    wireGrowthProfileEvents(modal, name, existingProfile || '', triggerBtn);
+        // Render the read-only state immediately. The profile editor shows the
+        // existing profile (or an empty editor + hint if none has been generated).
+        contentEl.innerHTML = renderGrowthProfileContent(name, observations, existingProfile || '', '', false, existingProfile, null, overrides);
+        wireGrowthProfileEvents(modal, name, existingProfile || '', triggerBtn);
+    } finally {
+        growthModalOpening = false;
+    }
 }
 
 /**
@@ -1669,9 +1728,18 @@ function openIdentityModal(name) {
         </div>
     `;
     document.body.appendChild(modal);
-    const close = () => modal.remove();
+    // Same lifecycle contract as core/modal.js's createModal and the dossier
+    // refresh modal: Escape closes, and the document-level keydown listener is
+    // detached on EVERY close path (and by the chat-change sweep via
+    // _cleanupKeyHandler). The singleton guard above already assumed Escape
+    // handlers existed ("duplicated Escape handlers fighting over one close") —
+    // this is that handler.
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
     modal.querySelector('.mwt-modal-close').addEventListener('click', close);
     modal.querySelector('.mwt-modal-backdrop').addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    modal._cleanupKeyHandler = () => document.removeEventListener('keydown', onKey);
 
     const refresh = canonical => {
         close();
@@ -2656,4 +2724,5 @@ export {
     hideNotificationPanel,
     importNpcs,
     importFromLorebooks,
+    openGrowthProfileModal,
 };

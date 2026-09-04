@@ -30,7 +30,7 @@ import {
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
-import { checkRegistryRecord, knowledgeStoreSchema } from './schema.js';
+import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema } from './schema.js';
 import { makeQuarantineItem } from '../core/quarantine.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
@@ -369,6 +369,17 @@ export async function exportNpcs() {
             type: info.type || 'minor',
             keywords: info.keywords || [name],
             lastUpdated: info.lastUpdated || null,
+            // Identity layer (TODO §1): the stable entity id, user-approved
+            // aliases, and the merge audit trail must ride along too — the old
+            // hardcoded field list silently re-minted the NPC as a DIFFERENT
+            // entity on the far side of a share/reinstall (fresh entityId, no
+            // aliases, no merge history) even though its dossier content
+            // survived. entityId is emitted only when it is a real string: a
+            // present-but-null value is "malformed" to checkRegistryRecord on
+            // the import side and would quarantine the WHOLE record.
+            ...(info.entityId ? { entityId: info.entityId } : {}),
+            aliases: Array.isArray(info.aliases) ? info.aliases : [],
+            ...(Array.isArray(info.mergedFrom) ? { mergedFrom: info.mergedFrom } : {}),
             content,
             history,
         };
@@ -498,11 +509,28 @@ export async function importNpcs() {
                 }
             }
 
+            // Identity layer (TODO §1) — rebuild, not replace. The record is
+            // MERGED with any local remainder (registerEntry's rule): a local
+            // entityId is already referenced by THIS install's relationship
+            // edges and evidence, so adopting the file's id would dangle them
+            // — local wins, the file fills the gaps (and on a same-install
+            // re-import both sides match anyway). Aliases union through
+            // mergeKeywords (case-insensitive dedup); merge trails concat —
+            // audit entries are append-only facts. Without this the imported
+            // NPC came back as a different entity than the one exported.
+            const prev = registry[name] || {};
             registry[name] = {
+                ...prev, // keep local-only fields (e.g. profileUid)
                 uid: incomingUid,
                 type: entry.type || 'minor',
                 keywords: entry.keywords || [name],
                 lastUpdated: entry.lastUpdated || Date.now(),
+                entityId: prev.entityId || entry.entityId || null,
+                aliases: mergeKeywords(prev.aliases, entry.aliases),
+                mergedFrom: [
+                    ...(Array.isArray(prev.mergedFrom) ? prev.mergedFrom : []),
+                    ...(Array.isArray(entry.mergedFrom) ? entry.mergedFrom : []),
+                ],
             };
             imported++;
 
@@ -528,6 +556,20 @@ export async function importNpcs() {
             }
         }
 
+        // Combined-registry identity validation. The per-record pass above
+        // checks each incoming entry's SHAPE; it cannot see conflicts that
+        // only exist once local and imported records share one map — e.g. an
+        // imported Sophie claiming a tracked Mara's entityId and alias. Both
+        // conflicting records used to be committed as-is, and the duplicate
+        // entity id / colliding alias stayed persisted until the next store
+        // hydration repaired them. Canonicalize BEFORE the commit, with the
+        // same repair set the hydration validator runs (first claim wins;
+        // dropped claims are re-stamped fresh by saveRegistry's stamper).
+        const identityRepairs = canonicalizeRegistryIdentityClaims(registry);
+        for (const issue of identityRepairs) {
+            console.warn(`[MWT:Knowledge] Import canonicalized a conflicting identity claim: ${issue.message}`);
+        }
+
         saveRegistry(registry);
 
         // Trigger re-render
@@ -538,6 +580,9 @@ export async function importNpcs() {
         if (skipped > 0) msg += ` ${skipped} already tracked (skipped).`;
         if (refused.length > 0) {
             msg += ` ${refused.length} invalid record(s) quarantined in the Knowledge store for recovery.`;
+        }
+        if (identityRepairs.length > 0) {
+            msg += ` ${identityRepairs.length} conflicting identity field(s) canonicalized (see console).`;
         }
         if (settingsImported) msg += ' Settings restored.';
         ktSetStatus(msg, 'success');

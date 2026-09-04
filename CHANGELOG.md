@@ -12,6 +12,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.3.1]
+
+### Added
+- Defense-in-depth tests
+
+### Fixed
+
+- **[P1] Standalone NPC import persisted conflicting identity claims**
+  (`knowledge/staging.js` `importNpcs`). The import validated each incoming
+  record's *shape* (`checkRegistryRecord`) but never the *combined* registry,
+  so an imported record claiming a tracked NPC's `entityId`, or an alias equal
+  to another record's canonical name/alias, was committed as-is — both
+  conflicting records stayed persisted until the next store hydration
+  repaired them. The entity-identity cross-checks (duplicate entity ids,
+  alias collisions, malformed merge trails) moved out of
+  `validateKnowledgeStoreData` into an exported
+  `canonicalizeRegistryIdentityClaims()`
+  (`knowledge/schema.js`, same repair semantics: first claim wins, later
+  claims are dropped and re-stamped fresh by `saveRegistry`), and the import
+  now runs it on the combined registry BEFORE committing, warns per repair,
+  and reports the count in the status message. Pinned by new tests in
+  `test/import_export_roundtrip.test.js`.
+- **[P1] The Growth Profile modal could open into the wrong chat**
+  (`knowledge/render.js` `openGrowthProfileModal`). A chat could change while
+  the opening awaits (module imports + the profile lorebook read) were
+  pending: the chat-change sweeps remove `#kt-growth-modal`, but the modal is
+  not in the DOM yet, so the OLD chat's modal was appended into the NEW chat
+  and its evidence-editing / Save-to-Lorebook handlers then acted on the new
+  chat's stores. The opener now captures the chat scope before the first
+  await (`core/scope.js captureScope`) and rechecks it after each await
+  (`scopeStillCurrent`), discarding the open on drift. An in-flight singleton
+  guard plus a DOM check also stop rapid clicks from stacking duplicate
+  `#kt-growth-modal` nodes during the same await window. Pinned by new tests
+  in `test/growth_modal_scope.test.js`.
+
+
 ## [2.3.0]
 
 ### Added

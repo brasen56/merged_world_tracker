@@ -59,6 +59,7 @@ let _promptCalls = [];
 const _notifications = [];
 let _statusCalls = [];
 let _downloadJsonCalls = [];
+let _downloadBlobCalls = [];
 
 /**
  * Wipe all fake state. Call this in `beforeEach` so every test starts clean.
@@ -73,6 +74,7 @@ export function resetCoreStubs() {
     _promptCalls = [];
     _statusCalls = [];
     _downloadJsonCalls = [];
+    _downloadBlobCalls = [];
     // Clear the real diagnostics singleton (events + last-runs), since the stub
     // now re-exports it from core/diagnostics.js. Without this, record() calls
     // made through the barrel by later phases would leak across tests.
@@ -521,11 +523,16 @@ export function notify(title, message, level = 'info') {
 }
 export function getFakePromptCalls() { return _promptCalls; }
 export function getFakeNotifications() { return _notifications; }
-export const downloadBlob = notImplemented('downloadBlob');
+/** In-memory recording stand-in (mirrors downloadJson): exportMarkdown()
+ * downloads through this, so tests can pin the markdown it produced. */
+export function downloadBlob(filename, blob) {
+    _downloadBlobCalls.push({ filename, blob });
+}
 export function downloadJson(filename, data) {
     _downloadJsonCalls.push({ filename, data });
 }
 export function getFakeDownloadJsonCalls() { return _downloadJsonCalls; }
+export function getFakeDownloadBlobCalls() { return _downloadBlobCalls; }
 /**
  * Install a fake implementation of pickTextFile() for the duration of one test.
  * Pass a function (sync or async) that returns the file text, returns '' for a

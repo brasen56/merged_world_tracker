@@ -149,6 +149,113 @@ export function ensureRegistryIdentityFields(registry, { generate = generateEnti
 }
 
 /**
+ * Canonicalize a registry map's entity-identity claims (TODO §1 identity
+ * service): malformed merge trails stripped, duplicate entityId claims
+ * resolved (the first record in insertion order keeps the id, later claimants
+ * lose theirs), and alias collisions pruned (an alias equal to a canonical
+ * key (normalized), to the record's OWN key, or to another record's alias
+ * would make the resolver's alias step ambiguous or hijack a canonical
+ * lookup — the first claim wins, the loser's alias is stripped).
+ *
+ * All are REPAIRS, not quarantines: the NPC record itself is fine — only the
+ * identity CLAIM conflicts. Dropping the claim keeps the NPC live while the
+ * identity stamper (ensureRegistryIdentityFields, via saveRegistry) re-stamps
+ * a clean id on the next write.
+ *
+ * This owns the SAME cross-check validateKnowledgeStoreData runs on every
+ * hydration; it is exported so runtime writers that merge identity fields
+ * from OUTSIDE the store — the standalone NPC import (knowledge/staging.js) —
+ * can validate the combined registry BEFORE committing it, instead of
+ * persisting duplicate entity ids / colliding aliases until the next
+ * hydration repairs them.
+ *
+ * MUTATES the map it is given copy-on-write (repaired records are replaced,
+ * untouched records are shared); returns the repair issues.
+ *
+ * @param {object} registry — the registry map ({ [npcName]: info })
+ * @returns {Array<object>} structured repair issues (one per repaired field)
+ */
+export function canonicalizeRegistryIdentityClaims(registry) {
+    const issues = [];
+    if (!isObject(registry)) return issues;
+
+    // Merge audit trails: a malformed `mergedFrom` is a REPAIR, never a
+    // quarantine — the trail is the least valuable field on the record, and
+    // the merge writer itself can produce the shape (the absorbed record
+    // predating entity ids). The field is stripped with the raw value
+    // preserved in the issue; the NPC record stays live.
+    for (const [name, record] of Object.entries(registry)) {
+        if (!isObject(record) || record.mergedFrom === undefined) continue;
+        const validTrail = Array.isArray(record.mergedFrom)
+            && record.mergedFrom.every(entry => isObject(entry)
+                && isNonEmptyString(entry.entityId)
+                && isNonEmptyString(entry.name)
+                && isFiniteNumber(entry.at));
+        if (validTrail) continue;
+        issues.push(repairIssue(
+            'registry-merged-from-invalid',
+            ['registry', name, 'mergedFrom'],
+            `"${name}"'s merge audit trail (mergedFrom) was malformed and was removed; the NPC record stays live.`,
+            record.mergedFrom,
+            name,
+        ));
+        const repaired = { ...record };
+        delete repaired.mergedFrom;
+        registry[name] = repaired;
+    }
+
+    // Two records claiming one entityId: the first (insertion order) keeps
+    // it, later claimants lose theirs — both NPCs stay live either way.
+    const claimedIds = new Set();
+    for (const [name, record] of Object.entries(registry)) {
+        if (!isObject(record) || !isNonEmptyString(record.entityId)) continue;
+        if (claimedIds.has(record.entityId)) {
+            issues.push(repairIssue(
+                'registry-duplicate-entity-id',
+                ['registry', name, 'entityId'],
+                `"${name}" claimed entityId "${record.entityId}" already owned by an earlier record; the claim was dropped and can be re-stamped.`,
+                record,
+            ));
+            const repaired = { ...record };
+            delete repaired.entityId;
+            registry[name] = repaired;
+        } else {
+            claimedIds.add(record.entityId);
+        }
+    }
+
+    // Alias collisions: first claim wins; the loser's alias is stripped,
+    // record preserved.
+    const claimedNames = new Set(Object.keys(registry).map(normalizeStoreKeyName));
+    const claimedAliases = new Map();
+    for (const [name, record] of Object.entries(registry)) {
+        if (!isObject(record) || !Array.isArray(record.aliases) || record.aliases.length === 0) continue;
+        const kept = [];
+        let stripped = false;
+        for (const alias of record.aliases) {
+            const normalized = normalizeStoreKeyName(alias);
+            if (normalized === normalizeStoreKeyName(name)
+                || claimedNames.has(normalized)
+                || claimedAliases.has(normalized)
+                || kept.some(existing => normalizeStoreKeyName(existing) === normalized)) {
+                issues.push(repairIssue(
+                    'registry-alias-collision',
+                    ['registry', name, 'aliases'],
+                    `Alias "${alias}" on "${name}" collides with a canonical name or another alias; it was removed.`,
+                    alias,
+                ));
+                stripped = true;
+            } else {
+                kept.push(alias);
+                claimedAliases.set(normalized, name);
+            }
+        }
+        if (stripped) registry[name] = { ...record, aliases: kept };
+    }
+    return issues;
+}
+
+/**
  * Backfill stable entity pointers onto relationship edges that lack them, from
  * the registry in the same store: a map key's edges get that NPC's
  * `subjectEntityId`, and each edge's target name resolves (exact key only)
@@ -448,81 +555,13 @@ export function validateKnowledgeStoreData(data) {
     // Entity-identity cross-checks (TODO §1 identity service). Both are
     // REPAIRS, not quarantines: the NPC record itself is fine — only the
     // identity CLAIM conflicts. Dropping the claim keeps the NPC live while
-    // the identity service re-stamps a clean one on its next write.
+    // the identity stamper re-stamps a clean one on its next write. The rules
+    // live in canonicalizeRegistryIdentityClaims so runtime writers that
+    // merge identity fields from outside the store (the standalone NPC
+    // import, knowledge/staging.js) run the exact same repair set on the
+    // combined registry BEFORE committing it.
     if (accepted.registry) {
-        // Merge audit trails (TODO §1): a malformed `mergedFrom` is a REPAIR,
-        // never a quarantine — the trail is the least valuable field on the
-        // record, and the merge writer itself can produce the shape (the
-        // absorbed record predating entity ids). The field is stripped with
-        // the raw value preserved in the issue; the NPC record stays live.
-        for (const [name, record] of Object.entries(accepted.registry)) {
-            if (record.mergedFrom === undefined) continue;
-            const validTrail = Array.isArray(record.mergedFrom)
-                && record.mergedFrom.every(entry => isObject(entry)
-                    && isNonEmptyString(entry.entityId)
-                    && isNonEmptyString(entry.name)
-                    && isFiniteNumber(entry.at));
-            if (validTrail) continue;
-            issues.push(repairIssue(
-                'registry-merged-from-invalid',
-                ['registry', name, 'mergedFrom'],
-                `"${name}"'s merge audit trail (mergedFrom) was malformed and was removed; the NPC record stays live.`,
-                record.mergedFrom,
-                name,
-            ));
-            const repaired = { ...record };
-            delete repaired.mergedFrom;
-            accepted.registry[name] = repaired;
-        }
-        // Two records claiming one entityId: the first (insertion order) keeps
-        // it, later claimants lose theirs — both NPCs stay live either way.
-        const claimedIds = new Set();
-        for (const [name, record] of Object.entries(accepted.registry)) {
-            if (!isNonEmptyString(record.entityId)) continue;
-            if (claimedIds.has(record.entityId)) {
-                issues.push(repairIssue(
-                    'registry-duplicate-entity-id',
-                    ['registry', name, 'entityId'],
-                    `"${name}" claimed entityId "${record.entityId}" already owned by an earlier record; the claim was dropped and can be re-stamped.`,
-                    record,
-                ));
-                const repaired = { ...record };
-                delete repaired.entityId;
-                accepted.registry[name] = repaired;
-            } else {
-                claimedIds.add(record.entityId);
-            }
-        }
-        // Alias collisions: an alias equal to a canonical key (normalized), to
-        // the record's OWN key, or to another record's alias would make the
-        // resolver's alias step ambiguous or hijack a canonical lookup. The
-        // first claim wins; the loser's alias is stripped, record preserved.
-        const claimedNames = new Set(Object.keys(accepted.registry).map(normalizeStoreKeyName));
-        const claimedAliases = new Map();
-        for (const [name, record] of Object.entries(accepted.registry)) {
-            if (!Array.isArray(record.aliases) || record.aliases.length === 0) continue;
-            const kept = [];
-            let stripped = false;
-            for (const alias of record.aliases) {
-                const normalized = normalizeStoreKeyName(alias);
-                if (normalized === normalizeStoreKeyName(name)
-                    || claimedNames.has(normalized)
-                    || claimedAliases.has(normalized)
-                    || kept.some(existing => normalizeStoreKeyName(existing) === normalized)) {
-                    issues.push(repairIssue(
-                        'registry-alias-collision',
-                        ['registry', name, 'aliases'],
-                        `Alias "${alias}" on "${name}" collides with a canonical name or another alias; it was removed.`,
-                        alias,
-                    ));
-                    stripped = true;
-                } else {
-                    kept.push(alias);
-                    claimedAliases.set(normalized, name);
-                }
-            }
-            if (stripped) accepted.registry[name] = { ...record, aliases: kept };
-        }
+        issues.push(...canonicalizeRegistryIdentityClaims(accepted.registry));
     }
     if (data.relationships !== undefined) {
         if (!isObject(data.relationships)) {

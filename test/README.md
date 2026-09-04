@@ -103,13 +103,18 @@ If a future test needs a `core/index.js` helper that the stub doesn't implement 
 
 ---
 
-## What NOT to test (yet)
+## What NOT to test (and what used to be on this list but no longer is)
 
-These are intentionally not covered, because they're tightly coupled to SillyTavern's runtime and give low return on effort for a solo project:
+An earlier version of this section listed `render.js` files, `injection.js` files, "anything that calls `fetch`", and "the lorebook APIs" as intentionally untested. **That is no longer true** — each of those boundaries now has coverage behind a seam, and the seams are the pattern to copy when a new feature lands on one of them:
 
-- `render.js` files (DOM rendering)
-- `injection.js` files (prompt injection via ST APIs)
-- `index.js` files (event wiring, slash commands)
-- Anything that calls `fetch`, `setExtensionPrompt`, or the lorebook APIs
+- **Modal / DOM-adjacent rendering** — `modal_interactions.test.js` drives the shared `core/modal.js` lifecycle (Escape rule, × / backdrop pointers, onClose veto, handler cleanup) against a minimal parsed-DOM fake; `backup_ui.test.js` pins the backup presenters. *Still out:* the hand-rolled modals inside each module's `render.js` (the Knowledge modals bypass `createModal` — see the scope note in `modal_interactions.test.js`) and anything visual/CSS.
+- **Injection** — `injection_diagnostics.test.js` pins the injection diagnostics seam. *Still out:* end-to-end "did text reach the prompt" checks, which need a live SillyTavern.
+- **`fetch` / the API layer** — `api_diagnostics.test.js` and `api_failure_families.test.js` cover BOTH transport paths (custom endpoint + Connection-Manager profile) with local doubles (`fetch()` and the `test/stubs/shared.js` host-module seam), including retry/fatal classification and the diagnostics ring.
+- **Lorebook (world-info) APIs** — `knowledge_store_hydration.test.js`, `lorebook_hydration_retry.test.js`, and `import_export_roundtrip.test.js` run against a fake world-info script whose `books` map is the disk. `chronicle`/`knowledge` export → import round trips are pinned there too.
 
-If you ever want to test these, the stub in `test/stubs/core.js` is the place to extend — but it's usually more cost than it's worth for an extension of this size. Manual testing in SillyTavern remains the practical approach for UI/event code.
+What remains deliberately untested, because it needs a live SillyTavern or gives low return for the effort:
+
+- **Real host-runtime integration** — the event wiring and slash commands in the top-level `index.js` files, the actual `shared.js` / `world-info.js` host modules (aliased to stubs in `vitest.config.js`), and browser-only behavior. Manual testing in SillyTavern remains the practical check.
+- **Whole-UI flows.** A seam test proves a handler's contract; it does not prove the button is wired to that handler or that the screen looks right. If a new feature matters, pin its data invariants and its riskiest handler contracts — then click through it once for real.
+
+If a boundary you need is missing a seam, `test/stubs/` (`core.js`, `shared.js`, `world-info.js`, `chat_switch.js`) is the place to extend.
