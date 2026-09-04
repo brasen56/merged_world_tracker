@@ -196,14 +196,18 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
         expect(getFakeMeta()[COUNTERS_META_KEY]).toBeUndefined();
     });
 
-    test('drops the previous chat\'s view AND growth modals (paused half)', () => {
+    test('drops the previous chat\'s view, growth, AND identity modals (paused half)', () => {
         // The Growth modal is appended to document.body like the view modal
         // and otherwise survives the switch — displaying the previous chat's
         // evidence/profile, with still-live handlers that would save that old
-        // profile or edit evidence against the new chat's stores.
+        // profile or edit evidence against the new chat's stores. The identity
+        // modal is body-mounted too, and its Rename/Merge/alias handlers
+        // close over the previous chat's `key` — on a same-named NPC in the
+        // new chat they would mutate the wrong chat's record.
         const viewModal = { remove: vi.fn() };
         const growthModal = { remove: vi.fn() };
-        const querySelectorAll = vi.fn(() => [viewModal, growthModal]);
+        const identityModal = { remove: vi.fn() };
+        const querySelectorAll = vi.fn(() => [viewModal, growthModal, identityModal]);
         globalThis.document = {
             dispatchEvent: vi.fn(),
             getElementById: () => null,
@@ -213,18 +217,20 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
         pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'blocked' });
         Knowledge.onChatChangedWhilePaused();
 
-        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal');
+        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal');
         expect(viewModal.remove).toHaveBeenCalled();
         expect(growthModal.remove).toHaveBeenCalled();
+        expect(identityModal.remove).toHaveBeenCalled();
     });
 
-    test('the FULL chat-change handler drops the growth modal too (unpaused destination chat)', async () => {
+    test('the FULL chat-change handler drops the growth and identity modals too (unpaused destination chat)', async () => {
         // Same removal through onChatChanged() — the path that runs when the
         // destination chat is NOT paused, which is exactly where the stale
         // modal's handlers would fire against the new chat's stores.
         const viewModal = { remove: vi.fn() };
         const growthModal = { remove: vi.fn() };
-        const querySelectorAll = vi.fn(() => [viewModal, growthModal]);
+        const identityModal = { remove: vi.fn() };
+        const querySelectorAll = vi.fn(() => [viewModal, growthModal, identityModal]);
         globalThis.document = {
             dispatchEvent: vi.fn(),
             getElementById: () => null,
@@ -233,9 +239,10 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
 
         Knowledge.onChatChanged();
 
-        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal');
+        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal');
         expect(viewModal.remove).toHaveBeenCalled();
         expect(growthModal.remove).toHaveBeenCalled();
+        expect(identityModal.remove).toHaveBeenCalled();
         // reloadStores() is fire-and-forget and fully guarded; let its tail
         // settle before the harness tears down.
         await new Promise((r) => setTimeout(r, 20));

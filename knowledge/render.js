@@ -20,6 +20,10 @@ import {
     resolveRegistryKey,
 } from './registry.js';
 import {
+    addAlias, removeAlias, listAliases,
+    renameEntity, mergeEntities, getEntityId, flushIdentityWrites,
+} from './identity.js';
+import {
     loadEntryContent, loadStateTrackerEntry,
     runScan, runStateUpdate, runNpcUpdate, runNpcEnrich,
     runDossierFieldRefresh, DOSSIER_FIELDS, extractDossierFieldValues, isDossierEntry,
@@ -473,6 +477,9 @@ function renderNpcListContent(type, entries) {
     return `<div class="kt-npc-list">${sorted.map(([name, info]) => {
         const isOrphan = info.uid === null || info.uid === undefined;
         const showEnrich = type === 'major' && !isOrphan && dossierMode;
+        // ✏️ Identity stays available on orphans too: a record whose lorebook
+        // entry was deleted (uid null) is exactly the duplicate a merge folds
+        // back into its canonical owner, and both identity legs are uid-safe.
         return `<div class="kt-npc-card${isOrphan ? ' kt-npc-card--orphan' : ''}" data-name="${escapeHtml(name)}" data-uid="${info.uid ?? ''}">
             <div class="kt-npc-card-header"><span class="kt-npc-name">${escapeHtml(name)}${isOrphan ? ' ⚠' : ''}</span><span class="kt-npc-meta">${(info.keywords || [name]).join(', ')}</span></div>
             <div class="kt-npc-actions">
@@ -485,6 +492,7 @@ function renderNpcListContent(type, entries) {
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}">⬇ Demote</button>` : ''}
                     <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}">📖 View</button>
                 ` : ''}
+                <button class="mwt-btn kt-npc-identity" data-name="${escapeHtml(name)}" title="Rename, aliases, and merges — identity management">✏️ Identity</button>
                 <button class="mwt-btn kt-npc-remove" data-name="${escapeHtml(name)}">Remove</button>
             </div></div>`;
     }).join('')}</div>`;
@@ -628,6 +636,10 @@ function wireNpcListEvents(el, _type) {
 
     el.querySelectorAll('.kt-npc-view').forEach(btn => {
         btn.addEventListener('click', () => openNpcViewModal(btn.dataset.name));
+    });
+
+    el.querySelectorAll('.kt-npc-identity').forEach(btn => {
+        btn.addEventListener('click', () => openIdentityModal(btn.dataset.name));
     });
 
     el.querySelectorAll('.kt-npc-remove').forEach(btn => {
@@ -1585,6 +1597,156 @@ async function openNpcViewModal(name) {
     document.body.appendChild(viewModal);
     viewModal.querySelector('.kt-history-close').addEventListener('click', () => viewModal.remove());
     viewModal.querySelector('.kt-history-backdrop').addEventListener('click', () => viewModal.remove());
+}
+
+// ─── Identity modal (TODO §1 entity identity + alias service) ────────────────
+
+/**
+ * The per-NPC identity panel: canonical entity id, alias chips, rename, and
+ * merge-into. Everything here routes through knowledge/identity.js — the UI
+ * approves, the service propagates. Every action reports through ktSetStatus
+ * and re-renders so the NPC list reflects the new canonical name immediately.
+ */
+function openIdentityModal(name) {
+    // One identity modal at a time (the id is a singleton): a double-click
+    // would stack a second node sharing #kt-identity-modal — duplicated
+    // Escape handlers fighting over one close. Same guard as
+    // openDossierFieldRefreshModal.
+    if (document.getElementById('kt-identity-modal')) return;
+    const reg = getRegistry();
+    const key = resolveRegistryKey(reg, name);
+    if (!key) { ktSetStatus(`No registry record for "${name}".`, 'error'); return; }
+    const aliases = listAliases(key);
+    const entityId = getEntityId(key);
+
+    const modal = document.createElement('div');
+    modal.id = 'kt-identity-modal';
+    modal.className = 'mwt-modal kt-identity-modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="mwt-modal-backdrop"></div>
+        <div class="mwt-modal-panel">
+            <div class="mwt-modal-header">
+                <h3>✏️ Identity — ${escapeHtml(key)}</h3>
+                <button class="mwt-modal-close" title="Close">&times;</button>
+            </div>
+            <div class="mwt-modal-body">
+                <p class="kt-identity-hint">The registry key is a display name; the entity id below is the stable identity that survives renames and merges.</p>
+                <div class="kt-identity-entityid">Entity ID: <code>${escapeHtml(entityId ?? '(not stamped — save the registry once to stamp)')}</code></div>
+
+                <div class="kt-identity-section">
+                    <h4>Aliases</h4>
+                    <p class="kt-identity-note">Alternate spellings, titles, and nicknames that resolve to this NPC. Exact match only — a good alias is what the model actually calls the character.</p>
+                    <div class="kt-identity-aliases">
+                        ${aliases.length === 0 ? '<span class="kt-identity-empty">No aliases yet.</span>' : aliases.map(a => `
+                            <span class="kt-alias-chip">${escapeHtml(a)}<button class="kt-alias-chip-x" data-alias="${escapeHtml(a)}" title="Remove this alias">&times;</button></span>
+                        `).join('')}
+                    </div>
+                    <div class="kt-identity-row">
+                        <input type="text" class="mwt-input kt-alias-input" placeholder="Add an alias (e.g. The Vixen)" />
+                        <button class="mwt-btn kt-alias-add">Add alias</button>
+                    </div>
+                </div>
+
+                <div class="kt-identity-section">
+                    <h4>Rename</h4>
+                    <p class="kt-identity-note">Changes the canonical name across the registry, relationships, stances, evidence, dossier watermarks, and lorebook entry labels. The old name is kept as an alias, so existing references keep resolving.</p>
+                    <div class="kt-identity-row">
+                        <input type="text" class="mwt-input kt-rename-input" placeholder="New canonical name" value="${escapeHtml(key)}" />
+                        <button class="mwt-btn mwt-btn-primary kt-rename-go">Rename</button>
+                    </div>
+                </div>
+
+                <div class="kt-identity-section">
+                    <h4>Merge another NPC into this one</h4>
+                    <p class="kt-identity-note">Folds a duplicate identity (e.g. a stray "Sophie" record for "Sophie Simpson") into this NPC: its evidence, relationships, and aliases are absorbed and its name becomes an alias. The absorbed registry record is removed; its lorebook entry is left for manual deletion. This cannot be undone automatically.</p>
+                    <div class="kt-identity-row">
+                        <input type="text" class="mwt-input kt-merge-input" placeholder="NPC to absorb into ${escapeHtml(key)}" />
+                        <button class="mwt-btn kt-merge-go">Merge into ${escapeHtml(key)}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    const close = () => modal.remove();
+    modal.querySelector('.mwt-modal-close').addEventListener('click', close);
+    modal.querySelector('.mwt-modal-backdrop').addEventListener('click', close);
+
+    const refresh = canonical => {
+        close();
+        if (canonical && getRegistry()[canonical]) openIdentityModal(canonical);
+    };
+
+    modal.querySelectorAll('.kt-alias-chip-x').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const result = removeAlias(key, btn.dataset.alias);
+            if (!result.ok) { ktSetStatus(`Could not remove alias: ${result.reason}`, 'error'); return; }
+            ktSetStatus(result.removed ? `Alias "${btn.dataset.alias}" removed.` : 'Alias was not on the record.', 'info');
+            refresh(key);
+        });
+    });
+
+    const aliasInput = modal.querySelector('.kt-alias-input');
+    const doAddAlias = () => {
+        const value = aliasInput.value.trim();
+        if (!value) return;
+        const result = addAlias(key, value);
+        if (!result.ok) {
+            ktSetStatus(result.reason === 'alias-taken'
+                ? `"${value}" already belongs to ${result.owner}.`
+                : `Could not add alias: ${result.reason}`, 'error');
+            return;
+        }
+        ktSetStatus(result.added ? `Alias "${value}" added to ${key}.` : `"${value}" was already an alias of ${key}.`, 'info');
+        refresh(key);
+    };
+    modal.querySelector('.kt-alias-add').addEventListener('click', doAddAlias);
+    aliasInput.addEventListener('keydown', e => { if (e.key === 'Enter') doAddAlias(); });
+
+    const renameInput = modal.querySelector('.kt-rename-input');
+    const doRename = async () => {
+        const target = renameInput.value.trim();
+        if (!target || target === key) return;
+        if (!confirm(`Rename "${key}" to "${target}"?`)) return;
+        const result = await renameEntity(key, target);
+        if (!result.ok) { ktSetStatus(`Rename refused: ${result.reason}`, 'error'); return; }
+        // Flush the book the operation CAPTURED, not the now-active one — a
+        // chat switch mid-rename must not point the flush at the new chat.
+        await flushIdentityWrites(result.book);
+        ktSetStatus(
+            `Renamed "${key}" → "${target}".${result.warnings?.length ? ` ${result.warnings.length} warning(s) — see the console.` : ''}`,
+            result.warnings?.length ? 'warning' : 'success',
+        );
+        for (const w of result.warnings ?? []) console.warn('[MWT:Knowledge]', w);
+        refresh(target);
+        renderNpcsSubTab();
+    };
+    modal.querySelector('.kt-rename-go').addEventListener('click', () => { void doRename(); });
+    renameInput.addEventListener('keydown', e => { if (e.key === 'Enter') void doRename(); });
+
+    const mergeInput = modal.querySelector('.kt-merge-input');
+    const doMerge = async () => {
+        const other = mergeInput.value.trim();
+        if (!other) return;
+        const otherKey = resolveRegistryKey(getRegistry(), other);
+        if (!otherKey) { ktSetStatus(`No NPC named "${other}" in the registry.`, 'error'); return; }
+        if (otherKey === key) { ktSetStatus('An NPC cannot merge into itself.', 'error'); return; }
+        if (!confirm(`Merge "${otherKey}" into "${key}"?\n\nThis absorbs its evidence, relationships, and aliases, keeps "${otherKey}" as a resolvable alias, and removes its registry record. Its lorebook entry stays for manual deletion. This cannot be undone automatically.`)) return;
+        const result = await mergeEntities(key, otherKey);
+        if (!result.ok) { ktSetStatus(`Merge refused: ${result.reason}`, 'error'); return; }
+        // Same as the rename flush: the captured book, never the new chat's.
+        await flushIdentityWrites(result.book);
+        ktSetStatus(
+            `Merged "${otherKey}" into "${key}".${result.warnings?.length ? ` ${result.warnings.length} warning(s) — see the console.` : ''}`,
+            result.warnings?.length ? 'warning' : 'success',
+        );
+        for (const w of result.warnings ?? []) console.warn('[MWT:Knowledge]', w);
+        close();
+        renderNpcsSubTab();
+    };
+    modal.querySelector('.kt-merge-go').addEventListener('click', () => { void doMerge(); });
+    mergeInput.addEventListener('keydown', e => { if (e.key === 'Enter') void doMerge(); });
 }
 
 // ─── Dossier per-field refresh modal (TODO §3) ───────────────────────────────

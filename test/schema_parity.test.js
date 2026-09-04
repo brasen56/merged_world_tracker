@@ -312,7 +312,7 @@ describe('adapter surface — validateSection and the envelope', () => {
     test('the knowledgeStore wrapper carries storeVersion and validates its data', () => {
         const envelope = {
             _meta: { type: 'mwt-chat-backup', formatVersion: 1 },
-            sections: { knowledgeStore: { storeVersion: 1, data: { registry: { Good: { uid: 7 } } } } },
+            sections: { knowledgeStore: { storeVersion: STORE_SCHEMAS.knowledgeStore.currentVersion, data: { registry: { Good: { uid: 7 } } } } },
         };
         const result = validateBackupEnvelope(envelope);
         expect(result.ok).toBe(true);
@@ -322,7 +322,7 @@ describe('adapter surface — validateSection and the envelope', () => {
         envelope.sections.knowledgeStore.storeVersion = 99;
         const refused = validateBackupEnvelope(envelope);
         expect(refused.ok).toBe(false);
-        expect(refused.errors[0]).toBe('Section "knowledgeStore" version 99 is newer than supported version 1.');
+        expect(refused.errors[0]).toBe(`Section "knowledgeStore" version 99 is newer than supported version ${STORE_SCHEMAS.knowledgeStore.currentVersion}.`);
     });
 
     test('a full envelope round-trips every section through the registry', () => {

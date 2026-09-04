@@ -1308,6 +1308,57 @@ try {
             return rows;
         },
 
+        // Entity identity + alias service (TODO §1) — the console surface of
+        // knowledge/identity.js. The ✏️ Identity button in the NPC list is the
+        // UI twin of these; both approve through the same service, so behavior
+        // cannot drift between them.
+        rename: async (npc, newName) => {
+            const identity = await import('./knowledge/identity.js');
+            const result = await identity.renameEntity(npc, newName);
+            if (!result.ok) { console.warn(`[MWT] Rename refused: ${result.reason}`); return result; }
+            // Flush the book the operation captured — after a mid-rename
+            // chat switch, the zero-argument form would flush the incoming
+            // chat's book instead.
+            if (result.renamed) await identity.flushIdentityWrites(result.book);
+            console.log(`[MWT] Renamed "${result.from}" → "${result.to}".${result.warnings?.length ? ` ${result.warnings.length} warning(s):` : ''}`);
+            for (const w of result.warnings ?? []) console.warn('[MWT]', w);
+            return result;
+        },
+        merge: async (keepNpc, mergeNpc) => {
+            const identity = await import('./knowledge/identity.js');
+            const result = await identity.mergeEntities(keepNpc, mergeNpc);
+            if (!result.ok) { console.warn(`[MWT] Merge refused: ${result.reason}`); return result; }
+            if (result.merged) await identity.flushIdentityWrites(result.book);
+            console.log(`[MWT] Merged "${result.from}" into "${result.to}".${result.warnings?.length ? ` ${result.warnings.length} warning(s):` : ''}`);
+            for (const w of result.warnings ?? []) console.warn('[MWT]', w);
+            return result;
+        },
+        addAlias: async (npc, alias) => {
+            const identity = await import('./knowledge/identity.js');
+            const result = identity.addAlias(npc, alias);
+            console.log(result.ok ? `[MWT] Alias "${alias}" ${result.added ? 'added to' : 'already on'} "${npc}".` : `[MWT] Alias refused: ${result.reason}${result.owner ? ` (belongs to ${result.owner})` : ''}`);
+            return result;
+        },
+        removeAlias: async (npc, alias) => {
+            const identity = await import('./knowledge/identity.js');
+            const result = identity.removeAlias(npc, alias);
+            console.log(result.ok ? `[MWT] Alias "${alias}" ${result.removed ? 'removed from' : 'was not on'} "${npc}".` : `[MWT] Refused: ${result.reason}`);
+            return result;
+        },
+        entityId: async (npc) => {
+            const identity = await import('./knowledge/identity.js');
+            const id = identity.getEntityId(npc);
+            console.log(id ? `[MWT] "${npc}" → ${id}` : `[MWT] "${npc}" has no entity id (unknown NPC, or a legacy record not yet saved/migrated).`);
+            return id;
+        },
+        repairLinks: async () => {
+            const identity = await import('./knowledge/identity.js');
+            const result = identity.repairEntityLinks();
+            console.log(`[MWT] Relationship identity repair: ${result.keysRekeyed} key(s) rekeyed, ${result.targetsRepointed} target(s) re-pointed, ${result.edgesMerged} edge(s) merged, ${result.idsStamped} id(s) stamped, ${result.conflicts.length} conflict(s) left alone.`);
+            for (const c of result.conflicts) console.warn('[MWT]', c.kind, '—', c.detail);
+            return result;
+        },
+
         // Repair pass — the console twin of the "📚 From Lorebooks" button.
         // Validates every registry uid against its physical entry and relinks
         // crossed ones, detaches dead ones, and adopts untracked entries. It

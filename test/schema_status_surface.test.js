@@ -1377,7 +1377,9 @@ describe('Knowledge hydration pause wiring (the live blocked paths)', () => {
         expect(row.storedVersion).toBe(99);
         expect(snap.knowledgeStore.paused).toMatchObject({ reasonCode: 'future-version' });
         const html = renderSchemaStatusSnapshot(snap, { formatTime: () => 'T' });
-        expect(html).toContain('99 / 1');
+        // The denominator is the store's CURRENT version — pinned via the
+        // same export the snapshot reads, not a literal.
+        expect(html).toContain(`99 / ${STORE_VERSION}`);
     });
 
     test('a later successful load of BOTH books resumes the store (§5.4)', async () => {
@@ -1415,7 +1417,8 @@ describe('Knowledge hydration pause wiring (the live blocked paths)', () => {
 
         const copy = peekStoreData(LOREBOOK_NAME);
         copy.registry.Mara.uid = 999;
-        expect(peekStore(LOREBOOK_NAME).version).toBe(1);
+        // The seeded v1 book migrated to the current version on hydration.
+        expect(peekStore(LOREBOOK_NAME).version).toBe(STORE_VERSION);
         expect(peekStoreData(LOREBOOK_NAME).registry.Mara.uid).toBe(1);
         expect(getHydratedBooks()).toContain(LOREBOOK_NAME);
     });

@@ -17,7 +17,7 @@ import {
     getRegistry, saveRegistry,
     getStateRegistry, saveStateRegistry,
     resolveRegistryKey, normalizeRegistryName,
-    isSameNpcIdentity, isUnambiguousNpcAlias,
+    isSameNpcIdentity, isUnambiguousNpcAlias, isSameNpcByName,
 } from './registry.js';
 import {
     formatMinorEntry, formatMajorEntry,
@@ -652,7 +652,7 @@ export async function reconcileRegistry() {
     for (const [key, info] of Object.entries(registry)) {
         if (info.uid === null || info.uid === undefined) continue; // orphan → phase 2
         const entry = entryByUid.get(info.uid);
-        if (entry && isUnambiguousNpcAlias(entry.comment, key, allLabels)) {
+        if (entry && isSameNpcByName(entry.comment, key, allLabels)) {
             result.verified++;
             claimedUids.add(info.uid);
         } else {

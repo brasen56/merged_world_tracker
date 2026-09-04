@@ -431,8 +431,13 @@ describe('Part 2 migrations — every legacy fixture migrates without touching l
     test('knowledgeStore: the embedded version is stamped when absent', () => {
         const result = dryRun('knowledgeStore', LEGACY_FIXTURES.knowledgeStore);
         expect(result.status).toBe('migrated');
-        expect(result.data.version).toBe(1);
-        expect(result.data.registry).toEqual({ Mara: { uid: 3 } });
+        // v0 climbs the full chain (0 → 1 → 2), so the embedded version lands
+        // on the CURRENT version and registry records carry stamped identity
+        // fields (entityId generated per stamp — matched as any string).
+        expect(result.data.version).toBe(STORE_SCHEMAS.knowledgeStore.currentVersion);
+        expect(result.data.registry).toEqual({
+            Mara: { uid: 3, aliases: [], entityId: expect.any(String) },
+        });
     });
 
     test('knowledgeStore: [MWT:store] ghost records are removed as an explicitly recorded repair', () => {
@@ -448,7 +453,7 @@ describe('Part 2 migrations — every legacy fixture migrates without touching l
         expect(repair.record).toEqual({ uid: 0, keywords: [STORE_SENTINEL] });
         expect(result.quarantined.filter(item => item.reasonCode === 'registry-store-ghost')).toEqual([]);
         // Idempotent: canonical v1 data carries no ghost to remove.
-        const again = prepareStore(STORE_SCHEMAS.knowledgeStore, result.data, { version: 1 });
+        const again = prepareStore(STORE_SCHEMAS.knowledgeStore, result.data, { version: result.data.version });
         expect(again.status).toBe('valid');
         expect(again.issues.some(issue => issue.code === 'registry-store-ghost')).toBe(false);
     });
@@ -615,7 +620,10 @@ describe('Part 2 migrations are idempotent', () => {
             expect(first.status, id).toBe('migrated');
             expect(first.changed, id).toBe(true);
 
-            const second = prepareStore(STORE_SCHEMAS[id], first.data, { version: 1 });
+            // Re-prepare at each schema's CURRENT version: the first pass left
+            // current-version canonical data, and preparing it again must be a
+            // no-op (the knowledgeStore's v2 data carries its embedded version).
+            const second = prepareStore(STORE_SCHEMAS[id], first.data, { version: STORE_SCHEMAS[id].currentVersion });
             expect(second.status, id).toBe('valid');
             expect(second.changed, id).toBe(false);
             expect(second.data, id).toEqual(first.data);
@@ -642,7 +650,7 @@ const POLICY_BATTERIES = {
     knowledgeCounters: [null, { messageCounter: -1, npcMessageCounter: 'x' }],
     storyPlanner: [null, { arcs: 'x' }, { history: 'x' }, { arcs: ['junk', { id: '' }, { id: 'a', title: 1, body: 1, section: 'nope', status: 'nope', beats: 'x', beatIndex: -1, turnsSinceAdvance: 'x', createdAt: 'x', updatedAt: 'x' }] }],
     interiority: [null, { ledger: 'x' }, { ledger: [{}, { id: 'i' }] }, { deletedIntentions: [{ id: 't', npc: 'n', actions: 'x', triggers: [1] }] }, { perMessage: 'x' }, { perMessage: { bad: {}, 'mu-': {} } }, { perMessage: { 'sd-legacy': {}, '3': {}, 'mu-ok': {} } }, { turnCounter: 'x' }],
-    knowledgeStore: [null, { registry: 'x' }, { registry: { g: 'junk', b: { uid: -1 } } }, { registry: { Mara: { uid: 0, profileUid: -1 } } }, { registry: { Mara: { uid: 0 }, mara: { uid: 1 } } }, { relationships: 'x' }, { relationships: { r: 'x', s: [{ target: '' }, { target: 't' }, 'junk'] } }, { registry: { t: { uid: 1 } }, relationships: { r: [{ target: 't', type: 'x', source: 'weird' }] } }, { registry: { A: { uid: 0 } }, relationships: { A: [{ target: 'Ghost', type: 'x' }] } }, { stances: { a: 3 } }, { stanceSources: { a: 3 } }, { stanceSources: { a: 'weird' } }, { version: 0 }, { quarantine: 'x' }, { quarantine: { version: 2 } }, { quarantine: { items: 'x' } }, { quarantine: { items: [{}, { store: 'x' }, { store: 'x', reasonCode: 'y' }] } }],
+    knowledgeStore: [null, { registry: 'x' }, { registry: { g: 'junk', b: { uid: -1 } } }, { registry: { Mara: { uid: 0, profileUid: -1 } } }, { registry: { Mara: { uid: 0 }, mara: { uid: 1 } } }, { relationships: 'x' }, { relationships: { r: 'x', s: [{ target: '' }, { target: 't' }, 'junk'] } }, { registry: { t: { uid: 1 } }, relationships: { r: [{ target: 't', type: 'x', source: 'weird' }] } }, { registry: { A: { uid: 0 } }, relationships: { A: [{ target: 'Ghost', type: 'x' }] } }, { stances: { a: 3 } }, { stanceSources: { a: 3 } }, { stanceSources: { a: 'weird' } }, { version: 0 }, { quarantine: 'x' }, { quarantine: { version: 2 } }, { quarantine: { items: 'x' } }, { quarantine: { items: [{}, { store: 'x' }, { store: 'x', reasonCode: 'y' }] } }, { registry: { Mara: { uid: 0, mergedFrom: [{ entityId: null, name: 'Soph', at: 1 }] } } }],
 };
 
 describe('structured record/reference/fatal policies per store (design §3.5)', () => {

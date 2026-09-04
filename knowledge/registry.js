@@ -15,6 +15,7 @@ import { getChat } from '../core/index.js';
 
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { readField, writeField } from './store.js';
+import { ensureRegistryIdentityFields } from './schema.js';
 
 // ─── NPC Registry ────────────────────────────────────────────────────────────
 
@@ -26,12 +27,30 @@ export function saveRegistry(reg) {
     // Store the flat map as-is. Nothing may merge a `lastUpdated` sibling into
     // it — callers iterate this map as { npcName: info } and a stray key would
     // be read as an NPC.
+    //
+    // The one in-shape mutation (TODO §1 identity service): stamp the identity
+    // fields (`entityId`, `aliases`) records lack. This is the registry's ONLY
+    // write seam, so every creation path — registerEntry, reconcile repairs,
+    // lorebook imports, the v2 migration's leftovers — converges on the full
+    // shape without each caller remembering to.
+    ensureRegistryIdentityFields(reg);
     writeField(getLorebookName(), 'registry', reg);
 }
 
 export function registerEntry(name, uid, type, keywords) {
     const reg = getRegistry();
-    reg[name] = { uid, type, keywords: keywords || [name], lastUpdated: Date.now() };
+    // MERGE, never replace — a wholesale `reg[name] = {...}` retired the
+    // record's entityId (saveRegistry's stamper then minted a fresh one) and
+    // dropped aliases, mergedFrom, and profileUid, dangling every id-keyed
+    // reference (relationship edges, audit trails). See the matching notes in
+    // render.js handleAccept and knowledge/index.js scanAndAccept.
+    reg[name] = {
+        ...(reg[name] || {}),
+        uid,
+        type,
+        keywords: keywords || [name],
+        lastUpdated: Date.now(),
+    };
     saveRegistry(reg);
 }
 
@@ -102,10 +121,15 @@ export function normalizeRegistryName(name) {
  * Matching runs strictest-first:
  *   1. exact key
  *   2. case-insensitive exact
- *   3. {@link isUnambiguousNpcAlias} alias match, both directions — but ONLY
+ *   3. explicit alias (TODO §1 identity service) — the wanted name matches a
+ *      record's user-approved `aliases` exactly (same normalization). One hit
+ *      resolves; more than one is genuinely ambiguous and fails closed
+ *   4. {@link isUnambiguousNpcAlias} alias match, both directions — but ONLY
  *      when unambiguous in the context of every same-given-name registry key
  *
- * Step 3 refuses to choose between two NPCs sharing a given name ("Mara
+ * Step 3 is the user-authored form of "these spellings are one entity" — it
+ * resolves titles and nicknames ("The Vixen") the heuristic could never prove.
+ * Step 4 refuses to choose between two NPCs sharing a given name ("Mara
  * Vance" / "Mara Chen") — and, since it uses the shared identity rule rather
  * than a first-token comparison, it also refuses when only ONE of them is on
  * file. Registry entries gate access to a character's dossier and secrets, so
@@ -133,7 +157,26 @@ export function resolveRegistryKey(reg, name) {
         if (normalizeRegistryName(key) === wanted) return key;
     }
 
-    // 3. Alias match, both directions — with the full same-given-name context:
+    // 3. Explicit aliases (TODO §1 identity service): the user-approved
+    // identity links stored on each record. Exact (normalized) match only —
+    // aliases never enter the shorthand heuristic below, because a nickname
+    // like "The Vixen" shares no token with "Mara Vance" and a heuristic hit
+    // would be a coincidence, not a proof. More than one record claiming the
+    // alias is genuinely ambiguous (imported data the validator could not
+    // see) — fail closed exactly like step 4.
+    const aliasHits = keys.filter(key => Array.isArray(reg[key]?.aliases)
+        && reg[key].aliases.some(alias => normalizeRegistryName(alias) === wanted));
+    if (aliasHits.length === 1) return aliasHits[0];
+    if (aliasHits.length > 1) {
+        console.warn(
+            `[MWT:Knowledge] NPC name "${name}" is an ambiguous alias — claimed by registry ` +
+            `entries: ${aliasHits.join(', ')}. Using no entry rather than risk exposing ` +
+            `another character's dossier. Remove the duplicate alias to disambiguate.`
+        );
+        return null;
+    }
+
+    // 4. Alias match, both directions — with the full same-given-name context:
     //      "Mara"       → registry "Mara Vance"
     //      "Mara Vance" → registry "Mara"
     //
@@ -218,6 +261,89 @@ export function isUnambiguousNpcAlias(a, b, population = []) {
     const names = [a, b, ...population]
         .filter(name => normalizeRegistryName(name).split(/\s+/)[0] === givenName);
     return names.every(left => names.every(right => isSameNpcIdentity(left, right)));
+}
+
+/**
+ * Do two NPC spellings resolve to the SAME registry record through an
+ * EXPLICIT link — the record's own key or its user-approved aliases?
+ *
+ * Explicit links are: an exact key, a case-insensitive key hit, or a
+ * user-approved explicit alias ("The Vixen" for "Mara Vance"). The resolver's
+ * given-name heuristic tier is deliberately NOT part of this: that tier's
+ * population is the registry alone, while the lorebook label checks must also
+ * weigh the BOOK's labels ("Mara Vance" heuristic-resolves to registry "Mara"
+ * when she is the only Mara on file — but a book also holding "Mara Chen"
+ * makes the pair ambiguous, and that ambiguity is the caller's
+ * population-aware heuristic's to judge, not the registry's).
+ *
+ * This is the registry-backed half of the lorebook label checks (see
+ * {@link isSameNpcByName}): after a rename like "Mara" → "The Vixen", the
+ * lorebook entry is relabelled "The Vixen" while a staged update can still
+ * spell the NPC "Mara" — the spellings share no token, but the registry's
+ * alias links both to one record, and that is the proof the label check
+ * needs to keep the uid instead of minting a duplicate entry.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+export function resolvesToSameRegistryRecord(a, b) {
+    const reg = getRegistry();
+    const aKey = resolveRegistryKey(reg, a);
+    if (aKey === null) return false;
+    const bKey = resolveRegistryKey(reg, b);
+    if (bKey === null || aKey !== bKey) return false;
+    // Both spellings landed on one record — but only count it when each got
+    // there by an EXPLICIT link (key or alias), not the given-name heuristic.
+    return isExplicitRegistryLink(reg, a, aKey) && isExplicitRegistryLink(reg, b, bKey);
+}
+
+/**
+ * Did `name` reach `key` through the record's own key or an explicit alias?
+ * @param {object} reg @param {string} name @param {string} key @returns {boolean}
+ */
+function isExplicitRegistryLink(reg, name, key) {
+    const wanted = normalizeRegistryName(name);
+    if (wanted && normalizeRegistryName(key) === wanted) return true;
+    return Array.isArray(reg?.[key]?.aliases)
+        && reg[key].aliases.some(alias => normalizeRegistryName(alias) === wanted);
+}
+
+/**
+ * Do two NPC spellings denote the same NPC — the label-verification form of
+ * the resolver used by the lorebook identity checks (writeToLorebook's
+ * KNOWLEDGE-01, writeProfileToLorebook, relabelLorebookEntry,
+ * loadEntryContent, and findEntryUidByNpcIdentity)?
+ *
+ * Two tiers, strongest evidence first:
+ *   1. registry-proven — {@link resolvesToSameRegistryRecord}: both spellings
+ *      reach one record through an EXPLICIT link (its key or a user-approved
+ *      alias). This is what recognizes an arbitrary rename whose spellings
+ *      share no token ("Mara" ↔ "The Vixen").
+ *   2. the shared contextual heuristic — {@link isUnambiguousNpcAlias} with
+ *      the caller's population, for spellings the registry cannot relate (a
+ *      not-yet-registered NPC, a book label that predates the registry) and
+ *      for given-name matches, whose ambiguity is judged against the caller's
+ *      population — the registry alone cannot see it.
+ *
+ * Tier 2 deliberately still runs when the registry knows both spellings as
+ * DIFFERENT records: that is exactly the audit's known-duplicate state
+ * ("Sophie" and "Sophie Simpson" both on file), and the registry's repair
+ * paths legitimately link a canonical key to an entry labelled with the
+ * other's spelling — which copy is authoritative is a human decision, so
+ * this check must not newly refuse it. The Mikhail/Marcus protection is
+ * unchanged: names that are neither registry-linked nor heuristic aliases
+ * never match.
+ *
+ * @param {string} a — the label as written (e.g. a lorebook entry comment)
+ * @param {string} b — the expected NPC name
+ * @param {Iterable<string>} [population] — labels/keys visible to the caller,
+ *   feeding the heuristic's ambiguity clique check
+ * @returns {boolean}
+ */
+export function isSameNpcByName(a, b, population = []) {
+    if (resolvesToSameRegistryRecord(a, b)) return true;
+    return isUnambiguousNpcAlias(a, b, population);
 }
 
 // ─── Profile UID (NPC Profiles lorebook cross-reference) ─────────────────────

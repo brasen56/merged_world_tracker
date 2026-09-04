@@ -120,11 +120,19 @@ function savedStoreOf(bookName) {
     return entry ? JSON.parse(entry.content) : null;
 }
 
+/**
+ * A registry record as the v2 identity migration leaves it: the entityId is
+ * generated per stamp (matched as any string) and aliases default to [].
+ * Legacy-path expectations use this; current-version (unmigrated) seeds keep
+ * their bare records — the fields are optional until a migration/save stamps.
+ */
+const stamped = record => ({ aliases: [], entityId: expect.any(String), ...record });
+
 // ─── Hydration validation gate ────────────────────────────────────────────────
 
 describe('Part 4: hydration validation gate (§6.7)', () => {
     test('a valid current-version store hydrates and is not rewritten', async () => {
-        setBookStore('Book A', { version: 1, registry: { Mara: { uid: 1 } } });
+        setBookStore('Book A', { version: KNOWLEDGE_STORE_VERSION, registry: { Mara: { uid: 1 } } });
         const save = vi.spyOn(wiFake, 'saveWorldInfo');
 
         const data = await hydrateBook('Book A', {});
@@ -147,7 +155,7 @@ describe('Part 4: hydration validation gate (§6.7)', () => {
         // The migration reached DISK before hydration returned — the flush is
         // awaited inside the critical section (§6.7 acceptance), not deferred.
         expect(savedStoreOf('Book A').version).toBe(KNOWLEDGE_STORE_VERSION);
-        expect(savedStoreOf('Book A').registry).toEqual({ Mara: { uid: 1 } });
+        expect(savedStoreOf('Book A').registry).toEqual({ Mara: stamped({ uid: 1 }) });
         expect(getEvents({ module: 'knowledge' }).some(e => e.event === 'schema_migrated')).toBe(true);
     });
 
@@ -158,7 +166,7 @@ describe('Part 4: hydration validation gate (§6.7)', () => {
 
         expect(isHydrated('Book A')).toBe(true);
         // The live view keeps only the valid record…
-        expect(data.registry).toEqual({ Mara: { uid: 1 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 1 }) });
         // …and the rejected record is preserved whole in the book's own
         // embedded container (§5.1), persisted by the SAME save.
         const saved = savedStoreOf('Book A');
@@ -180,7 +188,7 @@ describe('Part 4: hydration validation gate (§6.7)', () => {
         // orphan its lorebook entry — the duplicate/orphan failure this store
         // exists to prevent.
         setBookStore('State Book', {
-            version: 1,
+            version: KNOWLEDGE_STORE_VERSION,
             stateRegistry: {
                 Weather: { uid: 1, lastUpdatedMsg: 0, lastUpdatedAt: 0, enabled: true, alwaysUpdate: false },
                 weather: { uid: 7, lastUpdatedMsg: 0, lastUpdatedAt: 0, enabled: true, alwaysUpdate: false },
@@ -205,7 +213,7 @@ describe('Part 4: hydration validation gate (§6.7)', () => {
         _clearCacheForTests();
         const data = await hydrateBook('Book A', {});
 
-        expect(data.registry).toEqual({ Mara: { uid: 1 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 1 }) });
         expect(savedStoreOf('Book A').quarantine.items).toHaveLength(1);
     });
 
@@ -269,7 +277,7 @@ describe('Part 4: hydration validation gate (§6.7)', () => {
 
         const first = await hydrateBook('Book A', {});
         expect(isHydrated('Book A')).toBe(true);
-        expect(first.registry).toEqual({ Mara: { uid: 1 } });
+        expect(first.registry).toEqual({ Mara: stamped({ uid: 1 }) });
         expect(savedStoreOf('Book A').quarantine.items[0]).toMatchObject({
             reasonCode: 'store-version-invalid',
             raw: 'x',
@@ -278,7 +286,7 @@ describe('Part 4: hydration validation gate (§6.7)', () => {
         _clearCacheForTests();
         const second = await hydrateBook('Book A', {});
         expect(second.version).toBe(KNOWLEDGE_STORE_VERSION);
-        expect(second.registry).toEqual({ Mara: { uid: 1 } });
+        expect(second.registry).toEqual({ Mara: stamped({ uid: 1 }) });
         const saved = savedStoreOf('Book A');
         expect(saved.version).toBe(KNOWLEDGE_STORE_VERSION);
         // One preserved record, not two — the fingerprint dedups re-detections.
@@ -313,7 +321,7 @@ describe('Part 4: legacy seeds are validated before adoption (§6.7)', () => {
 
         expect(isHydrated('Book A')).toBe(true);
         // Only the valid part of the legacy chat metadata is adopted…
-        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 0 }) });
         expect(data.version).toBe(KNOWLEDGE_STORE_VERSION);
         // …and the rejected record is preserved inside the book.
         const saved = savedStoreOf('Book A');
@@ -333,8 +341,8 @@ describe('Part 4: legacy seeds are validated before adoption (§6.7)', () => {
         };
         const data = await hydrateBook('Book A', seed);
 
-        expect(data.registry).toEqual({ Mara: { uid: 0 } });
-        expect(savedStoreOf('Book A').registry).toEqual({ Mara: { uid: 0 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 0 }) });
+        expect(savedStoreOf('Book A').registry).toEqual({ Mara: stamped({ uid: 0 }) });
 
         // The repair is recorded by the migration (schema level).
         const prepared = prepareStore(STORE_SCHEMAS.knowledgeStore, structuredClone(seed));
@@ -381,7 +389,7 @@ describe('Part 4: flush failure rolls the hydration back (§6.7 acceptance)', ()
         // quarantining the junk record exactly once.
         const data = await hydrateBook('Book A', {});
         expect(isHydrated('Book A')).toBe(true);
-        expect(data.registry).toEqual({ Mara: { uid: 1 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 1 }) });
         expect(savedStoreOf('Book A').quarantine.items).toHaveLength(1);
     });
 
@@ -399,8 +407,8 @@ describe('Part 4: flush failure rolls the hydration back (§6.7 acceptance)', ()
 
         const data = await hydrateBook('Book A', { registry: meta[REGISTRY_KEY] });
         expect(isHydrated('Book A')).toBe(true);
-        expect(data.registry).toEqual({ Mara: { uid: 4 } });
-        expect(savedStoreOf('Book A').registry).toEqual({ Mara: { uid: 4 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 4 }) });
+        expect(savedStoreOf('Book A').registry).toEqual({ Mara: stamped({ uid: 4 }) });
     });
 
     test('a cache reset landing mid-hydration abandons instead of reporting failure', async () => {
@@ -436,7 +444,7 @@ describe('Part 4: flush failure rolls the hydration back (§6.7 acceptance)', ()
         expect(isHydrated('Book A')).toBe(true);
         expect(data.version).toBe(KNOWLEDGE_STORE_VERSION);
         expect(savedStoreOf('Book A').version).toBe(KNOWLEDGE_STORE_VERSION);
-        expect(savedStoreOf('Book A').registry).toEqual({ Mara: { uid: 1 } });
+        expect(savedStoreOf('Book A').registry).toEqual({ Mara: stamped({ uid: 1 }) });
     });
 
     test('a chat switch between the two book hydrations aborts the stale orchestration', async () => {
@@ -492,7 +500,7 @@ describe('Part 4: flush failure rolls the hydration back (§6.7 acceptance)', ()
         const reg = readField('Book A', 'registry');
         reg.Bren = { uid: 2 };
         await flushBook('Book A');
-        expect(savedStoreOf('Book A').registry).toEqual({ Mara: { uid: 1 }, Bren: { uid: 2 } });
+        expect(savedStoreOf('Book A').registry).toEqual({ Mara: stamped({ uid: 1 }), Bren: { uid: 2 } });
 
         // The book on disk is externally replaced by a v0 store whose flush
         // will fail: the rollback must leave the last durable state live and
@@ -503,7 +511,7 @@ describe('Part 4: flush failure rolls the hydration back (§6.7 acceptance)', ()
         await hydrateBook('Book A', {}, true /* force */);
 
         expect(isHydrated('Book A')).toBe(true);
-        expect(readField('Book A', 'registry')).toEqual({ Mara: { uid: 1 }, Bren: { uid: 2 } });
+        expect(readField('Book A', 'registry')).toEqual({ Mara: stamped({ uid: 1 }), Bren: { uid: 2 } });
         // The disk original is untouched for the next retry.
         expect(savedStoreOf('Book A').version).toBeUndefined();
     });
@@ -523,11 +531,11 @@ describe('Part 4: scope switch through hydrateCurrentBooks', () => {
         expect(isHydrated(LOREBOOK_NAME)).toBe(true);
         expect(isHydrated(STATE_LOREBOOK_NAME)).toBe(true);
         expect(savedStoreOf(LOREBOOK_NAME)).toMatchObject({
-            version: 1,
+            version: KNOWLEDGE_STORE_VERSION,
             registry: { Mara: { uid: 4 } },
         });
         expect(savedStoreOf(STATE_LOREBOOK_NAME)).toMatchObject({
-            version: 1,
+            version: KNOWLEDGE_STORE_VERSION,
             stateRegistry: { Weather: { uid: 0 } },
         });
     });
@@ -566,14 +574,17 @@ describe('Part 4: scope switch through hydrateCurrentBooks', () => {
         meta[REGISTRY_KEY] = { Someone: { uid: 99 } };
         await hydrateCurrentBooks();
 
-        expect(readField(LOREBOOK_NAME, 'registry', {})).toEqual({ Mara: { uid: 4 } });
+        expect(readField(LOREBOOK_NAME, 'registry', {})).toEqual({ Mara: stamped({ uid: 4 }) });
     });
 });
 
 // ─── §6.7 record checks (schema level) ────────────────────────────────────────
 
 describe('Part 4: §6.7 record checks at the schema level', () => {
-    const prepare = (data, version = 1) => prepareStore(STORE_SCHEMAS.knowledgeStore, data, { version });
+    // Validate at the CURRENT version by default: these tests exercise the
+    // validator's own rules, not the migrations (which stamp entity ids and
+    // would flip every 'valid' status to 'migrated').
+    const prepare = (data, version = KNOWLEDGE_STORE_VERSION) => prepareStore(STORE_SCHEMAS.knowledgeStore, data, { version });
     const codes = result => result.issues.map(issue => issue.code);
 
     test('profileUid must be absent, null, or a non-negative integer', () => {

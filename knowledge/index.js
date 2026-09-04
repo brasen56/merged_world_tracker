@@ -547,14 +547,17 @@ export function onChatChanged() {
     state.unreadGrowthEvidenceCount = 0;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     hideNotificationPanel();
-    // Both modals are appended to document.body and outlive the tab render —
-    // the view modal AND the Growth modal. The Growth modal carries the
-    // previous chat's evidence/profile, and its still-live handlers (Save to
-    // Lorebook, evidence editing) would act on the NEW chat's stores, so it
-    // must be dropped with the same stroke. _cleanupKeyHandler first (the
-    // core/modal.js convention) so the sweep also detaches any document-level
-    // Escape listener a removed modal left behind — a bare remove() leaks it.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
+    // Body-mounted modals are appended to document.body and outlive the tab
+    // render — the view, Growth, dossier refresh, and identity modals. The
+    // Growth modal carries the previous chat's evidence/profile, and its
+    // still-live handlers (Save to Lorebook, evidence editing) would act on
+    // the NEW chat's stores; the identity modal's Rename/Merge/alias handlers
+    // close over the previous chat's `key` and would mutate a same-named NPC
+    // in the new chat. All are dropped with the same stroke.
+    // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
+    // also detaches any document-level Escape listener a removed modal left
+    // behind — a bare remove() leaks it.
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
 
     // Re-point the registry stores at whatever lorebooks the new chat resolves
     // to. This is fire-and-forget because onChatChanged is synchronous, but it
@@ -588,13 +591,15 @@ export function onChatChangedWhilePaused() {
     state.unreadGrowthEvidenceCount = 0;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     hideNotificationPanel();
-    // The Growth modal is dropped with the view modal — pure DOM removal, no
-    // store read (otherwise it survives the switch displaying the previous
-    // chat's evidence/profile, and its handlers would edit that old evidence
-    // against the new chat's stores; see onChatChanged). _cleanupKeyHandler
-    // first (the core/modal.js convention) so the sweep also detaches any
+    // The Growth and identity modals are dropped with the view modal — pure
+    // DOM removal, no store read (otherwise they survive the switch: the
+    // Growth modal displaying the previous chat's evidence/profile with
+    // handlers that would edit it against the new chat's stores, and the
+    // identity modal's Rename/Merge/alias handlers acting on the previous
+    // chat's `key`; see onChatChanged). _cleanupKeyHandler first (the
+    // core/modal.js convention) so the sweep also detaches any
     // document-level Escape listener a removed modal left behind.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
     console.log('[MWT:Knowledge] Chat changed while paused — staging/UI state reset (store hydration skipped).');
 }
 

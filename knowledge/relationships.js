@@ -36,6 +36,24 @@ export function saveRelationships(rels) {
 
 export function getNpcRelationships(name) { return getRelationships()[name] || []; }
 
+/**
+ * Stamp an edge's stable entity pointers from the registry (TODO §1 identity
+ * service): the map-key NPC's `subjectEntityId` and the target NPC's
+ * `targetEntityId`. Only fills ABSENT pointers — an id a previous write
+ * stamped is the edge's identity anchor and must survive later renames (which
+ * change the display names, never the ids). Unresolvable endpoints (a target
+ * that left the registry) are left bare, exactly like legacy edges.
+ */
+function stampEdgeEntityIds(fromName, edge) {
+    const reg = getRegistry();
+    if (!edge.subjectEntityId && reg[fromName]?.entityId) {
+        edge.subjectEntityId = reg[fromName].entityId;
+    }
+    if (!edge.targetEntityId && reg[edge.target]?.entityId) {
+        edge.targetEntityId = reg[edge.target].entityId;
+    }
+}
+
 // ─── Provenance ──────────────────────────────────────────────────────────────
 //
 // Auto-extraction and the manual editor write through the same CRUD helpers, so
@@ -60,7 +78,9 @@ export function addRelationship(from, to, type, notes, source = SOURCE_MANUAL) {
     const rels = getRelationships();
     if (!rels[from]) rels[from] = [];
     if (!rels[from].some(r => r.target === to)) {
-        rels[from].push({ target: to, type, notes: notes || '', source });
+        const edge = { target: to, type, notes: notes || '', source };
+        stampEdgeEntityIds(from, edge);
+        rels[from].push(edge);
         saveRelationships(rels);
     }
 }
@@ -111,8 +131,11 @@ export function updateRelationship(from, to, type, notes, source = SOURCE_MANUAL
         // An edit re-stamps ownership: a human touching an auto edge claims it
         // (locking it), and the extractor re-confirming its own stays auto.
         existing.source = source;
+        stampEdgeEntityIds(from, existing);
     } else {
-        rels[from].push({ target: to, type, notes: notes || '', source });
+        const edge = { target: to, type, notes: notes || '', source };
+        stampEdgeEntityIds(from, edge);
+        rels[from].push(edge);
     }
     saveRelationships(rels);
 }
@@ -190,6 +213,10 @@ function mergedSource(a, b) {
 
 export function rekeyRelationships(oldName, newName) {
     if (oldName === newName) return;
+    // NOTE (TODO §1): a rename changes DISPLAY names only. The edges' stable
+    // `subjectEntityId`/`targetEntityId` pointers ride along untouched (the
+    // spread below copies them), which is exactly what lets
+    // repairRelationshipEntityNames() heal a rekey that was ever missed.
     const stances = getStances();
     if (stances[oldName] !== undefined) {
         stances[newName] = stances[oldName];
@@ -239,6 +266,229 @@ export function rekeyRelationships(oldName, newName) {
         if (targets.length === 0) delete rels[from];
     }
     saveRelationships(rels);
+}
+
+/**
+ * Merge one NPC's relationship identity into another's (TODO §1 identity
+ * service — the user-approved mergeEntities() calls this). Same discipline as
+ * rekeyRelationships, but KEEP semantics:
+ *   - the keep record's stance wins; the merged stance is adopted only when
+ *     keep has none (with its provenance, so a lock travels);
+ *   - outgoing edges of the merged NPC move under keep (overlaps collapse via
+ *     mergedSource — a merged pair stays auto only if BOTH were);
+ *   - incoming edges re-point at keep (same overlap collapse);
+ *   - edges whose two endpoints the merge collapses onto the SURVIVOR are
+ *     dropped, not moved: `merge → keep`, `keep → merge`, and a pre-existing
+ *     self-edge on the absorbed record (`merge → merge`) would all render as
+ *     `keep → keep` — a self-relationship in every managed block. (A
+ *     pre-existing self-edge on the KEEP record predates the merge and is the
+ *     user's own data, so it is left alone.);
+ *   - every surviving/moved edge carries the keep record's entityId as its
+ *     subject pointer where it can be resolved.
+ *
+ * @param {string} keepName — canonical name of the surviving NPC
+ * @param {string} mergeName — canonical name of the NPC being absorbed
+ * @returns {{edgesMoved:number, edgesMerged:number, incomingRepointed:number, edgesDropped:number, stanceAdopted:boolean}}
+ */
+export function mergeRelationshipIdentities(keepName, mergeName) {
+    const result = { edgesMoved: 0, edgesMerged: 0, incomingRepointed: 0, edgesDropped: 0, stanceAdopted: false };
+
+    const stances = getStances();
+    if (stances[mergeName] !== undefined && stances[keepName] === undefined) {
+        setStance(keepName, stances[mergeName], getStanceSources()[mergeName] ?? SOURCE_MANUAL);
+        result.stanceAdopted = true;
+    }
+    // Clear whatever merged stance remains — keep's (possibly adopted) stance
+    // is the surviving statement either way.
+    setStance(mergeName, '');
+
+    const rels = getRelationships();
+    if (!rels) return result;
+
+    // 1) Outgoing: mergeName -> * moves under keepName — except edges whose
+    //    target collapses onto the survivor: mergeName -> keepName (the two
+    //    identities ARE each other now) and a pre-existing self-edge
+    //    mergeName -> mergeName. Both would become keepName -> keepName.
+    if (rels[mergeName]) {
+        if (!rels[keepName]) rels[keepName] = [];
+        for (const edge of rels[mergeName]) {
+            if (edge.target === keepName || edge.target === mergeName) {
+                result.edgesDropped++;
+                continue;
+            }
+            const existing = rels[keepName].find(r => r.target === edge.target);
+            if (existing) {
+                existing.type = edge.type;
+                if (edge.notes) existing.notes = edge.notes;
+                existing.source = mergedSource(existing, edge);
+                result.edgesMerged++;
+            } else {
+                rels[keepName].push({ ...edge });
+                result.edgesMoved++;
+            }
+        }
+        delete rels[mergeName];
+    }
+
+    // 2) Incoming: * -> mergeName re-points at keepName — except keepName ->
+    //    mergeName, which collapses into a self-edge and is dropped the same
+    //    way instead of being repointed or merged into a self-relationship.
+    for (const [from, targets] of Object.entries(rels)) {
+        for (let i = targets.length - 1; i >= 0; i--) {
+            if (targets[i].target !== mergeName) continue;
+            if (from === keepName) {
+                targets.splice(i, 1);
+                result.edgesDropped++;
+                continue;
+            }
+            const existing = targets.find((r, idx) => idx !== i && r.target === keepName);
+            if (existing) {
+                existing.type = targets[i].type;
+                if (targets[i].notes) existing.notes = targets[i].notes;
+                existing.source = mergedSource(existing, targets[i]);
+                targets.splice(i, 1);
+                result.edgesMerged++;
+            } else {
+                targets[i] = { ...targets[i], target: keepName };
+                result.incomingRepointed++;
+            }
+        }
+        if (targets.length === 0) delete rels[from];
+    }
+
+    // Re-point the survivors' ids at the keep record where the registry can
+    // resolve them — moved edges still carry the merged NPC's subjectEntityId,
+    // which the merge just retired.
+    const reg = getRegistry();
+    const keepId = reg[keepName]?.entityId;
+    if (keepId && rels[keepName]) {
+        for (const edge of rels[keepName]) {
+            if (edge.subjectEntityId && edge.subjectEntityId !== keepId) edge.subjectEntityId = keepId;
+        }
+    }
+    if (keepId) {
+        for (const targets of Object.values(rels)) {
+            for (const edge of targets) {
+                if (edge.target === keepName && edge.targetEntityId && edge.targetEntityId !== keepId) {
+                    edge.targetEntityId = keepId;
+                }
+            }
+        }
+    }
+
+    saveRelationships(rels);
+    return result;
+}
+
+/**
+ * Heal relationship display names from their stable entity ids (TODO §1).
+ * The payoff of id-stamped edges: a rename that ever missed a surface (an
+ * interrupted rename, imported data, a hand-rekeyed legacy store) leaves edges
+ * whose names no longer resolve — and the ids still say exactly which entity
+ * each endpoint was.
+ *
+ * Conservative by design:
+ *   - a map key that names NO registry record is rekeyed to the record its
+ *     edges' (single, agreeing) subjectEntityId points at — merged into any
+ *     bucket already under that name;
+ *   - an edge target that names no registry record is re-pointed to the record
+ *     its targetEntityId points at (collapsing a duplicate if one appears);
+ *   - a name that resolves to a DIFFERENT entity than the id claims is a
+ *     genuine conflict, not rename residue — reported, never overwritten;
+ *   - ids are stamped onto any edge that lacks them (legacy healing).
+ *
+ * @returns {{keysRekeyed:number, targetsRepointed:number, edgesMerged:number, idsStamped:number, conflicts:Array<{kind:string,detail:string}>}}
+ */
+export function repairRelationshipEntityNames() {
+    const reg = getRegistry();
+    const byId = new Map();
+    for (const [name, record] of Object.entries(reg)) {
+        if (record?.entityId && !byId.has(record.entityId)) byId.set(record.entityId, name);
+    }
+    const result = { keysRekeyed: 0, targetsRepointed: 0, edgesMerged: 0, idsStamped: 0, conflicts: [] };
+    const rels = getRelationships();
+
+    // 1) Map keys whose name no longer resolves — heal from the edges' single
+    //    agreeing subject id. (Snapshot the keys: the loop re-keys buckets.)
+    for (const [name, edges] of Object.entries({ ...rels })) {
+        if (reg[name] || !Array.isArray(edges) || edges.length === 0) continue;
+        const ids = new Set(edges.map(e => e?.subjectEntityId).filter(Boolean));
+        if (ids.size !== 1) {
+            result.conflicts.push({ kind: 'subject-unresolvable', detail: `Key "${name}" names no registry record and its edges agree on no single subjectEntityId.` });
+            continue;
+        }
+        const canonical = byId.get([...ids][0]);
+        if (!canonical) {
+            result.conflicts.push({ kind: 'subject-unknown-id', detail: `Key "${name}" names no registry record and its subjectEntityId matches none either.` });
+            continue;
+        }
+        if (rels[canonical]) {
+            for (const edge of edges) {
+                const existing = rels[canonical].find(r => r.target === edge.target);
+                if (existing) {
+                    existing.type = edge.type;
+                    if (edge.notes) existing.notes = edge.notes;
+                    existing.source = mergedSource(existing, edge);
+                } else {
+                    rels[canonical].push(edge);
+                }
+            }
+        } else {
+            rels[canonical] = edges;
+        }
+        delete rels[name];
+        result.keysRekeyed++;
+    }
+
+    // 2) Edge targets whose name no longer resolves — heal from targetEntityId.
+    for (const [from, targets] of Object.entries(rels)) {
+        if (!Array.isArray(targets)) continue;
+        for (let i = targets.length - 1; i >= 0; i--) {
+            const edge = targets[i];
+            if (!edge?.target || !edge.targetEntityId) continue;
+            const current = reg[edge.target]?.entityId;
+            if (current === edge.targetEntityId) continue;
+            if (reg[edge.target]) {
+                result.conflicts.push({ kind: 'target-conflict', detail: `Edge ${from} → ${edge.target}: the name resolves to a different entity than its targetEntityId claims.` });
+                continue;
+            }
+            const canonical = byId.get(edge.targetEntityId);
+            if (!canonical) {
+                result.conflicts.push({ kind: 'target-unknown-id', detail: `Edge ${from} → ${edge.target}: the target names no record and its targetEntityId matches none either.` });
+                continue;
+            }
+            const existing = targets.find((r, idx) => idx !== i && r.target === canonical);
+            if (existing) {
+                existing.type = edge.type;
+                if (edge.notes) existing.notes = edge.notes;
+                existing.source = mergedSource(existing, edge);
+                targets.splice(i, 1);
+                result.edgesMerged++;
+            } else {
+                edge.target = canonical;
+                result.targetsRepointed++;
+            }
+        }
+        if (targets.length === 0) delete rels[from];
+    }
+
+    // 3) Bulk-stamp ids the first two passes could not reach (legacy edges).
+    let changed = false;
+    for (const [from, targets] of Object.entries(rels)) {
+        if (!Array.isArray(targets)) continue;
+        for (const edge of targets) {
+            const hadSubject = Boolean(edge.subjectEntityId);
+            const hadTarget = Boolean(edge.targetEntityId);
+            stampEdgeEntityIds(from, edge);
+            if (!hadSubject && edge.subjectEntityId) { result.idsStamped++; changed = true; }
+            if (!hadTarget && edge.targetEntityId) { result.idsStamped++; changed = true; }
+        }
+    }
+
+    if (result.keysRekeyed || result.targetsRepointed || result.edgesMerged || changed) {
+        saveRelationships(rels);
+    }
+    return result;
 }
 
 // ─── Managed block helpers ───────────────────────────────────────────────────

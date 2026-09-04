@@ -12,6 +12,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.3.0]
+
+### Added
+
+- **Entity identity + alias management service** (`knowledge/identity.js`, TODO §1 /
+  PI §4). Registry names are display state; this adds the stable identity layer
+  underneath so renames and merges stop losing history:
+  - **Canonical entity ids.** Every registry record now carries an `entityId`
+    (`mwt_<time36>_<rand>`), stamped by a lorebook-store schema **v1 → v2
+    migration** on load and by `saveRegistry()` on every runtime write, so all
+    creation paths converge without code changes. Relationship edges carry the
+    same stability: `addRelationship`/`updateRelationship` stamp
+    `subjectEntityId`/`targetEntityId`, and a new
+    `repairRelationshipEntityNames()` heals drifted edge/map-key names from
+    those ids (`MWT.npcs.repairLinks()`).
+  - **Aliases & nicknames.** Records carry a user-approved `aliases[]` that
+    `resolveRegistryKey()` honors as a new exact-match step — "The Vixen"
+    resolves to "Mara Vance" without touching the given-name heuristic.
+    Ambiguous aliases fail closed (no entry rather than the wrong dossier);
+    the write-time guards and the store validator (repair-severity
+    `registry-alias-collision`) keep aliases collision-free.
+  - **User-approved renames** (`renameEntity`): rekeys the registry, the
+    relationship map + edge targets (ids unchanged — that's the point),
+    stances/sources, the evidence map, and per-field dossier watermarks; swaps
+    the old spelling out of keywords; and relabels the lorebook + profile
+    entries through a new label-verified `relabelLorebookEntry()` seam
+    (`writeToLorebook` would have detached a genuine rename as a "stale uid").
+    The old name stays as an alias, so existing references keep resolving.
+  - **User-approved merges** (`mergeEntities`): folds a duplicate identity into
+    another with KEEP semantics (survivor's uid/type/stance win, pointers
+    adopted only where absent), a `mergedFrom` audit trail on the record,
+    evidence merged under namespaced ids so consolidated → raw quote-receipt
+    links survive verbatim, relationship edges re-pointed with the existing
+    provenance discipline, and the absorbed name kept as an alias. The
+    absorbed lorebook entry is reported for manual deletion, never
+    auto-deleted.
+  - **UI + console surface.** A ✏️ **Identity** button on every NPC card opens
+    a panel showing the entity id, alias chips (add/remove), rename, and
+    merge-into with confirmation. Console: `MWT.npcs.rename(npc, newName)`,
+    `.merge(keep, merge)`, `.addAlias`, `.removeAlias`, `.entityId`,
+    `.repairLinks()`.
+  - **Schema v2 validation.** `entityId`/`aliases`/`mergedFrom` and edge entity
+    ids are optional-but-validated; duplicate entity ids and alias collisions
+    repair with the raw values preserved; the v1 → v2 migration also carries
+    the `[MWT:store]` ghost scrub forward (v1-era books reach the chain without
+    running v0 → v1). Tests in `test/entity_identity.test.js` (28 tests); the
+    affected hydration/migration/backup assertions were updated to the stamped
+    v2 shapes.
+
+### Changed
+
+- Version bump to 2.3.0 (`manifest.json`, `package.json`, `core/version.js`).
+
 ## [2.2.0]
 
 ### Added
@@ -67,6 +120,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test/dossier_field_refresh.test.js`.
 
 ### Fixed
+
+- **Identity service hardening — four fixes pinned by new tests in
+  `test/entity_identity.test.js` and `test/canonical_identity.test.js`:**
+  - **Lorebook identity checks now recognize explicit registry aliases.** The
+    label checks in `writeToLorebook` (KNOWLEDGE-01), `writeProfileToLorebook`,
+    `relabelLorebookEntry`, `loadEntryContent`, and the adopt-before-create
+    backstop (`findEntryUidByNpcIdentity`) compared labels through the
+    given-name heuristic only — so after an arbitrary rename ("Mara" →
+    "The Vixen"), a staged update still spelled "Mara" treated the correctly
+    relabelled uid as a stranger's and minted a duplicate entry, and a failed
+    relabel left the old-labelled entry unreachable despite the alias. A new
+    registry-backed tier (`registry.js resolvesToSameRegistryRecord` /
+    `isSameNpcByName`) accepts user-approved explicit links (key or alias)
+    ahead of the heuristic; given-name matches keep being judged against the
+    caller's population (book labels), so same-given-name strangers still fail
+    closed. `reconcileRegistry`'s verification uses the same rule, so
+    "verified here" still means "loadable there".
+  - **Rename/merge can no longer cross chat scopes.** The registry,
+    relationships, evidence, and dossier watermarks are rekeyed synchronously,
+    but the lorebook relabels and the relationship-block sync crossed awaits
+    and re-resolved the book names afterward — a chat switch mid-flight let
+    the remaining work target the newly active chat's books. Both operations
+    now capture the scope and BOTH book names before any mutation, relabel
+    the captured names only, and re-verify the scope
+    (`core/scope.js scopeStillCurrent`) after every await, dropping the
+    remaining lorebook work with an explanatory warning on drift.
+  - **Refused evidence writes are no longer reported as successes.**
+    `saveEvidenceMap()` now returns a checked result for every refusal
+    (`store-paused` / `invalid-store` / `store-replaced` / `validation-fatal`
+    / `quarantine-refused`), and `renameEvidenceFile()` / `mergeEvidenceFiles()`
+    propagate it (`save-refused:<why>`) so a rename/merge warns that the
+    evidence stayed under its old name instead of silently stranding it. A new
+    `canRekeyEvidence()` preflight also refuses the rename/merge BEFORE the
+    registry is rekeyed when the evidence store cannot accept writes —
+    evidence-less NPCs are never blocked.
+  - **Merges no longer create self-relationships.** Edges between the two
+    merged identities (`Sophie → Sophie Simpson` and the reverse) and a
+    pre-existing self-edge on the absorbed record used to become
+    `survivor → survivor` edges in every managed block;
+    `mergeRelationshipIdentities()` drops them (counted as `edgesDropped`).
+    A pre-existing self-edge on the SURVIVOR predates the merge and is kept.
 
 - **Per-field dossier refresh + paused-chat follow-ups** (each pinned by new
   tests in `test/dossier_field_refresh.test.js`): the 🎯 Fields picker's

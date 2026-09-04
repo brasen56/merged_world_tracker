@@ -116,6 +116,23 @@ export function getEvidenceMap() {
  * and would need restoring. A record the schema rejects is quarantined
  * (design §5.2) out of the committed map but preserved whole in the
  * chat-local quarantine container, in the same write.
+ *
+ * The commit is CHECKED: callers that re-key or merge evidence files depend
+ * on knowing whether the write landed — a refusal leaves the files under
+ * their OLD names, and reporting that as a success would strand them there
+ * silently. Every path returns a result:
+ *
+ *   { ok: true }                     — nothing was staged; a no-op save
+ *   { ok: true, committed: true }    — the staged map was committed
+ *   { ok: false, reason: 'store-paused' }        — runtime schema gate (§7.5)
+ *   { ok: false, reason: 'invalid-store' }       — the stored map is not an object
+ *   { ok: false, reason: 'store-replaced' }      — live value replaced underneath staging
+ *   { ok: false, reason: 'validation-fatal' }    — the staged map is unreadable
+ *   { ok: false, reason: 'quarantine-refused', detail } — quarantine records
+ *       could not be preserved; `detail` carries preserveQuarantinedRecords'
+ *       reason
+ *
+ * @returns {{ok: boolean, committed?: boolean, reason?: string, detail?: string}}
  */
 export function saveEvidenceMap() {
     const meta = getChatMeta();
@@ -128,27 +145,32 @@ export function saveEvidenceMap() {
     if (isStoreWriteBlocked(knowledgeEvidenceSchema.id)) {
         console.warn('[MWT:Knowledge] Evidence write refused — the store is paused for this chat (schema preparation); the previous value was kept.');
         _resetEvidenceStaging();
-        return;
+        return { ok: false, reason: 'store-paused' };
     }
     // Nothing to validate when the store does not exist yet — getEvidenceMap()
     // callers create it before mutating, and a save without a store is a no-op.
     if (!live || typeof live !== 'object' || Array.isArray(live)) {
         if (live !== undefined && live !== null) {
             console.warn('[MWT:Knowledge] Evidence write refused — the evidence map is not an object; the previous value was kept.');
+            persistChatMeta();
+            return { ok: false, reason: 'invalid-store' };
         }
         persistChatMeta();
-        return;
+        return { ok: true };
     }
-    if (_stagedEvidenceMap === null || _stagedEvidenceBase !== live) {
-        // Either nothing was staged since the last commit, or the live value
-        // was replaced underneath us (chat switch / backup restore).
-        // Committing the staged copy now would clobber that replacement with
-        // stale data — refuse closed and drop the edit instead.
-        if (_stagedEvidenceMap !== null) {
-            console.warn('[MWT:Knowledge] Evidence write refused — the evidence map changed underneath an uncommitted edit; the edit was dropped and the current value was kept.');
-            _resetEvidenceStaging();
-        }
-        return;
+    if (_stagedEvidenceMap === null) {
+        // Nothing was staged since the last commit (or the last refusal reset
+        // staging) — there is no edit to commit.
+        return { ok: true };
+    }
+    if (_stagedEvidenceBase !== live) {
+        // The live value was replaced underneath us (chat switch / backup
+        // restore). Committing the staged copy now would clobber that
+        // replacement with stale data — refuse closed and drop the edit
+        // instead.
+        console.warn('[MWT:Knowledge] Evidence write refused — the evidence map changed underneath an uncommitted edit; the edit was dropped and the current value was kept.');
+        _resetEvidenceStaging();
+        return { ok: false, reason: 'store-replaced' };
     }
     const staged = _stagedEvidenceMap;
     const validation = knowledgeEvidenceSchema.validate(staged);
@@ -164,7 +186,7 @@ export function saveEvidenceMap() {
         // module reads next too, instead of the refused mutation persisting in
         // the working copy and being re-proposed on every subsequent save.
         _resetEvidenceStaging();
-        return;
+        return { ok: false, reason: 'validation-fatal' };
     }
     // §5.2: the canonical commit is only allowed to land if rejected records
     // were preserved. A refused quarantine container means they cannot be —
@@ -177,7 +199,7 @@ export function saveEvidenceMap() {
         // Same rule as the fatal refusal above: drop the staged copy so the
         // refused edit does not survive in what later reads hand back.
         _resetEvidenceStaging();
-        return;
+        return { ok: false, reason: 'quarantine-refused', detail: preserved.reason };
     }
     // CHECKED COMMIT: only now does chat metadata change — wholesale, to the
     // canonical form of the staged copy. The live value's previous contents
@@ -215,6 +237,7 @@ export function saveEvidenceMap() {
     }
     _stagedEvidenceBase = committed;
     persistChatMeta();
+    return { ok: true, committed: true };
 }
 
 // ─── Per-NPC evidence file ───────────────────────────────────────────────────
@@ -269,6 +292,194 @@ export function deleteEvidenceFile(name) {
     const map = getEvidenceMap();
     delete map[name];
     saveEvidenceMap();
+}
+
+// ─── Rename / merge support (TODO §1 entity identity service) ────────────────
+//
+// Evidence files are keyed by NPC name in chat metadata, so an identity
+// rename or merge has to re-key them or the dossier/profile machinery silently
+// re-enrolls the NPC with empty evidence — losing every quote receipt the
+// growth system is built on. These helpers exist so identity.js never touches
+// the staged-map internals directly.
+
+/**
+ * Preflight an identity rekey (rename or merge) against the evidence store.
+ *
+ * renameEvidenceFile()/mergeEvidenceFiles() re-key evidence files through the
+ * checked commit seam, and a refused commit leaves every file under its OLD
+ * name. For a rename that strands the file behind the registry's new key
+ * (nothing but the alias keeps it reachable); for a merge it is worse — the
+ * absorbed name no longer has a registry record at all, so its evidence is
+ * orphaned. The identity service therefore asks BEFORE it mutates anything:
+ * when any of these NPCs has evidence to move and the store cannot accept a
+ * write right now, the rename/merge is refused while every surface is still
+ * consistent and can be retried once the store accepts writes again.
+ *
+ * This is a PREFLIGHT, not a guarantee: it sees the refusals that are visible
+ * without doing the work (the §7.5 pause gate). Refusals only the full
+ * validate-and-preserve pass can see (a fatal proposal, a quarantine
+ * container that declines records) are still reported by the checked
+ * saveEvidenceMap() result the re-key helpers propagate.
+ *
+ * @param {...string} names — the NPC name(s) whose evidence files would move
+ * @returns {{ok:boolean, reason?:string, affected?:string[]}} — ok:true when
+ *   no evidence is affected, or the store can accept the re-key write
+ */
+export function canRekeyEvidence(...names) {
+    const map = getEvidenceMap();
+    const affected = names.filter(name => name && map[name] !== undefined);
+    if (affected.length === 0) return { ok: true };
+    if (isStoreWriteBlocked(knowledgeEvidenceSchema.id)) {
+        return { ok: false, reason: 'store-paused', affected };
+    }
+    return { ok: true };
+}
+
+/**
+ * Preflight a RENAME's evidence re-key — canRekeyEvidence's pause gate plus
+ * the destination check renameEvidenceFile() itself makes.
+ *
+ * A file already sitting under the NEW name (typically an orphan left behind
+ * by a removed record) makes renameEvidenceFile() refuse with
+ * `target-exists`: two evidence histories colliding is the merge flow's
+ * decision, not the rename's. Without this preflight that refusal surfaces
+ * only as a warning AFTER the registry has already moved, stranding the old
+ * file behind an alias; with it, the rename refuses up front while every
+ * surface is still consistent, and the collision can be resolved (merge or
+ * clear the orphan) before retrying. The destination check only matters when
+ * there is a file to move — an orphan under the new name with no old-name
+ * file re-keys nothing and does not block the rename.
+ *
+ * @param {string} oldName — the current (canonical) NPC name
+ * @param {string} newName — the new canonical NPC name
+ * @returns {{ok:boolean, reason?:string, affected?:string[]}} — ok:true when
+ *   no evidence is affected, or the re-key write can proceed
+ */
+export function canRenameEvidence(oldName, newName) {
+    const preflight = canRekeyEvidence(oldName);
+    if (!preflight.ok) return preflight;
+    const map = getEvidenceMap();
+    if (map[oldName] && map[newName] !== undefined) {
+        return { ok: false, reason: 'target-exists', affected: [oldName] };
+    }
+    return { ok: true };
+}
+
+/**
+ * Move one NPC's evidence file to a new name (user-approved rename).
+ *
+ * @param {string} oldName — the current (canonical) NPC name
+ * @param {string} newName — the new canonical NPC name
+ * @returns {{ok:boolean, reason?:string, moved:boolean}} — `target-exists`
+ *   refuses rather than overwrite: a destination file means two evidence
+ *   histories are colliding, which is the merge flow's decision, not the
+ *   rename's. A refused commit reports `save-refused:<why>` with moved:false —
+ *   the previous map was kept, so the file is still under `oldName`.
+ */
+export function renameEvidenceFile(oldName, newName) {
+    const map = getEvidenceMap();
+    if (!map[oldName]) return { ok: true, moved: false };
+    if (map[newName]) return { ok: false, reason: 'target-exists', moved: false };
+    map[newName] = { ...map[oldName], npc: newName };
+    delete map[oldName];
+    const commit = saveEvidenceMap();
+    if (!commit.ok) {
+        // The refusal dropped the staged copy, so the live map still carries
+        // the file under the old name — report the refusal, never a success.
+        return { ok: false, reason: `save-refused:${commit.reason}`, moved: false };
+    }
+    return { ok: true, moved: true };
+}
+
+/**
+ * Merge one NPC's evidence file into another's (user-approved merge). Every
+ * observation id from the merged file is NAMESPACED (`<tag>::<id>`) on the way
+ * in: ids only had to be unique per file, and a plain concatenation could
+ * collide — silently orphaning the consolidated → raw `sources` references
+ * that make an observation traceable to its quote. The same rewrite is applied
+ * to both sides of every reference, so links survive verbatim.
+ *
+ * A keep file that does not exist yet is a pure move. Capture/backfill
+ * watermarks keep the EARLIER cursor: re-covering messages is safe (captures
+ * are quote-verified and deduped), skipping ones only the merged identity had
+ * seen is not.
+ *
+ * @param {string} keepName — the surviving NPC's canonical name
+ * @param {string} mergeName — the absorbed NPC's canonical name
+ * @param {string} [tag] — namespace tag for merged ids (defaults to mergeName;
+ *   the identity service passes the absorbed entityId so the trail survives
+ *   even a later rename of the merged-away name)
+ * @returns {{ok:boolean, merged?:boolean, moved?:boolean, recordsMerged?:number}}
+ */
+export function mergeEvidenceFiles(keepName, mergeName, tag) {
+    const map = getEvidenceMap();
+    const mergeFile = map[mergeName];
+    if (!mergeFile) return { ok: true, merged: false };
+    const nsTag = (typeof tag === 'string' && tag.trim()) ? tag.trim() : mergeName;
+
+    if (!map[keepName]) {
+        map[keepName] = { ...mergeFile, npc: keepName };
+        delete map[mergeName];
+        const commit = saveEvidenceMap();
+        if (!commit.ok) {
+            // Refused — the live map was kept, so the file is still under
+            // mergeName. Report it; never claim the move happened.
+            return { ok: false, reason: `save-refused:${commit.reason}`, moved: false };
+        }
+        return { ok: true, moved: true };
+    }
+
+    const keepFile = map[keepName];
+    const rewrite = id => (typeof id === 'string' ? `${nsTag}::${id}` : id);
+    const remapObservation = obs => (obs && typeof obs === 'object' ? { ...obs, id: rewrite(obs.id) } : obs);
+    const remapConsolidated = obs => (obs && typeof obs === 'object'
+        ? {
+            ...obs,
+            id: rewrite(obs.id),
+            sources: Array.isArray(obs.sources) ? obs.sources.map(rewrite) : obs.sources,
+        }
+        : obs);
+
+    const keep = { ...keepFile };
+    let recordsMerged = 0;
+    for (const tier of ['raw', 'archivedRaw', 'userOverrides']) {
+        const incoming = Array.isArray(mergeFile[tier]) ? mergeFile[tier].map(remapObservation) : [];
+        recordsMerged += incoming.length;
+        keep[tier] = [...(Array.isArray(keepFile[tier]) ? keepFile[tier] : []), ...incoming];
+    }
+    const incomingConsolidated = Array.isArray(mergeFile.consolidated)
+        ? mergeFile.consolidated.map(remapConsolidated)
+        : [];
+    recordsMerged += incomingConsolidated.length;
+    keep.consolidated = [
+        ...(Array.isArray(keepFile.consolidated) ? keepFile.consolidated : []),
+        ...incomingConsolidated,
+    ];
+
+    const keepMeta = { ...(keepFile.meta ?? {}) };
+    const mergeMeta = mergeFile.meta ?? {};
+    for (const key of ['lastCaptureTs', 'lastBackfillTs']) {
+        const a = keepMeta[key];
+        const b = mergeMeta[key];
+        keepMeta[key] = (typeof a === 'number' && typeof b === 'number') ? Math.min(a, b) : (a ?? b);
+    }
+    keepMeta.updatedAt = Date.now();
+    keepMeta.mergedFrom = [
+        ...(Array.isArray(keepMeta.mergedFrom) ? keepMeta.mergedFrom : []),
+        { npc: mergeName, at: Date.now() },
+    ];
+    keep.meta = keepMeta;
+
+    map[keepName] = keep;
+    delete map[mergeName];
+    const commit = saveEvidenceMap();
+    if (!commit.ok) {
+        // Refused — the live map was kept, so BOTH files survive under their
+        // own names (nothing was lost, nothing was merged). Report it; never
+        // claim the merge happened.
+        return { ok: false, reason: `save-refused:${commit.reason}`, merged: false };
+    }
+    return { ok: true, merged: true, recordsMerged };
 }
 
 /**

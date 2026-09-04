@@ -20,7 +20,7 @@ import {
     HISTORY_KEY_PREFIX,
     state,
 } from './state.js';
-import { getRegistry, normalizeRegistryName, isUnambiguousNpcAlias } from './registry.js';
+import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
@@ -213,15 +213,18 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
             // already content-verifies; normal updates were LESS protected.
             const existingComment = entries[existingUid].comment || '';
             const expectedName = String(name || '');
-            // KNOWLEDGE-01 (follow-up): compare through the shared contextual
-            // NPC-alias rule, not an exact string. A case/whitespace gap — OR an
-            // unambiguous alias spelling ("Sophie Simpson" for registry key
-            // "Sophie", which importFromLorebooks legitimately links) — is the
-            // same NPC. An exact-only check detached that valid uid and
-            // re-created the duplicate this guard exists to prevent. An empty
-            // comment is unlabelled, not a mismatch, so it still adopts.
+            // KNOWLEDGE-01 (follow-up): compare through the shared NPC identity
+            // rule, not an exact string. A case/whitespace gap, an unambiguous
+            // alias spelling ("Sophie Simpson" for registry key "Sophie", which
+            // importFromLorebooks legitimately links), OR a registry-proven
+            // alias ("The Vixen" for "Mara" after a rename — the spellings
+            // share no token, but the registry links both to one record) is
+            // the same NPC. An exact-only check detached valid uids and
+            // re-created the duplicate this guard exists to prevent; a
+            // heuristic-only check still did after an arbitrary rename. An
+            // empty comment is unlabelled, not a mismatch, so it still adopts.
             const commentN = normalizeRegistryName(existingComment);
-            if (commentN && !isUnambiguousNpcAlias(existingComment, expectedName,
+            if (commentN && !isSameNpcByName(existingComment, expectedName,
                 Object.values(entries).map(entry => entry?.comment))) {
                 console.warn(
                     `[MWT:Knowledge] Registry uid ${existingUid} for "${expectedName.trim()}" points at ` +
@@ -303,6 +306,61 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
 }
 
 /**
+ * Relabel a lorebook entry (comment ± keywords) WITHOUT touching its content —
+ * the identity service's rename/merge seam (TODO §1).
+ *
+ * writeToLorebook cannot serve this purpose: its KNOWLEDGE-01 guard verifies
+ * the entry's label against the NAME it is given, so a genuine rename
+ * ("Sophie" → "Countess Beaumont") would read as a stale uid, detach it, and
+ * create the exact duplicate the guard exists to prevent. This function
+ * verifies the label against the OLD name and then writes the NEW one.
+ *
+ * @param {string} bookName — the book holding the entry (Knowledge or NPC
+ *   Profiles book — resolution belongs to the caller)
+ * @param {number} uid — entry UID
+ * @param {string} newLabel — the new comment/label
+ * @param {string|null} [expectedName] — the label the entry must currently
+ *   carry (same contextual NPC-alias verification as the write paths); null
+ *   skips the check for callers that have already verified identity
+ * @param {string[]|null} [keywords] — replacement primary keywords, when given
+ * @returns {Promise<{success:boolean, uid?:number, error?:string}>}
+ */
+export async function relabelLorebookEntry(bookName, uid, newLabel, expectedName = null, keywords = null) {
+    if (!state.wiScript) return { success: false, error: 'world-info.js not loaded' };
+    if (!Number.isInteger(uid) || uid < 0) return { success: false, error: `Invalid uid ${uid}.` };
+    const label = String(newLabel ?? '').trim();
+    if (!label) return { success: false, error: 'New label must be a non-empty string.' };
+    try {
+        const wi = await state.wiScript.loadWorldInfo(bookName);
+        const entry = wi?.entries?.[uid];
+        if (!entry) return { success: false, error: `UID ${uid} not found in "${bookName}".` };
+        if (isStoreEntry(entry)) {
+            return { success: false, error: `UID ${uid} is the ${STORE_SENTINEL} entry — refusing to relabel module bookkeeping.` };
+        }
+        if (expectedName !== null && expectedName !== undefined) {
+            const comment = entry.comment || '';
+            // Same NPC identity rule as the write paths: an alias spelling of
+            // the expected name still verifies — including a registry-proven
+            // alias, so a relabel retried after a partially applied rename
+            // (the entry already carries the new spelling) is idempotent; an
+            // empty comment is unlabelled, not a mismatch, and adopts.
+            if (comment && !isSameNpcByName(comment, expectedName,
+                Object.values(wi.entries).map(candidate => candidate?.comment))) {
+                return { success: false, error: `UID ${uid} is labelled "${comment}", not "${expectedName}" — refusing to relabel another NPC's entry.` };
+            }
+        }
+        entry.comment = label;
+        if (Array.isArray(keywords) && keywords.length > 0) entry.key = keywords;
+        applyStoreToWorldInfo(bookName, wi);
+        await saveBookNow(state.wiScript, bookName, wi);
+        markStoreClean(bookName);
+        return { success: true, uid };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+/**
  * Load an NPC entry's content from the Knowledge Tracker lorebook.
  *
  * @param {number} uid — entry UID
@@ -323,11 +381,12 @@ export async function loadEntryContent(uid, expectedName) {
         const entry = wi?.entries?.[uid];
         if (!entry) return null;
         if (expectedName !== undefined && expectedName !== null) {
-            // Same contextual NPC-alias rule as writeToLorebook's KNOWLEDGE-01: an
+            // Same NPC identity rule as writeToLorebook's KNOWLEDGE-01: an
             // alias spelling of the canonical key ("Sophie Simpson" for
-            // "Sophie") still verifies, but a genuinely different NPC — the
-            // Mikhail/Marcus symptom — is refused.
-            if (!isUnambiguousNpcAlias(entry.comment, expectedName,
+            // "Sophie") — or a registry-proven alias ("The Vixen" for "Mara"
+            // after a rename) — still verifies, but a genuinely different NPC
+            // — the Mikhail/Marcus symptom — is refused.
+            if (!isSameNpcByName(entry.comment, expectedName,
                 Object.values(wi?.entries || {}).map(candidate => candidate?.comment))) {
                 console.warn(
                     `[MWT:Knowledge] Refusing to load uid ${uid} for "${String(expectedName).trim()}" — ` +
@@ -422,12 +481,14 @@ export async function writeProfileToLorebook(name, content, existingUid) {
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const existingComment = entries[existingUid].comment || '';
             const expectedName = String(name || '');
-            // KNOWLEDGE-01 (follow-up): same shared contextual NPC-alias rule as
-            // writeToLorebook — a case/whitespace difference OR an unambiguous
-            // alias spelling of the registry key is the same NPC, not a stale
-            // uid. An empty comment is unlabelled, not a mismatch.
+            // KNOWLEDGE-01 (follow-up): same shared NPC identity rule as
+            // writeToLorebook — a case/whitespace difference, an unambiguous
+            // alias spelling of the registry key, OR a registry-proven alias
+            // ("The Vixen" entry for a save that spells "Mara" after a
+            // rename) is the same NPC, not a stale uid. An empty comment is
+            // unlabelled, not a mismatch.
             const commentN = normalizeRegistryName(existingComment);
-            if (commentN && !isUnambiguousNpcAlias(existingComment, expectedName,
+            if (commentN && !isSameNpcByName(existingComment, expectedName,
                 Object.values(entries).map(entry => entry?.comment))) {
                 console.warn(
                     `[MWT:Knowledge] Profile uid ${existingUid} for "${expectedName.trim()}" points at ` +

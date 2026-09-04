@@ -370,7 +370,9 @@ describe('unified backup Phase 2a collection/export', () => {
             'worldState', 'chronicle', 'knowledgeStore',
         ]);
         expect(result.sections.worldState.data).toEqual({ text: 'state' });
-        expect(result.sections.knowledgeStore.storeVersion).toBe(1);
+        // The cache seed carries no embedded version, so the wrapper mirrors
+        // the schema's currentVersion (knowledgeStore v2).
+        expect(result.sections.knowledgeStore.storeVersion).toBe(2);
         // The store version is carried by the wrapper
         // (storeVersion) only — it is NOT duplicated inside `data`.
         expect(result.sections.knowledgeStore.data).toEqual({

@@ -401,7 +401,9 @@ describe('restore/quarantine integrity fixes', () => {
         expect(knowledgeItems).toHaveLength(1);
         expect(knowledgeItems[0].store).toBe('knowledgeStore');
         expect(knowledgeItems[0].reasonCode).toBe('registry-invalid-uid');
-        expect(knowledgeItems[0].raw).toEqual({ uid: -1 });
+        // The v1 → v2 identity migration stamps entityId/aliases BEFORE the
+        // validator quarantines the record, so the preserved raw carries them.
+        expect(knowledgeItems[0].raw).toMatchObject({ uid: -1 });
         expect(knowledgeItems[0].path[0]).toBe('registry');
         // …stateRegistry findings → the State Tracker book…
         const stateItems = getStoreQuarantineItems('State Tracker');

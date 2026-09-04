@@ -6,7 +6,7 @@
  * registry.
  */
 
-import { normalizeRegistryName, isUnambiguousNpcAlias } from './registry.js';
+import { normalizeRegistryName, isUnambiguousNpcAlias, resolvesToSameRegistryRecord } from './registry.js';
 import { isStoreEntry } from './store.js';
 import { TRACKER_SENTINEL } from './state.js';
 
@@ -45,15 +45,21 @@ export function findDestinationEntryUid(entries, name, { kind = 'npc' } = {}) {
  *
  * Unlike {@link findDestinationEntryUid} (exact normalized label, first hit,
  * used by backup restore where strictness is the safer default), this matches
- * on the shared contextual NPC-alias rule and FAILS CLOSED on ambiguity:
+ * on the NPC identity rules and FAILS CLOSED on ambiguity:
  *   - exact-label matches win outright; the lowest uid is adopted so a book
  *     that already holds several identical labels CONVERGES on one entry
  *     instead of growing by one more on every scan;
- *   - otherwise a single alias match ("Sophie Simpson" for "Sophie") is
- *     adopted;
- *   - two or more DIFFERENT alias matches ("Sophie Simpson" and "Sophie
- *     Sinclair" for "Sophie") are two different people — return null and let
- *     the caller create, rather than write into a stranger's entry.
+ *   - registry-PROVEN matches (both spellings resolve to the same registry
+ *     record — e.g. an entry relabelled "The Vixen" for an update that still
+ *     spells the NPC "Mara" after a rename) are treated exactly like exact
+ *     matches: the registry is the identity authority, so several of them are
+ *     leftover duplicates of one NPC, not strangers, and the lowest uid wins;
+ *   - otherwise a single heuristic alias match ("Sophie Simpson" for
+ *     "Sophie") is adopted;
+ *   - two or more DIFFERENT heuristic-only alias matches ("Sophie Simpson"
+ *     and "Sophie Sinclair" for "Sophie") are two different people — return
+ *     null and let the caller create, rather than write into a stranger's
+ *     entry.
  *
  * Unlabelled and store entries are never adoptable.
  *
@@ -70,19 +76,28 @@ export function findEntryUidByNpcIdentity(entries, name) {
         if (isStoreEntry(entry)) continue;
         const label = String(entry?.comment ?? '').trim();
         if (!label) continue;
-        if (!isUnambiguousNpcAlias(label, name, labels)) continue;
+        // Registry-proven ("The Vixen" for "Mara" after a rename) is evidence,
+        // not a heuristic — such matches join the certain tier below instead
+        // of the fail-closed ambiguity rule.
+        const proven = resolvesToSameRegistryRecord(label, name);
+        if (!proven && !isUnambiguousNpcAlias(label, name, labels)) continue;
         const uid = Number(entry?.uid ?? key);
         if (!Number.isInteger(uid) || uid < 0) continue;
-        matches.push({ uid, label, exact: normalizeRegistryName(label) === wanted });
+        matches.push({ uid, label, proven, exact: normalizeRegistryName(label) === wanted });
     }
     if (matches.length === 0) return null;
 
-    const exact = matches.filter(m => m.exact).sort((a, b) => a.uid - b.uid);
-    if (exact.length > 0) {
-        return { uid: exact[0].uid, label: exact[0].label, exact: true, duplicates: exact.length };
+    // Certain tier: exact labels AND registry-proven ones, lowest uid first —
+    // they provably are this NPC, so several of them are duplicate entries to
+    // converge on, not strangers to refuse.
+    const certain = matches
+        .filter(m => m.exact || m.proven)
+        .sort((a, b) => a.uid - b.uid);
+    if (certain.length > 0) {
+        return { uid: certain[0].uid, label: certain[0].label, exact: certain[0].exact, duplicates: certain.length };
     }
-    // Alias-only: one candidate is an unambiguous alias; several are strangers
-    // who merely share a given name.
+    // Heuristic-only: one candidate is an unambiguous alias; several are
+    // strangers who merely share a given name.
     if (matches.length === 1) {
         return { uid: matches[0].uid, label: matches[0].label, exact: false, duplicates: 1 };
     }

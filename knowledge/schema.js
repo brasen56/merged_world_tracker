@@ -51,8 +51,18 @@ export const COUNTERS_META_KEY = 'knowledge_tracker_counters';
 /** Marks the lorebook entry that holds a book's store. Matched as a PREFIX. */
 export const STORE_SENTINEL = '[MWT:store]';
 
-/** Lorebook-store version — bumped only on a breaking change to the shape. */
-export const KNOWLEDGE_STORE_VERSION = 1;
+/**
+ * Lorebook-store version — bumped only on a breaking change to the shape.
+ *
+ * v2 (entity identity service, TODO §1): registry records gain a stable
+ * `entityId` and explicit `aliases[]`, relationship edges gain stable
+ * `subjectEntityId`/`targetEntityId` pointers, and the v1 → v2 migration
+ * stamps both onto existing data. Every new field stays OPTIONAL at
+ * validation — a record or edge without them is legacy-shaped, never invalid —
+ * while the migration (loads) and saveRegistry's stamping (runtime writes)
+ * converge every store on the full shape.
+ */
+export const KNOWLEDGE_STORE_VERSION = 2;
 
 /**
  * NPC-registry key normalization for the store schema's §6.7 checks: the
@@ -72,6 +82,105 @@ export const KNOWLEDGE_STORE_VERSION = 1;
  */
 export function normalizeStoreKeyName(name) {
     return String(name ?? '').toLowerCase().trim();
+}
+
+// ─── Entity identity fields (TODO §1 entity identity + alias service) ────────
+//
+// Registry names are DISPLAY state: the model spells them differently, users
+// rename characters, and one NPC can arrive under several spellings. The
+// entityId is the stable identity anchor underneath — assigned once, never
+// re-derived from the name, carried across renames and merges — so edges,
+// evidence, and audit trails can survive a display-name change. Aliases are
+// the user-approved form of "these spellings are the same entity" (the
+// resolver honors them; the heuristic given-name rule stays for unknowns).
+
+/** Prefix every generated entity id carries. */
+export const ENTITY_ID_PREFIX = 'mwt_';
+
+/**
+ * Generate a fresh canonical entity id: `mwt_<time36>_<rand>`. Uniqueness
+ * within a registry is guaranteed by the caller's used-set loop
+ * (ensureRegistryIdentityFields), not by entropy alone — a same-millisecond
+ * registration burst shares the time component.
+ *
+ * @returns {string}
+ */
+export function generateEntityId() {
+    return `${ENTITY_ID_PREFIX}${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Stamp the identity fields every v2 registry record carries — `entityId` and
+ * `aliases: []` — onto records that lack them, skipping non-object records
+ * (the validator quarantines those whole). Idempotent: an existing entityId is
+ * NEVER replaced, even if duplicated elsewhere — duplicate claims are the
+ * validator's repair, not the stamper's guess.
+ *
+ * MUTATES the records it is given. Runtime callers pass the live map they own
+ * (saveRegistry); the v1 → v2 migration copies first (see
+ * migrateKnowledgeStoreV1ToV2).
+ *
+ * @param {object} registry — the registry map ({ [npcName]: info })
+ * @param {{generate?: () => string}} [options] — test hook for deterministic ids
+ * @returns {boolean} true when anything was stamped
+ */
+export function ensureRegistryIdentityFields(registry, { generate = generateEntityId } = {}) {
+    if (!isObject(registry)) return false;
+    const used = new Set();
+    for (const record of Object.values(registry)) {
+        if (isObject(record) && isNonEmptyString(record.entityId)) used.add(record.entityId);
+    }
+    let changed = false;
+    for (const record of Object.values(registry)) {
+        if (!isObject(record)) continue;
+        if (!isNonEmptyString(record.entityId)) {
+            let id = generate();
+            while (used.has(id)) id = generate();
+            used.add(id);
+            record.entityId = id;
+            changed = true;
+        }
+        if (!Array.isArray(record.aliases)) {
+            record.aliases = [];
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+/**
+ * Backfill stable entity pointers onto relationship edges that lack them, from
+ * the registry in the same store: a map key's edges get that NPC's
+ * `subjectEntityId`, and each edge's target name resolves (exact key only)
+ * to a `targetEntityId`. Never overwrites an existing pointer — the identity
+ * a previous write stamped is authoritative.
+ *
+ * MUTATES the edges it is given (callers own the data: the migration copies
+ * first, runtime callers mutate the live store then save).
+ *
+ * @param {object} data — the lorebook store value ({ registry, relationships, … })
+ * @returns {boolean} true when any pointer was stamped
+ */
+export function backfillRelationshipEntityIds(data) {
+    if (!isObject(data) || !isObject(data.registry) || !isObject(data.relationships)) return false;
+    let changed = false;
+    for (const [name, edges] of Object.entries(data.relationships)) {
+        if (!Array.isArray(edges)) continue;
+        const subjectId = data.registry[name]?.entityId;
+        for (const edge of edges) {
+            if (!isObject(edge)) continue;
+            if (subjectId && !isNonEmptyString(edge.subjectEntityId)) {
+                edge.subjectEntityId = subjectId;
+                changed = true;
+            }
+            const targetId = data.registry[edge.target]?.entityId;
+            if (targetId && !isNonEmptyString(edge.targetEntityId)) {
+                edge.targetEntityId = targetId;
+                changed = true;
+            }
+        }
+    }
+    return changed;
 }
 
 /**
@@ -130,6 +239,23 @@ export function checkRegistryRecord(record) {
         && (!Number.isInteger(record.profileUid) || record.profileUid < 0)) {
         return { code: 'registry-invalid-profile-uid', message: 'Registry entry profileUid must be null or a non-negative integer.' };
     }
+    // Entity-identity fields (TODO §1): `entityId` is the stable id that
+    // survives renames/merges, `aliases` the user-approved alternate spellings
+    // the resolver honors, `mergedFrom` the merge audit trail. All are OPTIONAL
+    // — a record without them is legacy-shaped, never invalid — but a PRESENT
+    // malformed value is a pointer no MWT build could ever have written.
+    // `mergedFrom` is the deliberate exception: its shape check lives in
+    // validateKnowledgeStoreData as a REPAIR (the trail is stripped, the NPC
+    // stays live), because a finding here quarantines the WHOLE record — and
+    // the merge writer itself can emit `entityId: null` when the absorbed
+    // record predates ids, so the shape is reachable from live code.
+    if (record.entityId !== undefined && !isNonEmptyString(record.entityId)) {
+        return { code: 'registry-invalid-entity-id', message: 'Registry entry entityId must be a non-empty string.' };
+    }
+    if (record.aliases !== undefined && (!Array.isArray(record.aliases)
+        || record.aliases.some(alias => !isNonEmptyString(alias)))) {
+        return { code: 'registry-aliases-invalid', message: 'Registry entry aliases must be an array of non-empty strings.' };
+    }
     return null;
 }
 
@@ -144,6 +270,14 @@ export function checkRelationshipEdge(edge) {
     if (!isNonEmptyString(edge.type)) return { code: 'relationship-missing-type', message: 'Relationship edge type must be a non-empty string.' };
     if (edge.source !== undefined && !RELATIONSHIP_SOURCE_VALUES.includes(edge.source)) {
         return { code: 'relationship-invalid-source', message: `Relationship edge source must be "auto" or "manual" (or absent).` };
+    }
+    // Stable entity pointers (TODO §1): the subject/target entity ids outlive
+    // the display names, so a rename or merge never orphans an edge. Optional
+    // for the same legacy-shaped reason as the registry's entityId.
+    for (const key of ['subjectEntityId', 'targetEntityId']) {
+        if (edge[key] !== undefined && !isNonEmptyString(edge[key])) {
+            return { code: 'relationship-invalid-entity-id', message: 'Relationship edge entity ids must be non-empty strings.' };
+        }
     }
     return null;
 }
@@ -309,6 +443,85 @@ export function validateKnowledgeStoreData(data) {
             } else {
                 claimed.add(normalized);
             }
+        }
+    }
+    // Entity-identity cross-checks (TODO §1 identity service). Both are
+    // REPAIRS, not quarantines: the NPC record itself is fine — only the
+    // identity CLAIM conflicts. Dropping the claim keeps the NPC live while
+    // the identity service re-stamps a clean one on its next write.
+    if (accepted.registry) {
+        // Merge audit trails (TODO §1): a malformed `mergedFrom` is a REPAIR,
+        // never a quarantine — the trail is the least valuable field on the
+        // record, and the merge writer itself can produce the shape (the
+        // absorbed record predating entity ids). The field is stripped with
+        // the raw value preserved in the issue; the NPC record stays live.
+        for (const [name, record] of Object.entries(accepted.registry)) {
+            if (record.mergedFrom === undefined) continue;
+            const validTrail = Array.isArray(record.mergedFrom)
+                && record.mergedFrom.every(entry => isObject(entry)
+                    && isNonEmptyString(entry.entityId)
+                    && isNonEmptyString(entry.name)
+                    && isFiniteNumber(entry.at));
+            if (validTrail) continue;
+            issues.push(repairIssue(
+                'registry-merged-from-invalid',
+                ['registry', name, 'mergedFrom'],
+                `"${name}"'s merge audit trail (mergedFrom) was malformed and was removed; the NPC record stays live.`,
+                record.mergedFrom,
+                name,
+            ));
+            const repaired = { ...record };
+            delete repaired.mergedFrom;
+            accepted.registry[name] = repaired;
+        }
+        // Two records claiming one entityId: the first (insertion order) keeps
+        // it, later claimants lose theirs — both NPCs stay live either way.
+        const claimedIds = new Set();
+        for (const [name, record] of Object.entries(accepted.registry)) {
+            if (!isNonEmptyString(record.entityId)) continue;
+            if (claimedIds.has(record.entityId)) {
+                issues.push(repairIssue(
+                    'registry-duplicate-entity-id',
+                    ['registry', name, 'entityId'],
+                    `"${name}" claimed entityId "${record.entityId}" already owned by an earlier record; the claim was dropped and can be re-stamped.`,
+                    record,
+                ));
+                const repaired = { ...record };
+                delete repaired.entityId;
+                accepted.registry[name] = repaired;
+            } else {
+                claimedIds.add(record.entityId);
+            }
+        }
+        // Alias collisions: an alias equal to a canonical key (normalized), to
+        // the record's OWN key, or to another record's alias would make the
+        // resolver's alias step ambiguous or hijack a canonical lookup. The
+        // first claim wins; the loser's alias is stripped, record preserved.
+        const claimedNames = new Set(Object.keys(accepted.registry).map(normalizeStoreKeyName));
+        const claimedAliases = new Map();
+        for (const [name, record] of Object.entries(accepted.registry)) {
+            if (!Array.isArray(record.aliases) || record.aliases.length === 0) continue;
+            const kept = [];
+            let stripped = false;
+            for (const alias of record.aliases) {
+                const normalized = normalizeStoreKeyName(alias);
+                if (normalized === normalizeStoreKeyName(name)
+                    || claimedNames.has(normalized)
+                    || claimedAliases.has(normalized)
+                    || kept.some(existing => normalizeStoreKeyName(existing) === normalized)) {
+                    issues.push(repairIssue(
+                        'registry-alias-collision',
+                        ['registry', name, 'aliases'],
+                        `Alias "${alias}" on "${name}" collides with a canonical name or another alias; it was removed.`,
+                        alias,
+                    ));
+                    stripped = true;
+                } else {
+                    kept.push(alias);
+                    claimedAliases.set(normalized, name);
+                }
+            }
+            if (stripped) accepted.registry[name] = { ...record, aliases: kept };
         }
     }
     if (data.relationships !== undefined) {
@@ -514,23 +727,93 @@ export function migrateKnowledgeStoreV0ToV1(data) {
     // returned untouched for the validation gate to block — never replaced
     // with an empty store here.
     if (!isObject(data)) return { data, issues: [] };
-    const next = { ...data };
     const issues = [];
-    if (isObject(next.registry)) {
-        for (const name of Object.keys(next.registry)) {
-            if (name.startsWith(STORE_SENTINEL)) {
-                issues.push(repairIssue(
-                    'registry-store-ghost',
-                    ['registry', name],
-                    `Removed the "${STORE_SENTINEL}" ghost record left by a pre-fix lorebook import.`,
-                    next.registry[name],
-                    name,
-                ));
-                delete next.registry[name];
-            }
+    const next = { ...data };
+    scrubStoreGhostRecords(next, issues);
+    if (next.version === undefined) next.version = KNOWLEDGE_STORE_VERSION;
+    return { data: next, issues };
+}
+
+/**
+ * Remove registry records whose NAME is the store sentinel — ghosts left by
+ * "Import from Lorebook" runs that predate isStoreEntry() — recording each
+ * removal as an explicit repair (the complete raw record preserved). Shared by
+ * the v0 → v1 and v1 → v2 migrations: a v1-era book reaches the v2 chain
+ * without ever running v0 → v1, and the runtime's lazy scrub only fires for
+ * CURRENT-version stores, so the migration must carry the repair forward.
+ */
+function scrubStoreGhostRecords(next, issues) {
+    if (!isObject(next.registry)) return;
+    for (const name of Object.keys(next.registry)) {
+        if (name.startsWith(STORE_SENTINEL)) {
+            issues.push(repairIssue(
+                'registry-store-ghost',
+                ['registry', name],
+                `Removed the "${STORE_SENTINEL}" ghost record left by a pre-fix lorebook import.`,
+                next.registry[name],
+                name,
+            ));
+            delete next.registry[name];
         }
     }
-    if (next.version === undefined) next.version = KNOWLEDGE_STORE_VERSION;
+}
+
+/**
+ * v1 -> v2 lorebook store (TODO §1 entity identity service): stamp the stable
+ * `entityId` + `aliases: []` onto every registry record, scrub any
+ * `[MWT:store]` ghost records the v1 era could still carry (the lazy runtime
+ * scrub only fires at the current version), and backfill the stable
+ * `subjectEntityId`/`targetEntityId` pointers onto relationship edges from
+ * those ids. Copy-on-write throughout — a migration step must never mutate its
+ * input (design §4.2), so stamped records/edges are new objects even though
+ * prepareStore hands the step an already-cloned working value.
+ *
+ * Present-but-invalid identity values are left for the v2 validator to
+ * quarantine (the same discipline v0 -> v1 applies to `version`).
+ */
+export function migrateKnowledgeStoreV1ToV2(data) {
+    // Fatal-root policy (design §3.5, category 4): a non-object root is
+    // returned untouched for the validation gate to block — never replaced
+    // with an empty store here.
+    if (!isObject(data)) return { data, issues: [] };
+    const issues = [];
+    const next = { ...data };
+    scrubStoreGhostRecords(next, issues);
+    if (isObject(next.registry)) {
+        const used = new Set();
+        for (const record of Object.values(next.registry)) {
+            if (isObject(record) && isNonEmptyString(record.entityId)) used.add(record.entityId);
+        }
+        const stamped = {};
+        for (const [name, record] of Object.entries(next.registry)) {
+            if (!isObject(record)) { stamped[name] = record; continue; }
+            let entityId = record.entityId;
+            if (!isNonEmptyString(entityId)) {
+                entityId = generateEntityId();
+                while (used.has(entityId)) entityId = generateEntityId();
+                used.add(entityId);
+            }
+            stamped[name] = record.entityId === entityId && Array.isArray(record.aliases)
+                ? record
+                : { ...record, entityId, ...(Array.isArray(record.aliases) ? {} : { aliases: [] }) };
+        }
+        next.registry = stamped;
+    }
+    if (isObject(next.relationships)) {
+        const cloned = {};
+        for (const [name, edges] of Object.entries(next.relationships)) {
+            cloned[name] = Array.isArray(edges)
+                ? edges.map(edge => (isObject(edge) ? { ...edge } : edge))
+                : edges;
+        }
+        next.relationships = cloned;
+        backfillRelationshipEntityIds(next);
+    }
+    // Same version discipline as v0 -> v1: stamp only the honest transitions.
+    // An absent or v1 value becomes 2; anything else (including a future
+    // integer, which the gate would have refused anyway) is left for the
+    // validator to report.
+    if (next.version === undefined || next.version === 1) next.version = KNOWLEDGE_STORE_VERSION;
     return { data: next, issues };
 }
 
@@ -594,7 +877,7 @@ export const knowledgeStoreSchema = defineStoreSchema({
     location: Object.freeze({ kind: 'lorebook-entry', entryCommentPrefix: STORE_SENTINEL }),
     currentVersion: KNOWLEDGE_STORE_VERSION,
     createDefault: () => ({ version: KNOWLEDGE_STORE_VERSION }),
-    migrations: { 0: migrateKnowledgeStoreV0ToV1 },
+    migrations: { 0: migrateKnowledgeStoreV0ToV1, 1: migrateKnowledgeStoreV1ToV2 },
     validate: validateKnowledgeStoreData,
     policy: defineIssuePolicy({
         fatal: [
@@ -609,6 +892,8 @@ export const knowledgeStoreSchema = defineStoreSchema({
             'registry-not-object',
             'registry-invalid-uid',
             'registry-invalid-profile-uid',
+            'registry-invalid-entity-id',
+            'registry-aliases-invalid',
             'registry-name-collides',
             'relationships-not-object',
             'relationships-not-array',
@@ -616,6 +901,7 @@ export const knowledgeStoreSchema = defineStoreSchema({
             'relationship-missing-target',
             'relationship-missing-type',
             'relationship-invalid-source',
+            'relationship-invalid-entity-id',
             'stance-not-string',
             'stance-source-invalid',
             'store-version-invalid',
@@ -634,6 +920,12 @@ export const knowledgeStoreSchema = defineStoreSchema({
             'fingerprint-mismatch',
             // The recorded [MWT:store] ghost removal (design §6.7).
             'registry-store-ghost',
+            // Entity-identity repairs (TODO §1): a conflicting claim or a
+            // malformed merge trail is dropped, the NPC record stays live and
+            // the raw value is preserved.
+            'registry-duplicate-entity-id',
+            'registry-alias-collision',
+            'registry-merged-from-invalid',
         ],
     }),
 });

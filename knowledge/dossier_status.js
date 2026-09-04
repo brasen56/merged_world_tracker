@@ -150,3 +150,82 @@ export function deleteDossierFieldStatus(name) {
     return true;
 }
 
+// ─── Rename / merge support (TODO §1 entity identity service) ────────────────
+
+/**
+ * Move one NPC's per-field dossier watermarks to a new name (user-approved
+ * rename). Same write-seam contract as the functions above: refused (previous
+ * value kept) while the counters store is paused.
+ *
+ * @param {string} oldName
+ * @param {string} newName
+ * @returns {{ok:boolean, reason?:string, moved:boolean}} — `target-exists`
+ *   refuses rather than overwrite a destination NPC's watermarks.
+ */
+export function renameDossierFieldStatus(oldName, newName) {
+    const meta = getChatMeta();
+    if (!meta) return { ok: false, reason: 'no-metadata', moved: false };
+    if (isStoreWriteBlocked(knowledgeCountersSchema.id)) {
+        console.warn('[MWT:Knowledge] Dossier field-status rename refused — the counters store is paused for this chat (schema preparation); the previous value was kept.');
+        return { ok: false, reason: 'paused', moved: false };
+    }
+    const current = meta[COUNTERS_META_KEY];
+    const existing = current?.[DOSSIER_STATUS_SUBKEY];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing) || !(oldName in existing)) {
+        return { ok: true, moved: false };
+    }
+    if (newName in existing) return { ok: false, reason: 'target-exists', moved: false };
+    const nextMap = { ...existing, [newName]: existing[oldName] };
+    delete nextMap[oldName];
+    const next = prepareNextStoreValue(knowledgeCountersSchema, current, {
+        [DOSSIER_STATUS_SUBKEY]: nextMap,
+    });
+    if (!next.ok) {
+        console.warn('[MWT:Knowledge] Dossier field-status rename refused; the previous value was kept.', next.issues);
+        return { ok: false, reason: 'validation-refused', moved: false };
+    }
+    meta[COUNTERS_META_KEY] = next.data;
+    persistChatMeta();
+    return { ok: true, moved: true };
+}
+
+/**
+ * Merge one NPC's per-field dossier watermarks into another's (user-approved
+ * merge). The keep NPC's stamps win; fields it never tracked are filled from
+ * the absorbed NPC's map so staleness history is not silently reset.
+ *
+ * @param {string} keepName
+ * @param {string} mergeName
+ * @returns {{ok:boolean, reason?:string, merged:boolean, fieldsFilled?:number}}
+ */
+export function mergeDossierFieldStatus(keepName, mergeName) {
+    const meta = getChatMeta();
+    if (!meta) return { ok: false, reason: 'no-metadata', merged: false };
+    if (isStoreWriteBlocked(knowledgeCountersSchema.id)) {
+        console.warn('[MWT:Knowledge] Dossier field-status merge refused — the counters store is paused for this chat (schema preparation); the previous value was kept.');
+        return { ok: false, reason: 'paused', merged: false };
+    }
+    const current = meta[COUNTERS_META_KEY];
+    const existing = current?.[DOSSIER_STATUS_SUBKEY];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing) || !(mergeName in existing)) {
+        return { ok: true, merged: false };
+    }
+    // Keep's stamps win; fields keep never tracked are filled from the
+    // absorbed NPC's map (spread order: merge's first, keep's layered on top).
+    const keepStamps = (existing[keepName] && typeof existing[keepName] === 'object') ? existing[keepName] : {};
+    const mergeStamps = (existing[mergeName] && typeof existing[mergeName] === 'object') ? existing[mergeName] : {};
+    const merged = { ...existing, [keepName]: { ...mergeStamps, ...keepStamps } };
+    delete merged[mergeName];
+    const fieldsFilled = Object.keys(mergeStamps).filter(k => !(k in keepStamps)).length;
+    const next = prepareNextStoreValue(knowledgeCountersSchema, current, {
+        [DOSSIER_STATUS_SUBKEY]: merged,
+    });
+    if (!next.ok) {
+        console.warn('[MWT:Knowledge] Dossier field-status merge refused; the previous value was kept.', next.issues);
+        return { ok: false, reason: 'validation-refused', merged: false };
+    }
+    meta[COUNTERS_META_KEY] = next.data;
+    persistChatMeta();
+    return { ok: true, merged: true, fieldsFilled };
+}
+

@@ -36,7 +36,7 @@ import {
     renderScopeSnapshot,
     renderDiagnosticsPanel,
 } from '../diagnostics_panel/render.js';
-import { peekStore, isHydrated, _setCacheForTests, _clearCacheForTests } from '../knowledge/store.js';
+import { peekStore, isHydrated, _setCacheForTests, _clearCacheForTests, STORE_VERSION } from '../knowledge/store.js';
 import { shortHash } from '../knowledge/scope.js';
 import { record, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { MWT_VERSION } from '../core/version.js';
@@ -562,7 +562,9 @@ describe('peekStore — read-only, creates nothing', () => {
     test('a seeded book reports hydration, dirty, version, and its field names', () => {
         _setCacheForTests('Knowledge Tracker - Seraphina', { registry: { Mara: { uid: 5 } } });
         const peek = peekStore('Knowledge Tracker - Seraphina');
-        expect(peek).toMatchObject({ hydrated: true, dirty: false, version: 1 });
+        // _setCacheForTests seeds blankStore(), whose version is the current
+        // KNOWLEDGE_STORE_VERSION — pinned via the same export, not a literal.
+        expect(peek).toMatchObject({ hydrated: true, dirty: false, version: STORE_VERSION });
         expect(peek.fields).toEqual(expect.arrayContaining(['version', 'registry']));
     });
 });

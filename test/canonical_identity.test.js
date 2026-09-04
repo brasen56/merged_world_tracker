@@ -717,6 +717,123 @@ describe('findEntryUidByNpcIdentity', () => {
     });
 });
 
+// ─── Registry-backed alias links: arbitrary renames ("Mara" → "The Vixen") ───
+//
+// The given-name heuristic can never relate two spellings that share no
+// token. A rename's old name is kept as a user-approved alias of the new
+// record, and the label checks must honor that link in BOTH directions:
+// a staged update still spelled "Mara" against the relabelled "The Vixen"
+// entry, and a write for "The Vixen" against an entry whose relabel failed
+// and still says "Mara". Without it, either direction detaches a valid uid
+// and mints the duplicate the guards exist to prevent.
+
+describe('lorebook identity checks recognize explicit registry aliases', () => {
+    /**
+     * The registry exactly as a completed rename leaves it: the record under
+     * its new key, the old spelling kept as a user-approved alias.
+     */
+    function seedRenamedRegistry({ uid = 3 } = {}) {
+        seedRegistry({
+            'The Vixen': {
+                uid, type: 'major', keywords: ['The Vixen'], aliases: ['Mara'],
+                lastUpdated: 1, entityId: 'mwt_renamed_mara',
+            },
+        });
+    }
+
+    test('writeToLorebook keeps the relabelled uid for a staged update still spelled with the old name', async () => {
+        seedRenamedRegistry();
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 3: { uid: 3, comment: 'The Vixen', key: ['The Vixen'], content: 'old dossier' } },
+        });
+
+        const result = await writeToLorebook('Mara', 'new dossier', ['Mara'], 3);
+
+        expect(result.success).toBe(true);
+        expect(result.uid).toBe(3);
+        expect(npcEntries()).toHaveLength(1); // no duplicate minted
+        expect(wiFake.books.get('Knowledge Tracker').entries[3].content).toBe('new dossier');
+    });
+
+    test('a failed relabel leaves the old-labelled entry reachable under the new name', async () => {
+        seedRenamedRegistry();
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 3: { uid: 3, comment: 'Mara', key: ['Mara'], content: 'old dossier' } },
+        });
+
+        const result = await writeToLorebook('The Vixen', 'new dossier', ['The Vixen'], 3);
+
+        expect(result.success).toBe(true);
+        expect(result.uid).toBe(3);
+        expect(npcEntries()).toHaveLength(1);
+        expect(wiFake.books.get('Knowledge Tracker').entries[3].comment).toBe('The Vixen');
+    });
+
+    test('the adopt-before-create backstop finds the relabelled entry through the alias', async () => {
+        seedRenamedRegistry({ uid: null });
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 3: { uid: 3, comment: 'The Vixen', key: ['The Vixen'], content: 'old dossier' } },
+        });
+
+        const result = await writeToLorebook('Mara', 'new dossier', ['Mara'], null);
+
+        expect(result.success).toBe(true);
+        expect(result.uid).toBe(3);
+        expect(npcEntries()).toHaveLength(1);
+    });
+
+    test('loadEntryContent serves the relabelled entry for the old spelling', async () => {
+        seedRenamedRegistry();
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 3: { uid: 3, comment: 'The Vixen', key: ['The Vixen'], content: 'dossier text' } },
+        });
+
+        expect(await loadEntryContent(3, 'Mara')).toBe('dossier text');
+        expect(await loadEntryContent(3, 'The Vixen')).toBe('dossier text');
+        // A genuinely different NPC is still refused (the Mikhail/Marcus rule).
+        expect(await loadEntryContent(3, 'Jonah')).toBeNull();
+    });
+
+    test('a relabel retried against the already-relabelled entry is idempotent', async () => {
+        seedRenamedRegistry();
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 3: { uid: 3, comment: 'The Vixen', key: ['The Vixen'], content: 'dossier' } },
+        });
+
+        const { relabelLorebookEntry } = await import('../knowledge/lorebook.js');
+        const result = await relabelLorebookEntry('Knowledge Tracker', 3, 'The Vixen', 'Mara', ['The Vixen']);
+
+        expect(result.success).toBe(true);
+        expect(wiFake.books.get('Knowledge Tracker').entries[3].comment).toBe('The Vixen');
+    });
+
+    test('findEntryUidByNpcIdentity adopts registry-linked relabelled entries', () => {
+        seedRenamedRegistry({ uid: null });
+        // The relabelled entry (uid 3) and a stale entry still under the old
+        // spelling (uid 7) are BOTH this NPC — the registry proves both, so
+        // the book converges on the lowest uid instead of growing a duplicate.
+        const found = findEntryUidByNpcIdentity({
+            3: { uid: 3, comment: 'The Vixen' },
+            7: { uid: 7, comment: 'Mara' },
+        }, 'Mara');
+        expect(found.uid).toBe(3);
+        expect(found.duplicates).toBe(2);
+    });
+
+    test('a registry given-name link alone is NOT proof when the book holds strangers', () => {
+        // Registry "Mara" is the only Mara on file, so the RESOLVER would
+        // attribute "Mara Vance" to her — but the book also holds "Mara
+        // Chen", and the label check must keep failing closed on that pair:
+        // the given-name tier's population is the registry alone, and it
+        // cannot see the stranger the book adds.
+        seedRegistry({ Mara: { uid: 9, type: 'minor', keywords: ['Mara'], aliases: [], lastUpdated: 1, entityId: 'mwt_mara' } });
+        expect(findEntryUidByNpcIdentity({
+            1: { uid: 1, comment: 'Mara Vance' },
+            2: { uid: 2, comment: 'Mara Chen' },
+        }, 'Mara')).toBeNull();
+    });
+});
+
 describe('writeToLorebook adopts an existing entry instead of duplicating', () => {
     test('an orphan create updates the entry the book already holds', async () => {
         seedRegistry({ Sophie: { uid: null, type: 'minor', keywords: ['Sophie'] } });

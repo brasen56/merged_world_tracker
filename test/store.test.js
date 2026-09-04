@@ -95,18 +95,24 @@ function storeEntryOf(bookName) {
     return Object.values(wi.entries).find(e => isStoreEntry(e)) || null;
 }
 
+/**
+ * A registry record as the v2 identity migration leaves it (entityId generated
+ * per stamp — matched as any string — plus the default empty aliases array).
+ */
+const stamped = record => ({ aliases: [], entityId: expect.any(String), ...record });
+
 // ─── Hydration and migration ────────────────────────────────────────────────
 
 describe('hydrateBook', () => {
     test('adopts legacy chat_metadata when the book has no store yet', () => {
         // This is the upgrade path off chat_metadata.
         return hydrateBook('Book A', { registry: { Mara: { uid: 0 } } }).then(data => {
-            expect(data.registry).toEqual({ Mara: { uid: 0 } });
+            expect(data.registry).toEqual({ Mara: stamped({ uid: 0 }) });
             expect(isHydrated('Book A')).toBe(true);
             // Seeding writes through immediately so the migration is durable.
             const entry = storeEntryOf('Book A');
             expect(entry).not.toBeNull();
-            expect(JSON.parse(entry.content).registry).toEqual({ Mara: { uid: 0 } });
+            expect(JSON.parse(entry.content).registry).toEqual({ Mara: stamped({ uid: 0 }) });
         });
     });
 
@@ -122,7 +128,7 @@ describe('hydrateBook', () => {
         _clearCacheForTests();
 
         const data = await hydrateBook('Book A', {});
-        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 0 }) });
     });
 
     test('an existing store is never overwritten by a seed', async () => {
@@ -131,7 +137,7 @@ describe('hydrateBook', () => {
 
         // A stale chat_metadata seed must not clobber the book's own data.
         const data = await hydrateBook('Book A', { registry: { Someone: { uid: 99 } } });
-        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 0 }) });
     });
 
     test('a corrupt store stays un-hydrated rather than reading as empty', async () => {
@@ -231,7 +237,7 @@ describe('store entry shape', () => {
         _clearCacheForTests();
         const data = await hydrateBook('Book A', {});
         expect(data._note).toBeUndefined();
-        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 0 }) });
     });
 
     test('new entries carry the descriptive title, sentinel first', async () => {
@@ -253,7 +259,7 @@ describe('store entry shape', () => {
         });
 
         const data = await hydrateBook('Book A', {});
-        expect(data.registry).toEqual({ Mara: { uid: 1 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 1 }) });
 
         writeField('Book A', 'registry', { Mara: { uid: 1 }, Bren: { uid: 2 } });
         await flushBook('Book A');
@@ -320,12 +326,12 @@ describe('store-ghost scrub', () => {
         });
 
         const data = await hydrateBook('Book A', {});
-        expect(data.registry).toEqual({ Mara: { uid: 1 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 1 }) });
 
         // The scrub persists, so the ghost cannot come back on the next load.
         await flushBook('Book A');
         const saved = JSON.parse(storeEntryOf('Book A').content);
-        expect(saved.registry).toEqual({ Mara: { uid: 1 } });
+        expect(saved.registry).toEqual({ Mara: stamped({ uid: 1 }) });
     });
 
     test('a ghost in a legacy chat_metadata seed is not adopted', async () => {
@@ -336,7 +342,7 @@ describe('store-ghost scrub', () => {
             },
         };
         const data = await hydrateBook('Book A', seed);
-        expect(data.registry).toEqual({ Mara: { uid: 0 } });
+        expect(data.registry).toEqual({ Mara: stamped({ uid: 0 }) });
     });
 });
 
@@ -419,6 +425,7 @@ describe('applyStoreToWorldInfo', () => {
         expect(names).toHaveLength(2);
         expect(names).toEqual(expect.arrayContaining([STORE_COMMENT, 'Mara']));
         const store = Object.values(saved.entries).find(e => isStoreEntry(e));
+        // No hydration/migration ran here — writeField stored the record bare.
         expect(JSON.parse(store.content).registry).toEqual({ Mara: { uid: 0 } });
     });
 });
@@ -434,7 +441,7 @@ describe('hydrateCurrentBooks seeding', () => {
 
         const { knowledge } = await hydrateCurrentBooks();
         expect(knowledge).toBe('Knowledge Tracker');
-        expect(readField(knowledge, 'registry')).toEqual({ Mara: { uid: 0 } });
+        expect(readField(knowledge, 'registry')).toEqual({ Mara: stamped({ uid: 0 }) });
     });
 
     test('a SCOPED book starts empty and never adopts it', async () => {

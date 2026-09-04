@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Brasen",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "homePage": "https://github.com/brasen56/merged_world_tracker",
   "description": "Unified extension combining World State, Session Chronicle, Knowledge Tracker, Story Planner, and Interiority (NPC thoughts & hidden intentions) into a single modular system. Automatically tracks world state, chronicles sessions, manages NPC knowledge via lorebooks, brainstorms plot possibilities, and generates out-of-band NPC interiority."
 }
