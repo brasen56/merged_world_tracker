@@ -12,6 +12,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.4.1]
+
+### Added
+
+- **The alias list now reaches World State's grounding gate and Interiority's
+  matchers** (TODO §1 identity-service follow-up, the `[NEXT]` seam).
+  `knowledge/identity.js` (v2.3.0) ships user-approved `aliases[]` that
+  `resolveRegistryKey()` honors — but these consumers were still alias-blind:
+  - **World State grounding** (`world_state/provenance.js`):
+    `groundingGate()` accepts `aliasGroups` and grounds bolded names two ways
+    — an approved alias spelling passes outright (user-vouched, exactly like
+    a pinned entity, which is also what keeps a rename's old spelling
+    grounded), and a canonical name passes when one of its aliases is
+    phrase-grounded in the evidence (the alias itself appears — the scan
+    window said "The Vixen", the model wrote "Mara Vance" — one person per
+    the user's own alias decision).
+    Canonical names with aliases but no evidence of any form stay phantoms,
+    so the anti-invention gate keeps its teeth. New
+    `collectRegistryAliasGroups()` reads the live lorebook-store registry
+    (the alias list lives only there — the legacy chat-metadata mirror
+    predates the identity service) through a dynamic import, fail-soft, and
+    is wired into the full refresh, delta patches, and per-section
+    regeneration, collected once per gate pass.
+  - **Interiority roster matcher** (`buildSceneRoster`): the registry union
+    that rescues in-scene NPCs missing from an incomplete `Present:` line now
+    matches each record's aliases as well as its canonical key, and reads the
+    live store registry in addition to the legacy chat-metadata mirror — an
+    NPC whose scene presence is only ever spelled "The Vixen" reaches the
+    roster under "Mara Vance" instead of never getting thoughts/intentions.
+  - **Interiority model-output matcher** (`resolveRosterName`): an optional
+    alias index adds an explicit-alias step (exact match against the aliases
+    the user approved for each roster member; two claimants fail closed,
+    mirroring `resolveRegistryKey`) — the step titles and nicknames need,
+    since "The Vixen" shares no token with "Mara Vance" and the given-name
+    heuristic could never prove it. The orchestrator builds the index once
+    per turn (`collectRosterAliases()`) and threads it through
+    `mergeSplitResults`, `validateAndApply`, `runStrictCalls`, and
+    `getEvaluatedNpcNames` (which now resolves through `resolveRosterName`
+    altogether, so fuller heuristic spellings count as evaluated there too).
+  - Pinned by `test/alias_matchers.test.js` (35 tests).
+
+### Changed
+
+- Version bump to 2.4.1 (`manifest.json`, `package.json`, `core/version.js`).
+
+### Fixed
+
+- **The alias bridge demands the whole alias phrase, not a word of it**
+  (`world_state/provenance.js`). The bridge from a canonical name to its
+  alias evidence delegated to the canonical-name word rule ("Aboud"
+  grounding "Dr. Aboud") — but nicknames are built out of ordinary words, so
+  an alias like "Red Fox" grounded its owner's canonical name off any
+  mention of "red" in the evidence, permanently exempting exactly the NPCs
+  the user cared enough about to nickname from the anti-invention gate. The
+  bridge now matches the alias as a whole phrase (whitespace-flexible,
+  case-insensitive), the same phrase-level treatment the outright path
+  always had. Pinned by the multi-word-alias fixture in
+  `test/alias_matchers.test.js`.
+- **Per-section regeneration collects aliases above the guards**
+  (`world_state/sections.js`). The gate's alias consultation sat between the
+  WORLD-STATE-02 target-section revision check and the write, so an edit to
+  the target section landing in that (cold first-load) window was silently
+  overwritten. It is now collected with the other pre-flight captures, next
+  to the frozen scan window — no await remains between the section guard
+  and the write on the first-try path.
+- **Both alias collectors fail audibly**
+  (`collectRegistryAliasGroups`, `collectRosterAliases`). A bare `catch` and
+  the unhydrated store's empty registry read made "the user has no aliases",
+  "the knowledge module failed to load", and "the store hasn't hydrated yet
+  on this chat switch" indistinguishable — the first refresh after a chat
+  switch could silently run alias-blind with nothing in the console to
+  explain it. Both failure paths and the empty-registry read now warn.
+- **Interiority leftovers**: `_formatRelationshipsForRoster` resolves edge
+  targets through `resolveRosterName` instead of an exact lowercase lookup,
+  so a legacy or un-repaired edge spelling the old name no longer drops that
+  relationship line from the thoughts prompt (lines are emitted under the
+  roster's spelling); and `runStrictCalls` threads the turn's alias index
+  from `generateForCurrentMessage` instead of rebuilding it — a duplicate
+  dynamic import + registry scan per strict turn removed.
+- **The full refresh and the delta patch collect aliases above the guards**
+  (`world_state/refresh.js`). Per-section regeneration had already moved its
+  alias consultation pre-flight, but the full refresh and the delta path
+  still collected the alias groups inside the grounding block — AFTER the
+  post-generation scope assert. A chat switch while that (cold first-load)
+  dynamic import resolved sailed past the assert, and the later revision
+  check is not a cross-chat guard when the two chats' documents happen to
+  match: the old chat's generated document or patch was committed into the
+  new chat. Both paths now collect with the other pre-flight captures
+  (gated on the grounding setting), so the await is covered by the existing
+  post-generation assert and the registry read is the same chat's as the
+  scan window. Pinned by the alias-load chat-switch races in
+  `test/generation_commit_races.test.js`.
+- **Strict-mode evaluation counting resolves against the full roster**
+  (`interiority/generation.js`). The per-NPC evaluation check in
+  `runStrictCalls` resolved each answer against its singleton `[name]`
+  slice, which defeated the duplicate-alias ambiguity rule: with two roster
+  members importing the same alias, each singleton counted the ambiguous
+  answer as its own successful evaluation, so both dormant entries could be
+  confirmed and awakened even though full-roster validation rejects the
+  ambiguous blocks. The answer now resolves against the whole roster and
+  counts only when it lands on that loop's member. Pinned in
+  `test/alias_matchers.test.js`.
+- **Punctuation-edged aliases match again** (`core/context.js`,
+  `world_state/provenance.js`, `interiority/generation.js`). Wrapping the
+  escaped alias in unconditional `\b`s never matches when the alias begins
+  or ends with punctuation — no word boundary exists beside the outer
+  non-word character — so approved aliases like "A.J." or "(Vixen)" failed
+  both the grounding bridge and scene detection, and the canonical name
+  behind them was stripped as a phantom. A new shared `wholePhraseRegex()`
+  derives the boundaries from the phrase's actual edge characters (a
+  punctuation edge keeps its literal match and accepts a longer neighbour,
+  so "A.J." matches inside "A.J.'s"); both the grounding bridge and the
+  roster union matcher use it. Pinned by the punctuation-alias fixtures in
+  `test/alias_matchers.test.js`.
+
 ## [2.4.0]
 
 ### Added

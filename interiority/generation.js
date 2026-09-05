@@ -11,7 +11,7 @@
 import {
     getChatMeta, getContextSafe, getRecentMessages, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
-    getCurrentWorldState, escapeRegex,
+    getCurrentWorldState, wholePhraseRegex,
     assertSameScope, isCancellation,
 } from '../core/index.js';
 
@@ -210,13 +210,49 @@ export async function buildSceneRoster(virtuallyActiveIds = []) {
     //    world-state names win the slots.
     const registryPresent = [];
     try {
-        const registry = getChatMeta(REGISTRY_KEY);
-        if (registry && Object.keys(registry).length > 0) {
+        // Canonical keys come from the legacy chat-metadata mirror; the
+        // user-approved alias list (TODO §1 identity service) lives ONLY in
+        // the live lorebook-store registry, so the store is consulted too —
+        // an NPC whose scene presence is only ever spelled by an alias
+        // ("The Vixen" for "Mara Vance") must still reach the roster, under
+        // the canonical name. Matching a form pushes the canonical KEY;
+        // addUnique() re-canonicalizes regardless.
+        const nameForms = new Map(); // canonical registry key → Set<name form>
+        const addForms = (name, forms) => {
+            const key = String(name ?? '').trim();
+            if (!key) return;
+            const set = nameForms.get(key) ?? new Set();
+            for (const form of forms) {
+                const f = String(form ?? '').trim();
+                if (f) set.add(f);
+            }
+            nameForms.set(key, set);
+        };
+        for (const name of Object.keys(getChatMeta(REGISTRY_KEY) ?? {})) addForms(name, [name]);
+        try {
+            const { getRegistry } = await import('../knowledge/registry.js');
+            for (const [name, record] of Object.entries(getRegistry() ?? {})) {
+                const aliases = Array.isArray(record?.aliases) ? record.aliases : [];
+                addForms(name, [name, ...aliases]);
+            }
+        } catch { /* live registry unavailable — mirror keys only */ }
+
+        if (nameForms.size > 0) {
             const recent = getRecentMessages({ maxMessages: 10, maxChars: 50000 });
             if (recent) {
-                for (const name of Object.keys(registry)) {
-                    const re = new RegExp(`\\b${escapeRegex(name)}\\b`, 'i');
-                    if (re.test(recent)) registryPresent.push(name);
+                // NOTE: aliases are free text (addAlias imposes no shape
+                // rules) and this match is high-confidence evidence BY
+                // DESIGN — a single generic word ("Boss") pulls its owner
+                // onto the roster off any mention of that word, consuming a
+                // roster slot every turn. Distinctive aliases keep that
+                // power meaningful. Edge-derived boundaries
+                // (wholePhraseRegex): punctuation-edged aliases ("A.J.",
+                // "(Vixen)") never match under unconditional `\b`s, so the
+                // same forms would also fail scene detection here.
+                for (const [name, forms] of nameForms) {
+                    const present = [...forms].some(form =>
+                        wholePhraseRegex(form).test(recent));
+                    if (present) registryPresent.push(name);
                 }
             }
         }
@@ -461,6 +497,12 @@ async function _assembleThoughtsNpcBlocks(roster) {
  * Implements the sealed-minds rule structurally: Mara's block gets only
  * Mara→Jonah edges, never Jonah's edge about her.
  *
+ * Edge targets resolve through {@link resolveRosterName} rather than an exact
+ * lowercase lookup: a legacy or un-repaired edge spelling the old name
+ * ("Jonah" for roster "Jonah Reyes") used to drop the line from the prompt
+ * entirely. Lines are emitted under the roster's spelling, matching every
+ * other name the prompt shows.
+ *
  * @param {string} npcName
  * @param {string[]} roster
  * @param {function} getNpcRelationships - from knowledge/relationships.js
@@ -470,8 +512,21 @@ function _formatRelationshipsForRoster(npcName, roster, getNpcRelationships) {
     try {
         const rels = getNpcRelationships(npcName);
         if (!rels || rels.length === 0) return '';
-        const rosterLower = new Set(roster.map(n => String(n).toLowerCase()));
-        const filtered = rels.filter(r => rosterLower.has(String(r.target).toLowerCase()));
+        // Exact matches stay exact (resolveRosterName's step 1); the
+        // unambiguous given-name heuristic is the only addition. A target
+        // that resolves to nobody — or to two members — still drops, so the
+        // sealed-minds filter keeps its shape. Two spellings resolving to the
+        // same member collapse to one line.
+        const seen = new Set();
+        const filtered = [];
+        for (const r of rels) {
+            const target = resolveRosterName(roster, String(r?.target ?? '').trim());
+            if (target == null) continue;
+            const key = String(target).toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            filtered.push({ ...r, target });
+        }
         if (filtered.length === 0) return '';
         return filtered.map(r => {
             const note = r.notes ? ` (${r.notes})` : '';
@@ -738,9 +793,13 @@ async function _filterToProfiledNpcs(roster) {
  * @param {object|null} intentionsResult
  * @param {object|null} thoughtsResult
  * @param {string[]} roster - canonical NPC name list (preserves order)
+ * @param {object|null} [aliasIndex] - roster member (lowercased) → its
+ *   user-approved aliases, from collectRosterAliases(). Lets a split call
+ *   answered with an alias spelling ("The Vixen" for roster "Mara Vance")
+ *   merge instead of being dropped here as unresolvable.
  * @returns {{npcs: Array<object>}} unified result; empty npcs if both inputs null
  */
-export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
+export function mergeSplitResults(intentionsResult, thoughtsResult, roster, aliasIndex = null) {
     // Build name → entry maps from both results. Keys are RESOLVED against the
     // roster via resolveRosterName (the same unambiguous alias rules
     // validateAndApply uses), so a thoughts call answering "Charlotte Simpson"
@@ -755,7 +814,7 @@ export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
         for (const npc of intentionsResult.npcs) {
             const name = String(npc?.name || '').trim();
             if (!name) continue;
-            const canon = resolveRosterName(roster, name);
+            const canon = resolveRosterName(roster, name, aliasIndex);
             if (canon != null) intentionsMap.set(canon.toLowerCase(), npc);
         }
     }
@@ -763,7 +822,7 @@ export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
         for (const npc of thoughtsResult.npcs) {
             const name = String(npc?.name || '').trim();
             if (!name) continue;
-            const canon = resolveRosterName(roster, name);
+            const canon = resolveRosterName(roster, name, aliasIndex);
             if (canon != null) thoughtsMap.set(canon.toLowerCase(), npc);
         }
     }
@@ -802,9 +861,16 @@ export function mergeSplitResults(intentionsResult, thoughtsResult, roster) {
  * Returns the merged result as if it were a single batched response.
  *
  * @param {string[]} roster
+ * @param {string[]} [virtuallyActiveIds]
+ * @param {object} [opts]
+ * @param {string|null} [opts.trigger]
+ * @param {object|null} [opts.aliasIndex] — the turn's roster alias index from
+ *   {@link collectRosterAliases}, threaded from generateForCurrentMessage so
+ *   the turn never pays a duplicate dynamic import + registry scan; collected
+ *   here only when a direct caller (tests, manual entry points) omits it
  * @returns {Promise<object|null>}
  */
-export async function runStrictCalls(roster, virtuallyActiveIds = [], { trigger = null } = {}) {
+export async function runStrictCalls(roster, virtuallyActiveIds = [], { trigger = null, aliasIndex = null } = {}) {
     if (!hasValidSettings()) {
         console.warn('[MWT:Interiority] No API connection configured.');
         return null;
@@ -817,6 +883,11 @@ export async function runStrictCalls(roster, virtuallyActiveIds = [], { trigger 
         console.warn('[MWT:Interiority] Both thoughts and intentions are disabled — skipping API call.');
         return null;
     }
+
+    // TODO §1: the per-NPC evaluation check below resolves each answer
+    // against its singleton roster slice; the explicit-alias index keeps a
+    // title/nickname answer ("The Vixen") counting as an evaluation too.
+    const rosterAliases = aliasIndex ?? (await collectRosterAliases(roster));
 
     const windowSize = Math.max(1, settings.messageWindow || 8);
     const recentMessages = getStrippedRecentMessages(windowSize);
@@ -846,8 +917,15 @@ export async function runStrictCalls(roster, virtuallyActiveIds = [], { trigger 
             allNpcs.push(...result.npcs);
             // Alias-aware: the per-NPC call may be answered with a fuller
             // spelling ("Charlotte Simpson" for roster "Charlotte") — that
-            // still counts as this NPC having been evaluated.
-            if (wantIntentions && result.npcs.some(npc => resolveRosterName([name], String(npc?.name || '').trim()) != null)) {
+            // still counts as this NPC having been evaluated. Resolved
+            // against the FULL roster, not a [name] singleton: with two
+            // roster members claiming the same imported alias, each singleton
+            // slice counted that alias as ITS successful evaluation, so both
+            // dormant entries were confirmed and awakened even though
+            // full-roster validation (validateAndApply) rejects the ambiguous
+            // blocks. The resolution must land on this loop's member to
+            // count — the same ambiguity rule every other consumer uses.
+            if (wantIntentions && result.npcs.some(npc => resolveRosterName(roster, String(npc?.name || '').trim(), rosterAliases) === name)) {
                 intentionsEvaluatedRoster.push(name);
             }
         }
@@ -991,21 +1069,32 @@ async function fetchAndParse(systemPrompt, userContent, settings, { trigger = nu
  * name from the world-state `Present:` line, and the model may answer with a
  * fuller spelling of it. Matching runs strictest-first:
  *   1. exact / case-insensitive membership → the roster's own spelling;
- *   2. {@link isUnambiguousNpcAlias} alias match, both directions — ONLY when
+ *   2. explicit user-approved alias (TODO §1 identity service) — when an
+ *      `aliasIndex` is supplied, a spelling that exactly matches an alias the
+ *      user approved for exactly ONE roster member resolves to it. This is
+ *      the step titles and nicknames need: "The Vixen" for roster "Mara
+ *      Vance" shares no token with it, so the given-name heuristic below
+ *      could never prove the match. Two claimants is genuinely ambiguous and
+ *      resolves to null — mirroring resolveRegistryKey's alias step;
+ *   3. {@link isUnambiguousNpcAlias} alias match, both directions — ONLY when
  *      unambiguous in the surrounding same-given-name roster population.
  *
- * Step 2 is what used to be missing: a response naming "Charlotte Simpson"
- * for roster "Charlotte" was discarded whole — thoughts AND intentions — even
- * though it unambiguously identified that NPC. Ambiguity still resolves to
- * null (two roster members sharing a given name), and so does a name that is
- * merely a same-given-name stranger ("Mara Chen" against roster "Mara
- * Vance"): no entry is always safer than the wrong entry.
+ * Step 3 is what used to be the only alias handling: a response naming
+ * "Charlotte Simpson" for roster "Charlotte" was discarded whole — thoughts
+ * AND intentions — even though it unambiguously identified that NPC.
+ * Ambiguity still resolves to null (two roster members sharing a given name
+ * or an alias), and so does a name that is merely a same-given-name stranger
+ * ("Mara Chen" against roster "Mara Vance"): no entry is always safer than
+ * the wrong entry.
  *
  * @param {string[]} roster — canonical roster names
  * @param {string} name — the name to resolve (model output)
+ * @param {object|null} [aliasIndex] — roster member (lowercased) → its
+ *   user-approved aliases, from {@link collectRosterAliases}. Optional so
+ *   sync/pure callers keep the heuristic-only behaviour.
  * @returns {string|null} the roster's spelling of the matched member, or null
  */
-export function resolveRosterName(roster, name) {
+export function resolveRosterName(roster, name, aliasIndex = null) {
     const wanted = String(name ?? '').trim();
     if (!wanted || !Array.isArray(roster) || roster.length === 0) return null;
     const wantedLower = wanted.toLowerCase().trim();
@@ -1014,14 +1103,84 @@ export function resolveRosterName(roster, name) {
     for (const r of roster) {
         if (String(r).toLowerCase().trim() === wantedLower) return r;
     }
-    // 2. Alias match, both directions ("Charlotte" ↔ "Charlotte Simpson"),
-    // using the SAME shared rule the knowledge registry uses. Not a bare
-    // first-token comparison: that resolved "Mara Chen" to roster "Mara Vance"
-    // whenever Vance was the only "Mara" present, attributing one character's
-    // thoughts and intentions to another.
+    // 2. Explicit user-approved alias (TODO §1): exact normalized match
+    //    against the aliases the user approved for each roster member. The
+    //    index is keyed by the member's lowercased roster spelling.
+    if (aliasIndex && typeof aliasIndex === 'object') {
+        const claimants = roster.filter(r => {
+            const aliases = aliasIndex[String(r).toLowerCase().trim()];
+            return Array.isArray(aliases)
+                && aliases.some(a => String(a ?? '').toLowerCase().trim() === wantedLower);
+        });
+        if (claimants.length === 1) return claimants[0];
+        if (claimants.length > 1) {
+            console.warn(
+                `[MWT:Interiority] NPC name "${wanted}" is an ambiguous roster alias — claimed by: ` +
+                `${claimants.join(', ')}. Using no roster entry rather than risk attributing one ` +
+                `character's interiority to another. Remove the duplicate alias to disambiguate.`
+            );
+            return null;
+        }
+    }
+    // 3. Heuristic alias match, both directions ("Charlotte" ↔ "Charlotte
+    //    Simpson"), using the SAME shared rule the knowledge registry uses.
+    //    Not a bare first-token comparison: that resolved "Mara Chen" to
+    //    roster "Mara Vance" whenever Vance was the only "Mara" present,
+    //    attributing one character's thoughts and intentions to another.
     const candidates = roster.filter(r => isUnambiguousNpcAlias(r, wanted, roster));
     if (candidates.length === 1) return candidates[0];
     return null;
+}
+
+/**
+ * Build the explicit-alias index for {@link resolveRosterName}: each roster
+ * member's user-approved registry aliases, keyed by the member's lowercased
+ * roster spelling (TODO §1 identity service).
+ *
+ * The roster is canonicalized through the knowledge registry at build time,
+ * so each member resolves back to its registry record; members with no
+ * registry entry (a registry-less `Present:` name) simply contribute nothing.
+ * The knowledge module is an optional dependency — on failure the index is
+ * empty and matching falls back to the given-name heuristic, exactly as
+ * before the alias list existed.
+ *
+ * @param {string[]} roster — canonical roster names
+ * @returns {Promise<object>} `{ [rosterNameLower]: string[] }`
+ */
+export async function collectRosterAliases(roster) {
+    if (!Array.isArray(roster) || roster.length === 0) return {};
+    try {
+        const { getRegistry, resolveRegistryKey } = await import('../knowledge/registry.js');
+        const reg = getRegistry();
+        if (!reg || Object.keys(reg).length === 0) {
+            // Same ambiguity as collectRegistryAliasGroups: an unhydrated
+            // store reads exactly like "no records", and the first turn after
+            // a chat switch can hit that race. Surface it so alias-blind name
+            // resolution is reportable instead of invisible.
+            console.warn(
+                '[MWT:Interiority] collectRosterAliases: the knowledge registry read empty — ' +
+                'either this chat has no NPC records or the store has not hydrated yet. ' +
+                'Falling back to heuristic name matching for this pass.'
+            );
+            return {};
+        }
+        const index = {};
+        for (const member of roster) {
+            const key = resolveRegistryKey(reg, member);
+            const aliases = key != null ? reg[key]?.aliases : null;
+            if (Array.isArray(aliases) && aliases.length > 0) {
+                index[String(member).toLowerCase().trim()]
+                    = aliases.filter(a => typeof a === 'string' && a.trim());
+            }
+        }
+        return index;
+    } catch (err) {
+        console.warn(
+            '[MWT:Interiority] collectRosterAliases failed — falling back to heuristic name matching.',
+            err
+        );
+        return {};
+    }
 }
 
 /**
@@ -1049,10 +1208,17 @@ export function resolveRosterName(roster, name) {
  *   a snapshot taken here (after the poll) would bake the woken state into
  *   the rollback record and the wake would survive the swipe. Callers that
  *   run no poll may omit it — the validator captures its own.
+ * @param {string[]} [confirmedWakeIds] - dormant entry ids the intentions
+ *   call actually evaluated (committed as wakes once the result validates).
+ * @param {object|null} [aliasIndex] - roster member (lowercased) → its
+ *   user-approved registry aliases, from collectRosterAliases() (TODO §1).
+ *   Threads the explicit-alias step of resolveRosterName so a block answered
+ *   with an alias spelling ("The Vixen" for roster "Mara Vance") applies
+ *   instead of being discarded as "not in roster".
  * @returns {Promise<object|null>} { reactions: [], ledgerChanged: boolean }, or
  *   null when the scope changed during the await (caller should discard).
  */
-export async function validateAndApply(result, roster, msgIdx, scopeToken, preTurnLedgerSnapshot, confirmedWakeIds = []) {
+export async function validateAndApply(result, roster, msgIdx, scopeToken, preTurnLedgerSnapshot, confirmedWakeIds = [], aliasIndex = null) {
     const data = getInteriorityData();
     const settings = getSettings();
     const wantThoughts = settings.generateThoughts !== false;
@@ -1171,12 +1337,12 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         const rawName = String(npcResult.name || '').trim();
         // Resolve the model's spelling against the roster with the SAME
         // unambiguous alias rules the knowledge registry uses (exact →
-        // case-insensitive → unambiguous given-name). The old exact
-        // case-insensitive membership test discarded "Charlotte Simpson"
-        // for roster "Charlotte" whole — thoughts, inner state, and
+        // case-insensitive → user-approved alias → unambiguous given-name).
+        // The old exact case-insensitive membership test discarded "Charlotte
+        // Simpson" for roster "Charlotte" whole — thoughts, inner state, and
         // intentions. `name` is the ROSTER's spelling from here on, so
         // every downstream store keys on the canonical form.
-        const name = resolveRosterName(roster, rawName);
+        const name = resolveRosterName(roster, rawName, aliasIndex);
         if (!rawName || !name) {
             // Unknown name — discard
             console.warn(`[MWT:Interiority] Discarding NPC block "${rawName}" — not in roster [${roster.join(', ')}].`);

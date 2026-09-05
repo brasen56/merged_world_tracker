@@ -48,6 +48,7 @@ import { interioritySchema } from './schema.js';
 import {
     buildSceneRoster, runBatchedCall, runStrictCalls, validateAndApply,
     runSplitCall, mergeSplitResults, runDormantPoll, resolveUserNames, isUserName,
+    resolveRosterName, collectRosterAliases,
 } from './generation.js';
 
 import { applyIntentionsInjection } from './injection.js';
@@ -391,6 +392,13 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
             return null;
         }
 
+        // TODO §1: this roster's user-approved alias index, built once per
+        // turn and threaded through every name-resolution site below (merge,
+        // evaluated-names, apply) so an answer spelled with an alias
+        // ("The Vixen" for roster "Mara Vance") resolves to its member
+        // instead of being discarded as "not in roster".
+        const rosterAliases = await collectRosterAliases(roster);
+
         console.log(`[MWT:Interiority] Generating for ${roster.length} NPC(s): ${roster.join(', ')}`);
 
         // 2. Run API call(s).
@@ -419,11 +427,14 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
                 console.warn('[MWT:Interiority] Both split calls returned no result. Skipping silently.');
                 return null;
             }
-            result = mergeSplitResults(intentionsResult, thoughtsResult, roster);
-            intentionsEvaluatedRoster = getEvaluatedNpcNames(intentionsResult, roster);
+            result = mergeSplitResults(intentionsResult, thoughtsResult, roster, rosterAliases);
+            intentionsEvaluatedRoster = getEvaluatedNpcNames(intentionsResult, roster, undefined, rosterAliases);
         } else {
             if (settings.mode === 'strict') {
-                result = await runStrictCalls(roster, proposedWakeIds, { trigger });
+                // aliasIndex: the turn's index built above — runStrictCalls
+                // must not rebuild it (duplicate dynamic import + registry
+                // scan per strict turn).
+                result = await runStrictCalls(roster, proposedWakeIds, { trigger, aliasIndex: rosterAliases });
             } else {
                 result = await runBatchedCall(roster, { virtuallyActiveIds: proposedWakeIds, trigger });
             }
@@ -440,7 +451,7 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
                 console.warn('[MWT:Interiority] Generation returned no result (API/parse failure). Skipping silently.');
                 return null;
             }
-            if (wantIntentions) intentionsEvaluatedRoster = getEvaluatedNpcNames(result, roster, result.intentionsEvaluatedRoster);
+            if (wantIntentions) intentionsEvaluatedRoster = getEvaluatedNpcNames(result, roster, result.intentionsEvaluatedRoster, rosterAliases);
         }
 
         // Re-resolve the message index AFTER the API call(s). The await can
@@ -468,7 +479,7 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
             const entry = getLedger().find(candidate => candidate.id === id);
             return entry && evaluatedNpcNames.has(String(entry.npc).toLowerCase().trim());
         });
-        const applyResult = await validateAndApply(result, roster, msgIdx, scopeBefore, preTurnLedgerSnapshot, confirmedWakeIds);
+        const applyResult = await validateAndApply(result, roster, msgIdx, scopeBefore, preTurnLedgerSnapshot, confirmedWakeIds, rosterAliases);
 
         // INTERIORITY-02: Re-assert scope AFTER validateAndApply as a
         // belt-and-suspenders guard. The in-function check covers the
@@ -524,17 +535,33 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
  * must be plain arrays: a Set here silently satisfies `Array.isArray === false`
  * and then throws on `.map`, which is what broke every non-strict path in 1.6.0.
  *
+ * Every candidate resolves through resolveRosterName (exact → user-approved
+ * alias → unambiguous given-name) so a response spelled with a fuller form or
+ * an alias ("The Vixen" for roster "Mara Vance") still counts as evaluated —
+ * a dropped name here would silently refuse a dormant-wake confirmation.
+ *
  * @param {object|null} result parsed API result ({ npcs: [...] })
  * @param {string[]} roster canonical roster names (returned casing wins)
  * @param {string[]} [reportedNames] names the call reported as evaluated
+ * @param {object|null} [aliasIndex] roster member (lowercased) → its
+ *   user-approved aliases, from collectRosterAliases() (TODO §1)
  * @returns {string[]} deduped roster names, in canonical casing
  */
-export function getEvaluatedNpcNames(result, roster, reportedNames) {
-    const rosterByLower = new Map(roster.map(name => [String(name).toLowerCase().trim(), name]));
+export function getEvaluatedNpcNames(result, roster, reportedNames, aliasIndex = null) {
     const responseNames = (Array.isArray(result?.npcs) ? result.npcs : [])
-        .map(npc => String(npc?.name || '').toLowerCase().trim()).filter(Boolean);
+        .map(npc => String(npc?.name || '').trim()).filter(Boolean);
     const candidates = Array.isArray(reportedNames) ? reportedNames : responseNames;
-    return [...new Set(candidates.map(name => rosterByLower.get(String(name).toLowerCase().trim())).filter(Boolean))];
+    const evaluated = [];
+    const seen = new Set();
+    for (const name of candidates) {
+        const canonical = resolveRosterName(roster, String(name ?? '').trim(), aliasIndex);
+        if (canonical == null) continue;
+        const lower = String(canonical).toLowerCase().trim();
+        if (seen.has(lower)) continue;
+        seen.add(lower);
+        evaluated.push(canonical);
+    }
+    return evaluated;
 }
 
 // ─── Chat lifecycle ──────────────────────────────────────────────────────────

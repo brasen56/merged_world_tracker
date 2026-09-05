@@ -233,6 +233,34 @@ export function escapeRegex(s) {
 }
 
 /**
+ * Build a whole-phrase RegExp for a free-text name form (a user-approved
+ * alias, a registry spelling), with word boundaries derived from the phrase's
+ * actual EDGE characters instead of unconditional `\b`s.
+ *
+ * A `\b` only exists between a word character and a non-word character, so
+ * wrapping an escaped phrase in `\b…\b` never matches when the phrase begins
+ * or ends with punctuation: beside "A.J."'s trailing dot or "(Vixen)"'s
+ * brackets there is no boundary to find, and evidence that names the person
+ * goes unseen. A boundary is therefore emitted only on the side whose edge
+ * character is a word character; a punctuation edge keeps its literal match
+ * and deliberately accepts a longer neighbour ("A.J." inside "A.J.'s").
+ * Whitespace runs inside the phrase collapse to `\s+` so a form split by
+ * formatting still matches. Case-insensitive by default.
+ *
+ * @param {string} phrase — the raw, unescaped phrase (trimmed here)
+ * @param {string} [flags='i']
+ * @returns {RegExp} never matches when the phrase is empty/blank
+ */
+export function wholePhraseRegex(phrase, flags = 'i') {
+    const trimmed = String(phrase ?? '').trim();
+    if (!trimmed) return new RegExp('(?!x)x', flags); // matches nothing
+    const escaped = escapeRegex(trimmed).replace(/\s+/g, '\\s+');
+    const lead = /\w/.test(trimmed[0]) ? '\\b' : '';
+    const tail = /\w/.test(trimmed[trimmed.length - 1]) ? '\\b' : '';
+    return new RegExp(`${lead}${escaped}${tail}`, flags);
+}
+
+/**
  * Convert a SillyTavern message `send_date` to epoch milliseconds.
  *
  * `send_date` is a STRING whose format varies by ST build:

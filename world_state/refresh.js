@@ -31,7 +31,7 @@ import {
     getMaxScanMessages, setProvenance, getProvenance,
 } from './data.js';
 import { applyWorldStateInjection } from './injection.js';
-import { buildProvenance, groundingGate, applyExpiry } from './provenance.js';
+import { buildProvenance, groundingGate, applyExpiry, collectRegistryAliasGroups } from './provenance.js';
 import {
     DeltaPatchError, planAutoRefresh, getDeltaStatus, buildRefreshStatusDelta,
     buildPartialRefreshStatus, digestText, isDeltaModeEnabled,
@@ -479,6 +479,22 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             scanWindowText = getRecentMessagesForScan();
             scanEnd = getStableHistoryEnd();
         }
+
+        // TODO §1: the grounding gate's alias consultation — collected with
+        // the other pre-flight captures, ABOVE every guard (same placement as
+        // the section-regen path). Collected inside the gate block below, the
+        // dynamic import put an await AFTER the post-generation scope assert:
+        // a chat switch while aliases loaded sailed past that assert, and the
+        // later revision check is not a cross-chat guard when the two chats'
+        // documents happen to match — the old chat's result was then written
+        // into the new chat. Pre-flight, this await is covered by the assert
+        // below, and the registry read is the SAME chat's as the scan window.
+        // Gated on the setting so the import (and its empty-registry warning)
+        // never fires for grounding-off users; a grounding toggle landing
+        // mid-call runs that one pass alias-blind — the same soft fallback as
+        // an unhydrated store.
+        const aliasGroups = getSettings().groundingEnabled ? await collectRegistryAliasGroups() : [];
+
         const _wsApi1 = resolveApiCall({ moduleSettings: getSettings() });
         let result = await _wsApi1.fetchFn({
             systemPrompt,
@@ -535,7 +551,10 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         const gateSettings = getSettings();
         if (gateSettings.groundingEnabled) {
             const pinned = getPinnedEntities(gateSettings);
-            let grounding = groundingGate(text, { scanText: scanWindowText, priorText: oldText, pinned, mode: gateSettings.groundingMode });
+            // aliasGroups was captured pre-flight (above every guard) and is
+            // shared by every gate call below — there is no await left between
+            // the scope assert and the write on the first-try path.
+            let grounding = groundingGate(text, { scanText: scanWindowText, priorText: oldText, pinned, aliasGroups, mode: gateSettings.groundingMode });
             if (!grounding.ok) {
                 console.warn(`[MWT:WorldState] Grounding gate rejected: ${grounding.reason} — retrying once`);
                 const _wsApi3 = resolveApiCall({ moduleSettings: getSettings() });
@@ -559,7 +578,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                     );
                     return null;
                 }
-                grounding = groundingGate(text, { scanText: scanWindowText, priorText: oldText, pinned, mode: gateSettings.groundingMode });
+                grounding = groundingGate(text, { scanText: scanWindowText, priorText: oldText, pinned, aliasGroups, mode: gateSettings.groundingMode });
                 if (!grounding.ok) {
                     // WORLD-STATE-04: Strict mode fails closed — the model had
                     // two honest chances and still produced ungrounded names.
@@ -571,7 +590,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                     }
                     // Soft mode strips the offending names and commits.
                     console.warn(`[MWT:WorldState] Grounding gate still rejected after retry (${grounding.reason}) — soft mode, stripping.`);
-                    grounding = groundingGate(text, { scanText: scanWindowText, priorText: oldText, pinned, mode: 'soft' });
+                    grounding = groundingGate(text, { scanText: scanWindowText, priorText: oldText, pinned, aliasGroups, mode: 'soft' });
                 }
             }
             text = grounding.cleanedText;
@@ -749,6 +768,15 @@ export async function refreshWorldStateDelta(isAuto = false) {
         const systemPrompt = buildDeltaSystemPrompt(buildSystemPrompt());
         const prevText = baselineText.trim();
 
+        // TODO §1: same pre-flight alias capture as the full refresh. The
+        // collection used to sit inside the grounding block AFTER the
+        // post-patch scope assert, re-opening the cross-chat gap that assert
+        // closed: a chat switch during the alias await let the old chat's
+        // patch through — the later revision check passes when the two chats'
+        // documents happen to match — and the checked write landed in the new
+        // chat. Pre-flight, this await is covered by the assert below.
+        const aliasGroups = getSettings().groundingEnabled ? await collectRegistryAliasGroups() : [];
+
         const _wsApiD1 = resolveApiCall({ moduleSettings: getSettings() });
         let result = await _wsApiD1.fetchFn({
             systemPrompt,
@@ -817,10 +845,15 @@ export async function refreshWorldStateDelta(isAuto = false) {
             // of the re-read — and evidence that was valid for the model would
             // then strip or reject legitimate patch content.
             const scanText = scanWindow.text;
+            // aliasGroups was captured pre-flight (above the scope assert) —
+            // the user-approved alias list grounds approved spellings outright
+            // and bridges canonical names to alias evidence in the window, and
+            // there is no await left between the assert and the checked write.
             let grounding = groundingGate(finalText, {
                 scanText,
                 priorText: baselineText,
                 pinned: getPinnedEntities(gateSettings),
+                aliasGroups,
                 mode: gateSettings.groundingMode,
             });
             if (!grounding.ok) {
@@ -834,6 +867,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
                     scanText,
                     priorText: baselineText,
                     pinned: getPinnedEntities(gateSettings),
+                    aliasGroups,
                     mode: 'soft',
                 });
             }

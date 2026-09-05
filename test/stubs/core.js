@@ -247,6 +247,18 @@ export function escapeRegex(s) {
     return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Mirror of core/context.js's edge-aware whole-phrase matcher (see there).
+ * Boundaries are derived from the phrase's actual edge characters, so
+ * punctuation-edged aliases ("A.J.", "(Vixen)") match too. */
+export function wholePhraseRegex(phrase, flags = 'i') {
+    const trimmed = String(phrase ?? '').trim();
+    if (!trimmed) return new RegExp('(?!x)x', flags); // matches nothing
+    const escaped = escapeRegex(trimmed).replace(/\s+/g, '\\s+');
+    const lead = /\w/.test(trimmed[0]) ? '\\b' : '';
+    const tail = /\w/.test(trimmed[trimmed.length - 1]) ? '\\b' : '';
+    return new RegExp(`${lead}${escaped}${tail}`, flags);
+}
+
 export function sendDateToMs(sendDate) {
     if (sendDate == null) return null;
     if (typeof sendDate === 'number' ||

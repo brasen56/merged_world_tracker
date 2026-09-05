@@ -294,7 +294,11 @@ The per-section regeneration path (`regenerateSection` in `sections.js`) should 
    Grounded-name check is word-level (skips short words/titles like "Dr.")
    against the scan window ∪ prior state ∪ `pinnedEntities`, so a partial
    later reference ("Aboud") still grounds an earlier full introduction
-   ("Dr. Aboud").
+   ("Dr. Aboud"). Since **v2.4.1** (TODO §1 identity service) the union
+   also includes the knowledge registry's user-approved alias list
+   (`collectRegistryAliasGroups()`): an approved alias spelling grounds
+   outright, and a canonical name grounds through an alias appearing in
+   the evidence.
 4. ✅ **Done (2026-07-03).** `expiryMode: 'quarantine'` (moves stale entries to
    a `## Archive (Stale)` section, excluded from prompt injection via
    `injection.js`'s `splitWorldState()`) and `'remove'` are implemented and

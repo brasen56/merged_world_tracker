@@ -29,6 +29,28 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetCoreStubs, setFakeChat, setFakeApi } from './stubs/core.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { _resetPausedStores } from '../core/schema_status.js';
+import { buildRefreshStatusDelta } from '../world_state/delta.js';
+
+// ─── 1c harness: hold the alias consultation open ────────────────────────────
+//
+// The grounding gate's registry-alias consultation is an await inside both
+// refresh paths. Collected inside the gate block it sat AFTER the
+// post-generation scope assert, re-opening the cross-chat gap that assert had
+// just closed: a chat switch while the dynamic import resolved sailed through
+// (the later revision check is not a cross-chat guard when the two chats'
+// documents happen to match) and the old chat's result was written into the
+// new chat. The fix collects the groups pre-flight, above every guard, so the
+// switch is caught by the existing post-generation assert. These tests hold
+// the alias collection open across the switch — the mock IS the race. The
+// passthrough default keeps every other provenance export real for the rest
+// of this file.
+vi.mock('../world_state/provenance.js', async (importOriginal) => {
+    const orig = await importOriginal();
+    return {
+        ...orig,
+        collectRegistryAliasGroups: vi.fn((...args) => orig.collectRegistryAliasGroups(...args)),
+    };
+});
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -364,6 +386,123 @@ describe('World State busy flag — a concurrent start is refused at the gate', 
         expect(getWorldStateText()).toBe(FULL_DOC);
         expect(state.wstIsRefreshing).toBe(false);
         expect(requests).toHaveLength(1); // still one — the refusals never fired a call
+    });
+});
+
+
+// ─── 1c. Alias consultation — chat switch while the alias groups load ────────
+
+describe('World State refresh — chat switch while the alias groups load', () => {
+    let state, getWorldStateData, getWorldStateText, setWorldStateData, saveSettings;
+    let requests;
+    let CURRENT;
+    let prov;
+    let chatId;
+
+    // A minimal delta patch that parses and applies cleanly.
+    const DELTA_PATCH = [
+        '### UPDATE: recent changes',
+        '## Recent Changes',
+        '- The manifest went missing overnight.',
+    ].join('\n');
+
+    beforeEach(async () => {
+        resetCoreStubs();
+        _resetEpoch();
+        _resetPausedStores();
+        chatId = 'chat-alias';
+        globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => chatId }) };
+        globalThis.document = { dispatchEvent: vi.fn() };
+        setFakeChat(makeChat());
+        ({ state, getWorldStateData, getWorldStateText, setWorldStateData } = await import('../world_state/data.js'));
+        ({ saveSettings } = await import('../world_state/settings.js'));
+        prov = await import('../world_state/provenance.js');
+        state.wstIsRefreshing = false;
+        state.modal = null;
+        state.autoRefreshQueued = false;
+        state.autoRefreshDeferTimer = null;
+        requests = [];
+        CURRENT = '';
+        setFakeApi(async (req) => {
+            requests.push(req);
+            return typeof CURRENT === 'string' ? CURRENT : CURRENT(req, requests.length);
+        });
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        state.wstIsRefreshing = false;
+        if (state.autoRefreshDeferTimer) { clearTimeout(state.autoRefreshDeferTimer); state.autoRefreshDeferTimer = null; }
+        vi.restoreAllMocks();
+        delete globalThis.SillyTavern;
+        delete globalThis.document;
+    });
+
+    /**
+     * Start `fn` (a refresh entry point) with the alias consultation held
+     * open, switch chats while it is pending, then release it. Returns the
+     * refresh promise.
+     */
+    function startUnderAliasLoadAndSwitch(fn) {
+        let releaseAliases;
+        let markStarted;
+        const started = new Promise(resolve => { markStarted = resolve; });
+        const gate = new Promise(resolve => { releaseAliases = resolve; });
+        prov.collectRegistryAliasGroups.mockImplementationOnce(() => {
+            markStarted();
+            return gate;
+        });
+        const pending = fn();
+        return started
+            .then(() => {
+                // The user switches chats while the aliases are still loading.
+                chatId = 'chat-other';
+                bumpEpoch();
+                releaseAliases([]);
+                return pending;
+            });
+    }
+
+    test('full path: the generated document is discarded, nothing is written', async () => {
+        const { refreshWorldState } = await import('../world_state/refresh.js');
+        saveSettings({
+            apiUrl: 'https://example.test', modelName: 'test-model',
+            groundingEnabled: true, groundingMode: 'soft',
+        });
+        setWorldStateData({ text: BASELINE });
+        CURRENT = FULL_DOC;
+
+        const text = await startUnderAliasLoadAndSwitch(() => refreshWorldState());
+
+        expect(text).toBeNull(); // declined, not applied
+        expect(prov.collectRegistryAliasGroups).toHaveBeenCalledTimes(1);
+        expect(getWorldStateText()).toBe(BASELINE); // document untouched
+        expect(getWorldStateData().autoSaveHistory).toHaveLength(0);
+        expect(state.wstIsRefreshing).toBe(false);
+    });
+
+    test('delta path: the patch is discarded, nothing is written', async () => {
+        const { refreshWorldStateDelta } = await import('../world_state/refresh.js');
+        saveSettings({
+            apiUrl: 'https://example.test', modelName: 'test-model',
+            groundingEnabled: true, groundingMode: 'soft',
+        });
+        // Delta preconditions: a baseline document whose digest matches the
+        // refresh status committed for it (the seedReconciledDoc recipe from
+        // world_state_delta.test.js).
+        const status = buildRefreshStatusDelta('full', BASELINE, { deltasSinceFull: 0 }, makeChat().length);
+        setWorldStateData({ text: BASELINE, deltaStatus: status });
+        CURRENT = DELTA_PATCH;
+
+        const text = await startUnderAliasLoadAndSwitch(() => refreshWorldStateDelta());
+
+        expect(text).toBeNull(); // declined, not applied
+        expect(prov.collectRegistryAliasGroups).toHaveBeenCalledTimes(1);
+        expect(getWorldStateText()).toBe(BASELINE); // patch never landed
+        expect(getWorldStateData().autoSaveHistory).toHaveLength(0);
+        expect(state.wstIsRefreshing).toBe(false);
     });
 });
 

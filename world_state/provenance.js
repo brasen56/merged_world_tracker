@@ -8,14 +8,16 @@
  *                             configurable message-age threshold.
  *   §5.3 groundingGate()    — strip (soft) or reject (strict) bolded names in
  *                             freshly generated text that don't appear
- *                             anywhere in the scan window, prior state, or
- *                             the pinned-entities list.
+ *                             anywhere in the scan window, prior state, the
+ *                             pinned-entities list, or the knowledge
+ *                             registry's user-approved alias list (TODO §1
+ *                             identity service — collectRegistryAliasGroups).
  *
  * Leaf-ish module — imports only data.js / settings.js (+ core) to avoid
  * circular deps with refresh.js / sections.js, which import this instead.
  */
 
-import { getChat, getStableHistoryEnd } from '../core/index.js';
+import { getChat, getStableHistoryEnd, wholePhraseRegex } from '../core/index.js';
 import {
     getWorldStateText, getProvenance, getMaxScanMessages,
     extractOnlySection, replaceSection,
@@ -327,6 +329,29 @@ function nameIsGrounded(label, haystacks) {
 }
 
 /**
+ * Whether `alias` appears in the evidence as a whole PHRASE — all of its
+ * words, in order, separated by any run of whitespace, case-insensitive.
+ *
+ * Aliases are deliberately NOT matched by {@link nameIsGrounded}'s word-level
+ * rule, even though that rule is right for canonical names ("Aboud" grounding
+ * "Dr. Aboud"): nicknames are built out of ordinary words ("Red Fox",
+ * "Little Bird", "Boss"), so matching any single word of the alias would
+ * ground the owner's canonical name off unrelated prose ("Jonah wiped his
+ * hands on a red rag"). An alias is user-vouched, high-confidence evidence
+ * only when the alias itself — all of it — appears.
+ */
+function aliasPhraseGrounded(alias, haystacks) {
+    const phrase = String(alias ?? '').trim();
+    if (!phrase) return false;
+    // Edge-derived boundaries (wholePhraseRegex): free-text aliases can begin
+    // or end with punctuation ("A.J.", "(Vixen)"), and an unconditional `\b`
+    // beside the outer non-word character never matches — the bridge would
+    // miss the alias's own evidence. Whitespace runs stay flexible.
+    const re = wholePhraseRegex(phrase);
+    return haystacks.some(h => re.test(h));
+}
+
+/**
  * Drop every entry whose bolded name is in `labels` (exact, case-insensitive),
  * INCLUDING the indented subfield lines that belong to that entry.
  *
@@ -370,8 +395,9 @@ function stripNameLines(text, labels) {
 
 /**
  * Anti-invention gate. Checks every bolded name in `newText` against the
- * union of (scan window text) ∪ (prior state text) ∪ (pinned entities).
- * Names that appear nowhere in that union are "phantoms."
+ * union of (scan window text) ∪ (prior state text) ∪ (pinned entities) ∪
+ * (user-approved registry aliases). Names that appear nowhere in that union
+ * are "phantoms."
  *
  * - soft mode: strips the offending line(s) and returns ok:true with the
  *   cleaned text (callers should log `stripped`).
@@ -379,18 +405,64 @@ function stripNameLines(text, labels) {
  *   can retry the generation (mirrors refresh.js's existing validateOutput
  *   retry path).
  *
+ * The alias list (TODO §1 identity service, `aliasGroups` — see
+ * {@link collectRegistryAliasGroups}) grounds in two ways:
+ *   - outright: an alias spelling is a name the USER vouched for, exactly
+ *     like a pinned entity — the model cannot have "invented" it. This is
+ *     also what keeps a rename's old spelling grounded (renameEntity keeps
+ *     the old name as an alias);
+ *   - bridged: a bold label that IS a canonical registry name is grounded
+ *     when any of that record's aliases appears in the evidence as a whole
+ *     phrase — the scan window said "The Vixen", the model wrote "Mara
+ *     Vance", and per the user's own alias decision that is one person.
+ * Canonical registry names WITHOUT alias evidence stay ungated as before —
+ * grounding every tracked NPC outright would defeat the anti-invention gate.
+ *
+ * @param {string} newText
+ * @param {object} [opts]
+ * @param {string} [opts.scanText='']
+ * @param {string} [opts.priorText='']
+ * @param {string[]} [opts.pinned=[]]
+ * @param {'soft'|'strict'} [opts.mode='soft']
+ * @param {Array<{owner: string, aliases: string[]}>} [opts.aliasGroups=[]] —
+ *   the registry's user-approved alias records
  * @returns {{ ok: boolean, cleanedText?: string, stripped: Array, reason?: string }}
  */
 export function groundingGate(newText, opts = {}) {
-    const { scanText = '', priorText = '', pinned = [], mode = 'soft' } = opts;
+    const { scanText = '', priorText = '', pinned = [], mode = 'soft', aliasGroups = [] } = opts;
 
     if (!newText) return { ok: true, cleanedText: newText, stripped: [] };
 
     const pinnedSet = new Set(pinned.map(p => p.toLowerCase().trim()).filter(Boolean));
     const haystacks = [scanText.toLowerCase(), priorText.toLowerCase()];
 
+    // Alias index (TODO §1): every alias spelling grounds outright; canonical
+    // owner → its alias forms, for the bridge check. Defensive normalization —
+    // the store validator keeps the registry clean, but the gate must never
+    // throw on a malformed group.
+    const aliasSpellings = new Set();
+    const ownerAliases = new Map();
+    for (const group of Array.isArray(aliasGroups) ? aliasGroups : []) {
+        const owner = String(group?.owner ?? '').trim();
+        const aliases = (Array.isArray(group?.aliases) ? group.aliases : [])
+            .map(a => String(a ?? '').trim())
+            .filter(Boolean);
+        if (!owner || aliases.length === 0) continue;
+        ownerAliases.set(owner.toLowerCase(), aliases);
+        for (const alias of aliases) aliasSpellings.add(alias.toLowerCase());
+    }
+    const groundedViaAliasBridge = (label) => {
+        const aliases = ownerAliases.get(String(label).toLowerCase().trim());
+        // Phrase-level, NOT nameIsGrounded's word-level rule — a word of the
+        // alias is not the alias (see aliasPhraseGrounded).
+        return aliases != null && aliases.some(alias => aliasPhraseGrounded(alias, haystacks));
+    };
+
     const phantoms = extractBoldNames(newText).filter(({ key, label }) => (
-        !pinnedSet.has(key) && !nameIsGrounded(label, haystacks)
+        !pinnedSet.has(key)
+        && !aliasSpellings.has(key)
+        && !nameIsGrounded(label, haystacks)
+        && !groundedViaAliasBridge(label)
     ));
 
     if (phantoms.length === 0) return { ok: true, cleanedText: newText, stripped: [] };
@@ -403,4 +475,52 @@ export function groundingGate(newText, opts = {}) {
         console.warn(`[MWT:WorldState] Grounding gate stripped ungrounded name: "${label}"`);
     }
     return { ok: true, cleanedText: stripNameLines(newText, phantoms.map(p => p.label)), stripped: phantoms };
+}
+
+/**
+ * Collect the knowledge registry's user-approved alias records (TODO §1
+ * identity service) for the grounding gate.
+ *
+ * Aliases live ONLY in the live lorebook-store registry — the legacy
+ * chat-metadata mirror predates the identity service — so this reads
+ * `getRegistry()` through a DYNAMIC import, the same optional-dependency
+ * pattern interiority uses for the knowledge module. A dynamic import adds no
+ * static import edge, keeping this module leaf-ish (no cycle with
+ * refresh.js/sections.js, which import this file). Failure is inert: no
+ * aliases, and the gate behaves exactly as it did before them.
+ *
+ * @returns {Promise<Array<{owner: string, aliases: string[]}>>} one group per
+ *   registry record that carries aliases; `[]` when the knowledge module or
+ *   its registry is unavailable
+ */
+export async function collectRegistryAliasGroups() {
+    try {
+        const { getRegistry } = await import('../knowledge/registry.js');
+        const reg = getRegistry();
+        const groups = [];
+        for (const [owner, record] of Object.entries(reg ?? {})) {
+            const aliases = (Array.isArray(record?.aliases) ? record.aliases : [])
+                .map(a => String(a ?? '').trim())
+                .filter(Boolean);
+            if (aliases.length > 0) groups.push({ owner, aliases });
+        }
+        if (groups.length === 0 && Object.keys(reg ?? {}).length === 0) {
+            // An empty registry is ambiguous: "this chat has no NPCs" reads
+            // exactly like "the store has not hydrated yet" (e.g. the first
+            // refresh after a chat switch). Surface it so a silently
+            // alias-blind gate pass is reportable instead of invisible.
+            console.warn(
+                '[MWT:WorldState] collectRegistryAliasGroups: the knowledge registry read empty — ' +
+                'either this chat has no NPC records or the store has not hydrated yet. ' +
+                'The grounding gate runs alias-blind for this pass.'
+            );
+        }
+        return groups;
+    } catch (err) {
+        console.warn(
+            '[MWT:WorldState] collectRegistryAliasGroups failed — the grounding gate runs alias-blind for this pass.',
+            err
+        );
+        return [];
+    }
 }

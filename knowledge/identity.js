@@ -131,6 +131,14 @@ export function listAliases(name) {
  * record's own key. Adding an alias the record already carries is an
  * idempotent no-op success.
  *
+ * NOTE: aliases are free text — no shape rules beyond the uniqueness checks
+ * above — and both consumers treat them as high-confidence evidence: World
+ * State's grounding gate matches the whole phrase (provenance.js) and
+ * Interiority's roster union matches the full form (generation.js). A single
+ * generic word ("Boss") is therefore a valid alias, but it will pull its
+ * owner onto the scene roster off ANY mention of that word. Distinctive
+ * aliases keep that power meaningful.
+ *
  * @param {string} name — any spelling that resolves to the NPC
  * @param {string} alias
  * @returns {{ok:boolean, added?:boolean, reason?:string, owner?:string}}

@@ -25,7 +25,7 @@ import {
 } from './data.js';
 import { applyWorldStateInjection } from './injection.js';
 import { getRecentMessagesForScan } from './refresh.js';
-import { buildProvenance, groundingGate } from './provenance.js';
+import { buildProvenance, groundingGate, collectRegistryAliasGroups } from './provenance.js';
 import { getDeltaStatus, buildPartialRefreshStatus } from './delta.js';
 
 export { extractOnlySection, replaceSection };
@@ -179,6 +179,15 @@ export async function regenerateSection(sectionName, variety = 2) {
         // that arrived meanwhile, stripping names the model legitimately used.
         const scanWindowText = getRecentMessagesForScan();
 
+        // TODO §1: the grounding gate's alias consultation (same as the full
+        // refresh path), collected with the other pre-flight captures — ABOVE
+        // every guard. Collecting it inside the gate block below put an await
+        // between the section-revision guard and the write, so a target-section
+        // edit landing in that window would be overwritten (WORLD-STATE-02).
+        // Frozen here alongside scanWindowText so the whole gate pass — first
+        // try, retry, soft fallback — works from one evidence set.
+        const aliasGroups = s.groundingEnabled ? await collectRegistryAliasGroups() : [];
+
         const _wsApi3 = resolveApiCall({ moduleSettings: sectionSettings });
         const raw = await _wsApi3.fetchFn({
             systemPrompt: buildSectionSystemPrompt(sectionName, variety),
@@ -227,10 +236,14 @@ export async function regenerateSection(sectionName, variety = 2) {
         // WORLD-STATE-04: Both retry and strict/soft policy mirror the full
         // refresh path so the two agree.
         if (s.groundingEnabled) {
+            // aliasGroups was captured pre-flight (above the guards) and is
+            // shared by every gate call below — there is no await left between
+            // the section guard and the write on the first-try path.
             let grounding = groundingGate(cleaned, {
                 scanText: scanWindowText,
                 priorText,
                 pinned: getPinnedEntities(s),
+                aliasGroups,
                 mode: s.groundingMode,
             });
             if (!grounding.ok) {
@@ -266,6 +279,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                     scanText: scanWindowText,
                     priorText,
                     pinned: getPinnedEntities(s),
+                    aliasGroups,
                     mode: s.groundingMode,
                 });
                 if (!grounding.ok) {
@@ -280,6 +294,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                         scanText: scanWindowText,
                         priorText,
                         pinned: getPinnedEntities(s),
+                        aliasGroups,
                         mode: 'soft',
                     });
                 }

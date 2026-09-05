@@ -4,7 +4,7 @@
  * Feature modules import from '../core/index.js' to access shared utilities.
  */
 
-export { getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex, estimateTokens, getPlayerNames, getUserNames, getRecentMessages, getRecentHistoryExclude, getStableHistoryEnd, DEFAULT_RECENT_HISTORY_EXCLUDE, MAX_RECENT_HISTORY_EXCLUDE, sendDateToMs } from './context.js';
+export { getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex, wholePhraseRegex, estimateTokens, getPlayerNames, getUserNames, getRecentMessages, getRecentHistoryExclude, getStableHistoryEnd, DEFAULT_RECENT_HISTORY_EXCLUDE, MAX_RECENT_HISTORY_EXCLUDE, sendDateToMs } from './context.js';
 export { normalizeApiBase, fetchFromApi, fetchViaConnectionProfile, resolveApiCall, normaliseOutput, retryAsync, parseJsonLenient } from './api.js';
 // Generation coordinator (TODO §1 / PI §P1) — central cross-module job
 // queue, concurrency limits, priorities, dedupe, cancellation, and the
