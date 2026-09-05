@@ -5,7 +5,7 @@
  */
 
 import {
-    escapeHtml, renderLineDiff, notify,
+    escapeHtml, renderLineDiff, notify, isCancellation,
 } from '../core/index.js';
 // Direct import (not the barrel): the chat-scope guard must read the REAL
 // core/scope.js epoch/identity state under the test barrel→stub alias — the
@@ -257,6 +257,15 @@ export function renderNpcsSubTab() {
             ktSetStatus(`Scan complete — ${added.length} proposal(s).`, 'success');
             notify('Knowledge Tracker', `Scan found ${added.length} proposal(s).`, added.length ? 'info' : 'success');
         } catch (err) {
+            // Coordinator cancellation (TODO §1): an intentional stop (chat
+            // switch, MWT.coordinator.cancel) is a quiet discard — logged,
+            // never a failure status/toast. The info status replaces the
+            // stale "Scanning…" line rather than leaving it dangling.
+            if (isCancellation(err)) {
+                console.log('[MWT:Knowledge] Scan cancelled (coordinator) — discarded.');
+                ktSetStatus('Scan cancelled.', 'info');
+                return;
+            }
             ktSetStatus(`Scan failed: ${err.message}`, 'error');
             notify('Knowledge Tracker', `Scan failed: ${err.message}`, 'error');
         }
@@ -537,7 +546,15 @@ function wireNpcListEvents(el, _type) {
                 addNotificationEntry(stagedItem);
                 renderNpcsSubTab();
                 ktSetStatus(`Update for "${name}" staged.`, 'success');
-            } catch (err) { ktSetStatus(`Update failed: ${err.message}`, 'error'); }
+            } catch (err) {
+                // Coordinator cancellation (TODO §1): quiet discard — the
+                // finally restores the button, no failure status.
+                if (isCancellation(err)) {
+                    console.log(`[MWT:Knowledge] Update for "${name}" cancelled (coordinator) — discarded.`);
+                    return;
+                }
+                ktSetStatus(`Update failed: ${err.message}`, 'error');
+            }
             finally { btn.disabled = false; btn.textContent = 'Update'; }
         });
     });
@@ -573,7 +590,15 @@ function wireNpcListEvents(el, _type) {
                 addNotificationEntry(stagedItem);
                 renderNpcsSubTab();
                 ktSetStatus(`Dossier enrichment for "${name}" staged for review.`, 'success');
-            } catch (err) { ktSetStatus(`Enrich failed: ${err.message}`, 'error'); }
+            } catch (err) {
+                // Coordinator cancellation (TODO §1): quiet discard — the
+                // finally restores the button, no failure status.
+                if (isCancellation(err)) {
+                    console.log(`[MWT:Knowledge] Enrichment for "${name}" cancelled (coordinator) — discarded.`);
+                    return;
+                }
+                ktSetStatus(`Enrich failed: ${err.message}`, 'error');
+            }
             finally { btn.disabled = false; btn.textContent = '📋 Enrich'; }
         });
     });
@@ -798,7 +823,15 @@ function wireStateTrackerEvents(el) {
                 addNotificationEntry(stagingItem);
                 renderNpcsSubTab();
                 ktSetStatus(`State update for "${name}" staged.`, 'success');
-            } catch (err) { ktSetStatus(`Update failed: ${err.message}`, 'error'); }
+            } catch (err) {
+                // Coordinator cancellation (TODO §1): quiet discard — the
+                // finally restores the button, no failure status.
+                if (isCancellation(err)) {
+                    console.log(`[MWT:Knowledge] State update for "${name}" cancelled (coordinator) — discarded.`);
+                    return;
+                }
+                ktSetStatus(`Update failed: ${err.message}`, 'error');
+            }
             finally { btn.disabled = false; btn.textContent = 'Update'; }
         });
     });
@@ -2001,7 +2034,14 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
             }
             cleanup();
         } catch (err) {
-            ktSetStatus(`Field refresh failed: ${err.message}`, 'error');
+            // Coordinator cancellation (TODO §1): quiet discard — the modal
+            // stays open and usable, so the button must be re-enabled here
+            // rather than via an early return.
+            if (isCancellation(err)) {
+                console.log(`[MWT:Knowledge] Field refresh for "${name}" cancelled (coordinator) — discarded.`);
+            } else {
+                ktSetStatus(`Field refresh failed: ${err.message}`, 'error');
+            }
             runBtn.disabled = false;
             updateRunBtn();
         }

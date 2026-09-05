@@ -335,6 +335,11 @@ export const GLOBAL_SETTINGS_DEFAULTS = Object.freeze({
     connectionProfileId: '',
     // Newest messages to defer from ordinary tracker history scans
     recentHistoryExclude: 2,
+    // Generation coordinator (TODO §1): how many outbound LLM calls may run
+    // at once ACROSS modules (per-module is always 1), and whether automatic/
+    // background tracker calls hold while the user's own generation streams.
+    apiMaxConcurrent: 2,
+    pauseBackgroundJobsDuringGeneration: false,
     // Per-module injection settings
     worldStateDepth: 4,
     worldStateRole: 'system',

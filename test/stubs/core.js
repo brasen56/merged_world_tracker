@@ -45,6 +45,9 @@
 // phases call record() through the barrel. _resetDiagnostics stays out of the
 // production barrel — only this test stub reaches it.
 import { _resetDiagnostics, recordInjection } from '../../core/diagnostics.js';
+// Same rule for the generation coordinator singleton (TODO §1): a job leaked
+// by one test would consume the global concurrency limit for every later one.
+import { _resetCoordinator } from '../../core/coordinator.js';
 // Real sanitizer (leaf module, no SillyTavern deps) — getRecentMessages below
 // must mirror core/context.js's strip/preserveOffScreen options.
 import { stripNonNarrative } from '../../core/strip.js';
@@ -79,6 +82,8 @@ export function resetCoreStubs() {
     // now re-exports it from core/diagnostics.js. Without this, record() calls
     // made through the barrel by later phases would leak across tests.
     _resetDiagnostics();
+    // Same isolation for the generation coordinator's singleton queue.
+    _resetCoordinator();
 }
 
 /**
@@ -594,6 +599,25 @@ export {
     getAllInjectedSnapshots,
     clearInjections,
 } from '../../core/diagnostics.js';
+// Generation coordinator (TODO §1 / PI §P1). Re-exported from the REAL
+// module — it is pure (injectable resolvers, no SillyTavern dependency) — so
+// barrel consumers see the SAME singleton queue under test as the transports
+// in core/api.js do. resetCoreStubs() clears it via _resetCoordinator above.
+export {
+    submitJob,
+    cancelWhere,
+    onChatScopeChanged,
+    beginUserGeneration,
+    endUserGeneration,
+    pumpCoordinator,
+    getCoordinatorSnapshot,
+    isCancellation,
+    PRIORITY,
+    PER_MODULE_LIMIT,
+    DEFAULT_GLOBAL_LIMIT,
+    MAX_GLOBAL_LIMIT,
+    SETTLED_HISTORY_CAP,
+} from '../../core/coordinator.js';
 // Phase 5 redaction layer (core/redaction.js). Re-exported from the REAL
 // module — it is pure, with no SillyTavern dependency — so barrel consumers
 // see identical redaction behavior under test. The report tests pin this

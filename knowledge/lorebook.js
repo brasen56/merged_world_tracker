@@ -11,6 +11,7 @@ import {
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, getLatestChronicleEntry,
     stripNonNarrative, getStableHistoryEnd,
+    isCancellation,
 } from '../core/index.js';
 
 import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT, DOSSIER_FIELD_REFRESH_PROMPT } from './prompts.js';
@@ -132,9 +133,11 @@ export function getRecentMessages(count = 50) {
 
 // ─── API fetch (delegates to shared core) ────────────────────────────────────
 
-export async function ktFetchFromApi(systemPrompt, userContent, { retries = 1 } = {}) {
+export async function ktFetchFromApi(systemPrompt, userContent, { retries = 1, trigger = null } = {}) {
     const resolved = resolveApiCall({ moduleSettings: getSettings() });
-    return resolved.fetchFn({ systemPrompt, userContent, settings: resolved.settings, retries });
+    // `trigger` rides down to the coordinator (TODO §1) so auto scans classify
+    // as background work and the api-call telemetry names the cause.
+    return resolved.fetchFn({ systemPrompt, userContent, settings: resolved.settings, retries, trigger });
 }
 
 // ─── Lorebook CRUD ───────────────────────────────────────────────────────────
@@ -1059,7 +1062,15 @@ export function validateStateOutput(originalEntry, output) {
 
 // ─── Scan ────────────────────────────────────────────────────────────────────
 
-export async function runScan() {
+/**
+ * Scan recent messages for new/updated NPCs.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.trigger=null] — cause of the call; threaded down so
+ *   the coordinator classifies cadence-driven auto scans as background work
+ *   (trigger-less manual paths stay foreground by design)
+ */
+export async function runScan({ trigger = null } = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
     const settings = getSettings();
     const dossierMode = settings.dossierMode === true;
@@ -1122,7 +1133,7 @@ export async function runScan() {
     let lastErr = null;
     let lastPreview = '';
     for (let attempt = 1; attempt <= 2; attempt++) {
-        const raw = await ktFetchFromApi(systemPrompt, userContent);
+        const raw = await ktFetchFromApi(systemPrompt, userContent, { trigger });
         const cleaned = normaliseOutput(raw);
         try {
             const result = parseJsonLenient(cleaned);
@@ -1147,7 +1158,7 @@ export async function runScan() {
 
 // ─── State update ────────────────────────────────────────────────────────────
 
-export async function runStateUpdate(name, uid) {
+export async function runStateUpdate(name, uid, { trigger = null } = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
     const loaded = await loadStateTrackerEntry(uid);
     if (!loaded) throw new Error(`Could not load state entry for "${name}".`);
@@ -1159,7 +1170,7 @@ export async function runStateUpdate(name, uid) {
         const userContent = attempt === 1
             ? [`<entity>${name}</entity>`, '', '<current_entry>', loaded.content, '</current_entry>', '', '<recent_messages>', recentMessages, '</recent_messages>', '', 'Output the updated entry.'].join('\n')
             : [`<entity>${name}</entity>`, '', '<current_entry>', loaded.content, '</current_entry>', '', '<recent_messages>', recentMessages, '</recent_messages>', '', `<previous_attempt_rejected>Reason: ${lastError}</previous_attempt_rejected>`, '', 'Try again. Output ONLY the updated entry.'].join('\n');
-        const raw = await ktFetchFromApi(STATE_UPDATE_PROMPT, userContent);
+        const raw = await ktFetchFromApi(STATE_UPDATE_PROMPT, userContent, { trigger });
         const cleaned = normaliseOutput(raw);
         const validation = validateStateOutput(loaded.content, cleaned);
         if (validation.ok) return { currentContent: loaded.content, merged: cleaned, unchanged: cleaned.trim() === loaded.content.trim(), attempts: attempt };
@@ -1200,6 +1211,14 @@ export async function runNpcUpdate(name, uid) {
             cleaned = normaliseOutput(raw);
             result = parseJsonLenient(cleaned);
         } catch (err) {
+            // Coordinator cancellation (TODO §1): an aborted/retired call must
+            // be rethrown immediately, never retried. A retry would submit a
+            // FRESH job at the current epoch, which the chat-scope retirement
+            // can no longer cancel — a second request spent on the old chat's
+            // prompt after the user already switched. isCancellation() covers
+            // both the coordinator's marked JobCancelledError and the native
+            // AbortError a mid-wire abort produces.
+            if (isCancellation(err)) throw err;
             lastError = err;
             console.warn(`[MWT:Knowledge] runNpcUpdate JSON parse failed (attempt ${attempt}): ${err.message}`);
             if (attempt < 2) continue;
@@ -1283,6 +1302,9 @@ export async function runNpcEnrich(name, uid) {
             cleaned = normaliseOutput(raw);
             result = parseJsonLenient(cleaned);
         } catch (err) {
+            // Coordinator cancellation — see runNpcUpdate's catch above: an
+            // aborted call is rethrown, never retried at a fresh epoch.
+            if (isCancellation(err)) throw err;
             lastError = err;
             console.warn(`[MWT:Knowledge] runNpcEnrich JSON parse failed (attempt ${attempt}): ${err.message}`);
             if (attempt < 2) continue;
@@ -1427,6 +1449,9 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
                 throw new Error('response was not a JSON object');
             }
         } catch (err) {
+            // Coordinator cancellation — see runNpcUpdate's catch above: an
+            // aborted call is rethrown, never retried at a fresh epoch.
+            if (isCancellation(err)) throw err;
             lastError = err;
             console.warn(`[MWT:Knowledge] runDossierFieldRefresh JSON parse failed (attempt ${attempt}): ${err.message}`);
             if (attempt < 2) continue;

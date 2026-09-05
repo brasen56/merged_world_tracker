@@ -691,9 +691,13 @@ export function describeRelationshipChange(c) {
 /**
  * Extract relationships + stances from recent messages and apply them.
  *
+ * @param {object} [opts]
+ * @param {string} [opts.trigger=null] — cause of the call; threaded down so
+ *   the coordinator classifies cadence-driven auto extracts as background
+ *   work (trigger-less manual paths stay foreground by design)
  * @returns {Promise<{affectedNpcs:Set<string>, edgesAdded:number, edgesUpdated:number, stancesSet:number, skipped:number}>}
  */
-export async function runRelationshipExtract() {
+export async function runRelationshipExtract({ trigger = null } = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
 
     // KNOWLEDGE-04: Capture scope before the API round-trip. See the assert
@@ -733,7 +737,7 @@ export async function runRelationshipExtract() {
     let lastErr = null;
     let lastPreview = '';
     for (let attempt = 1; attempt <= 2; attempt++) {
-        const raw = await ktFetchFromApi(RELATIONSHIP_EXTRACT_SYSTEM_PROMPT, userContent);
+        const raw = await ktFetchFromApi(RELATIONSHIP_EXTRACT_SYSTEM_PROMPT, userContent, { trigger });
         // KNOWLEDGE-04: Assert scope BEFORE applying, not just in the caller.
         // applyExtractedRelationships writes through writeField(getLorebookName(),
         // …), and getLorebookName() resolves per chat/character under non-global

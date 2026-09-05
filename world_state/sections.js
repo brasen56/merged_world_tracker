@@ -8,7 +8,7 @@ import {
     resolveApiCall, normaliseOutput, escapeRegex,
     captureScope, assertSameScope,
     captureRevision, sameRevision,
-    truncateText,
+    truncateText, isCancellation,
 } from '../core/index.js';
 // Part 6 (§7.4) pause guard + the store id it checks. Direct import (not the
 // barrel) so the REAL pause singleton is read even under the test
@@ -343,6 +343,19 @@ export async function regenerateSection(sectionName, variety = 2) {
 
         console.log(`[MWT:WorldState] Section "${sectionName}" regenerated (variety ${variety}).`);
         return updated;
+    } catch (err) {
+        // Coordinator cancellation (TODO §1): the chat changed mid-regen and
+        // the coordinator aborted the call, or the queued job was retired
+        // before it started. The scope guard above would have discarded the
+        // result anyway — discard quietly instead of surfacing an intentional
+        // stop as a user-facing failure, matching refreshWorldState() /
+        // refreshWorldStateDelta(). isCancellation() covers both the marked
+        // JobCancelledError and the native AbortError of a mid-wire abort.
+        if (isCancellation(err)) {
+            console.log('[MWT:WorldState] Section regeneration cancelled (coordinator) — discarded.');
+            return null;
+        }
+        throw err;
     } finally {
         state.wstIsRefreshing = false;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));

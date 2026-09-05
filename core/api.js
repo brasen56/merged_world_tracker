@@ -8,6 +8,11 @@
 import { getContextSafe } from './context.js';
 import { getGlobalSettings } from './settings.js';
 import { record, recordApiCall } from './diagnostics.js';
+// Generation coordinator (TODO §1 / PI §P1): both transports submit through it,
+// so every module's outbound call is subject to the per-module + global
+// concurrency limits, priorities, cancellation, and the user-generation
+// policy without any per-module restructuring.
+import { submitJob, PRIORITY, isCancellation } from './coordinator.js';
 
 function apiModule(settings) {
     return settings?.module || settings?.moduleKey || 'api';
@@ -46,6 +51,9 @@ function usageSummary(usage) {
 }
 
 function errorClass(err) {
+    // Cancellation first: an aborted call is an intentional stop, not a
+    // failure — the Last-request tab must not read it as one.
+    if (isCancellation(err)) return 'cancelled';
     if (err?._isHtmlResponse) return 'HTML-response';
     if (err?._isNoContent) return 'no-content';
     if (err?._isLengthError) return '_isLengthError';
@@ -123,9 +131,15 @@ export function finiteNumber(value, fallback) {
  * @param {function(number): Promise<T>} fn — async function receiving attempt index
  * @param {object} [opts]
  * @param {function(Error, number, number): void} [opts.onRetry] — called before each retry with (err, attempt, delay)
+ * @param {AbortSignal} [opts.signal] — when provided, checked before every
+ *   attempt (including the first), after every failure, AND during the retry
+ *   backoff delay itself: an aborted signal stops the loop immediately —
+ *   the pending backoff timer is cleared, no slot is held — and rethrows a
+ *   marked cancellation error instead of burning another request.
+ *   Coordinator cancellation relies on this.
  * @returns {Promise<T>}
  */
-export async function retryAsync(attempts, fn, { onRetry } = {}) {
+export async function retryAsync(attempts, fn, { onRetry, signal } = {}) {
     // CORE-06: Validate `attempts` at the boundary. A negative or non-finite
     // value used to run zero loop iterations and then fall through to
     // `throw lastErr`, where `lastErr` was `undefined` — so the caller got a
@@ -139,10 +153,21 @@ export async function retryAsync(attempts, fn, { onRetry } = {}) {
         : 0;
     let lastErr;
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+        // Cancellation boundary: never let an aborted job start (or restart)
+        // an outbound request. Marked so the coordinator and the caller can
+        // both recognize it via isCancellation().
+        if (signal?.aborted) throw cancellationError('cancelled before attempt');
         try {
             return await fn(attempt);
         } catch (err) {
             lastErr = err;
+            // An abort-shaped rejection must not be retried — the request was
+            // stopped on purpose, not failed.
+            if (signal?.aborted || isCancellation(err)) {
+                if (!isCancellation(err)) throw cancellationError('cancelled during attempt');
+                err._noRetry = true;
+                throw err;
+            }
             if (attempt >= maxAttempts) throw err;
             // CORE-06: A non-object rejection (a string, null, number, etc.)
             // made `err._noRetry` itself throw a TypeError, masking the
@@ -151,28 +176,128 @@ export async function retryAsync(attempts, fn, { onRetry } = {}) {
             if (err && typeof err === 'object' && err._noRetry) throw err;
             const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
             onRetry?.(err, attempt, delay);
-            await new Promise(r => setTimeout(r, delay));
+            await abortableDelay(delay, signal);
         }
     }
     throw lastErr;
 }
 
 /**
- * Send a chat-completion request to an OpenAI-compatible API.
+ * Abort-aware backoff delay. A plain setTimeout would hold the coordinator
+ * slot hostage after a cancellation: the job stays in `_running` (so fresh
+ * work for the same module — and with a global limit of one, ALL work)
+ * remains queued until the pending 1/2/4/8-second timer runs out. On abort
+ * the timer is cleared and the delay rejects immediately with a marked
+ * cancellation error.
+ *
+ * @param {number} ms
+ * @param {AbortSignal|null} signal
+ * @returns {Promise<void>} resolves when the delay elapses; rejects with a
+ *   marked cancellation error when the signal aborts mid-delay
+ */
+function abortableDelay(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(cancellationError('cancelled during backoff'));
+            return;
+        }
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        function onAbort() {
+            clearTimeout(timer);
+            reject(cancellationError('cancelled during backoff'));
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+/**
+ * Build the shared cancellation error. Same marker the coordinator's own
+ * JobCancelledError carries (isCancellation() recognizes both), plus the
+ * native AbortError name so non-MWT catch sites treat it as an abort.
+ */
+function cancellationError(message) {
+    const err = new Error(message);
+    err.name = 'AbortError';
+    err._mwtCancelled = true;
+    return err;
+}
+
+// ─── Generation-coordinator adoption ──────────────────────────────────────────
+
+/**
+ * Classify a fetch's trigger for the coordinator. Explicit user intent —
+ * 'manual' (button paths; also the default when a caller never threaded a
+ * trigger) and 'slash_command' (/wt-thoughts and friends, which pass force:
+ * true and bypass the panic gate everywhere else) — is foreground work the
+ * user is watching: never held by the user-generation pause, MANUAL priority.
+ * Every automatic trigger ('auto', 'message_received', 'swipe', 'edit',
+ * dormant polls, …) is background work the optional user-generation policy
+ * may hold. 'unknown' deliberately stays in the background branch: a caller
+ * that forgot to say what it was must not silently override the hold policy,
+ * and genuinely manual paths always say so.
+ */
+function classifyTrigger(trigger) {
+    if (trigger == null || trigger === 'manual' || trigger === 'slash_command') {
+        return { background: false, priority: PRIORITY.MANUAL };
+    }
+    return { background: true, priority: PRIORITY.BACKGROUND };
+}
+
+/**
+ * Run one outbound transport through the coordinator (TODO §1 / PI §P1).
+ * Each fetch — including its retries/backoff — is one job: the per-module
+ * and global limits therefore also throttle retry storms, and an abort
+ * (chat switch, explicit cancel) stops the whole attempt sequence.
+ *
+ * The job's own cancellation signal is composed with any caller-supplied
+ * external signal inside the coordinator; the transport just consumes the
+ * single signal it receives.
+ */
+function coordinatedFetch(perform, { systemPrompt, userContent, settings, retries, trigger, signal }) {
+    const { background, priority } = classifyTrigger(trigger);
+    const { promise } = submitJob({
+        module: apiModule(settings),
+        kind: 'api-call',
+        priority,
+        background,
+        signal,
+        run: ({ signal: jobSignal }) => perform({ systemPrompt, userContent, settings, retries, trigger, signal: jobSignal }),
+    });
+    return promise;
+}
+
+/**
+ * Send a chat-completion request to an OpenAI-compatible API, through the
+ * generation coordinator.
  *
  * @param {object} opts
  * @param {string} opts.systemPrompt
  * @param {string} opts.userContent
  * @param {object} opts.settings — { apiUrl, apiKey, modelName, maxTokens, temperature, topP, frequencyPenalty, presencePenalty, customHeaders }
  * @param {number} [opts.retries=2]
+ * @param {string} [opts.trigger] — cause of the call ('manual', 'auto',
+ *   'message_received', …); drives coordinator priority + background policy
+ * @param {AbortSignal} [opts.signal] — external cancellation signal
  * @returns {Promise<string>} the raw content string from the API
  */
-export async function fetchFromApi({
+export function fetchFromApi(opts) {
+    return coordinatedFetch(performFetchFromApi, opts);
+}
+
+/**
+ * The actual custom-API transport. Unexported — reached only through
+ * fetchFromApi()'s coordinator wrapper.
+ */
+async function performFetchFromApi({
     systemPrompt,
     userContent,
     settings,
     retries = 2,
     trigger = null,
+    signal = null,
 }) {
     const startedAt = Date.now();
     // Panic latch: sampled at dispatch and again immediately before every
@@ -226,6 +351,10 @@ export async function fetchFromApi({
             method: 'POST',
             headers,
             body: JSON.stringify(payload),
+            // Coordinator cancellation: the composed signal aborts the
+            // in-flight request (native AbortError, recognized by
+            // isCancellation() and NOT retried by retryAsync).
+            signal,
         });
         status = response.status ?? null;
 
@@ -313,8 +442,17 @@ export async function fetchFromApi({
         }
 
         return content;
+        }, { signal });
+        captureApiCall({
+            startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName,
+            attempts, status, finishReason, usage,
+            // Cancellation-aware success capture: a response that landed after
+            // the job's signal aborted (slow proxy; or the CM transport, whose
+            // sendRequest cannot observe the signal) is discarded by the
+            // coordinator's resolved-after-abort barrier — the summary must
+            // not read it as a success either (errorClass 'cancelled').
+            error: signal?.aborted ? cancellationError('resolved after abort') : null,
         });
-        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage });
         return apiContent;
     } catch (error) {
         captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage, error });
@@ -323,18 +461,39 @@ export async function fetchFromApi({
 }
 
 /**
- * Send a prompt through a SillyTavern Connection Manager profile.
- * Uses ConnectionManagerRequestService from shared.js to support every
- * backend ST supports (OpenAI, TextGen, etc.) with full preset/instruct support.
+ * Send a prompt through a SillyTavern Connection Manager profile, through
+ * the generation coordinator. Uses ConnectionManagerRequestService from
+ * shared.js to support every backend ST supports (OpenAI, TextGen, etc.)
+ * with full preset/instruct support.
  *
  * @param {object} opts
  * @param {string} opts.systemPrompt
  * @param {string} opts.userContent
  * @param {object} opts.settings — { connectionProfileId, maxTokens }
  * @param {number} [opts.retries=2]
+ * @param {string} [opts.trigger] — cause of the call; drives coordinator
+ *   priority + background policy
+ * @param {AbortSignal} [opts.signal] — external cancellation signal
  * @returns {Promise<string>} the raw content string
  */
-export async function fetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2, trigger = null }) {
+export function fetchViaConnectionProfile(opts) {
+    return coordinatedFetch(performFetchViaConnectionProfile, opts);
+}
+
+/**
+ * The actual Connection-Manager transport. Unexported — reached only through
+ * fetchViaConnectionProfile()'s coordinator wrapper.
+ *
+ * Cancellation note: ConnectionManagerRequestService.sendRequest has no
+ * signal parameter, so an in-flight CM request cannot be aborted mid-wire —
+ * "AbortController cancellation where the backend supports it." The signal
+ * IS honored at every boundary we control: before the awaited shared.js
+ * load, before every outbound attempt, and between retries (retryAsync).
+ * A cancelled job therefore never LEAVES once the coordinator aborts it.
+ */
+async function performFetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2, trigger = null, signal = null }) {
+    // Cancellation boundary: the shared.js load itself is awaited work.
+    if (signal?.aborted) throw cancellationError('cancelled before shared.js load');
     const startedAt = Date.now();
     // Panic latch: sampled at dispatch and again immediately before every
     // outbound attempt. The dispatch sample PRECEDES the awaited shared.js
@@ -387,6 +546,9 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
         const cmText = await retryAsync(retries, async (attempt) => {
         attempts = attempt + 1;
         panicSeen = panicNow() || panicSeen;
+        // Cancellation boundary (retryAsync checks before dispatching each
+        // attempt, including this one — sendRequest itself has no signal).
+        if (signal?.aborted) throw cancellationError('cancelled before sendRequest');
         console.log(`[MWT API] Using Connection Profile: ${profileId}, attempt=${attempt}`);
         const result = await ConnectionManagerRequestService.sendRequest(
             profileId,
@@ -462,8 +624,18 @@ export async function fetchViaConnectionProfile({ systemPrompt, userContent, set
         onRetry: (err, attempt, delay) => {
             console.warn(`[MWT API] Connection profile request failed (attempt ${attempt + 1}): ${err.message}. Retrying in ${delay}ms...`);
         },
+        signal,
         });
-        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage });
+        captureApiCall({
+            startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId,
+            attempts, status, finishReason, usage,
+            // Cancellation-aware success capture — see the custom transport.
+            // This is the load-bearing path for it: sendRequest has no signal
+            // parameter, so an aborted job's wire call routinely RESOLVES and
+            // would otherwise be recorded ok:true for a job the coordinator
+            // already settled as cancelled.
+            error: signal?.aborted ? cancellationError('resolved after abort') : null,
+        });
         return cmText;
     } catch (error) {
         captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage, error });

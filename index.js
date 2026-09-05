@@ -11,6 +11,18 @@
 import { getContextSafe } from './core/context.js';
 import { escapeHtml } from './core/diff.js';
 import { bumpEpoch } from './core/scope.js';
+// Generation coordinator (TODO §1 / PI §P1): the central cross-module job
+// queue both API transports submit through. Same direct-import rule as the
+// diagnostics accessors — reads the real singleton regardless of the
+// test-only barrel→stub alias.
+import {
+    beginUserGeneration,
+    endUserGeneration,
+    onChatScopeChanged,
+    pumpCoordinator,
+    getCoordinatorSnapshot,
+    cancelWhere,
+} from './core/coordinator.js';
 import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings.js';
 import { createModal, showModal, setStatus } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
@@ -250,6 +262,23 @@ function renderSettingsTab() {
         <div class="mwt-settings-grid">
             <label class="mwt-label" for="mwt-s-recent-history-exclude">Messages to defer</label>
             <input id="mwt-s-recent-history-exclude" class="mwt-input" type="number" value="${s.recentHistoryExclude ?? 2}" min="0" max="10" step="1">
+        </div>
+
+        <hr style="border-color:var(--mwt-border);margin:16px 0">
+        <h3 style="margin-bottom:8px">🚦 Generation Coordinator</h3>
+        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
+            All tracker API calls go through one central queue. Each module runs at most one generation at a time; this caps how many may run in parallel <em>across</em> modules, so a burst of tracker work cannot stampede your API endpoint (manual clicks always jump ahead of automatic work). Switching chats cancels queued tracker jobs from the old chat. See what's queued any time with <code>MWT.coordinator.status()</code> in the console.
+        </p>
+        <div class="mwt-settings-grid">
+            <label class="mwt-label" for="mwt-s-api-max-concurrent">Max parallel API calls</label>
+            <input id="mwt-s-api-max-concurrent" class="mwt-input" type="number" value="${s.apiMaxConcurrent ?? 2}" min="1" max="8" step="1">
+            <label class="mwt-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="mwt-s-pause-background" ${s.pauseBackgroundJobsDuringGeneration ? 'checked' : ''}>
+                Hold automatic tracker work while you generate
+            </label>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
+                When on, automatic calls (auto-refresh, auto-snapshot, NPC updates, auto-thoughts, …) wait until your own generation finishes. Button-pressed generations are never held.
+            </p>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">
@@ -526,10 +555,18 @@ function renderModal() {
             const recentHistoryExclude = Number.isFinite(rawRecentHistoryExclude)
                 ? Math.min(10, Math.max(0, Math.round(rawRecentHistoryExclude)))
                 : 2;
+            // Generation coordinator (TODO §1): clamp to the coordinator's
+            // supported range; an empty/garbage field falls back to the default.
+            const rawApiMaxConcurrent = Number(modal.querySelector('#mwt-s-api-max-concurrent')?.value);
+            const apiMaxConcurrent = Number.isFinite(rawApiMaxConcurrent)
+                ? Math.min(8, Math.max(1, Math.round(rawApiMaxConcurrent)))
+                : 2;
             const patch = {
                 ...apiValues,
                 connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
                 recentHistoryExclude,
+                apiMaxConcurrent,
+                pauseBackgroundJobsDuringGeneration: modal.querySelector('#mwt-s-pause-background')?.checked ?? false,
                 // Per-module injection settings
                 worldStateDepth: depthOr('#mwt-s-ws-depth', 4),
                 worldStateRole: modal.querySelector('#mwt-s-ws-role')?.value || 'system',
@@ -567,6 +604,10 @@ function renderModal() {
             ui.applyButtonVisibility();
             ui.applyButtonStyle();
             ui.updateButtonStates();
+            // TODO §1 — the coordinator reads its limits live, but queued jobs
+            // only start on the next submit/settle; re-run the scheduler so a
+            // RAISED limit releases them immediately.
+            pumpCoordinator();
             // Re-apply injections so the structural-boundaries toggle takes
             // effect immediately without requiring a new chat message.
             try {
@@ -654,6 +695,11 @@ for (const [resumeStoreId, resumeModuleId] of Object.entries(STORE_MODULE_IDS)) 
 if (eventSource && event_types?.CHAT_CHANGED) {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         bumpEpoch(); // Tier 0.2 — invalidate all in-flight scope tokens BEFORE module handlers
+        // TODO §1 — retire coordinator jobs captured before the switch:
+        // queued copies never start, running ones abort where the backend
+        // supports it. Their results would be discarded by the scope guards
+        // anyway; this stops the spend too.
+        onChatScopeChanged();
         console.log('[MWT] Chat changed — resetting state.');
         // Schema plan Part 6 (§7.4): the synchronous fast load gate runs BEFORE
         // any module handler, so no module reads or injects an unprepared
@@ -714,8 +760,40 @@ function onAnyEvent(names, handler) {
     }
 }
 
-onAnyEvent(['GENERATION_STARTED'], () => Chronicle.onGenerationStarted());
-onAnyEvent(['GENERATION_STOPPED', 'GENERATION_ENDED'], () => Chronicle.onGenerationStopped());
+// The user-generation DEPTH must move exactly once per generation. Registering
+// the decrement on BOTH GENERATION_STOPPED and GENERATION_ENDED (builds can
+// fire the pair for one generation — BUG_REPORTS/01_core.md #4) needs a
+// heuristic to collapse them, and every heuristic has a failure mode: a
+// time-window deduper early-releases when a slow proxy separates the pair by
+// more than the window, and permanently wedges when the terminals of two
+// concurrent generations interleave with no START in between (quiet
+// generations from other extensions emit the same pair). Instead ONE
+// canonical terminal event is selected per build: GENERATION_ENDED when
+// event_types exposes it (it fires exactly once per generation — natural end
+// AND abort — from generate's close-out), else GENERATION_STOPPED (the only
+// terminal older builds have). A single event cannot double-count by
+// construction, and interleaved terminals each unwind their own window. A
+// terminal that never fires at all is bounded by onChatScopeChanged()'s hard
+// depth reset. Chronicle's own busy flag stays registered on BOTH terminals
+// (unchanged) — that module owns its flag semantics.
+const depthTerminalEvent = event_types?.GENERATION_ENDED ? 'GENERATION_ENDED' : 'GENERATION_STOPPED';
+console.log(`[MWT] Generation-depth terminal event: ${depthTerminalEvent}`);
+
+onAnyEvent(['GENERATION_STARTED'], () => {
+    Chronicle.onGenerationStarted();
+    // TODO §1 — the optional "hold background tracker jobs while the user is
+    // generating" policy (Settings tab, default off). Depth-counted inside
+    // the coordinator; the decrement side fires on ONE canonical terminal
+    // event (depthTerminalEvent above), so builds that emit both stop events
+    // cannot double-decrement.
+    beginUserGeneration();
+});
+onAnyEvent(['GENERATION_STOPPED', 'GENERATION_ENDED'], () => {
+    Chronicle.onGenerationStopped();
+});
+onAnyEvent([depthTerminalEvent], () => {
+    endUserGeneration();
+});
 
 // ─── Swipe / edit / delete awareness (F2) ────────────────────────────────────
 // Keep module counters and chronicle anchors in sync when the user mutates chat
@@ -1414,7 +1492,38 @@ try {
         },
     };
 
-    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.npcs.{auditDuplicates,reconcile}, MWT.interiority.{deletions,clearDeletions}');
+    // ── Generation coordinator (TODO §1) ──────────────────────────────────────
+    //
+    // Console twin of the 🚦 Settings section + the coordinator's diagnostics
+    // events: one command answers "what is MWT doing to my API right now?"
+    // status() returns the snapshot AND tables it; cancel() is the emergency
+    // stop (queued jobs never start; running ones abort where the backend
+    // supports it).
+    window.MWT.coordinator = {
+        status: () => {
+            const snap = getCoordinatorSnapshot();
+            const rows = [
+                ...snap.running.map(j => ({ phase: 'running', ...j })),
+                ...snap.queued.map(j => ({ phase: 'queued', ...j })),
+            ];
+            if (rows.length) console.table(rows.map(({ scopeKey, epoch, ...rest }) => rest));
+            else console.log('[MWT] Coordinator idle — nothing running or queued.');
+            console.log(
+                `[MWT] Limits: ${snap.running.length}/${snap.limits.global} global slots in use, ` +
+                `${snap.limits.perModule} per module; user-generation windows: ${snap.userGeneration.depth}` +
+                (snap.userGeneration.backgroundPaused ? ' (background jobs HELD)' : '') + '.'
+            );
+            return snap;
+        },
+        jobs: () => getCoordinatorSnapshot().recentSettled,
+        cancel: (module) => {
+            const counts = cancelWhere(module ? { module } : {});
+            console.log(`[MWT] Cancelled ${counts.queued} queued and aborted ${counts.running} running job(s)${module ? ` for module "${module}"` : ''}.`);
+            return counts;
+        },
+    };
+
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.npcs.{auditDuplicates,reconcile}, MWT.interiority.{deletions,clearDeletions}, MWT.coordinator.{status,jobs,cancel}');
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }

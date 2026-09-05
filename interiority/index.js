@@ -19,7 +19,7 @@
 import {
     getChat, getContextSafe, estimateTokens,
     captureScope, assertSameScope,
-    injectionAllowed, record,
+    injectionAllowed, record, isCancellation,
 } from '../core/index.js';
 
 import {
@@ -373,6 +373,13 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
                     proposedWakeIds = [];
                 }
             } catch (err) {
+                // Coordinator cancellation must STOP the whole old-scope flow
+                // here: swallowing it (the dormant poll is normally
+                // non-blocking) would let this turn continue into the MAIN
+                // generation — a fresh-epoch job carrying the old chat's
+                // prompt that the chat-switch cancellation can no longer
+                // retire. The outer catch below quiet-discards it.
+                if (isCancellation(err)) throw err;
                 console.warn('[MWT:Interiority] Dormant poll failed (non-blocking):', err);
             }
         }
@@ -389,16 +396,18 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
         // 2. Run API call(s).
         //
         // Split mode (§16): when splitThoughts is ON and both features are
-        // enabled, fire two parallel calls — one for intentions, one for
+        // enabled, run two separate calls — one for intentions, one for
         // thoughts — then merge the results into a single object that the
-        // unchanged validateAndApply can process. When OFF, or when only one
-        // feature is enabled, run a single unified call (v1 behavior).
+        // unchanged validateAndApply can process. Both are issued together,
+        // but the coordinator's per-module limit sends them one at a time.
+        // When OFF, or when only one feature is enabled, run a single
+        // unified call (v1 behavior).
         const useSplit = settings.splitThoughts === true && wantThoughts && wantIntentions;
 
         let result;
         let intentionsEvaluatedRoster = [];
         if (useSplit) {
-            console.log('[MWT:Interiority] Split mode ON — running parallel intentions + thoughts calls.');
+            console.log('[MWT:Interiority] Split mode ON — running separate intentions + thoughts calls (issued together, sent one at a time).');
             const { intentionsResult, thoughtsResult } = await runSplitCall(roster, { force, virtuallyActiveIds: proposedWakeIds, trigger });
             // INTERIORITY-02: Cross-chat guard after the parallel pair completes.
             if (!assertSameScope(scopeBefore).ok) {
@@ -489,6 +498,15 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
 
         return { reactions, ledgerChanged };
     } catch (err) {
+        // Coordinator cancellation (TODO §1): chat changed mid-generation and
+        // the coordinator aborted the call. The scope guard would have
+        // discarded the result anyway — return quietly. isCancellation()
+        // covers both the marked JobCancelledError and the native AbortError
+        // of a mid-wire abort.
+        if (isCancellation(err)) {
+            console.log('[MWT:Interiority] Generation cancelled (coordinator) — discarded.');
+            return null;
+        }
         console.error('[MWT:Interiority] Generation failed:', err);
         return null;
     } finally {

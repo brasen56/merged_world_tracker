@@ -12,6 +12,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.4.0]
+
+### Added
+
+- **Central generation coordinator + cancellation model** (`core/coordinator.js`,
+  TODO §1 / PI §P1). The five modules each kept their own busy flag — correct
+  *within* a module, but nothing stopped World State, Chronicle, Knowledge,
+  Story Planner, and Interiority from issuing simultaneous outbound calls
+  *across* modules: API rate-limit bursts, several expensive calls after one
+  message, overlapping notifications, token pressure. One coordinator now owns
+  what is in flight:
+  - **Concurrency limits.** Per-module 1 (matching every module's own
+    busy-flag contract) + a global cap (`apiMaxConcurrent`, default 2, 1–8,
+    read live from the global settings). No head-of-line blocking: a job that
+    cannot start never stops an unrelated module's job.
+  - **Adopted at the transport seam.** Both `fetchFromApi()` and
+    `fetchViaConnectionProfile()` (core/api.js) submit through the coordinator,
+    so every module call — including Knowledge's dossier/growth fetches and
+    every retry/backoff sequence — is coordinated with zero per-module
+    restructuring. A whole fetch-with-retries is one job, so retry storms are
+    throttled too.
+  - **Priorities + trigger classification.** Manual button/slash-command work
+    outranks automatic work when slots free up. The main generation call sites
+    now thread `trigger: 'auto' | 'manual'` (World State full/delta refresh,
+    Story Planner, Chronicle auto-snapshots via `generateSnapshot(isAuto)`,
+    Knowledge state updates via `ktFetchFromApi({ trigger })`; Interiority
+    already threaded its triggers).
+  - **Dedupe of pending jobs.** A submit carrying a `key` joins an equal-key
+    QUEUED job (one run, all awaiters settle together); running work is never
+    joined — the module busy flags own that refusal.
+  - **Cancellation via AbortController, where the backend supports it.**
+    Cancelled queued jobs never start; cancelled running calls abort mid-wire
+    in custom-API mode (`fetch(..., { signal })`) and at every
+    dispatch/backoff boundary in Connection-Manager mode (`sendRequest` has no
+    signal parameter). `retryAsync` never retries an abort. A chat switch
+    (`bumpEpoch()` → `onChatScopeChanged()`) retires every stale-epoch job —
+    queued copies never spend, running ones stop early — using a three-pass
+    sweep so a settle-triggered pump can never start a stale job mid-sweep.
+    Cancellations surface to flows as `_mwtCancelled` and are quietly
+    discarded (logged, no failure toast/status); the Last-request tab records
+    them as `errorClass: 'cancelled'`, not failed.
+  - **Unified busy/queued/cancelled/failed status.** `getCoordinatorSnapshot()`
+    (JSON-safe job records with wait/duration timings), `coordinator` events
+    in the 📋 Log tab ring, `mwt:busy-changed` dispatch on transitions, and a
+    console bridge: `MWT.coordinator.status()` (tables running+queued, returns
+    the snapshot), `.jobs()` (settled history), `.cancel(module?)` (emergency
+    stop).
+  - **Optional "hold automatic tracker work while you generate" policy.**
+    Global setting `pauseBackgroundJobsDuringGeneration` (default off),
+    driven by ST `GENERATION_STARTED` plus ONE canonical terminal event
+    (`GENERATION_ENDED` when the build exposes it, else
+    `GENERATION_STOPPED`) and depth-counted, so a build that fires both stop
+    events for one generation (BUG REPORTS/01_core.md #4) cannot
+    double-decrement. Manual work is never held.
+  - **Settings UI** (Settings tab → 🚦 Generation Coordinator): the parallel
+    cap + the hold-during-generation toggle; saving re-runs the scheduler so a
+    raised cap releases queued jobs immediately.
+  - **Test seam parity.** The coordinator is a pure module with injectable
+    resolvers (`_setCoordinatorResolvers`), re-exported through the
+    core/index.js barrel and mirrored in `test/stubs/core.js`
+    (`resetCoreStubs()` now clears the singleton). Pinned end-to-end by the
+    new `test/coordinator.test.js` (limits, priorities, dedupe, every
+    cancellation path, the epoch-based chat-switch retirement, and the
+    transport adoption contract). Suite: 76 files / 1947 tests → **77 / 1983**.
+
+### Fixed
+
+- **Coordinator cancellation leaked into stale retries and user-facing
+  failures** — three gaps in the adoption of the coordinator above, all
+  violating its "cancellation is a quiet discard, never a failure" contract:
+  - **Knowledge JSON-recovery retry loops** (`runNpcUpdate`, `runNpcEnrich`,
+    `runDossierFieldRefresh` in `knowledge/lorebook.js`) caught the
+    coordinator's cancellation errors like parse failures and retried —
+    spending a FRESH job at the new epoch (which the chat-scope retirement
+    can no longer cancel) on the OLD chat's prompt. Cancellation is now
+    rethrown immediately via the shared `isCancellation()` (recognizes both
+    the marked `JobCancelledError` and the native mid-wire `AbortError`).
+    Pinned by new tests in `test/dossier_field_refresh.test.js`.
+  - **World State section regeneration** (`world_state/sections.js`) had no
+    cancellation catch, so a chat switch mid-regen rejected through to the UI
+    as "Section regen failed". It now quietly returns `null` like
+    `refreshWorldState()` / `refreshWorldStateDelta()`, and the 🎲 handler
+    reports a neutral "Section regen aborted." info status for every null
+    discard. Pinned by a new test in `test/world_state_delta.test.js`.
+  - **Knowledge workflow boundaries** (the manual Scan / NPC-Update / Enrich /
+    State-Update / Field-Refresh handlers in `knowledge/render.js`, and the
+    auto state-update / auto-scan / relationship-extract catches in
+    `knowledge/index.js`) reported cancellation as error toasts, statuses, or
+    warnings. Each boundary now discards cancellation quietly and stops the
+    surrounding auto run (its remaining steps would submit fresh stale-context
+    jobs); real errors still surface unchanged.
+
 ## [2.3.1]
 
 ### Added

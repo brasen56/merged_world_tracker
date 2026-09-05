@@ -32,8 +32,17 @@
 import {
     getChat, getChatMeta, stripNonNarrative, getCurrentWorldState,
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
-    getStableHistoryEnd,
+    getStableHistoryEnd, captureScope, isCancellation,
 } from '../core/index.js';
+// scopeStillCurrent (not the barrel's strict assertSameScope): the capture
+// guards must not false-fire on hosts with an UNKNOWN chat identity —
+// getChatIdentity() issues a fresh nonce per call there, so strict identity
+// equality would mark every capture stale and continuous capture could never
+// write. The epoch check is the authoritative chat-switch signal; identity is
+// additionally required whenever the capture actually identified the chat.
+// Direct import (not the barrel) so the REAL scope module is read under the
+// test barrel→stub alias.
+import { scopeStillCurrent } from '../core/scope.js';
 // Part 6 (§7.4) pause guard for the Growth profiler's direct entry points.
 // Direct import (not the barrel) so the REAL pause singleton is read even under
 // the test barrel→stub alias — the same rule knowledge/index.js applies to its
@@ -1030,6 +1039,10 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
  * exception: see refuseIfGrowthPaused.)
  *
  * @param {string} name — NPC name (must exist in the registry)
+ * @param {object} [opts]
+ * @param {string} [opts.trigger=null] — cause of the API call; threaded down
+ *   so the coordinator classifies auto-cadence captures as background work
+ *   (trigger-less manual paths stay foreground by design)
  * @returns {Promise<{added:number, skipped:number, maxTs:number}|null>}
  *   null = nothing to capture (delta too small or NPC not in recent messages)
  * @throws {Error} when Knowledge is paused for the current chat/scope — this
@@ -1041,6 +1054,12 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
 export async function runContinuousCapture(name, opts = {}) {
     refuseIfGrowthPaused();
     if (!hasValidSettings()) return null;
+
+    // KNOWLEDGE-04: scope token for the pre-write assert below. This function
+    // is the lower-level choke point every capture path flows through, and the
+    // multi-NPC loop's own guard runs only AFTER a full pass — far too late to
+    // stop these writes.
+    const scopeBefore = captureScope();
 
     const registry = getRegistry();
     const info = registry[name];
@@ -1085,7 +1104,16 @@ export async function runContinuousCapture(name, opts = {}) {
         `Extract behavioral observations about ${name} from these recent messages. Output only JSON.`,
     ].filter(Boolean).join('\n');
 
-    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries });
+    const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries, trigger: opts.trigger ?? null });
+    // KNOWLEDGE-04: the API await is the long gap. A chat switch during it
+    // means these observations belong to the outgoing chat and MUST NOT be
+    // appended through the now-current evidence store — the caller's outer
+    // check happens only after the full multi-NPC run and cannot undo a
+    // write. Quiet no-op (no observations, no watermark advance).
+    if (!scopeStillCurrent(scopeBefore).ok) {
+        console.log(`[MWT:Knowledge] Continuous capture for "${name}" discarded — chat changed during API call.`);
+        return null;
+    }
     const cleaned = normaliseOutput(rawResponse);
     const result = parseJsonLenient(cleaned);
 
@@ -1143,11 +1171,19 @@ export async function runContinuousCapture(name, opts = {}) {
  * `attempted` lets the caller distinguish "ran and found nothing" from "no
  * eligible NPCs, nothing ran at all".
  *
+ * Cancellation (coordinator) and a mid-run chat switch are the two exceptions
+ * to the best-effort rule: the loop STOPS immediately (rethrowing a
+ * coordinator cancellation) instead of continuing — every further iteration
+ * would submit fresh-epoch jobs for an orchestration run that began in the
+ * old scope.
+ *
  * @returns {Promise<{
  *   results: {npc:string, added:number}[],
  *   errors: {npc:string, message:string, isLength:boolean}[],
  *   attempted: number
  * }>}
+ * @throws rethrows a coordinator cancellation so the caller quiet-discards
+ *   instead of reporting the run as a per-NPC failure
  */
 export async function runContinuousCaptureAll() {
     const registry = getRegistry();
@@ -1155,16 +1191,33 @@ export async function runContinuousCaptureAll() {
     const errors = [];
     let attempted = 0;
 
+    // KNOWLEDGE-04: the whole multi-NPC pass belongs to the chat it started
+    // in. Checked before EVERY iteration — the per-capture guard inside
+    // runContinuousCapture refuses the writes, but without this the loop
+    // would keep spending fresh-epoch API calls on the old run's roster.
+    const scopeBefore = captureScope();
+
     for (const [name, info] of Object.entries(registry)) {
+        if (!scopeStillCurrent(scopeBefore).ok) {
+            console.log('[MWT:Knowledge] Continuous capture loop stopped — chat changed mid-run.');
+            break;
+        }
         // Only major NPCs with existing evidence files get continuous capture.
         // Minor NPCs or those without a profile yet are skipped (registry gate).
         if (info.type !== 'major') continue;
         if (!hasEvidenceFile(name)) continue;
         attempted++;
         try {
-            const res = await runContinuousCapture(name);
+            // Coordinator classification (TODO §1): the cadence-driven capture
+            // is background work — trigger-less would classify as a manual
+            // foreground call that the user-generation policy cannot hold.
+            const res = await runContinuousCapture(name, { trigger: 'auto' });
             if (res && res.added > 0) results.push({ npc: name, added: res.added });
         } catch (err) {
+            // Coordinator cancellation stops the whole run: continuing would
+            // submit fresh-epoch jobs for an orchestration that began in the
+            // old scope. Rethrown to the caller's quiet-discard path.
+            if (isCancellation(err)) throw err;
             console.warn(`[MWT:Knowledge] Continuous capture for "${name}" failed:`, err.message);
             errors.push({
                 npc: name,

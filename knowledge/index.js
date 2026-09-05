@@ -5,7 +5,7 @@
  * consumed by the root index.js.  All implementation lives in sub-files.
  */
 
-import { getChat, escapeRegex, estimateTokens, getChatMeta, persistChatMeta, preserveQuarantinedRecords, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
+import { getChat, escapeRegex, estimateTokens, getChatMeta, persistChatMeta, preserveQuarantinedRecords, captureScope, assertSameScope, getOrCreateReceiptIdentity, isCancellation } from '../core/index.js';
 import { prepareNextStoreValue } from '../core/schema.js';
 // Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias — the same
@@ -318,11 +318,24 @@ export function onMessageReceived({ countMessage = true } = {}) {
             }
             // No toast for "attempted but found nothing" — that's the quiet
             // no-op path. Errors (above) are the exception.
-        }).catch(err => {
+        }).catch(async err => {
+            // Coordinator cancellation (TODO §1): chat changed mid-run (or an
+            // explicit cancel) and runContinuousCaptureAll rethrew to stop the
+            // loop — quiet discard, never a failure toast for work the
+            // coordinator stopped on purpose.
+            if (isCancellation(err)) {
+                console.log('[MWT:Knowledge] Continuous capture cancelled (coordinator) — discarded.');
+                // Resolve the debug start toast the same way the scope-discard
+                // branch above does, so it does not dangle.
+                if (settings.growthDebugToasts) {
+                    const { notify } = await import('../core/index.js');
+                    notify('Knowledge Tracker', '🌱 Growth capture cancelled (chat changed).', 'info');
+                }
+                return;
+            }
             console.warn('[MWT:Knowledge] Continuous capture pass failed:', err.message);
-            import('../core/index.js').then(({ notify }) =>
-                notify('Knowledge Tracker', `🌱 Growth capture failed: ${err.message}`, 'error')
-            );
+            const { notify } = await import('../core/index.js');
+            notify('Knowledge Tracker', `🌱 Growth capture failed: ${err.message}`, 'error');
         });
     }
 
@@ -367,7 +380,9 @@ export function onMessageReceived({ countMessage = true } = {}) {
                         return;
                     }
                     try {
-                        const result = await runStateUpdate(name, info.uid);
+                        // Coordinator classification (TODO §1): the counter-
+                        // driven auto-update is background work.
+                        const result = await runStateUpdate(name, info.uid, { trigger: 'auto' });
                         if (result.unchanged) { bumpStateTrackerTimestamp(name); continue; }
                         const stagingItem = {
                             id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'state', action: 'update', name, data: {},
@@ -401,7 +416,18 @@ export function onMessageReceived({ countMessage = true } = {}) {
                         }
                         addNotificationEntry(stagingItem);
                         staged++;
-                    } catch (err) { console.warn(`[MWT:Knowledge] Auto-update "${name}" failed:`, err.message); }
+                    } catch (err) {
+                        // Coordinator cancellation (TODO §1): quiet discard,
+                        // and stop the auto-trigger run — the remaining
+                        // per-NPC updates and the scan/extract steps below
+                        // would just submit fresh jobs built from the stopped
+                        // run's stale context.
+                        if (isCancellation(err)) {
+                            console.log(`[MWT:Knowledge] Auto-update "${name}" cancelled (coordinator) — discarded.`);
+                            return;
+                        }
+                        console.warn(`[MWT:Knowledge] Auto-update "${name}" failed:`, err.message);
+                    }
                 }
                 if (staged > 0) {
                     console.log(`[MWT:Knowledge] Auto-trigger: ${staged} state proposal(s) staged.`);
@@ -413,7 +439,11 @@ export function onMessageReceived({ countMessage = true } = {}) {
             // ── NPC auto-scan ──
             if (doNpc) {
                 try {
-                    const result = await runScan();
+                    // Coordinator classification (TODO §1): the cadence-driven
+                    // scan is background work; trigger-less would classify as a
+                    // manual foreground call the user-generation policy cannot
+                    // hold.
+                    const result = await runScan({ trigger: 'auto' });
                     // Re-check chat identity after the long API await. A chat
                     // switch mid-scan means these results belong to the old
                     // chat and must not be written into the new chat's staging
@@ -443,6 +473,15 @@ export function onMessageReceived({ countMessage = true } = {}) {
                     }
                     renderNpcsSubTab();
                 } catch (err) {
+                    // Coordinator cancellation (TODO §1): quiet discard — never
+                    // a failure warning for work the coordinator stopped on
+                    // purpose, and stop the run: the relationship extract
+                    // below would otherwise submit a fresh job for the same
+                    // stale context.
+                    if (isCancellation(err)) {
+                        console.log('[MWT:Knowledge] Auto-scan cancelled (coordinator) — discarded.');
+                        return;
+                    }
                     console.warn('[MWT:Knowledge] Auto-scan failed:', err.message);
                 }
             }
@@ -455,7 +494,10 @@ export function onMessageReceived({ countMessage = true } = {}) {
             // affected NPC's entry.
             if (doRel) {
                 try {
-                    const extract = await runRelationshipExtract();
+                    // Coordinator classification (TODO §1): same rule as the
+                    // auto-scan above — the cadence-driven extract is
+                    // background work.
+                    const extract = await runRelationshipExtract({ trigger: 'auto' });
                     // Re-check scope after the API round-trip.
                     if (!assertSameScope(scopeBefore).ok) {
                         console.log('[MWT:Knowledge] Relationship extract discarded — chat changed during API call.');
@@ -504,6 +546,12 @@ export function onMessageReceived({ countMessage = true } = {}) {
                         notify('Knowledge Tracker', `🔗 Relationships logged${detail}.`, 'success');
                     }
                 } catch (err) {
+                    // Coordinator cancellation — quiet discard like auto-scan
+                    // (TODO §1): never a failure warning/toast.
+                    if (isCancellation(err)) {
+                        console.log('[MWT:Knowledge] Relationship extract cancelled (coordinator) — discarded.');
+                        return;
+                    }
                     console.warn('[MWT:Knowledge] Relationship extract failed:', err.message);
                     const { notify } = await import('../core/index.js');
                     notify('Knowledge Tracker', `🔗 Relationship logging failed: ${err.message}`, 'error');

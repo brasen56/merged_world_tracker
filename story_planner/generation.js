@@ -9,7 +9,7 @@ import {
     resolveApiCall, normaliseOutput, notify,
     getCurrentWorldState, getLatestChronicleEntry,
     stripNonNarrative, getStableHistoryEnd,
-    captureScope, assertSameScope,
+    captureScope, assertSameScope, isCancellation,
     captureRevision, sameRevision,
     wrapTag, escapePromptText,
 } from '../core/index.js';
@@ -239,6 +239,9 @@ export async function generatePlan(isAuto = false) {
             systemPrompt,
             userContent: buildUserPrompt(recent),
             settings: resolved.settings,
+            // Coordinator classification (TODO §1): scheduled auto-plans are
+            // background work; the Generate button is foreground.
+            trigger: isAuto ? 'auto' : 'manual',
         });
         let text = normaliseOutput(result);
         let validation = validateOutput(text, expectHeader);
@@ -250,6 +253,7 @@ export async function generatePlan(isAuto = false) {
                 systemPrompt,
                 userContent: buildUserPrompt(recent, validation.reason),
                 settings: resolved2.settings,
+                trigger: isAuto ? 'auto' : 'manual',
             });
             text = normaliseOutput(result);
             validation = validateOutput(text, expectHeader);
@@ -302,6 +306,15 @@ export async function generatePlan(isAuto = false) {
         console.log(`[MWT:StoryPlanner] Plan generated — ${matched} arcs kept with progress, ${added} new, ${carried} carried forward (${newArcs.length} total)`);
         return newArcs;
     } catch (err) {
+        // Coordinator cancellation (TODO §1): the chat changed mid-generation
+        // and the coordinator aborted the call. The scope guard would have
+        // discarded the result anyway — return quietly. isCancellation()
+        // covers both the marked JobCancelledError and the native AbortError
+        // of a mid-wire abort.
+        if (isCancellation(err)) {
+            console.log('[MWT:StoryPlanner] Generation cancelled (coordinator) — discarded.');
+            return null;
+        }
         console.error('[MWT:StoryPlanner] Generation failed:', err);
         if (!isAuto) notify('Story Planner', `Generation failed: ${err.message}`, 'error');
         throw err;

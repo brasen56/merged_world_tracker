@@ -215,3 +215,73 @@ describe('the dormant poll names its cause with a :dormant_poll suffix', () => {
         expect(apiCalls[0].userContent).toContain('<dormant_intentions>');
     });
 });
+
+describe('a native AbortError is a cancellation, not a parse failure', () => {
+    // The coordinator's composed signal aborts fetch() mid-wire, which
+    // rejects with an UNMARKED native AbortError (no `_mwtCancelled`). Every
+    // catch site must recognize it via isCancellation(): the marker-only
+    // check used to mistake it for an API/parse failure — fetchAndParse then
+    // spent a second, fresh-epoch attempt on the old chat's prompt, and the
+    // dormant-poll catch swallowed it and continued into the MAIN call.
+
+    /** Exactly what fetch() rejects with when the signal fires mid-wire. */
+    function nativeAbort() {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        return err;
+    }
+
+    /** A dormant (scheduled) ledger entry — the poll's subject. */
+    function seedDormantEntry() {
+        return addLedgerEntry(
+            {
+                npc: 'Jonas',
+                action: 'sabotage the festival bell',
+                trigger: 'the night before the harvest festival',
+                status: 'dormant',
+                wakeHint: 'harvest festival',
+            },
+            'day 1',
+            0,
+        );
+    }
+
+    test('the main call makes exactly ONE wire attempt and quiet-discards', async () => {
+        setFakeChat(makeChat());
+        seedRoster();
+        setPerMessage(getOrCreateMsgKeyForIndex(1), { reactions: [{ npc: 'Mara', thought: 'old' }] });
+        setFakeApi(async () => {
+            apiCalls.push(true);
+            throw nativeAbort();
+        });
+
+        // Must not throw: the orchestrator's catch quiet-discards it.
+        await onMessageReceived(1);
+        await flushWorkQueue();
+
+        expect(apiCalls).toHaveLength(1);
+    });
+
+    test('a cancelled dormant poll stops the whole flow — no main generation follows', async () => {
+        setFakeChat(makeChat());
+        seedRoster();
+        seedDormantEntry();
+        setPerMessage(getOrCreateMsgKeyForIndex(1), { reactions: [{ npc: 'Mara', thought: 'old' }] });
+        // Interval 1 + the look-ahead-by-one scheduler ⇒ due on turn one.
+        saveSettings({ apiUrl: 'http://example.test/v1', modelName: 'test-model', dormantPollInterval: 1 });
+        setFakeApi(async (req) => {
+            apiCalls.push(req);
+            if (String(req.userContent).includes('<dormant_intentions>')) throw nativeAbort();
+            return '{"npcs": []}';
+        });
+
+        await onMessageReceived(1);
+        await flushWorkQueue();
+
+        // Exactly ONE wire attempt total: the poll. The dormant-poll catch
+        // used to swallow the cancellation and continue into the MAIN call —
+        // a fresh-epoch job carrying the old chat's prompt.
+        expect(apiCalls).toHaveLength(1);
+        expect(String(apiCalls[0].userContent)).toContain('<dormant_intentions>');
+    });
+});

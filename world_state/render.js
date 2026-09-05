@@ -859,6 +859,13 @@ export function wireEvents() {
                 refreshRevertButton();
                 refreshProvenancePanel();
                 setStatus(state.modal, `Section "${sectionName}" regenerated (${VARIETY_LABELS[variety]}).`, 'success', 3000);
+            } else {
+                // null = quiet discard (coordinator cancellation on a chat
+                // switch, a mid-flight edit of this section, or a refused
+                // store write) — regenerateSection() already logged why.
+                // Neutral info, not an error, mirroring #ws-refresh's null
+                // handling ("Refresh aborted.").
+                setStatus(state.modal, 'Section regen aborted.', 'info');
             }
         } catch (err) {
             setStatus(state.modal, `Section regen failed: ${err.message}`, 'error');

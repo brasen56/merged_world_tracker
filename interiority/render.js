@@ -370,8 +370,8 @@ export function renderSettingsPanel() {
             </div>
 
             <div style="margin-top:12px">
-                <label><input type="checkbox" id="mwt-int-split-thoughts" ${s.splitThoughts === true ? 'checked' : ''}> Rich thoughts (separate call) — <span style="color:var(--mwt-text-dim)">uses two parallel API calls per turn</span></label>
-                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON and both features are enabled, intentions and thoughts run as two parallel calls — enabling a dedicated craft prompt and richer context for thoughts (v2 groundwork). Roughly doubles interiority's per-turn token cost. OFF = the original single unified call.</p>
+                <label><input type="checkbox" id="mwt-int-split-thoughts" ${s.splitThoughts === true ? 'checked' : ''}> Rich thoughts (separate call) — <span style="color:var(--mwt-text-dim)">uses two separate API calls per turn</span></label>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON and both features are enabled, intentions and thoughts run as two separate calls — issued together but sent one at a time (the coordinator allows one outbound call per module at a time) — enabling a dedicated craft prompt and richer context for thoughts (v2 groundwork). Roughly doubles interiority's per-turn token cost. OFF = the original single unified call.</p>
             </div>
 
             <div id="mwt-int-v2-dials" style="margin-top:12px;padding:8px 12px;border:1px solid var(--mwt-border);border-radius:4px;${s.splitThoughts === true ? '' : 'display:none'}">

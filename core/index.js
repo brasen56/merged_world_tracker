@@ -6,6 +6,25 @@
 
 export { getContextSafe, getChat, getChatMeta, setChatMeta, getSetExtensionPrompt, escapeRegex, estimateTokens, getPlayerNames, getUserNames, getRecentMessages, getRecentHistoryExclude, getStableHistoryEnd, DEFAULT_RECENT_HISTORY_EXCLUDE, MAX_RECENT_HISTORY_EXCLUDE, sendDateToMs } from './context.js';
 export { normalizeApiBase, fetchFromApi, fetchViaConnectionProfile, resolveApiCall, normaliseOutput, retryAsync, parseJsonLenient } from './api.js';
+// Generation coordinator (TODO §1 / PI §P1) — central cross-module job
+// queue, concurrency limits, priorities, dedupe, cancellation, and the
+// optional "hold background jobs while the user is generating" policy.
+// Pure module; mirrored in test/stubs/core.js for the barrel→stub alias.
+export {
+    submitJob,
+    cancelWhere,
+    onChatScopeChanged,
+    beginUserGeneration,
+    endUserGeneration,
+    pumpCoordinator,
+    getCoordinatorSnapshot,
+    isCancellation,
+    PRIORITY,
+    PER_MODULE_LIMIT,
+    DEFAULT_GLOBAL_LIMIT,
+    MAX_GLOBAL_LIMIT,
+    SETTLED_HISTORY_CAP,
+} from './coordinator.js';
 export { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from './diff.js';
 export { createSettingsManager, syncSharedConnectionSettings, getGlobalSettings, injectionAllowed } from './settings.js';
 export { createModal, showModal, hideModal, setStatus, formatDate } from './modal.js';

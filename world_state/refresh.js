@@ -9,7 +9,7 @@ import {
     getChat,
     getStableHistoryEnd,
     resolveApiCall, normaliseOutput, stripNonNarrative,
-    captureScope, assertSameScope,
+    captureScope, assertSameScope, isCancellation,
     captureRevision, sameRevision,
     getOrCreateReceiptIdentity,
     truncateText,
@@ -484,6 +484,10 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             systemPrompt,
             userContent: buildUserMessage(scanWindowText),
             settings: _wsApi1.settings,
+            // Coordinator classification (TODO §1): a scheduled refresh is
+            // background work the user-generation policy may hold; a button
+            // press is foreground.
+            trigger: isAuto ? 'auto' : 'manual',
         });
         let text = normaliseOutput(result);
         let validation = validateOutput(text);
@@ -495,6 +499,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                 systemPrompt,
                 userContent: buildUserMessage(scanWindowText, validation.reason),
                 settings: _wsApi2.settings,
+                trigger: isAuto ? 'auto' : 'manual',
             });
             text = normaliseOutput(result);
             validation = validateOutput(text);
@@ -538,6 +543,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                     systemPrompt,
                     userContent: buildUserMessage(scanWindowText, grounding.reason),
                     settings: _wsApi3.settings,
+                    trigger: isAuto ? 'auto' : 'manual',
                 });
                 text = normaliseOutput(result);
                 validation = validateOutput(text);
@@ -623,6 +629,16 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         console.log(`[MWT:WorldState] Refresh complete (${text.length} chars)`);
         return text;
     } catch (err) {
+        // Coordinator cancellation (TODO §1): the chat changed mid-refresh and
+        // the coordinator aborted the call, or the queued job was retired
+        // before it started. The scope guards would have discarded the result
+        // anyway — return quietly instead of surfacing a failure.
+        // isCancellation() covers both the marked JobCancelledError and the
+        // native AbortError of a mid-wire abort.
+        if (isCancellation(err)) {
+            console.log('[MWT:WorldState] Refresh cancelled (coordinator) — discarded.');
+            return null;
+        }
         console.error('[MWT:WorldState] Refresh failed:', err);
         throw err;
     } finally {
@@ -738,6 +754,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
             systemPrompt,
             userContent: buildDeltaUserMessage({ prevText, recentText: scanWindow.text }),
             settings: _wsApiD1.settings,
+            trigger: isAuto ? 'auto' : 'manual',
         });
         let parsed = parseDeltaPatch(normaliseOutput(result));
 
@@ -748,6 +765,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
                 systemPrompt,
                 userContent: buildDeltaUserMessage({ prevText, recentText: scanWindow.text, reminderReason: parsed.reason }),
                 settings: _wsApiD2.settings,
+                trigger: isAuto ? 'auto' : 'manual',
             });
             parsed = parseDeltaPatch(normaliseOutput(result));
             if (!parsed.ok) throw new DeltaPatchError(`Model patch rejected after retry: ${parsed.reason}`);
@@ -863,6 +881,11 @@ export async function refreshWorldStateDelta(isAuto = false) {
         console.log(`[MWT:WorldState] Delta refresh complete (${parsed.ops.length} op(s), ${finalText.length} chars).`);
         return finalText;
     } catch (err) {
+        // Coordinator cancellation — see the full-refresh catch above.
+        if (isCancellation(err)) {
+            console.log('[MWT:WorldState] Delta refresh cancelled (coordinator) — discarded.');
+            return null;
+        }
         console.error('[MWT:WorldState] Delta refresh failed:', err);
         throw err;
     } finally {

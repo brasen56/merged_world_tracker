@@ -12,7 +12,7 @@ import {
     getChatMeta, getContextSafe, getRecentMessages, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getCurrentWorldState, escapeRegex,
-    assertSameScope,
+    assertSameScope, isCancellation,
 } from '../core/index.js';
 
 import { REGISTRY_KEY } from '../knowledge/state.js';
@@ -578,15 +578,22 @@ export async function runBatchedCall(roster, { virtuallyActiveIds = [], trigger 
 // ─── Split-call mode (v2 §16) ────────────────────────────────────────────────
 
 /**
- * Run two parallel batched calls — one for intentions only, one for thoughts
+ * Run the two split batched calls — one for intentions only, one for thoughts
  * only — and return both results. Each call is independently error-isolated:
  * a failure in one returns null without affecting the other.
+ *
+ * Both calls are ISSUED together (one Promise.all) but the coordinator's
+ * per-module limit serializes the wire calls one-at-a-time — both occupy the
+ * interiority module lane. §16's original "two parallel calls" design predates
+ * the coordinator; one-outbound-call-per-module is the deliberate contract
+ * now, so the split is about prompt/context separation, not transport-level
+ * parallelism.
  *
  * Both calls see the SAME message window and roster. The thoughts call sees
  * the pre-mutation ledger (including dormant entries once §20 ships); the
  * intentions call evaluates and mutates it. Because validation happens later
  * in validateAndApply (after both calls complete), neither call mutates
- * shared state during execution — parallel execution is safe.
+ * shared state during execution — concurrent issuance is safe.
  *
  * §21 cost dials apply to the thoughts side only (intentions always run):
  *  - `thoughtsInterval` (N): skip the thoughts call on turns where
@@ -644,6 +651,14 @@ export async function runSplitCall(roster, { force = false, virtuallyActiveIds =
                 thoughts: false, intentions: true, label: 'intentions', virtuallyActiveIds, trigger,
             })
                 .catch(err => {
+                    // Coordinator cancellation (chat switch / explicit cancel)
+                    // is a quiet discard like every other adoption site —
+                    // isCancellation() covers the marked JobCancelledError
+                    // and the native mid-wire AbortError.
+                    if (isCancellation(err)) {
+                        console.log('[MWT:Interiority] Intentions call cancelled (coordinator) — discarded.');
+                        return null;
+                    }
                     console.error('[MWT:Interiority] Intentions call failed:', err);
                     return null;
                 })
@@ -651,6 +666,11 @@ export async function runSplitCall(roster, { force = false, virtuallyActiveIds =
         runThoughts
             ? _runCall(thoughtsRoster, { thoughts: true, intentions: false, label: 'thoughts', useRichThoughtsContext: true, trigger })
                 .catch(err => {
+                    // See the intentions catch above — quiet cancellation.
+                    if (isCancellation(err)) {
+                        console.log('[MWT:Interiority] Thoughts call cancelled (coordinator) — discarded.');
+                        return null;
+                    }
                     console.error('[MWT:Interiority] Thoughts call failed:', err);
                     return null;
                 })
@@ -937,6 +957,16 @@ async function fetchAndParse(systemPrompt, userContent, settings, { trigger = nu
             const result = parseJsonLenient(cleaned);
             return result;
         } catch (err) {
+            // Coordinator cancellation (TODO §1): the call was aborted on
+            // purpose (chat switch / explicit cancel) — rethrow immediately;
+            // a retry would queue a fresh request the coordinator just
+            // retired. Recognized by the caller's quiet-discard path.
+            // isCancellation() covers both the marked JobCancelledError and
+            // the NATIVE AbortError fetch() rejects with — the marker-only
+            // check used to mistake the latter for a parse failure and spend
+            // a second (fresh-epoch, uncancellable) attempt on the old
+            // chat's prompt.
+            if (isCancellation(err)) throw err;
             console.warn(`[MWT:Interiority] API/parse attempt ${attempt} failed: ${err.message}`);
             if (cleaned) {
                 console.warn(`[MWT:Interiority] Normalised output that failed to parse (first 800 chars):\n${cleaned.slice(0, 800)}`);

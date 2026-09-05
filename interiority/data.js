@@ -182,8 +182,9 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // Feature toggles — users may want only thoughts or only intentions
         generateThoughts: true,
         generateIntentions: true,
-        // v2 split-call: when true AND both features are enabled, fire two
-        // parallel calls (intentions + thoughts) instead of one unified call.
+        // v2 split-call: when true AND both features are enabled, run two
+        // separate calls (intentions + thoughts) instead of one unified call.
+        // Issued together, sent one at a time (per-module coordinator limit).
         // Default off = byte-identical v1 behavior. See §16.
         splitThoughts: false,
         // §21 v2 cost dials (only meaningful when splitThoughts is ON):

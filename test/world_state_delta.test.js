@@ -825,6 +825,28 @@ describe('refreshWorldStateDelta / runScheduledWorldStateRefresh', () => {
         expect(requests.at(-1).userContent).toContain('Message number 3');
     });
 
+    test('section regeneration quietly discards a coordinator cancellation', async () => {
+        const { regenerateSection } = await import('../world_state/sections.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        seedReconciledDoc(BASELINE);
+        // A mid-wire abort rejects the fetch with a native AbortError — the
+        // shape the coordinator's composed signal produces when a chat switch
+        // retires the job. The regen must resolve to null (quiet discard),
+        // never surface as a user-facing failure, and never spend a grounding
+        // retry on the cancelled call.
+        const aborted = new Error('The operation was aborted');
+        aborted.name = 'AbortError';
+        CURRENT_FAKE_RESPONSE = () => { throw aborted; };
+
+        await expect(regenerateSection('Pending', 2)).resolves.toBeNull();
+
+        expect(requests).toHaveLength(1);
+        expect(getWorldStateText()).toBe(BASELINE);
+        // The finally still released the busy flag — a leak would wedge the
+        // module's refresh gate for every later action.
+        expect(state.wstIsRefreshing).toBe(false);
+    });
+
     // ── The oversized-gap fallback must cover the interval ──
 
     test('an oversized gap triggers a catch-up that scans the OLDEST unseen messages', async () => {

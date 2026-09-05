@@ -230,6 +230,38 @@ describe('runDossierFieldRefresh', () => {
         expect(apiCalls.length).toBe(2);
     });
 
+    test('a coordinator cancellation is rethrown immediately — no second attempt', async () => {
+        // The chat changed mid-call and the coordinator retired the job. The
+        // retry loop must rethrow instead of retrying: a fresh submit would
+        // run at the NEW epoch, which the chat-scope retirement can no longer
+        // cancel — a second request spent on the old chat's prompt.
+        const cancelled = new Error('Job cancelled (chat scope changed)');
+        cancelled.name = 'JobCancelledError';
+        cancelled._mwtCancelled = true;
+        setFakeApi(req => {
+            apiCalls.push(req);
+            throw cancelled;
+        });
+        await expect(runDossierFieldRefresh(NPC, 7, ['agenda'])).rejects.toMatchObject({ _mwtCancelled: true });
+        // The same guard stands in runNpcUpdate / runNpcEnrich's identical
+        // retry loops; this pins the shared contract for all three.
+        expect(apiCalls.length).toBe(1);
+    });
+
+    test('a native AbortError (mid-wire abort) is equally not retried', async () => {
+        // A running call aborted by the coordinator's composed signal rejects
+        // with a native AbortError that carries no `_mwtCancelled` marker —
+        // isCancellation() must still recognize it.
+        const aborted = new Error('The operation was aborted');
+        aborted.name = 'AbortError';
+        setFakeApi(req => {
+            apiCalls.push(req);
+            throw aborted;
+        });
+        await expect(runDossierFieldRefresh(NPC, 7, ['agenda'])).rejects.toMatchObject({ name: 'AbortError' });
+        expect(apiCalls.length).toBe(1);
+    });
+
     test('refuses a non-dossier entry (the Enrich-first gate)', async () => {
         wiFake.books.set('Knowledge Tracker', {
             entries: { 7: { uid: 7, comment: NPC, content: 'Mara Voss | Human | harbourmaster\nTone: brisk' } },

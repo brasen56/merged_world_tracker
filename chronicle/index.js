@@ -135,7 +135,7 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     // failure apart from a mid-generation chat switch. Uses the scope guard
     // (getCurrentChatId + epoch) instead of the old weak key.
     const scopeBefore = captureScope();
-    const snapshot = await generateSnapshot();
+    const snapshot = await generateSnapshot(true);
     // On failure, reset the counter (success resets inside generateSnapshot).
     // Without this, a persistent failure (API down, empty output) left the
     // counter at ≥ threshold, causing every subsequent MESSAGE_RECEIVED to

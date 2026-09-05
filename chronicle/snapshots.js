@@ -12,7 +12,7 @@ import {
     getCurrentWorldState,
     WORLD_STATE_METADATA_KEY,
     patchChatMeta,
-    captureScope, assertSameScope,
+    captureScope, assertSameScope, isCancellation,
 } from '../core/index.js';
 
 import { applyWorldStateInjection } from '../world_state/index.js';
@@ -163,7 +163,7 @@ function chroniclePaused() {
 
 // ─── Generate snapshot ───────────────────────────────────────────────────────
 
-export async function generateSnapshot() {
+export async function generateSnapshot(isAuto = false) {
     if (chroniclePaused()) return null;
     if (state.isGenerating) { scSetStatus('Generation already in progress.', 'error'); return null; }
     if (state.isMainGenerating) {
@@ -224,12 +224,15 @@ export async function generateSnapshot() {
 
     try {
         const _scApi1 = resolveApiCall({ moduleSettings: getSettings() });
-        let raw = await _scApi1.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi1.settings, retries: 3 });
+        // Coordinator classification (TODO §1): the message-counter auto
+        // snapshot is background work; the Snapshot button is foreground.
+        const _scTrigger = isAuto ? 'auto' : 'manual';
+        let raw = await _scApi1.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi1.settings, retries: 3, trigger: _scTrigger });
         raw = normaliseOutput(raw);
         raw = stripToEntry(raw);
         if (!raw.trim()) {
             const _scApi1b = resolveApiCall({ moduleSettings: getSettings() });
-            raw = await _scApi1b.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]', settings: _scApi1b.settings, retries: 3 });
+            raw = await _scApi1b.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]', settings: _scApi1b.settings, retries: 3, trigger: _scTrigger });
             raw = normaliseOutput(raw);
             raw = stripToEntry(raw);
         }
@@ -292,6 +295,16 @@ export async function generateSnapshot() {
         scSetStatus('Chronicle entry generated.', 'success');
         return snapshot;
     } catch (err) {
+        // Coordinator cancellation (TODO §1): the chat changed mid-snapshot and
+        // the coordinator aborted the call, or the queued job was retired
+        // before it started. The scope guard would have discarded the result
+        // anyway — return quietly instead of a failure status/notification.
+        // isCancellation() covers both the marked JobCancelledError and the
+        // native AbortError of a mid-wire abort.
+        if (isCancellation(err)) {
+            console.log('[MWT:Chronicle] Snapshot cancelled (coordinator) — discarded.');
+            return null;
+        }
         console.error('[MWT:Chronicle] Generate error:', err);
         scSetStatus(`Generation failed: ${err.message}`, 'error');
         notify('Session Chronicle', `Chronicle generation failed: ${err.message}`, 'error');
