@@ -1325,18 +1325,41 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
 
     const gracePeriod = Math.max(0, settings.intentionGracePeriod || 0);
 
-    // ── Grace-period design note ────────────────────────────────────────
-    // The grace period trades "premature erasure" for "stale demands": if a
-    // trigger fires the very next turn and the narrator performs the action
-    // (because the injection demands it), the executed-mark is rejected as
-    // in-grace, the entry stays open, and the injection keeps demanding an
-    // action that already happened. The INJECTION_HEADER "stale bookkeeping
-    // — ignore silently" line is the prompt-side mitigation (statistical).
+    // ── Grace-period design note (lifecycle plan Tier 3) ───────────────
+    // The grace period trades "premature erasure" for "stale demands".
+    // For `dropped` marks that trade is kept whole (see the drop handler).
     //
-    // This is an acceptable trade at the default grace=2. Resist raising it.
-    // If it ever misbehaves, the code-side alternative is: allow executed
-    // during grace ONLY when the entry was declared before the current
-    // message (age ≥ 1), rather than a blanket window.
+    // For `executed` marks, blanket rejection produced the reported failure
+    // class: the narrator performs a demanded action on-screen, the
+    // executed-mark bounces off the grace gate, the entry stays open, and
+    // the injection keeps demanding an already-completed action every turn
+    // after. Tier 3 splits completion from abandonment: an executed mark may
+    // close an in-grace entry ONLY when the entry is engine-created AND was
+    // declared before the story message being evaluated
+    // (`entry.declaredMsgIdx !== null && entry.declaredMsgIdx < msgIdx`).
+    // The declaration index is a story-time fact; `turnsOpen` is a call
+    // counter that regeneration and swipes pump without proving a new story
+    // message elapsed, so it must never carry this decision — and using it
+    // (`turnsOpen >= 1`) would admit guessed ids for entries created in the
+    // current validation pass.
+    //
+    // Edge policies (resolved here, pinned in test/interiority_swipe_turns):
+    //  - Manual (panel-authored) entries carry `declaredMsgIdx: null`, so
+    //    they are NOT engine-executable through this exception; they remain
+    //    closable once genuinely out of grace by age, as before. A user EDIT
+    //    of an engine entry keeps its original declaredMsgIdx: correcting
+    //    the wording does not erase when the plan was declared, so edited
+    //    engine entries remain closable through the exception.
+    //  - Woken scheduled entries retain their original declaration index,
+    //    which predates the evaluated wake turn — so the wake turn DOES
+    //    permit immediate execution through the gate. Deliberate: the wake
+    //    itself certified the occasion arrived. For executed marks this
+    //    policy no longer depends on wakeLedgerEntry's turnsOpen floor
+    //    (which still governs drops of woken entries).
+    //  - Known limitation: the gate proves elapsed story time, not that the
+    //    action truly completed; a model can still mislabel preparation or
+    //    an attempt as execution. That is semantic quality — deliberately
+    //    out of scope for Tier 3.
     // ────────────────────────────────────────────────────────────────────
 
     const reactions = [];
@@ -1403,6 +1426,12 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         postWakeLedger.filter(e => e.status !== 'dormant')
             .map(e => [e.id, e.turnsOpen || 0])
     );
+
+    // id → entry object, for the Tier 3 completion gate: grace enforcement
+    // of executed marks needs the entry's DECLARATION index (a story-time
+    // fact), not just its call-count age. Map copies are fine even after
+    // later blocks remove entries — declaredMsgIdx never mutates.
+    const ledgerEntryById = new Map(postWakeLedger.map(e => [e.id, e]));
 
     // Owner-scoped candidates (lifecycle plan Tier 1 item 2): the shared id
     // set above accepted executed/dropped ids from ANY NPC block, so in a
@@ -1560,9 +1589,27 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 }
                 const age = ledgerAgeMap.get(id) || 0;
                 if (age < gracePeriod) {
-                    console.log(`[MWT:Interiority] ${name}: intention ${id} executed but still in grace period (age ${age} < ${gracePeriod}) — kept open.`);
-                    noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'rejected', reason: 'grace-period' });
-                    return false;
+                    // Lifecycle plan Tier 3 — completion is separable from
+                    // abandonment: an executed mark may close an in-grace
+                    // entry ONLY when it is engine-created and was declared
+                    // before the story message being evaluated, i.e. real
+                    // story time elapsed with the plan live. Age is NOT the
+                    // test (see the design note above). A missing/undefined
+                    // declaredMsgIdx (manual or legacy entries) fails the
+                    // comparison and stays grace-protected.
+                    const entry = ledgerEntryById.get(id);
+                    const declaredBeforeEvaluatedMsg =
+                        entry != null
+                        && entry.declaredMsgIdx !== null
+                        && entry.declaredMsgIdx < msgIdx;
+                    if (!declaredBeforeEvaluatedMsg) {
+                        console.log(`[MWT:Interiority] ${name}: intention ${id} executed but still in grace period (age ${age} < ${gracePeriod}) and not declared before message ${msgIdx} — kept open.`);
+                        noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'rejected', reason: 'grace-period' });
+                        return false;
+                    }
+                    console.log(`[MWT:Interiority] ${name}: intention ${id} executed inside grace period (age ${age} < ${gracePeriod}) but declared before message ${msgIdx} — completion accepted (lifecycle Tier 3).`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'accepted', reason: 'grace-declared-before' });
+                    return true;
                 }
                 noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'accepted' });
                 return true;
@@ -1582,7 +1629,10 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         // Same grace period applies — models drop intentions too eagerly
         // when a minor situation change occurs, before the trigger has
         // had a chance to arrive. Tier 1 item 2: the id must ALSO be owned
-        // by this NPC's block.
+        // by this NPC's block. Lifecycle Tier 3 grants drops NO
+        // declaration-based exception: elapsed story time can prove a plan
+        // old enough to have been completed, but it cannot prove the NPC's
+        // resolve lapsed — blanket grace stays the drop policy.
         if (Array.isArray(npcResult.dropped)) {
             const validIds = [];
             for (const drop of npcResult.dropped) {

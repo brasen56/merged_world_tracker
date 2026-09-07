@@ -28,7 +28,8 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 
 import { resetCoreStubs, setFakeChat } from './stubs/core.js';
 import {
-    getLedger, addLedgerEntry, wakeLedgerEntry, restoreLedgerSnapshot,
+    getLedger, addLedgerEntry, addManualLedgerEntry, updateLedgerEntry,
+    wakeLedgerEntry, restoreLedgerSnapshot,
     getTurnCounter, incrementTurnCounter, restoreTurnCounter,
     setPerMessage, getOrCreateMsgKeyForIndex, getInteriorityData,
     patchInteriorityData,
@@ -542,10 +543,15 @@ describe('same-response replay guard (lifecycle Tier 2)', () => {
     test('an entry protected by the grace period is not removed, so its duplicate is the ordinary live one', async () => {
         // If the executed mark is rejected (age < grace), the entry is still
         // live when new_intentions run — the LIVE dedup rejects the proposal
-        // and the snapshot check never gets to see a removal at all.
+        // and the snapshot check never gets to see a removal at all. The
+        // entry is declared at the SAME message index being evaluated (an
+        // earlier validation pass of this message — a regeneration), the
+        // case lifecycle Tier 3's declaration gate still protects; declared
+        // one message earlier, Tier 3 would (correctly) let the completion
+        // through and this test would exercise the snapshot path instead.
         setFakeChat(CHAT);
         saveSettings({ intentionGracePeriod: 2 });
-        const entry = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+        const entry = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 1);
 
         await validateAndApply({
             npcs: [{
@@ -557,6 +563,205 @@ describe('same-response replay guard (lifecycle Tier 2)', () => {
 
         // Survived the grace-period rejection AND no duplicate was added.
         expect(getLedger().map(e => e.id)).toEqual([entry.id]);
+    });
+});
+
+// ─── Lifecycle plan Tier 3 — completion vs. abandonment grace ────────────────
+
+describe('completion is separated from abandonment grace (lifecycle Tier 3)', () => {
+    // THE BUG: the grace period rejected `executed` marks exactly like
+    // `dropped` marks, so a genuinely completed entry survived as an active
+    // demand and the injection kept requiring an action the story had
+    // already performed. Tier 3: an executed mark may close an in-grace
+    // entry ONLY when the entry is engine-created and was declared before
+    // the evaluated story message (`declaredMsgIdx !== null &&
+    // declaredMsgIdx < msgIdx`). Dropped marks keep blanket grace, and age
+    // (`turnsOpen`) is never the test — regeneration pumps it without a new
+    // story message elapsing.
+
+    test('an executed mark closes a pre-existing engine entry declared before the evaluated message', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        // Declared at message 0; message 1 is being evaluated — one message
+        // of story elapsed with the plan live. Age after this pass's
+        // increment is 1 < grace 2, so only the declaration gate admits it.
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({ npcs: [{ name: 'Mara', executed: [done.id] }] }, ['Mara'], 1);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('an entry declared in the CURRENT validation pass is not closable during grace', async () => {
+        // Guessed-id guard: the entry is declared at the SAME message index
+        // being evaluated (created this pass, or by an earlier validation
+        // pass of this message — what a regeneration re-evaluates), so no
+        // story message elapsed since declaration and the gate keeps it
+        // protected for as long as the grace window lasts. (With grace 0
+        // there is no window to protect anything — age-based expiry alone
+        // decides, exactly as before Tier 3.)
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        const fresh = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 1);
+
+        await validateAndApply({ npcs: [{ name: 'Mara', executed: [fresh.id] }] }, ['Mara'], 1);
+
+        expect(getLedger().some(e => e.id === fresh.id)).toBe(true);
+    });
+
+    test('regeneration cannot manufacture gate eligibility by pumping age', async () => {
+        // An entry declared by message 1's first validation pass is
+        // re-evaluated by regenerations of message 1: the age counter rises
+        // with every call, but no new story message elapsed, so the
+        // in-grace executed mark must stay rejected at every pass.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 5 });
+        const entry = addLedgerEntry({ npc: 'Mara', action: 'stash the coin', trigger: 'sundown' }, 'day 1', 1);
+
+        // Three regeneration passes of the SAME message: ages 1, 2, 3 —
+        // all inside grace, all rejected despite the rising counter.
+        for (let i = 0; i < 3; i++) {
+            await validateAndApply({ npcs: [{ name: 'Mara', executed: [entry.id] }] }, ['Mara'], 1);
+        }
+
+        expect(getLedger().some(e => e.id === entry.id)).toBe(true);
+        expect(getLedger()[0].turnsOpen).toBe(3);
+    });
+
+    test('a dropped mark keeps full grace even when the declaration gate would pass', async () => {
+        // Same entry shape as the first test, but a drop: elapsed story
+        // time cannot prove the NPC's resolve lapsed, so blanket grace
+        // stays the drop policy.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        const entry = addLedgerEntry({ npc: 'Mara', action: 'burn the ledgers', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{ name: 'Mara', dropped: [{ id: entry.id, reason: 'changed her mind' }] }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().some(e => e.id === entry.id)).toBe(true);
+    });
+
+    test('out-of-grace by age: executed and dropped marks behave as before', async () => {
+        // Tier 3 is narrow — age-based expiry of the grace window is
+        // untouched for both marks. Entries created at turnsOpen 0 are
+        // incremented to 1 by this pass; with grace 1 they are out of
+        // grace regardless of the declaration gate.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 1 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'scout the pass', trigger: 'first light' }, 'day 1', 1);
+        const gone = addLedgerEntry({ npc: 'Mara', action: 'copy the manifest', trigger: 'the watch change' }, 'day 1', 1);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                dropped: [{ id: gone.id, reason: 'no longer needed' }],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('a manual entry is not engine-executable through the grace exception', async () => {
+        // Panel-authored entries carry declaredMsgIdx: null — the Tier 3
+        // exception cannot apply, so the grace period protects them like
+        // before.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        const plan = addManualLedgerEntry({ npc: 'Mara', action: 'bribe the harbor master', trigger: 'next shipment' });
+
+        await validateAndApply({ npcs: [{ name: 'Mara', executed: [plan.id] }] }, ['Mara'], 5);
+
+        expect(getLedger().some(e => e.id === plan.id)).toBe(true);
+    });
+
+    test('a manual entry is still closable once genuinely out of grace by age', async () => {
+        // The policy bars manual entries from the grace EXCEPTION only —
+        // age-based expiry still applies, so the engine can complete a
+        // user-authored plan the story has demonstrably moved past.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 1 });
+        const plan = addManualLedgerEntry({ npc: 'Mara', action: 'bribe the harbor master', trigger: 'next shipment' });
+
+        await validateAndApply({ npcs: [{ name: 'Mara', executed: [plan.id] }] }, ['Mara'], 5);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('a woken scheduled entry may complete on its evaluated wake turn through the gate itself', async () => {
+        // Pin the POLICY, not the age-stamp accident: wake with a floor of
+        // 0 so the entry is still in grace by age, leaving the declaration
+        // gate as the only thing that can admit the executed mark. The
+        // entry retains its original declaration index (message 0), which
+        // predates the evaluated message 1 — the wake certified the
+        // occasion arrived.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'visit the market', trigger: 'harvest festival',
+            status: 'dormant', wakeHint: 'harvest festival',
+        }, 'day 1', 0);
+        wakeLedgerEntry(entry.id, 0);
+
+        await validateAndApply({ npcs: [{ name: 'Mara', executed: [entry.id] }] }, ['Mara'], 1);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('a woken scheduled entry in grace is NOT droppable on its wake turn', async () => {
+        // The wake turn's exception is completion-only. (Production stamps
+        // turnsOpen = max(turnsOpen, gracePeriod) on wake, which usually
+        // puts woken entries out of grace entirely; waking with a floor of
+        // 0 isolates the Tier 3 policy from that stamp.)
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        const entry = addLedgerEntry({
+            npc: 'Mara', action: 'visit the market', trigger: 'harvest festival',
+            status: 'dormant', wakeHint: 'harvest festival',
+        }, 'day 1', 0);
+        wakeLedgerEntry(entry.id, 0);
+
+        await validateAndApply({
+            npcs: [{ name: 'Mara', dropped: [{ id: entry.id, reason: 'lost interest' }] }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().some(e => e.id === entry.id)).toBe(true);
+    });
+
+    test('a user-edited engine entry keeps its declaration evidence', async () => {
+        // updateLedgerEntry marks the entry manual: true but cannot change
+        // when the plan was declared; correcting the wording must not lock
+        // a genuinely completed plan inside the grace window.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        const entry = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+        updateLedgerEntry(entry.id, { action: 'finish the wiring' });
+
+        await validateAndApply({ npcs: [{ name: 'Mara', executed: [entry.id] }] }, ['Mara'], 1);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('strict path: a strict-mode result closes a declared-before entry inside grace', async () => {
+        // validateAndApply is the single shared validator (unified, split,
+        // and strict results all funnel through it); this drives the real
+        // strict-mode seam end to end to prove the gate applies there too.
+        const { setFakeApi } = await import('./stubs/core.js');
+        setFakeChat(CHAT);
+        saveSettings({
+            apiUrl: 'https://example.test', modelName: 'test',
+            generateThoughts: false, generateIntentions: true,
+            intentionGracePeriod: 2,
+        });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+        setFakeApi(async () => JSON.stringify({ npcs: [{ name: 'Mara', executed: [done.id] }] }));
+
+        const merged = await runStrictCalls(['Mara']);
+        await validateAndApply(merged, ['Mara'], 1);
+
+        expect(getLedger()).toHaveLength(0);
     });
 });
 
