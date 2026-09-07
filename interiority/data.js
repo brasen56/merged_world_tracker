@@ -742,18 +742,42 @@ export function purgeUserLedgerEntries(userNames = getUserNames({ lower: true })
  * against `ledgerSnapshot`, the pre-mutation ledger captured before this
  * validation pass's removals.
  *
+ * NPC ownership is an exact string match by default. Callers that have a
+ * roster (generation.validateAndApply) may pass `resolveNpc` — the roster
+ * resolver, e.g. `n => resolveRosterName(roster, n, aliasIndex)` — so both
+ * sides resolve to the canonical roster spelling first. Without it, an entry
+ * stored or user-edited under an alias ("The Vixen" for roster "Mara Vance")
+ * evades its canonical owner's replay check even though the same resolution
+ * allowed that owner's block to execute the entry. This module is a leaf and
+ * cannot import the resolver itself, so the caller supplies it — the same
+ * pattern as {@link purgeUserLedgerEntries}' userNames. A name the resolver
+ * cannot place falls back to its raw lowercased form, so unresolvable names
+ * keep the exact-string behaviour.
+ *
  * @param {Array<object>} ledger - the entries to search (never mutated)
  * @param {string} npc
  * @param {string} action
  * @param {string} trigger
+ * @param {function(string): (string|null)} [resolveNpc] - optional roster
+ *   resolver; maps an npc string to its canonical roster spelling, or null
+ *   when it cannot place the name
  * @returns {boolean}
  */
-export function hasDuplicateIntentionIn(ledger, npc, action, trigger) {
+export function hasDuplicateIntentionIn(ledger, npc, action, trigger, resolveNpc = null) {
     if (!Array.isArray(ledger) || ledger.length === 0) return false;
-    const lower = String(npc).toLowerCase();
     const a = String(action).trim().toLowerCase();
     const t = String(trigger).trim().toLowerCase();
     const norm = v => String(v ?? '').trim().toLowerCase();
+    // Ownership key: the resolver's canonical spelling when one is supplied
+    // AND it can place the name, else the raw lowercased string (the
+    // historical exact-string rule).
+    const keyOf = (n) => {
+        const raw = String(n ?? '').toLowerCase();
+        if (typeof resolveNpc !== 'function') return raw;
+        const resolved = resolveNpc(String(n ?? ''));
+        return resolved ? String(resolved).toLowerCase() : raw;
+    };
+    const ownerKey = keyOf(npc);
 
     // An entry matches on its CURRENT text or on the text it had before the
     // user edited it (see updateLedgerEntry). Without the second key, correcting
@@ -764,7 +788,7 @@ export function hasDuplicateIntentionIn(ledger, npc, action, trigger) {
     // this stays an exact-string match — an unedited entry behaves exactly as
     // before, and no genuinely new intention is suppressed.
     return ledger.some((e) => {
-        if (String(e.npc).toLowerCase() !== lower) return false;
+        if (keyOf(e.npc) !== ownerKey) return false;
         const actions = new Set([norm(e.action)]);
         const triggers = new Set([norm(e.trigger)]);
         if (e.originalAction !== undefined) actions.add(norm(e.originalAction));

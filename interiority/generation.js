@@ -1588,6 +1588,25 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                     return false;
                 }
                 const age = ledgerAgeMap.get(id) || 0;
+                const entry = ledgerEntryById.get(id);
+                // Same-message protection, independent of age. Every
+                // successful validation increments turnsOpen — including
+                // repeated manual generation of the SAME message — so age
+                // can reach the grace threshold with no story message
+                // elapsing. Once age >= gracePeriod the in-grace gate below
+                // no longer runs, so without this standing guard an age pump
+                // (regeneration) would let the declaring message's own
+                // response close the entry it declared. An engine entry whose
+                // declaredMsgIdx equals the evaluated msgIdx is therefore
+                // never closable in that evaluation, at any age and at any
+                // grace setting (grace 0 included). Manual/legacy entries
+                // (declaredMsgIdx null/undefined) never compare equal and are
+                // unaffected here.
+                if (entry != null && entry.declaredMsgIdx === msgIdx) {
+                    console.log(`[MWT:Interiority] ${name}: intention ${id} executed but declared by message ${msgIdx} itself (no story message elapsed; age ${age}) — kept open.`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'rejected', reason: 'same-message' });
+                    return false;
+                }
                 if (age < gracePeriod) {
                     // Lifecycle plan Tier 3 — completion is separable from
                     // abandonment: an executed mark may close an in-grace
@@ -1597,7 +1616,6 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                     // test (see the design note above). A missing/undefined
                     // declaredMsgIdx (manual or legacy entries) fails the
                     // comparison and stays grace-protected.
-                    const entry = ledgerEntryById.get(id);
                     const declaredBeforeEvaluatedMsg =
                         entry != null
                         && entry.declaredMsgIdx !== null
@@ -1710,7 +1728,18 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 // the snapshot is per-validation-pass, not closure history, and
                 // matching remains exact-string (paraphrases are the prompt
                 // contract's and capture's problem, per plan non-goals).
-                if (hasDuplicateIntentionIn(ledgerSnapshot, name, action, trigger)) {
+                // Ownership must resolve through the SAME roster rules the
+                // executed/dropped owner check uses (exact → user-approved
+                // alias → unambiguous given-name). A snapshot entry stored or
+                // user-edited under an alias ("The Vixen" for roster "Mara
+                // Vance") is closable by its canonical owner's block, so an
+                // exact-string npc compare here would let that entry's
+                // verbatim replay slip past the guard and be re-created.
+                // data.js is a leaf module — it cannot import the resolver,
+                // so the caller supplies it (same pattern as
+                // purgeUserLedgerEntries' userNames).
+                if (hasDuplicateIntentionIn(ledgerSnapshot, name, action, trigger,
+                    (npcName) => resolveRosterName(roster, npcName, aliasIndex))) {
                     console.log(`[MWT:Interiority] ${name}: skipping replayed intention "${action.slice(0, 60)}" — executed or dropped earlier in this same response.`);
                     noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'replayed-this-response' });
                     continue;

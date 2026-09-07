@@ -740,6 +740,22 @@ describe('hasDuplicateIntentionIn — the non-mutating snapshot matcher (lifecyc
         expect(getLedger()).toHaveLength(1);
         expect(getLedger()[0].id).toBe(live.id);
     });
+
+    test('a supplied roster resolver matches alias-stored entries to their canonical owner', () => {
+        // generation.validateAndApply passes resolveRosterName so snapshot
+        // ownership resolves exactly like the executed/dropped owner check;
+        // without it an entry stored under an alias ("The Vixen") evades its
+        // canonical owner's replay match.
+        const ledger = [
+            { id: 'i-1', npc: 'The Vixen', action: 'rob the vault', trigger: 'the eclipse' },
+        ];
+        const resolve = (n) => (String(n).toLowerCase() === 'the vixen' ? 'Mara Vance' : null);
+        expect(hasDuplicateIntentionIn(ledger, 'Mara Vance', 'rob the vault', 'the eclipse', resolve)).toBe(true);
+        // A resolver that cannot place the name falls back to the raw string…
+        expect(hasDuplicateIntentionIn(ledger, 'Mara Vance', 'rob the vault', 'the eclipse', () => null)).toBe(false);
+        // …and omitting the resolver entirely keeps the exact-string rule.
+        expect(hasDuplicateIntentionIn(ledger, 'Mara Vance', 'rob the vault', 'the eclipse')).toBe(false);
+    });
 });
 
 describe('restoreLedgerSnapshot (existing behaviour — the reference)', () => {

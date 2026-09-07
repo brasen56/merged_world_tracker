@@ -564,6 +564,30 @@ describe('same-response replay guard (lifecycle Tier 2)', () => {
         // Survived the grace-period rejection AND no duplicate was added.
         expect(getLedger().map(e => e.id)).toEqual([entry.id]);
     });
+
+    test('a replayed alias-owned entry is not recreated by its canonical owner', async () => {
+        // The executed/dropped owner check resolves entries through the
+        // roster (alias-aware), so a block named "Mara Vance" may close an
+        // entry stored under its alias "The Vixen". The replay guard must
+        // resolve the snapshot's ownership the SAME way — an exact-string
+        // npc compare would let the verbatim re-proposal of that executed
+        // alias entry slip through and be re-created.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const entry = addLedgerEntry({ npc: 'The Vixen', action: 'rob the vault', trigger: 'the eclipse' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara Vance',
+                executed: [entry.id],
+                new_intentions: [{ action: 'rob the vault', trigger: 'the eclipse' }],
+            }],
+        }, ['Mara Vance'], 1, null, null, [], { 'mara vance': ['The Vixen'] });
+
+        // Executed (alias ownership resolved) AND the replay blocked —
+        // nothing left in the ledger.
+        expect(getLedger()).toHaveLength(0);
+    });
 });
 
 // ─── Lifecycle plan Tier 3 — completion vs. abandonment grace ────────────────
@@ -597,9 +621,9 @@ describe('completion is separated from abandonment grace (lifecycle Tier 3)', ()
         // being evaluated (created this pass, or by an earlier validation
         // pass of this message — what a regeneration re-evaluates), so no
         // story message elapsed since declaration and the gate keeps it
-        // protected for as long as the grace window lasts. (With grace 0
-        // there is no window to protect anything — age-based expiry alone
-        // decides, exactly as before Tier 3.)
+        // protected for as long as the grace window lasts — and beyond it:
+        // the same-message guard is age-independent, so grace 0 protects
+        // too (pinned by the grace-0 test below).
         setFakeChat(CHAT);
         saveSettings({ intentionGracePeriod: 2 });
         const fresh = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 1);
@@ -612,20 +636,40 @@ describe('completion is separated from abandonment grace (lifecycle Tier 3)', ()
     test('regeneration cannot manufacture gate eligibility by pumping age', async () => {
         // An entry declared by message 1's first validation pass is
         // re-evaluated by regenerations of message 1: the age counter rises
-        // with every call, but no new story message elapsed, so the
-        // in-grace executed mark must stay rejected at every pass.
+        // with every call, but no new story message elapsed, so the executed
+        // mark must stay rejected at every pass — including the passes where
+        // the pumped counter has reached the grace threshold and the in-grace
+        // gate alone would no longer run.
         setFakeChat(CHAT);
         saveSettings({ intentionGracePeriod: 5 });
         const entry = addLedgerEntry({ npc: 'Mara', action: 'stash the coin', trigger: 'sundown' }, 'day 1', 1);
 
-        // Three regeneration passes of the SAME message: ages 1, 2, 3 —
-        // all inside grace, all rejected despite the rising counter.
-        for (let i = 0; i < 3; i++) {
+        // Five regeneration passes of the SAME message: ages 1–5. Passes
+        // 1–4 sit inside grace (rejected by the declaration gate); pass 5 is
+        // AT the threshold (age 5 >= grace 5) and is rejected by the
+        // age-independent same-message guard instead.
+        for (let i = 0; i < 5; i++) {
             await validateAndApply({ npcs: [{ name: 'Mara', executed: [entry.id] }] }, ['Mara'], 1);
         }
 
         expect(getLedger().some(e => e.id === entry.id)).toBe(true);
-        expect(getLedger()[0].turnsOpen).toBe(3);
+        expect(getLedger()[0].turnsOpen).toBe(5);
+    });
+
+    test('a same-message entry stays protected even at grace 0, past the age threshold', async () => {
+        // Grace 0 empties the grace window on the very first pass — if the
+        // same-message guard depended on age, the first re-evaluation of the
+        // declaring message would close an entry no story message has ever
+        // elapsed on.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const entry = addLedgerEntry({ npc: 'Mara', action: 'stash the coin', trigger: 'sundown' }, 'day 1', 1);
+
+        for (let i = 0; i < 2; i++) {
+            await validateAndApply({ npcs: [{ name: 'Mara', executed: [entry.id] }] }, ['Mara'], 1);
+        }
+
+        expect(getLedger().some(e => e.id === entry.id)).toBe(true);
     });
 
     test('a dropped mark keeps full grace even when the declaration gate would pass', async () => {
@@ -645,13 +689,16 @@ describe('completion is separated from abandonment grace (lifecycle Tier 3)', ()
 
     test('out-of-grace by age: executed and dropped marks behave as before', async () => {
         // Tier 3 is narrow — age-based expiry of the grace window is
-        // untouched for both marks. Entries created at turnsOpen 0 are
-        // incremented to 1 by this pass; with grace 1 they are out of
-        // grace regardless of the declaration gate.
+        // untouched for both marks. Entries declared one message earlier
+        // are incremented to age 1 by this pass; with grace 1 they are out
+        // of grace regardless of the declaration gate. (Declared-before
+        // matters now: a same-message entry stays protected by the
+        // age-independent guard at ANY age — re-evaluating one message can
+        // no longer pump turnsOpen into manufactured expiry.)
         setFakeChat(CHAT);
         saveSettings({ intentionGracePeriod: 1 });
-        const done = addLedgerEntry({ npc: 'Mara', action: 'scout the pass', trigger: 'first light' }, 'day 1', 1);
-        const gone = addLedgerEntry({ npc: 'Mara', action: 'copy the manifest', trigger: 'the watch change' }, 'day 1', 1);
+        const done = addLedgerEntry({ npc: 'Mara', action: 'scout the pass', trigger: 'first light' }, 'day 1', 0);
+        const gone = addLedgerEntry({ npc: 'Mara', action: 'copy the manifest', trigger: 'the watch change' }, 'day 1', 0);
 
         await validateAndApply({
             npcs: [{
