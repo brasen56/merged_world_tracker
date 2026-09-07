@@ -204,6 +204,19 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // can be executed or dropped. Prevents models from prematurely
         // erasing intentions before their trigger arrives.
         intentionGracePeriod: 2,
+        // Lifecycle plan Tier 1 item 3: maximum accepted new intentions per
+        // NPC per generation call. Temporary reporter-facing diagnostic cap:
+        // it limits CREATION only (executed/dropped evaluation still runs
+        // once the cap is reached) and malformed/duplicate proposals never
+        // consume it. 0 blocks new proposals entirely. Not the final
+        // lifecycle cost-control design.
+        maxNewIntentionsPerNpc: 2,
+        // Lifecycle plan Tier 1 item 4: opt-in, generation-scoped intentions
+        // diagnostics capture (latest generation only: prompts, raw model
+        // responses, ledger before/after, accept/reject reasons). In-memory
+        // only — never persisted; surfaced solely through the Diagnostics
+        // Copy Report's content opt-in. Temporary reporter-facing tool.
+        captureIntentionsDiagnostics: false,
     },
     logPrefix: '[MWT:Interiority]',
 });

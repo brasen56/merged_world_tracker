@@ -186,6 +186,215 @@ describe('strict intentions evaluation', () => {
     });
 });
 
+// ─── Lifecycle plan Tier 1 — owner-checked executed/dropped ids ──────────────
+
+describe('executed/dropped ids are owner-checked (lifecycle Tier 1 item 2)', () => {
+    // THE BUG: executed/dropped ids were validated against the SHARED ledger
+    // id set, so in a multi-NPC response one NPC's block could close another
+    // NPC's entry — Derek "completing" Mara's plan silently removed her
+    // demand from the injection while her own block said nothing about it.
+    // Candidates are now restricted per resolved block to entries the SAME
+    // roster rules attribute to that NPC.
+
+    const TWO_NPC_CHAT = [
+        { name: 'User', is_user: true, mes: 'What happens at the depot tonight?', extra: {} },
+        { name: 'Narrator', mes: 'Mara locks the depot while Derek watches the road.', extra: {} },
+    ];
+
+    test("one NPC's block cannot execute another NPC's entry", async () => {
+        setFakeChat(TWO_NPC_CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const mara = addLedgerEntry({ npc: 'Mara', action: 'burn the ledgers', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({ npcs: [{ name: 'Derek', executed: [mara.id] }] }, ['Mara', 'Derek'], 1);
+
+        expect(getLedger().some(e => e.id === mara.id)).toBe(true);
+    });
+
+    test("one NPC's block cannot drop another NPC's entry", async () => {
+        setFakeChat(TWO_NPC_CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const mara = addLedgerEntry({ npc: 'Mara', action: 'burn the ledgers', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{ name: 'Derek', dropped: [{ id: mara.id, reason: 'no longer needed' }] }],
+        }, ['Mara', 'Derek'], 1);
+
+        expect(getLedger().some(e => e.id === mara.id)).toBe(true);
+    });
+
+    test('the owner block can still execute and drop its own entries', async () => {
+        setFakeChat(TWO_NPC_CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        addLedgerEntry({ npc: 'Mara', action: 'burn the ledgers', trigger: 'nightfall' }, 'day 1', 0);
+        addLedgerEntry({ npc: 'Mara', action: 'copy the shipping manifest', trigger: 'the watch change' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [getLedger()[0].id],
+                dropped: [{ id: getLedger()[1].id, reason: 'changed her mind' }],
+            }],
+        }, ['Mara', 'Derek'], 1);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('an entry whose owner is not on this roster is closable by no block', async () => {
+        setFakeChat(TWO_NPC_CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const ghost = addLedgerEntry({ npc: 'Rowan', action: 'slip away', trigger: 'the bell' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [
+                { name: 'Mara', executed: [ghost.id] },
+                { name: 'Derek', executed: [ghost.id] },
+            ],
+        }, ['Mara', 'Derek'], 1);
+
+        expect(getLedger().some(e => e.id === ghost.id)).toBe(true);
+    });
+
+    test('a ledger owner spelled with a fuller form still resolves to the roster member', async () => {
+        // Legacy entries can pre-date roster canonicalization and carry a
+        // fuller spelling than the roster member. Ownership resolution uses
+        // the same unambiguous-alias rules as response names, so the entry
+        // must remain closable by its owner's block.
+        setFakeChat(TWO_NPC_CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const entry = addLedgerEntry({ npc: 'Mara Vance', action: 'scout the pass', trigger: 'first light' }, 'day 1', 0);
+
+        await validateAndApply({ npcs: [{ name: 'Mara', executed: [entry.id] }] }, ['Mara Vance', 'Derek'], 1);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+});
+
+// ─── Lifecycle plan Tier 1 — per-NPC accepted-proposal cap ───────────────────
+
+describe('per-NPC accepted-proposal cap (lifecycle Tier 1 item 3)', () => {
+    // Default cap: TWO accepted new intentions per NPC per call, enforced
+    // AFTER field validation and dedup (malformed/duplicate proposals never
+    // consume a slot) and limiting CREATION only — executed/dropped handling
+    // runs before new-intention acceptance for the same block.
+
+    test('accepts at most two valid new intentions per NPC per call', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                new_intentions: [
+                    { action: 'stash the coin', trigger: 'sundown', horizon: 'immediate' },
+                    { action: 'copy the key', trigger: 'the watch change', horizon: 'immediate' },
+                    { action: 'scope the vault', trigger: 'midnight', horizon: 'immediate' },
+                ],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action)).toEqual(['stash the coin', 'copy the key']);
+    });
+
+    test('malformed and duplicate proposals do not consume the cap', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        addLedgerEntry({ npc: 'Mara', action: 'stash the coin', trigger: 'sundown' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                new_intentions: [
+                    { trigger: 'no action supplied' },                        // missing action → rejected
+                    { action: 'stash the coin', trigger: 'sundown' },         // duplicate of live entry → rejected
+                    { action: 'copy the key', trigger: 'the watch change' },  // accepted (slot 1)
+                    { action: 'scope the vault', trigger: 'midnight' },       // accepted (slot 2)
+                    { action: 'forge the signature', trigger: 'next market day' }, // cap → rejected
+                ],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action))
+            .toEqual(['stash the coin', 'copy the key', 'scope the vault']);
+    });
+
+    test('a same-batch exact duplicate is suppressed after its first acceptance', async () => {
+        // The first acceptance lands on the live ledger immediately, so the
+        // second copy trips the dedup — one entry, not two.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                new_intentions: [
+                    { action: 'stash the coin', trigger: 'sundown' },
+                    { action: 'stash the coin', trigger: 'sundown' },
+                ],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger()).toHaveLength(1);
+    });
+
+    test('the cap is per NPC, not per response', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+
+        await validateAndApply({
+            npcs: [
+                { name: 'Mara', new_intentions: [
+                    { action: 'm1', trigger: 't1' }, { action: 'm2', trigger: 't2' }, { action: 'm3', trigger: 't3' },
+                ] },
+                { name: 'Derek', new_intentions: [
+                    { action: 'd1', trigger: 't1' }, { action: 'd2', trigger: 't2' },
+                ] },
+            ],
+        }, ['Mara', 'Derek'], 1);
+
+        const byNpc = { Mara: 0, Derek: 0 };
+        for (const e of getLedger()) byNpc[e.npc] += 1;
+        expect(byNpc).toEqual({ Mara: 2, Derek: 2 });
+    });
+
+    test('completion and drop evaluation still run after the cap is reached', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'old errand', trigger: 'the bell' }, 'day 1', 0);
+
+        const result = await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                new_intentions: [
+                    { action: 'a1', trigger: 't1' },
+                    { action: 'a2', trigger: 't2' },
+                    { action: 'a3', trigger: 't3' },
+                ],
+            }],
+        }, ['Mara'], 1);
+
+        expect(result.ledgerChanged).toBe(true);
+        // Executed despite the additions hitting the cap.
+        expect(getLedger().some(e => e.id === done.id)).toBe(false);
+        // …and the additions were still capped.
+        expect(getLedger().filter(e => e.npc === 'Mara')).toHaveLength(2);
+    });
+
+    test('a cap of zero accepts nothing but still evaluates existing entries', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0, maxNewIntentionsPerNpc: 0 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'old errand', trigger: 'the bell' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{ name: 'Mara', executed: [done.id], new_intentions: [{ action: 'a1', trigger: 't1' }] }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().some(e => e.id === done.id)).toBe(false);
+        expect(getLedger()).toHaveLength(0);
+    });
+});
+
 describe('onMessageSwiped — the full rollback', () => {
     test('a swipe restores both the dormant status and the turn counter', async () => {
         setFakeChat(CHAT);

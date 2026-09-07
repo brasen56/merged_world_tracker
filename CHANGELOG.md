@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.5.1]
+
+### Added
+
+- Owner-checked executed/dropped IDs for interiority
+- Per-NPC accepted-proposal cap (Default 2)
+- Opt-in generation-scoped diagnostics capture
+
+### Changed
+
+- New-intentions prompt rule replaced
+
+
 ## [2.5.0]
 
 ### Added

@@ -405,13 +405,20 @@ export function renderSettingsPanel() {
                 <label style="font-size:12px;color:var(--mwt-text-dim)">Max NPCs <input type="number" id="mwt-int-max-npcs" class="mwt-input" style="width:60px;display:inline-block" value="${s.maxNpcs || 4}" min="1" max="20"></label>
                 <label style="font-size:12px;color:var(--mwt-text-dim)">Message Window <input type="number" id="mwt-int-window" class="mwt-input" style="width:60px;display:inline-block" value="${s.messageWindow || 8}" min="1" max="50"></label>
                 <label style="font-size:12px;color:var(--mwt-text-dim)" title="Minimum turns an intention must survive before it can be executed or dropped. Prevents models from erasing intentions too quickly.">Grace Period <input type="number" id="mwt-int-grace" class="mwt-input" style="width:60px;display:inline-block" value="${s.intentionGracePeriod ?? 2}" min="0" max="20"></label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" title="Maximum accepted new intentions per NPC per generation call. Malformed or duplicate proposals never consume the cap, and executed/dropped evaluation still runs after it is reached. 0 blocks new proposals entirely. Temporary diagnostic setting.">Max New/NPC <input type="number" id="mwt-int-max-new" class="mwt-input" style="width:60px;display:inline-block" value="${s.maxNewIntentionsPerNpc ?? 2}" min="0" max="20"></label>
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Grace Period: minimum turns an intention must survive before it can be executed or dropped. Higher values make intentions more persistent. Set to 0 to disable.</p>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Max New/NPC: at most this many new intentions are accepted per NPC per generation call (default 2). Completion/drop evaluation is unaffected; malformed or duplicate proposals never consume the cap. Set to 0 to stop new proposals entirely. Temporary diagnostic setting.</p>
 
             <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                 <label style="font-size:12px;color:var(--mwt-text-dim)" title="How often (in turns) the dormant-intentions poll fires to check if a scheduled intention's trigger is near.">Dormant Poll <input type="number" id="mwt-int-dormant-poll" class="mwt-input" style="width:60px;display:inline-block" value="${s.dormantPollInterval ?? 10}" min="1" max="200"> turns</label>
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">How often scheduled intentions are checked to see if their trigger is near. Lower = sooner wake, higher = fewer API checks. Default: ${DORMANT_POLL_INTERVAL}.</p>
+
+            <div style="margin-top:12px">
+                <label><input type="checkbox" id="mwt-int-capture-diagnostics" ${s.captureIntentionsDiagnostics === true ? 'checked' : ''}> Capture intentions generation diagnostics (temporary reporter tool)</label>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, the latest intentions generation — every constituent call's prompt and raw model response, the ledger before/after, and each accept/reject reason — is kept in memory ONLY (never saved to the chat or settings) and is cleared on chat switch and reload. It appears in the Diagnostics 📋 Copy Report only while that report's "include content" opt-in is checked. Leave OFF unless actively reporting an intentions issue.</p>
+            </div>
 
             <div class="mwt-flex mwt-gap-4" style="margin-top:12px">
                 <button id="mwt-int-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
@@ -441,7 +448,9 @@ export function renderSettingsPanel() {
             maxNpcs: Number(panel.querySelector('#mwt-int-max-npcs')?.value) || 4,
             messageWindow: Number(panel.querySelector('#mwt-int-window')?.value) || 8,
             intentionGracePeriod: Math.max(0, Number(panel.querySelector('#mwt-int-grace')?.value) || 0),
+            maxNewIntentionsPerNpc: Math.max(0, Number(panel.querySelector('#mwt-int-max-new')?.value ?? 2) || 0),
             dormantPollInterval: Math.max(1, Number(panel.querySelector('#mwt-int-dormant-poll')?.value) || 10),
+            captureIntentionsDiagnostics: panel.querySelector('#mwt-int-capture-diagnostics')?.checked ?? false,
         });
         setIntStatus('Settings saved.', 'success');
         renderContent();

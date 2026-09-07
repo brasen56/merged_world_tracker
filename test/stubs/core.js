@@ -65,6 +65,7 @@ let _contextExtras = {};
 let _extSettings = {};
 let _pickTextFileImpl = null;
 let _apiImpl = null;
+let _parseImpl = null;
 let _promptCalls = [];
 const _notifications = [];
 let _statusCalls = [];
@@ -81,6 +82,7 @@ export function resetCoreStubs() {
     _extSettings = {};
     _pickTextFileImpl = null;
     _apiImpl = null;
+    _parseImpl = null;
     _promptCalls = [];
     _statusCalls = [];
     _downloadJsonCalls = [];
@@ -452,7 +454,19 @@ export function normaliseOutput(value) {
     return typeof value === 'string' ? value : JSON.stringify(value ?? '');
 }
 export const retryAsync = notImplemented('retryAsync');
+/**
+ * Install a fake JSON parser over the barrel's parseJsonLenient. The default
+ * stub below returns null on unparseable output, but the PRODUCTION
+ * parseJsonLenient (core/api.js) THROWS — a different control flow that tests
+ * must be able to pin (e.g. interiority fetchAndParse's record-each-attempt-
+ * once contract). Pass a function to take over parsing, or null to restore
+ * the default lenient stub.
+ */
+export function setFakeParser(fn) {
+    _parseImpl = fn;
+}
 export function parseJsonLenient(value) {
+    if (typeof _parseImpl === 'function') return _parseImpl(value);
     if (value && typeof value === 'object') return value;
     try { return JSON.parse(String(value)); } catch { return null; }
 }

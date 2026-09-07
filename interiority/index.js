@@ -51,6 +51,13 @@ import {
     resolveRosterName, collectRosterAliases,
 } from './generation.js';
 
+// Lifecycle plan Tier 1 item 4 — generation-scoped intentions capture. Leaf
+// module (in-memory only, no store dependency).
+import {
+    beginIntentionsGenerationCapture, completeIntentionsGenerationCapture,
+    noteIntentionsCaptureRoster, clearIntentionsCapture,
+} from './capture.js';
+
 import { applyIntentionsInjection } from './injection.js';
 
 import {
@@ -363,6 +370,22 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
         const settings = getSettings();
         const wantThoughts = settings.generateThoughts !== false;
         const wantIntentions = settings.generateIntentions !== false;
+
+        // Lifecycle plan Tier 1 item 4: begin the opt-in generation capture
+        // BEFORE the dormant poll so the poll's call joins the same
+        // generation. ledgerBefore is the pre-poll rollback snapshot — the
+        // same "before every ledger mutation of this turn" record a swipe
+        // restores. `mode` mirrors the call-selection branch below (split
+        // requires both features on; otherwise strict/batched by setting).
+        beginIntentionsGenerationCapture({
+            enabled: settings.captureIntentionsDiagnostics === true,
+            mode: settings.splitThoughts === true && wantThoughts && wantIntentions
+                ? 'split'
+                : (settings.mode === 'strict' ? 'strict' : 'unified'),
+            trigger,
+            ledgerBefore: preTurnLedgerSnapshot,
+        });
+
         if (wantIntentions && isDormantPollDue()) {
             try {
                 proposedWakeIds = await runDormantPoll({ trigger });
@@ -398,6 +421,10 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
         // ("The Vixen" for roster "Mara Vance") resolves to its member
         // instead of being discarded as "not in roster".
         const rosterAliases = await collectRosterAliases(roster);
+
+        // Tier 1 capture: the roster is known only now (the dormant poll runs
+        // before roster building); stamp it into the in-flight generation.
+        noteIntentionsCaptureRoster(roster);
 
         console.log(`[MWT:Interiority] Generating for ${roster.length} NPC(s): ${roster.join(', ')}`);
 
@@ -521,6 +548,12 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
         console.error('[MWT:Interiority] Generation failed:', err);
         return null;
     } finally {
+        // Tier 1 capture: complete whatever generation ran — a successful
+        // apply, a failed API call, and a thrown error are all diagnostic
+        // evidence worth keeping. No-ops when no capture began; discards
+        // (never commits) when the scope epoch changed mid-generation, and a
+        // thoughts-only generation never replaces stored intentions evidence.
+        completeIntentionsGenerationCapture({ ledgerAfter: getLedger() });
         state.isGenerating = false;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
@@ -572,6 +605,10 @@ export function onChatChanged() {
     // the flag false here shows stale "idle" UI and (if the work queue were
     // ever removed) could allow overlapping calls. Mirrors story_planner.
     state.contentEl = null;
+    // Tier 1 capture: the previous chat's intentions evidence must never be
+    // attributed to (or pasted alongside) the new chat. Clear it eagerly; the
+    // capture's own epoch stamp is the backstop for paths that bypass this.
+    clearIntentionsCapture();
     // Part 6: the legacy key conversion for the new chat is NOT queued here —
     // the root CHAT_CHANGED handler runs the runtime schema gate (and its
     // privileged §7.5 preparation) BEFORE this handler, so the store is either
@@ -600,6 +637,9 @@ export function onChatChanged() {
  */
 export function onChatChangedWhilePaused() {
     state.contentEl = null;
+    // Same chat-switch rule as onChatChanged — the paused variant must not
+    // leave the old chat's capture behind either (Tier 1).
+    clearIntentionsCapture();
     clearAllThoughtBlocks();
     applyIntentionsInjection();
     console.log('[MWT:Interiority] Chat changed while paused — injection cleared, thought blocks cleared (store hydration skipped).');

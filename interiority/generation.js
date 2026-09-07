@@ -28,6 +28,9 @@ import {
     buildThoughtsSystemPrompt, buildThoughtsUserContent,
     buildDormantPollSystemPrompt, buildDormantPollUserContent,
 } from './prompts.js';
+// Lifecycle plan Tier 1 item 4 — generation-scoped intentions capture. Leaf
+// module; every note* helper is a no-op unless a capture is in flight.
+import { noteIntentionsCaptureCall, noteIntentionsCaptureDecision } from './capture.js';
 import {
     getSettings, hasValidSettings,
     getInteriorityData,
@@ -613,7 +616,21 @@ async function _runCall(roster, {
         });
     }
 
-    return fetchAndParse(systemPrompt, userContent, apiSettings, { trigger });
+    // Lifecycle plan Tier 1 item 4: attach this call to the in-flight
+    // generation capture (inert unless one began). `kind` marks whether THIS
+    // call carries the intentions contract — the unified call (when
+    // intentions are on) and the split/strict intentions calls do; the split
+    // thoughts side and a thoughts-only unified call do not. The capture's
+    // commit rule reads it: a thoughts-only generation must never overwrite
+    // stored intentions evidence.
+    const capture = noteIntentionsCaptureCall({
+        kind: wantIntentions ? 'intentions' : 'thoughts',
+        label,
+        systemPrompt,
+        userContent,
+    });
+
+    return fetchAndParse(systemPrompt, userContent, apiSettings, { trigger, capture });
 }
 
 /**
@@ -912,7 +929,18 @@ export async function runStrictCalls(roster, virtuallyActiveIds = [], { trigger 
             includeIntentions: wantIntentions,
         });
 
-        const result = await fetchAndParse(systemPrompt, userContent, settings, { trigger });
+        // Tier 1 generation capture: one call record per strict NPC. The
+        // label carries the member so a generation's constituent calls stay
+        // attributable even after the results are merged into one array.
+        const capture = noteIntentionsCaptureCall({
+            kind: wantIntentions ? 'intentions' : 'thoughts',
+            label: `strict:${name}`,
+            npc: name,
+            systemPrompt,
+            userContent,
+        });
+
+        const result = await fetchAndParse(systemPrompt, userContent, settings, { trigger, capture });
         if (result && Array.isArray(result.npcs)) {
             allNpcs.push(...result.npcs);
             // Alias-aware: the per-NPC call may be answered with a fuller
@@ -978,8 +1006,17 @@ export async function runDormantPoll({ trigger = null } = {}) {
     // The poll is a second call inside the SAME turn, so it carries the turn's
     // trigger with a suffix rather than a cause of its own — otherwise a turn
     // that polls looks like two unrelated spends in the telemetry.
+    // Tier 1 generation capture: the poll joins the turn's generation under
+    // its own kind — it never satisfies the intentions-evidence commit rule.
+    const capture = noteIntentionsCaptureCall({
+        kind: 'dormant_poll',
+        label: 'dormant_poll',
+        systemPrompt,
+        userContent,
+    });
     const result = await fetchAndParse(systemPrompt, userContent, settings, {
         trigger: trigger ? `${trigger}:dormant_poll` : null,
+        capture,
     });
     if (!result || !Array.isArray(result.intentions)) {
         console.warn('[MWT:Interiority] Dormant poll returned no valid result.');
@@ -1014,15 +1051,21 @@ export async function runDormantPoll({ trigger = null } = {}) {
  * @param {string} systemPrompt
  * @param {string} userContent
  * @param {object} settings
+ * @param {object} [opts]
+ * @param {string|null} [opts.trigger]
+ * @param {object|null} [opts.capture] - Tier 1 generation-capture recorder
+ *   from noteIntentionsCaptureCall(); records each wire attempt's raw and
+ *   normalised text plus the final parse outcome. Inert when null.
  * @returns {Promise<object|null>}
  */
-async function fetchAndParse(systemPrompt, userContent, settings, { trigger = null } = {}) {
+async function fetchAndParse(systemPrompt, userContent, settings, { trigger = null, capture = null } = {}) {
     const resolved = resolveApiCall({ moduleSettings: settings });
 
     for (let attempt = 1; attempt <= 2; attempt++) {
+        let raw = '';
         let cleaned = '';
         try {
-            const raw = await resolved.fetchFn({
+            raw = await resolved.fetchFn({
                 systemPrompt,
                 userContent,
                 settings: resolved.settings,
@@ -1033,6 +1076,15 @@ async function fetchAndParse(systemPrompt, userContent, settings, { trigger = nu
             });
             cleaned = normaliseOutput(raw);
             const result = parseJsonLenient(cleaned);
+            // Record the wire attempt exactly once, AFTER the parse outcome is
+            // known: the PRODUCTION parser throws on unparseable output (the
+            // Vitest stub returns null), and recording ok:true before the
+            // parse made the catch below re-record the SAME wire response as
+            // failed — one attempt, two entries, the per-call attempt cap
+            // eaten twice as fast. A parse that merely yields null is still a
+            // successful wire attempt (ok:true here, parsed:false at finish).
+            capture?.attempt({ ok: true, rawResponse: raw, normalisedResponse: cleaned });
+            capture?.finish({ parsed: result != null });
             return result;
         } catch (err) {
             // Coordinator cancellation (TODO §1): the call was aborted on
@@ -1044,13 +1096,23 @@ async function fetchAndParse(systemPrompt, userContent, settings, { trigger = nu
             // check used to mistake the latter for a parse failure and spend
             // a second (fresh-epoch, uncancellable) attempt on the old
             // chat's prompt.
-            if (isCancellation(err)) throw err;
+            if (isCancellation(err)) {
+                capture?.finish({ cancelled: true });
+                throw err;
+            }
+            capture?.attempt({
+                ok: false,
+                rawResponse: raw,
+                normalisedResponse: cleaned,
+                error: String(err?.message || err),
+            });
             console.warn(`[MWT:Interiority] API/parse attempt ${attempt} failed: ${err.message}`);
             if (cleaned) {
                 console.warn(`[MWT:Interiority] Normalised output that failed to parse (first 800 chars):\n${cleaned.slice(0, 800)}`);
             }
             if (attempt >= 2) {
                 console.error('[MWT:Interiority] Giving up after 2 attempts.');
+                capture?.finish({ parsed: false });
                 return null;
             }
         }
@@ -1321,6 +1383,15 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     const ledgerIds = new Set(
         postWakeLedger.filter(e => e.status !== 'dormant').map(e => e.id)
     );
+    // Dormant siblings of ledgerIds: ids that exist but never appear in the
+    // prompt's <open_intentions>. Distinguishing them from plain unknown ids
+    // matters diagnostically — a dormant reference is a §20 hallucination, an
+    // unknown one the model invented outright. Both are ignored below, but the
+    // capture records WHICH (ignored:dormant-id / ignored:unknown-id), so the
+    // evidence can tell an absent proposal from a silently ignored id.
+    const dormantLedgerIds = new Set(
+        postWakeLedger.filter(e => e.status === 'dormant').map(e => e.id)
+    );
 
     // Build a lookup from id → turnsOpen for grace-period enforcement.
     // The model frequently declares and executes/drops an intention in the
@@ -1331,6 +1402,33 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         postWakeLedger.filter(e => e.status !== 'dormant')
             .map(e => [e.id, e.turnsOpen || 0])
     );
+
+    // Owner-scoped candidates (lifecycle plan Tier 1 item 2): the shared id
+    // set above accepted executed/dropped ids from ANY NPC block, so in a
+    // multi-NPC response one NPC's block could close another NPC's entry —
+    // Derek "completing" Mara's plan silently removed her demand from the
+    // injection while her own block said nothing about it. Each entry's
+    // owner is resolved through the SAME roster rules as response names
+    // (exact → user-approved alias → unambiguous given-name), and only that
+    // owner's block may close it. Entries whose owner is not on this turn's
+    // roster are closable by no block this turn — an owner must be evaluated
+    // for its own plan to complete or lapse. `ledgerIds`/`ledgerAgeMap`
+    // above stay global: they answer "does this id exist non-dormant at all"
+    // and "how old is it", which is what distinguishes a wrong-owner id from
+    // an unknown or hallucinated one below.
+    const ownedLedgerIds = new Map();
+    for (const e of postWakeLedger) {
+        if (e.status === 'dormant') continue;
+        const owner = resolveRosterName(roster, String(e.npc || ''), aliasIndex);
+        if (!owner) continue;
+        const key = owner.toLowerCase();
+        let ids = ownedLedgerIds.get(key);
+        if (!ids) {
+            ids = new Set();
+            ownedLedgerIds.set(key, ids);
+        }
+        ids.add(e.id);
+    }
 
     const seenNpcs = new Set();
     for (const npcResult of result.npcs) {
@@ -1346,6 +1444,7 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         if (!rawName || !name) {
             // Unknown name — discard
             console.warn(`[MWT:Interiority] Discarding NPC block "${rawName}" — not in roster [${roster.join(', ')}].`);
+            noteIntentionsCaptureDecision({ npc: rawName, kind: 'block', outcome: 'ignored', reason: 'not-in-roster' });
             continue;
         }
         if (isUserName(name, userNamesLower, roster)) {
@@ -1357,10 +1456,12 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 `[MWT:Interiority] Discarding block for "${name}" — that is the player character. ` +
                 `They should not have been on the roster; please report this.`
             );
+            noteIntentionsCaptureDecision({ npc: name, kind: 'block', outcome: 'ignored', reason: 'player-character' });
             continue;
         }
         if (seenNpcs.has(name.toLowerCase())) {
             // Model emitted the same NPC twice — first block wins
+            noteIntentionsCaptureDecision({ npc: name, kind: 'block', outcome: 'ignored', reason: 'duplicate-block' });
             continue;
         }
         seenNpcs.add(name.toLowerCase());
@@ -1428,6 +1529,9 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         // they are skipped entirely when the intentions feature is disabled.
         if (!wantIntentions) continue;
 
+        // Tier 1 item 2: this block may only close entries owned by this NPC.
+        const ownedIds = ownedLedgerIds.get(name.toLowerCase()) || new Set();
+
         // ── Executed intentions ──
         // Grace period: intentions that haven't survived enough turns are
         // protected from premature removal. The model often sees an NPC
@@ -1435,17 +1539,39 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         // before the action is actually completed on-screen.
         if (Array.isArray(npcResult.executed)) {
             const validIds = npcResult.executed.filter(id => {
-                if (!ledgerIds.has(id)) return false;
+                if (!ownedIds.has(id)) {
+                    // Known to the ledger but owned by another NPC — the
+                    // cross-NPC closure the owner check exists to stop. Unknown
+                    // and dormant ids are ignored too (the §20 hallucination
+                    // guard) — but never silently: every ignored id is recorded
+                    // with a reason so the capture can distinguish an absent
+                    // proposal from a hallucinated one.
+                    if (ledgerIds.has(id)) {
+                        console.log(`[MWT:Interiority] ${name}: ignoring executed id ${id} — the entry belongs to another NPC.`);
+                        noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'ignored', reason: 'wrong-owner' });
+                    } else if (id && dormantLedgerIds.has(id)) {
+                        console.log(`[MWT:Interiority] ${name}: ignoring executed id ${id} — the entry is dormant (never shown in <open_intentions>).`);
+                        noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'ignored', reason: 'dormant-id' });
+                    } else if (id) {
+                        noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'ignored', reason: 'unknown-id' });
+                    }
+                    return false;
+                }
                 const age = ledgerAgeMap.get(id) || 0;
                 if (age < gracePeriod) {
                     console.log(`[MWT:Interiority] ${name}: intention ${id} executed but still in grace period (age ${age} < ${gracePeriod}) — kept open.`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'rejected', reason: 'grace-period' });
                     return false;
                 }
+                noteIntentionsCaptureDecision({ npc: name, kind: 'executed', id, outcome: 'accepted' });
                 return true;
             });
             if (validIds.length > 0) {
                 removeLedgerEntries(validIds);
-                validIds.forEach(id => ledgerIds.delete(id));
+                validIds.forEach(id => {
+                    ledgerIds.delete(id);
+                    ownedIds.delete(id);
+                });
                 ledgerChanged = true;
                 console.log(`[MWT:Interiority] ${name}: executed ${validIds.length} intention(s).`);
             }
@@ -1454,19 +1580,31 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         // ── Dropped intentions ──
         // Same grace period applies — models drop intentions too eagerly
         // when a minor situation change occurs, before the trigger has
-        // had a chance to arrive.
+        // had a chance to arrive. Tier 1 item 2: the id must ALSO be owned
+        // by this NPC's block.
         if (Array.isArray(npcResult.dropped)) {
             const validIds = [];
             for (const drop of npcResult.dropped) {
-                if (drop && drop.id && ledgerIds.has(drop.id)) {
+                if (drop && drop.id && ownedIds.has(drop.id)) {
                     const age = ledgerAgeMap.get(drop.id) || 0;
                     if (age < gracePeriod) {
                         console.log(`[MWT:Interiority] ${name}: intention ${drop.id} dropped but still in grace period (age ${age} < ${gracePeriod}) — kept open.`);
+                        noteIntentionsCaptureDecision({ npc: name, kind: 'dropped', id: drop.id, outcome: 'rejected', reason: 'grace-period' });
                         continue;
                     }
                     validIds.push(drop.id);
                     ledgerIds.delete(drop.id);
+                    ownedIds.delete(drop.id);
                     console.log(`[MWT:Interiority] ${name}: dropped intention ${drop.id} (${String(drop.reason || '').slice(0, 80)}).`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'dropped', id: drop.id, outcome: 'accepted' });
+                } else if (drop && drop.id && ledgerIds.has(drop.id)) {
+                    console.log(`[MWT:Interiority] ${name}: ignoring dropped id ${drop.id} — the entry belongs to another NPC.`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'dropped', id: drop.id, outcome: 'ignored', reason: 'wrong-owner' });
+                } else if (drop && drop.id && dormantLedgerIds.has(drop.id)) {
+                    console.log(`[MWT:Interiority] ${name}: ignoring dropped id ${drop.id} — the entry is dormant (never shown in <open_intentions>).`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'dropped', id: drop.id, outcome: 'ignored', reason: 'dormant-id' });
+                } else if (drop && drop.id) {
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'dropped', id: drop.id, outcome: 'ignored', reason: 'unknown-id' });
                 }
             }
             if (validIds.length > 0) {
@@ -1476,6 +1614,18 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         }
 
         // ── New intentions ──
+        // Per-NPC accepted-proposal cap (lifecycle plan Tier 1 item 3): the
+        // reported failure class was a flash-tier model dumping several
+        // near-identical proposals for one NPC. The cap limits CREATION
+        // only — executed/dropped handling above has already run for this
+        // block by the time we get here — and it is enforced AFTER field
+        // validation and dedup, so malformed or duplicate proposals never
+        // consume another candidate's slot. 0 disables new proposals
+        // entirely (temporary reporter-facing diagnostic setting;
+        // user-authored entries never pass through this path, so nothing
+        // user-made is evicted or suppressed by it).
+        const maxNewPerNpc = Math.max(0, Math.min(20, Number(settings.maxNewIntentionsPerNpc ?? 2) || 0));
+        let acceptedNewCount = 0;
         if (Array.isArray(npcResult.new_intentions)) {
             for (const ni of npcResult.new_intentions) {
                 if (!ni) continue;
@@ -1483,12 +1633,20 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 const trigger = String(ni.trigger || '').trim();
                 if (!action || !trigger) {
                     console.warn(`[MWT:Interiority] ${name}: discarding new intention missing action/trigger — got keys: [${Object.keys(ni).join(', ')}].`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'missing-action-or-trigger' });
                     continue;
                 }
 
                 // Dedup: never declare the same intention twice
                 if (hasDuplicateIntention(name, action, trigger)) {
                     console.log(`[MWT:Interiority] ${name}: skipping duplicate intention "${action.slice(0, 60)}".`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'duplicate' });
+                    continue;
+                }
+
+                if (acceptedNewCount >= maxNewPerNpc) {
+                    console.log(`[MWT:Interiority] ${name}: new-intention cap reached (${maxNewPerNpc} accepted this call) — skipping "${action.slice(0, 60)}".`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'cap-reached' });
                     continue;
                 }
 
@@ -1507,11 +1665,13 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 // misclassification is user-correctable from the panel
                 // (⏰ wake / 💤 sleep) rather than silently overridden here.
 
-                addLedgerEntry(
+                const created = addLedgerEntry(
                     { npc: name, action, trigger, status: entryStatus, wakeHint: entryWakeHint },
                     worldTime,
                     msgIdx,
                 );
+                acceptedNewCount += 1;
+                noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', id: created.id, action, trigger, outcome: 'accepted' });
                 ledgerChanged = true;
             }
         }

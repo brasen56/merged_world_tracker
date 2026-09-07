@@ -60,6 +60,7 @@ MWT.diagnostics.lastApiCalls()            // last call per module (pointer view)
 MWT.diagnostics.lastRuns()                // per-module last-run stamps
 MWT.diagnostics.injections()              // last snapshot per injection key (payloads!)
 MWT.diagnostics.injection('mwt_world_state_injection')  // one key's recorded payload
+MWT.diagnostics.intentionsCapture()       // latest intentions generation capture (prompts + raw responses; opt-in)
 MWT.diagnostics.settingsProvenance()      // where each WS/SP setting resolves from
 MWT.diagnostics.health()                  // the ❤️ Health tab snapshot, one row per module
 MWT.diagnostics.environment()             // the 🌐 Environment tab snapshot (fork-compat probe; async)

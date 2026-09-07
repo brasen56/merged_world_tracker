@@ -100,11 +100,28 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
         // [P1] Evidence is required for the MOTIVATION, not the decision:
         // demanding the plan be visibly formed or committed on-screen turned
         // Interiority into explicit-plan extraction and suppressed genuinely
-        // hidden intentions. A new intention now needs a NEW event or
+        // hidden intentions. A new intention still needs a NEW event or
         // circumstance in the window; the decision itself may stay private.
         // The mere passage of time never counts — waking already-scheduled
         // intentions for approaching dates is the dormant poll's job (§20).
-        rules.push(`${++n}. NEW INTENTIONS REQUIRE CURRENT EVIDENCE. Propose a new intention ONLY when <recent_messages> contains a NEW event or circumstance that would motivate this NPC to form a plan — a threat, an opportunity, a slight, a loss, a reveal, a changed situation. The NPC does NOT need to announce, show, or decide anything on-screen: hidden intentions are the point, and the decision itself may remain entirely private. But the MOTIVATION must be new and present in this window — the mere passage of time (a deadline or festival drawing near) is NOT a motivating event; already-scheduled intentions are woken by a separate system, never re-proposed here. <knowledge_entry> is BACKGROUND EVIDENCE ONLY: it may explain a motive, but a plan-shaped line there is a historical record, not a motivating event — NEVER create an intention by restating or paraphrasing a line from <knowledge_entry> when no new cause has appeared. A stale intention is worse than a missing one.`);
+        //
+        // Lifecycle plan Tier 1 item 1: the old single-paragraph rule carried
+        // the motivation requirement but never told the model to check the
+        // FINAL message for the action already being done — the exact shape
+        // of the reported regression (the story completes an installation and
+        // the intentions call re-proposes it, slightly reworded). Replaced
+        // with short sequential candidate checks plus one contrastive
+        // example, because small/flash-tier models follow ordered checks far
+        // better than compound paragraphs. The "at most two" wording matches
+        // the code-side per-NPC cap (validateAndApply's maxNewIntentionsPerNpc,
+        // default 2) — prompt and code must not drift.
+        rules.push(`${++n}. NEW INTENTIONS — for each candidate, run these checks in order and propose it ONLY if it passes all three:`);
+        rules.push(`   1. A recent event or circumstance in <recent_messages> must newly motivate the plan (a threat, an opportunity, a slight, a loss, a reveal, a changed situation). The decision may remain entirely private — the NPC need not announce, show, or decide anything on-screen.`);
+        rules.push(`   2. Check the final message of the supplied window: if the candidate's action has already been carried out there (or earlier in the window), it is not a plan. Never re-propose a completed action.`);
+        rules.push(`   3. Do not repeat an existing plan from <open_intentions> or <already_scheduled>, and do not repeat another proposal for the same NPC.`);
+        rules.push(`   <knowledge_entry> is BACKGROUND EVIDENCE ONLY: it may explain a motive, but never restate or paraphrase a plan-shaped line from it as a new intention. The mere passage of time (a deadline or festival drawing near) does not motivate a plan; already-scheduled intentions are woken by a separate system, never re-proposed here. A stale intention is worse than a missing one.`);
+        rules.push(`   Example (one scene, final message: "the courier hands over a sealed parcel"): "hand over the sealed parcel" is NOT a new plan — that action is already done; "open the sealed parcel in private before dawn" CAN be one — a future action newly motivated by the delivery.`);
+        rules.push(`   Propose at most two new intentions per NPC. Zero new intentions is a normal, expected result.`);
         rules.push(`${++n}. New intentions require BOTH a concrete "action" AND a specific "trigger" condition (the event or circumstance when the NPC will act). Vague triggers like "soon" or "when the time is right" are not acceptable — use concrete, verifiable conditions.`);
         rules.push(`${++n}. INTENTION HORIZON — for each new intention, classify when it will fire:`);
         rules.push(`   - "immediate": the trigger could be met any turn now (e.g. "next time Jonah leaves the house"). Use for event-conditional or situational triggers.`);

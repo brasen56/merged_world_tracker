@@ -130,6 +130,20 @@ export const CONTENT_KEYS = Object.freeze([
     // wholesale; gating the field name makes the redaction layer the backstop
     // rather than trusting every caller to keep picking fields by hand.
     'preview',
+    // Interiority intentions capture (interiority/capture.js): the raw and
+    // normalised model responses for a captured call. The capture report
+    // section already nests them under `payload` (gated as a whole); these
+    // entries are the backstop for any future surface that serializes call
+    // records outside that umbrella — raw model output is chat-derived prose.
+    'rawResponse',
+    'normalisedResponse',
+    // Interiority scene-roster names (interiority/capture.js). The capture
+    // report section nests the roster under `payload` (gated as a whole) and
+    // its meta exposes only a numeric rosterCount — NPC names are chat-derived
+    // content. This gates the bare field name as the backstop for any future
+    // surface that serializes a roster outside that umbrella, same reasoning
+    // as pinnedEntities above.
+    'roster',
 ]);
 
 /**
@@ -328,6 +342,13 @@ function contentMarker(value) {
     }
     if (Array.isArray(value)) {
         return `[content excluded — ${value.length} item(s)]`;
+    }
+    if (typeof value === 'object') {
+        // Plain-object content bodies (e.g. the Tier 1 intentions capture
+        // section's `payload`) get the same size-only marker as strings and
+        // arrays — "[REDACTED]" would lose the "how big was it" signal the
+        // marker exists to preserve.
+        return `[content excluded — ${Object.keys(value).length} key(s)]`;
     }
     return REDACTED; // unknown shape under a content key — never pass it through
 }

@@ -50,6 +50,12 @@ import { collectScopeSnapshot } from './scope_storage.js';
 import { collectSchemaStatusSnapshot } from './schema_status.js';
 import { collectInjectionSnapshot } from './injection.js';
 import { collectIntegritySnapshot } from './integrity.js';
+// Lifecycle plan Tier 1 item 4 — the generation-scoped intentions capture
+// section. interiority/capture.js is a leaf module (direct core leaf imports
+// only, no interiority store dependency), so this direct import cannot pull
+// the interiority store — or, under Vitest, the barrel→stub alias — into the
+// report path.
+import { collectIntentionsCaptureSection } from '../interiority/capture.js';
 
 // ─── Header lines ────────────────────────────────────────────────────────────
 
@@ -284,6 +290,16 @@ export async function collectReportSections() {
         // Payloads in this section are content: they appear only when the
         // opt-in is on, because redactForReport() gates the `payload` field.
         guarded('injections', 'Injected payloads (Phase 2 — content-gated)', () => getAllInjectedSnapshots()),
+
+        // Lifecycle plan Tier 1 item 4 — the generation-scoped intentions
+        // capture: prompts, raw responses, ledger before/after, and decision
+        // reasons for the latest intentions generation. meta (counts, mode,
+        // ids) is telemetry; the entire evidence body sits under `payload`,
+        // a CONTENT_KEYS member, so it is content-gated exactly like the
+        // injections section above. Null (nothing captured — the capture is
+        // opt-in and latest-generation-only) renders as a plain unavailable
+        // marker.
+        guarded('intentionsCapture', 'Interiority intentions capture (lifecycle Tier 1 — content-gated)', () => collectIntentionsCaptureSection()),
 
         // ── Phase 13 — the tab accessors, in sub-tab order ──────────────────
         guarded('health', 'Health (Phase 6 — one row per module)', () => collectHealthSnapshot()),

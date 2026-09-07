@@ -523,7 +523,8 @@ describe('new intentions require current evidence (knowledge_entry is background
 
     test('the system prompt grounds new intentions in recent messages', () => {
         const prompt = buildSystemPrompt({ intentions: true });
-        expect(prompt).toContain('NEW INTENTIONS REQUIRE CURRENT EVIDENCE');
+        expect(prompt).toContain('NEW INTENTIONS —');
+        expect(prompt).toContain('newly motivate the plan');
         expect(prompt).toContain('BACKGROUND EVIDENCE ONLY');
     });
 
@@ -542,13 +543,55 @@ describe('new intentions require current evidence (knowledge_entry is background
         // dormant poll's job (§20) — never a reason to re-propose here.
         const prompt = buildSystemPrompt({ intentions: true });
         expect(prompt).toContain('passage of time');
+        expect(prompt).toContain('never re-proposed');
     });
 
     test('thoughts-only calls never see the intention-evidence rule', () => {
         expect(buildSystemPrompt({ thoughts: true, intentions: false }))
-            .not.toContain('NEW INTENTIONS REQUIRE CURRENT EVIDENCE');
+            .not.toContain('NEW INTENTIONS —');
+    });
+});
+
+describe('new-intention prompt rule — lifecycle Tier 1 sequential checks', () => {
+    // Tier 1 item 1: the old single-paragraph rule never told the model to
+    // check the FINAL message for the action already being done — the exact
+    // shape of the reported regression (story completes an installation;
+    // intentions call re-proposes it, slightly reworded). The rule is now
+    // three short ordered checks plus one contrastive example, and states
+    // the per-NPC cap (which must match validateAndApply's
+    // maxNewIntentionsPerNpc default of 2 — prompt and code must not drift).
+
+    test('the final-message completion check is a numbered step', () => {
+        const prompt = buildSystemPrompt({ intentions: true });
+        expect(prompt).toContain('Check the final message of the supplied window');
+        expect(prompt).toContain('already been carried out');
+        expect(prompt).toContain('Never re-propose a completed action');
     });
 
+    test('the no-repetition check covers open, scheduled, and same-batch plans', () => {
+        const prompt = buildSystemPrompt({ intentions: true });
+        expect(prompt).toContain('Do not repeat an existing plan');
+        expect(prompt).toContain('<open_intentions>');
+        expect(prompt).toContain('<already_scheduled>');
+        expect(prompt).toContain('do not repeat another proposal for the same NPC');
+    });
+
+    test('one contrastive example teaches completion state without named characters', () => {
+        const prompt = buildSystemPrompt({ intentions: true });
+        // Same abstract scene: the completed action is NOT a plan; a
+        // different future action newly motivated by it CAN be.
+        expect(prompt).toContain('is NOT a new plan');
+        expect(prompt).toContain('newly motivated by the delivery');
+    });
+
+    test('the per-NPC cap is stated and zero is called normal', () => {
+        const prompt = buildSystemPrompt({ intentions: true });
+        expect(prompt).toContain('at most two new intentions per NPC');
+        expect(prompt).toContain('Zero new intentions is a normal, expected result');
+    });
+});
+
+describe('knowledge_entry stays background evidence in the user content', () => {
     test('the knowledge_entry block carries a background-evidence header', () => {
         const content = buildUserContent({
             npcBlocks: [{ name: 'Mara', knowledgeEntry: 'Intends to ambush the caravan (overheard, Day 3)' }],
@@ -806,9 +849,9 @@ describe('off-screen events are sealed to the acting NPC and named witnesses', (
         const prompt = buildSystemPrompt({ thoughts: false, intentions: true });
         // runSplitCall runs intentions as its own call whose window still shows
         // the sealed log (getStrippedRecentMessages preserves it by default).
-        // Without the shared partition rule, "NEW INTENTIONS REQUIRE CURRENT
-        // EVIDENCE" would read an unwitnessed off-screen log line as a valid
-        // motivating event for any roster NPC.
+        // Without the shared partition rule, the NEW INTENTIONS rule would
+        // read an unwitnessed off-screen log line as a valid motivating event
+        // for any roster NPC.
         expect(prompt).toContain('Off-Screen Events module block');
         expect(prompt).toContain('NPC who performed the logged action');
         expect(prompt).toContain('explicitly names as witnesses');

@@ -40,6 +40,10 @@ import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMes
 // Imported directly (not via the core/index.js barrel) so the namespace reads
 // the real singleton regardless of the test-only barrel→stub alias.
 import { getEvents, getApiCalls, getLastApiCall, getAllLastApiCalls, getAllLastRuns, getInjectedSnapshot, getAllInjectedSnapshots, clearEvents, clearApiCalls, clearLastRuns, clearInjections } from './core/diagnostics.js';
+// Lifecycle plan Tier 1 item 4 — read-only peek at the generation-scoped
+// intentions capture (interiority/capture.js, a leaf module: in-memory only,
+// no store dependency). Same direct-import rule as above.
+import { getIntentionsCaptureSnapshot } from './interiority/capture.js';
 // Diagnostics Phase 6 — Tab 1 Health: the snapshot collector behind the ❤️
 // Health sub-tab (one row per module: enabled · gate · busy · tokens · auto ·
 // last run). Same direct-import rule as above.
@@ -1724,6 +1728,7 @@ window.MWT.recovery = {
 //   MWT.diagnostics.lastRuns()                  // per-module last-run stamps
 //   MWT.diagnostics.injections()                // last snapshot per injection key
 //   MWT.diagnostics.injection('mwt_world_state_injection')  // one key's payload
+//   MWT.diagnostics.intentionsCapture()         // latest intentions generation capture (prompts + raw responses! opt-in)
 //   MWT.diagnostics.settingsProvenance()        // where each WS/SP setting resolves from
 //   MWT.diagnostics.health()                    // the ❤️ Health tab snapshot (one row per module)
 //   MWT.diagnostics.environment()               // the 🌐 Environment tab snapshot (fork-compat probe)
@@ -1838,6 +1843,32 @@ window.MWT.diagnostics = {
         }
         console.log(`[MWT] Injection snapshot (${key}):`, snap);
         return snap;
+    },
+
+    // Lifecycle plan Tier 1 item 4 — the generation-scoped intentions capture:
+    // the latest intentions generation's constituent calls (prompts + raw
+    // responses), the ledger before/after, and every accept/reject/ignore
+    // decision with its reason. Opt-in (Interiority settings), in-memory
+    // only, latest generation only, cleared on chat switch and reload. The
+    // Copy Report carries the same data content-gated under its
+    // "include content" opt-in; this raw accessor always shows bodies, so
+    // skim before pasting publicly.
+    intentionsCapture: () => {
+        const snapshot = getIntentionsCaptureSnapshot();
+        if (!snapshot) {
+            console.log('[MWT] No intentions capture available — enable "Capture intentions generation diagnostics" in Interiority settings and run a generation (in-memory only; resets on reload and chat switch).');
+            return undefined;
+        }
+        console.table([{
+            generationId: snapshot.id,
+            mode: snapshot.mode,
+            calls: snapshot.counts.calls,
+            decisions: snapshot.counts.decisions,
+            ledgerBefore: snapshot.ledgerBefore.total,
+            ledgerAfter: snapshot.ledgerAfter.total,
+        }]);
+        console.log('[MWT] Intentions capture summarized above — the return value carries the full prompts, raw responses, and decision reasons for copy-paste. Content-sensitive: skim before pasting publicly.');
+        return snapshot;
     },
 
     // Phase 4 — settings provenance (design §I.4.6). Two jobs: show WHERE each
