@@ -243,9 +243,9 @@ export function noteIntentionsCaptureCall({
  * @param {string} decision.kind - 'executed' | 'dropped' | 'new_intention' | 'block'
  * @param {string} decision.outcome - 'accepted' | 'rejected' | 'ignored'
  * @param {string|null} [decision.reason] - e.g. 'grace-period', 'wrong-owner',
- *   'unknown-id', 'dormant-id', 'duplicate', 'cap-reached',
- *   'missing-action-or-trigger', 'not-in-roster', 'player-character',
- *   'duplicate-block'
+ *   'unknown-id', 'dormant-id', 'duplicate', 'replayed-this-response',
+ *   'cap-reached', 'missing-action-or-trigger', 'not-in-roster',
+ *   'player-character', 'duplicate-block'
  */
 export function noteIntentionsCaptureDecision(decision = {}) {
     if (!_pending) return;

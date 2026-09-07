@@ -732,14 +732,24 @@ export function purgeUserLedgerEntries(userNames = getUserNames({ lower: true })
 }
 
 /**
- * Check whether an action+trigger combination already exists in the ledger
- * for a given NPC (string-match dedup, per §8 of the design).
+ * Check whether an action+trigger combination already exists in a SUPPLIED
+ * ledger array for a given NPC (string-match dedup, per §8 of the design).
+ *
+ * Non-mutating and store-free: the caller passes the array to search. This is
+ * the one definition of the exact-match rule — the live-ledger check in
+ * {@link hasDuplicateIntention} and the same-response replay guard in
+ * generation.validateAndApply (lifecycle plan Tier 2) both run it, the latter
+ * against `ledgerSnapshot`, the pre-mutation ledger captured before this
+ * validation pass's removals.
+ *
+ * @param {Array<object>} ledger - the entries to search (never mutated)
  * @param {string} npc
  * @param {string} action
  * @param {string} trigger
  * @returns {boolean}
  */
-export function hasDuplicateIntention(npc, action, trigger) {
+export function hasDuplicateIntentionIn(ledger, npc, action, trigger) {
+    if (!Array.isArray(ledger) || ledger.length === 0) return false;
     const lower = String(npc).toLowerCase();
     const a = String(action).trim().toLowerCase();
     const t = String(trigger).trim().toLowerCase();
@@ -753,7 +763,7 @@ export function hasDuplicateIntention(npc, action, trigger) {
     // Both fields fall back to the current value when no edit was recorded, so
     // this stays an exact-string match — an unedited entry behaves exactly as
     // before, and no genuinely new intention is suppressed.
-    const live = getLedger().some((e) => {
+    return ledger.some((e) => {
         if (String(e.npc).toLowerCase() !== lower) return false;
         const actions = new Set([norm(e.action)]);
         const triggers = new Set([norm(e.trigger)]);
@@ -761,10 +771,32 @@ export function hasDuplicateIntention(npc, action, trigger) {
         if (e.originalTrigger !== undefined) triggers.add(norm(e.originalTrigger));
         return actions.has(a) && triggers.has(t);
     });
+}
+
+/**
+ * Check whether an action+trigger combination already exists in the LIVE
+ * ledger for a given NPC (string-match dedup, per §8 of the design), or was
+ * deleted by the user (tombstone).
+ *
+ * This sees only the CURRENT store. An entry the engine removed earlier in the
+ * SAME validation pass (executed/dropped) is invisible here — engine removals
+ * deliberately leave no tombstone, because a later, independently motivated
+ * re-declaration must stay possible. generation.validateAndApply therefore also
+ * dedups new proposals against its pre-mutation `ledgerSnapshot` via
+ * {@link hasDuplicateIntentionIn} (lifecycle plan Tier 2) to block the exact
+ * execute-and-recreate replay within one response.
+ *
+ * @param {string} npc
+ * @param {string} action
+ * @param {string} trigger
+ * @returns {boolean}
+ */
+export function hasDuplicateIntention(npc, action, trigger) {
     // A deleted intention is not in the ledger to match against, so without
     // this the next generation re-proposes it as brand new. The user already
     // said no once.
-    return live || isIntentionDeleted(npc, action);
+    return hasDuplicateIntentionIn(getLedger(), npc, action, trigger)
+        || isIntentionDeleted(npc, action);
 }
 
 // ─── Manual entries (user-authored intentions) ───────────────────────────────

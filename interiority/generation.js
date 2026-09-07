@@ -34,7 +34,7 @@ import { noteIntentionsCaptureCall, noteIntentionsCaptureDecision } from './capt
 import {
     getSettings, hasValidSettings,
     getInteriorityData,
-    addLedgerEntry, removeLedgerEntries, hasDuplicateIntention,
+    addLedgerEntry, removeLedgerEntries, hasDuplicateIntention, hasDuplicateIntentionIn,
     setPerMessage, getLedgerEntriesForNpc,
     getOrCreateMsgKeyForIndex,
     getRecentThoughtsForNpc,
@@ -1253,7 +1253,8 @@ export async function collectRosterAliases(roster) {
  *   - executed/dropped ids must exist in ledger
  *   - new_intentions require both action + trigger
  *   - length caps on thoughts
- *   - dedup new intentions against open ones
+ *   - dedup new intentions against open ones and the pre-mutation snapshot
+ *     (lifecycle plan Tier 2 — same-response replay guard)
  *   - max 1 reaction per NPC per turn
  *
  * @param {object} result - parsed JSON from the API
@@ -1641,6 +1642,27 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 if (hasDuplicateIntention(name, action, trigger)) {
                     console.log(`[MWT:Interiority] ${name}: skipping duplicate intention "${action.slice(0, 60)}".`);
                     noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'duplicate' });
+                    continue;
+                }
+
+                // Lifecycle plan Tier 2 — same-response replay guard. The
+                // executed/dropped handlers above have ALREADY removed this
+                // pass's accepted ids from the live ledger, and engine removals
+                // deliberately leave no tombstone (an NPC who completes a plan
+                // may legitimately re-declare it in a LATER turn). So the live
+                // check above cannot see an entry removed moments ago in this
+                // same response: a model that executes an intention and
+                // re-proposes it verbatim would land it straight back as
+                // brand-new. The pre-mutation ledgerSnapshot — captured at the
+                // top of this function, before the wake, the age increment, and
+                // every removal — still holds the entry, so consulting it
+                // blocks the replay. Cross-turn re-declaration stays allowed:
+                // the snapshot is per-validation-pass, not closure history, and
+                // matching remains exact-string (paraphrases are the prompt
+                // contract's and capture's problem, per plan non-goals).
+                if (hasDuplicateIntentionIn(ledgerSnapshot, name, action, trigger)) {
+                    console.log(`[MWT:Interiority] ${name}: skipping replayed intention "${action.slice(0, 60)}" — executed or dropped earlier in this same response.`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'replayed-this-response' });
                     continue;
                 }
 

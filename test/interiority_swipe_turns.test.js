@@ -395,6 +395,171 @@ describe('per-NPC accepted-proposal cap (lifecycle Tier 1 item 3)', () => {
     });
 });
 
+// ─── Lifecycle plan Tier 2 — same-response replay guard ──────────────────────
+
+describe('same-response replay guard (lifecycle Tier 2)', () => {
+    // The executed/dropped handlers run BEFORE new_intentions inside one
+    // validateAndApply pass and remove entries from the LIVE ledger without a
+    // tombstone (a later, independently motivated re-declaration must stay
+    // possible). Until Tier 2 the live-only dedup could not see an entry
+    // removed moments earlier in the same response, so a model that executed
+    // an intention and re-proposed it verbatim landed it straight back as
+    // brand-new. The guard dedups new proposals against the pre-mutation
+    // ledgerSnapshot (captured before the wake, the age increment, and every
+    // removal) in addition to the live ledger.
+
+    test('execute then exact recreate in one response is rejected', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                new_intentions: [{ action: 'finish the installation', trigger: 'nightfall' }],
+            }],
+        }, ['Mara'], 1);
+
+        // Executed, and the verbatim recreate was blocked by the pre-removal
+        // snapshot — not re-added under a fresh id.
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('drop then exact recreate in one response is rejected', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const gone = addLedgerEntry({ npc: 'Mara', action: 'burn the ledgers', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                dropped: [{ id: gone.id, reason: 'the depot burned down' }],
+                new_intentions: [{ action: 'burn the ledgers', trigger: 'nightfall' }],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('the guard also consults a caller-supplied preTurnLedgerSnapshot', async () => {
+        // The production path: generateForCurrentMessage captures the snapshot
+        // BEFORE the dormant poll and passes it in, so the guard must use that
+        // array — not a fresh copy taken inside validateAndApply.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+        const preTurn = JSON.parse(JSON.stringify(getLedger()));
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                new_intentions: [{ action: 'finish the installation', trigger: 'nightfall' }],
+            }],
+        }, ['Mara'], 1, undefined, preTurn);
+
+        expect(getLedger()).toHaveLength(0);
+    });
+
+    test('a genuinely different new intention still lands after an execution', async () => {
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                new_intentions: [{ action: 'stash the blueprints', trigger: 'sundown' }],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action)).toEqual(['stash the blueprints']);
+    });
+
+    test('a reworded recreate is not blocked — the guard is exact-match only', async () => {
+        // Pinned deliberately: the snapshot guard is deterministic string
+        // matching, not semantic paraphrase detection (plan non-goal — the
+        // new-intentions prompt contract and the Tier 1 capture carry the
+        // paraphrase burden). This asserts the guard does not overreach.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                new_intentions: [{ action: 'complete the installation', trigger: 'nightfall' }],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action)).toEqual(['complete the installation']);
+    });
+
+    test('a same-text proposal for a DIFFERENT NPC is not this guard\'s concern', async () => {
+        // Dedup keys on the NPC: Derek executing Derek's plan says nothing
+        // about Mara proposing the same action wording for herself — the live
+        // check has always allowed that, and the snapshot check must not
+        // tighten it into a cross-NPC suppression.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const done = addLedgerEntry({ npc: 'Derek', action: 'watch the road', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [
+                { name: 'Derek', executed: [done.id] },
+                { name: 'Mara', new_intentions: [{ action: 'watch the road', trigger: 'nightfall' }] },
+            ],
+        }, ['Mara', 'Derek'], 1);
+
+        expect(getLedger().map(e => e.npc)).toEqual(['Mara']);
+    });
+
+    test('a replay rejection does not consume a Tier 1 cap slot', async () => {
+        // Tier 1 item 3: the cap is enforced after validation AND dedup, so a
+        // replayed proposal must not eat a slot a genuine candidate could use.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 0 });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                new_intentions: [
+                    { action: 'finish the installation', trigger: 'nightfall' }, // replay — no slot
+                    { action: 'stash the coin', trigger: 'sundown' },            // slot 1
+                    { action: 'copy the key', trigger: 'the watch change' },     // slot 2
+                ],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action)).toEqual(['stash the coin', 'copy the key']);
+    });
+
+    test('an entry protected by the grace period is not removed, so its duplicate is the ordinary live one', async () => {
+        // If the executed mark is rejected (age < grace), the entry is still
+        // live when new_intentions run — the LIVE dedup rejects the proposal
+        // and the snapshot check never gets to see a removal at all.
+        setFakeChat(CHAT);
+        saveSettings({ intentionGracePeriod: 2 });
+        const entry = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [entry.id],
+                new_intentions: [{ action: 'finish the installation', trigger: 'nightfall' }],
+            }],
+        }, ['Mara'], 1);
+
+        // Survived the grace-period rejection AND no duplicate was added.
+        expect(getLedger().map(e => e.id)).toEqual([entry.id]);
+    });
+});
+
 describe('onMessageSwiped — the full rollback', () => {
     test('a swipe restores both the dormant status and the turn counter', async () => {
         setFakeChat(CHAT);

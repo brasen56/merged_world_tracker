@@ -361,6 +361,43 @@ describe('wiring — runStrictCalls + validateAndApply under an active capture',
         expect(reasons.filter(r => r === 'accepted:null')).toHaveLength(2);
     });
 
+    test('records a same-response replay rejection with its own reason (lifecycle Tier 2)', async () => {
+        const { saveSettings, addLedgerEntry, getLedger } = await import('../interiority/data.js');
+        const { validateAndApply } = await import('../interiority/generation.js');
+
+        setFakeChat(CHAT);
+        saveSettings({
+            apiUrl: 'https://example.test', modelName: 'test',
+            generateThoughts: false, generateIntentions: true, intentionGracePeriod: 0,
+        });
+        const done = addLedgerEntry({ npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' }, 'day 1', 0);
+
+        beginIntentionsGenerationCapture({ enabled: true, mode: 'unified', ledgerBefore: getLedger() });
+        noteIntentionsCaptureRoster(['Mara']);
+        noteIntentionsCaptureCall({ kind: 'intentions' }).finish({ parsed: true });
+
+        // The reported failure class, compressed: execute the entry and
+        // re-propose it verbatim in the SAME response. The live ledger no
+        // longer holds the entry, so only the pre-mutation snapshot catches it.
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                executed: [done.id],
+                new_intentions: [{ action: 'finish the installation', trigger: 'nightfall' }],
+            }],
+        }, ['Mara'], 1);
+
+        const committed = completeIntentionsGenerationCapture({ ledgerAfter: getLedger() });
+        expect(committed).not.toBeNull();
+        // Executed, and the recreate was blocked — nothing left in the ledger.
+        expect(committed.ledgerAfter.total).toBe(0);
+
+        const newIntentions = committed.decisions.filter(d => d.kind === 'new_intention');
+        expect(newIntentions).toHaveLength(1);
+        expect(newIntentions[0].outcome).toBe('rejected');
+        expect(newIntentions[0].reason).toBe('replayed-this-response');
+    });
+
     test('a parse THROW records one attempt per wire call, never two (production parser path)', async () => {
         const { saveSettings, addLedgerEntry, getLedger } = await import('../interiority/data.js');
         const { setFakeApi, setFakeParser } = await import('./stubs/core.js');

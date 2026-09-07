@@ -19,7 +19,7 @@ import {
 import { REGISTRY_KEY } from '../knowledge/state.js';
 import {
     getLedger, setLedger, restoreLedgerSnapshot,
-    addLedgerEntry, updateLedgerEntry, hasDuplicateIntention,
+    addLedgerEntry, updateLedgerEntry, hasDuplicateIntention, hasDuplicateIntentionIn,
     removeLedgerEntries, isIntentionDeleted, clearDeletedIntentions,
     getInnerState, getInnerStates, setInnerState,
     getInnerStatesSnapshot, restoreInnerStatesSnapshot,
@@ -688,6 +688,57 @@ describe('dedup survives a user edit', () => {
         updateLedgerEntry(entry.id, { trigger: 'when they are alone' });
 
         expect(hasDuplicateIntention('Mara', 'confront James', 'when they are alonr')).toBe(true);
+    });
+});
+
+describe('hasDuplicateIntentionIn — the non-mutating snapshot matcher (lifecycle Tier 2)', () => {
+    // validateAndApply dedups new proposals against BOTH the live ledger and
+    // its pre-mutation ledgerSnapshot (the same-response replay guard). This
+    // helper is the one definition of the exact-match rule both checks run:
+    // same npc + action + trigger keys (original wording included), never
+    // touching the store — the snapshot it is handed is rollback state.
+
+    test('matches npc + action + trigger in the supplied array', () => {
+        const ledger = [
+            { id: 'i-1', npc: 'Mara', action: 'finish the installation', trigger: 'nightfall' },
+            { id: 'i-2', npc: 'Derek', action: 'watch the road', trigger: 'nightfall' },
+        ];
+        expect(hasDuplicateIntentionIn(ledger, 'mara', '  Finish The Installation ', 'nightfall')).toBe(true);
+        // Same text under another NPC — a different intention.
+        expect(hasDuplicateIntentionIn(ledger, 'Derek', 'finish the installation', 'nightfall')).toBe(false);
+        // Same NPC, different trigger — a different intention.
+        expect(hasDuplicateIntentionIn(ledger, 'Mara', 'finish the installation', 'dawn')).toBe(false);
+    });
+
+    test('matches a user-edited entry through its recorded ORIGINAL wording', () => {
+        // A snapshot can hold entries the user edited before the pass — replay
+        // detection must recognise the engine's own original strings, exactly
+        // like the live check does.
+        const ledger = [
+            { id: 'i-1', npc: 'Mara', action: 'confront James', trigger: 'when alone', originalAction: 'confront Jaimie' },
+        ];
+        expect(hasDuplicateIntentionIn(ledger, 'Mara', 'confront James', 'when alone')).toBe(true);
+        expect(hasDuplicateIntentionIn(ledger, 'Mara', 'confront Jaimie', 'when alone')).toBe(true);
+    });
+
+    test('never consults or mutates the live store', () => {
+        const unrelated = [
+            { id: 'i-9', npc: 'Rowan', action: 'slip away', trigger: 'the bell' },
+        ];
+        // A live ledger entry that is NOT in the supplied array is invisible…
+        const live = addLedgerEntry({ npc: 'Mara', action: 'live-only plan', trigger: 'dawn' }, 'day 1', 0);
+        expect(hasDuplicateIntentionIn(unrelated, 'Mara', 'live-only plan', 'dawn')).toBe(false);
+        // …while the same wording IS caught when the array holds it (sanity).
+        expect(hasDuplicateIntentionIn(
+            [{ id: 'x', npc: 'Mara', action: 'live-only plan', trigger: 'dawn' }],
+            'Mara', 'live-only plan', 'dawn',
+        )).toBe(true);
+        // Degenerate inputs are a plain false, not a throw.
+        expect(hasDuplicateIntentionIn(null, 'Mara', 'anything', 'anytime')).toBe(false);
+        expect(hasDuplicateIntentionIn([], 'Mara', 'anything', 'anytime')).toBe(false);
+        // And the calls mutated nothing in the store.
+        expect(getLedger()).toHaveLength(1);
+        expect(getLedger()[0].id).toBe(live.id);
     });
 });
 
