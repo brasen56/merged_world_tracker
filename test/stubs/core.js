@@ -51,6 +51,13 @@ import { _resetCoordinator } from '../../core/coordinator.js';
 // Real sanitizer (leaf module, no SillyTavern deps) — getRecentMessages below
 // must mirror core/context.js's strip/preserveOffScreen options.
 import { stripNonNarrative } from '../../core/strip.js';
+// Real context-budget hook (TODO §2): the stub's apply must mirror the REAL
+// core/injection.js seam, which consults the budget before registering. The
+// real hook reads the REAL chat metadata (no fake context here), so under the
+// stub it stays in observe mode — the production default — and passes every
+// payload through. Enforce-mode behavior is pinned against the real modules
+// directly (test/budget.test.js), the injection_diagnostics tier5 pattern.
+import { enforceInjectionBudget } from '../../core/budget.js';
 
 let _chat = [];
 let _meta = {};
@@ -514,17 +521,29 @@ export function applyExtensionPromptInjection({
     // snapshots production never registers — so this must stay faithful.
     // (wrapInTag below is this stub's mirror of the real one.)
     const inner = header?.trim() ? `${header}\n\n${body}` : body;
-    const payload = active ? ((useTags && wrapperTag) ? wrapInTag(wrapperTag, inner) : inner) : '';
-    _promptCalls.push({ key, payload, enabled: !!enabled, depth, role, wrapperTag, useTags });
+    const built = active ? ((useTags && wrapperTag) ? wrapInTag(wrapperTag, inner) : inner) : '';
+    // Budget seam parity (TODO §2): the real core/injection.js consults the
+    // per-chat budget on the ACTIVE path only (the clear path returns before
+    // the hook) with the FULLY-BUILT payload. Under the stub the hook reads
+    // the real (absent) chat metadata, so it stays in observe mode — the
+    // production default — and passes everything through; enforce-mode
+    // behavior is pinned against the real modules in test/budget.test.js.
+    const budgeted = active
+        ? enforceInjectionBudget({ key, payload: built, enabled: true })
+        : { payload: '', enabled: false, decision: null };
+    const payload = budgeted.payload;
+    const finalEnabled = active && budgeted.enabled;
+    _promptCalls.push({ key, payload, enabled: !!enabled, depth, role, wrapperTag, useTags, budget: budgeted.decision?.action ?? null });
     const ctx = buildFakeContext();
     ctx.setExtensionPrompt?.(key, payload, 1, depth, undefined, role);
     // Phase 2 parity with the real core/injection.js: record a diagnostics
     // snapshot whenever setExtensionPrompt is available (the real module
-    // returns early — and records nothing — when it is not).
+    // returns early — and records nothing — when it is not). enabled mirrors
+    // the FINAL post-budget state, exactly what the real seam records.
     if (typeof ctx.setExtensionPrompt === 'function') {
-        recordInjection({ key, payload, role, depth, enabled: active });
+        recordInjection({ key, payload, role, depth, enabled: finalEnabled });
     }
-    return active;
+    return finalEnabled;
 }
 export const roleToNumber = notImplemented('roleToNumber');
 export function wrapInTag(tag, body) {

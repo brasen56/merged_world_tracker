@@ -15,6 +15,7 @@
   - [💭 Interiority](#-interiority)
   - [Shared Core](#shared-core)
   - [🩺 Diagnostics](#-diagnostics)
+  - [📊 Budget](#-budget)
   - [Slash Commands & Macros](#slash-commands--macros)
   - [Mobile & Touch](#mobile--touch)
 - [Installation](#installation)
@@ -228,6 +229,18 @@ A read-only **🩺 Diagnostics** tab inside the MWT modal answers "what is MWT a
 - **📋 Copy Report** — One click bundles everything into redacted, paste-ready Markdown. Chat text is included only if you explicitly opt in; API keys and secrets are redacted either way
 
 Everything the tab shows (and more) is also available via the `MWT.diagnostics.*` console API. Full references: **[DIAGNOSTICS_GUIDE.md](DIAGNOSTICS_GUIDE.md)** and **[DIAGNOSTICS_CONSOLE_GUIDE.md](DIAGNOSTICS_CONSOLE_GUIDE.md)**.
+
+### 📊 Budget
+
+The **📊 Budget** tab shows the estimated prompt tokens MWT has registered and lets you set per-chat limits for World State, Chronicle, Story Planner, and Interiority. Its settings are stored in the current chat's metadata, so changing a cap does not affect other chats.
+
+- **Observe mode is the default.** It does not change injection applies; the table and Diagnostics Log show what enforcement *would* do. On a chat change, MWT still clears stale injection snapshots before the new chat's modules re-apply, preventing old-chat context from influencing the new allocation.
+- **Enforce budget** applies limits at the shared injection seam. A **soft cap** truncates a payload with a visible `[…truncated ~N tokens]` marker while preserving closed wrapper tags. A **hard cap** drops that module's injection. The **global hard cap** protects higher-priority context by dropping lower-priority content first.
+- **Priority** uses lower numbers first: P1 survives longer than P2. A global cap only displaces strictly lower-priority registered modules; equal-or-higher priority content is protected.
+- **Caps apply on the next injection apply.** After saving, toggle a module's injection or trigger its refresh to enforce new settings against its current payload.
+- **Knowledge is advisory.** Its lorebook entries are activated by SillyTavern World Info keywords rather than MWT's extension-prompt seam, so the tab reports its stored size but never modifies it.
+
+Use `0` for any cap to leave that cap off. Token figures are estimates using the same tokenizer MWT uses throughout its UI.
 
 ### Slash Commands & Macros
 

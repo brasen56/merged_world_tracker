@@ -12,6 +12,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.5.0]
+
+### Added
+
+- **Context / token budget — the 📊 Budget tab + enforcement engine** (TODO §2
+  / PI §P1, the last open P1). Every module had its own token estimate; there
+  was no global view of what MWT puts in the prompt and no way to cap it. Now:
+  - **`core/budget.js` — the engine, adopted at the ONE seam every
+    setExtensionPrompt injection already funnels through**
+    (`applyExtensionPromptInjection`). Zero per-module restructuring: World
+    State, Chronicle, Story Planner, and Interiority payloads pass through the
+    per-chat budget before registration. The hook's contract is
+    pass-through on ANY internal failure — a budget bug can never break
+    injection itself.
+  - **Observe by default; enforcement is an explicit per-chat opt-in.** A new
+    chat starts in observe mode where nothing is modified and the Log tab
+    records what enforcement *would* have done (`budget_would_truncate` /
+    `budget_would_drop` events). Flipping **Enforce budget for this chat**
+    enables: module **soft caps** → structure-preserving truncation with a
+    visible `[…truncated ~N tokens]` marker (wrapper tags stay closed — the
+    cut is inner-only); module **hard caps** → the injection is dropped
+    (cleared); the **global hard cap** drops lowest-priority content first —
+    an incoming payload displaces strictly-worse-priority registered modules
+    (their slots cleared through the same seam) and never displaces an
+    equal-or-better priority; if it still cannot fit, it drops and nothing is
+    wasted. Default priority follows the TODO's suggestion: World State +
+    Interiority first (P1), Chronicle (P2), Story Planner (P3), older/reference
+    material last — all editable per chat.
+  - **The 📊 Budget tab** (budget/panel.js): estimated tokens per module —
+    registered payload tokens for the seam modules (the Phase 2 snapshots,
+    never a rebuild) plus Knowledge's stored lorebook total as an advisory
+    figure — total vs the selected model's context limit (auto-detected from
+    `ctx.maxContext` / the active preset, with a manual override), the
+    drop-order model, a pre-send summary line ("1 dropped · 1 truncated ·
+    ~800 of 1,200 tokens kept" at current sizes), per-module priority/soft/
+    hard caps, the global hard cap, and the enforce toggle. The panel and the
+    enforcement seam share ONE planner, so what the panel shows can never
+    drift from what enforcement does. Settings live in THIS CHAT's metadata —
+    per-project, not global.
+  - **`MWT.budget.{status,settings,set,setModule}`** — the console twin of
+    the tab.
+  - Stated scope (on the panel): SillyTavern's own prompt and Knowledge's
+    lorebook entries (World Info keyword activation) are reported, never
+    managed — the Health tab's token-kind split, kept honest here.
+  - Pinned by `test/budget.test.js` (54 tests: normalization, context-limit
+    probes, truncation, drop-order, all three cap families at the planner and
+    through the REAL seam, the never-break contract, and the panel's
+    collector/renderer/wiring). Suite: 80 files / 2,092 tests green.
+
 ## [2.4.1]
 
 ### Added

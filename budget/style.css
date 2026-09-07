@@ -1,0 +1,122 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   budget/style.css — .mwt-budget-* (the 📊 Budget tab, TODO §2)
+   Reuses the diagnostics panel's shared classes (mwt-diag-badge,
+   mwt-diag-dim, mwt-diag-health-stats/-table, mwt-diag-note, mwt-diag-panic,
+   mwt-diag-placeholder) from core/style.css; only the budget-specific
+   shapes live here.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.mwt-budget-mode {
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 8px 0;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.mwt-budget-mode--observe {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.mwt-budget-mode--enforce {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.mwt-budget-summary {
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 6px 12px;
+    margin: 8px 0;
+    border-left: 3px solid rgba(59, 130, 246, 0.5);
+    background: rgba(59, 130, 246, 0.06);
+    border-radius: 0 4px 4px 0;
+}
+
+.mwt-budget-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 14px;
+}
+
+.mwt-budget-bar {
+    flex: 1;
+    height: 10px;
+    border-radius: 5px;
+    background: var(--mwt-bg, rgba(255, 255, 255, 0.08));
+    border: 1px solid var(--mwt-border, rgba(255, 255, 255, 0.15));
+    overflow: hidden;
+}
+
+.mwt-budget-bar-fill {
+    height: 100%;
+    background: #3b82f6;
+    transition: width 0.2s ease;
+}
+
+.mwt-budget-bar-fill--over {
+    background: #ef4444;
+}
+
+.mwt-budget-bar-label {
+    font-size: 12px;
+    white-space: nowrap;
+    color: var(--mwt-text-dim, #999);
+}
+
+.mwt-budget-table input[type="number"] {
+    width: 72px;
+    padding: 2px 4px;
+    font-size: 12px;
+    text-align: right;
+    background: var(--mwt-bg, rgba(0, 0, 0, 0.2));
+    color: var(--mwt-text, inherit);
+    border: 1px solid var(--mwt-border, rgba(255, 255, 255, 0.15));
+    border-radius: 4px;
+}
+
+.mwt-budget-row--idle td {
+    opacity: 0.6;
+}
+
+.mwt-budget-caps {
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.mwt-budget-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 14px 0;
+}
+
+.mwt-budget-enforce-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    cursor: pointer;
+}
+
+.mwt-budget-global-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 12px;
+}
+
+.mwt-budget-global-controls input[type="number"] {
+    width: 100px;
+    padding: 3px 6px;
+    font-size: 12px;
+    text-align: right;
+    background: var(--mwt-bg, rgba(0, 0, 0, 0.2));
+    color: var(--mwt-text, inherit);
+    border: 1px solid var(--mwt-border, rgba(255, 255, 255, 0.15));
+    border-radius: 4px;
+}

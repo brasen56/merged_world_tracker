@@ -5,6 +5,12 @@
 import { getSetExtensionPrompt } from './context.js';
 import { escapePromptBoundary } from './prompt.js';
 import { recordInjection } from './diagnostics.js';
+// TODO §2 context budget: the ONE seam every setExtensionPrompt injection
+// funnels through consults the per-chat budget before registering. Direct
+// import (never the barrel — the §II.3 alias trap); core/budget.js never
+// imports this module back, so no cycle. The hook's contract is pass-through
+// on ANY internal failure, so a budget bug cannot break injection itself.
+import { enforceInjectionBudget, rebalanceBudgetInjections, clearDesiredBudgetInjection } from './budget.js';
 
 export function roleToNumber(role) {
     switch (role) {
@@ -87,6 +93,10 @@ export function applyExtensionPromptInjection({
         // Phase 2 diagnostics: record the cleared state too — "it was cleared
         // at T" is exactly as diagnostic as what the slot contained before.
         recordInjection({ key, payload: '', role, depth, enabled: false });
+        // Disabled/empty applies bypass enforceInjectionBudget entirely, so
+        // explicitly forget this desired payload and let any other displaced
+        // module reclaim the capacity it just freed (TODO §2 P2).
+        clearDesiredBudgetInjection(key, { setEP });
         return false;
     }
 
@@ -94,7 +104,20 @@ export function applyExtensionPromptInjection({
     // the body is treated as already fully assembled (e.g. World State builds
     // multiple independently-wrapped blocks and passes the final string here).
     const inner = header?.trim() ? `${header}\n\n${body}` : body;
-    const payload = (useTags && wrapperTag) ? wrapInTag(wrapperTag, inner) : inner;
+    let payload = (useTags && wrapperTag) ? wrapInTag(wrapperTag, inner) : inner;
+
+    // TODO §2 context budget. The per-chat budget gets the FINAL payload —
+    // after header/wrapper assembly, before registration — and may return a
+    // truncated version, a drop (cleared slot), or (observe mode, the
+    // default) exactly what was passed in. `enabled` travels with the
+    // decision: a dropped injection clears its slot like any disabled path.
+    // depth/role travel too so the budget's desired-payload registry can
+    // RE-INJECT a previously displaced module at its correct placement when
+    // capacity is freed (TODO §2 P2 — displaced modules are no longer
+    // one-way).
+    const budgeted = enforceInjectionBudget({ key, payload, enabled: true, depth, role });
+    payload = budgeted.payload;
+    const finalEnabled = enabled && budgeted.enabled;
 
     setEP(key, payload, 1, depth, undefined, role);
     // Phase 2 diagnostics: snapshot exactly what was registered with
@@ -104,6 +127,11 @@ export function applyExtensionPromptInjection({
     // MWT registered, not that a generation ran afterwards or that
     // SillyTavern placed the payload in the final prompt — placement is not
     // observable from here (the panel design calls it Unverified).
-    recordInjection({ key, payload, role, depth, enabled: true });
-    return true;
+    recordInjection({ key, payload, role, depth, enabled: finalEnabled });
+    // TODO §2 P2 — now that this incoming payload's active snapshot exists,
+    // safely re-admit any lower-priority module it previously displaced if
+    // the current allocation has capacity again. This must occur AFTER the
+    // record above because the rebalance planner reads live snapshots.
+    rebalanceBudgetInjections({ setEP });
+    return !!finalEnabled;
 }

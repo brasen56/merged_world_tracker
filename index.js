@@ -24,6 +24,13 @@ import {
     cancelWhere,
 } from './core/coordinator.js';
 import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings.js';
+// TODO §2 context budget — the per-chat settings accessors behind the
+// MWT.budget console bridge. Direct import (the barrel is aliased under
+// Vitest; the bridge must read the real chat metadata). resetBudgetInjections
+// is the two-phase chat-change reset (TODO §2 P1): clears every managed
+// module's slot + snapshot at the start of CHAT_CHANGED so the new chat's
+// injections are never rejected by the previous chat's stale snapshots.
+import { getBudgetSettings, saveBudgetSettings, resetBudgetInjections } from './core/budget.js';
 import { createModal, showModal, setStatus } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
 import { createCommands } from './core/commands.js';
@@ -102,6 +109,9 @@ import { collectQuarantineStatus, exportRecoveryData, clearQuarantineData } from
 // Diagnostics panel shell (Phase 5): the 🩺 tab inside this modal, its redaction
 // layer (core/redaction.js), and the D1 copy-report shape.
 import { renderDiagnosticsPanel, wireDiagnosticsPanel } from './diagnostics_panel/render.js';
+// TODO §2 context budget: the 📊 Budget tab's collector/renderer/wiring
+// (budget/panel.js on top of core/budget.js).
+import { collectBudgetSnapshot, renderBudgetPane, wireBudgetTab } from './budget/panel.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -204,6 +214,10 @@ const TABS = [
     // opt-in + Copy Report). Read-only; rendered/wired by
     // diagnostics_panel/render.js, not by a feature module.
     { id: 'diagnostics', label: '🩺 Diagnostics', module: null },
+    // TODO §2: the cross-module context/token budget panel (core/budget.js
+    // engine + budget/panel.js UI). Sits beside Diagnostics — it MANAGES
+    // token load where Diagnostics deliberately only reports it.
+    { id: 'budget', label: '📊 Budget', module: null },
     { id: 'settings', label: '⚙️ Settings', module: null },
 ];
 
@@ -414,6 +428,9 @@ function buildTabContent(tab) {
     if (tab.id === 'settings') return renderSettingsTab();
     // Diagnostics Phase 5 — the panel shell (placeholders for tabs 1–7).
     if (tab.id === 'diagnostics') return renderDiagnosticsPanel();
+    // TODO §2 — the context/token budget panel (open-and-read, like the
+    // Diagnostics tabs: the modal is rebuilt on every open).
+    if (tab.id === 'budget') return renderBudgetPane();
     // Part 5 (§5.4): the paused-store banner leads the module's own tab. It
     // returns '' for a healthy module, so an unchanged tab renders exactly as
     // before. The modal is rebuilt on every open, which is this banner's
@@ -530,6 +547,10 @@ function renderModal() {
     // Wire the Diagnostics panel shell (lives in the 🩺 Diagnostics tab).
     // Same rebind-every-render rule as the backup control above.
     wireDiagnosticsPanel(modal);
+
+    // Wire the 📊 Budget tab's Save control (TODO §2). Same
+    // rebind-every-render rule.
+    wireBudgetTab(modal, { setStatusFn: (root, message, type, ms) => setStatus(modal, message, type, ms) });
 
     // Wire connection profile toggle (hide API fields when a profile is selected)
     const profileSelect = modal.querySelector('#mwt-s-connection-profile');
@@ -713,6 +734,15 @@ if (eventSource && event_types?.CHAT_CHANGED) {
         // deferred module is already paused (preparing) above.
         runSchemaPreparations().catch(err => console.warn('[MWT] Schema preparation after chat change failed:', err?.message || err));
         const activeTab = modal?.querySelector('.mwt-tab-btn.active')?.dataset.tab;
+        // TODO §2 P1 — two-phase chat-change budget lifecycle, RESET phase:
+        // clear every managed module's injection slot + Phase 2 snapshot
+        // BEFORE the sequential reapply below. The injection snapshots are
+        // intentionally global (no scope), so without this reset the modules
+        // later in the reapply order would still see the PREVIOUS chat's
+        // payloads through registeredOthersTokens() and reject the new chat's
+        // injections purely on handler order. After this, each module sees an
+        // empty `others` map and registers only the new chat's payloads.
+        resetBudgetInjections();
         // Part 6 (§7.4/§5.4): a module paused by the runtime gate does NOT run
         // its chat-change hydration. Its onChatChanged() would restore
         // counters and bookkeeping from the BLOCKED store value and hold them
@@ -1523,7 +1553,51 @@ try {
         },
     };
 
-    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.npcs.{auditDuplicates,reconcile}, MWT.interiority.{deletions,clearDeletions}, MWT.coordinator.{status,jobs,cancel}');
+    // ── Budget console namespace (TODO §2 context/token budget) ─────────────
+    //
+    // The console twin of the 📊 Budget tab — the same snapshot the tab
+    // renders, plus the two settings accessors the tab's Save button uses.
+    // Read-only except the setters, which persist into THIS CHAT's metadata.
+    //
+    // Usage:
+    //   MWT.budget.status()          // the full snapshot (console.table + return)
+    //   MWT.budget.settings()        // the per-chat budget settings record
+    //   MWT.budget.set({ enforce: true, globalHardCap: 4000 })
+    //   MWT.budget.setModule('chronicle', { softCap: 500, hardCap: 1200 })
+    window.MWT.budget = {
+        status: () => {
+            const snap = collectBudgetSnapshot();
+            console.table(snap.modules.map((m) => ({
+                module: m.id,
+                tokens: m.tokens,
+                kind: m.tokenKind,
+                priority: m.priority,
+                softCap: m.softCap,
+                hardCap: m.hardCap,
+                action: m.plan?.action ?? '—',
+            })));
+            console.log(`[MWT] Budget — mode: ${snap.enforce ? 'ENFORCE' : 'observe'}; injected ${snap.injectedTokens} tokens${snap.contextLimit.value ? ` of a ${snap.contextLimit.value}-token context limit (${snap.contextLimit.source})` : ' (context limit unknown)'}. Drop order: ${snap.dropOrder.map((d) => d.id).join(' → ')}.`);
+            return snap;
+        },
+        settings: () => {
+            const s = getBudgetSettings();
+            console.log(`[MWT] Budget settings for this chat — enforce: ${s.enforce}, globalHardCap: ${s.globalHardCap}, contextLimitOverride: ${s.contextLimitOverride}.`);
+            console.table(Object.entries(s.modules).map(([id, m]) => ({ module: id, ...m })));
+            return s;
+        },
+        set: (patch) => {
+            const ok = saveBudgetSettings(patch || {});
+            console.log(ok ? '[MWT] Budget settings saved for this chat.' : '[MWT] Budget settings save FAILED — see the console.');
+            return getBudgetSettings();
+        },
+        setModule: (id, patch) => {
+            const ok = saveBudgetSettings({ modules: { [id]: patch || {} } });
+            console.log(ok ? `[MWT] Budget settings for "${id}" saved.` : '[MWT] Budget settings save FAILED — see the console.');
+            return getBudgetSettings().modules[id] ?? null;
+        },
+    };
+
+    console.log('[MWT] Console API ready: MWT.evidence.{list,summary,inspect,clear,clearAll}, MWT.profiles.{list,duplicates,pruneDuplicates,relink}, MWT.npcs.{auditDuplicates,reconcile}, MWT.interiority.{deletions,clearDeletions}, MWT.coordinator.{status,jobs,cancel}, MWT.budget.{status,settings,set,setModule}');
 } catch (err) {
     console.warn('[MWT] Could not load console evidence API:', err.message);
 }
