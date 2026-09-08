@@ -511,6 +511,159 @@ export function injectRelationshipBlock(content, blockText) {
     return `${stripped}\n\n${block}`;
 }
 
+// ─── Compact relationship projection ─────────────────────────────────────────
+//
+// The block written into an NPC's lorebook entry is a PROJECTION of the graph,
+// not a copy of it. The graph stays whole in [MWT:store]; only a bounded view
+// of it reaches the prompt.
+//
+// It used to be a copy. formatRelationshipBlock rendered every outbound edge
+// with its free-text `notes` inlined, and auto-extraction only ever ADDS edges
+// — so an NPC's prompt footprint grew with their lifetime number of
+// connections and never shrank. One real entry measured over 900 tokens of
+// relationship prose on a character who had been on screen twice. Three rules
+// bound it:
+//
+//   1. Notes never reach the prompt. They are evidence for the editor and the
+//      graph view ("APEX freight/receiving; starts Monday") — up to 280 chars
+//      of extractor prose per edge, which is where most of that 900 went. The
+//      structural claim, which is the part the narrator needs, is a tenth of
+//      the size.
+//   2. Same-type targets collapse into one clause. No direction is lost: every
+//      edge reads subject-role-toward-target, so "employee of Derek, Ezra"
+//      states exactly what two separate clauses stated.
+//   3. Hard caps on edge count and rendered length, with a deterministic
+//      priority order deciding what survives them.
+//
+// Determinism is not tidiness here. This text lands in a lorebook entry that
+// sits high in the prompt, and auto-extraction re-syncs it on a cadence
+// (default every 10 messages) — so a rewrite invalidates the prompt cache from
+// that point down for every following turn. Identical input must render
+// identical output, or a re-sync that changes nothing still costs a cache miss.
+//
+// selectRelationshipEdges/renderRelationshipEdges are pure and exported
+// because the contextual-injection milestone needs the same ranking and the
+// same rendering applied to a scene-filtered edge list. Two implementations of
+// "which relationships matter" would drift.
+
+/** Most edges any one NPC's managed block may render. */
+export const RELATIONSHIP_BLOCK_MAX_EDGES = 12;
+
+/** Hard ceiling on the rendered edge text, in characters. */
+export const RELATIONSHIP_BLOCK_MAX_CHARS = 400;
+
+/**
+ * Structural salience tiers — what a narrator most needs to know when the list
+ * has to be cut. Lower sorts first.
+ *
+ * Unknown and legacy types land in the middle tier rather than last: an
+ * unrecognised type is far more likely to be a newer enum member than a
+ * throwaway, and burying it would silently drop it from every capped block.
+ */
+const TYPE_PRIORITY = new Map([
+    ['family', 0], ['lover', 0], ['enemy', 0],
+    ['employer', 1], ['employee', 1], ['superior', 1], ['subordinate', 1],
+    ['mentor', 1], ['student', 1],
+    ['ally', 2], ['rival', 2], ['friend', 2],
+    ['acquaintance', 3], ['neutral', 3],
+]);
+const TYPE_PRIORITY_DEFAULT = 2;
+
+/**
+ * Rank an NPC's outbound edges and cut them to the block's budget.
+ *
+ * Priority, in order:
+ *   1. Manual edges before automatic ones. A hand-entered edge is the user's
+ *      own statement about their story; an extracted one is a model's reading
+ *      of a message window. `isEdgeAutoManaged` owns that test, including its
+ *      fail-safe direction — a missing `source` reads as manual, never auto.
+ *   2. Structural salience (see TYPE_PRIORITY).
+ *   3. Target name, purely as a stable tie-breaker, then original position.
+ *
+ * The character budget drops whole edges from the tail and re-renders; it
+ * never truncates text. A half-written edge is a false statement about the
+ * fiction, not a shorter true one. A single edge that busts the budget on its
+ * own is kept — one relationship is the smallest meaningful output, and
+ * dropping it would leave the NPC looking unconnected.
+ *
+ * Pure: reads no store, mutates no input.
+ *
+ * @param {Array<{target: string, type: string, source?: string}>} edges
+ * @param {object} [opts]
+ * @param {number} [opts.maxEdges]
+ * @param {number} [opts.maxChars]
+ * @returns {{selected: Array<object>, omitted: number}}
+ */
+export function selectRelationshipEdges(edges, {
+    maxEdges = RELATIONSHIP_BLOCK_MAX_EDGES,
+    maxChars = RELATIONSHIP_BLOCK_MAX_CHARS,
+} = {}) {
+    const usable = (Array.isArray(edges) ? edges : []).filter(e => (
+        e && typeof e.target === 'string' && e.target.trim()
+        && typeof e.type === 'string' && e.type.trim()
+    ));
+
+    // Collapse duplicate targets before ranking so one NPC recorded twice
+    // cannot spend two slots. First occurrence wins: dedupe is not the place
+    // to arbitrate between two conflicting types for the same pair.
+    const seen = new Set();
+    const unique = [];
+    for (const edge of usable) {
+        const key = edge.target.trim().toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(edge);
+    }
+
+    const ranked = unique
+        .map((edge, index) => ({ edge, index }))
+        .sort((a, b) => {
+            const autoA = isEdgeAutoManaged(a.edge) ? 1 : 0;
+            const autoB = isEdgeAutoManaged(b.edge) ? 1 : 0;
+            if (autoA !== autoB) return autoA - autoB;
+            const tierA = TYPE_PRIORITY.get(a.edge.type) ?? TYPE_PRIORITY_DEFAULT;
+            const tierB = TYPE_PRIORITY.get(b.edge.type) ?? TYPE_PRIORITY_DEFAULT;
+            if (tierA !== tierB) return tierA - tierB;
+            return a.edge.target.localeCompare(b.edge.target) || a.index - b.index;
+        })
+        .map(entry => entry.edge);
+
+    let selected = ranked.slice(0, Math.max(0, maxEdges));
+    while (selected.length > 1 && renderRelationshipEdges(selected).length > maxChars) {
+        selected = selected.slice(0, -1);
+    }
+    return { selected, omitted: unique.length - selected.length };
+}
+
+/**
+ * Render selected edges as the compact clause list:
+ *
+ *   employee of Derek Sandhorn, Ezra Blackwell; subordinate of Gerald Hronec
+ *
+ * Type clauses keep the order they arrive in (already ranked by the selector);
+ * targets inside a clause sort alphabetically, so the same graph always
+ * renders the same string regardless of the order edges were recorded in.
+ *
+ * Pure, and emits no trailing period — the caller owns the sentence.
+ *
+ * @param {Array<{target: string, type: string}>} edges
+ * @returns {string}
+ */
+export function renderRelationshipEdges(edges) {
+    const byType = new Map();
+    for (const edge of Array.isArray(edges) ? edges : []) {
+        if (!edge?.type || !edge?.target) continue;
+        if (!byType.has(edge.type)) byType.set(edge.type, []);
+        byType.get(edge.type).push(edge.target);
+    }
+    const clauses = [];
+    for (const [type, targets] of byType) {
+        const names = [...targets].sort((a, b) => a.localeCompare(b)).join(', ');
+        clauses.push(`${type} of ${names}`);
+    }
+    return clauses.join('; ');
+}
+
 export function formatRelationshipBlock(name) {
     const lines = [];
 
@@ -519,14 +672,9 @@ export function formatRelationshipBlock(name) {
     const stance = getStance(name);
     if (stance) lines.push(`Stance toward {{user}}: ${stance}.`);
 
-    const rels = getNpcRelationships(name);
-    if (rels.length) {
-        const edges = rels.map(r => {
-            const note = r.notes ? ` (${r.notes})` : '';
-            return `${r.type} of ${r.target}${note}`;
-        });
-        lines.push(`Relationships: ${edges.join('; ')}.`);
-    }
+    const { selected } = selectRelationshipEdges(getNpcRelationships(name));
+    const rendered = renderRelationshipEdges(selected);
+    if (rendered) lines.push(`Relationships: ${rendered}.`);
 
     return lines.join('\n');
 }

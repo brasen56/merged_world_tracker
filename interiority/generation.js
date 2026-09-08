@@ -559,6 +559,15 @@ async function _assembleThoughtsNpcBlocks(roster) {
  * entirely. Lines are emitted under the roster's spelling, matching every
  * other name the prompt shows.
  *
+ * Edge `notes` are deliberately NOT rendered, matching the same rule in
+ * knowledge/relationships.js formatRelationshipBlock(). A note is up to 280
+ * chars of extractor prose ("APEX freight/receiving; starts Monday"), stored
+ * as evidence for the editor and the graph view. Roster filtering bounds this
+ * list by cast size, not by note length, so the notes were the one part of it
+ * that could grow without limit — paid on every interiority call, several
+ * times per turn in split mode. The structural claim is what the generator
+ * reasons over; the prose was context it never asked for.
+ *
  * @param {string} npcName
  * @param {string[]} roster
  * @param {function} getNpcRelationships - from knowledge/relationships.js
@@ -584,10 +593,7 @@ function _formatRelationshipsForRoster(npcName, roster, getNpcRelationships) {
             filtered.push({ ...r, target });
         }
         if (filtered.length === 0) return '';
-        return filtered.map(r => {
-            const note = r.notes ? ` (${r.notes})` : '';
-            return `- ${npcName} → ${r.target}: ${r.type}${note}`;
-        }).join('\n');
+        return filtered.map(r => `- ${npcName} → ${r.target}: ${r.type}`).join('\n');
     } catch {
         return '';
     }
