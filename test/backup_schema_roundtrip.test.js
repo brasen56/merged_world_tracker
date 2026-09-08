@@ -67,6 +67,10 @@ function canonicalMetadata() {
             deletedIntentions: [],
             perMessage: { 'mu-2': { generatedAt: 2 } },
             turnCounter: 0,
+            // Store v2 lifecycle containers (spec §1) — part of canonical data.
+            lifecycleHistory: [],
+            evidenceBoundaries: {},
+            npcControls: {},
         },
     };
 }

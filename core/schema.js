@@ -226,7 +226,7 @@ export function checkPlainRecordList(list, label, check, { path = [] } = {}) {
     return { records, issues, stats };
 }
 
-export function checkRecordMap(map, label, check, { path = [] } = {}) {
+export function checkRecordMap(map, label, check, { path = [], normalizeKey = null } = {}) {
     const data = {};
     const issues = [];
     const stats = emptyStats();
@@ -239,6 +239,15 @@ export function checkRecordMap(map, label, check, { path = [] } = {}) {
             issues.push(quarantineIssue('empty-key', [...path, name], `${label} keys must be non-empty strings.`, value, name));
             continue;
         }
+        const normalizedName = normalizeKey ? normalizeKey(name) : name;
+        if (!isNonEmptyString(normalizedName)) {
+            issues.push(quarantineIssue('empty-key', [...path, name], `${label} keys must normalize to a non-empty string.`, value, name));
+            continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(data, normalizedName)) {
+            issues.push(quarantineIssue('normalized-key-conflict', [...path, name], `${label} key conflicts with an earlier key after normalization.`, value, name));
+            continue;
+        }
         // Shape guard so maps without a record-level check keep the permissive
         // object-only behaviour they always had.
         const finding = check
@@ -247,7 +256,7 @@ export function checkRecordMap(map, label, check, { path = [] } = {}) {
         if (finding) {
             issues.push(quarantineIssue(finding.code, [...path, name], finding.message, value, name));
         } else {
-            data[name] = value;
+            data[normalizedName] = value;
             stats.added++;
         }
     }

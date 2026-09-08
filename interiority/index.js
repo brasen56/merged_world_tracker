@@ -58,6 +58,11 @@ import {
     noteIntentionsCaptureRoster, clearIntentionsCapture,
 } from './capture.js';
 
+// Deferred lifecycle work (spec §2/§3): rollback restore for the lifecycle
+// history and evidence boundaries — one layer above data.js, like generation.
+import { restoreLifecycleHistorySnapshot, restoreEvidenceBoundariesSnapshot,
+    restoreNpcControlWatermarksSnapshot, reapplyUserLifecycleTransitions } from './lifecycle.js';
+
 import { applyIntentionsInjection } from './injection.js';
 
 import {
@@ -506,7 +511,7 @@ async function generateForCurrentMessage(targetKey, { force = false, trigger = T
             const entry = getLedger().find(candidate => candidate.id === id);
             return entry && evaluatedNpcNames.has(String(entry.npc).toLowerCase().trim());
         });
-        const applyResult = await validateAndApply(result, roster, msgIdx, scopeBefore, preTurnLedgerSnapshot, confirmedWakeIds, rosterAliases);
+        const applyResult = await validateAndApply(result, roster, msgIdx, scopeBefore, preTurnLedgerSnapshot, confirmedWakeIds, rosterAliases, intentionsEvaluatedRoster);
 
         // INTERIORITY-02: Re-assert scope AFTER validateAndApply as a
         // belt-and-suspenders guard. The in-function check covers the
@@ -713,6 +718,9 @@ export async function onMessageDeleted(deletedIndex) {
     let snapshotToRestore = null;
     let innerStatesSnapshotToRestore = null;
     let turnCounterToRestore = null;
+    let lifecycleHistoryToRestore = null;
+    let evidenceBoundariesToRestore = null;
+    let npcControlWatermarksToRestore = null;
     const orphanedSet = new Set(orphaned);
     const rollbackKeys = [];
     for (const key of allKeys) {
@@ -727,6 +735,13 @@ export async function onMessageDeleted(deletedIndex) {
             if (Array.isArray(deleted.ledgerSnapshot)) snapshotToRestore = deleted.ledgerSnapshot;
             if (deleted.innerStatesSnapshot) innerStatesSnapshotToRestore = deleted.innerStatesSnapshot;
             if (typeof deleted.turnCounterAtSnapshot === 'number') turnCounterToRestore = deleted.turnCounterAtSnapshot;
+            if (Array.isArray(deleted.lifecycleHistorySnapshot)) lifecycleHistoryToRestore = deleted.lifecycleHistorySnapshot;
+            if (deleted.evidenceBoundariesSnapshot && typeof deleted.evidenceBoundariesSnapshot === 'object') {
+                evidenceBoundariesToRestore = deleted.evidenceBoundariesSnapshot;
+            }
+            if (deleted.npcControlWatermarksSnapshot && typeof deleted.npcControlWatermarksSnapshot === 'object') {
+                npcControlWatermarksToRestore = deleted.npcControlWatermarksSnapshot;
+            }
         }
     }
 
@@ -744,6 +759,19 @@ export async function onMessageDeleted(deletedIndex) {
     // schedule tracks generations that still exist in the timeline.
     if (turnCounterToRestore !== null) {
         restoreTurnCounter(turnCounterToRestore);
+    }
+    // Lifecycle v2 (spec §2/§3): roll the lifecycle substrate back with the
+    // ledger — engine records from the deleted generation truncate, user
+    // records survive, and the deleted generation's evidence stamps revert.
+    if (lifecycleHistoryToRestore) {
+        restoreLifecycleHistorySnapshot(lifecycleHistoryToRestore);
+        reapplyUserLifecycleTransitions();
+    }
+    if (evidenceBoundariesToRestore) {
+        restoreEvidenceBoundariesSnapshot(evidenceBoundariesToRestore);
+    }
+    if (npcControlWatermarksToRestore) {
+        restoreNpcControlWatermarksSnapshot(npcControlWatermarksToRestore);
     }
     if (snapshotToRestore || innerStatesSnapshotToRestore) {
         console.log(`[MWT:Interiority] MESSAGE_DELETED — snapshots restored (manual ledger entries preserved).`);
@@ -779,6 +807,20 @@ function invalidateAndMaybeRegenerate(msgIdx, eventName) {
         }
         if (deleted.innerStatesSnapshot) {
             restoreInnerStatesSnapshot(deleted.innerStatesSnapshot);
+        }
+        // Lifecycle v2 (spec §2/§3): the same rollback restores the lifecycle
+        // history (engine records from the discarded generation are truncated;
+        // user records survive) and the evidence boundaries, so a swiped-away
+        // generation never counts as consumed evidence.
+        if (Array.isArray(deleted.lifecycleHistorySnapshot)) {
+            restoreLifecycleHistorySnapshot(deleted.lifecycleHistorySnapshot);
+            reapplyUserLifecycleTransitions();
+        }
+        if (deleted.evidenceBoundariesSnapshot && typeof deleted.evidenceBoundariesSnapshot === 'object') {
+            restoreEvidenceBoundariesSnapshot(deleted.evidenceBoundariesSnapshot);
+        }
+        if (deleted.npcControlWatermarksSnapshot && typeof deleted.npcControlWatermarksSnapshot === 'object') {
+            restoreNpcControlWatermarksSnapshot(deleted.npcControlWatermarksSnapshot);
         }
         // Un-consume the invalidated turn (see restoreTurnCounter): without
         // this, every swipe cycle advanced the dormant-poll schedule by one

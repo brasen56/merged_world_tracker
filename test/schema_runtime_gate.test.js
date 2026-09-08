@@ -348,7 +348,7 @@ describe('runSchemaPreparations — the §7.5 privileged path (Interiority)', ()
         expect(perMessage[Object.keys(perMessage)[0]]).toEqual({ reactions: [], generatedAt: 1 });
         // …and the re-run gate committed data + manifest together (§7.3) and
         // cleared the pause.
-        expect(meta[MANIFEST_METADATA_KEY].sections.interiority).toBe(1);
+        expect(meta[MANIFEST_METADATA_KEY].sections.interiority).toBe(2); // store v2 (lifecycle history, boundaries, controls)
         expect(getPauseState('interiority')).toBeNull();
         expect(isStorePausedForCurrentScope('interiority')).toBe(false);
         expect(eventsOf(SCHEMA_DIAGNOSTIC_EVENTS.STORE_RESUMED)).toHaveLength(1);
@@ -386,7 +386,7 @@ describe('runSchemaPreparations — the §7.5 privileged path (Interiority)', ()
         // preparation — index.js fires both) completes it.
         applySchemaLoadGate({ persist: () => {} });
         await runSchemaPreparations({ persist: () => {} });
-        expect(getFakeMeta()[MANIFEST_METADATA_KEY].sections.interiority).toBe(1);
+        expect(getFakeMeta()[MANIFEST_METADATA_KEY].sections.interiority).toBe(2); // store v2 (lifecycle history, boundaries, controls)
         expect(getPauseState('interiority')).toBeNull();
     });
 
@@ -405,7 +405,7 @@ describe('runSchemaPreparations — the §7.5 privileged path (Interiority)', ()
         // commits, stamps, and resumes.
         expect(getFakeMeta()[KEY.interiority].perMessage).toEqual({});
         expect(getFakeMeta()[KEY.interiority].keyMigrationDone).toBe(true);
-        expect(getFakeMeta()[MANIFEST_METADATA_KEY].sections.interiority).toBe(1);
+        expect(getFakeMeta()[MANIFEST_METADATA_KEY].sections.interiority).toBe(2); // store v2 (lifecycle history, boundaries, controls)
         expect(getPauseState('interiority')).toBeNull();
     });
 

@@ -12,6 +12,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.6.0]
+
+### Added
+
+- **Interiority lifecycle v2 — the deferred lifecycle substrate** (the
+  "Deferred lifecycle work" tier of
+  `upcoming_work_misc/INTERIORITY_LIFECYCLE_IMPLEMENTATION_PLAN.md` §4 /
+  TODO.md §3-F; record shape, retention caps, rollback semantics, and backup
+  behavior specified first in
+  `upcoming_work_misc/INTERIORITY_LIFECYCLE_V2_SPEC.md`). The interiority store
+  migrates v1 → v2 with three new containers, all validated and
+  quarantine-preserving like the rest of the store:
+  - **`lifecycleHistory`** — bounded (150 records), occurrence-specific audit
+    trail of completions, drops, expiries, merges, sleeps, wakes, and reopens,
+    with engine/user source and a readable reason each (model drop reasons are
+    kept verbatim). Deliberately separate from user deletion tombstones: an
+    engine-closed plan may legitimately be re-declared later, so closures
+    suppress re-proposals only inside a turn window, never permanently.
+  - **Conservative cross-turn duplicate comparison** — new engine proposals are
+    checked against recent closures for the same canonical NPC (roster-resolved
+    identity, Dice token similarity ≥ 0.85 on the action and ≥ 0.7 on the
+    trigger, or an exact action with a similar trigger), within the
+    `lifecycleDedupTurns` window (default 8, 0 disables). A reopened closure no
+    longer suppresses; genuinely different phrasings stay legal (the Tier 1
+    prompt contract and capture remain the owners of true paraphrase
+    recognition).
+  - **`evidenceBoundaries`** — per-NPC watermark of the last successful
+    intentions evaluation commit, stamped only after the validating pass's
+    scope assertion for roster NPCs that were actually evaluated (strict
+    partial failures stamp only the succeeded NPCs; thoughts-only and
+    disabled-intentions turns stamp nothing; an explicitly empty threaded list
+    stamps nothing). Surfaced in the panel ("last evaluated turn N") and as a
+    short `<evaluation_note>` in the prompt when a NPC's evidence is ≥ 2 turns
+    stale. The rolling message window itself is deliberately unchanged.
+  - **Expiration, split by kind** — in-world `expiresOn` labels ("no longer
+    plausible once …") ride the open-intentions prompt, injection line, and
+    panel; generation-turn aging (`intentionMaxTurnsOpen`, default 0 = never)
+    closes ENGINE entries only — user-authored plans are never auto-evicted,
+    and a per-entry `expiresTurn` set from the panel is explicit user intent
+    and applies regardless of authorship.
+  - **User lifecycle actions + audit UI** — new panel section "Lifecycle
+    History" (newest-first, reasons, supersession links, 🔁 reopen, clear) and
+    per-entry ✔ mark-done / 🚫 dismiss (no-longer-plausible) controls; ⚠
+    duplicate/occasion conflict badges with a one-click merge (supersession
+    link recorded); sleep/wake are now audited transitions; ✎ edit gains
+    priority (low/normal/high/urgent), `expiresOn`, and `expiresTurn` fields.
+    Priority sorts the panel and annotates the narrator injection; the model
+    is never asked for any of these fields.
+  - **Per-NPC controls** (`npcControls`) — a privacy exclusion that withholds a
+    NPC's dossier-derived context (knowledge entry, character core,
+    relationships) from EVERY interiority call while leaving intentions
+    tracking and the actor/witness rules intact, plus creation-only cost
+    dials: `pauseNewProposals`, `cooldownTurns` (armed per accepted proposal),
+    and `activeCap` (counts engine-authored active entries only). Existing
+    plans are always evaluated while proposals are gated, and nothing is ever
+    auto-evicted to meet a cap.
+  - **Rollback + backup** — perMessage records gain
+    `lifecycleHistorySnapshot`/`evidenceBoundariesSnapshot`; swipe/edit/delete
+    restore them with the ledger (engine records from the discarded generation
+    truncate; user records survive — the same ownership rule as manual ledger
+    entries). Backup merge handles the new containers through the existing
+    interiority section (history by id like tombstones; maps current-wins with
+    new names added); exact replace is unchanged; exports stamp version 2 via
+    the schema registry. Lifecycle events also leave a metadata-only breadcrumb
+    in the diagnostics ring (`intention_lifecycle`).
+  Completion receipts / structured outcome response fields remain deliberately
+  deferred (plan §4: only if failures surviving Tiers 1–3 justify their
+  response-schema cost — none have).
+
+- **Completion separated from abandonment grace for interiority intentions**
+  (lifecycle plan Tier 3). An `executed` mark may now close an entry that is
+  still inside the intention grace period — but only when the entry is
+  engine-created and was declared before the story message being evaluated
+  (`declaredMsgIdx < msgIdx`), so genuine story time elapsed with the plan
+  live. A completed plan no longer lingers in the injection demanding an
+  action the story already performed. `dropped` marks keep the full grace
+  window; entries declared in the current validation pass (including
+  same-message regeneration passes) stay protected even at grace 0, so
+  regenerating cannot manufacture eligibility by pumping the age counter;
+  manual entries are not engine-executable through the exception (they
+  remain closable once genuinely out of grace). Woken scheduled entries may
+  complete on their evaluated wake turn — their original declaration index
+  predates it — now a pinned policy rather than an age-counter accident.
+  Exception-accepted decisions surface in the diagnostics capture as
+  `accepted:grace-declared-before`. No persisted state, schema, or backup
+  changes.
+
+- **Same-response replay guard for interiority intentions** (lifecycle plan
+  Tier 2). `validateAndApply` now deduplicates new intention proposals against
+  the pre-mutation `ledgerSnapshot` in addition to the live ledger, so a model
+  can no longer execute or drop an entry and re-propose it verbatim within the
+  same response (the reported "completed, yet still proposed" failure).
+  Rejections surface in the diagnostics capture as
+  `rejected:replayed-this-response`. No persisted state, schema, or backup
+  changes: cross-turn re-declaration of a completed plan stays allowed, and the
+  matching remains exact-string.
+
+### Fixed
+
+- **Same-message `executed` marks can no longer age past the grace gate**
+  (interiority). The Tier 3 declaration gate only ran while
+  `age < intentionGracePeriod`, but every successful validation increments
+  `turnsOpen` — including repeated manual generation of the same message —
+  so regenerating one message enough times walked age to the threshold and
+  the declaring message's own response could then close the entry it
+  declared, with no story message elapsed. The same-message guard is now
+  independent of age: an engine entry whose `declaredMsgIdx` equals the
+  evaluated message index is never closable in that evaluation, at any age
+  and at any grace setting (grace 0 included — matching what the Tier 3
+  entry above already claimed). Manual/legacy entries (`declaredMsgIdx`
+  null) and out-of-grace completions of older entries behave exactly as
+  before. Rejections surface in the diagnostics capture as
+  `rejected:same-message`. No persisted state, schema, or backup changes.
+
+- **Replay matching now resolves NPC identity through the roster**
+  (interiority). The same-response replay guard compared the pre-mutation
+  `ledgerSnapshot`'s npc field as an exact string, while the executed/
+  dropped owner check resolves through `resolveRosterName` (alias and
+  canonical-name aware). An entry stored or user-edited under an alias
+  ("The Vixen" for roster "Mara Vance") could therefore be validly executed
+  by its canonical owner's block and then re-created verbatim in the same
+  response. `hasDuplicateIntentionIn` accepts an optional roster-resolution
+  callback (data.js stays a leaf — the caller supplies the resolver, the
+  same pattern as `purgeUserLedgerEntries`), and `validateAndApply` passes
+  the turn's roster + alias index, so snapshot ownership matches under the
+  same rules that allowed the removal. Names the resolver cannot place keep
+  the exact-string rule.
+
 ## [2.5.1]
 
 ### Added

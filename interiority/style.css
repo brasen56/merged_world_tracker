@@ -197,6 +197,154 @@
     opacity: 0.7;
 }
 
+/* ─── Lifecycle v2: priority / conflict / expiry badges ──────────────────── */
+
+.mwt-int-priority-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    margin-left: 6px;
+    border-radius: 8px;
+    border: 1px solid var(--mwt-border);
+    white-space: nowrap;
+}
+
+.mwt-int-priority--urgent {
+    color: var(--mwt-error, #e5484d);
+    border-color: var(--mwt-error, #e5484d);
+}
+
+.mwt-int-priority--high {
+    color: var(--mwt-warning, #ff9800);
+    border-color: var(--mwt-warning, #ff9800);
+}
+
+.mwt-int-priority--low {
+    color: var(--mwt-text-dim, #888);
+    opacity: 0.8;
+}
+
+.mwt-int-conflict-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    margin-left: 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+.mwt-int-conflict-badge--occasion {
+    color: var(--mwt-warning, #ff9800);
+    border: 1px dashed var(--mwt-warning, #ff9800);
+    cursor: help;
+}
+
+button.mwt-int-conflict-badge {
+    color: var(--mwt-warning, #ff9800);
+    border: 1px solid var(--mwt-warning, #ff9800);
+    cursor: pointer;
+    background: transparent;
+}
+
+.mwt-int-expiry-note {
+    font-size: 11px;
+    color: var(--mwt-text-dim, #888);
+    cursor: help;
+}
+
+/* ─── Lifecycle v2: history list ─────────────────────────────────────────── */
+
+.mwt-int-lifecycle-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mwt-int-lifecycle-entry {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+}
+
+.mwt-int-lifecycle-outcome {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.mwt-int-lifecycle--completed .mwt-int-lifecycle-outcome { color: var(--mwt-success, #46a758); }
+.mwt-int-lifecycle--dropped     .mwt-int-lifecycle-outcome { color: var(--mwt-text-dim, #888); }
+.mwt-int-lifecycle--expired     .mwt-int-lifecycle-outcome { color: var(--mwt-warning, #ff9800); }
+.mwt-int-lifecycle--merged      .mwt-int-lifecycle-outcome { color: var(--mwt-info, #71a7ff); }
+.mwt-int-lifecycle--reopened    .mwt-int-lifecycle-outcome { color: var(--mwt-info, #71a7ff); }
+.mwt-int-lifecycle--slept       .mwt-int-lifecycle-outcome { color: var(--mwt-text-dim, #888); }
+.mwt-int-lifecycle--woken       .mwt-int-lifecycle-outcome { color: var(--mwt-info, #71a7ff); }
+
+.mwt-int-lifecycle-source {
+    font-size: 10px;
+    color: var(--mwt-text-dim, #888);
+    margin-left: 4px;
+}
+
+.mwt-int-lifecycle-reason {
+    font-size: 11px;
+    color: var(--mwt-text-dim, #888);
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ─── Lifecycle v2: per-NPC controls ─────────────────────────────────────── */
+
+.mwt-int-controls-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mwt-int-controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+}
+
+.mwt-int-controls-row--readonly {
+    opacity: 0.75;
+}
+
+.mwt-int-controls-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--mwt-text-dim, #888);
+}
+
+.mwt-int-controls-fields label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
 /* ─── Recent thoughts list ───────────────────────────────────────────────── */
 
 .mwt-int-thoughts-list {

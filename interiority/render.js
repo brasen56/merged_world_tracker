@@ -14,14 +14,24 @@ import {
 
 import {
     state, getSettings, saveSettings,
-    getLedger, getPerMessage, getPerMessageKeys,
+    getLedger, getPerMessage, getPerMessageKeys, getInteriorityData,
     getMsgKeyForIndex, buildKeyToIndexMap,
-    removeLedgerEntries, updateLedgerEntry,
+    removeLedgerEntries, updateLedgerEntry, setLedgerEntryDormant,
     addManualLedgerEntry, hasDuplicateIntention,
     getInnerStates, setInnerState, MAX_INNER_STATE_LENGTH,
-    wakeLedgerEntry, setLedgerEntryDormant,
     DORMANT_POLL_INTERVAL, getDormantPollInterval,
 } from './data.js';
+import { INTENTION_PRIORITIES } from './schema.js';
+// Deferred lifecycle work (spec §2–§5): user lifecycle actions, audit history,
+// conflicts, and per-NPC controls.
+import {
+    getLifecycleHistory, clearLifecycleHistory,
+    markLedgerEntryDone, dismissLedgerEntry, mergeLedgerEntries,
+    reopenFromLifecycle, sleepLedgerEntryTracked, wakeLedgerEntryTracked,
+    findLifecycleConflicts, getEvidenceBoundary,
+    setNpcControl, removeNpcControl,
+    MAX_LIFECYCLE_EVENTS,
+} from './lifecycle.js';
 
 // ─── Main render ─────────────────────────────────────────────────────────────
 
@@ -83,6 +93,30 @@ export function renderContent() {
 
             <hr style="border-color:var(--mwt-border);margin:16px 0">
 
+            <h3>🎛 Per-NPC Controls</h3>
+            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                Privacy exclusion (never send this NPC's dossier in interiority calls) and creation-only cost controls (pause new proposals, cooldown, active cap). Existing intentions are always evaluated, and nothing is ever auto-evicted to meet a cap.
+            </p>
+            <div id="mwt-int-npc-controls-list" class="mwt-int-controls-list">
+                ${renderNpcControlsList()}
+            </div>
+            <div class="mwt-flex mwt-gap-4" style="margin-top:8px;flex-wrap:wrap">
+                <input type="text" id="mwt-int-controls-add-name" class="mwt-input" style="width:160px" placeholder="NPC name">
+                <button id="mwt-int-controls-add-btn" class="mwt-btn mwt-btn-sm">➕ Add control</button>
+            </div>
+
+            <hr style="border-color:var(--mwt-border);margin:16px 0">
+
+            <h3>🗂 Lifecycle History (last ${getLifecycleHistory().length}${getLifecycleHistory().length >= MAX_LIFECYCLE_EVENTS ? ', capped' : ''})</h3>
+            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                Occurrence-specific audit trail of completions, drops, expiries, merges, sleeps, wakes, and reopens — with reasons. Repeated near-identical proposals for a recently closed plan are suppressed within the dedup window; click 🔁 to reopen a closed plan.
+            </p>
+            <div id="mwt-int-lifecycle-list" class="mwt-int-lifecycle-list">
+                ${renderLifecycleHistoryList()}
+            </div>
+
+            <hr style="border-color:var(--mwt-border);margin:16px 0">
+
             <h3>💭 Recent Thoughts</h3>
             <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
                 Display-only NPC reactions from recent turns. These are never injected into the narrator prompt.
@@ -97,13 +131,54 @@ export function renderContent() {
 }
 
 /**
+ * Lifecycle v2: the priority badge for an entry (empty for 'normal'/absent).
+ * @param {object} entry
+ * @returns {string}
+ */
+function priorityBadge(entry) {
+    const priority = String(entry?.priority ?? '').trim().toLowerCase();
+    if (!priority || !INTENTION_PRIORITIES.includes(priority) || priority === 'normal') return '';
+    return `<span class="mwt-int-priority-badge mwt-int-priority--${escapeHtml(priority)}" title="Priority (user-set)">${priority === 'urgent' ? '‼' : priority === 'high' ? '⬆' : '⬇'} ${escapeHtml(priority)}</span>`;
+}
+
+/**
+ * Lifecycle v2: conflict warning badges for an entry, from this render's
+ * deterministic conflict pass. 'duplicate' pairs get a merge offer;
+ * 'occasion' pairs (two plans, same moment) are informational.
+ * @param {string} id
+ * @param {Array<object>} conflicts
+ * @returns {string}
+ */
+function conflictBadges(id, conflicts) {
+    const mine = conflicts.filter(c => c.keepId === id || c.dropId === id);
+    if (mine.length === 0) return '';
+    return mine.map((c) => {
+        if (c.type === 'duplicate') {
+            const other = c.keepId === id ? c.dropId : c.keepId;
+            return `<button class="mwt-int-conflict-badge mwt-int-merge-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(id)}" data-other="${escapeHtml(other)}" title="Looks like a duplicate of another active intention — click to keep THIS one and merge the other away">⚠ dup — merge</button>`;
+        }
+        return '<span class="mwt-int-conflict-badge mwt-int-conflict-badge--occasion" title="Two different plans compete for the same trigger occasion — consider dropping or rescheduling one">⚠ same occasion</span>';
+    }).join(' ');
+}
+
+/**
  * Render the ledger list HTML.
  */
 function renderLedgerList(ledger) {
     if (!ledger || ledger.length === 0) {
         return '<p style="color:var(--mwt-text-dim);font-size:12px">No active intentions.</p>';
     }
-    return ledger.map((entry) => `
+    // Lifecycle v2 (spec §2): priority first (urgent → high → normal → low),
+    // then age — the panel reads as the narrator's demand order.
+    const order = { urgent: 0, high: 1, normal: 2, low: 3 };
+    const sorted = [...ledger].sort((a, b) => {
+        const pa = order[String(a.priority ?? 'normal')] ?? 2;
+        const pb = order[String(b.priority ?? 'normal')] ?? 2;
+        if (pa !== pb) return pa - pb;
+        return (b.turnsOpen || 0) - (a.turnsOpen || 0);
+    });
+    const conflicts = findLifecycleConflicts(ledger);
+    return sorted.map((entry) => `
         <div class="mwt-int-ledger-entry${entry.manual ? ' mwt-int-ledger-entry--manual' : ''}" data-id="${escapeHtml(entry.id)}">
             <div class="mwt-int-ledger-entry-main">
                 <span class="mwt-int-ledger-npc">${escapeHtml(entry.npc)}</span>
@@ -112,13 +187,18 @@ function renderLedgerList(ledger) {
                 <span class="mwt-int-arrow">→</span>
                 <span class="mwt-int-ledger-trigger">${escapeHtml(entry.trigger)}</span>
                 ${entry.manual ? '<span class="mwt-int-manual-badge" title="User-authored intention">✋</span>' : ''}
+                ${priorityBadge(entry)}
+                ${conflictBadges(entry.id, conflicts)}
             </div>
             <div class="mwt-int-ledger-meta">
                 ${entry.since ? `<span style="color:var(--mwt-text-dim)">since ${escapeHtml(entry.since)}</span>` : ''}
-                ${entry.turnsOpen != null ? `<span style="color:var(--mwt-text-dim);font-size:11px" title="Turns this intention has survived">${entry.turnsOpen} turn${entry.turnsOpen === 1 ? '' : 's'}</span>` : ''}
+                ${entry.turnsOpen != null ? `<span style="color:var(--mwt-text-dim);font-size:11px" title="Turns this intention has survived${entry.expiresTurn ? ` — expires after ${entry.expiresTurn}` : ''}">${entry.turnsOpen} turn${entry.turnsOpen === 1 ? '' : 's'}${entry.expiresTurn ? ` / ${entry.expiresTurn}` : ''}</span>` : ''}
+                ${entry.expiresOn ? `<span class="mwt-int-expiry-note" title="In-world expiry — the plan is no longer plausible after this event">⌛ ${escapeHtml(entry.expiresOn)}</span>` : ''}
+                <button class="mwt-int-done-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Mark this intention completed — closes it and records the completion in the lifecycle history">✔</button>
+                <button class="mwt-int-dismiss-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Dismiss as no longer plausible — closes it without a permanent block">🚫</button>
                 <button class="mwt-int-sleep-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Schedule this intention — stops per-turn narrator demands until its trigger is near">💤</button>
                 <button class="mwt-int-edit-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Edit this intention">✎</button>
-                <button class="mwt-int-remove-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Remove this intention">✕</button>
+                <button class="mwt-int-remove-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Remove this intention and never re-propose it">✕</button>
             </div>
         </div>
     `).join('');
@@ -148,15 +228,124 @@ function renderDormantList(dormant) {
                 <span class="mwt-int-arrow">→</span>
                 <span class="mwt-int-ledger-trigger">${escapeHtml(entry.trigger)}</span>
                 ${entry.wakeHint ? `<span class="mwt-int-dormant-hint" title="Wake condition">📅 ${escapeHtml(entry.wakeHint)}</span>` : ''}
+                ${priorityBadge(entry)}
             </div>
             <div class="mwt-int-ledger-meta">
                 ${entry.since ? `<span style="color:var(--mwt-text-dim)">since ${escapeHtml(entry.since)}</span>` : ''}
                 <button class="mwt-int-wake-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Wake this intention now">⏰</button>
+                <button class="mwt-int-done-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Mark this intention completed — closes it and records the completion in the lifecycle history">✔</button>
+                <button class="mwt-int-dismiss-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Dismiss as no longer plausible — closes it without a permanent block">🚫</button>
                 <button class="mwt-int-edit-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Edit this intention">✎</button>
                 <button class="mwt-int-remove-btn mwt-btn mwt-btn-sm" data-id="${escapeHtml(entry.id)}" title="Remove this intention">✕</button>
             </div>
         </div>
     `).join('');
+}
+
+// ─── Lifecycle history + per-NPC controls (lifecycle v2, spec §2/§5) ─────────
+
+/** Human label for a lifecycle outcome, with its source distinction. */
+const OUTCOME_LABELS = {
+    completed: '✔ completed',
+    dropped: '✕ dropped',
+    expired: '⌛ expired',
+    merged: '⧉ merged',
+    reopened: '🔁 reopened',
+    slept: '💤 slept',
+    woken: '⏰ woken',
+};
+
+/**
+ * Render the lifecycle history list (newest first). Only closure outcomes get
+ * the 🔁 reopen control — slept/woken are transitions of live entries.
+ * @returns {string}
+ */
+function renderLifecycleHistoryList() {
+    const history = getLifecycleHistory();
+    if (history.length === 0) {
+        return '<p style="color:var(--mwt-text-dim);font-size:12px">No lifecycle events yet. Completions, drops, expiries, merges, sleeps, wakes, and reopens appear here with their reasons.</p>';
+    }
+    const reopenable = new Set(['completed', 'dropped', 'expired', 'merged']);
+    const rows = [...history].reverse().slice(0, 50).map((evt) => `
+        <div class="mwt-int-lifecycle-entry mwt-int-lifecycle--${escapeHtml(evt.outcome)}" data-hid="${escapeHtml(evt.id)}">
+            <div class="mwt-int-ledger-entry-main">
+                <span class="mwt-int-lifecycle-outcome">${OUTCOME_LABELS[evt.outcome] || escapeHtml(evt.outcome)}</span>
+                <span class="mwt-int-arrow">·</span>
+                <span class="mwt-int-ledger-npc">${escapeHtml(evt.npc)}</span>
+                <span class="mwt-int-arrow">→</span>
+                <span class="mwt-int-ledger-action">${escapeHtml(evt.action)}</span>
+                <span class="mwt-int-lifecycle-source">${evt.source === 'user' ? '(user)' : '(engine)'}</span>
+            </div>
+            <div class="mwt-int-ledger-meta">
+                ${evt.reason ? `<span class="mwt-int-lifecycle-reason" title="Recorded reason">${escapeHtml(evt.reason.slice(0, 160))}</span>` : ''}
+                <span style="color:var(--mwt-text-dim);font-size:11px">turn ${evt.turn}${evt.supersededBy ? ` · superseded by ${escapeHtml(evt.supersededBy)}` : ''}</span>
+                ${reopenable.has(evt.outcome) ? `<button class="mwt-int-reopen-btn mwt-btn mwt-btn-sm" data-hid="${escapeHtml(evt.id)}" title="Reopen this plan — adds it back as an active, user-owned intention">🔁</button>` : ''}
+            </div>
+        </div>
+    `);
+    const more = history.length > 50 ? `<p style="color:var(--mwt-text-dim);font-size:11px">… ${history.length - 50} older event(s) retained (cap ${MAX_LIFECYCLE_EVENTS}).</p>` : '';
+    const clearBtn = history.length > 0
+        ? '<button id="mwt-int-clear-history" class="mwt-btn mwt-btn-sm" style="margin-top:8px" title="Empty the lifecycle history. Deletion tombstones are untouched.">🗑 Clear history</button>'
+        : '';
+    return rows.join('') + more + clearBtn;
+}
+
+/**
+ * Render the per-NPC controls list: explicit control records plus read-only
+ * evidence-boundary lines for NPCs that have one but no control record.
+ * @returns {string}
+ */
+function renderNpcControlsList() {
+    const rows = [];
+    const seen = new Set();
+    // Explicit control records first (insertion order = the store map's).
+    for (const [npcKey, control] of Object.entries(getInteriorityData().npcControls)) {
+        const boundary = getEvidenceBoundary(npcKey);
+        seen.add(npcKey.toLowerCase());
+        rows.push(`
+        <div class="mwt-int-controls-row" data-npc="${escapeHtml(npcKey)}">
+            <div class="mwt-int-ledger-entry-main">
+                <span class="mwt-int-ledger-npc">${escapeHtml(npcKey)}</span>
+                ${boundary ? `<span style="color:var(--mwt-text-dim);font-size:11px" title="Generation turn this NPC's intentions were last successfully evaluated">· last evaluated turn ${boundary.turn}</span>` : ''}
+            </div>
+            <div class="mwt-int-controls-fields">
+                <label title="Never send this NPC's dossier (knowledge entry, character core, relationships) in any interiority call. Intentions tracking and actor/witness rules are untouched.">
+                    <input type="checkbox" class="mwt-int-ctl-privacy" data-npc="${escapeHtml(npcKey)}" ${control.privacyExcluded ? 'checked' : ''}> privacy
+                </label>
+                <label title="Block NEW engine proposals for this NPC. Existing intentions are still evaluated every turn.">
+                    <input type="checkbox" class="mwt-int-ctl-pause" data-npc="${escapeHtml(npcKey)}" ${control.pauseNewProposals ? 'checked' : ''}> pause new
+                </label>
+                <label title="After an accepted proposal, block further proposals for N turns. 0 = off.">
+                    cooldown <input type="number" min="0" max="200" style="width:52px" class="mwt-input mwt-int-ctl-cooldown" data-npc="${escapeHtml(npcKey)}" value="${control.cooldownTurns || 0}">
+                </label>
+                <label title="Max ACTIVE engine-authored intentions for this NPC. 0 = unlimited. Nothing is auto-evicted; creation simply pauses at the cap.">
+                    cap <input type="number" min="0" max="20" style="width:44px" class="mwt-input mwt-int-ctl-cap" data-npc="${escapeHtml(npcKey)}" value="${control.activeCap || 0}">
+                </label>
+                <button class="mwt-int-ctl-remove-btn mwt-btn mwt-btn-sm" data-npc="${escapeHtml(npcKey)}" title="Remove this control record">✕</button>
+            </div>
+        </div>`);
+    }
+    // NPCs with an evidence boundary but no control record (informational).
+    for (const entry of getLedger()) {
+        const npc = String(entry.npc || '').trim();
+        const key = npc.toLowerCase();
+        if (!npc || seen.has(key)) continue;
+        const boundary = getEvidenceBoundary(npc);
+        if (!boundary) continue;
+        seen.add(key);
+        rows.push(`
+        <div class="mwt-int-controls-row mwt-int-controls-row--readonly" data-npc="${escapeHtml(npc)}">
+            <div class="mwt-int-ledger-entry-main">
+                <span class="mwt-int-ledger-npc">${escapeHtml(npc)}</span>
+                <span style="color:var(--mwt-text-dim);font-size:11px" title="Generation turn this NPC's intentions were last successfully evaluated">· last evaluated turn ${boundary.turn}</span>
+            </div>
+            <div class="mwt-int-controls-fields"><span style="color:var(--mwt-text-dim);font-size:11px">no controls set</span></div>
+        </div>`);
+    }
+    if (rows.length === 0) {
+        return '<p style="color:var(--mwt-text-dim);font-size:12px">No per-NPC controls. Add one by NPC name — privacy exclusion withholds the dossier; the cost dials pause only NEW proposals.</p>';
+    }
+    return rows.join('');
 }
 
 // ─── Inner states (v2 §18 — persistent affective line) ───────────────────────
@@ -412,6 +601,8 @@ export function renderSettingsPanel() {
 
             <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                 <label style="font-size:12px;color:var(--mwt-text-dim)" title="How often (in turns) the dormant-intentions poll fires to check if a scheduled intention's trigger is near.">Dormant Poll <input type="number" id="mwt-int-dormant-poll" class="mwt-input" style="width:60px;display:inline-block" value="${s.dormantPollInterval ?? 10}" min="1" max="200"> turns</label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" title="How recent (in turns) a completed/dropped/expired closure still suppresses near-identical re-proposals for the same NPC. Occurrence-specific: an independently motivated repetition after the window stays legal. 0 disables the guard.">Closure Dedup <input type="number" id="mwt-int-dedup-turns" class="mwt-input" style="width:60px;display:inline-block" value="${s.lifecycleDedupTurns ?? 8}" min="0" max="100"> turns</label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" title="Generation-turn aging: engine-authored intentions older than this close automatically as expired. NEVER applies to user-authored (✋) intentions, and per-entry overrides win. 0 = never.">Max Turns Open <input type="number" id="mwt-int-max-turns" class="mwt-input" style="width:60px;display:inline-block" value="${s.intentionMaxTurnsOpen ?? 0}" min="0" max="500"> turns</label>
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">How often scheduled intentions are checked to see if their trigger is near. Lower = sooner wake, higher = fewer API checks. Default: ${DORMANT_POLL_INTERVAL}.</p>
 
@@ -450,6 +641,8 @@ export function renderSettingsPanel() {
             intentionGracePeriod: Math.max(0, Number(panel.querySelector('#mwt-int-grace')?.value) || 0),
             maxNewIntentionsPerNpc: Math.max(0, Number(panel.querySelector('#mwt-int-max-new')?.value ?? 2) || 0),
             dormantPollInterval: Math.max(1, Number(panel.querySelector('#mwt-int-dormant-poll')?.value) || 10),
+            lifecycleDedupTurns: Math.max(0, Number(panel.querySelector('#mwt-int-dedup-turns')?.value ?? 8) || 0),
+            intentionMaxTurnsOpen: Math.max(0, Number(panel.querySelector('#mwt-int-max-turns')?.value) || 0),
             captureIntentionsDiagnostics: panel.querySelector('#mwt-int-capture-diagnostics')?.checked ?? false,
         });
         setIntStatus('Settings saved.', 'success');
@@ -576,6 +769,76 @@ function wireEvents(el) {
     // apart (the scheduled list previously rendered an ✎ with no handler).
     el.querySelector('#mwt-int-ledger-list')?.addEventListener('click', handleLedgerListClick);
     el.querySelector('#mwt-int-dormant-list')?.addEventListener('click', handleLedgerListClick);
+
+    // Lifecycle v2: lifecycle-history actions (event delegation) — reopen a
+    // closure, or clear the whole audit trail.
+    el.querySelector('#mwt-int-lifecycle-list')?.addEventListener('click', (e) => {
+        const reopenBtn = e.target.closest('.mwt-int-reopen-btn');
+        if (reopenBtn) {
+            const historyId = reopenBtn.dataset.hid;
+            if (historyId && reopenFromLifecycle(historyId)) {
+                setIntStatus('Plan reopened — active again as a user-owned intention.', 'success');
+                renderContent();
+                document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+            }
+            return;
+        }
+        if (e.target.closest('#mwt-int-clear-history')) {
+            if (!confirm('Clear the lifecycle history? Deletion tombstones are untouched. This cannot be undone.')) return;
+            const removed = clearLifecycleHistory();
+            setIntStatus(`Cleared ${removed} lifecycle record(s).`, 'success');
+            renderContent();
+        }
+    });
+
+    // Lifecycle v2: per-NPC controls — privacy/pause toggles, cooldown/cap
+    // numbers, remove, and add-by-name. Changes commit immediately (the row
+    // reads back from the store, so an invalid number simply normalizes).
+    const controlsList = el.querySelector('#mwt-int-npc-controls-list');
+    if (controlsList) {
+        controlsList.addEventListener('change', (e) => {
+            const target = e.target;
+            const npc = target.dataset?.npc;
+            if (!npc) return;
+            if (target.classList.contains('mwt-int-ctl-privacy')) {
+                setNpcControl(npc, { privacyExcluded: target.checked });
+                setIntStatus(`Privacy ${target.checked ? 'enabled' : 'disabled'} for ${npc}.`, 'success');
+            } else if (target.classList.contains('mwt-int-ctl-pause')) {
+                setNpcControl(npc, { pauseNewProposals: target.checked });
+                setIntStatus(`New proposals ${target.checked ? 'paused' : 'resumed'} for ${npc}.`, 'success');
+            } else if (target.classList.contains('mwt-int-ctl-cooldown')) {
+                setNpcControl(npc, { cooldownTurns: Math.max(0, Number(target.value) || 0) });
+            } else if (target.classList.contains('mwt-int-ctl-cap')) {
+                setNpcControl(npc, { activeCap: Math.max(0, Number(target.value) || 0) });
+            } else {
+                return;
+            }
+            renderContent();
+        });
+        controlsList.addEventListener('click', (e) => {
+            const removeBtn = e.target.closest('.mwt-int-ctl-remove-btn');
+            if (removeBtn) {
+                const npc = removeBtn.dataset.npc;
+                if (npc) {
+                    removeNpcControl(npc);
+                    setIntStatus(`Controls removed for ${npc}.`, 'info');
+                    renderContent();
+                }
+            }
+        });
+    }
+
+    el.querySelector('#mwt-int-controls-add-btn')?.addEventListener('click', () => {
+        const input = el.querySelector('#mwt-int-controls-add-name');
+        const npc = String(input?.value || '').trim();
+        if (!npc) {
+            setIntStatus('Enter an NPC name to add controls for.', 'error');
+            return;
+        }
+        setNpcControl(npc, {});
+        setIntStatus(`Controls added for ${npc}.`, 'success');
+        renderContent();
+    });
 }
 
 /**
@@ -583,14 +846,55 @@ function wireEvents(el) {
  * @param {MouseEvent} e
  */
 function handleLedgerListClick(e) {
-    // §20: Wake button (scheduled list) — flip a dormant intention to active
+    // §20: Wake button (scheduled list) — flip a dormant intention to active.
+    // Lifecycle v2: routed through the tracked wrapper so the wake is audited.
     const wakeBtn = e.target.closest('.mwt-int-wake-btn');
     if (wakeBtn) {
         const id = wakeBtn.dataset.id;
         if (id) {
             const grace = getSettings().intentionGracePeriod || 0;
-            wakeLedgerEntry(id, grace);
+            wakeLedgerEntryTracked(id, grace);
             setIntStatus('Intention woken — now active.', 'success');
+            renderContent();
+            document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+        }
+        return;
+    }
+
+    // Lifecycle v2 (spec §2): Mark done — the user asserts completion. Closes
+    // the occurrence and records it; a later re-proposal is only suppressed
+    // inside the dedup window (the permanent refusal remains the ✕ delete).
+    const doneBtn = e.target.closest('.mwt-int-done-btn');
+    if (doneBtn) {
+        const id = doneBtn.dataset.id;
+        if (id && markLedgerEntryDone(id)) {
+            setIntStatus('Intention marked done — recorded in the lifecycle history.', 'success');
+            renderContent();
+            document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+        }
+        return;
+    }
+
+    // Lifecycle v2 (spec §4): Dismiss — the in-world "no longer plausible" close.
+    const dismissBtn = e.target.closest('.mwt-int-dismiss-btn');
+    if (dismissBtn) {
+        const id = dismissBtn.dataset.id;
+        if (id && dismissLedgerEntry(id)) {
+            setIntStatus('Intention dismissed as no longer plausible.', 'success');
+            renderContent();
+            document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
+        }
+        return;
+    }
+
+    // Lifecycle v2 (spec §2): Merge — keep this entry, close the flagged
+    // duplicate with a supersession link.
+    const mergeBtn = e.target.closest('.mwt-int-merge-btn');
+    if (mergeBtn) {
+        const keepId = mergeBtn.dataset.id;
+        const dropId = mergeBtn.dataset.other;
+        if (keepId && dropId && mergeLedgerEntries(keepId, dropId)) {
+            setIntStatus('Duplicate merged away — the kept intention is unchanged.', 'success');
             renderContent();
             document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
         }
@@ -602,11 +906,12 @@ function handleLedgerListClick(e) {
     // when unsure, so a plan anchored days out often lands active. This is
     // the manual correction: dormant entries leave the injection and the
     // per-turn evaluation until their trigger is near.
+    // Lifecycle v2: routed through the tracked wrapper so the sleep is audited.
     const sleepBtn = e.target.closest('.mwt-int-sleep-btn');
     if (sleepBtn) {
         const id = sleepBtn.dataset.id;
         if (id) {
-            setLedgerEntryDormant(id);
+            sleepLedgerEntryTracked(id);
             setIntStatus('Intention scheduled — click ✎ to add a wake hint (the event to watch for).', 'success');
             renderContent();
             document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
@@ -692,6 +997,20 @@ function showInlineEditForm(id) {
                 <label class="mwt-label">Trigger</label>
                 <input type="text" class="mwt-input mwt-int-edit-trigger" value="${escapeHtml(entry.trigger)}" placeholder="When/where the NPC will act">
             </div>
+            <div class="mwt-int-edit-row">
+                <label class="mwt-label" title="User-set urgency. Shown in the panel and in the narrator injection; never asked of the model.">Priority</label>
+                <select class="mwt-input mwt-int-edit-priority">
+                    ${INTENTION_PRIORITIES.map(p => `<option value="${p}"${(entry.priority || 'normal') === p ? ' selected' : ''}>${p}</option>`).join('')}
+                </select>
+            </div>
+            <div class="mwt-int-edit-row">
+                <label class="mwt-label" title="In-world expiry: after this event/date the plan is no longer plausible. Surfaced to the intentions call so it can drop the plan with this recorded reason.">No longer plausible once</label>
+                <input type="text" class="mwt-input mwt-int-edit-expireson" value="${escapeHtml(entry.expiresOn || '')}" placeholder="e.g. the harvest festival ends (blank = none)">
+            </div>
+            <div class="mwt-int-edit-row">
+                <label class="mwt-label" title="Generation-turn expiry override for THIS entry. Blank/0 = none (the global max-turns setting still applies to engine entries).">Expires after turns</label>
+                <input type="number" min="0" max="500" class="mwt-input mwt-int-edit-expiresturn" value="${entry.expiresTurn || ''}" placeholder="e.g. 12">
+            </div>
             ${isDormant ? `
             <div class="mwt-int-edit-row">
                 <label class="mwt-label">Wake hint</label>
@@ -712,7 +1031,7 @@ function showInlineEditForm(id) {
     }
 
     // Keyboard shortcuts: Enter to save, Escape to cancel
-    entryEl.querySelectorAll('.mwt-int-edit-npc, .mwt-int-edit-action, .mwt-int-edit-trigger, .mwt-int-edit-wakehint').forEach(input => {
+    entryEl.querySelectorAll('.mwt-int-edit-npc, .mwt-int-edit-action, .mwt-int-edit-trigger, .mwt-int-edit-wakehint, .mwt-int-edit-expireson, .mwt-int-edit-expiresturn').forEach(input => {
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -743,7 +1062,18 @@ function handleInlineEditSave(id) {
         return;
     }
 
-    updateLedgerEntry(id, { npc, action, trigger });
+    // Lifecycle v2 (spec §1): the optional priority/expiry fields ride the same
+    // update. Normalization lives in data.js's write seam ('' / 0 / unknown
+    // values CLEAR the field).
+    const priorityValue = entryEl.querySelector('.mwt-int-edit-priority')?.value ?? undefined;
+    const expiresOnValue = entryEl.querySelector('.mwt-int-edit-expireson')?.value ?? undefined;
+    const expiresTurnValue = entryEl.querySelector('.mwt-int-edit-expiresturn')?.value ?? undefined;
+    updateLedgerEntry(id, {
+        npc, action, trigger,
+        priority: priorityValue,
+        expiresOn: expiresOnValue,
+        expiresTurn: expiresTurnValue,
+    });
 
     // §20: the wake-hint field only renders for dormant entries. Persist it
     // via setLedgerEntryDormant, which owns the dormant fields (updateLedgerEntry

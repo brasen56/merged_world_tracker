@@ -14,6 +14,11 @@ import { validateBackupEnvelope } from './validate.js';
 import { getStoreSchema } from '../schema/registry.js';
 import { ISSUE_SEVERITIES, prepareStore } from '../core/schema.js';
 import { mergeQuarantineItems } from '../core/quarantine.js';
+// The lifecycle retention cap is owned by the interiority store's leaf schema
+// (which also enforces it in the validator), so the merge trims to the same
+// bound the runtime writer and the validator use. Already a transitive
+// dependency: schema/registry.js imports this module for the descriptor.
+import { MAX_LIFECYCLE_EVENTS } from '../interiority/schema.js';
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const objectOrEmpty = value => (isObject(value) ? value : {});
@@ -138,15 +143,26 @@ function mergeInteriority(current, incoming, { sameChat, restoreSessionConfig = 
     const tombstones = Object.prototype.hasOwnProperty.call(incoming || {}, 'deletedIntentions')
         ? mergeUnique(current?.deletedIntentions, incoming.deletedIntentions, 'id', 'Interiority tombstone')
         : { data: cloneBackupData(current?.deletedIntentions || []), summary: emptySummary() };
+    // Lifecycle v2 (spec §6): the bounded lifecycle history merges by record id
+    // exactly like tombstones — occurrence-specific audit records, never
+    // second-guessed by the merge.
+    const lifecycle = Object.prototype.hasOwnProperty.call(incoming || {}, 'lifecycleHistory')
+        ? mergeUnique(current?.lifecycleHistory, incoming.lifecycleHistory, 'id', 'Interiority lifecycle record')
+        : { data: cloneBackupData(current?.lifecycleHistory || []), summary: emptySummary() };
     result.ledger = ledger.data;
     result.deletedIntentions = tombstones.data;
+    result.lifecycleHistory = lifecycle.data.slice(-MAX_LIFECYCLE_EVENTS);
+    // Lifecycle v2: the two name-keyed maps merge current-wins / new-names-add
+    // (the same policy as stance maps — a local control edit survives import).
+    mergeNpcKeyedMap(result, summary, current, incoming, 'evidenceBoundaries', 'Interiority evidence boundary');
+    mergeNpcKeyedMap(result, summary, current, incoming, 'npcControls', 'Interiority NPC control');
     // These scalar values are part of the current session/configuration state;
     // do not silently replace them during an append-only merge.
     skipProtectedScalars(summary, incoming, ['enabled', 'turnCounter'], 'Interiority', restoreSessionConfig);
     if (restoreSessionConfig) {
         mergeSafeScalars(result, current, incoming, ['enabled', 'turnCounter'], summary);
     }
-    for (const part of [ledger.summary, tombstones.summary]) {
+    for (const part of [ledger.summary, tombstones.summary, lifecycle.summary]) {
         summary.added += part.added;
         summary.updated += part.updated;
         summary.conflicts += part.conflicts;
@@ -162,6 +178,46 @@ function mergeInteriority(current, incoming, { sameChat, restoreSessionConfig = 
         }
     }
     return { data: result, summary };
+}
+
+/**
+ * Merge one of Interiority's name-keyed lifecycle maps (spec §6): the CURRENT
+ * value wins on conflict (a local privacy toggle or control edit survives an
+ * import); names only present in the backup are added. Same current-wins rule
+ * as mergeStanceMap, parameterized by label because it serves two maps.
+ */
+function mergeNpcKeyedMap(result, summary, current, incoming, field, label) {
+    if (!isObject(incoming?.[field])) {
+        result[field] = cloneBackupData(current?.[field] || {});
+        return;
+    }
+    const merged = {};
+    for (const [name, value] of Object.entries(objectOrEmpty(current?.[field]))) {
+        const normalizedName = String(name).trim().toLowerCase();
+        if (!normalizedName) {
+            addSkip(summary, `${field}:${name}`, `${label} has an empty normalized name; the current value was preserved.`);
+            continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(merged, normalizedName)) {
+            summary.conflicts++;
+            addSkip(summary, `${field}:${name}`, `${label} conflicts after name normalization; the first current value was preserved.`);
+            continue;
+        }
+        merged[normalizedName] = cloneBackupData(value);
+    }
+    for (const [name, value] of Object.entries(incoming[field])) {
+        const normalizedName = String(name).trim().toLowerCase();
+        if (!normalizedName) {
+            addSkip(summary, `${field}:${name}`, `${label} has an empty normalized name.`);
+        } else if (Object.prototype.hasOwnProperty.call(merged, normalizedName)) {
+            summary.conflicts++;
+            addSkip(summary, `${field}:${name}`, `${label} already exists; the current value was preserved.`);
+        } else {
+            merged[normalizedName] = cloneBackupData(value);
+            summary.added++;
+        }
+    }
+    result[field] = merged;
 }
 
 function mergeRelationshipMap(current, incoming) {

@@ -13,13 +13,24 @@
  *       { id, npc, action, trigger, since, declaredMsgIdx,
  *         manual, turnsOpen,
  *                  ↑ optional   ↑ age in generation turns
- *         status, wakeHint }
+ *         status, wakeHint,
  *           ↑ 'active'|'dormant' (§20)   ↑ free-text wake condition
+ *         priority, expiresOn, expiresTurn, reopenedFrom }
+ *           ↑ optional lifecycle fields (v2 — see INTERIORITY_LIFECYCLE_V2_SPEC.md)
  *     ],
  *     turnCounter: 0,           ↑ incremented each generation (§20 lazy poll)
  *     deletedIntentions: [      ↑ tombstones for USER-deleted intentions
  *       { id, npc, actions: [...], triggers: [...], at }
  *     ],
+ *     lifecycleHistory: [       ↑ bounded engine/user lifecycle events (v2 §2)
+ *       { id, entryId, npc, action, trigger, outcome, source, reason, turn, at }
+ *     ],
+ *     evidenceBoundaries: {     ↑ per-NPC last successful-eval watermark (v2 §3)
+ *       npcLower: { turn, msgIdx, msgKey, at }
+ *     },
+ *     npcControls: {            ↑ per-NPC privacy/cost controls (v2 §5)
+ *       npcLower: { privacyExcluded, pauseNewProposals, cooldownTurns, activeCap }
+ *     },
  *     perMessage: {
  *       'mu-<uuid>': {
  *         reactions: [ { npc, re, thought } ],
@@ -53,7 +64,7 @@ import { clonePlainData, prepareNextStoreValue } from '../core/schema.js';
 // Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStoreWriteBlocked, recordSchemaEvent, SCHEMA_DIAGNOSTIC_EVENTS } from '../core/schema_status.js';
-import { interioritySchema } from './schema.js';
+import { interioritySchema, INTENTION_PRIORITIES } from './schema.js';
 // Part 7 (schema plan §2.2): the mwt_uuid stamps are MWT-owned persistence
 // on chat messages — validated by schema/secondary.js, the one owner of the
 // secondary-persistence vocabulary (direct import, not the barrel).
@@ -217,6 +228,18 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // only — never persisted; surfaced solely through the Diagnostics
         // Copy Report's content opt-in. Temporary reporter-facing tool.
         captureIntentionsDiagnostics: false,
+        // ── Deferred lifecycle work (spec INTERIORITY_LIFECYCLE_V2_SPEC §2/§4)
+        // Cross-turn closure dedup window, in generation turns. A proposal
+        // that conservatively matches a closure recorded within this window
+        // for the same canonical NPC is rejected as "recently closed" — an
+        // occurrence-specific guard, so a later independently motivated
+        // repetition stays legal once the window passes. 0 disables.
+        lifecycleDedupTurns: 8,
+        // Generation-turn aging cap: engine-authored entries older than this
+        // many turns close automatically as expired. 0 = never. NEVER applies
+        // to user-authored (manual) entries — a user plan is only ever closed
+        // by its own explicit per-entry expiresTurn or a user action.
+        intentionMaxTurnsOpen: 0,
     },
     logPrefix: '[MWT:Interiority]',
 });
@@ -341,6 +364,13 @@ export function getInteriorityData() {
     if (!Array.isArray(working.ledger)) working.ledger = [];
     if (!_isStoreRoot(working.perMessage)) working.perMessage = {};
     if (!Array.isArray(working.deletedIntentions)) working.deletedIntentions = [];
+    // Store v2 lifecycle containers (spec §1): canonical shapes on the working
+    // copy, same policy as the v1 containers above. The live value is never
+    // canonicalized on read — a corrupt container stays visible to the write
+    // seam's validation so its raw records remain recoverable.
+    if (!Array.isArray(working.lifecycleHistory)) working.lifecycleHistory = [];
+    if (!_isStoreRoot(working.evidenceBoundaries)) working.evidenceBoundaries = {};
+    if (!_isStoreRoot(working.npcControls)) working.npcControls = {};
     _stagedInteriority = working;
     _stagedInteriorityBase = raw;
     return working;
@@ -478,6 +508,42 @@ export function getLedgerEntriesForNpc(npcName) {
 }
 
 /**
+ * Normalize the optional lifecycle fields of a ledger entry (spec §1).
+ *
+ * Applied at BOTH write seams (add + update) so a corrupt optional field can
+ * never enter the store, while the schema keeps its unknown-key pass-through
+ * (an entry is never quarantined over a bad priority — identity fields are
+ * what entry quarantine is for).
+ *
+ * - `priority` — kept only when it is a known ladder value; 'normal' is the
+ *   unstored default (deleted rather than stored).
+ * - `expiresOn` — trimmed free-text in-world expiry label; empty → deleted.
+ * - `expiresTurn` — integer ≥ 1 or deleted (0/blank/NaN clear the override).
+ *
+ * @param {object} entry - the store entry object to normalize (mutated)
+ * @param {object} [patch] - when present, only keys the patch names are
+ *   re-normalized (update semantics); absent keys keep their stored value
+ */
+function _normalizeLifecycleFields(entry, patch = null) {
+    const touches = (field) => patch === null || patch[field] !== undefined;
+    if (touches('priority')) {
+        const value = String(entry.priority ?? '').trim().toLowerCase();
+        entry.priority = INTENTION_PRIORITIES.includes(value) && value !== 'normal' ? value : undefined;
+        if (entry.priority === undefined) delete entry.priority;
+    }
+    if (touches('expiresOn')) {
+        const label = String(entry.expiresOn ?? '').trim();
+        if (label) entry.expiresOn = label;
+        else delete entry.expiresOn;
+    }
+    if (touches('expiresTurn')) {
+        const raw = Number(entry.expiresTurn);
+        if (Number.isFinite(raw) && raw >= 1) entry.expiresTurn = Math.floor(raw);
+        else delete entry.expiresTurn;
+    }
+}
+
+/**
  * Add a new intention to the ledger.
  * Assigns a unique id and `since` timestamp.
  * @param {object} entry - { npc, action, trigger }
@@ -496,6 +562,16 @@ export function addLedgerEntry(entry, since, msgIdx) {
         declaredMsgIdx: typeof msgIdx === 'number' ? msgIdx : null,
         turnsOpen: 0,
     };
+    // Optional lifecycle fields (spec §1) — normalized, never trusted raw.
+    for (const field of ['priority', 'expiresOn', 'expiresTurn', 'reopenedFrom']) {
+        if (entry[field] !== undefined) fullEntry[field] = entry[field];
+    }
+    _normalizeLifecycleFields(fullEntry);
+    if (entry.reopenedFrom !== undefined) {
+        const link = String(entry.reopenedFrom).trim();
+        if (link) fullEntry.reopenedFrom = link;
+        else delete fullEntry.reopenedFrom;
+    }
     // §20: scheduled intentions start dormant; immediate/event are active.
     if (entry.status === 'dormant') {
         fullEntry.status = 'dormant';
@@ -546,6 +622,13 @@ export function updateLedgerEntry(id, patch) {
     if (patch.action !== undefined) entry.action = String(patch.action).trim();
     if (patch.trigger !== undefined) entry.trigger = String(patch.trigger).trim();
     if (patch.since !== undefined) entry.since = String(patch.since).trim();
+    // Optional lifecycle fields (spec §1): explicitly-patched keys only, so a
+    // text-only edit never disturbs the entry's priority/expiry settings.
+    // Setting a field to '', 0, or an unknown priority CLEARS it.
+    for (const field of ['priority', 'expiresOn', 'expiresTurn']) {
+        if (patch[field] !== undefined) entry[field] = patch[field];
+    }
+    _normalizeLifecycleFields(entry, patch);
 
     // The text is now user-authored, whoever first wrote it. This is what tells
     // restoreLedgerSnapshot to keep the correction instead of reverting to the
@@ -557,7 +640,10 @@ export function updateLedgerEntry(id, patch) {
 }
 
 /** Fields the user can edit from the panel — the ones their edit owns. */
-const USER_EDITED_FIELDS = ['npc', 'action', 'trigger', 'since', 'originalAction', 'originalTrigger'];
+const USER_EDITED_FIELDS = ['npc', 'action', 'trigger', 'since', 'originalAction', 'originalTrigger',
+    // Lifecycle v2 (spec §1): user-set priority and expiry settings survive a
+    // rollback exactly like a text correction — the user owns these fields.
+    'priority', 'expiresOn', 'expiresTurn'];
 
 /**
  * Remove ledger entries by id.

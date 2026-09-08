@@ -21,6 +21,7 @@
  */
 import {
     checkRecordList,
+    checkRecordMap,
     deferIssue,
     defineIssuePolicy,
     defineStoreSchema,
@@ -35,6 +36,75 @@ import {
 
 /** Canonical per-message key format: `mu-<message uuid>`. */
 export const PER_MESSAGE_KEY_PATTERN = /^mu-[^\s]+$/;
+
+// ─── Lifecycle vocabulary (deferred lifecycle work — spec §1/§2) ─────────────
+//
+// Owned HERE (the leaf) so data.js, lifecycle.js, and the validator can never
+// drift: one definition each of the lifecycle outcomes, their sources, and the
+// intention priority ladder. The response contract never uses these — they are
+// store/UI vocabulary only.
+
+/** Lifecycle event outcomes. Closure set: completed/dropped/expired/merged. */
+export const LIFECYCLE_OUTCOMES = Object.freeze([
+    'completed', 'dropped', 'expired', 'merged', 'reopened', 'slept', 'woken',
+]);
+
+/** Who performed the event — engine generation pass vs. explicit user action. */
+export const LIFECYCLE_SOURCES = Object.freeze(['engine', 'user']);
+
+/** Intention priority ladder (user-set only; 'normal' is the unstored default). */
+export const INTENTION_PRIORITIES = Object.freeze(['low', 'normal', 'high', 'urgent']);
+
+/** The lifecycle audit trail is intentionally bounded at the schema boundary. */
+export const MAX_LIFECYCLE_EVENTS = 150;
+
+/**
+ * Validate one lifecycle history record (store v2, spec §2).
+ *
+ * Identity fields, the lifecycle vocabulary, timestamps, and link shapes are
+ * enforced. Links remain advisory pointers rather than join keys: a missing
+ * target does not invalidate an otherwise well-formed audit line.
+ */
+export function checkLifecycleEvent(record) {
+    if (!isObject(record)) return { code: 'lifecycle-not-object', message: 'Lifecycle record must be an object.' };
+    if (!isNonEmptyString(record.id)) {
+        return { code: 'lifecycle-invalid-id', message: 'Lifecycle record id must be a non-empty string.' };
+    }
+    for (const key of ['npc', 'action']) {
+        if (!isNonEmptyString(record[key])) {
+            return { code: `lifecycle-invalid-${key}`, message: `Lifecycle ${key} must be a non-empty string.` };
+        }
+    }
+    if (!LIFECYCLE_OUTCOMES.includes(record.outcome)) {
+        return { code: 'lifecycle-invalid-outcome', message: `Lifecycle outcome must be one of: ${LIFECYCLE_OUTCOMES.join(', ')}.` };
+    }
+    if (!LIFECYCLE_SOURCES.includes(record.source)) {
+        return { code: 'lifecycle-invalid-source', message: `Lifecycle source must be one of: ${LIFECYCLE_SOURCES.join(', ')}.` };
+    }
+    for (const key of ['entryId', 'trigger', 'reason']) {
+        if (typeof record[key] !== 'string') {
+            return { code: `lifecycle-invalid-${key}`, message: `Lifecycle ${key} must be a string.` };
+        }
+    }
+    for (const key of ['turn', 'at']) {
+        if (!isFiniteNumber(record[key]) || record[key] < 0) {
+            return { code: `lifecycle-invalid-${key}`, message: `Lifecycle ${key} must be a finite non-negative number.` };
+        }
+    }
+    if (record.outcome === 'merged' && !isNonEmptyString(record.supersededBy)) {
+        return { code: 'lifecycle-invalid-superseded-by', message: 'Merged lifecycle records require a supersededBy string.' };
+    }
+    if (record.outcome === 'reopened' && !isNonEmptyString(record.reopenedFrom)) {
+        return { code: 'lifecycle-invalid-reopened-from', message: 'Reopened lifecycle records require a reopenedFrom string.' };
+    }
+    for (const key of ['supersededBy', 'reopenedFrom']) {
+        if (record[key] !== undefined && typeof record[key] !== 'string') {
+            return { code: `lifecycle-invalid-${key}`, message: `Lifecycle ${key} must be a string.` };
+        }
+    }
+    return null;
+}
+
 
 /**
  * Legacy per-message key formats still pending conversion on the hydration
@@ -98,10 +168,31 @@ export function validateInteriorityData(data) {
         return { data: {}, issues, stats };
     }
     const accepted = { ...data };
-    for (const [key, check] of [['ledger', checkLedgerEntry], ['deletedIntentions', checkTombstone]]) {
+    for (const [key, check] of [['ledger', checkLedgerEntry], ['deletedIntentions', checkTombstone], ['lifecycleHistory', checkLifecycleEvent]]) {
         if (data[key] === undefined) continue;
         const checked = checkRecordList(data[key], key, check, { path: [key] });
-        accepted[key] = checked.records;
+        accepted[key] = key === 'lifecycleHistory'
+            ? checked.records.slice(-MAX_LIFECYCLE_EVENTS)
+            : checked.records;
+        mergeStats(stats, checked.stats);
+        issues.push(...checked.issues);
+    }
+    // Store v2 (spec §1): the two name-keyed lifecycle maps. Same per-entry
+    // policy as perMessage — an invalid VALUE is quarantined (preserved whole)
+    // and dropped; its siblings survive.
+    if (data.evidenceBoundaries !== undefined) {
+        const checked = checkRecordMap(data.evidenceBoundaries, 'Evidence boundary', checkEvidenceBoundary, {
+            path: ['evidenceBoundaries'], normalizeKey: key => String(key).trim().toLowerCase(),
+        });
+        accepted.evidenceBoundaries = checked.data;
+        mergeStats(stats, checked.stats);
+        issues.push(...checked.issues);
+    }
+    if (data.npcControls !== undefined) {
+        const checked = checkRecordMap(data.npcControls, 'NPC control', checkNpcControl, {
+            path: ['npcControls'], normalizeKey: key => String(key).trim().toLowerCase(),
+        });
+        accepted.npcControls = checked.data;
         mergeStats(stats, checked.stats);
         issues.push(...checked.issues);
     }
@@ -154,6 +245,44 @@ export function validateInteriorityData(data) {
 // ─── Migration (design §4.2 / §6.6, Part 2) ──────────────────────────────────
 
 /**
+ * Validate the evidence-boundaries map (store v2, spec §3). Keys are
+ * lower-cased NPC names; each value carries the per-NPC watermark of the last
+ * successful intentions evaluation commit.
+ */
+function checkEvidenceBoundary(value) {
+        const valid = isObject(value)
+            && isFiniteNumber(value.turn) && value.turn >= 0
+            && (value.msgIdx === undefined || value.msgIdx === null || (isFiniteNumber(value.msgIdx) && value.msgIdx >= 0))
+            && (value.msgKey === undefined || value.msgKey === null || isNonEmptyString(value.msgKey))
+            && (value.at === undefined || isFiniteNumber(value.at));
+        return valid ? null : {
+            code: 'evidence-boundary-invalid',
+            message: 'Evidence boundary must carry a finite non-negative turn and optional msgIdx/msgKey/at.',
+        };
+}
+
+/**
+ * Validate the per-NPC controls map (store v2, spec §5). All fields optional;
+ * wrong-typed values quarantine the whole record (the panel re-creates it).
+ */
+function checkNpcControl(value) {
+        if (!isObject(value)) return { code: 'npc-control-invalid', message: 'NPC control must be an object.' };
+        const boolField = (f) => value[f] === undefined || typeof value[f] === 'boolean';
+        const numField = (f) => value[f] === undefined || value[f] === null
+            || (isFiniteNumber(value[f]) && value[f] >= 0);
+        const valid = isObject(value)
+            && boolField('privacyExcluded')
+            && boolField('pauseNewProposals')
+            && numField('cooldownTurns')
+            && numField('activeCap')
+            && numField('lastAcceptedTurn');
+        return valid ? null : {
+            code: 'npc-control-invalid',
+            message: 'NPC control must carry booleans for privacy/pause and finite non-negative numbers for cooldown/cap.',
+        };
+}
+
+/**
  * v0 -> v1: canonical structural defaults, mirroring what
  * interiority/data.js getInteriorityData() creates on demand.
  *
@@ -186,6 +315,28 @@ export function migrateInteriorityV0ToV1(data) {
 }
 
 /**
+ * v1 -> v2 (deferred lifecycle work, spec §1): canonical defaults for the
+ * three lifecycle containers — the bounded occurrence history, the per-NPC
+ * evidence-boundary watermarks, and the per-NPC controls map.
+ *
+ * Same discipline as v0 -> v1: only ABSENT fields are defaulted;
+ * present-but-invalid values are left for the v2 validator to quarantine with
+ * the raw record recoverable. A v0-era store reaches the v2 chain through
+ * v0 -> v1 first (prepareStore walks the steps in order), so this step never
+ * needs to repeat the v1 defaults.
+ *
+ * Pure: returns a new object; the caller's data is untouched.
+ */
+export function migrateInteriorityV1ToV2(data) {
+    if (!isObject(data)) return { data, issues: [] };
+    const next = { ...data };
+    if (next.lifecycleHistory === undefined) next.lifecycleHistory = [];
+    if (next.evidenceBoundaries === undefined) next.evidenceBoundaries = {};
+    if (next.npcControls === undefined) next.npcControls = {};
+    return { data: next, issues: [] };
+}
+
+/**
  * Interiority store schema. `createDefault` mirrors the runtime's on-demand
  * defaults from interiority/data.js getInteriorityData() AND the converged
  * v1 shape — createDefault() is canonical: migrating it changes nothing.
@@ -193,9 +344,18 @@ export function migrateInteriorityV0ToV1(data) {
 export const interioritySchema = defineStoreSchema({
     id: 'interiority',
     metadataKey: 'mwt_interiority',
-    currentVersion: 1,
-    createDefault: () => ({ enabled: true, ledger: [], deletedIntentions: [], perMessage: {}, turnCounter: 0 }),
-    migrations: { 0: migrateInteriorityV0ToV1 },
+    currentVersion: 2,
+    createDefault: () => ({
+        enabled: true,
+        ledger: [],
+        deletedIntentions: [],
+        perMessage: {},
+        turnCounter: 0,
+        lifecycleHistory: [],
+        evidenceBoundaries: {},
+        npcControls: {},
+    }),
+    migrations: { 0: migrateInteriorityV0ToV1, 1: migrateInteriorityV1ToV2 },
     validate: validateInteriorityData,
     policy: defineIssuePolicy({
         fatal: [
@@ -218,6 +378,26 @@ export const interioritySchema = defineStoreSchema({
             'tombstone-missing-fields',
             'tombstone-actions',
             'tombstone-triggers',
+            'lifecycle-not-object',
+            'lifecycle-invalid-id',
+            'lifecycle-invalid-npc',
+            'lifecycle-invalid-action',
+            'lifecycle-invalid-outcome',
+            'lifecycle-invalid-source',
+            'lifecycle-invalid-entryId',
+            'lifecycle-invalid-trigger',
+            'lifecycle-invalid-reason',
+            'lifecycle-invalid-turn',
+            'lifecycle-invalid-at',
+            'lifecycle-invalid-supersededBy',
+            'lifecycle-invalid-reopenedFrom',
+            'lifecycle-invalid-superseded-by',
+            'lifecycle-invalid-reopened-from',
+            'not-an-object',
+            'empty-key',
+            'normalized-key-conflict',
+            'evidence-boundary-invalid',
+            'npc-control-invalid',
             'per-message-not-object',
             'per-message-entry',
             'turn-counter-invalid',

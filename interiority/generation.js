@@ -31,6 +31,16 @@ import {
 // Lifecycle plan Tier 1 item 4 — generation-scoped intentions capture. Leaf
 // module; every note* helper is a no-op unless a capture is in flight.
 import { noteIntentionsCaptureCall, noteIntentionsCaptureDecision } from './capture.js';
+// Deferred lifecycle work (spec §2–§5): bounded lifecycle history, cross-turn
+// closure dedup, evidence boundaries, per-NPC controls. One layer ABOVE
+// data.js (same rule as this module) — never imported by data.js.
+import {
+    recordLifecycleEvent, findRecentClosureMatch, checkProposalAllowed,
+    noteProposalAccepted, expireOverdueEngineEntries, stampEvidenceBoundary,
+    getEvidenceBoundariesSnapshot, getLifecycleHistorySnapshot, getNpcControl,
+    getNpcControlWatermarksSnapshot,
+    getEvidenceBoundary, PRIVACY_WITHHELD_NOTE,
+} from './lifecycle.js';
 import {
     getSettings, hasValidSettings,
     getInteriorityData,
@@ -399,8 +409,14 @@ async function loadNpcKnowledge(npcName) {
 export async function assembleNpcBlocks(roster, virtuallyActiveIds = []) {
     const virtualIds = new Set(virtuallyActiveIds);
     const blocks = [];
+    const turnNow = getTurnCounter();
     for (const name of roster) {
-        const knowledgeEntry = await loadNpcKnowledge(name);
+        // Per-NPC privacy control (spec §5): the dossier is withheld BEFORE
+        // assembly — the lorebook is never even consulted for an excluded NPC,
+        // so their knowledge entry cannot reach ANY batched/strict intentions
+        // call. Intentions tracking and the actor/witness rules are untouched.
+        const privacyExcluded = getNpcControl(name).privacyExcluded === true;
+        const knowledgeEntry = privacyExcluded ? PRIVACY_WITHHELD_NOTE : await loadNpcKnowledge(name);
         const entries = getLedgerEntriesForNpc(name);
         // §20: dormant entries stay out of normal evaluation, except for a
         // wake proposed by THIS turn's poll. That proposal is virtual until the
@@ -408,7 +424,16 @@ export async function assembleNpcBlocks(roster, virtuallyActiveIds = []) {
         // it in the same turn rather than receiving a stale demand next turn.
         const openIntentions = entries.filter(e => e.status !== 'dormant' || virtualIds.has(e.id));
         const scheduledIntentions = entries.filter(e => e.status === 'dormant' && !virtualIds.has(e.id));
-        blocks.push({ name, knowledgeEntry, openIntentions, scheduledIntentions });
+        // Lifecycle v2 (spec §3): the evidence-boundary payoff — when this
+        // NPC's last successful intentions evaluation lags the current turn,
+        // tell the model so un-judged events get extra scrutiny. The rolling
+        // window itself is deliberately unchanged (plan §1 failure-mode 6).
+        const boundary = getEvidenceBoundary(name);
+        const evaluationGap = boundary ? turnNow - (Number(boundary.turn) || 0) : null;
+        const evaluationNote = evaluationGap !== null && evaluationGap >= 2
+            ? `This NPC's intentions were last successfully evaluated ${evaluationGap} turns ago (story turn ${boundary.turn}). Events since then may not have been judged yet — check for completed or abandoned plans in the supplied window with extra care.`
+            : null;
+        blocks.push({ name, knowledgeEntry, openIntentions, scheduledIntentions, evaluationNote });
     }
     return blocks;
 }
@@ -427,6 +452,26 @@ export async function assembleNpcBlocks(roster, virtuallyActiveIds = []) {
  * @param {string[]} roster
  * @returns {Promise<Array<object>>} rich blocks keyed by §17 block names
  */
+/**
+ * Format one NPC's `<recent_thoughts>` block (§17 interior memory).
+ *
+ * Shared by the normal and privacy-excluded paths: recent thoughts are
+ * interiority's OWN layer, not dossier text, so a privacy-excluded NPC keeps
+ * them — and must keep them in the SAME shape, or a batched call would carry
+ * one NPC's block formatted unlike every sibling's.
+ *
+ * @param {string} npcName
+ * @returns {string} formatted thought lines, or '' if none
+ */
+function _formatRecentThoughts(npcName) {
+    const recent = getRecentThoughtsForNpc(npcName, 4);
+    if (recent.length === 0) return '';
+    return recent.map(r => {
+        const label = r.msgIdx != null ? ` (msg ${r.msgIdx})` : '';
+        return `- "${r.thought}"${label}`;
+    }).join('\n');
+}
+
 async function _assembleThoughtsNpcBlocks(roster) {
     // Dynamic imports — knowledge module is an optional dependency. Cached by
     // the ES module system, so repeated calls resolve to the same namespace.
@@ -445,6 +490,20 @@ async function _assembleThoughtsNpcBlocks(roster) {
             innerState: getInnerState(name), // §18: prior mood line fed to the thoughts call
             openIntentions: getLedgerEntriesForNpc(name),
         };
+
+        // Per-NPC privacy control (spec §5): every dossier-derived layer is
+        // withheld on the thoughts side too — one control, ALL interiority
+        // calls. Interiority's OWN layers (inner state, recent thoughts, the
+        // intention lists) are not dossier text and stay; the actor/witness
+        // rules are untouched.
+        if (getNpcControl(name).privacyExcluded === true) {
+            block.knowledgeEntry = PRIVACY_WITHHELD_NOTE;
+            block.characterCore = PRIVACY_WITHHELD_NOTE;
+            block.relationships = PRIVACY_WITHHELD_NOTE;
+            block.recentThoughts = _formatRecentThoughts(name);
+            blocks.push(block);
+            continue;
+        }
 
         // Load raw knowledge entry (already relationship-stripped by loadNpcKnowledge)
         const rawKnowledge = await loadNpcKnowledge(name);
@@ -481,13 +540,7 @@ async function _assembleThoughtsNpcBlocks(roster) {
         }
 
         // <recent_thoughts> — interior memory (continue, don't repeat)
-        const recent = getRecentThoughtsForNpc(name, 4);
-        if (recent.length > 0) {
-            block.recentThoughts = recent.map(r => {
-                const label = r.msgIdx != null ? ` (msg ${r.msgIdx})` : '';
-                return `- "${r.thought}"${label}`;
-            }).join('\n');
-        }
+        block.recentThoughts = _formatRecentThoughts(name);
 
         blocks.push(block);
     }
@@ -1278,10 +1331,18 @@ export async function collectRosterAliases(roster) {
  *   Threads the explicit-alias step of resolveRosterName so a block answered
  *   with an alias spelling ("The Vixen" for roster "Mara Vance") applies
  *   instead of being discarded as "not in roster".
+ * @param {string[]|null} [evaluatedNpcNames] - roster NPCs whose intentions
+ *   this pass actually evaluated (deferred lifecycle work, spec §3). The
+ *   orchestrator threads its per-mode computation here (strict uses
+ *   result.intentionsEvaluatedRoster; batched/split use the resolved response
+ *   names). Null falls back to the result's own evidence — the reported
+ *   intentionsEvaluatedRoster when present, else the resolved block names —
+ *   matching getEvaluatedNpcNames' default. These names, and only these, get
+ *   their evidence boundary stamped.
  * @returns {Promise<object|null>} { reactions: [], ledgerChanged: boolean }, or
  *   null when the scope changed during the await (caller should discard).
  */
-export async function validateAndApply(result, roster, msgIdx, scopeToken, preTurnLedgerSnapshot, confirmedWakeIds = [], aliasIndex = null) {
+export async function validateAndApply(result, roster, msgIdx, scopeToken, preTurnLedgerSnapshot, confirmedWakeIds = [], aliasIndex = null, evaluatedNpcNames = null) {
     const data = getInteriorityData();
     const settings = getSettings();
     const wantThoughts = settings.generateThoughts !== false;
@@ -1307,6 +1368,16 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     // rewrites it (§18 rollback). Without this, a swipe would roll back
     // Mara's intentions but leave her mood from the abandoned timeline.
     const innerStatesSnapshot = getInnerStatesSnapshot();
+
+    // Deferred lifecycle work (spec §2/§3): rollback snapshots for the
+    // lifecycle history and evidence boundaries, captured before EVERY ledger
+    // mutation of this turn (wakes, ages, expiries, closures) — the same
+    // "before all mutations" rule the ledger snapshot follows. A swipe that
+    // discards this generation truncates the engine records written here and
+    // restores the pre-turn boundaries; user records survive (ownership rule).
+    const lifecycleHistorySnapshot = getLifecycleHistorySnapshot();
+    const evidenceBoundariesSnapshot = getEvidenceBoundariesSnapshot();
+    const npcControlWatermarksSnapshot = getNpcControlWatermarksSnapshot();
 
     // Defense-in-depth: also reject the user even if they somehow made it into
     // the roster (e.g. a stale ledger entry from before this fix, which is
@@ -1374,6 +1445,9 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 reactions: [],
                 ledgerSnapshot,
                 innerStatesSnapshot,
+                lifecycleHistorySnapshot,
+                evidenceBoundariesSnapshot,
+                npcControlWatermarksSnapshot,
                 // Pre-turn value: the caller increments only after this returns.
                 turnCounterAtSnapshot: getTurnCounter(),
                 generatedAt: Date.now(),
@@ -1386,7 +1460,21 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     // successful intentions call. A syntactically-valid thoughts-only result,
     // an empty strict result for a failed NPC, or a disabled intentions feature
     // must never promote an unreviewed dormant demand into the injection.
-    for (const id of new Set(confirmedWakeIds)) wakeLedgerEntry(id, gracePeriod);
+    // Lifecycle v2 (spec §2): each committed wake is an audited event.
+    for (const id of new Set(confirmedWakeIds)) {
+        const woken = wakeLedgerEntry(id, gracePeriod);
+        if (woken) {
+            recordLifecycleEvent({
+                npc: woken.npc,
+                action: woken.action,
+                trigger: woken.trigger,
+                entryId: woken.id,
+                outcome: 'woken',
+                source: 'engine',
+                reason: 'Wake proposed by the dormant poll and confirmed by a successful intentions evaluation.',
+            });
+        }
+    }
 
     // Increment the age of every open intention — AFTER the shape check so a
     // garbage parse doesn't burn a turn of grace period off every open
@@ -1394,6 +1482,13 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     // mechanism: intentions that haven't survived enough turns since being
     // declared are protected from premature execution/dropping.
     incrementLedgerAges();
+
+    // Deferred lifecycle work (spec §4): turn-aging expiry, AFTER the age
+    // increment so this turn's age is included. Engine entries close at the
+    // intentionMaxTurnsOpen cap; manual entries only at their own explicit
+    // per-entry limit; every close is an audited 'expired' record.
+    const expiredEntries = expireOverdueEngineEntries(msgIdx);
+    if (expiredEntries.length > 0) ledgerChanged = true;
 
     // Build a map of ledger entry ids for quick lookup.
     // §20: dormant entries are excluded from executed/dropped evaluation —
@@ -1634,6 +1729,23 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
             });
             if (validIds.length > 0) {
                 removeLedgerEntries(validIds);
+                // Lifecycle v2 (spec §2): each engine completion is an audited
+                // occurrence record — occurrence-specific, so a later
+                // legitimately re-motivated repetition of the same plan is not
+                // blocked forever (unlike user tombstones).
+                for (const id of validIds) {
+                    const closed = ledgerEntryById.get(id);
+                    if (!closed) continue;
+                    recordLifecycleEvent({
+                        npc: closed.npc,
+                        action: closed.action,
+                        trigger: closed.trigger,
+                        entryId: closed.id,
+                        outcome: 'completed',
+                        source: 'engine',
+                        reason: 'Completed on-screen and marked executed by the intentions call.',
+                    });
+                }
                 validIds.forEach(id => {
                     ledgerIds.delete(id);
                     ownedIds.delete(id);
@@ -1664,6 +1776,21 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                     validIds.push(drop.id);
                     ledgerIds.delete(drop.id);
                     ownedIds.delete(drop.id);
+                    // Lifecycle v2 (spec §2): audited engine drop, carrying the
+                    // model's own reason verbatim (the readable "abandoned"
+                    // record the panel shows).
+                    const closed = ledgerEntryById.get(drop.id);
+                    if (closed) {
+                        recordLifecycleEvent({
+                            npc: closed.npc,
+                            action: closed.action,
+                            trigger: closed.trigger,
+                            entryId: closed.id,
+                            outcome: 'dropped',
+                            source: 'engine',
+                            reason: String(drop.reason || '').trim() || 'Abandoned per the intentions call.',
+                        });
+                    }
                     console.log(`[MWT:Interiority] ${name}: dropped intention ${drop.id} (${String(drop.reason || '').slice(0, 80)}).`);
                     noteIntentionsCaptureDecision({ npc: name, kind: 'dropped', id: drop.id, outcome: 'accepted' });
                 } else if (drop && drop.id && ledgerIds.has(drop.id)) {
@@ -1745,6 +1872,35 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                     continue;
                 }
 
+                // Deferred lifecycle work (spec §2): conservative cross-turn
+                // closure guard. The Tier 2 replay check above covers this
+                // SAME response; this one covers PREVIOUS turns — the plan the
+                // engine completed two messages ago, re-proposed with the
+                // wording shuffled. Matching is conservative (canonical NPC +
+                // near-exact action/occasion) and windowed by
+                // lifecycleDedupTurns, so an independently motivated repetition
+                // after the window stays legal — occurrence-specific, unlike
+                // the permanent user tombstones.
+                const closureMatch = findRecentClosureMatch(name, action, trigger, {
+                    resolveNpc: (npcName) => resolveRosterName(roster, npcName, aliasIndex),
+                });
+                if (closureMatch) {
+                    console.log(`[MWT:Interiority] ${name}: skipping intention "${action.slice(0, 60)}" — matches a ${closureMatch.record.outcome} closure from turn ${closureMatch.record.turn} (within the dedup window).`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'recently-closed' });
+                    continue;
+                }
+
+                // Deferred lifecycle work (spec §5): per-NPC creation-only cost
+                // controls. Evaluated BEFORE the per-call cap so a gated NPC
+                // never consumes global budget; applies to ENGINE proposals
+                // only — manual panel entries never pass through this path.
+                const controlGate = checkProposalAllowed(name);
+                if (!controlGate.allowed) {
+                    console.log(`[MWT:Interiority] ${name}: new intention "${action.slice(0, 60)}" rejected by a per-NPC control (${controlGate.reason}: ${controlGate.detail}).`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: `npc-${controlGate.reason}` });
+                    continue;
+                }
+
                 if (acceptedNewCount >= maxNewPerNpc) {
                     console.log(`[MWT:Interiority] ${name}: new-intention cap reached (${maxNewPerNpc} accepted this call) — skipping "${action.slice(0, 60)}".`);
                     noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'cap-reached' });
@@ -1772,9 +1928,38 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                     msgIdx,
                 );
                 acceptedNewCount += 1;
+                // Lifecycle v2 (spec §5): arm this NPC's proposal cooldown.
+                noteProposalAccepted(name);
                 noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', id: created.id, action, trigger, outcome: 'accepted' });
                 ledgerChanged = true;
             }
+        }
+    }
+
+    // Deferred lifecycle work (spec §3): stamp the per-NPC evidence boundary
+    // — ONLY now, after the whole pass validated and every mutation committed.
+    // Thoughts-only turns (wantIntentions false) stamp nothing; strict partial
+    // failures stamp only the NPCs whose per-call singleton succeeded (via the
+    // threaded evaluatedNpcNames / result.intentionsEvaluatedRoster); callers
+    // that discard this result on a scope change never reach this line.
+    if (wantIntentions) {
+        // An explicitly threaded list is authoritative — INCLUDING an empty one
+        // (split mode with a failed intentions call evaluates nobody; falling
+        // back to the merged block names there would stamp the whole roster).
+        const evaluatedList = Array.isArray(evaluatedNpcNames)
+            ? evaluatedNpcNames
+            : (Array.isArray(result.intentionsEvaluatedRoster)
+                ? result.intentionsEvaluatedRoster
+                : result.npcs.map(npc => npc?.name));
+        const turnNow = getTurnCounter();
+        const stamped = new Set();
+        for (const rawName of evaluatedList) {
+            const canonical = resolveRosterName(roster, String(rawName ?? '').trim(), aliasIndex);
+            if (canonical == null) continue;
+            const key = canonical.toLowerCase();
+            if (stamped.has(key)) continue;
+            stamped.add(key);
+            stampEvidenceBoundary(canonical, turnNow, msgIdx, msgKey);
         }
     }
 
@@ -1784,11 +1969,16 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
     // Mara's intentions but leave her mood from the abandoned timeline.
     // turnCounterAtSnapshot is the pre-turn counter (the caller increments
     // only after this returns) so the same rollback can un-consume the turn.
+    // Lifecycle v2: the lifecycle-history and evidence-boundary snapshots ride
+    // the same record, so one swipe restores the whole turn coherently.
     if (msgKey) {
         setPerMessage(msgKey, {
             reactions,
             ledgerSnapshot,
             innerStatesSnapshot,
+            lifecycleHistorySnapshot,
+            evidenceBoundariesSnapshot,
+            npcControlWatermarksSnapshot,
             turnCounterAtSnapshot: getTurnCounter(),
             generatedAt: Date.now(),
         });

@@ -36,6 +36,24 @@ function cap(text, max) {
 }
 
 /**
+ * Lifecycle v2 annotations (spec §1/§4) shared by the open-intentions prompt
+ * lines and the narrator injection: the user-set priority (skipped for the
+ * 'normal' default) and the in-world "no longer plausible once" expiry label.
+ * Kept short and parenthesised — the response contract is unchanged; these
+ * fields only give the model the user's urgency and expiry judgments.
+ *
+ * @param {object} entry - ledger entry
+ * @returns {string} '' or ', priority: high' / ', no longer plausible once: X' fragments
+ */
+function _lifecycleAnnotations(entry) {
+    const parts = [];
+    const priority = String(entry?.priority ?? '').trim().toLowerCase();
+    if (priority && priority !== 'normal') parts.push(`priority: ${priority}`);
+    if (entry?.expiresOn) parts.push(`no longer plausible once: ${cap(entry.expiresOn, MAX_LEDGER_FIELD)}`);
+    return parts.length > 0 ? ` (${parts.join('; ')})` : '';
+}
+
+/**
  * Build the system prompt for the interiority generation call.
  *
  * The prompt is assembled dynamically so that only the requested features
@@ -94,7 +112,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
     if (wantIntentions) {
         rules.push(`${++n}. Evaluate each open intention from the <open_intentions> list. The DEFAULT outcome is "open" (carry forward) — only mark "executed" or "dropped" when there is clear, unmistakable evidence:`);
         rules.push(`   - "executed": ONLY if the recent messages show the NPC has ALREADY COMPLETED the action in full — either enacted in narrative prose or logged as completed in an Off-Screen Events module block (a details block titled "Off-Screen Events"). Discussing, planning, preparing for, deciding to do, or beginning the action is NOT execution. The action must be done.`);
-        rules.push(`   - "dropped": ONLY if the NPC has EXPLICITLY abandoned or cancelled the intention (said so, or clearly changed their mind). A changed situation, a delay, a new complication, or the trigger not arriving yet is NOT a drop — the intention waits.`);
+        rules.push(`   - "dropped": ONLY if the NPC has EXPLICITLY abandoned or cancelled the intention (said so, or clearly changed their mind), OR if its user-defined expiresOn condition ("no longer plausible once …") is unmistakably satisfied by the recent events. When dropping for expiresOn, cite that condition in the reason. A changed situation, a delay, a new complication, or the trigger not arriving yet is NOT a drop unless it unmistakably satisfies expiresOn — the intention waits.`);
         rules.push(`   - "open" (default): if there is ANY doubt whether the action is completed or the intention is truly abandoned, leave it open. Do not list it. It carries forward automatically.`);
         rules.push(`   - When in doubt between open and executed/dropped: choose open.`);
         // [P1] Evidence is required for the MOTIVATION, not the decision:
@@ -238,12 +256,20 @@ export function buildUserContent({ npcBlocks, recentMessages, worldTime, playerN
             if (npc.openIntentions && npc.openIntentions.length > 0) {
                 const lines = npc.openIntentions.map(e =>
                     // INTERIORITY-06: cap every prompt path, not just the
-                    // narrator injection / dormant poll.
-                    `- [${e.id}] ${cap(e.action, MAX_LEDGER_FIELD)} → trigger: ${cap(e.trigger, MAX_LEDGER_FIELD)} (since ${e.since ? cap(e.since, MAX_LEDGER_SINCE) : 'unknown'})`
+                    // narrator injection / dormant poll. Lifecycle v2: the
+                    // line carries the user's priority/expiry annotations.
+                    `- [${e.id}] ${cap(e.action, MAX_LEDGER_FIELD)} → trigger: ${cap(e.trigger, MAX_LEDGER_FIELD)} (since ${e.since ? cap(e.since, MAX_LEDGER_SINCE) : 'unknown'})${_lifecycleAnnotations(e)}`
                 );
                 parts.push(wrapTag('open_intentions', lines.join('\n')));
             } else {
                 parts.push(wrapTag('open_intentions', '(None.)'));
+            }
+            // Lifecycle v2 (spec §3): a stale-evaluation note when this NPC's
+            // evidence boundary lags the current turn — events since their
+            // last successful intentions evaluation may not have been judged,
+            // so completion/abandonment evidence deserves extra care.
+            if (npc.evaluationNote) {
+                parts.push(wrapTag('evaluation_note', npc.evaluationNote));
             }
             // Scheduled intentions, deliberately WITHOUT ids: the model needs
             // to know these plans already exist so it stops re-proposing them,
@@ -463,12 +489,13 @@ export function formatLedgerForInjection(ledger) {
     if (active.length === 0) return '';
     const lines = active.map(e => {
         // INTERIORITY-06: Cap each field so unbounded entries don't bloat
-        // the narrator injection every turn.
+        // the narrator injection every turn. Lifecycle v2: the line carries
+        // the user's priority/expiry annotations (spec §1/§4).
         const npc = cap(e.npc, MAX_LEDGER_NAME);
         const action = cap(e.action, MAX_LEDGER_FIELD);
         const trigger = cap(e.trigger, MAX_LEDGER_FIELD);
         const since = e.since ? ` (since ${cap(e.since, MAX_LEDGER_SINCE)})` : '';
-        return `- ${npc} → ${action} → ${trigger}${since}`;
+        return `- ${npc} → ${action} → ${trigger}${since}${_lifecycleAnnotations(e)}`;
     });
     return lines.join('\n');
 }

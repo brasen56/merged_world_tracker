@@ -1325,7 +1325,7 @@ describe('write-seam fail-closed helpers', () => {
             store: 'interiority',
             reasonCode: 'turn-counter-invalid',
             raw: 'RAW-BAD',
-            sourceVersion: 1,
+            sourceVersion: 2, // store v2 (lifecycle history, boundaries, controls)
         });
     });
 
