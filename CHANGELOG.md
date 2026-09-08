@@ -12,6 +12,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.6.1]
+
+### Changed
+
+- **Knowledge relationship blocks are now a bounded projection of the graph
+  rather than a copy of it.** The managed block in each NPC lorebook entry
+  rendered every outbound edge with its free-text notes inlined, and automatic
+  extraction only ever adds edges — so an NPC's prompt footprint grew with
+  their lifetime number of connections and never shrank. One minor NPC measured
+  over 900 tokens.
+  - Edge **notes are no longer sent to the model**. They stay in the store, the
+    relationship editor, and the graph view, where they are evidence for you
+    rather than prompt text.
+  - Same-type targets **collapse into one clause** — `employee of Derek
+    Sandhorn, Ezra Blackwell; subordinate of Gerald Hronec`. No direction is
+    lost: every edge already read subject-role-toward-target.
+  - The list is **capped at 12 edges / 400 characters**, with a deterministic
+    ranking deciding what survives — manual edges before automatic ones, then
+    structural salience (family/lover/enemy, then employment and mentorship,
+    then ally/rival/friend, then acquaintance/neutral), then name. The
+    character cap drops whole edges and re-renders; it never truncates a name.
+  - Measured **71% smaller** on the reported minor NPC and **96% smaller** on a
+    40-edge major NPC.
+  - Rendering is now **deterministic**, which matters beyond tidiness:
+    automatic extraction rewrites note phrasing on its cadence, and that used
+    to mutate a lorebook entry sitting high in the prompt every cycle. A
+    notes-only rewrite now renders byte-identical text, so the sync's
+    unchanged-check skips the write and the prompt cache survives.
+  - Interiority's per-NPC relationship lines drop notes for the same reason —
+    roster filtering bounded that list by cast size, never by note length.
+  - `Stance toward {{user}}:` is unchanged, byte for byte. Presets that gate on
+    that exact prefix keep working.
+  - **Existing entries keep their old blocks until you run "💾 Sync to
+    Lorebooks"** in the Relationships tab. Nothing in the stored graph changes —
+    the full relationship data, notes included, is untouched.
+
+
 ## [2.6.0]
 
 ### Added
