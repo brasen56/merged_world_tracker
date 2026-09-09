@@ -12,6 +12,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.6.3]
+
+### Changed
+
+- **Tabs are now real WAI-ARIA tab lists** (Slice 2 of the accessibility
+  pass, `docs/accessibility_plan.md` §4.2 and §5; tests in
+  `test/tab_navigation.test.js`):
+  - New shared `wireTablist()` helper in `core/ui.js` owns the whole tab
+    contract — `role="tablist"` / `tab` / `tabpanel`, an explicit
+    `aria-orientation`, `aria-controls` / `aria-labelledby` pairs through
+    stable ids, a roving `tabindex`, `aria-selected`, and `hidden` on
+    inactive panels — with arrow keys that follow the declared orientation
+    (Left/Right, or Up/Down for the future vertical Settings navigation),
+    Home/End, wrap-around, and automatic activation. Activation only toggles
+    attributes on the existing DOM, so panel contents and field values are
+    never rebuilt or lost, and listeners bind once per tab bar so repeated
+    modal re-renders can neither drop them nor stack duplicates.
+  - Both the main eight-tab bar and the seven-item Diagnostics sub-tab strip
+    now use the helper instead of their own click handlers; the main bar's
+    modal-level click delegation is gone with them.
+  - The decorative emoji in all fifteen tab labels are wrapped in
+    `aria-hidden="true"` spans, so screen readers announce "World State"
+    instead of the emoji character followed by the name. The separator space
+    after the emoji survives in the visible label — each label stays
+    byte-identical, never a cramped `🌍World State`.
+  - The main tab bar's markup and wiring live behind a small render/wire seam
+    (`renderMainTabShell()` / `wireMainTabBar()` in `core/main_tabs.js`) that
+    `renderModal()` itself calls; `test/main_tabbar_adoption.test.js` drives
+    it under jsdom — DOM contract, activation, field-state preservation, and
+    repeated renders — covering the main consumer at runtime where index.js
+    itself cannot be imported.
+
 ## [2.6.2]
 
 ### Changed

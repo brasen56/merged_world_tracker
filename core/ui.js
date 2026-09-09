@@ -144,6 +144,207 @@ export function readApiSettingsValues(el, opts = {}) {
     };
 }
 
+// ─── Tablist wiring (accessibility plan §4.2, Slice 2) ───────────────────────
+
+/**
+ * Matches one leading decorative emoji: a pictographic optionally followed by
+ * variation selectors / ZWJ-joined pictographics (🗺️, ❤️, 🏳️‍🌈), plus the
+ * whitespace separating it from the real label. The whitespace is consumed
+ * only to bound the match — ariaHideEmoji() preserves it in its output so the
+ * visible label stays byte-identical. `\p{Extended_Pictographic}` needs the
+ * `u` flag (ES2018+).
+ */
+const LEADING_EMOJI_RE = /^(\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)\s*/u;
+
+/**
+ * Hide a label's leading decorative emoji from assistive technology.
+ *
+ * Tab labels like `🌍 World State` are pronounced as the emoji character
+ * followed by the name; the emoji carries no information the name doesn't.
+ * Wrapping it in an `aria-hidden="true"` span leaves the visible label
+ * untouched while the accessible name becomes just "World State"
+ * (accessibility plan §4.4 / Slice 2 item 4).
+ *
+ * Labels without a leading emoji are returned unchanged, so this is safe to
+ * run over any label list.
+ *
+ * @param {string} label — label text that may start with a decorative emoji
+ * @returns {string} HTML string
+ */
+export function ariaHideEmoji(label) {
+    if (typeof label !== 'string' || label === '') return label || '';
+    const match = label.match(LEADING_EMOJI_RE);
+    if (!match) return label;
+    // Slice at the end of the emoji (match[1]), NOT the end of the whole
+    // match: match[0] also swallowed the separator run (`\s*` in
+    // LEADING_EMOJI_RE), so slicing there dropped the space between the
+    // emoji and the label and every tab rendered as a cramped `🌍World
+    // State`. The visible label must stay byte-identical — only the
+    // accessible name loses the emoji.
+    return `<span aria-hidden="true">${match[1]}</span>${label.slice(match[1].length)}`;
+}
+
+/**
+ * Wire a tab strip to the WAI-ARIA Tabs pattern (accessibility plan §4.2).
+ *
+ * Owns the whole keyboard/state contract so consumers only supply markup and
+ * selectors:
+ *
+ * - stamps `role="tablist"` + `aria-orientation` on the container,
+ *   `role="tab"` on buttons and `role="tabpanel"` on panels;
+ * - pairs tabs and panels **in DOM order** (every consumer renders both from
+ *   the same ordered list), giving each a stable id if the markup ships none
+ *   and wiring `aria-controls` / `aria-labelledby` both ways;
+ * - keeps exactly one tab selected (`aria-selected`, the consumer's active
+ *   class, and `tabindex="0"`; every other tab gets `tabindex="-1"`), and
+ *   exposes exactly one panel (inactive panels get the `hidden` attribute —
+ *   out of the tab order, still in the DOM);
+ * - Arrow keys follow the declared orientation (`horizontal` → Left/Right,
+ *   `vertical` → Up/Down, for the future Settings navigation), wrap in both
+ *   directions, Home/End work in both, and activation is automatic — moving
+ *   focus selects the tab, no second keypress, because all panels render
+ *   locally;
+ * - activation never rebuilds anything: it toggles attributes and classes on
+ *   the existing nodes only, so field values in any panel survive switching.
+ *
+ * Listeners bind **once per tablist element** (the `_mwtTablistWired` flag,
+ * after the `_cleanupKeyHandler` precedent). Both current consumers re-render
+ * the whole strip per `renderModal()` pass — a fresh element cannot carry
+ * stale listeners — and the flag additionally makes wiring the same surviving
+ * element twice a no-op for listeners.
+ *
+ * @param {Element} tablist — the tab bar container element
+ * @param {object} [opts]
+ * @param {'horizontal'|'vertical'} [opts.orientation='horizontal']
+ * @param {string} [opts.tabSelector='[role="tab"]'] — tab buttons inside the container
+ * @param {string} [opts.panelSelector='[role="tabpanel"]'] — panels; must not
+ *        match a *nested* tablist's panels, so consumers with nesting pass an
+ *        explicit class selector
+ * @param {Element} [opts.scope=tablist.parentElement] — root searched for panels
+ * @param {string|null} [opts.activeClass='active'] — CSS hook class kept in
+ *        sync with `aria-selected`/`hidden`; pass null when the consumer has none
+ * @param {string} [opts.idPrefix='mwt-tablist'] — prefix for generated ids
+ * @param {Function} [opts.onActivate] — called with (tab, panel) after each
+ *        user-driven activation (not after the initial normalization)
+ * @returns {object|null} `{ tablist, select(index, focus), getSelectedIndex }`
+ *          or null when there is nothing to wire
+ */
+export function wireTablist(tablist, opts = {}) {
+    if (!tablist || typeof tablist.querySelectorAll !== 'function') return null;
+    const {
+        orientation = 'horizontal',
+        tabSelector = '[role="tab"]',
+        panelSelector = '[role="tabpanel"]',
+        scope = tablist.parentElement,
+        activeClass = 'active',
+        idPrefix = 'mwt-tablist',
+        onActivate = null,
+    } = opts;
+    if (!scope || typeof scope.querySelectorAll !== 'function') return null;
+
+    const vertical = orientation === 'vertical';
+    tablist.setAttribute('role', 'tablist');
+    tablist.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal');
+
+    // Handlers re-query on every activation so a re-wire against changed
+    // markup can never act on a stale tab list.
+    const getTabs = () => Array.from(tablist.querySelectorAll(tabSelector));
+    const getPanels = () => Array.from(scope.querySelectorAll(panelSelector));
+
+    // 1) Static bookkeeping: pair tabs and panels by DOM order and stamp the
+    //    id / aria-controls / aria-labelledby contract.
+    const tabs = getTabs();
+    const panels = getPanels();
+    const count = Math.min(tabs.length, panels.length);
+    if (!count) return null;
+    for (let i = 0; i < count; i += 1) {
+        const tab = tabs[i];
+        const panel = panels[i];
+        tab.setAttribute('role', 'tab');
+        panel.setAttribute('role', 'tabpanel');
+        if (!tab.id) tab.id = `${idPrefix}-tab-${i + 1}`;
+        if (!panel.id) panel.id = `${idPrefix}-panel-${i + 1}`;
+        tab.setAttribute('aria-controls', panel.id);
+        panel.setAttribute('aria-labelledby', tab.id);
+    }
+
+    // (selection state + activation + listeners continue below)
+
+    // 2) Selection state lives on the tablist element so re-wiring and the
+    //    once-per-element listeners below always share one source of truth.
+    const state = tablist._mwtTablist || (tablist._mwtTablist = {});
+    if (typeof state.selected !== 'number' || state.selected < 0 || state.selected >= count) {
+        const marked = tabs.findIndex((t) =>
+            t.getAttribute('aria-selected') === 'true'
+            || (activeClass && t.classList.contains(activeClass)));
+        state.selected = marked >= 0 ? marked : 0;
+    }
+
+    const select = (index, { focus = false, announce = true } = {}) => {
+        const currentTabs = getTabs();
+        const currentPanels = getPanels();
+        const n = Math.min(currentTabs.length, currentPanels.length);
+        if (!n) return;
+        const wrapped = ((index % n) + n) % n;
+        state.selected = wrapped;
+        for (let i = 0; i < n; i += 1) {
+            const active = i === wrapped;
+            const tab = currentTabs[i];
+            const panel = currentPanels[i];
+            tab.setAttribute('aria-selected', String(active));
+            tab.setAttribute('tabindex', active ? '0' : '-1');
+            if (activeClass) {
+                tab.classList.toggle(activeClass, active);
+                panel.classList.toggle(activeClass, active);
+            }
+            panel.hidden = !active;
+        }
+        if (focus && typeof currentTabs[wrapped].focus === 'function') {
+            currentTabs[wrapped].focus();
+        }
+        if (announce && typeof onActivate === 'function') {
+            onActivate(currentTabs[wrapped], currentPanels[wrapped]);
+        }
+    };
+    state.select = select;
+
+    // Normalize whatever the markup claimed — exactly one selected tab, one
+    // exposed panel, coherent roving tabindex — without announcing it.
+    select(state.selected, { announce: false });
+
+    // 3) Listeners bind once per element; see the doc comment.
+    if (!tablist._mwtTablistWired) {
+        tablist._mwtTablistWired = true;
+        tablist.addEventListener('click', (e) => {
+            const target = e.target?.closest?.(tabSelector);
+            if (!target || !tablist.contains(target)) return;
+            const index = getTabs().indexOf(target);
+            if (index < 0) return;
+            state.select(index);
+        });
+        tablist.addEventListener('keydown', (e) => {
+            const forwardKey = vertical ? 'ArrowDown' : 'ArrowRight';
+            const backKey = vertical ? 'ArrowUp' : 'ArrowLeft';
+            const n = Math.min(getTabs().length, getPanels().length);
+            if (!n) return;
+            let target = null;
+            if (e.key === forwardKey) target = state.selected + 1;
+            else if (e.key === backKey) target = state.selected - 1;
+            else if (e.key === 'Home') target = 0;
+            else if (e.key === 'End') target = n - 1;
+            else return;
+            e.preventDefault();
+            state.select(target, { focus: true });
+        });
+    }
+
+    return {
+        tablist,
+        select: (index, focus) => state.select(index, { focus }),
+        getSelectedIndex: () => state.selected,
+    };
+}
+
 // ─── Floating Button Bar Factory ────────────────────────────────────────────
 
 const FLOAT_BUTTONS = [

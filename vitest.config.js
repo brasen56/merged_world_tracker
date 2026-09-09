@@ -41,6 +41,13 @@ export default defineConfig({
             // The stub satisfies the import; tests that exercise real behavior
             // inject their own state.wiScript in beforeEach.
             '../../../../world-info.js': fileURLToPath(new URL('./test/stubs/world-info.js', import.meta.url)),
+            // SillyTavern's public/scripts/script.js, lazy-imported by
+            // interiority/data.js for the fork's isChatFullyHydrated(). Harmless
+            // in the Node environment (the import sits in a try/catch and only
+            // runs lazily), but jsdom resolves literal dynamic specifiers at
+            // transform time and a missing host file fails the module graph.
+            // See test/stubs/script.js.
+            '../../../../../script.js': fileURLToPath(new URL('./test/stubs/script.js', import.meta.url)),
             '../../../shared.js': fileURLToPath(new URL('./test/stubs/shared.js', import.meta.url)),
         },
     },

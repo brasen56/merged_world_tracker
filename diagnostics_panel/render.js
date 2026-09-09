@@ -100,6 +100,10 @@
  */
 
 import { setStatus, escapeHtml } from '../core/index.js';
+// Accessibility plan §4.2 / Slice 2: the shared tablist helper. Imported
+// directly (not via the barrel) because Vitest aliases core/index.js to a
+// stub — same rule as the direct imports in index.js and core/modal.js.
+import { wireTablist, ariaHideEmoji } from '../core/ui.js';
 import { buildReport, collectReportSections, collectKnownSecrets } from './report.js';
 import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
@@ -206,12 +210,19 @@ export const DIAGNOSTICS_CONTENT_OPT_IN_ID = 'mwt-diag-include-content';
  * @returns {string} innerHTML for the tab
  */
 export function renderDiagnosticsPanel() {
+    // Accessibility plan §4.2 / Slice 2: the sub-tab strip follows the
+    // WAI-ARIA Tabs pattern — role=tablist/tab/tabpanel, aria-controls /
+    // aria-labelledby through stable ids, roving tabindex, hidden on inactive
+    // panes, and the decorative emoji in the labels hidden from assistive
+    // technology. wireDiagnosticsPanel() maintains it at wire time.
     const subTabButtons = DIAGNOSTICS_PANEL_TABS.map((t, i) =>
-        `<button class="mwt-diag-tab-btn ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">${t.label}</button>`
+        `<button id="mwt-diag-tab-${t.id}" class="mwt-diag-tab-btn ${i === 0 ? 'active' : ''}" role="tab"`
+        + ` aria-selected="${i === 0}" aria-controls="mwt-diag-tabpane-${t.id}" tabindex="${i === 0 ? 0 : -1}"`
+        + ` data-diag-tab="${t.id}">${ariaHideEmoji(t.label)}</button>`
     ).join('');
 
     const subTabPanes = DIAGNOSTICS_PANEL_TABS.map((t, i) => `
-        <div class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" data-diag-tab="${t.id}">
+        <div id="mwt-diag-tabpane-${t.id}" class="mwt-diag-tab-pane ${i === 0 ? 'active' : ''}" role="tabpanel" aria-labelledby="mwt-diag-tab-${t.id}"${i === 0 ? '' : ' hidden'} data-diag-tab="${t.id}">
             ${t.id === 'health' ? renderHealthPane() : (t.id === 'environment' ? renderEnvironmentPane() : (t.id === 'scope' ? renderScopePane() : (t.id === 'injection' ? renderInjectionPane() : (t.id === 'last-request' ? renderLastRequestPane() : (t.id === 'log' ? renderLogPane() : (t.id === 'integrity' ? renderIntegrityPane() : `
             <div class="mwt-diag-placeholder">
                 <span class="mwt-diag-placeholder-badge">Phase ${t.phase} — not built yet</span>
@@ -235,7 +246,7 @@ export function renderDiagnosticsPanel() {
                 including copies that leaked into error messages — and diagnostics data is in-memory only and resets
                 on reload. With the checkbox off, error bodies are replaced by size-only markers; turning it on includes
                 the verbatim error text (still secret-scrubbed), which can quote your chat — skim before pasting.</p>
-            <div class="mwt-diag-tab-bar">${subTabButtons}</div>
+            <div class="mwt-diag-tab-bar" role="tablist" aria-orientation="horizontal">${subTabButtons}</div>
             ${subTabPanes}
         </div>
     `;
@@ -1992,17 +2003,21 @@ export async function copyIntegritySnapshotJson(snapshot, { copy = copyTextToCli
 export function wireDiagnosticsPanel(root) {
     if (!root) return;
 
-    // Sub-tab switching, scoped to this panel. Deliberately its own class
-    // namespace (mwt-diag-tab-*, data-diag-tab) so the main modal tab bar's
-    // delegation in index.js (.mwt-tab-btn / data-tab) cannot collide with it.
+    // Sub-tab switching through the shared tablist helper (accessibility plan
+    // §4.2 / Slice 2): arrow/Home/End keys with automatic activation plus the
+    // aria-selected / hidden / roving-tabindex bookkeeping. Deliberately its
+    // own class namespace (mwt-diag-tab-*, data-diag-tab) so the main modal
+    // tab bar's wiring in index.js (.mwt-tab-btn / data-tab) cannot collide
+    // with it.
     const bar = root.querySelector('.mwt-diag-tab-bar');
     if (bar) {
-        bar.addEventListener('click', (e) => {
-            const btn = e.target.closest('.mwt-diag-tab-btn');
-            if (!btn) return;
-            const id = btn.dataset.diagTab;
-            root.querySelectorAll('.mwt-diag-tab-btn').forEach(b => b.classList.toggle('active', b === btn));
-            root.querySelectorAll('.mwt-diag-tab-pane').forEach(p => p.classList.toggle('active', p.dataset.diagTab === id));
+        wireTablist(bar, {
+            orientation: 'horizontal',
+            tabSelector: '.mwt-diag-tab-btn',
+            panelSelector: '.mwt-diag-tab-pane',
+            scope: root,
+            activeClass: 'active',
+            idPrefix: 'mwt-diag-tablist',
         });
     }
 

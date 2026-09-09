@@ -33,6 +33,10 @@ import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings
 import { getBudgetSettings, saveBudgetSettings, resetBudgetInjections } from './core/budget.js';
 import { createModal, showModal, setStatus, releaseManagedInert } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
+// Main modal tab shell — the render/wire seam core/main_tabs.js owns so the
+// main tab bar's exact rendering path is testable under jsdom (index.js
+// itself cannot be imported into Vitest; see test/main_tabbar_adoption.test.js).
+import { renderMainTabShell, wireMainTabBar } from './core/main_tabs.js';
 import { createCommands } from './core/commands.js';
 import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
 // Diagnostics accessors (Phases 0–1). Read-only peek at the in-memory capture,
@@ -449,18 +453,15 @@ let modal = null;
 const _initedModules = new Set();
 
 function renderModal() {
-    const tabBarHtml = TABS.map((t, i) =>
-        `<button class="mwt-tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.id}">${t.label}</button>`
-    ).join('');
-
-    const tabContentsHtml = TABS.map((t, i) =>
-        `<div class="mwt-tab-content ${i === 0 ? 'active' : ''}" data-tab="${t.id}">${buildTabContent(t)}</div>`
-    ).join('');
-
-    const content = `
-        <div class="mwt-tab-bar">${tabBarHtml}</div>
-        ${tabContentsHtml}
-    `;
+    // Accessibility plan §4.2 / Slice 2: the main tab bar follows the WAI-ARIA
+    // Tabs pattern — role=tablist/tab/tabpanel, aria-controls/aria-labelledby
+    // pairs through stable ids, roving tabindex (inactive tabs -1), hidden on
+    // inactive panels, and the decorative emoji in the labels hidden from
+    // assistive technology. The shell (markup + wiring) lives behind the
+    // render/wire seam in core/main_tabs.js, which
+    // test/main_tabbar_adoption.test.js drives under jsdom — this file's top
+    // level cannot be imported into Vitest.
+    const content = renderMainTabShell(TABS, buildTabContent);
 
     if (!modal) {
         modal = createModal({
@@ -480,24 +481,13 @@ function renderModal() {
         if (body) body.innerHTML = content;
     }
 
-    // Wire tab clicks via event delegation
-    const tabBar = modal.querySelector('.mwt-tab-bar');
-    if (tabBar && !modal._tabHandlerBound) {
-        modal._tabHandlerBound = true;
-        // Bind on the persistent modal rather than the rebuilt tab bar. The
-        // body is replaced on every render, so a listener on tabBar would be
-        // lost after the first chat-change/open refresh.
-        modal.addEventListener('click', (e) => {
-            const btn = e.target.closest('.mwt-tab-btn');
-            if (!btn) return;
-            const tabId = btn.dataset.tab;
-            modal.querySelectorAll('.mwt-tab-btn').forEach(b => b.classList.remove('active'));
-            modal.querySelectorAll('.mwt-tab-content').forEach(c => c.classList.remove('active'));
-            btn.classList.add('active');
-            const tabContent = modal.querySelector(`.mwt-tab-content[data-tab="${tabId}"]`);
-            if (tabContent) tabContent.classList.add('active');
-        });
-    }
+    // Wire the main tab bar through the shared tablist helper (accessibility
+    // plan §4.2 / Slice 2): automatic activation, arrow/Home/End navigation,
+    // and the aria-selected / hidden / roving-tabindex bookkeeping. The body
+    // is rebuilt on every open and chat change, so wiring runs on every
+    // render; see wireMainTabBar() for why repeated renders can neither drop
+    // the handlers nor stack duplicates.
+    wireMainTabBar(modal);
 
     // Init feature modules with modal reference and wire their events
     for (const tab of TABS) {
