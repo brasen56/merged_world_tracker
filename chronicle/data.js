@@ -140,6 +140,13 @@ export function scSetStatus(msg, level = 'info') {
     const el = getContentEl();
     if (!el) return;
     el.querySelectorAll('.sc-status-text').forEach(s => {
+        // Shared live-region contract (a11y plan §4.4, the setStatus()
+        // precedent): stamp the semantics on every write so the tab's
+        // generation, completion, and error messages are announced exactly
+        // once, even on shells rendered before the template carried them.
+        s.setAttribute?.('role', 'status');
+        s.setAttribute?.('aria-live', 'polite');
+        s.setAttribute?.('aria-atomic', 'true');
         s.textContent = msg;
         s.className = 'sc-status-text';
         if (level) s.classList.add(`sc-status--${level}`);

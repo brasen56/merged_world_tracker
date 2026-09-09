@@ -103,7 +103,7 @@ import { setStatus, escapeHtml } from '../core/index.js';
 // Accessibility plan §4.2 / Slice 2: the shared tablist helper. Imported
 // directly (not via the barrel) because Vitest aliases core/index.js to a
 // stub — same rule as the direct imports in index.js and core/modal.js.
-import { wireTablist, ariaHideEmoji } from '../core/ui.js';
+import { wireTablist, ariaHideEmoji, setControlBusy } from '../core/ui.js';
 import { buildReport, collectReportSections, collectKnownSecrets } from './report.js';
 import { collectHealthSnapshot, TOKEN_KINDS } from './health.js';
 import { collectEnvironmentSnapshot, inspectConnectionManager, loadSharedModule } from './environment.js';
@@ -1867,7 +1867,7 @@ export async function runCopyReport(button, root, {
     if (!button || !root) return false;
     const includeContent = (readOptIn ?? (() => !!root.querySelector(`#${DIAGNOSTICS_CONTENT_OPT_IN_ID}`)?.checked))();
     const label = button.textContent;
-    button.disabled = true;
+    setControlBusy(button, true);
     button.textContent = '⏳ Building report…';
     try {
         // Phase 13: one collect per press — the sections now include the five
@@ -1890,7 +1890,7 @@ export async function runCopyReport(button, root, {
         status(`Report build failed: ${err?.message || err}`, 'error');
         return false;
     } finally {
-        button.disabled = false;
+        setControlBusy(button, false);
         button.textContent = label || '📋 Copy Report';
     }
 }
@@ -1929,7 +1929,7 @@ export async function runIntegrityChecks(button, result, {
     formatTime,
 } = {}) {
     if (!button || !result) return;
-    button.disabled = true;
+    setControlBusy(button, true);
     button.textContent = '⏳ Running…';
     let snapshot;
     try {
@@ -1944,7 +1944,7 @@ export async function runIntegrityChecks(button, result, {
         status(`Integrity run failed: ${err?.message || err}`, 'error');
         return;
     } finally {
-        button.disabled = false;
+        setControlBusy(button, false);
         button.textContent = '▶ Run again';
     }
     result.innerHTML = render(snapshot, formatTime ? { formatTime } : {});

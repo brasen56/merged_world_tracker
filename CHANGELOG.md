@@ -12,6 +12,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.6.4]
+
+### Changed
+
+- **Keyboard focus is now visible without restyling SillyTavern, status
+  messages are announced, busy state is owned per control, and motion
+  respects `prefers-reduced-motion`** (Slice 3 of the accessibility pass,
+  `docs/accessibility_plan.md` §4.3–§4.5 and §5; tests in
+  `test/focus_status_motion.test.js` and
+  `test/focus_status_motion_css.test.js`):
+  - The old bare-element `:focus-visible` rule (`button:focus-visible`,
+    `input:focus-visible`, …) is gone — it restyled keyboard focus across
+    the whole host page. The shared rule is now scoped to MWT's own
+    surfaces: everything under `.mwt-modal`, the `.mwt-btn` / `.mwt-input` /
+    `.mwt-textarea` control classes, the floating buttons, and the `kt-`
+    panels and modals.
+  - Every one of the 19 `outline: none` declarations (knowledge ×10,
+    chronicle ×4, story_planner ×4, core ×1) is now paired with a local
+    `:focus-visible` outline of clear contrast and a 2px offset — mouse
+    focus keeps each surface's custom border treatment, keyboard focus
+    always gets a real outline. Two chronicle pairs deliberately repeat
+    only the scoped selectors from their baseline rule; no unscoped
+    element selectors were added.
+  - `setStatus()` now owns a polite live region: the modal status bar ships
+    `role="status"` / `aria-live="polite"` / `aria-atomic="true"` from
+    `createModal`'s template, `setStatus()` stamps the same semantics on
+    legacy shells that predate it, and the Knowledge tab's `#kt-status`
+    element carries (and is stamped with) the same contract — results are
+    announced exactly once, and nothing fast-changing was made live.
+  - New `setControlBusy(control, busy)` helper in `core/ui.js` sets and
+    clears `disabled` **and** `aria-busy` in one call, and every async
+    action handler across World State, Knowledge (update/enrich/capture/
+    psychoanalyze/consolidate/generate/backfill/catch-up/sync), Story
+    Planner, Chronicle, Backup/Restore, the Diagnostics report and
+    integrity runs, and the paused-store Retry buttons now routes its
+    set/clear through it — including error and coordinator-cancellation
+    paths, where a forgotten re-enable was previously possible.
+  - A `@media (prefers-reduced-motion: reduce)` block (the first in the
+    repo) suppresses animation, transitions, and smooth scrolling — scoped
+    past `.mwt-modal` to the `mwt-` / `kt-` class prefixes so the floating
+    button bar, the auto-refresh countdown badge, and the Knowledge
+    staging/growth pulses are covered too. Functional timers are untouched:
+    the countdown keeps counting, it just stops animating. The one piece of
+    JavaScript-driven motion — the psychoanalyze smooth scroll — is gated
+    through a new `prefersReducedMotion()` helper (`core/ui.js`) that fails
+    open when `matchMedia` is unavailable; the force-directed graph needed
+    no JS gate because its layout is computed synchronously and rendered
+    statically.
+
+
 ## [2.6.3]
 
 ### Changed

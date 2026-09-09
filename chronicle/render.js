@@ -9,6 +9,11 @@ import {
     getGlobalSettings,
     createModal, showModal, hideModal, setStatus,
 } from '../core/index.js';
+// Direct import (not the barrel) so the real helper runs under the test
+// barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
+// setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
+// (a11y plan §4.4).
+import { setControlBusy } from '../core/ui.js';
 
 import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
 
@@ -57,10 +62,24 @@ export function showConsolidationPreview(selectedEntries, inputContent, onConfir
             <p>Review content fed to consolidator. Edit if needed.</p>
             ${selectedEntries.map((e, i) => `<details ${i === 0 ? 'open' : ''}><summary>${i === 0 ? 'BASE' : `DELTA ${i}`} — ${escapeHtml(e.worldDate || e.createdAt)}</summary><pre>${escapeHtml((e.text || '').slice(0, 2000))}</pre></details>`).join('')}
             <textarea id="sc-consolidate-input" class="mwt-textarea" rows="12">${escapeHtml(inputContent)}</textarea>
-            <div class="sc-status"><span class="sc-status-text"></span></div>
+            <div class="sc-status"><span class="sc-status-text" role="status" aria-live="polite" aria-atomic="true"></span></div>
             <div class="mwt-flex mwt-gap-4"><button id="sc-consolidate-go" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>Consolidate</button><button id="sc-consolidate-cancel" class="mwt-btn">Cancel</button></div>
         </div>`;
-    el.querySelector('#sc-consolidate-go')?.addEventListener('click', function () { this.disabled = true; onConfirm(el.querySelector('#sc-consolidate-input')?.value || inputContent); });
+    // A11Y-S3-02: the Consolidate click owns this control's busy pair for the
+    // whole consolidation. The callback re-renders (replacing this button) on
+    // success and stale-scope cancellation; on API failure it only sets
+    // status/notifies — without the finally below, the still-visible button
+    // would remain disabled+aria-busy forever, blocking a retry. isConnected
+    // guard: never touch a control that a re-render already replaced.
+    const consolidateBtn = el.querySelector('#sc-consolidate-go');
+    consolidateBtn?.addEventListener('click', async () => {
+        setControlBusy(consolidateBtn, true);
+        try {
+            await onConfirm(el.querySelector('#sc-consolidate-input')?.value || inputContent);
+        } finally {
+            if (consolidateBtn.isConnected) setControlBusy(consolidateBtn, false);
+        }
+    });
     el.querySelector('#sc-consolidate-cancel')?.addEventListener('click', () => renderContent());
 }
 
@@ -74,7 +93,7 @@ function showEntryEditor(snapshot) {
             <div><span>Characters:</span> ${escapeHtml(charList)}</div>
             <div><span>Note:</span> <input type="text" id="sc-note-input" class="mwt-input" value="${escapeHtml(snapshot.note || '')}" placeholder="Add a note..."></div>
             <textarea id="sc-editor-textarea" class="mwt-textarea" rows="20">${escapeHtml(snapshot.text)}</textarea>
-            <div class="sc-status"><span class="sc-status-text"></span></div>
+            <div class="sc-status"><span class="sc-status-text" role="status" aria-live="polite" aria-atomic="true"></span></div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                 <button id="sc-save-edit" class="mwt-btn mwt-btn-primary">Save</button>
                 <button id="sc-regenerate-btn" class="mwt-btn" ${!snapshot.manual && hasValidSettings() ? '' : 'disabled'}>Regenerate</button>
@@ -98,7 +117,16 @@ function showEntryEditor(snapshot) {
             scSetStatus('Entry saved.', 'success');
         }
     });
-    el.querySelector('#sc-regenerate-btn')?.addEventListener('click', () => { if (!snapshot.manual) regenerateSnapshot(snapshot.id); });
+    // A11Y-S3-03: regeneration is an API round-trip — the button owns its busy
+    // pair (set only after the manual-entry guard, cleared in finally; success
+    // replaces this view with the diff preview, hence the isConnected guard).
+    const regenerateBtn = el.querySelector('#sc-regenerate-btn');
+    regenerateBtn?.addEventListener('click', async () => {
+        if (snapshot.manual) return;
+        setControlBusy(regenerateBtn, true);
+        try { await regenerateSnapshot(snapshot.id); }
+        finally { if (regenerateBtn.isConnected) setControlBusy(regenerateBtn, false); }
+    });
     el.querySelector('#sc-delete-btn')?.addEventListener('click', () => deleteEntry(snapshot.id));
     el.querySelector('#sc-back-btn')?.addEventListener('click', () => { state.selectedSnapshotId = null; renderContent(); });
     el.querySelector('#sc-undo-consolidate')?.addEventListener('click', () => {
@@ -372,7 +400,7 @@ export function renderContent() {
             </div>`;
         }).join('')}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:4px">
-            <div class="sc-status"><span class="sc-status-text"></span></div>
+            <div class="sc-status"><span class="sc-status-text" role="status" aria-live="polite" aria-atomic="true"></span></div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                 <button id="sc-inject-toggle" class="mwt-btn" style="font-size:12px">${isInjectionEnabled() ? '📥 Injection ON' : '📤 Injection OFF'}</button>
                 <button id="sc-preview-injection" class="mwt-btn" style="font-size:12px">📄 Preview</button>
@@ -472,7 +500,14 @@ function bindMainEvents() {
     });
 
     // Toolbar buttons
-    el.querySelector('#sc-generate-btn')?.addEventListener('click', () => generateSnapshot());
+    // A11Y-S3-03: generateSnapshot is an API round-trip that can fail without
+    // re-rendering — same busy contract as Regenerate above.
+    const generateBtn = el.querySelector('#sc-generate-btn');
+    generateBtn?.addEventListener('click', async () => {
+        setControlBusy(generateBtn, true);
+        try { await generateSnapshot(); }
+        finally { if (generateBtn.isConnected) setControlBusy(generateBtn, false); }
+    });
     el.querySelector('#sc-new-entry-btn')?.addEventListener('click', () => createManualEntry());
     el.querySelector('#sc-settings-btn')?.addEventListener('click', () => showSettingsModal());
     el.querySelector('#sc-open-settings-btn')?.addEventListener('click', () => showSettingsModal());

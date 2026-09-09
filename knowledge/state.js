@@ -135,6 +135,14 @@ export function ktSetStatus(text, type = 'info') {
     if (!el) return;
     const statusEl = el.querySelector('#kt-status');
     if (statusEl) {
+        // Same polite-live-region contract as setStatus() (accessibility
+        // plan §4.4): the Knowledge tab renders #kt-status in its own markup
+        // (render.js), not createModal's template, so stamp the semantics
+        // here too — attributes first, then the text change, so screen
+        // readers announce the new message exactly once.
+        statusEl.setAttribute?.('role', 'status');
+        statusEl.setAttribute?.('aria-live', 'polite');
+        statusEl.setAttribute?.('aria-atomic', 'true');
         statusEl.textContent = state._lastKtStatusMsg;
         statusEl.className = `kt-status kt-status--${state._lastKtStatusLevel}`;
     }

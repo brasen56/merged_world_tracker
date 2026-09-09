@@ -42,6 +42,12 @@
     border-color: var(--mwt-accent);
 }
 
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.sp-enforcement:focus-visible {
+    outline: 2px solid var(--mwt-accent);
+    outline-offset: 2px;
+}
+
 /* ─── Sections ─────────────────────────────────────────────────────────────── */
 
 .sp-section {
@@ -171,6 +177,12 @@
     color: var(--mwt-text);
 }
 
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.sp-arc-title:focus-visible {
+    outline: 2px solid var(--mwt-accent);
+    outline-offset: 2px;
+}
+
 .sp-arc-body {
     width: 100%;
     box-sizing: border-box;
@@ -196,6 +208,12 @@
     border-color: var(--mwt-accent);
     background-color: var(--mwt-bg);
     color: var(--mwt-text);
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.sp-arc-body:focus-visible {
+    outline: 2px solid var(--mwt-accent);
+    outline-offset: 2px;
 }
 
 /* ─── Beat strip (current setup step + advance controls) ───────────────────── */
@@ -300,6 +318,13 @@
 .sp-arc-status:focus {
     outline: none;
     border-color: var(--mwt-accent);
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.sp-arc-section:focus-visible,
+.sp-arc-status:focus-visible {
+    outline: 2px solid var(--mwt-accent);
+    outline-offset: 2px;
 }
 
 .sp-pin,

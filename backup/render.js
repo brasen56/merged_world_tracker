@@ -20,6 +20,11 @@ import {
     pickTextFile,
     escapeHtml,
 } from '../core/index.js';
+// Direct import (not the barrel) so the real helper runs under the test
+// barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
+// setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
+// (a11y plan §4.4).
+import { setControlBusy } from '../core/ui.js';
 import {
     exportBackup,
     previewRestore,
@@ -239,7 +244,7 @@ function setBusy(busy) {
     const panel = state.modal?.querySelector('#mwt-backup-panel');
     if (!panel) return;
     panel.querySelectorAll('button[data-backup-action]').forEach(btn => {
-        btn.disabled = busy;
+        setControlBusy(btn, busy);
     });
 }
 
@@ -501,74 +506,97 @@ async function refreshSummary() {
     const exactCheckbox = modal.querySelector('#mwt-bk-exact');
     const exactNote = modal.querySelector('#mwt-bk-exact-note');
 
-    const values = readRestoreControlValues(modal);
-    const modes = buildRestoreModes(values);
-    const exact = values.exact === true;
-
     setStatus(modal, 'Previewing…', 'info');
-    if (confirmBtn) confirmBtn.disabled = true;
+    setControlBusy(confirmBtn, true);
 
-    let preview;
+    // A11Y-S3-01: busy state is transient — it must end when the preview ends,
+    // on EVERY path (thrown error, invalid preview, exact-blocked re-preview),
+    // so the clear lives in `finally`. Eligibility is a separate concern: the
+    // Confirm button only becomes operable again when the preview is actually
+    // confirmable. The old code only cleared busy on the success tail, which
+    // left Confirm `aria-busy="true"` (and disabled) forever after a failure.
+    let confirmable = false;
     try {
-        preview = await previewRestore(state.pendingEnvelope, { modes, exact });
-    } catch (err) {
-        tableEl.innerHTML = `<p style="color:var(--mwt-danger)">Preview failed: ${escapeHtml(err?.message || String(err))}</p>`;
-        setStatus(modal, 'Preview failed.', 'error');
-        return;
-    }
+        let preview;
+        let summary;
+        let exact = false;
+        for (;;) {
+            // Re-read every pass: the exact-blocked pass below unchecks Exact
+            // and must preview the merge-mode plan the checkbox now shows.
+            const values = readRestoreControlValues(modal);
+            const modes = buildRestoreModes(values);
+            exact = values.exact === true;
 
-    state.pendingPreview = preview;
-    state.pendingExact = exact;
-    const summary = summarizePreview(preview, state.pendingEnvelope);
+            try {
+                preview = await previewRestore(state.pendingEnvelope, { modes, exact });
+            } catch (err) {
+                tableEl.innerHTML = `<p style="color:var(--mwt-danger)">Preview failed: ${escapeHtml(err?.message || String(err))}</p>`;
+                setStatus(modal, 'Preview failed.', 'error');
+                return;
+            }
 
-    // Exact mode is only meaningful for a verifiable same-chat identity.
-    if (exactCheckbox) {
-        const blocked = exact && !summary.exactAllowed;
-        if (blocked) {
-            exactCheckbox.checked = false;
-            state.pendingExact = false;
-            // Re-preview in merge mode so the table matches the unchecked state.
-            return refreshSummary();
+            state.pendingPreview = preview;
+            state.pendingExact = exact;
+            summary = summarizePreview(preview, state.pendingEnvelope);
+
+            // Exact mode is only meaningful for a verifiable same-chat identity.
+            if (exactCheckbox) {
+                const blocked = exact && !summary.exactAllowed;
+                if (blocked) {
+                    exactCheckbox.checked = false;
+                    state.pendingExact = false;
+                    // Re-preview in merge mode so the table matches the unchecked state.
+                    continue;
+                }
+            }
+            break;
         }
-    }
 
-    if (!preview.ok) {
-        // Environment failures (store not loaded, chat switched) are not file
-        // problems; validation failures surface the validator's own errors.
-        // Written into the table container (not inserted before it) so repeated
-        // refreshes never stack duplicate error paragraphs.
-        const failure = describePreviewFailure(preview);
-        modal.querySelector('#mwt-bk-summary-meta').innerHTML = '';
-        modal.querySelector('#mwt-bk-summary-warning').innerHTML = '';
-        modal.querySelector('#mwt-bk-summary-skipped').innerHTML = '';
-        if (exactNote) exactNote.style.display = 'none';
-        tableEl.innerHTML = `<p style="color:var(--mwt-danger)">${escapeHtml(failure.message)}</p>`;
-        setStatus(modal, failure.kind === 'environment'
-            ? 'Preview unavailable — fix the issue above, then try again.'
-            : 'Cannot restore this file.', 'error');
-        return;
-    }
-    if (exactNote) {
-        exactNote.style.display = exact ? 'block' : 'none';
-        exactNote.textContent = exact
-            ? 'Exact mode overwrites this chat entirely. A pre-restore backup is downloaded automatically before anything is written.'
+        if (!preview.ok) {
+            // Environment failures (store not loaded, chat switched) are not file
+            // problems; validation failures surface the validator's own errors.
+            // Written into the table container (not inserted before it) so repeated
+            // refreshes never stack duplicate error paragraphs.
+            const failure = describePreviewFailure(preview);
+            modal.querySelector('#mwt-bk-summary-meta').innerHTML = '';
+            modal.querySelector('#mwt-bk-summary-warning').innerHTML = '';
+            modal.querySelector('#mwt-bk-summary-skipped').innerHTML = '';
+            if (exactNote) exactNote.style.display = 'none';
+            tableEl.innerHTML = `<p style="color:var(--mwt-danger)">${escapeHtml(failure.message)}</p>`;
+            setStatus(modal, failure.kind === 'environment'
+                ? 'Preview unavailable — fix the issue above, then try again.'
+                : 'Cannot restore this file.', 'error');
+            return;
+        }
+        if (exactNote) {
+            exactNote.style.display = exact ? 'block' : 'none';
+            exactNote.textContent = exact
+                ? 'Exact mode overwrites this chat entirely. A pre-restore backup is downloaded automatically before anything is written.'
+                : '';
+        }
+
+        modal.querySelector('#mwt-bk-summary-meta').innerHTML = formatBackupMeta(summary);
+        const warnEl = modal.querySelector('#mwt-bk-summary-warning');
+        const warns = [];
+        if (summary.warning) warns.push(summary.warning);
+        if (summary.restrictions.length) warns.push(summary.restrictions.join('; '));
+        warnEl.innerHTML = warns.length
+            ? `<p style="color:var(--mwt-warning);font-size:12px;margin:0 0 8px">⚠ ${escapeHtml(warns.join(' '))}</p>`
             : '';
+
+        renderSummaryTable(tableEl, summary.sections);
+        renderSkipped(modal.querySelector('#mwt-bk-summary-skipped'), summary.sections);
+
+        setStatus(modal, 'Preview ready. Review the plan above, then confirm.', 'info');
+        confirmable = true;
+    } finally {
+        // A11Y-S3-01: the preview is over on every path. Clear the busy pair,
+        // then re-apply ordinary disabled when the preview is not confirmable —
+        // the button may legitimately stay unclickable, but it is never "busy"
+        // once the preview has definitively finished.
+        setControlBusy(confirmBtn, false);
+        if (confirmBtn) confirmBtn.disabled = !confirmable;
     }
-
-    modal.querySelector('#mwt-bk-summary-meta').innerHTML = formatBackupMeta(summary);
-    const warnEl = modal.querySelector('#mwt-bk-summary-warning');
-    const warns = [];
-    if (summary.warning) warns.push(summary.warning);
-    if (summary.restrictions.length) warns.push(summary.restrictions.join('; '));
-    warnEl.innerHTML = warns.length
-        ? `<p style="color:var(--mwt-warning);font-size:12px;margin:0 0 8px">⚠ ${escapeHtml(warns.join(' '))}</p>`
-        : '';
-
-    renderSummaryTable(tableEl, summary.sections);
-    renderSkipped(modal.querySelector('#mwt-bk-summary-skipped'), summary.sections);
-
-    setStatus(modal, 'Preview ready. Review the plan above, then confirm.', 'info');
-    if (confirmBtn) confirmBtn.disabled = false;
 }
 
 /**
@@ -593,7 +621,7 @@ async function commitRestore() {
         if (!confirm('Confirm restore? A pre-restore backup will download automatically before anything is written.')) return;
     }
 
-    if (confirmBtn) confirmBtn.disabled = true;
+    setControlBusy(confirmBtn, true);
     setStatus(modal, `${verb}…`, 'info');
     setBusy(true);
     let result;
@@ -601,7 +629,7 @@ async function commitRestore() {
         result = await restoreBackup(state.pendingEnvelope, { confirm: true, exact, modes, previewToken });
     } catch (err) {
         setStatus(modal, `Restore failed: ${err?.message || err}`, 'error');
-        if (confirmBtn) confirmBtn.disabled = false;
+        setControlBusy(confirmBtn, false);
         setBusy(false);
         return;
     }
@@ -613,7 +641,7 @@ async function commitRestore() {
         return;
     }
     setBusy(false);
-    if (confirmBtn) confirmBtn.disabled = false;
+    setControlBusy(confirmBtn, false);
 
     const reason = result.reason;
     if (reason === 'reconfirmation-required') {

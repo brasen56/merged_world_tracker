@@ -109,6 +109,8 @@
   transition: border-color 0.15s;
 }
 .sc-search:focus { outline: none; border-color: var(--sc-accent); }
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.sc-search:focus-visible { outline: 2px solid var(--sc-accent); outline-offset: 2px; }
 
 /* ── Empty state ────────────────────────────────────────────────────────── */
 .sc-empty {
@@ -229,6 +231,8 @@
   transition: border-color 0.15s;
 }
 .sc-editor textarea:focus { border-color: var(--sc-accent); }
+/* Keyboard-focus pair for the base rule's outline: none above (a11y §4.3). */
+.sc-editor textarea:focus-visible { outline: 2px solid var(--sc-accent); outline-offset: 2px; }
 
 /* ── Consolidation preview ──────────────────────────────────────────────── */
 .sc-consolidate-preview {
@@ -254,6 +258,8 @@
   box-sizing: border-box;
 }
 .sc-consolidate-preview textarea:focus { border-color: var(--sc-accent); }
+/* Keyboard-focus pair for the base rule's outline: none above (a11y §4.3). */
+.sc-consolidate-preview textarea:focus-visible { outline: 2px solid var(--sc-accent); outline-offset: 2px; }
 
 /* ── Trash view ─────────────────────────────────────────────────────────── */
 .sc-trash {
@@ -318,6 +324,23 @@ input[type="datetime-local"],
   outline: none;
   box-sizing: border-box;
   transition: border-color 0.15s;
+}
+/* Keyboard-focus pair for the outline: none in the baseline above (a11y
+   plan §4.3). Only the SCOPED selectors are repeated — the baseline's bare
+   `input[type="datetime-local"]` is covered inside the chronicle tab by the
+   [data-tab="chronicle"] variant, and unscoped element selectors must not
+   be added to an MWT stylesheet loaded into the host page. */
+#sc-inject-count:focus-visible,
+.mwt-input[type="number"]:focus-visible,
+input[type="number"].mwt-input:focus-visible,
+.mwt-tab-content[data-tab="chronicle"] input[type="number"]:focus-visible,
+.mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"]:focus-visible,
+.mwt-tab-content[data-tab="chronicle"] input[type="text"]:focus-visible,
+.sc-stats-grid input[type="number"]:focus-visible,
+.sc-stats-grid input[type="datetime-local"]:focus-visible,
+.sc-stats-grid input[type="text"]:focus-visible {
+  outline: 2px solid var(--sc-accent);
+  outline-offset: 2px;
 }
 
 input[type="datetime-local"]:focus {

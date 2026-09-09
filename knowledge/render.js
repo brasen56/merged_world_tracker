@@ -58,7 +58,16 @@ import {
     STAGING_PLACEHOLDERS,
 } from './staging.js';
 import { getStateLorebookName } from './scope.js';
-import { decorateModalShell } from '../core/modal.js';
+// setStatus joins decorateModalShell so the Growth modal's flash messages
+// route through the shared live-region writer instead of a bare textContent
+// assignment (a11y plan §4.4).
+import { decorateModalShell, setStatus } from '../core/modal.js';
+// Direct import (not the barrel) so the real helpers run under the test
+// barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
+// setControlBusy: async handlers set/clear `disabled` + `aria-busy` together
+// (plan §4.4); prefersReducedMotion: gates the one JS-driven smooth scroll
+// (plan §4.5).
+import { setControlBusy, prefersReducedMotion } from '../core/ui.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -189,7 +198,7 @@ export function renderNpcsSubTab() {
 
     el.innerHTML = `
         <div class="kt-toolbar">
-            <button id="kt-scan-btn" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>${state.isRunning ? '⏳ Scanning…' : '🔍 Scan'}</button>
+            <button id="kt-scan-btn" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() || state.isRunning ? 'disabled' : ''} ${state.isRunning ? 'aria-busy="true"' : ''}>${state.isRunning ? '⏳ Scanning…' : '🔍 Scan'}</button>
             ${(() => {
                 const s = getSettings();
                 if (s.npcAutoScanEnabled) {
@@ -223,7 +232,7 @@ export function renderNpcsSubTab() {
               state.activeSubTab === 'relationships' ? renderRelationshipContent() :
               ''}
         </div>
-        <div id="kt-status" class="kt-status"></div>`;
+        <div id="kt-status" class="kt-status" role="status" aria-live="polite" aria-atomic="true"></div>`;
 
     // Wire sub-tab clicks
     el.querySelectorAll('.kt-sub-tab[data-sub]').forEach(btn => {
@@ -403,7 +412,11 @@ function wireStagingEvents(el) {
     });
 
     // Accept/dismiss buttons
-    el.querySelector('#kt-accept')?.addEventListener('click', async () => {
+    // A11Y-S3-03: the lorebook write below is async — own the busy pair from
+    // here through handleAccept's re-render (isConnected guard covers the
+    // re-render and the modal closing mid-write).
+    const acceptBtn = el.querySelector('#kt-accept');
+    acceptBtn?.addEventListener('click', async () => {
         const item = state.stagingItems.find(i => i.id === state.activeItemId);
         if (!item) return;
         const editorVal = el.querySelector('#kt-proposal-editor')?.value;
@@ -423,7 +436,12 @@ function wireStagingEvents(el) {
         }
         const keywordsRaw = el.querySelector('#kt-keyword-input')?.value || item.name;
         const keywords = item.type === 'state' ? [item.name] : keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
-        await handleAccept(item, text, keywords, el);
+        setControlBusy(acceptBtn, true);
+        try {
+            await handleAccept(item, text, keywords, el);
+        } finally {
+            if (acceptBtn.isConnected) setControlBusy(acceptBtn, false);
+        }
     });
 
     el.querySelector('#kt-dismiss')?.addEventListener('click', () => {
@@ -434,20 +452,28 @@ function wireStagingEvents(el) {
     });
 
     // Batch buttons
-    el.querySelector('#kt-batch-accept')?.addEventListener('click', async () => {
+    // A11Y-S3-03: busy only after the confirmation succeeds (S3-03), spanning
+    // the sequential lorebook writes; cleared before the closing re-render.
+    const batchAcceptBtn = el.querySelector('#kt-batch-accept');
+    batchAcceptBtn?.addEventListener('click', async () => {
         if (!confirm(`Accept all ${state.stagingItems.length} proposals?`)) return;
-        let accepted = 0;
-        let skipped = 0;
-        for (const item of [...state.stagingItems]) {
-            const text = item.mergedContent || item.proposedContent;
-            // Reject placeholders (Fetch to see changes / promoting / demoting)
-            // so unloaded proposals are never written to the lorebook. The
-            // single-accept path guards this; the batch path previously had no
-            // guard at all.
-            if (!text || STAGING_PLACEHOLDERS.includes(text)) { skipped++; continue; }
-            try { await handleAccept(item, text, item.keywords || [item.name], el); accepted++; } catch (e) { console.warn('[MWT:Knowledge] Batch accept failed:', e); }
+        setControlBusy(batchAcceptBtn, true);
+        try {
+            let accepted = 0;
+            let skipped = 0;
+            for (const item of [...state.stagingItems]) {
+                const text = item.mergedContent || item.proposedContent;
+                // Reject placeholders (Fetch to see changes / promoting / demoting)
+                // so unloaded proposals are never written to the lorebook. The
+                // single-accept path guards this; the batch path previously had no
+                // guard at all.
+                if (!text || STAGING_PLACEHOLDERS.includes(text)) { skipped++; continue; }
+                try { await handleAccept(item, text, item.keywords || [item.name], el); accepted++; } catch (e) { console.warn('[MWT:Knowledge] Batch accept failed:', e); }
+            }
+            if (skipped > 0) ktSetStatus(`${accepted} accepted · ${skipped} skipped (click the item to load its content first).`, 'info');
+        } finally {
+            if (batchAcceptBtn.isConnected) setControlBusy(batchAcceptBtn, false);
         }
-        if (skipped > 0) ktSetStatus(`${accepted} accepted · ${skipped} skipped (click the item to load its content first).`, 'info');
         renderNpcsSubTab();
     });
 
@@ -524,7 +550,7 @@ function wireNpcListEvents(el, _type) {
             const reg = getRegistry()[name];
             if (!reg?.uid && reg?.uid !== 0) { ktSetStatus(`No UID for "${name}".`, 'error'); return; }
             try {
-                btn.disabled = true; btn.textContent = '⏳…';
+                setControlBusy(btn, true); btn.textContent = '⏳…';
                 const result = await runNpcUpdate(name, reg.uid);
                 const hasChanges = Object.values(result.fields).some(v => v !== null) || result.newKnowledge.length > 0;
                 if (!hasChanges) { ktSetStatus(`No new info for "${name}".`, 'info'); return; }
@@ -556,7 +582,7 @@ function wireNpcListEvents(el, _type) {
                 }
                 ktSetStatus(`Update failed: ${err.message}`, 'error');
             }
-            finally { btn.disabled = false; btn.textContent = 'Update'; }
+            finally { setControlBusy(btn, false); btn.textContent = 'Update'; }
         });
     });
 
@@ -570,7 +596,7 @@ function wireNpcListEvents(el, _type) {
             const reg = getRegistry()[name];
             if (!reg?.uid && reg?.uid !== 0) { ktSetStatus(`No UID for "${name}".`, 'error'); return; }
             try {
-                btn.disabled = true; btn.textContent = '⏳…';
+                setControlBusy(btn, true); btn.textContent = '⏳…';
                 const result = await runNpcEnrich(name, reg.uid);
                 state.stagingItems.push({
                     id: `enrich-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -600,7 +626,7 @@ function wireNpcListEvents(el, _type) {
                 }
                 ktSetStatus(`Enrich failed: ${err.message}`, 'error');
             }
-            finally { btn.disabled = false; btn.textContent = '📋 Enrich'; }
+            finally { setControlBusy(btn, false); btn.textContent = '📋 Enrich'; }
         });
     });
 
@@ -609,9 +635,9 @@ function wireNpcListEvents(el, _type) {
             // Double-click guard (the Enrich pattern): the picker modal only
             // exists after an awaited lorebook read, so two rapid clicks would
             // stack two #kt-dossier-refresh-modal nodes with the same id.
-            btn.disabled = true;
+            setControlBusy(btn, true);
             try { await openDossierFieldRefreshModal(btn.dataset.name); }
-            finally { btn.disabled = false; }
+            finally { setControlBusy(btn, false); }
         });
     });
 
@@ -620,19 +646,28 @@ function wireNpcListEvents(el, _type) {
             const name = btn.dataset.name;
             const reg = getRegistry()[name];
             if (reg?.uid == null) return;
-            // Label-verified: refuse to promote off another NPC's entry content.
-            const existing = await loadEntryContent(reg.uid, name);
-            const item = {
-                id: `promote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'promote', action: 'update', name, data: {},
-                proposedContent: '(promoting)', existingContent: existing,
-                mergedContent: existing ? buildPromotedContent(existing) : '',
-                keywords: reg.keywords || [name], uid: reg.uid, fromType: 'minor', toType: 'major',
-            };
-            state.stagingItems.push(item);
-            addNotificationEntry(item);
-            state.activeItemId = item.id;
-            state.activeSubTab = 'staging';
-            renderNpcsSubTab();
+            // A11Y-S3-04: the label-verified read below is async — own the
+            // busy pair so the click can't double-fire while the lorebook
+            // loads (the re-render at the end replaces the button, hence the
+            // isConnected guard).
+            setControlBusy(btn, true);
+            try {
+                // Label-verified: refuse to promote off another NPC's entry content.
+                const existing = await loadEntryContent(reg.uid, name);
+                const item = {
+                    id: `promote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'promote', action: 'update', name, data: {},
+                    proposedContent: '(promoting)', existingContent: existing,
+                    mergedContent: existing ? buildPromotedContent(existing) : '',
+                    keywords: reg.keywords || [name], uid: reg.uid, fromType: 'minor', toType: 'major',
+                };
+                state.stagingItems.push(item);
+                addNotificationEntry(item);
+                state.activeItemId = item.id;
+                state.activeSubTab = 'staging';
+                renderNpcsSubTab();
+            } finally {
+                if (btn.isConnected) setControlBusy(btn, false);
+            }
         });
     });
 
@@ -641,19 +676,26 @@ function wireNpcListEvents(el, _type) {
             const name = btn.dataset.name;
             const reg = getRegistry()[name];
             if (reg?.uid == null) return;
-            // Label-verified: refuse to demote off another NPC's entry content.
-            const existing = await loadEntryContent(reg.uid, name);
-            const item = {
-                id: `demote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'demote', action: 'update', name, data: {},
-                proposedContent: '(demoting)', existingContent: existing,
-                mergedContent: existing ? buildDemotedContent(existing) : '',
-                keywords: reg.keywords || [name], uid: reg.uid, fromType: 'major', toType: 'minor',
-            };
-            state.stagingItems.push(item);
-            addNotificationEntry(item);
-            state.activeItemId = item.id;
-            state.activeSubTab = 'staging';
-            renderNpcsSubTab();
+            // A11Y-S3-04: same busy contract as Promote — the read is async,
+            // so the click can't double-fire while the lorebook loads.
+            setControlBusy(btn, true);
+            try {
+                // Label-verified: refuse to demote off another NPC's entry content.
+                const existing = await loadEntryContent(reg.uid, name);
+                const item = {
+                    id: `demote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type: 'demote', action: 'update', name, data: {},
+                    proposedContent: '(demoting)', existingContent: existing,
+                    mergedContent: existing ? buildDemotedContent(existing) : '',
+                    keywords: reg.keywords || [name], uid: reg.uid, fromType: 'major', toType: 'minor',
+                };
+                state.stagingItems.push(item);
+                addNotificationEntry(item);
+                state.activeItemId = item.id;
+                state.activeSubTab = 'staging';
+                renderNpcsSubTab();
+            } finally {
+                if (btn.isConnected) setControlBusy(btn, false);
+            }
         });
     });
 
@@ -669,7 +711,9 @@ function wireNpcListEvents(el, _type) {
     });
 
     el.querySelectorAll('.kt-npc-view').forEach(btn => {
-        btn.addEventListener('click', () => openNpcViewModal(btn.dataset.name));
+        // Pass the button so openNpcViewModal can own its busy pair across
+        // the awaited lorebook read (A11Y-S3-04).
+        btn.addEventListener('click', () => openNpcViewModal(btn.dataset.name, btn));
     });
 
     el.querySelectorAll('.kt-npc-identity').forEach(btn => {
@@ -762,15 +806,24 @@ function renderStateTrackerContent() {
 }
 
 function wireStateTrackerEvents(el) {
-    el.querySelector('#kt-state-register')?.addEventListener('click', async () => {
+    const registerBtn = el.querySelector('#kt-state-register');
+    registerBtn?.addEventListener('click', async () => {
         const uid = parseInt(el.querySelector('#kt-state-uid')?.value, 10);
         const name = el.querySelector('#kt-state-name')?.value?.trim();
         if (Number.isNaN(uid) || !name) { ktSetStatus('Enter both UID and name.', 'error'); return; }
-        const loaded = await loadStateTrackerEntry(uid);
-        if (!loaded) { ktSetStatus(`UID ${uid} not found.`, 'error'); return; }
-        if (!loaded.comment.startsWith(TRACKER_SENTINEL)) { ktSetStatus(`Missing ${TRACKER_SENTINEL} sentinel.`, 'error'); return; }
-        registerStateTracker(name, uid);
-        renderNpcsSubTab();
+        // A11Y-S3-04: the sentinel check awaits a lorebook read — own the
+        // busy pair across it (the successful path re-renders the sub-tab
+        // and replaces this button, hence the isConnected guard).
+        setControlBusy(registerBtn, true);
+        try {
+            const loaded = await loadStateTrackerEntry(uid);
+            if (!loaded) { ktSetStatus(`UID ${uid} not found.`, 'error'); return; }
+            if (!loaded.comment.startsWith(TRACKER_SENTINEL)) { ktSetStatus(`Missing ${TRACKER_SENTINEL} sentinel.`, 'error'); return; }
+            registerStateTracker(name, uid);
+            renderNpcsSubTab();
+        } finally {
+            if (registerBtn.isConnected) setControlBusy(registerBtn, false);
+        }
     });
 
     el.querySelectorAll('.kt-state-enabled').forEach(cb => {
@@ -787,7 +840,7 @@ function wireStateTrackerEvents(el) {
             const info = getStateRegistry()[name];
             if (!info) return;
             try {
-                btn.disabled = true; btn.textContent = '⏳…';
+                setControlBusy(btn, true); btn.textContent = '⏳…';
                 const result = await runStateUpdate(name, info.uid);
                 if (result.unchanged) { bumpStateTrackerTimestamp(name); renderNpcsSubTab(); ktSetStatus(`No change for "${name}".`, 'info'); return; }
                 const stagingItem = {
@@ -833,7 +886,7 @@ function wireStateTrackerEvents(el) {
                 }
                 ktSetStatus(`Update failed: ${err.message}`, 'error');
             }
-            finally { btn.disabled = false; btn.textContent = 'Update'; }
+            finally { setControlBusy(btn, false); btn.textContent = 'Update'; }
         });
     });
 
@@ -853,6 +906,8 @@ function wireStateTrackerEvents(el) {
             // cannot stack a second #kt-view-modal.
             if (document.getElementById('kt-view-modal') || viewModalOpening) return;
             viewModalOpening = true;
+            // A11Y-S3-04: own this button's busy pair across the awaited read.
+            setControlBusy(btn, true);
             try {
                 const name = btn.dataset.name;
                 const info = getStateRegistry()[name];
@@ -863,33 +918,49 @@ function wireStateTrackerEvents(el) {
                 }
             } finally {
                 viewModalOpening = false;
+                if (btn.isConnected) setControlBusy(btn, false);
             }
         });
     });
 
-    el.querySelector('#kt-state-export')?.addEventListener('click', async () => {
-        const trackers = {};
-        for (const [name, info] of Object.entries(getStateRegistry())) {
-            const loaded = await loadStateTrackerEntry(info.uid);
-            trackers[name] = { uid: info.uid, content: loaded?.content || null };
+    const exportBtn = el.querySelector('#kt-state-export');
+    exportBtn?.addEventListener('click', async () => {
+        // A11Y-S3-04: one awaited lorebook read per tracker — own the busy
+        // pair so the export can't be double-fired mid-walk.
+        setControlBusy(exportBtn, true);
+        try {
+            const trackers = {};
+            for (const [name, info] of Object.entries(getStateRegistry())) {
+                const loaded = await loadStateTrackerEntry(info.uid);
+                trackers[name] = { uid: info.uid, content: loaded?.content || null };
+            }
+            const { downloadJson } = await import('../core/index.js');
+            downloadJson(`state-trackers-${Date.now()}.json`, { version: 1, trackers });
+        } finally {
+            if (exportBtn.isConnected) setControlBusy(exportBtn, false);
         }
-        const { downloadJson } = await import('../core/index.js');
-        downloadJson(`state-trackers-${Date.now()}.json`, { version: 1, trackers });
     });
 
-    el.querySelector('#kt-state-import')?.addEventListener('click', async () => {
-        const { pickTextFile } = await import('../core/index.js');
-        const text = await pickTextFile('.json');
-        if (!text) return;
+    const importBtn = el.querySelector('#kt-state-import');
+    importBtn?.addEventListener('click', async () => {
+        // A11Y-S3-04: the file picker + parse are async — own the busy pair.
+        setControlBusy(importBtn, true);
         try {
-            const snapshot = JSON.parse(text);
-            if (!snapshot.trackers) throw new Error('Invalid format');
-            for (const [name, data] of Object.entries(snapshot.trackers)) {
-                if (data.uid !== undefined) registerStateTracker(name, data.uid);
-            }
-            renderNpcsSubTab();
-            ktSetStatus('State trackers imported.', 'success');
-        } catch (err) { ktSetStatus(`Import failed: ${err.message}`, 'error'); }
+            const { pickTextFile } = await import('../core/index.js');
+            const text = await pickTextFile('.json');
+            if (!text) return;
+            try {
+                const snapshot = JSON.parse(text);
+                if (!snapshot.trackers) throw new Error('Invalid format');
+                for (const [name, data] of Object.entries(snapshot.trackers)) {
+                    if (data.uid !== undefined) registerStateTracker(name, data.uid);
+                }
+                renderNpcsSubTab();
+                ktSetStatus('State trackers imported.', 'success');
+            } catch (err) { ktSetStatus(`Import failed: ${err.message}`, 'error'); }
+        } finally {
+            if (importBtn.isConnected) setControlBusy(importBtn, false);
+        }
     });
 }
 
@@ -926,6 +997,10 @@ async function openGrowthProfileModal(name, triggerBtn) {
     // openDossierFieldRefreshModal's id checks cannot see.
     if (growthModalOpening || document.getElementById('kt-growth-modal')) return;
     growthModalOpening = true;
+    // A11Y-S3-04: the opening awaits module loads + read-only lorebook reads —
+    // own the trigger button's busy pair so a second click can't race the
+    // in-flight guard's await window.
+    if (triggerBtn) setControlBusy(triggerBtn, true);
     try {
         // Opening a Growth Profile modal = the user is now reviewing evidence.
         // Clear the unread counter so the floating-button pulse stops, and
@@ -991,7 +1066,7 @@ async function openGrowthProfileModal(name, triggerBtn) {
                     <div class="kt-growth-content"></div>
                 </div>
                 <div class="mwt-modal-statusbar">
-                    <span class="mwt-status"></span>
+                    <span class="mwt-status" role="status" aria-live="polite" aria-atomic="true"></span>
                 </div>
             </div>`;
         document.body.appendChild(modal);
@@ -1004,6 +1079,9 @@ async function openGrowthProfileModal(name, triggerBtn) {
         wireGrowthProfileEvents(modal, name, existingProfile || '', triggerBtn);
     } finally {
         growthModalOpening = false;
+        // The tab may have re-rendered while the modal was opening; never
+        // touch a control a re-render already replaced.
+        if (triggerBtn?.isConnected) setControlBusy(triggerBtn, false);
     }
 }
 
@@ -1052,15 +1130,10 @@ async function refreshGrowthModalContent(modal, name, triggerBtn, flashMsg) {
         wireGrowthProfileEvents(modal, name, preservedProfile, triggerBtn);
     }
     if (flashMsg) {
-        const flash = (msg, type = 'success') => {
-            const statusEl = modal.querySelector('.mwt-status');
-            if (!statusEl) return;
-            statusEl.textContent = msg;
-            statusEl.className = `mwt-status mwt-status-${type}`;
-            statusEl.style.opacity = '1';
-            if (type === 'success') setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
-        };
-        flash(flashMsg);
+        // Route through the shared setStatus() (a11y plan §4.4) so the write
+        // lands in the live-region contract instead of the bare textContent
+        // assignment the Growth modal's custom shell never announced.
+        setStatus(modal, flashMsg, 'success', 3000);
     }
 }
 
@@ -1177,14 +1250,13 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
 
 function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
 
-    // Helper to flash a status message in the modal's status bar.
+    // Helper to flash a status message in the modal's status bar. Routes
+    // through the shared setStatus() (a11y plan §4.4): same text/class/opacity
+    // behavior, plus the polite live-region semantics stamped on the Growth
+    // modal's custom shell, and the CORE-03 timer-cancellation the old bare
+    // write never had.
     const flash = (msg, type = 'success') => {
-        const statusEl = modal.querySelector('.mwt-status');
-        if (!statusEl) return;
-        statusEl.textContent = msg;
-        statusEl.className = `mwt-status mwt-status-${type}`;
-        statusEl.style.opacity = '1';
-        if (type === 'success') setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+        setStatus(modal, msg, type, type === 'success' ? 3000 : 0);
     };
 
     // ── Save to Lorebook ──
@@ -1193,7 +1265,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         if (!text.trim()) { flash('Profile is empty — nothing to save.', 'error'); return; }
         const btn = modal.querySelector('#kt-growth-save');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Saving…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Saving…';
             const { saveProfile } = await import('./growth.js');
             const result = await saveProfile(name, text);
             if (result.success && result.uidRecorded === false) {
@@ -1215,31 +1287,41 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         } catch (err) {
             flash(`Save failed: ${err.message}`, 'error');
         } finally {
-            btn.disabled = false; btn.textContent = '💾 Save to Lorebook';
+            setControlBusy(btn, false); btn.textContent = '💾 Save to Lorebook';
         }
     });
 
     // ── Copy Profile ──
-    modal.querySelector('#kt-growth-copy')?.addEventListener('click', async () => {
+    // A11Y-S3-03: clipboard writes are permission-gated async calls — own the
+    // busy pair so a hanging permission prompt can't double-fire the write.
+    const copyProfileBtn = modal.querySelector('#kt-growth-copy');
+    copyProfileBtn?.addEventListener('click', async () => {
         const text = modal.querySelector('#kt-growth-profile-text')?.value || profile;
+        setControlBusy(copyProfileBtn, true);
         try {
             await navigator.clipboard.writeText(text);
             flash('Profile copied to clipboard.');
         } catch (err) {
             flash(`Copy failed: ${err.message}`, 'error');
+        } finally {
+            setControlBusy(copyProfileBtn, false);
         }
     });
 
     // ── Copy Evidence ──
-    modal.querySelector('#kt-growth-copy-evidence')?.addEventListener('click', async () => {
+    const copyEvidenceBtn = modal.querySelector('#kt-growth-copy-evidence');
+    copyEvidenceBtn?.addEventListener('click', async () => {
         const claims = [...modal.querySelectorAll('.kt-growth-obs-claim')].map(el => el.textContent);
         const quotes = [...modal.querySelectorAll('.kt-growth-obs-quote')].map(el => el.textContent);
         const evidenceText = claims.map((c, i) => `- ${c}\n  Quote: ${quotes[i] || ''}`).join('\n');
+        setControlBusy(copyEvidenceBtn, true);
         try {
             await navigator.clipboard.writeText(`Evidence for ${name}:\n${evidenceText}`);
             flash('Evidence copied to clipboard.');
         } catch (err) {
             flash(`Copy failed: ${err.message}`, 'error');
+        } finally {
+            setControlBusy(copyEvidenceBtn, false);
         }
     });
 
@@ -1256,7 +1338,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         if (!container || !contentDiv) return;
 
         try {
-            btn.disabled = true; btn.textContent = '⏳ Analyzing…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Analyzing…';
             flash('Generating psychoanalytic portrait…', 'info');
 
             const { runPsychoanalyzeProfile, looksTruncated } = await import('./growth.js');
@@ -1281,20 +1363,26 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             `;
 
             // Wire the copy button for the psychoanalyze portrait
+            // A11Y-S3-03: same busy contract as the other clipboard buttons.
             const copyBtn = contentDiv.querySelector('#kt-growth-copy-psychoanalyze');
             copyBtn?.addEventListener('click', async () => {
                 const text = contentDiv.querySelector('#kt-growth-psychoanalyze-text')?.value || '';
+                setControlBusy(copyBtn, true);
                 try {
                     await navigator.clipboard.writeText(text);
                     flash('Psychoanalytic portrait copied to clipboard.');
                 } catch (err) {
                     flash(`Copy failed: ${err.message}`, 'error');
+                } finally {
+                    setControlBusy(copyBtn, false);
                 }
             });
 
             flash('Psychoanalytic portrait generated.', 'success');
-            // Scroll to the new section
-            container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // Scroll to the new section — plain jump under reduced motion
+            // (a11y plan §4.5: gate JS-driven movement, not the scroll
+            // itself, so the section still becomes visible).
+            container.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
         } catch (err) {
             flash(`Psychoanalyze failed: ${err.message}`, 'error');
             const innerContentDiv = modal.querySelector('.kt-growth-psychoanalyze-content');
@@ -1304,7 +1392,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             const panelContainer = modal.querySelector('#kt-growth-psychoanalyze-container');
             if (panelContainer) panelContainer.style.display = '';
         } finally {
-            btn.disabled = false; btn.textContent = '🧠 Psychoanalyze';
+            setControlBusy(btn, false); btn.textContent = '🧠 Psychoanalyze';
         }
     });
 
@@ -1399,7 +1487,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
     modal.querySelector('#kt-growth-capture')?.addEventListener('click', async () => {
         const btn = modal.querySelector('#kt-growth-capture');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Capturing…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Capturing…';
             flash('Capturing behavioral evidence from recent messages…', 'info');
             const { runCaptureOnly } = await import('./growth.js');
             const { captureStats } = await runCaptureOnly(name);
@@ -1416,7 +1504,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         } catch (err) {
             flash(`Capture failed: ${err.message}`, 'error');
         } finally {
-            btn.disabled = false; btn.textContent = '🔍 Capture Evidence';
+            setControlBusy(btn, false); btn.textContent = '🔍 Capture Evidence';
         }
     });
 
@@ -1424,7 +1512,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
     modal.querySelector('#kt-growth-consolidate')?.addEventListener('click', async () => {
         const btn = modal.querySelector('#kt-growth-consolidate');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Consolidating…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Consolidating…';
             flash('Consolidating evidence…', 'info');
             const { runConsolidation } = await import('./growth.js');
             const { consolidatedCount, archivedCount, totalConsolidated } = await runConsolidation(name);
@@ -1441,7 +1529,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             await refreshGrowthModalContent(modal, name, triggerBtn, msg);
         } catch (err) {
             flash(`Consolidation failed: ${err.message}`, 'error');
-            btn.disabled = false; btn.textContent = '🔗 Consolidate';
+            setControlBusy(btn, false); btn.textContent = '🔗 Consolidate';
         }
     });
 
@@ -1452,7 +1540,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
     modal.querySelector('#kt-growth-regenerate')?.addEventListener('click', async () => {
         const btn = modal.querySelector('#kt-growth-regenerate');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Generating…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Generating…';
             flash('Generating profile from existing evidence…', 'info');
             const { regenerateProfile, looksTruncated } = await import('./growth.js');
             const { observations, profile: newProfile } = await regenerateProfile(name);
@@ -1477,7 +1565,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             flash('Profile generated from existing evidence.', 'success');
         } catch (err) {
             flash(`Generation failed: ${err.message}`, 'error');
-            btn.disabled = false; btn.textContent = '📝 Generate Profile';
+            setControlBusy(btn, false); btn.textContent = '📝 Generate Profile';
         }
     });
 
@@ -1488,7 +1576,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
     modal.querySelector('#kt-growth-backfill')?.addEventListener('click', async () => {
         const btn = modal.querySelector('#kt-growth-backfill');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Backfilling…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Backfilling…';
             flash('Backfilling evidence from ILS summaries…', 'info');
             const { runIlsBackfillCapture } = await import('./growth.js');
             const result = await runIlsBackfillCapture(name);
@@ -1502,7 +1590,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             await refreshGrowthModalContent(modal, name, triggerBtn, msg);
         } catch (err) {
             flash(`Backfill failed: ${err.message}`, 'error');
-            btn.disabled = false; btn.textContent = '📦 Backfill';
+            setControlBusy(btn, false); btn.textContent = '📦 Backfill';
         }
     });
 
@@ -1521,10 +1609,17 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         const regenerateBtn = modal.querySelector('#kt-growth-regenerate');
         const consolidateBtn = modal.querySelector('#kt-growth-consolidate');
         const backfillBtn = modal.querySelector('#kt-growth-backfill');
+        // Snapshot each action's eligibility BEFORE marking everything busy:
+        // Generate Profile renders disabled with zero observations and
+        // Consolidate with fewer than two non-canon raw ones, and a failed
+        // catch-up must not clear busy into an enabled state the evidence
+        // rules forbid.
+        const priorDisabled = new Map([btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn]
+            .map(b => [b, b?.disabled ?? false]));
         try {
             // Disable all action buttons for the duration — catch-up is a
             // multi-batch loop and concurrent actions would race the watermarks.
-            [btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => b && (b.disabled = true));
+            [btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => setControlBusy(b, true));
             btn.textContent = '⏳ Reading…';
             if (progressEl) {
                 progressEl.style.display = '';
@@ -1589,11 +1684,17 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             flash(`Catch-up failed: ${err.message}`, 'error');
             notify('Knowledge Tracker', `Catch-up failed for ${name}: ${err.message}`, 'error');
         } finally {
-            btn.disabled = false; btn.textContent = '🚀 Catch Up';
+            setControlBusy(btn, false); btn.textContent = '🚀 Catch Up';
             // Re-enable the other action buttons (refreshGrowthModalContent
             // re-renders and re-wires them, but this covers the failure path
-            // where the modal isn't re-rendered).
-            [captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => b && (b.disabled = false));
+            // where the modal isn't re-rendered). Clearing busy enables by
+            // contract, so restore each action's prior eligibility — a failed
+            // catch-up must not make Generate available with zero
+            // observations or Consolidate with fewer than two eligible ones.
+            [captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => {
+                setControlBusy(b, false);
+                if (b && priorDisabled.get(b)) b.disabled = true;
+            });
             const progressEl2 = modal.querySelector('#kt-growth-catchup-progress');
             if (progressEl2) {
                 // Keep the final progress line visible briefly, then hide.
@@ -1690,9 +1791,12 @@ function createKnowledgeViewModal(name, content) {
     return viewModal;
 }
 
-async function openNpcViewModal(name) {
+async function openNpcViewModal(name, triggerBtn = null) {
     if (document.getElementById('kt-view-modal') || viewModalOpening) return;
     viewModalOpening = true;
+    // A11Y-S3-04: the label-verified read below is async — when the call came
+    // from a button, own its busy pair across the load.
+    if (triggerBtn) setControlBusy(triggerBtn, true);
     try {
     const reg = getRegistry()[name];
     if (!reg?.uid && reg?.uid !== 0) return;
@@ -1703,6 +1807,7 @@ async function openNpcViewModal(name) {
     createKnowledgeViewModal(name, content);
     } finally {
         viewModalOpening = false;
+        if (triggerBtn?.isConnected) setControlBusy(triggerBtn, false);
     }
 }
 
@@ -1991,7 +2096,7 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
         const selected = [...modal.querySelectorAll('.kt-dfr-field:checked')].map(cb => cb.dataset.key);
         if (selected.length === 0) return;
         try {
-            runBtn.disabled = true; runBtn.textContent = '⏳…';
+            setControlBusy(runBtn, true); runBtn.textContent = '⏳…';
             const result = await runDossierFieldRefresh(name, reg.uid, selected);
             // The field-refresh prompt ECHOES unchanged values instead of
             // returning null (the Update prompt's convention), so "nothing
@@ -2038,7 +2143,7 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
             } else {
                 ktSetStatus(`Field refresh failed: ${err.message}`, 'error');
             }
-            runBtn.disabled = false;
+            setControlBusy(runBtn, false);
             updateRunBtn();
         }
     });
@@ -2647,7 +2752,10 @@ function wireRelationshipEvents(el) {
         requestAnimationFrame(() => renderRelationshipGraph());
     }
 
-    el.querySelector('#kt-rel-add')?.addEventListener('click', async () => {
+    // A11Y-S3-03: the lorebook sync below is async — set busy only after
+    // validation, clear it in finally before the re-render rebuilds the row.
+    const relAddBtn = el.querySelector('#kt-rel-add');
+    relAddBtn?.addEventListener('click', async () => {
         const from = el.querySelector('#kt-rel-from')?.value;
         const to = el.querySelector('#kt-rel-to')?.value;
         let type = el.querySelector('#kt-rel-type')?.value;
@@ -2660,40 +2768,51 @@ function wireRelationshipEvents(el) {
         const npcNames = getAllNpcNames();
         if (!npcNames.includes(from)) { ktSetStatus(`"${from}" is not a known NPC.`, 'error'); return; }
         if (!npcNames.includes(to)) { ktSetStatus(`"${to}" is not a known NPC.`, 'error'); return; }
-        // Capture the prior edge (if any) so the Recent Changes log can say "was X".
-        const previous = getNpcRelationships(from).find(r => r.target === to);
-        updateRelationship(from, to, type, notes);
-        recordRelationshipChanges([{ kind: 'edge', action: previous ? 'updated' : 'added', from, to, type, previousType: previous?.type, notes }], 'manual');
-        state._graphData = null; // invalidate cached layout
+        setControlBusy(relAddBtn, true);
         try {
-            const result = await syncRelationshipsToLorebook(from);
-            if (result.success && !result.unchanged) {
-                ktSetStatus(`Relationship added and synced to "${from}" lorebook.`, 'success');
-            } else if (result.success) {
-                ktSetStatus(`Relationship added (lorebook unchanged).`, 'success');
-            } else {
-                ktSetStatus(`Relationship added but lorebook sync failed: ${result.error}`, 'warning');
+            // Capture the prior edge (if any) so the Recent Changes log can say "was X".
+            const previous = getNpcRelationships(from).find(r => r.target === to);
+            updateRelationship(from, to, type, notes);
+            recordRelationshipChanges([{ kind: 'edge', action: previous ? 'updated' : 'added', from, to, type, previousType: previous?.type, notes }], 'manual');
+            state._graphData = null; // invalidate cached layout
+            try {
+                const result = await syncRelationshipsToLorebook(from);
+                if (result.success && !result.unchanged) {
+                    ktSetStatus(`Relationship added and synced to "${from}" lorebook.`, 'success');
+                } else if (result.success) {
+                    ktSetStatus(`Relationship added (lorebook unchanged).`, 'success');
+                } else {
+                    ktSetStatus(`Relationship added but lorebook sync failed: ${result.error}`, 'warning');
+                }
+            } catch (err) {
+                ktSetStatus(`Relationship added but sync failed: ${err.message}`, 'warning');
             }
-        } catch (err) {
-            ktSetStatus(`Relationship added but sync failed: ${err.message}`, 'warning');
+        } finally {
+            if (relAddBtn.isConnected) setControlBusy(relAddBtn, false);
         }
         renderNpcsSubTab();
     });
 
-    el.querySelector('#kt-stance-set')?.addEventListener('click', async () => {
+    const stanceSetBtn = el.querySelector('#kt-stance-set');
+    stanceSetBtn?.addEventListener('click', async () => {
         const name = el.querySelector('#kt-stance-npc')?.value;
         const stance = el.querySelector('#kt-stance-value')?.value;
         if (!name || !stance) { ktSetStatus('Select an NPC and a stance.', 'error'); return; }
         if (!getAllNpcNames().includes(name)) { ktSetStatus(`"${name}" is not a known NPC.`, 'error'); return; }
-        const previousStance = getStance(name);
-        setStance(name, stance);
-        recordRelationshipChanges([{ kind: 'stance', action: 'set', npc: name, stance, previousStance }], 'manual');
+        setControlBusy(stanceSetBtn, true);
         try {
-            const result = await syncRelationshipsToLorebook(name);
-            if (result.success) ktSetStatus(`"${name}" is now ${stance} toward {{user}}.`, 'success');
-            else ktSetStatus(`Stance saved but lorebook sync failed: ${result.error}`, 'warning');
-        } catch (err) {
-            ktSetStatus(`Stance saved but sync failed: ${err.message}`, 'warning');
+            const previousStance = getStance(name);
+            setStance(name, stance);
+            recordRelationshipChanges([{ kind: 'stance', action: 'set', npc: name, stance, previousStance }], 'manual');
+            try {
+                const result = await syncRelationshipsToLorebook(name);
+                if (result.success) ktSetStatus(`"${name}" is now ${stance} toward {{user}}.`, 'success');
+                else ktSetStatus(`Stance saved but lorebook sync failed: ${result.error}`, 'warning');
+            } catch (err) {
+                ktSetStatus(`Stance saved but sync failed: ${err.message}`, 'warning');
+            }
+        } finally {
+            if (stanceSetBtn.isConnected) setControlBusy(stanceSetBtn, false);
         }
         renderNpcsSubTab();
     });
@@ -2717,10 +2836,16 @@ function wireRelationshipEvents(el) {
     el.querySelectorAll('.kt-stance-clear').forEach(btn => {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
-            const previousStance = getStance(name);
-            setStance(name, '');
-            recordRelationshipChanges([{ kind: 'stance', action: 'cleared', npc: name, previousStance }], 'manual');
-            try { await syncRelationshipsToLorebook(name); } catch { /* entry may be gone */ }
+            // A11Y-S3-03: the lorebook sync is async — own the busy pair.
+            setControlBusy(btn, true);
+            try {
+                const previousStance = getStance(name);
+                setStance(name, '');
+                recordRelationshipChanges([{ kind: 'stance', action: 'cleared', npc: name, previousStance }], 'manual');
+                try { await syncRelationshipsToLorebook(name); } catch { /* entry may be gone */ }
+            } finally {
+                if (btn.isConnected) setControlBusy(btn, false);
+            }
             renderNpcsSubTab();
         });
     });
@@ -2730,11 +2855,18 @@ function wireRelationshipEvents(el) {
             const from = btn.dataset.from;
             const to = btn.dataset.to;
             if (!confirm(`Remove relationship: ${from} → ${to}?`)) return;
-            const previousType = getNpcRelationships(from).find(r => r.target === to)?.type;
-            removeRelationship(from, to);
-            recordRelationshipChanges([{ kind: 'edge', action: 'removed', from, to, previousType }], 'manual');
-            state._graphData = null; // invalidate cached layout
-            try { await syncRelationshipsToLorebook(from); } catch { /* ignore */ }
+            // A11Y-S3-03: busy only after the confirmation; cleared before the
+            // re-render below rebuilds the row.
+            setControlBusy(btn, true);
+            try {
+                const previousType = getNpcRelationships(from).find(r => r.target === to)?.type;
+                removeRelationship(from, to);
+                recordRelationshipChanges([{ kind: 'edge', action: 'removed', from, to, previousType }], 'manual');
+                state._graphData = null; // invalidate cached layout
+                try { await syncRelationshipsToLorebook(from); } catch { /* ignore */ }
+            } finally {
+                if (btn.isConnected) setControlBusy(btn, false);
+            }
             renderNpcsSubTab();
         });
     });
@@ -2742,13 +2874,13 @@ function wireRelationshipEvents(el) {
     el.querySelector('#kt-rel-sync-all')?.addEventListener('click', async () => {
         const btn = el.querySelector('#kt-rel-sync-all');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Syncing…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Syncing…';
             const result = await syncAllRelationshipsToLorebooks();
             ktSetStatus(`Synced ${result.synced} lorebook(s). ${result.failed > 0 ? result.failed + ' failed.' : ''}`, result.failed > 0 ? 'warning' : 'success');
         } catch (err) {
             ktSetStatus(`Sync failed: ${err.message}`, 'error');
         } finally {
-            btn.disabled = false; btn.textContent = '💾 Sync to Lorebooks';
+            setControlBusy(btn, false); btn.textContent = '💾 Sync to Lorebooks';
         }
     });
 }

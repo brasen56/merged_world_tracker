@@ -13,6 +13,11 @@ import {
     getChat,
     captureScope, assertSameScope,
 } from '../core/index.js';
+// Direct import (not the barrel) so the real helper runs under the test
+// barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
+// setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
+// (a11y plan §4.4).
+import { setControlBusy } from '../core/ui.js';
 
 import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntities, EXPIRY_SECTIONS_DEFAULT } from './settings.js';
 import {
@@ -724,7 +729,7 @@ export function wireEvents() {
                     return;
                 }
             }
-            btn.disabled = true; btn.textContent = '⏳ Refreshing…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Refreshing…';
             setStatus(state.modal, 'Generating world state…', 'info');
             const text = await refreshWorldState();
             if (text === null) { setStatus(state.modal, 'Refresh aborted.', 'info'); return; }
@@ -739,7 +744,7 @@ export function wireEvents() {
         } catch (err) {
             setStatus(state.modal, `Error: ${err.message}`, 'error');
         } finally {
-            btn.disabled = false; btn.textContent = '🔄 Refresh';
+            setControlBusy(btn, false); btn.textContent = '🔄 Refresh';
         }
     });
 
@@ -758,7 +763,7 @@ export function wireEvents() {
                     return;
                 }
             }
-            btn.disabled = true; btn.textContent = '⏳ Patching…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Patching…';
             setStatus(state.modal, 'Generating delta patch…', 'info');
             const text = await refreshWorldStateDelta();
             if (text === null) { setStatus(state.modal, 'Delta refresh aborted.', 'info'); return; }
@@ -775,7 +780,7 @@ export function wireEvents() {
             // user at the full Refresh instead of a bare error.
             setStatus(state.modal, `Delta refresh failed: ${err.message}${err.name === 'DeltaPatchError' ? ' — run a full 🔄 Refresh instead.' : ''}`, 'error', 8000);
         } finally {
-            btn.disabled = false; btn.textContent = '⚡ Delta';
+            setControlBusy(btn, false); btn.textContent = '⚡ Delta';
             // Re-derive the disabled state instead of unconditionally
             // enabling: the editor-pre-sync early return above can leave the
             // store empty, and updateArchiveButtonState() would disable the
@@ -825,7 +830,7 @@ export function wireEvents() {
         if (!sectionName) { setStatus(state.modal, 'Select a section first.', 'error'); return; }
 
         try {
-            regenBtn.disabled = true; regenBtn.textContent = '⏳ Regenerating…';
+            setControlBusy(regenBtn, true); regenBtn.textContent = '⏳ Regenerating…';
             setStatus(state.modal, `Regenerating "${sectionName}" (variety: ${VARIETY_LABELS[variety]})…`, 'info');
 
             // Preserve unsaved editor edits. regenerateSection() rebuilds the
@@ -870,7 +875,7 @@ export function wireEvents() {
         } catch (err) {
             setStatus(state.modal, `Section regen failed: ${err.message}`, 'error');
         } finally {
-            regenBtn.disabled = false; regenBtn.textContent = '🎲 Regenerate Section';
+            setControlBusy(regenBtn, false); regenBtn.textContent = '🎲 Regenerate Section';
         }
     });
 
@@ -978,7 +983,7 @@ export function wireEvents() {
         if (!url || !model) { setStatus(state.modal, 'Fill URL and Model first.', 'error'); return; }
 
         try {
-            btn.disabled = true; btn.textContent = 'Testing…';
+            setControlBusy(btn, true); btn.textContent = 'Testing…';
             setStatus(state.modal, 'Testing connection…', 'info');
             const headers = { 'Content-Type': 'application/json' };
             if (key) headers['Authorization'] = `Bearer ${key}`;
@@ -993,7 +998,7 @@ export function wireEvents() {
         } catch (err) {
             setStatus(state.modal, `Failed: ${err.message}`, 'error');
         } finally {
-            btn.disabled = false; btn.textContent = 'Test Connection';
+            setControlBusy(btn, false); btn.textContent = 'Test Connection';
         }
     });
 

@@ -32,7 +32,7 @@ import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings
 // injections are never rejected by the previous chat's stale snapshots.
 import { getBudgetSettings, saveBudgetSettings, resetBudgetInjections } from './core/budget.js';
 import { createModal, showModal, setStatus, releaseManagedInert } from './core/modal.js';
-import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
+import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues, setControlBusy } from './core/ui.js';
 // Main modal tab shell — the render/wire seam core/main_tabs.js owns so the
 // main tab bar's exact rendering path is testable under jsdom (index.js
 // itself cannot be imported into Vitest; see test/main_tabbar_adoption.test.js).
@@ -512,7 +512,7 @@ function renderModal() {
     pauseRetryBtns.forEach((btn) => {
         btn.addEventListener('click', async () => {
             const storeId = btn.dataset.mwtPauseRetry;
-            btn.disabled = true;
+            setControlBusy(btn, true);
             const previousLabel = btn.textContent;
             btn.textContent = 'Retrying…';
             try {
@@ -523,7 +523,7 @@ function renderModal() {
                     setStatus(modal, `Retry did not clear the pause: ${result.message || result.reason || 'the store is still blocked'}`, 'error', 9000);
                 }
             } finally {
-                btn.disabled = false;
+                setControlBusy(btn, false);
                 btn.textContent = previousLabel;
             }
         });
@@ -537,8 +537,15 @@ function renderModal() {
             // One wording owner (backup/render.js describeRecoveryExportResult):
             // an `unreadable` refusal surfaces its message as an error, never
             // the "nothing was rejected" info line — same as the Backup panel.
-            const { message, tone } = describeRecoveryExportResult(await exportRecoveryData());
-            setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
+            // A11Y-S3-03: own the busy pair across the awaited export so the
+            // button can neither double-fire nor lie about being idle.
+            setControlBusy(btn, true);
+            try {
+                const { message, tone } = describeRecoveryExportResult(await exportRecoveryData());
+                setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
+            } finally {
+                setControlBusy(btn, false);
+            }
         });
     });
 
@@ -881,9 +888,13 @@ if (eventSource && event_types?.MESSAGE_EDITED) {
 // ─── Interiority custom event listeners ──────────────────────────────────────
 // The render.js "Generate Now" button dispatches these custom events.
 
-document.addEventListener('mwt:interiority-generate', () => {
+document.addEventListener('mwt:interiority-generate', (e) => {
     // trigger defaults to TRIGGER.MANUAL — this listener IS the 💭 button.
-    Interiority.triggerGenerate?.();
+    // A11Y-S3-03: publish the generation promise on the shared detail object
+    // so the dispatching handler (interiority/render.js "Generate Now") can
+    // await the work and own its control's busy state end to end.
+    const pending = Interiority.triggerGenerate?.();
+    if (e?.detail) e.detail.promise = pending ?? null;
 });
 
 document.addEventListener('mwt:interiority-ledger-changed', () => {

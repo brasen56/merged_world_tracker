@@ -185,6 +185,63 @@ export function ariaHideEmoji(label) {
 }
 
 /**
+ * Mark a control busy or idle for the duration of async work
+ * (accessibility plan §4.4 / Slice 3 item 4).
+ *
+ * `disabled` stops double-submits; `aria-busy="true"` tells assistive
+ * technology that work is in flight. The two must be set AND cleared
+ * together — including on error and cancellation paths — which is why
+ * handlers route through this helper instead of touching `disabled`
+ * directly: with one call per state change, the clear side can never be
+ * forgotten on one path.
+ *
+ * setStatus() owns the *result* announcement (a polite live region); it
+ * cannot know which control is doing the work, so the busy flags stay with
+ * the handler that owns the control.
+ *
+ * Null-tolerant by design: handlers resolve buttons with `?.` and may pass
+ * a missing node straight through. setAttribute is feature-tested because
+ * Node-suite element fakes implement `disabled` but not the attribute API.
+ *
+ * @param {Element|null|undefined} control — the control running the async work
+ * @param {boolean} busy — true while the work is in flight, false when it ends
+ */
+export function setControlBusy(control, busy) {
+    if (!control) return;
+    control.disabled = busy === true;
+    control.setAttribute?.('aria-busy', busy ? 'true' : 'false');
+}
+
+/**
+ * Whether the user asked the OS/browser for reduced motion
+ * (accessibility plan §4.5 / Slice 3 item 5).
+ *
+ * Only needed where JavaScript itself produces visual movement — the one
+ * smooth scroll in the codebase (knowledge/render.js psychoanalyze). All
+ * CSS-driven motion (pulses, transitions, the countdown badge) is
+ * suppressed by the `@media (prefers-reduced-motion: reduce)` block in
+ * core/style.css, which scopes past `.mwt-modal` to the `mwt-`/`kt-` class
+ * prefixes. The force-directed relationship graph needs no JS gate: its
+ * layout is computed synchronously (computeGraphLayout) and rendered in a
+ * single static pass — there is no animated settle to suppress, and node
+ * drag/pan is direct manipulation, not animation.
+ *
+ * Fail-open: no `matchMedia` (old embedders, the Node test environment)
+ * reads as "no preference" — motion keeps working.
+ *
+ * @returns {boolean}
+ */
+export function prefersReducedMotion() {
+    try {
+        return typeof window !== 'undefined'
+            && typeof window.matchMedia === 'function'
+            && window.matchMedia('(prefers-reduced-motion: reduce)').matches === true;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Wire a tab strip to the WAI-ARIA Tabs pattern (accessibility plan §4.2).
  *
  * Owns the whole keyboard/state contract so consumers only supply markup and

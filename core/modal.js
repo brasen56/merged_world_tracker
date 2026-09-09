@@ -70,7 +70,7 @@ export function createModal({ id, title, content, cssClass = '', onClose = null,
             </div>
             <div class="mwt-modal-body">${content}</div>
             <div class="mwt-modal-statusbar">
-                <span class="mwt-status"></span>
+                <span class="mwt-status" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
         </div>
     `;
@@ -542,6 +542,15 @@ export function setStatus(modalIdOrEl, message, type = 'info', clearAfterMs = 0)
 
     const statusEl = modal.querySelector('.mwt-status');
     if (!statusEl) return;
+
+    // Accessibility plan §4.4 / Slice 3 item 3: the status bar is a polite
+    // live region. createModal stamps the semantics on its own template;
+    // stamping here as well covers legacy shells whose markup predates it,
+    // so every result announced through setStatus() reaches screen readers
+    // exactly once, wherever the element came from.
+    statusEl.setAttribute?.('role', 'status');
+    statusEl.setAttribute?.('aria-live', 'polite');
+    statusEl.setAttribute?.('aria-atomic', 'true');
 
     statusEl.textContent = message;
     statusEl.className = `mwt-status mwt-status-${type}`;

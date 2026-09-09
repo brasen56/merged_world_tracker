@@ -11,6 +11,11 @@ import {
     escapeHtml, getContextSafe,
     renderApiSettingsFields, readApiSettingsValues,
 } from '../core/index.js';
+// Direct import (not the barrel) so the real helper runs under the test
+// barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
+// setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
+// (a11y plan §4.4).
+import { setControlBusy } from '../core/ui.js';
 
 import {
     state, getSettings, saveSettings,
@@ -57,7 +62,7 @@ export function renderContent() {
                 <button id="mwt-int-generate" class="mwt-btn mwt-btn-primary">💭 Generate Now</button>
                 <button id="mwt-int-clear-ledger" class="mwt-btn" title="Remove all ledger entries">🗑 Clear Ledger</button>
             </div>
-            <div id="mwt-int-status" class="mwt-int-status"></div>
+            <div id="mwt-int-status" class="mwt-int-status" role="status" aria-live="polite" aria-atomic="true"></div>
 
             <div id="mwt-int-settings-panel" style="display:none;margin-bottom:16px"></div>
 
@@ -664,13 +669,24 @@ function wireEvents(el) {
     });
 
     // Generate now button
-    el.querySelector('#mwt-int-generate')?.addEventListener('click', async () => {
-        setIntStatus('Generating...', 'info');
+    // A11Y-S3-03: the actual work lives in index.js (reached via the custom
+    // event below). That listener publishes triggerGenerate()'s promise on the
+    // shared detail object, so THIS handler still owns the button's busy pair —
+    // including the failure paths triggerGenerate reports through status.
+    const generateBtn = el.querySelector('#mwt-int-generate');
+    generateBtn?.addEventListener('click', async () => {
+        setControlBusy(generateBtn, true);
         try {
-            // Delegate to index.js via custom event
-            document.dispatchEvent(new CustomEvent('mwt:interiority-generate', { detail: { manual: true } }));
+            setIntStatus('Generating...', 'info');
+            const detail = { manual: true, promise: null };
+            document.dispatchEvent(new CustomEvent('mwt:interiority-generate', { detail }));
+            await detail.promise;
         } catch (err) {
             setIntStatus(`Error: ${err.message}`, 'error');
+        } finally {
+            // The tab can re-render mid-generation (the busy-changed listener
+            // repaints status); only restore a control that still exists.
+            if (generateBtn.isConnected) setControlBusy(generateBtn, false);
         }
     });
 
@@ -1322,6 +1338,14 @@ export function setIntStatus(text, type = 'info') {
     if (!el) return;
     const statusEl = el.querySelector('#mwt-int-status');
     if (statusEl) {
+        // Shared live-region contract (a11y plan §4.4, the setStatus()
+        // precedent): the template ships the semantics and every write
+        // re-stamps them, so re-rendered or legacy shells inherit them too —
+        // generation, completion, and error messages are announced exactly
+        // once. The className assignment below never strips these attributes.
+        statusEl.setAttribute?.('role', 'status');
+        statusEl.setAttribute?.('aria-live', 'polite');
+        statusEl.setAttribute?.('aria-atomic', 'true');
         statusEl.textContent = text || '';
         statusEl.className = `mwt-int-status mwt-int-status--${type}`;
     }

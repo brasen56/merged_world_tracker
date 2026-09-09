@@ -16,6 +16,11 @@ import {
     createModal, showModal, hideModal,
     computeLcsDiff, renderDiffHtml,
 } from '../core/index.js';
+// Direct import (not the barrel) so the real helper runs under the test
+// barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
+// setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
+// (a11y plan §4.4).
+import { setControlBusy } from '../core/ui.js';
 
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -652,7 +657,7 @@ export function wireEvents() {
     state.modal.querySelector('#sp-generate')?.addEventListener('click', async () => {
         const btn = state.modal.querySelector('#sp-generate');
         try {
-            btn.disabled = true; btn.textContent = '⏳ Generating…';
+            setControlBusy(btn, true); btn.textContent = '⏳ Generating…';
             const arcs = await generatePlan(false);
             if (arcs) {
                 renderArcs();
@@ -661,7 +666,7 @@ export function wireEvents() {
         } catch (err) {
             notify('Story Planner', `Generation failed: ${err.message}`, 'error');
         } finally {
-            btn.disabled = false; btn.textContent = '🎲 Generate Plan';
+            setControlBusy(btn, false); btn.textContent = '🎲 Generate Plan';
         }
     });
 

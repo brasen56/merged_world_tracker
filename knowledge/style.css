@@ -296,6 +296,12 @@
     border-color: var(--mwt-accent);
 }
 
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-detail-editor:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
+}
+
 .kt-keyword-input {
     width: 100%;
     background: var(--mwt-bg-light);
@@ -311,6 +317,12 @@
 .kt-keyword-input:focus {
     outline: none;
     border-color: var(--mwt-accent);
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-keyword-input:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
 }
 
 .kt-detail-actions {
@@ -617,6 +629,12 @@
     outline: none;
     border-color: var(--sc-border-focus);
 }
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-field input:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
+}
  
 .kt-settings-actions {
     display: flex;
@@ -703,6 +721,12 @@
 .kt-state-register-row input:focus {
     outline: none;
     border-color: var(--sc-border-focus);
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-state-register-row input:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
 }
  
 .kt-state-register-row input[type="number"] {
@@ -981,6 +1005,12 @@
 .kt-search-input:focus {
     outline: none;
     border-color: var(--sc-border-focus);
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-search-input:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
 }
 .kt-npc-promote,
 .kt-npc-demote {
@@ -1363,6 +1393,12 @@
 .kt-sort-select:focus {
     outline: none;
     border-color: var(--sc-border-focus);
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-sort-select:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
 }
 
 /* ── Modals / panels that need filled Rel/Keywords buttons ────────────────── */
@@ -2082,6 +2118,12 @@
     border-color: var(--mwt-primary, #6366f1);
 }
 
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-growth-profile-editor:focus-visible {
+    outline: 2px solid var(--mwt-primary, #6366f1);
+    outline-offset: 2px;
+}
+
 .kt-growth-actions {
     display: flex;
     gap: 8px;
@@ -2150,6 +2192,13 @@
     outline: none;
     padding: 2px 4px;
     border-radius: 3px;
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3) —
+   contenteditable is focusable, so it needs the same visible indicator. */
+.kt-growth-override-text:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
 }
 
 .kt-growth-override-text:focus {
@@ -2222,6 +2271,13 @@
     padding: 2px 4px;
     margin: 0 -4px;
     transition: background 0.15s;
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3) —
+   contenteditable is focusable, so it needs the same visible indicator. */
+.kt-growth-obs-claim[contenteditable]:focus-visible {
+    outline: 2px solid var(--mwt-accent, #6366f1);
+    outline-offset: 2px;
 }
 
 .kt-growth-obs-claim[contenteditable]:hover {
@@ -2307,6 +2363,12 @@
 .kt-growth-psychoanalyze-editor:focus {
     outline: none;
     border-color: rgba(168, 85, 247, 0.6);
+}
+
+/* Keyboard-focus pair for the outline suppressed above (a11y plan §4.3). */
+.kt-growth-psychoanalyze-editor:focus-visible {
+    outline: 2px solid rgba(168, 85, 247, 0.9);
+    outline-offset: 2px;
 }
 
 /* ─── Dossier per-field refresh modal (TODO §3) ───────────────────────────── */
