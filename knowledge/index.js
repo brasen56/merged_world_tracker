@@ -605,7 +605,13 @@ export function onChatChanged() {
     // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
     // also detaches any document-level Escape listener a removed modal left
     // behind — a bare remove() leaks it.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => {
+        // Use the shared close path so the modal stack restores body inertness
+        // before the old-chat node is discarded. Direct remove() leaves the
+        // remaining application inert when this was the topmost dialog.
+        if (typeof m._closeModal === 'function') m._closeModal();
+        else { m._cleanupKeyHandler?.(); m.remove(); }
+    });
 
     // Re-point the registry stores at whatever lorebooks the new chat resolves
     // to. This is fire-and-forget because onChatChanged is synchronous, but it
@@ -647,7 +653,10 @@ export function onChatChangedWhilePaused() {
     // chat's `key`; see onChatChanged). _cleanupKeyHandler first (the
     // core/modal.js convention) so the sweep also detaches any
     // document-level Escape listener a removed modal left behind.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => { m._cleanupKeyHandler?.(); m.remove(); });
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => {
+        if (typeof m._closeModal === 'function') m._closeModal();
+        else { m._cleanupKeyHandler?.(); m.remove(); }
+    });
     console.log('[MWT:Knowledge] Chat changed while paused — staging/UI state reset (store hydration skipped).');
 }
 

@@ -482,8 +482,12 @@ function renderModal() {
 
     // Wire tab clicks via event delegation
     const tabBar = modal.querySelector('.mwt-tab-bar');
-    if (tabBar) {
-        tabBar.addEventListener('click', (e) => {
+    if (tabBar && !modal._tabHandlerBound) {
+        modal._tabHandlerBound = true;
+        // Bind on the persistent modal rather than the rebuilt tab bar. The
+        // body is replaced on every render, so a listener on tabBar would be
+        // lost after the first chat-change/open refresh.
+        modal.addEventListener('click', (e) => {
             const btn = e.target.closest('.mwt-tab-btn');
             if (!btn) return;
             const tabId = btn.dataset.tab;
@@ -769,8 +773,18 @@ if (eventSource && event_types?.CHAT_CHANGED) {
             else mod.onChatChanged();
         }
         if (modal?.style.display === 'flex') {
+            const activeElement = document.activeElement;
+            const focusWasInModal = modal.contains(activeElement);
+            const focusId = activeElement?.id;
+            const focusTab = activeElement?.dataset?.tab;
             renderModal();
             if (activeTab) modal.querySelector(`.mwt-tab-btn[data-tab="${activeTab}"]`)?.click();
+            if (focusWasInModal) {
+                const restored = focusId
+                    ? [...modal.querySelectorAll('[id]')].find(el => el.id === focusId)
+                    : (focusTab ? modal.querySelector(`.mwt-tab-btn[data-tab="${focusTab}"]`) : null);
+                (restored || modal.querySelector('.mwt-modal-close'))?.focus?.();
+            }
         }
     });
 }
