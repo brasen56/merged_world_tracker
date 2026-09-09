@@ -58,6 +58,7 @@ import {
     STAGING_PLACEHOLDERS,
 } from './staging.js';
 import { getStateLorebookName } from './scope.js';
+import { decorateModalShell } from '../core/modal.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -846,17 +847,22 @@ function wireStateTrackerEvents(el) {
 
     el.querySelectorAll('.kt-state-view').forEach(btn => {
         btn.addEventListener('click', async () => {
-            const name = btn.dataset.name;
-            const info = getStateRegistry()[name];
-            if (!info) return;
-            const loaded = await loadStateTrackerEntry(info.uid);
-            if (loaded) {
-                const viewModal = document.createElement('div');
-                viewModal.id = 'kt-view-modal';
-                viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(loaded.content)}</pre></div></div>`;
-                document.body.appendChild(viewModal);
-                viewModal.querySelector('.kt-history-close').addEventListener('click', () => viewModal.remove());
-                viewModal.querySelector('.kt-history-backdrop').addEventListener('click', () => viewModal.remove());
+            // Same singleton + in-flight contract as openNpcViewModal: the
+            // shared flag spans this await, so a click on EITHER view path
+            // cannot start a second load while one is already in flight and
+            // cannot stack a second #kt-view-modal.
+            if (document.getElementById('kt-view-modal') || viewModalOpening) return;
+            viewModalOpening = true;
+            try {
+                const name = btn.dataset.name;
+                const info = getStateRegistry()[name];
+                if (!info) return;
+                const loaded = await loadStateTrackerEntry(info.uid);
+                if (loaded) {
+                    createKnowledgeViewModal(name, loaded.content);
+                }
+            } finally {
+                viewModalOpening = false;
             }
         });
     });
@@ -990,25 +996,8 @@ async function openGrowthProfileModal(name, triggerBtn) {
             </div>`;
         document.body.appendChild(modal);
 
-        const closeBtn = modal.querySelector('.mwt-modal-close');
         const contentEl = modal.querySelector('.kt-growth-content');
-        // Same lifecycle contract as core/modal.js's createModal and the dossier
-        // refresh modal below: EVERY close path detaches the document-level Escape
-        // listener. The old `cleanup = () => modal.remove()` leaked one keydown
-        // handler per open-and-×-close (onKey only detached itself inside its own
-        // Escape branch), and the chat-change sweep could not detach it either —
-        // it only knows the _cleanupKeyHandler convention.
-        const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
-        const cleanup = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
-        closeBtn.addEventListener('click', cleanup);
-        // Backdrop click intentionally does NOT close this modal — the
-        // evidence/profile view is easy to dismiss by accident, so require the ×
-        // button or Escape.
-        document.addEventListener('keydown', onKey);
-        // core/modal.js convention: lets the chat-change sweeps (knowledge/index.js)
-        // detach this listener when they remove the modal without cleanup().
-        modal._cleanupKeyHandler = () => document.removeEventListener('keydown', onKey);
-
+        decorateModalShell(modal, { title: `Growth Profile — ${name}`, closeOnBackdrop: false, destroyOnClose: true });
         // Render the read-only state immediately. The profile editor shows the
         // existing profile (or an empty editor + hint if none has been generated).
         contentEl.innerHTML = renderGrowthProfileContent(name, observations, existingProfile || '', '', false, existingProfile, null, overrides);
@@ -1676,19 +1665,45 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
 
 // ─── NPC view modal (shared) ─────────────────────────────────────────────────
 
+/**
+ * In-flight guard for #kt-view-modal, shared by BOTH open paths (the NPC
+ * dossier path below and the State Tracker path in wireStateTrackerEvents).
+ * It spans each path's await, so a click on either path cannot start a
+ * competing load while the first is still in flight. Without it the two
+ * paths could each pass their own singleton check before their awaits and
+ * then each build a node, duplicating the #kt-view-modal id.
+ */
+let viewModalOpening = false;
+
+function createKnowledgeViewModal(name, content) {
+    // Singleton enforced here, at the only construction site: whichever open
+    // path arrives second finds the winner's node already in the DOM and
+    // keeps it, instead of stacking a duplicate #kt-view-modal with a second
+    // Escape handler fighting over the same close.
+    if (document.getElementById('kt-view-modal')) return null;
+    const viewModal = document.createElement('div');
+    viewModal.id = 'kt-view-modal';
+    viewModal.className = 'mwt-modal kt-view-modal-overlay';
+    viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
+    document.body.appendChild(viewModal);
+    decorateModalShell(viewModal, { title: name, destroyOnClose: true });
+    return viewModal;
+}
+
 async function openNpcViewModal(name) {
+    if (document.getElementById('kt-view-modal') || viewModalOpening) return;
+    viewModalOpening = true;
+    try {
     const reg = getRegistry()[name];
     if (!reg?.uid && reg?.uid !== 0) return;
     // Label-verified: a uid pointing at a differently-labelled entry must not
     // display that character's dossier under this NPC's name.
     const content = await loadEntryContent(reg.uid, name);
     if (!content) return;
-    const viewModal = document.createElement('div');
-    viewModal.id = 'kt-view-modal';
-    viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
-    document.body.appendChild(viewModal);
-    viewModal.querySelector('.kt-history-close').addEventListener('click', () => viewModal.remove());
-    viewModal.querySelector('.kt-history-backdrop').addEventListener('click', () => viewModal.remove());
+    createKnowledgeViewModal(name, content);
+    } finally {
+        viewModalOpening = false;
+    }
 }
 
 // ─── Identity modal (TODO §1 entity identity + alias service) ────────────────
@@ -1761,18 +1776,8 @@ function openIdentityModal(name) {
         </div>
     `;
     document.body.appendChild(modal);
-    // Same lifecycle contract as core/modal.js's createModal and the dossier
-    // refresh modal: Escape closes, and the document-level keydown listener is
-    // detached on EVERY close path (and by the chat-change sweep via
-    // _cleanupKeyHandler). The singleton guard above already assumed Escape
-    // handlers existed ("duplicated Escape handlers fighting over one close") —
-    // this is that handler.
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const close = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
-    modal.querySelector('.mwt-modal-close').addEventListener('click', close);
-    modal.querySelector('.mwt-modal-backdrop').addEventListener('click', close);
-    document.addEventListener('keydown', onKey);
-    modal._cleanupKeyHandler = () => document.removeEventListener('keydown', onKey);
+    decorateModalShell(modal, { title: `Identity — ${key}`, destroyOnClose: true });
+    const close = () => modal._closeModal?.();
 
     const refresh = canonical => {
         close();
@@ -1944,17 +1949,8 @@ async function openDossierFieldRefreshModal(name) {
             </div>
         </div>`;
     document.body.appendChild(modal);
-
-    const cleanup = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
-    modal.querySelector('.mwt-modal-close').addEventListener('click', cleanup);
-    modal.querySelector('.mwt-modal-backdrop').addEventListener('click', cleanup);
-    document.addEventListener('keydown', onKey);
-    // core/modal.js convention: anything that removes this node WITHOUT going
-    // through cleanup() (e.g. the chat-change sweep) detaches the document-
-    // level key handler through this property instead of leaking one listener
-    // per refresh run.
-    modal._cleanupKeyHandler = () => document.removeEventListener('keydown', onKey);
+    decorateModalShell(modal, { title: `Refresh fields — ${name}`, destroyOnClose: true });
+    const cleanup = () => modal._closeModal?.();
     wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup);
 }
 

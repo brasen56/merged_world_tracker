@@ -12,6 +12,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.6.2]
+
+### Changed
+
+- **Modals are now real dialogs, with one authoritative close path** (Slice 1
+  of the accessibility pass, `docs/accessibility_plan.md` §4.1 and §5; tests
+  in `test/modal_accessibility.test.js`):
+  - `.mwt-modal-panel` — the dialog surface, not the backdrop container — now
+    carries `role="dialog"` and `aria-labelledby` pointing at a stable heading
+    id, and the × button has a real accessible name ("Close <title>") instead
+    of relying on its glyph.
+  - `showModal()` remembers which element opened each modal and moves focus
+    into the dialog on open. Every close path — ×, backdrop, Escape, any of
+    `hideModal()`'s call sites, and the Knowledge chat-change sweep — now goes
+    through one shared close operation that honors the `onClose` veto on every
+    path and restores focus to the opener, falling back to the next remaining
+    modal or the page body when the opener is gone, detached, or disabled.
+  - Tab focus is contained inside the topmost visible modal (wrapping first ↔
+    last, skipping disabled controls and controls hidden inside inactive
+    panels), and only that modal responds to Tab and Escape — background
+    modals no longer intercept either.
+  - The modal stack is ordered by most-recently-shown rather than DOM order,
+    so with stacked dialogs `aria-modal` and Escape target the dialog you
+    actually see. Only the topmost visible panel carries `aria-modal="true"`,
+    and that declaration is backed by real inertness: everything else on the
+    page is made `inert` while a dialog is open and restored when it closes.
+  - `createModal()` gains `closeOnBackdrop` / `destroyOnClose` options, and a
+    new `decorateModalShell()` applies the same lifecycle to modal shells
+    built by hand. The four hand-rolled Knowledge modals (Growth, Identity,
+    Dossier field refresh, and the NPC/State view) now share the one contract
+    while keeping their own policies — the Growth modal still ignores
+    backdrop clicks deliberately, and the `kt-` modals still destroy their
+    node on close instead of hiding and reusing it.
+  - `#kt-view-modal` was previously built at two separate sites with no
+    Escape handler at either and an unnamed ✕; it now has a single builder,
+    an Escape handler, and a named close button.
+  - Switching chats with the main modal open used to rebuild the body and
+    strand focus on `document.body` — which, with the page now inert behind
+    the dialog, would leave the user stuck there. The focused element (or the
+    active tab) is now remembered across the re-render and focus is restored
+    into the rebuilt dialog. The main tab-bar click handler also moved onto
+    the persistent modal node behind a one-time guard, so repeated re-renders
+    can neither drop it nor stack duplicates.
+  - Both Knowledge chat-change sweeps now close through the shared path, so
+    page inertness is restored before the old chat's modals are discarded —
+    a bare `remove()` used to leave the rest of the application inert.
+  - The inertness behind that claim is now fail-safe rather than
+    fire-and-forget (BUG_REPORTS/bugs_temp.md; tests in
+    `test/modal_inert_guards.test.js`): every inert value MWT changes is
+    recorded in a managed map with an exported `releaseManagedInert()`
+    rollback; a `MutationObserver` on `document.body` inerts overlays added
+    while a dialog is open and releases everything if a modal is removed
+    outside the shared close path; a stack-sync failure fails open (inertness
+    released, `aria-modal` claims dropped, error logged — the host stays
+    usable) instead of freezing the page; and opening is refused while focus
+    sits inside a foreign (non-MWT) dialog rather than inerting that dialog
+    out from under the user. Elements that were already inert before MWT
+    opened keep their own value when the modal closes.
+
+### Added
+
+- **`jsdom` as a dev-only test dependency** (accessibility plan §6.1) and the
+  first tests to use it: `test/modal_accessibility.test.js` covers the focus
+  trap's exclusion of hidden-panel controls, `aria-modal` on a decorated
+  Knowledge shell, Escape-handler reinstall when a reusable modal reopens,
+  opener focus restore with a disabled-opener fallback, show-order (not
+  DOM-order) stack resolution, and background-modals-can't-trap-Tab.
+  `test/modal_inert_guards.test.js` pins the inert fail-safes: recovery
+  after a modal is removed outside the close path, inerting of late-added
+  body children, preservation of pre-existing inert values, fail-open on a
+  stack-sync throw, and refusal to open over a foreign dialog. Full suite at
+  the time of writing: 86 files / 2,236 tests, lint clean.
+
+
 ## [2.6.1]
 
 ### Changed

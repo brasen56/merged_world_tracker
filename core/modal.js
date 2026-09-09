@@ -6,8 +6,35 @@
  */
 
 import { escapeHtml } from './diff.js';
+// Toast on the open-refusal paths (core/notifications.js). Direct import —
+// modal.js sits below the core/index.js barrel, and notifications.js's own
+// chain (diagnostics.js → scope.js) never imports back up, so this adds no
+// cycle.
+import { notify } from './notifications.js';
 
 let modalShowSequence = 0;
+
+/**
+ * Every body child MWT has marked inert, mapped to the inert value the
+ * element had before MWT touched it. The map is the single record of what
+ * MWT owes back to the host: normal closes restore entries one by one, and
+ * releaseManagedInert() can roll the whole set back in one call.
+ */
+const managedInert = new Map();
+
+/**
+ * Watches document.body's direct children while any MWT modal is visible.
+ * Re-runs the stack sync when the set of body children changes, so overlays
+ * added while a modal is open also become inert, and a modal removed by
+ * anything other than the shared close path cannot strand the host in an
+ * inert state. It also watches the style/hidden/class/open attributes on
+ * those same direct children — foreign code hiding the active modal without
+ * removing it must release the host too, and a native <dialog> popup opening
+ * or closing re-ranks the stack — but attribute records are only acted on
+ * when their target is a modal root or a native dialog; class churn on host
+ * chrome is deliberately ignored. Null when no modal is visible.
+ */
+let modalDomObserver = null;
 
 /**
  * Create a modal element and append it to document.body.
@@ -77,6 +104,13 @@ export function createModal({ id, title, content, cssClass = '', onClose = null,
 export function showModal(id) {
     const el = document.getElementById(id);
     if (!el) return;
+    if (foreignDialogOwnsFocus()) {
+        console.warn('[MWT:Modal] Modal open refused — focus is inside a foreign dialog.');
+        // The refusal is deliberate, but to the user it is still a click that
+        // did nothing — say so, not only in the console.
+        notify('Merged World Tracker', 'Modal not opened — another dialog has focus. Close it first.', 'info');
+        return;
+    }
     if (document.activeElement && document.activeElement !== el) el._mwtOpener = document.activeElement;
     // closeModalElement removes the document handler for reusable modals;
     // install it again when the same element is shown later.
@@ -95,6 +129,24 @@ export function hideModal(id) {
     if (el) {
         if (typeof el._closeModal === 'function') el._closeModal();
         else closeModalElement(el);
+    }
+}
+
+/**
+ * Emergency rollback for the managed-inert bookkeeping: restore every inert
+ * value MWT changed (best effort, per element) and stop the body watcher.
+ * Normal closes restore entries one by one; this rolls the whole set back.
+ * It runs automatically when stack synchronization fails, and is safe to
+ * call by hand from the console if a crash ever leaves the host frozen —
+ * the handle is MWT.modal.releaseManagedInert(), exposed on window.MWT by
+ * index.js.
+ */
+export function releaseManagedInert() {
+    const entries = [...managedInert.entries()];
+    managedInert.clear();
+    disconnectModalDomObserver();
+    for (const [element, wasInert] of entries) {
+        try { element.inert = wasInert; } catch { /* a broken element must not block the rest */ }
     }
 }
 
@@ -126,7 +178,10 @@ function installKeyHandler(modal, close) {
     const onKey = (e) => {
         const visible = visibleModals();
         if (visible[visible.length - 1] !== modal) return;
-        const focusedDialog = document.activeElement?.closest?.('[role="dialog"]');
+        // Native <dialog> elements carry the dialog role implicitly — the
+        // selector must match the element itself, or Escape pressed inside a
+        // foreign native popup would close the MWT modal underneath it.
+        const focusedDialog = document.activeElement?.closest?.('[role="dialog"], dialog');
         if (focusedDialog && !modal.contains(focusedDialog)) return;
         if (e.key === 'Tab') {
             const focusable = getFocusable(modal);
@@ -150,33 +205,229 @@ function installKeyHandler(modal, close) {
 
 function visibleModals() {
     return [...(document.querySelectorAll?.('.mwt-modal') || [])]
-        .filter(m => m.style.display !== 'none')
+        // A modal hidden by foreign code through more than its inline display
+        // (the hidden attribute, aria-hidden) is just as closed: keeping it
+        // "visible" here would strand the host in an inert state.
+        .filter(m => m.style.display !== 'none'
+            && !m.hidden
+            && m.getAttribute?.('aria-hidden') !== 'true')
         .sort((a, b) => (a._mwtShowSequence || 0) - (b._mwtShowSequence || 0));
 }
 
 function updateModalStack() {
-    const visible = visibleModals();
-    const top = visible[visible.length - 1];
-    visible.forEach(m => {
-        const panel = m.querySelector?.('.mwt-modal-panel, .kt-history-panel');
-        if (!panel) return;
-        if (m === top) panel.setAttribute?.('aria-modal', 'true');
-        else panel.removeAttribute?.('aria-modal');
-    });
-    // Make non-modal body content unavailable while the topmost dialog is open.
-    if (document.body?.children) {
-        [...document.body.children].forEach(child => {
-            if (visible.includes(child)) child.inert = child !== top;
-            else if (top) {
-                if (child._mwtInertBefore === undefined) child._mwtInertBefore = !!child.inert;
-                child.inert = true;
+    try {
+        const visible = visibleModals();
+        const top = visible[visible.length - 1];
+        // An open native <dialog> body child (SillyTavern's Popup is one) is
+        // a live top-layer dialog above every MWT modal, so while one is up
+        // it — not MWT's topmost modal — owns the interaction. Counted only
+        // while an MWT modal is visible: with none of its own dialogs open,
+        // MWT owes the host no inertness at all.
+        const foreignNativeOpen = !!top
+            && [...(document.body?.children || [])].some(isOpenNativeDialog);
+        visible.forEach(m => {
+            const panel = m.querySelector?.('.mwt-modal-panel, .kt-history-panel');
+            if (!panel) return;
+            if (m === top && !foreignNativeOpen) panel.setAttribute?.('aria-modal', 'true');
+            else panel.removeAttribute?.('aria-modal');
+        });
+        applyManagedInert(visible, top, foreignNativeOpen);
+        syncModalDomObserver(visible);
+    } catch (error) {
+        failModalStackOpen(error);
+    }
+}
+
+/**
+ * True when focus currently sits inside a dialog MWT does not own —
+ * SillyTavern's own popup, another extension's dialog. Opening a MWT modal
+ * on top of that would inert the host dialog mid-interaction, so callers
+ * refuse the open instead of exempting the foreign dialog from inertness.
+ */
+function foreignDialogOwnsFocus() {
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    // Native <dialog> elements (SillyTavern's Popup is one) carry the dialog
+    // role implicitly — there is no role attribute to match — so the selector
+    // must match the element itself as well, or the guard below silently
+    // lets MWT open on top of a focused native popup and inert it.
+    const dialog = active?.closest?.('[role="dialog"], dialog');
+    if (!dialog) return false;
+    // Focus inside any .mwt-modal root — stacking, or the modal being opened
+    // itself — is MWT's own business, not a foreign dialog.
+    return !dialog.closest?.('.mwt-modal');
+}
+
+/**
+ * True for a native <dialog> body child in the open state. Shown with
+ * showModal() (how SillyTavern's Popup opens) it lives in the browser's top
+ * layer above every MWT modal, so it is a live dialog, never background to
+ * be inerted. The hasAttribute fallback keeps this working where
+ * HTMLDialogElement is not implemented.
+ */
+function isOpenNativeDialog(element) {
+    if (element?.tagName !== 'DIALOG') return false;
+    return element.open === true || element.hasAttribute?.('open') === true;
+}
+
+/**
+ * True for a body child MWT must treat as a live dialog it does not own and
+ * never mark inert: a native <dialog> in the open state, or any other element
+ * announcing the dialog role. Open-time refusal (foreignDialogOwnsFocus)
+ * covers dialogs that exist before a modal opens, but one appended by foreign
+ * code while a modal is already up arrives after that gate — without this
+ * wider check applyManagedInert would inert it mid-interaction, the exact
+ * harm the refusal exists to prevent. MWT's own .mwt-modal roots are
+ * stack-managed and never match.
+ */
+function isLiveForeignDialog(element) {
+    if (!element || element.classList?.contains?.('mwt-modal')) return false;
+    return isOpenNativeDialog(element)
+        || element?.matches?.('[role="dialog"]') === true;
+}
+
+/**
+ * True for the only body children whose style/hidden/class/open changes can
+ * re-rank the modal stack: MWT's own modal roots and native <dialog> popups.
+ * Attribute mutations on every other body child are noise — SillyTavern
+ * toggles classes on #sheld, #top-bar, and the drawer roots continuously,
+ * and none of that may cost a full stack sync.
+ */
+function isWatchedAttributeTarget(target) {
+    return target?.classList?.contains?.('mwt-modal') === true
+        || target?.tagName === 'DIALOG';
+}
+
+/** Record element's current inert value (once), then make it inert. */
+function captureManagedInert(element) {
+    if (!managedInert.has(element)) managedInert.set(element, !!element.inert);
+    element.inert = true;
+}
+
+/** Hand element back the inert value it had before MWT touched it (no-op when MWT never captured it). */
+function restoreManagedInert(element) {
+    if (!managedInert.has(element)) return;
+    element.inert = managedInert.get(element);
+    managedInert.delete(element);
+}
+
+/**
+ * Make non-modal body content unavailable while the topmost dialog is open,
+ * and hand it back when the last one closes. Background MWT modals are inert
+ * too; only the top stays live. Every inert value MWT changes is recorded in
+ * `managedInert` first, so releaseManagedInert() can always undo the set.
+ */
+function applyManagedInert(visible, top, foreignNativeOpen) {
+    const children = document.body?.children;
+    if (!children) return;
+    for (const child of [...children]) {
+        if (isLiveForeignDialog(child)) {
+            // A live dialog some other script owns is never modal background —
+            // an open native <dialog> popup lives in the browser's top layer,
+            // and a foreign div[role="dialog"] overlay would be just as
+            // unusable inerted. Restore any value captured before it became a
+            // dialog, then leave it alone: MWT must neither inert a live
+            // dialog nor keep bookkeeping for one.
+            if (managedInert.has(child)) restoreManagedInert(child);
+            continue;
+        }
+        if (visible.includes(child)) {
+            if (child === top && !foreignNativeOpen) {
+                // The topmost dialog must stay live even if an earlier stack
+                // state (or a foreign script) left it inert.
+                if (managedInert.has(child)) restoreManagedInert(child);
+                else if (child.inert) child.inert = false;
+            } else {
+                // Background MWT modals are inert — and so is the topmost
+                // one while a foreign native dialog covers it.
+                captureManagedInert(child);
             }
-            else if (child._mwtInertBefore !== undefined) {
-                child.inert = child._mwtInertBefore;
-                delete child._mwtInertBefore;
-            }
+        } else if (top) {
+            captureManagedInert(child);
+        } else {
+            restoreManagedInert(child);
+        }
+    }
+    // Elements MWT captured that are no longer direct children of body —
+    // relocated by foreign code (SillyTavern moves #toast-container into an
+    // opened dialog) or removed outright — are outside the modal background
+    // now. Hand each one its prior inert value back immediately: a retained
+    // entry would keep a moved element inert long after the last modal
+    // closed, and deleting an entry without restoring leaks the value MWT
+    // owes it. Covers disconnected elements too (parentElement null).
+    for (const element of [...managedInert.keys()]) {
+        if (element.parentElement !== document.body) restoreManagedInert(element);
+    }
+}
+
+/**
+ * Keep a MutationObserver on document.body's direct children alive exactly
+ * while a MWT modal is visible. Besides body's childList it watches, on
+ * those same direct children, the attributes through which foreign code can
+ * change what is dialog and what is background: style/hidden/class on modal
+ * roots (a modal hidden without being removed must release the host) and
+ * open on native <dialog> popups (opening or closing one re-ranks the
+ * stack). Attribute records on anything else are filtered out by
+ * isWatchedAttributeTarget — the callback below explains why. MWT's own
+ * inert and aria-modal writes are not in the filter and must not retrigger
+ * the watcher.
+ */
+function syncModalDomObserver(visible) {
+    const needed = visible.length > 0
+        && typeof MutationObserver === 'function'
+        && typeof document !== 'undefined'
+        && document.body;
+    if (!needed) {
+        disconnectModalDomObserver();
+        return;
+    }
+    if (!modalDomObserver) {
+        modalDomObserver = new MutationObserver(records => {
+            // Re-sync the stack on any watched change: overlays added while a
+            // modal is open become inert; a modal removed or hidden by
+            // foreign code releases everything once no MWT modal remains; a
+            // native dialog opening or closing re-ranks the stack. Attribute
+            // records count only on modal roots and native dialogs — class or
+            // style churn on any other body child (SillyTavern toggles
+            // #sheld, #top-bar, and the drawers as a matter of course) is
+            // noise and must not cost a stack walk.
+            const relevant = records.some(record =>
+                record.addedNodes.length > 0
+                || record.removedNodes.length > 0
+                || (record.type === 'attributes' && isWatchedAttributeTarget(record.target)));
+            if (relevant) updateModalStack();
+        });
+        modalDomObserver.observe(document.body, { childList: true });
+    }
+    // Attribute watching targets each direct child individually (a subtree
+    // observer would fire on every descendant style tweak in the host UI).
+    // Re-registering an already-observed child with identical options is a
+    // no-op, so this both covers children added since the last sync — e.g. a
+    // native popup whose later close() must be seen — and skips nothing.
+    for (const child of document.body.children) {
+        modalDomObserver.observe(child, {
+            attributes: true,
+            attributeFilter: ['style', 'hidden', 'class', 'open'],
         });
     }
+}
+
+function disconnectModalDomObserver() {
+    modalDomObserver?.disconnect();
+    modalDomObserver = null;
+}
+
+/**
+ * Fail open: if stack synchronization throws partway through, release every
+ * inert value MWT owns, drop its aria-modal claims, stop watching the body,
+ * and leave the host usable. The visible modal stays open — unmanaged —
+ * rather than freezing the page behind it.
+ */
+function failModalStackOpen(error) {
+    releaseManagedInert();
+    [...(document.querySelectorAll?.('.mwt-modal') || [])].forEach(m => {
+        try { m.querySelector?.('.mwt-modal-panel, .kt-history-panel')?.removeAttribute?.('aria-modal'); } catch { /* best effort */ }
+    });
+    console.error('[MWT:Modal] Modal stack sync failed — managed inertness released so the host stays usable.', error);
 }
 
 function closeModalElement(modal, { destroyOnClose = modal._mwtModalOptions?.destroyOnClose } = {}) {
@@ -230,6 +481,16 @@ function isFocusable(element, { ignoreInert = false } = {}) {
  */
 export function decorateModalShell(modal, { title = '', closeOnBackdrop = true, destroyOnClose = true, onClose = null } = {}) {
     if (!modal) return modal;
+    if (foreignDialogOwnsFocus()) {
+        // Refuse rather than inerting the foreign dialog the user is in.
+        // Callers append the shell just before this call, so hide it — and
+        // drop it, for disposable shells — leaving nothing half-open behind.
+        console.warn('[MWT:Modal] Modal open refused — focus is inside a foreign dialog.');
+        notify('Merged World Tracker', 'Modal not opened — another dialog has focus. Close it first.', 'info');
+        modal.style.display = 'none';
+        if (destroyOnClose) modal.remove?.();
+        return modal;
+    }
     if (document.activeElement && document.activeElement !== modal) modal._mwtOpener = document.activeElement;
     const panel = modal.querySelector?.('.mwt-modal-panel, .kt-history-panel');
     const heading = panel?.querySelector?.('h3');

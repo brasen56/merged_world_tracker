@@ -102,6 +102,22 @@ describe('modal accessibility lifecycle', () => {
         expect(document.getElementById('mwt-reopen').style.display).toBe('none');
     });
 
+    test('opening moves focus into the dialog', () => {
+        // §6.2 (docs/accessibility_plan.md): explicit focus-on-open
+        // assertion. focusIntoModal picks the first focusable control in the
+        // panel — the × button, first in DOM order — so keyboard and AT users
+        // land inside the dialog, never on the opener or the body behind it.
+        const opener = document.createElement('button');
+        document.body.append(opener);
+        opener.focus();
+        const modal = createModal({ id: 'mwt-focus-on-open', title: 'Focus on open', content: '<button id="focus-open-action">Action</button>' });
+
+        showModal(modal.id);
+
+        expect(document.activeElement).toBe(modal.querySelector('.mwt-modal-close'));
+        expect(document.activeElement).not.toBe(opener);
+    });
+
     test('restores focus to a valid opener and falls back when it is disabled', () => {
         const opener = document.createElement('button');
         document.body.append(opener);

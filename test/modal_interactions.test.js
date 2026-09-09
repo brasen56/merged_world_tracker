@@ -24,15 +24,18 @@
  * escapeHtml. Listeners are still invoked directly (fire/click) — these stay
  * handler tests rather than full mobile interaction coverage.
  *
- * SCOPE — these guarantees hold for createModal CONSUMERS only. The four
- * Knowledge modals hand-roll their markup and never call the helper, so none
- * of the Escape/veto/cleanup contract pinned here applies to them by
- * construction: #kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal,
- * and #kt-identity-modal (knowledge/render.js). What IS pinned elsewhere is
- * their removal on chat change (test/paused_chat_cleanup.test.js, via the
- * _cleanupKeyHandler convention). A lifecycle regression in one of those
- * modals is invisible to this file — do not read green here as "modal
- * interactions are covered" for them.
+ * SCOPE — the lifecycle guarantees pinned here are createModal's own. The
+ * four Knowledge modals still hand-roll their MARKUP (knowledge/render.js)
+ * but no longer bypass the shared lifecycle: each is wrapped with
+ * decorateModalShell (core/modal.js), which installs the same key handler,
+ * close path, onClose veto, and cleanup convention as createModal. Their
+ * behavior under that shared contract is pinned in the jsdom suites —
+ * test/modal_accessibility.test.js (dialog semantics, focus management),
+ * test/modal_inert_guards.test.js (managed-inert fail-safes),
+ * test/kt_view_modal_singleton.test.js (the #kt-view-modal singleton race),
+ * and test/kt_chat_change_sweep.test.js (the chat-change close path). This
+ * file's parsed-DOM fake stays the home of the × / backdrop / Escape /
+ * hideModal input rules themselves.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -432,6 +435,17 @@ describe('onClose veto', () => {
         const modal = openModal('mwt-veto-tap', { onClose: () => false });
 
         modal.querySelector('.mwt-modal-backdrop').click();
+
+        expect(modal.style.display).toBe('flex');
+    });
+
+    test('returning false keeps the modal open through hideModal (the programmatic route)', () => {
+        // §6.2 (docs/accessibility_plan.md, bugs_temp.md): hideModal routes
+        // through the same _closeModal as × / backdrop / Escape and is the
+        // path dozens of module call sites use — the veto must hold here too.
+        const modal = openModal('mwt-veto-hide', { onClose: () => false });
+
+        hideModal('mwt-veto-hide');
 
         expect(modal.style.display).toBe('flex');
     });

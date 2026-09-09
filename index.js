@@ -31,7 +31,7 @@ import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings
 // module's slot + snapshot at the start of CHAT_CHANGED so the new chat's
 // injections are never rejected by the previous chat's stale snapshots.
 import { getBudgetSettings, saveBudgetSettings, resetBudgetInjections } from './core/budget.js';
-import { createModal, showModal, setStatus } from './core/modal.js';
+import { createModal, showModal, setStatus, releaseManagedInert } from './core/modal.js';
 import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues } from './core/ui.js';
 import { createCommands } from './core/commands.js';
 import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
@@ -971,6 +971,7 @@ document.addEventListener('mwt:busy-changed', ui.updateButtonStates);
 //   MWT.scope.diagnose()                 // which books this chat resolves to, and why
 //   MWT.scope.bindings()                 // every saved character/chat → lorebook binding
 //   MWT.scope.reload()                   // flush + re-hydrate the registry stores
+//   MWT.modal.releaseManagedInert()      // emergency: un-inert the page if a modal crash froze it
 //
 // NOTE ON CLEARING: evidence is the ROOT, a generated profile is a LEAF. Clearing
 // evidence does NOT delete the NPC's entry in the "NPC Profiles" lorebook, which
@@ -1001,6 +1002,12 @@ try {
     };
 
     window.MWT = window.MWT || {};
+    // Emergency console handle for the modal stack's managed-inert
+    // bookkeeping (core/modal.js): if a crash ever leaves the host frozen
+    // behind a modal, MWT.modal.releaseManagedInert() rolls every inert
+    // value MWT owns back. releaseManagedInert is a plain ES-module export,
+    // unreachable from a tester's console without this bridge.
+    window.MWT.modal = { releaseManagedInert };
     window.MWT.evidence = {
         list: () => {
             const map = evidenceApi.getEvidenceMap();
