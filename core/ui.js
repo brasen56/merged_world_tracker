@@ -43,46 +43,49 @@ export function renderApiSettingsFields(s, opts = {}) {
     } = opts;
 
     const advanced = includeAdvanced ? `
-        <label class="mwt-label">Top P</label>
+        <label class="mwt-label" for="${topPId}">Top P</label>
         <input id="${topPId}" class="mwt-input" type="number"
                value="${numberValue(s.topP, 1.0)}" min="0" max="1" step="0.05">
 
-        <label class="mwt-label">Freq Penalty</label>
+        <label class="mwt-label" for="${freqId}">Freq Penalty</label>
         <input id="${freqId}" class="mwt-input" type="number"
                value="${numberValue(s.frequencyPenalty, 0)}" min="-2" max="2" step="0.1">
 
-        <label class="mwt-label">Pres Penalty</label>
+        <label class="mwt-label" for="${presId}">Pres Penalty</label>
         <input id="${presId}" class="mwt-input" type="number"
                value="${numberValue(s.presencePenalty, 0)}" min="-2" max="2" step="0.1">
     ` : '';
 
     const headers = includeHeaders ? `
-        <label class="mwt-label">Custom Headers</label>
+        <label class="mwt-label" for="${headersId}">Custom Headers</label>
         <textarea id="${headersId}" class="mwt-input" rows="2"
                   placeholder='{"X-Custom": "value"}'>${escapeHtml(s.customHeaders || '')}</textarea>
     ` : '';
 
+    // Slice 4 (a11y plan §4.4): every label carries an explicit for= pointing
+    // at its control. The inputs already had stable ids (readApiSettingsValues
+    // queries by them), so the sibling pairs just needed the association.
     return `
-        <label class="mwt-label">API URL</label>
+        <label class="mwt-label" for="${urlId}">API URL</label>
         <input id="${urlId}" class="mwt-input" type="text"
                value="${escapeHtml(s.apiUrl || '')}"
                placeholder="https://api.openai.com/v1">
 
-        <label class="mwt-label">API Key</label>
+        <label class="mwt-label" for="${keyId}">API Key</label>
         <input id="${keyId}" class="mwt-input" type="password"
                value="${escapeHtml(s.apiKey || '')}"
                placeholder="sk-...">
 
-        <label class="mwt-label">Model</label>
+        <label class="mwt-label" for="${modelId}">Model</label>
         <input id="${modelId}" class="mwt-input" type="text"
                value="${escapeHtml(s.modelName || '')}"
                placeholder="gpt-4o-mini">
 
-        <label class="mwt-label">Max Tokens</label>
+        <label class="mwt-label" for="${maxTokensId}">Max Tokens</label>
         <input id="${maxTokensId}" class="mwt-input" type="number"
                value="${numberValue(s.maxTokens, maxTokensDefault)}" min="100" max="32000">
 
-        <label class="mwt-label">Temperature</label>
+        <label class="mwt-label" for="${tempId}">Temperature</label>
         <input id="${tempId}" class="mwt-input" type="number"
                value="${numberValue(s.temperature, tempDefault)}" min="0" max="2" step="0.05">
         ${advanced}
@@ -525,10 +528,21 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 hub.id = 'mwt-float-hub';
                 hub.className = 'mwt-float-btn';
                 hub.title = 'Merged World Tracker';
+                // Same Slice 4 contract as the per-module float buttons: a
+                // div needs the role, tab stop, and name made explicit, plus
+                // Enter/Space activation (below).
+                hub.setAttribute('role', 'button');
+                hub.setAttribute('tabindex', '0');
+                hub.setAttribute('aria-label', 'Merged World Tracker');
                 hub.style.right = '16px';
                 hub.style.bottom = '70px';
-                hub.innerHTML = '<span class="mwt-float-btn-icon">🌐</span>';
+                hub.innerHTML = '<span class="mwt-float-btn-icon" aria-hidden="true">🌐</span>';
                 hub.addEventListener('click', () => openModal(null));
+                hub.addEventListener('keydown', (e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    hub.click();
+                });
                 document.body.appendChild(hub);
             }
             hub.style.display = 'flex';
@@ -604,8 +618,19 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             btn.id = cfg.id;
             btn.className = 'mwt-float-btn';
             btn.title = cfg.title;
+            // Slice 4 (a11y plan §4.4): the bar is built from divs, so the
+            // button role, tab stop, and accessible name are all explicit.
+            // aria-label is kept in step with every later title update below
+            // (countdowns, pending-proposal counts) — the name should describe
+            // the button's current state when focus lands on it.
+            btn.setAttribute('role', 'button');
+            btn.setAttribute('tabindex', '0');
+            btn.setAttribute('aria-label', cfg.title);
             btn.style.touchAction = 'none'; // Enable pointer events for touch
-            btn.innerHTML = `<span class="mwt-float-btn-icon">${cfg.label}</span><span class="mwt-float-btn-tokens" id="${cfg.id}-tokens"></span><span class="mwt-float-btn-countdown" id="${cfg.id}-countdown"></span>`;
+            // The icon glyph is decorative (the name above carries the
+            // meaning); the countdown digits change every message and must not
+            // be announced per change (§4.4 — countdowns are never live).
+            btn.innerHTML = `<span class="mwt-float-btn-icon" aria-hidden="true">${cfg.label}</span><span class="mwt-float-btn-tokens" id="${cfg.id}-tokens"></span><span class="mwt-float-btn-countdown" id="${cfg.id}-countdown" aria-hidden="true"></span>`;
 
             // Restore saved position or use default
             const saved = savedPositions[cfg.id];
@@ -640,6 +665,17 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             btn.addEventListener('click', () => {
                 if (btn._dragged) { btn._dragged = false; return; }
                 openModal(cfg.tab);
+            });
+
+            // Keyboard activation for the role="button" div (Slice 4): Enter
+            // and Space fire a click natively on <button> but not on divs, so
+            // synthesize the same path. Reusing the click listener (rather
+            // than calling openModal directly) keeps the _dragged guard and
+            // any future click-side behavior in one place.
+            btn.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                btn.click();
             });
 
             // Pointer-event-based drag (covers mouse + touch + pen)
@@ -762,12 +798,12 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
         container.innerHTML = `
             <div class="mwt-drawer-title">Merged World Tracker</div>
             <div class="mwt-drawer-buttons">
-                <button class="mwt-btn mwt-btn-primary" id="mwt-drawer-open" title="Open the MWT modal">🌐 Open MWT</button>
-                <button class="mwt-btn" id="mwt-drawer-world" title="Open World State tab">🌍</button>
-                <button class="mwt-btn" id="mwt-drawer-chronicle" title="Open Chronicle tab">📜</button>
-                <button class="mwt-btn" id="mwt-drawer-knowledge" title="Open Knowledge tab">🧠</button>
-                <button class="mwt-btn" id="mwt-drawer-story-planner" title="Open Story Planner tab">🗺️</button>
-                <button class="mwt-btn" id="mwt-drawer-interiority" title="Open Interiority tab">💭</button>
+                <button class="mwt-btn mwt-btn-primary" id="mwt-drawer-open" title="Open the MWT modal"><span aria-hidden="true">🌐</span> Open MWT</button>
+                <button class="mwt-btn" id="mwt-drawer-world" title="Open World State tab" aria-label="Open World State tab"><span aria-hidden="true">🌍</span></button>
+                <button class="mwt-btn" id="mwt-drawer-chronicle" title="Open Chronicle tab" aria-label="Open Chronicle tab"><span aria-hidden="true">📜</span></button>
+                <button class="mwt-btn" id="mwt-drawer-knowledge" title="Open Knowledge tab" aria-label="Open Knowledge tab"><span aria-hidden="true">🧠</span></button>
+                <button class="mwt-btn" id="mwt-drawer-story-planner" title="Open Story Planner tab" aria-label="Open Story Planner tab"><span aria-hidden="true">🗺️</span></button>
+                <button class="mwt-btn" id="mwt-drawer-interiority" title="Open Interiority tab" aria-label="Open Interiority tab"><span aria-hidden="true">💭</span></button>
             </div>
         `;
 
@@ -977,6 +1013,9 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             // Title shows whichever signal(s) are active. Staging takes
             // precedence in the wording since proposals need action; growth
             // evidence is informational (already saved to the evidence store).
+            // Slice 4: aria-label tracks the title so the accessible name
+            // describes the current state (name changes do not announce —
+            // that stays the notification system's job).
             if (stagingCount > 0 && growthCount > 0) {
                 knBtnAny.title = `Knowledge Tracker — ${stagingCount} proposal(s) + ${growthCount} new growth observation(s)`;
             } else if (stagingCount > 0) {
@@ -986,6 +1025,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             } else {
                 knBtnAny.title = 'Knowledge';
             }
+            knBtnAny.setAttribute?.('aria-label', knBtnAny.title);
         }
 
         if (s.buttonStyle !== 'classic') return;

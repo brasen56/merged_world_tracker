@@ -92,23 +92,31 @@ function updateAutoBanner() {
     const autoInterval = getAutoInterval();
     if (autoEnabled) {
         el.style.display = '';
-        el.textContent = `🔄 Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)`;
+        // innerHTML (never a raw textContent write) so the 🔄 stays inside its
+        // aria-hidden span — the initial markup in render() hides the glyph,
+        // and this update must not un-hide it (Slice 4 item 2).
+        el.innerHTML = `<span aria-hidden="true">🔄</span> Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)`;
     } else {
         el.style.display = 'none';
     }
 }
 
-/** Update toggle button labels to reflect current persisted state. */
+/**
+ * Update toggle button labels to reflect current persisted state. Labels are
+ * rebuilt with innerHTML so the decorative 🔌/🔄 glyphs stay inside their
+ * aria-hidden spans — a textContent write would fold them into the buttons'
+ * accessible names (Slice 4 item 2; must match the initial markup in render()).
+ */
 function refreshButtonLabels() {
     if (!state.modal) return;
     const injectBtn = state.modal.querySelector('#sp-toggle-inject');
     const autoBtn = state.modal.querySelector('#sp-toggle-auto');
     if (injectBtn) {
-        injectBtn.textContent = isInjectionEnabled() ? '🔌 Injection: ON' : '🔌 Injection: OFF';
+        injectBtn.innerHTML = isInjectionEnabled() ? '<span aria-hidden="true">🔌</span> Injection: ON' : '<span aria-hidden="true">🔌</span> Injection: OFF';
     }
     if (autoBtn) {
         const autoInterval = getAutoInterval();
-        autoBtn.textContent = isAutoEnabled() ? `🔄 Auto: ON (${autoInterval})` : '🔄 Auto: OFF';
+        autoBtn.innerHTML = isAutoEnabled() ? `<span aria-hidden="true">🔄</span> Auto: ON (${autoInterval})` : '<span aria-hidden="true">🔄</span> Auto: OFF';
     }
 }
 
@@ -174,7 +182,7 @@ function renderBeatStrip(arc) {
                     <span class="sp-beat-text">All ${total} setup beats planted — this can happen now.</span>
                 </div>
                 <div class="sp-beat-actions">
-                    <button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Undo the last '✓ planted'">↺ back</button>
+                    <button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Undo the last '✓ planted'"><span aria-hidden="true">↺</span> back</button>
                 </div>
             </div>`;
     }
@@ -189,8 +197,8 @@ function renderBeatStrip(arc) {
             </div>
             <div class="sp-beat-actions">
                 <button class="mwt-btn sp-beat-done" data-action="beat-done" data-id="${id}"
-                        title="Mark this setup as planted and move to the next beat">✓ planted</button>
-                ${done > 0 ? `<button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Go back a beat">↺</button>` : ''}
+                        title="Mark this setup as planted and move to the next beat"><span aria-hidden="true">✓</span> planted</button>
+                ${done > 0 ? `<button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Go back a beat" aria-label="Go back a beat">↺</button>` : ''}
             </div>
         </div>`;
 }
@@ -203,13 +211,13 @@ function renderArcCard(arc) {
         <div class="sp-arc${dimmed}${pinnedCls}${readyCls}" data-id="${escapeHtml(arc.id)}">
             <div class="sp-arc-head">
                 <button class="sp-pin" data-action="pin" data-id="${escapeHtml(arc.id)}"
-                        title="${arc.pinned ? 'Unpin' : 'Pin — keeps this arc through regeneration'}">${arc.pinned ? '📌' : '📍'}</button>
+                        title="${arc.pinned ? 'Unpin' : 'Pin — keeps this arc through regeneration'}" aria-label="${arc.pinned ? `Unpin arc ${escapeHtml(arc.title || 'untitled')}` : `Pin arc ${escapeHtml(arc.title || 'untitled')}`}">${arc.pinned ? '📌' : '📍'}</button>
                 <input type="text" class="sp-arc-title" data-action="title" data-id="${escapeHtml(arc.id)}"
-                       value="${escapeHtml(arc.title)}" placeholder="Arc name">
-                <button class="sp-arc-del" data-action="delete" data-id="${escapeHtml(arc.id)}" title="Delete arc">🗑</button>
+                       value="${escapeHtml(arc.title)}" placeholder="Arc name" aria-label="Arc name">
+                <button class="sp-arc-del" data-action="delete" data-id="${escapeHtml(arc.id)}" title="Delete arc" aria-label="Delete arc">🗑</button>
             </div>
             <textarea class="sp-arc-body" data-action="body" data-id="${escapeHtml(arc.id)}" rows="2"
-                      placeholder="What shift does this arc introduce?">${escapeHtml(arc.body)}</textarea>
+                      placeholder="What shift does this arc introduce?" aria-label="Arc description for ${escapeHtml(arc.title || 'untitled arc')}">${escapeHtml(arc.body)}</textarea>
             ${renderBeatStrip(arc)}
             <div class="sp-arc-foot">
                 <select class="sp-arc-section" data-action="section" data-id="${escapeHtml(arc.id)}" title="Move to another section">
@@ -295,80 +303,81 @@ export function render() {
 
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
-            <button id="sp-generate" class="mwt-btn mwt-btn-primary">🎲 Generate Plan</button>
-            <button id="sp-revert" class="mwt-btn" ${getPlanHistory().length === 0 ? 'disabled' : ''}>⏪ Revert</button>
-            <button id="sp-history" class="mwt-btn">📋 History</button>
-            <button id="sp-preview" class="mwt-btn">👁 Preview Injection</button>
-            <button id="sp-clear" class="mwt-btn mwt-btn-danger">🗑️ Clear</button>
+            <button id="sp-generate" class="mwt-btn mwt-btn-primary"><span aria-hidden="true">🎲</span> Generate Plan</button>
+            <button id="sp-revert" class="mwt-btn" ${getPlanHistory().length === 0 ? 'disabled' : ''}><span aria-hidden="true">⏪</span> Revert</button>
+            <button id="sp-history" class="mwt-btn"><span aria-hidden="true">📋</span> History</button>
+            <button id="sp-preview" class="mwt-btn"><span aria-hidden="true">👁</span> Preview Injection</button>
+            <button id="sp-clear" class="mwt-btn mwt-btn-danger"><span aria-hidden="true">🗑️</span> Clear</button>
             <span id="sp-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="margin-left:auto;line-height:28px">${escapeHtml(toolbarStatsText())}</span>
         </div>
 
         <div class="sp-inject-modes mwt-flex mwt-gap-8 mwt-mb-8" style="flex-wrap:wrap;align-items:center">
             <span class="mwt-text-dim mwt-text-sm">Inject:</span>
             ${INJECT_MODES.map(m => `
-                <label class="sp-mode-label" title="${escapeHtml(m.blurb)}">
-                    <input type="radio" name="sp-inject-mode" value="${m.key}" ${m.key === mode ? 'checked' : ''}> ${escapeHtml(m.label)}
+                <label class="sp-mode-label" for="sp-inject-mode-${m.key}">
+                    <input type="radio" id="sp-inject-mode-${m.key}" name="sp-inject-mode" value="${m.key}" aria-describedby="sp-inject-mode-help" ${m.key === mode ? 'checked' : ''}> ${escapeHtml(m.label)}
                 </label>`).join('')}
 
             <span class="mwt-text-dim mwt-text-sm" style="margin-left:12px">Push:</span>
-            <select id="sp-enforcement" class="sp-enforcement" title="How hard the AI is pushed to act on the plan">
+            <select id="sp-enforcement" class="sp-enforcement" title="How hard the AI is pushed to act on the plan" aria-label="Push (enforcement)">
                 ${ENFORCEMENT_MODES.map(m => `<option value="${m.key}" ${m.key === enforcement ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('')}
             </select>
             <span id="sp-enforcement-blurb" class="mwt-text-dim mwt-text-sm">${escapeHtml(ENFORCEMENT_MODES.find(m => m.key === enforcement)?.blurb || '')}</span>
         </div>
+        <p id="sp-inject-mode-help" class="mwt-text-dim mwt-text-sm" style="margin:0 0 8px">${INJECT_MODES.map(m => `<strong>${escapeHtml(m.label)}:</strong> ${escapeHtml(m.blurb)}`).join(' · ')}</p>
 
         <div id="sp-arcs" class="sp-arcs">${renderArcsInner()}</div>
 
-        <div id="sp-auto-banner" style="color:var(--mwt-accent);font-size:12px;margin:8px 0 4px;${autoEnabled ? '' : 'display:none'}">${autoEnabled ? `🔄 Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)` : ''}</div>
+        <div id="sp-auto-banner" style="color:var(--mwt-accent);font-size:12px;margin:8px 0 4px;${autoEnabled ? '' : 'display:none'}">${autoEnabled ? `<span aria-hidden="true">🔄</span> Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)` : ''}</div>
 
         <details class="mwt-mt-8">
-            <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">⚙️ Story Planner Settings</summary>
+            <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500"><span aria-hidden="true">⚙️</span> Story Planner Settings</summary>
             <div class="mwt-settings-grid mwt-mt-8">
                 ${renderApiSettingsFields(s, { ...SP_API_FIELD_IDS, includeAdvanced: true, includeHeaders: true })}
 
-                <label class="mwt-label">Settings Scope</label>
+                <div class="mwt-label">Settings Scope</div>
                 <div>
-                    <label class="sp-mode-label"><input id="sp-use-global-defaults" type="checkbox" ${usesGlobalDefaults() ? 'checked' : ''}> Use global defaults</label>
+                    <label class="sp-mode-label" for="sp-use-global-defaults"><input id="sp-use-global-defaults" type="checkbox" ${usesGlobalDefaults() ? 'checked' : ''}> Use global defaults</label>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When checked, Inject, Push, Arcs Per Generation, Auto, and its interval are shared by new and existing chats. Uncheck to override them for this chat.</p>
                 </div>
 
-                <label class="mwt-label">Direction Hint</label>
+                <label class="mwt-label" for="sp-direction-hint">Direction Hint</label>
                 <div>
                     <textarea id="sp-direction-hint" class="mwt-input" rows="2" placeholder="e.g. more political intrigue, ease off the romance, I want a villain arc">${escapeHtml(getDirectionHint())}</textarea>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Steers the next generation. Leave blank for none. Saved per chat.</p>
                 </div>
 
-                <label class="mwt-label">Arcs Per Generation</label>
+                <label class="mwt-label" for="sp-arc-count">Arcs Per Generation</label>
                 <div>
                     <input id="sp-arc-count" class="mwt-input" type="number" value="${getArcCount()}" min="3" max="30" style="max-width:100px">
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">How many arcs to ask for (3–30). Fewer, tighter arcs vs. a sprawling menu.</p>
                 </div>
 
-                <label class="mwt-label">Injection Depth</label>
+                <label class="mwt-label" for="sp-injection-depth">Injection Depth</label>
                 <input id="sp-injection-depth" class="mwt-input" type="number" value="${s.injectionDepth ?? 4}" min="0" max="999">
 
-                <label class="mwt-label">Custom System Prompt</label>
+                <label class="mwt-label" for="sp-custom-system-prompt">Custom System Prompt</label>
                 <textarea id="sp-custom-system-prompt" class="mwt-input" rows="4" placeholder="Leave blank for default prompt">${escapeHtml(s.customSystemPrompt || '')}</textarea>
                 <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Overrides the system prompt sent to the AI when generating a plan. Leave blank to use the built-in default. Note: the default prompt defines the section headings the plan is parsed into — a custom prompt that uses different headings will have its arcs filed under "${escapeHtml(getSectionMeta('emerging').label)}".</p>
 
-                <label class="mwt-label">Custom User Prompt</label>
+                <label class="mwt-label" for="sp-custom-user-prompt">Custom User Prompt</label>
                 <div>
                     <textarea id="sp-custom-user-prompt" class="mwt-input" rows="4" placeholder="Leave blank for default prompt">${escapeHtml(s.customUserPrompt || '')}</textarea>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Overrides the user task prompt. Supports tokens: <code>{{chatHistory}}</code>, <code>{{worldState}}</code>, <code>{{lastChronicle}}</code>, <code>{{previousPlan}}</code>, <code>{{directionHint}}</code>, <code>{{arcCount}}</code>. Each resolves to empty if that data isn't available. Leave blank for default.</p>
                 </div>
 
-                <label class="mwt-label">Auto-Generate Interval</label>
+                <label class="mwt-label" for="sp-auto-interval">Auto-Generate Interval</label>
                 <div>
                     <input id="sp-auto-interval" class="mwt-input" type="number" value="${autoInterval}" min="1" max="100" style="max-width:100px">
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When auto-generate is ON, a new plan is generated every N messages (counted on AI replies).</p>
                 </div>
 
-                <label class="mwt-label">Beat Reminder</label>
+                <div class="mwt-label">Beat Reminder</div>
                 <div>
-                    <label class="sp-mode-label">
+                    <label class="sp-mode-label" for="sp-nudge-enabled">
                         <input id="sp-nudge-enabled" type="checkbox" ${isNudgeEnabled() ? 'checked' : ''}> Remind me after
                     </label>
-                    <input id="sp-nudge-turns" class="mwt-input" type="number" value="${getNudgeTurns()}" min="3" max="60" style="max-width:80px">
+                    <input id="sp-nudge-turns" class="mwt-input" type="number" value="${getNudgeTurns()}" min="3" max="60" style="max-width:80px" aria-label="Remind me after this many turns">
                     <span class="mwt-text-dim mwt-text-sm">turns</span>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">
                         Uses no API calls. When a setup beat has gone this many turns without being marked planted,
@@ -381,8 +390,8 @@ export function render() {
                 <div></div>
                 <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                     <button id="sp-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
-                    <button id="sp-toggle-inject" class="mwt-btn">${isInjectionEnabled() ? '🔌 Injection: ON' : '🔌 Injection: OFF'}</button>
-                    <button id="sp-toggle-auto" class="mwt-btn">${autoEnabled ? `🔄 Auto: ON (${autoInterval})` : '🔄 Auto: OFF'}</button>
+                    <button id="sp-toggle-inject" class="mwt-btn">${isInjectionEnabled() ? '<span aria-hidden="true">🔌</span> Injection: ON' : '<span aria-hidden="true">🔌</span> Injection: OFF'}</button>
+                    <button id="sp-toggle-auto" class="mwt-btn">${autoEnabled ? `<span aria-hidden="true">🔄</span> Auto: ON (${autoInterval})` : '<span aria-hidden="true">🔄</span> Auto: OFF'}</button>
                 </div>
             </div>
         </details>
@@ -657,7 +666,7 @@ export function wireEvents() {
     state.modal.querySelector('#sp-generate')?.addEventListener('click', async () => {
         const btn = state.modal.querySelector('#sp-generate');
         try {
-            setControlBusy(btn, true); btn.textContent = '⏳ Generating…';
+            setControlBusy(btn, true); btn.innerHTML = '<span aria-hidden="true">⏳</span> Generating…';
             const arcs = await generatePlan(false);
             if (arcs) {
                 renderArcs();
@@ -666,7 +675,10 @@ export function wireEvents() {
         } catch (err) {
             notify('Story Planner', `Generation failed: ${err.message}`, 'error');
         } finally {
-            setControlBusy(btn, false); btn.textContent = '🎲 Generate Plan';
+            // Restore through innerHTML with the hidden span so the treatment
+            // survives the busy cycle (Slice 4 item 2; matches the toolbar
+            // markup above).
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🎲</span> Generate Plan';
         }
     });
 

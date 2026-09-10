@@ -87,7 +87,10 @@ export function refreshDocumentStatusChip() {
     if (!chip) return;
     const status = deriveDocumentStatus();
     const presentation = documentStatusPresentation(status);
-    chip.textContent = `${presentation.emoji} ${presentation.label}`;
+    // The emoji duplicates the visible label + color, so it stays decorative:
+    // rebuilt through an aria-hidden span, never a raw textContent write
+    // (Slice 4 item 2).
+    chip.innerHTML = `<span aria-hidden="true">${presentation.emoji}</span> ${escapeHtml(presentation.label)}`;
     chip.title = presentation.title;
     chip.style.color = DOC_STATUS_STYLES[status.kind]?.color || '';
 }
@@ -202,14 +205,18 @@ export function refreshButtonLabels() {
     if (!state.modal) return;
     const injectBtn = state.modal.querySelector('#ws-toggle-inject');
     const autoBtn = state.modal.querySelector('#ws-toggle-auto');
+    // Labels are rebuilt with innerHTML so the decorative 🔌/🔄 glyphs stay
+    // inside their aria-hidden spans — a textContent write would fold them
+    // into the buttons' accessible names (Slice 4 item 2; must match the
+    // initial markup in render()).
     if (injectBtn) {
-        injectBtn.textContent = isInjectionEnabled() ? '🔌 Injection: ON' : '🔌 Injection: OFF';
+        injectBtn.innerHTML = isInjectionEnabled() ? '<span aria-hidden="true">🔌</span> Injection: ON' : '<span aria-hidden="true">🔌</span> Injection: OFF';
     }
     if (autoBtn) {
         if (isAutoRefreshEnabled()) {
-            autoBtn.textContent = `🔄 Auto: ${state.autoRefreshCounter}/${getAutoRefreshInterval()}`;
+            autoBtn.innerHTML = `<span aria-hidden="true">🔄</span> Auto: ${state.autoRefreshCounter}/${getAutoRefreshInterval()}`;
         } else {
-            autoBtn.textContent = '🔄 Auto: OFF';
+            autoBtn.innerHTML = '<span aria-hidden="true">🔄</span> Auto: OFF';
         }
     }
 }
@@ -482,14 +489,14 @@ export function render() {
 
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
-            <button id="ws-refresh" class="mwt-btn mwt-btn-primary">🔄 Refresh</button>
-            <button id="ws-delta-refresh" class="mwt-btn" ${!text?.trim() ? 'disabled' : ''} title="Delta refresh: ask the model only for changed sections and apply a validated patch (cheap). Needs an existing refresh baseline.">⚡ Delta</button>
-            <button id="ws-save" class="mwt-btn">💾 Save</button>
-            <button id="ws-revert" class="mwt-btn" ${getAutoSaveHistory().length === 0 ? 'disabled' : ''}>⏪ Revert</button>
-            <button id="ws-history" class="mwt-btn">📋 History</button>
-            <button id="ws-archive" class="mwt-btn" ${!text?.trim() ? 'disabled' : ''}>📦 Export</button>
-            <button id="ws-import" class="mwt-btn">📥 Import</button>
-            <button id="ws-clear" class="mwt-btn mwt-btn-danger">🗑️ Clear</button>
+            <button id="ws-refresh" class="mwt-btn mwt-btn-primary"><span aria-hidden="true">🔄</span> Refresh</button>
+            <button id="ws-delta-refresh" class="mwt-btn" ${!text?.trim() ? 'disabled' : ''} title="Delta refresh: ask the model only for changed sections and apply a validated patch (cheap). Needs an existing refresh baseline."><span aria-hidden="true">⚡</span> Delta</button>
+            <button id="ws-save" class="mwt-btn"><span aria-hidden="true">💾</span> Save</button>
+            <button id="ws-revert" class="mwt-btn" ${getAutoSaveHistory().length === 0 ? 'disabled' : ''}><span aria-hidden="true">⏪</span> Revert</button>
+            <button id="ws-history" class="mwt-btn"><span aria-hidden="true">📋</span> History</button>
+            <button id="ws-archive" class="mwt-btn" ${!text?.trim() ? 'disabled' : ''}><span aria-hidden="true">📦</span> Export</button>
+            <button id="ws-import" class="mwt-btn"><span aria-hidden="true">📥</span> Import</button>
+            <button id="ws-clear" class="mwt-btn mwt-btn-danger"><span aria-hidden="true">🗑️</span> Clear</button>
             <span id="ws-doc-status" class="mwt-text-sm" style="margin-left:auto;line-height:28px;white-space:nowrap" title=""></span>
             <span id="ws-toolbar-stats" class="mwt-text-dim mwt-text-sm" style="line-height:28px">${words} words · ~${tokens} tokens${autoEnabled ? ` · Auto: ${state.autoRefreshCounter}/${autoInterval} msgs` : ''}</span>
         </div>
@@ -509,11 +516,11 @@ export function render() {
                         ${sectionOptions}
                     </select>
                     <div class="mwt-flex mwt-gap-4" style="align-items:center">
-                        <label class="mwt-label" style="margin:0;white-space:nowrap">Variety:</label>
-                        <input id="ws-variety-slider" type="range" min="1" max="5" value="2" style="width:120px">
+                        <label class="mwt-label" style="margin:0;white-space:nowrap" for="ws-variety-slider">Variety:</label>
+                        <input id="ws-variety-slider" type="range" min="1" max="5" value="2" style="width:120px" aria-label="Regeneration variety">
                         <span id="ws-variety-label" style="font-size:11px;color:#c4b5fd;min-width:80px">${VARIETY_LABELS[2]}</span>
                     </div>
-                    <button id="ws-regen-section" class="mwt-btn" style="background:#6d28d9;border-color:#7c3aed;color:#fff">🎲 Regenerate Section</button>
+                    <button id="ws-regen-section" class="mwt-btn" style="background:#6d28d9;border-color:#7c3aed;color:#fff"><span aria-hidden="true">🎲</span> Regenerate Section</button>
                 </div>
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin:6px 0 0">Regenerate a single section with adjustable variety. Higher variety = bolder, more unexpected results.</p>
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Note:</b> The temperature boost only applies when using a custom API connection (URL + Model). With a Connection Profile, temperature is controlled by the profile/preset — variety then only changes the prompt text.</p>
@@ -529,8 +536,8 @@ export function render() {
                     See <code>world_state/STALE_ENTRY_EXPIRY_DESIGN.md</code>.
                 </p>
                 <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
-                    <button id="ws-rebuild-provenance" class="mwt-btn">🔄 Rebuild Provenance</button>
-                    <button id="ws-purge-stale" class="mwt-btn mwt-btn-danger">🧹 Purge Stale Entries</button>
+                    <button id="ws-rebuild-provenance" class="mwt-btn"><span aria-hidden="true">🔄</span> Rebuild Provenance</button>
+                    <button id="ws-purge-stale" class="mwt-btn mwt-btn-danger"><span aria-hidden="true">🧹</span> Purge Stale Entries</button>
                 </div>
                 <div id="ws-provenance-panel" class="mwt-mt-8">${renderProvenanceRows()}</div>
             </div>
@@ -539,19 +546,19 @@ export function render() {
         <details class="mwt-mt-8">
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">🧹 Stale-Entry Expiry &amp; Grounding</summary>
             <div class="mwt-settings-grid mwt-mt-8">
-                <label class="mwt-label">Expiry</label>
+                <div class="mwt-label">Expiry</div>
                 <div>
-                    <label class="mwt-text-sm" style="display:flex;align-items:center;gap:6px">
+                    <label class="mwt-text-sm" for="ws-expiry-enabled" style="display:flex;align-items:center;gap:6px">
                         <input id="ws-expiry-enabled" type="checkbox" ${s.expiryEnabled ? 'checked' : ''}>
                         Automatically expire stale entries on full refresh
                     </label>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Off by default. When on, entries in the sections below that haven't been mentioned in the configured message window are marked/quarantined/removed on every full refresh.</p>
                 </div>
 
-                <label class="mwt-label">Stale After (msgs)</label>
+                <label class="mwt-label" for="ws-expiry-stale-after">Stale After (msgs)</label>
                 <input id="ws-expiry-stale-after" class="mwt-input" type="number" value="${s.expiryStaleAfterMsgs ?? 40}" min="1" style="max-width:100px">
 
-                <label class="mwt-label">Expiry Mode</label>
+                <label class="mwt-label" for="ws-expiry-mode">Expiry Mode</label>
                 <div>
                     <select id="ws-expiry-mode" class="mwt-input" style="max-width:180px">
                         <option value="mark" ${(s.expiryMode || 'mark') === 'mark' ? 'selected' : ''}>Mark (non-destructive)</option>
@@ -561,25 +568,25 @@ export function render() {
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Mark:</b> appends "(stale)" to the entry. <b>Quarantine:</b> moves it to a "## Archive (Stale)" section, kept out of prompt injection. <b>Remove:</b> deletes it outright.</p>
                 </div>
 
-                <label class="mwt-label">Expiry Sections</label>
+                <div class="mwt-label">Expiry Sections</div>
                 <div>
-                    ${SECTIONS.filter(sec => sec !== 'Current Scene' && sec !== 'Key Character States').map(sec => {
+                    ${SECTIONS.filter(sec => sec !== 'Current Scene' && sec !== 'Key Character States').map((sec, i) => {
                         const checked = (s.expirySections || EXPIRY_SECTIONS_DEFAULT).includes(sec);
-                        return `<label class="mwt-text-sm" style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0"><input type="checkbox" class="ws-expiry-section" value="${escapeHtml(sec)}" ${checked ? 'checked' : ''}>${escapeHtml(sec)}</label>`;
+                        return `<label class="mwt-text-sm" for="ws-expiry-section-${i}" style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0"><input type="checkbox" id="ws-expiry-section-${i}" class="ws-expiry-section" value="${escapeHtml(sec)}" ${checked ? 'checked' : ''}>${escapeHtml(sec)}</label>`;
                     }).join('')}
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">"Current Scene" and "Key Character States" are always exempt (active cast).</p>
                 </div>
 
-                <label class="mwt-label">Grounding Gate</label>
+                <div class="mwt-label">Grounding Gate</div>
                 <div>
-                    <label class="mwt-text-sm" style="display:flex;align-items:center;gap:6px">
+                    <label class="mwt-text-sm" for="ws-grounding-enabled" style="display:flex;align-items:center;gap:6px">
                         <input id="ws-grounding-enabled" type="checkbox" ${s.groundingEnabled ? 'checked' : ''}>
                         Reject/strip names not grounded in chat or prior state
                     </label>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Off by default. Catches invented characters/entities the model didn't actually see. Checked against the scan window, the previous world state, and Pinned Entities below.</p>
                 </div>
 
-                <label class="mwt-label">Grounding Mode</label>
+                <label class="mwt-label" for="ws-grounding-mode">Grounding Mode</label>
                 <div>
                     <select id="ws-grounding-mode" class="mwt-input" style="max-width:180px">
                         <option value="soft" ${(s.groundingMode || 'soft') === 'soft' ? 'selected' : ''}>Soft (strip + log)</option>
@@ -587,7 +594,7 @@ export function render() {
                     </select>
                 </div>
 
-                <label class="mwt-label">Pinned Entities</label>
+                <label class="mwt-label" for="ws-pinned-entities">Pinned Entities</label>
                 <div>
                     <input id="ws-pinned-entities" class="mwt-input" type="text" value="${escapeHtml(s.pinnedEntities || '')}" placeholder="e.g. Protagonist Name, Companion Name">
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Comma-separated names that never expire and are never flagged as ungrounded.</p>
@@ -598,16 +605,16 @@ export function render() {
         <details class="mwt-mt-8">
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">⚡ Delta Refresh (Low-cost Mode)</summary>
             <div class="mwt-settings-grid mwt-mt-8">
-                <label class="mwt-label">Delta Mode</label>
+                <div class="mwt-label">Delta Mode</div>
                 <div>
-                    <label class="mwt-text-sm" style="display:flex;align-items:center;gap:6px">
+                    <label class="mwt-text-sm" for="ws-delta-enabled" style="display:flex;align-items:center;gap:6px">
                         <input id="ws-delta-enabled" type="checkbox" ${s.deltaMode ? 'checked' : ''}>
                         Use cheap delta refreshes for the scheduled auto-refresh
                     </label>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Off by default. When on, the scheduled auto-refresh asks the model only for the sections that changed and applies a validated patch, instead of regenerating the whole document. A full refresh still runs for the first generation, after manual edits, and on the reconciliation cadence below. The ⚡ Delta button always runs a delta on demand.</p>
                 </div>
 
-                <label class="mwt-label">Full Refresh Every</label>
+                <label class="mwt-label" for="ws-delta-reconcile-every">Full Refresh Every</label>
                 <div>
                     <div class="mwt-flex mwt-gap-4" style="align-items:center">
                         <input id="ws-delta-reconcile-every" class="mwt-input" type="number" value="${s.deltaReconcileEvery ?? 5}" min="1" max="50" style="max-width:100px">
@@ -616,7 +623,7 @@ export function render() {
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Periodic reconciliation: after this many consecutive delta (or section) updates, the next scheduled refresh is a full one. Default 5.</p>
                 </div>
 
-                <label class="mwt-label">Stale After (msgs)</label>
+                <label class="mwt-label" for="ws-delta-stale-after">Stale After (msgs)</label>
                 <div>
                     <div class="mwt-flex mwt-gap-4" style="align-items:center">
                         <input id="ws-delta-stale-after" class="mwt-input" type="number" value="${s.deltaStaleAfterMsgs ?? 15}" min="1" style="max-width:100px">
@@ -628,33 +635,33 @@ export function render() {
         </details>
 
         <details class="mwt-mt-8">
-            <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500">⚙️ World State Settings</summary>
+            <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500"><span aria-hidden="true">⚙️</span> World State Settings</summary>
             <div class="mwt-settings-grid mwt-mt-8">
                 ${renderApiSettingsFields(s, { urlId: 'ws-api-url', keyId: 'ws-api-key', modelId: 'ws-model', maxTokensId: 'ws-max-tokens', tempId: 'ws-temp', includeAdvanced: false, includeHeaders: false })}
 
-                <label class="mwt-label">Settings Scope</label>
+                <div class="mwt-label">Settings Scope</div>
                 <div>
-                    <label class="mwt-text-sm"><input id="ws-use-global-defaults" type="checkbox" ${usesGlobalDefaults() ? 'checked' : ''}> Use global defaults</label>
+                    <label class="mwt-text-sm" for="ws-use-global-defaults"><input id="ws-use-global-defaults" type="checkbox" ${usesGlobalDefaults() ? 'checked' : ''}> Use global defaults</label>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When checked, Injection, Auto, and its interval are shared across chats. Uncheck to override them for this chat.</p>
                 </div>
 
-                <label class="mwt-label">Injection Depth</label>
+                <label class="mwt-label" for="ws-injection-depth">Injection Depth</label>
                 <input id="ws-injection-depth" class="mwt-input" type="number" value="${s.injectionDepth ?? 1}" min="0" max="999">
 
-                <label class="mwt-label">Scan Messages</label>
+                <label class="mwt-label" for="ws-max-scan-messages">Scan Messages</label>
                 <div>
                     <input id="ws-max-scan-messages" class="mwt-input" type="number" value="${maxScan}" min="1" max="30" style="max-width:100px">
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">How many previous messages to scan (max 30). Auto-snapshot interval cannot exceed this.</p>
                 </div>
 
-                <label class="mwt-label">Auto-Save (sec)</label>
+                <label class="mwt-label" for="ws-auto-save-interval">Auto-Save (sec)</label>
                 <input id="ws-auto-save-interval" class="mwt-input" type="number" value="${s.autoSaveInterval || DEFAULT_AUTO_SAVE_INTERVAL}" min="30">
 
-                <label class="mwt-label">Custom Prompt</label>
+                <label class="mwt-label" for="ws-custom-prompt">Custom Prompt</label>
                 <textarea id="ws-custom-prompt" class="mwt-input" rows="3" placeholder="Leave blank for default prompt">${escapeHtml(s.customPrompt || '')}</textarea>
                 <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Prompt: Overrides the system prompt sent to the AI. Must start with instructions to output "## Current Scene". Leave blank to use the built-in default prompt. Click "Reset Prompt" to clear.</p>
 
-                <label class="mwt-label">Hook Mode</label>
+                <label class="mwt-label" for="ws-hook-mode">Hook Mode</label>
                 <div>
                     <select id="ws-hook-mode" class="mwt-input" style="max-width:180px">
                         <option value="off" ${s.hookMode === 'off' ? 'selected' : ''}>Off</option>
@@ -665,7 +672,7 @@ export function render() {
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Off:</b> Plot Seeds are not injected into the prompt. <b>Passive:</b> Model is encouraged to use a hook if the scene allows. <b>Proactive:</b> Model should introduce a hook unless the scene is at a climax — player pre-approval is stated. <b>Assertive:</b> Model must introduce at least one hook — the world moves without player permission.</p>
                 </div>
 
-                <label class="mwt-label">Message Filter</label>
+                <label class="mwt-label" for="ws-message-filter">Message Filter</label>
                 <div>
                     <textarea id="ws-message-filter" class="mwt-input" rows="3" placeholder="One regex per line. Matching text is stripped from messages before scanning.&#10;Example: \\[NPC thoughts][\\s\\S]*?\\[/NPC thoughts]">${escapeHtml(s.messageFilter || '')}</textarea>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Each line is a separate regex pattern (case-insensitive). Matching content is removed from chat messages <i>before</i> the World State scanner sees them. Use this to strip out NPC thought blocks, OOC notes, or other content that shouldn't influence the world state.</p>
@@ -675,10 +682,10 @@ export function render() {
                 <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                     <button id="ws-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
                     <button id="ws-test-connection" class="mwt-btn">Test Connection</button>
-                    <button id="ws-toggle-inject" class="mwt-btn">${isInjectionEnabled() ? '🔌 Injection: ON' : '🔌 Injection: OFF'}</button>
-                    <button id="ws-toggle-auto" class="mwt-btn">${isAutoRefreshEnabled() ? `🔄 Auto: ON (${getAutoRefreshInterval()})` : '🔄 Auto: OFF'}</button>
+                    <button id="ws-toggle-inject" class="mwt-btn">${isInjectionEnabled() ? '<span aria-hidden="true">🔌</span> Injection: ON' : '<span aria-hidden="true">🔌</span> Injection: OFF'}</button>
+                    <button id="ws-toggle-auto" class="mwt-btn">${isAutoRefreshEnabled() ? '<span aria-hidden="true">🔄</span> Auto: ON (' + getAutoRefreshInterval() + ')' : '<span aria-hidden="true">🔄</span> Auto: OFF'}</button>
                     <button id="ws-reset-prompt" class="mwt-btn">Reset Prompt</button>
-                    <button id="ws-preview-injection" class="mwt-btn">📄 Preview Injection</button>
+                    <button id="ws-preview-injection" class="mwt-btn"><span aria-hidden="true">📄</span> Preview Injection</button>
                 </div>
             </div>
         </details>
@@ -729,7 +736,7 @@ export function wireEvents() {
                     return;
                 }
             }
-            setControlBusy(btn, true); btn.textContent = '⏳ Refreshing…';
+            setControlBusy(btn, true); btn.innerHTML = '<span aria-hidden="true">⏳</span> Refreshing…';
             setStatus(state.modal, 'Generating world state…', 'info');
             const text = await refreshWorldState();
             if (text === null) { setStatus(state.modal, 'Refresh aborted.', 'info'); return; }
@@ -744,7 +751,10 @@ export function wireEvents() {
         } catch (err) {
             setStatus(state.modal, `Error: ${err.message}`, 'error');
         } finally {
-            setControlBusy(btn, false); btn.textContent = '🔄 Refresh';
+            // Restore through innerHTML with the hidden span so the treatment
+            // survives the busy cycle (Slice 4 item 2; matches the toolbar
+            // markup above).
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🔄</span> Refresh';
         }
     });
 
@@ -763,7 +773,7 @@ export function wireEvents() {
                     return;
                 }
             }
-            setControlBusy(btn, true); btn.textContent = '⏳ Patching…';
+            setControlBusy(btn, true); btn.innerHTML = '<span aria-hidden="true">⏳</span> Patching…';
             setStatus(state.modal, 'Generating delta patch…', 'info');
             const text = await refreshWorldStateDelta();
             if (text === null) { setStatus(state.modal, 'Delta refresh aborted.', 'info'); return; }
@@ -780,7 +790,9 @@ export function wireEvents() {
             // user at the full Refresh instead of a bare error.
             setStatus(state.modal, `Delta refresh failed: ${err.message}${err.name === 'DeltaPatchError' ? ' — run a full 🔄 Refresh instead.' : ''}`, 'error', 8000);
         } finally {
-            setControlBusy(btn, false); btn.textContent = '⚡ Delta';
+            // Restore through innerHTML with the hidden span (Slice 4 item 2;
+            // matches the toolbar markup above).
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">⚡</span> Delta';
             // Re-derive the disabled state instead of unconditionally
             // enabling: the editor-pre-sync early return above can leave the
             // store empty, and updateArchiveButtonState() would disable the
@@ -830,7 +842,7 @@ export function wireEvents() {
         if (!sectionName) { setStatus(state.modal, 'Select a section first.', 'error'); return; }
 
         try {
-            setControlBusy(regenBtn, true); regenBtn.textContent = '⏳ Regenerating…';
+            setControlBusy(regenBtn, true); regenBtn.innerHTML = '<span aria-hidden="true">⏳</span> Regenerating…';
             setStatus(state.modal, `Regenerating "${sectionName}" (variety: ${VARIETY_LABELS[variety]})…`, 'info');
 
             // Preserve unsaved editor edits. regenerateSection() rebuilds the
@@ -875,7 +887,9 @@ export function wireEvents() {
         } catch (err) {
             setStatus(state.modal, `Section regen failed: ${err.message}`, 'error');
         } finally {
-            setControlBusy(regenBtn, false); regenBtn.textContent = '🎲 Regenerate Section';
+            // Restore through innerHTML with the hidden span so the treatment
+            // survives the busy cycle (Slice 4 item 2).
+            setControlBusy(regenBtn, false); regenBtn.innerHTML = '<span aria-hidden="true">🎲</span> Regenerate Section';
         }
     });
 
@@ -1096,7 +1110,7 @@ export function wireEvents() {
                 </p>
                 <pre style="white-space:pre-wrap;font-family:var(--mwt-font-mono);font-size:12px;line-height:1.5;background:var(--mwt-bg-light);padding:12px;border-radius:var(--mwt-radius);border:1px solid var(--mwt-border);max-height:60vh;overflow-y:auto">${escapeHtml(injected)}</pre>
                 <div class="mwt-flex mwt-gap-8 mwt-mt-8">
-                    <button id="mwt-ws-preview-copy" class="mwt-btn mwt-btn-primary">📋 Copy to Clipboard</button>
+                    <button id="mwt-ws-preview-copy" class="mwt-btn mwt-btn-primary"><span aria-hidden="true">📋</span> Copy to Clipboard</button>
                     <button id="mwt-ws-preview-close" class="mwt-btn">Close</button>
                 </div>
             `,

@@ -171,6 +171,15 @@
     padding: 6px 10px;
 }
 
+/* Slice 4 (a11y plan §4.4): visible help for the three edit-form fields whose
+   explanations used to be tooltip-only. Same visual language as the help
+   paragraphs used across the module's settings panel. */
+.mwt-int-edit-help {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    margin: 0;
+}
+
 .mwt-int-edit-actions {
     display: flex;
     gap: 8px;
@@ -343,6 +352,18 @@ button.mwt-int-conflict-badge {
     align-items: center;
     gap: 4px;
     white-space: nowrap;
+}
+
+/* Slice 4 (a11y plan §4.4 / §5 Slice 4 item 3): the per-NPC control dial
+   explanations used to be tooltip-only titles. They now live in a
+   persistent help line under each row, referenced from every control via
+   aria-describedby, so keyboard and screen-reader users get them reliably. */
+.mwt-int-ctl-help {
+    flex-basis: 100%;
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    margin: 0;
+    white-space: normal;
 }
 
 /* ─── Recent thoughts list ───────────────────────────────────────────────── */

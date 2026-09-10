@@ -287,10 +287,10 @@ export function renderBackupPanel() {
         </p>
         <div id="mwt-backup-panel" class="mwt-backup-panel">
             <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap;align-items:center">
-                <button id="mwt-bk-export" class="mwt-btn" data-backup-action="export">⬇ Export Backup</button>
-                <button id="mwt-bk-restore" class="mwt-btn" data-backup-action="restore">⬆ Restore from File…</button>
-                <button id="mwt-bk-undo" class="mwt-btn" data-backup-action="undo" title="Replay the pre-restore snapshot captured this session">↩ Undo Last Restore</button>
-                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download every quarantined record this chat/session holds, as JSON — each item's store + path say where it belongs. The file is evidence, not a restore file: repair the record into a backup's matching section, then restore that backup (DATA_SAFETY_GUIDE.md). Quarantined records also ride in every backup.">🧯 Download recovery data</button>
+                <button id="mwt-bk-export" class="mwt-btn" data-backup-action="export"><span aria-hidden="true">⬇</span> Export Backup</button>
+                <button id="mwt-bk-restore" class="mwt-btn" data-backup-action="restore"><span aria-hidden="true">⬆</span> Restore from File…</button>
+                <button id="mwt-bk-undo" class="mwt-btn" data-backup-action="undo" title="Replay the pre-restore snapshot captured this session"><span aria-hidden="true">↩</span> Undo Last Restore</button>
+                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download every quarantined record this chat/session holds, as JSON — each item's store + path say where it belongs. The file is evidence, not a restore file: repair the record into a backup's matching section, then restore that backup (DATA_SAFETY_GUIDE.md). Quarantined records also ride in every backup."><span aria-hidden="true">🧯</span> Download recovery data</button>
             </div>
             <p style="color:var(--mwt-text-dim);font-size:11px;margin:8px 0 0">
                 Recovery data = records MWT refused to load (kept whole, never injected). Diagnostics → 🗂️ Scope &amp; storage shows the per-store counts.
@@ -389,11 +389,11 @@ function buildSummaryModalContent() {
                 <option value="replace">Replace with backup</option>
                 <option value="keep">Keep current</option>
             </select>
-            <label class="mwt-label" style="margin:0;text-align:left;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1/3">
+            <label class="mwt-label" for="mwt-bk-session-config" style="margin:0;text-align:left;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1/3">
                 <input type="checkbox" id="mwt-bk-session-config">
                 <span>Also restore session settings (Chronicle injection, Interiority enabled/turn counter)</span>
             </label>
-            <label class="mwt-label" style="margin:0;text-align:left;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1/3">
+            <label class="mwt-label" for="mwt-bk-exact" style="margin:0;text-align:left;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1/3">
                 <input type="checkbox" id="mwt-bk-exact">
                 <span><strong>Exact (replace) mode</strong> — overwrite this chat's data entirely instead of merging. Same-chat only.</span>
             </label>

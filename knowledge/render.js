@@ -198,31 +198,31 @@ export function renderNpcsSubTab() {
 
     el.innerHTML = `
         <div class="kt-toolbar">
-            <button id="kt-scan-btn" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() || state.isRunning ? 'disabled' : ''} ${state.isRunning ? 'aria-busy="true"' : ''}>${state.isRunning ? '⏳ Scanning…' : '🔍 Scan'}</button>
+            <button id="kt-scan-btn" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() || state.isRunning ? 'disabled' : ''} ${state.isRunning ? 'aria-busy="true"' : ''}>${state.isRunning ? '<span aria-hidden="true">⏳</span> Scanning…' : '<span aria-hidden="true">🔍</span> Scan'}</button>
             ${(() => {
                 const s = getSettings();
                 if (s.npcAutoScanEnabled) {
                     const everyN = Math.max(1, Number(s.npcAutoScanEveryN) || 10);
                     const remaining = Math.max(0, everyN - state.npcMessageCounter);
-                    return `<span class="kt-autoscan-countdown" title="Auto-scan fires every ${everyN} messages (${state.npcMessageCounter}/${everyN})">⏱️ ${remaining} msg${remaining !== 1 ? 's' : ''} until auto-scan</span>`;
+                    return `<span class="kt-autoscan-countdown" title="Auto-scan fires every ${everyN} messages (${state.npcMessageCounter}/${everyN})"><span aria-hidden="true">⏱️</span> ${remaining} msg${remaining !== 1 ? 's' : ''} until auto-scan</span>`;
                 }
                 return '';
             })()}
-            <button id="kt-export-btn" class="mwt-btn" title="Export NPC registry">📥 Export</button>
-            <button id="kt-import-btn" class="mwt-btn" title="Import NPCs from JSON">📤 Import</button>
-            <button id="kt-import-lb-btn" class="mwt-btn" title="Import from existing lorebooks">📚 From Lorebooks</button>
+            <button id="kt-export-btn" class="mwt-btn" title="Export NPC registry"><span aria-hidden="true">📥</span> Export</button>
+            <button id="kt-import-btn" class="mwt-btn" title="Import NPCs from JSON"><span aria-hidden="true">📤</span> Import</button>
+            <button id="kt-import-lb-btn" class="mwt-btn" title="Import from existing lorebooks"><span aria-hidden="true">📚</span> From Lorebooks</button>
         </div>
         <div class="kt-sub-tabs">
             <button class="kt-sub-tab ${state.activeSubTab === 'staging' ? 'active' : ''} ${state.stagingItems.length > 0 && state.activeSubTab !== 'staging' ? 'kt-staging-pulse' : ''}" data-sub="staging">
-                📋 Staging${state.stagingItems.length > 0 ? ` (${state.stagingItems.length})` : ''}
+                <span aria-hidden="true">📋</span> Staging${state.stagingItems.length > 0 ? ` (${state.stagingItems.length})` : ''}
             </button>
-            <button class="kt-sub-tab ${state.activeSubTab === 'minor' ? 'active' : ''}" data-sub="minor">👤 Minor (${Object.keys(minorEntries).length})</button>
-            <button class="kt-sub-tab ${state.activeSubTab === 'major' ? 'active' : ''}" data-sub="major">🏛️ Major (${Object.keys(majorEntries).length})</button>
-            <button class="kt-sub-tab ${state.activeSubTab === 'state' ? 'active' : ''}" data-sub="state">📊 State</button>
-            <button class="kt-sub-tab ${state.activeSubTab === 'relationships' ? 'active' : ''}" data-sub="relationships">🔗 Relationships</button>
+            <button class="kt-sub-tab ${state.activeSubTab === 'minor' ? 'active' : ''}" data-sub="minor"><span aria-hidden="true">👤</span> Minor (${Object.keys(minorEntries).length})</button>
+            <button class="kt-sub-tab ${state.activeSubTab === 'major' ? 'active' : ''}" data-sub="major"><span aria-hidden="true">🏛️</span> Major (${Object.keys(majorEntries).length})</button>
+            <button class="kt-sub-tab ${state.activeSubTab === 'state' ? 'active' : ''}" data-sub="state"><span aria-hidden="true">📊</span> State</button>
+            <button class="kt-sub-tab ${state.activeSubTab === 'relationships' ? 'active' : ''}" data-sub="relationships"><span aria-hidden="true">🔗</span> Relationships</button>
             <span class="kt-sub-spacer"></span>
-            ${unreadCount() > 0 ? `<button class="kt-sub-tab kt-notif-badge" id="kt-notif-btn">🔔 ${unreadCount()}</button>` : ''}
-            <button class="kt-sub-tab" id="kt-cog-btn" title="Settings">⚙️</button>
+            ${unreadCount() > 0 ? `<button class="kt-sub-tab kt-notif-badge" id="kt-notif-btn" aria-label="Notifications — ${unreadCount()} unread">🔔 ${unreadCount()}</button>` : ''}
+            <button class="kt-sub-tab" id="kt-cog-btn" title="Settings" aria-label="Settings"><span aria-hidden="true">⚙️</span></button>
         </div>
         <div class="kt-sub-content" id="kt-sub-content">
             ${state.activeSubTab === 'staging' ? renderStagingContent(state.stagingItems.length) :
@@ -314,12 +314,12 @@ function renderStagingContent(count) {
     if (count === 0) return '<div class="kt-empty">No pending proposals.<br>Click <strong>🔍 Scan</strong> to analyse recent messages.</div>';
     return `
         <div class="kt-staging-alert">
-            <span class="kt-staging-alert-icon">📬</span>
+            <span class="kt-staging-alert-icon" aria-hidden="true">📬</span>
             <span class="kt-staging-alert-text"><strong>${count} proposal${count !== 1 ? 's' : ''}</strong> awaiting your review — Accept to write to the lorebook, or Dismiss to discard.</span>
         </div>
         <div class="kt-staging-toolbar">
-            <button id="kt-batch-accept" class="mwt-btn mwt-btn-primary">✓ Accept All</button>
-            <button id="kt-batch-dismiss" class="mwt-btn">✗ Dismiss All</button>
+            <button id="kt-batch-accept" class="mwt-btn mwt-btn-primary"><span aria-hidden="true">✓</span> Accept All</button>
+            <button id="kt-batch-dismiss" class="mwt-btn"><span aria-hidden="true">✗</span> Dismiss All</button>
             <span>${count} proposal(s)</span>
         </div>
         <div class="kt-staging-layout">
@@ -365,7 +365,7 @@ function renderDetailForItem(item) {
                 <div class="kt-superseded-entry" style="margin-bottom:8px">
                     <div class="kt-detail-superseded-meta" style="font-size:11px;color:var(--mwt-text-dim);margin-bottom:2px">
                         ${escapeHtml(formatHistoryAge(entry.timestamp))}
-                        <button class="mwt-btn kt-superseded-restore" data-idx="${i}" style="margin-left:8px;padding:2px 8px;font-size:11px">↩ Restore</button>
+                        <button class="mwt-btn kt-superseded-restore" data-idx="${i}" style="margin-left:8px;padding:2px 8px;font-size:11px"><span aria-hidden="true">↩</span> Restore</button>
                     </div>
                     <pre class="kt-detail-current" style="opacity:0.7">${escapeHtml(entry.content)}</pre>
                 </div>
@@ -377,10 +377,10 @@ function renderDetailForItem(item) {
         <div class="kt-detail-name">${escapeHtml(item.name)}</div>
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
-        <div class="kt-detail-section"><div class="kt-detail-label">Proposed</div><textarea class="kt-detail-editor" id="kt-proposal-editor">${escapeHtml(editorContent)}</textarea></div>
-        ${item.type !== 'state' ? `<div class="kt-detail-section"><div class="kt-detail-label">Keywords</div><input class="kt-keyword-input" id="kt-keyword-input" type="text" value="${escapeHtml((item.keywords || [item.name]).join(', '))}" /></div>` : ''}
+        <div class="kt-detail-section"><label class="kt-detail-label" for="kt-proposal-editor">Proposed</label><textarea class="kt-detail-editor" id="kt-proposal-editor">${escapeHtml(editorContent)}</textarea></div>
+        ${item.type !== 'state' ? `<div class="kt-detail-section"><label class="kt-detail-label" for="kt-keyword-input">Keywords</label><input class="kt-keyword-input" id="kt-keyword-input" type="text" value="${escapeHtml((item.keywords || [item.name]).join(', '))}" /></div>` : ''}
         ${supersededHtml}
-        <div class="kt-detail-actions"><button class="mwt-btn mwt-btn-primary" id="kt-accept">✓ Accept & Write</button><button class="mwt-btn" id="kt-dismiss">✗ Dismiss</button></div>
+        <div class="kt-detail-actions"><button class="mwt-btn mwt-btn-primary" id="kt-accept"><span aria-hidden="true">✓</span> Accept &amp; Write</button><button class="mwt-btn" id="kt-dismiss"><span aria-hidden="true">✗</span> Dismiss</button></div>
     </div>`;
 }
 
@@ -525,18 +525,18 @@ function renderNpcListContent(type, entries) {
         // entry was deleted (uid null) is exactly the duplicate a merge folds
         // back into its canonical owner, and both identity legs are uid-safe.
         return `<div class="kt-npc-card${isOrphan ? ' kt-npc-card--orphan' : ''}" data-name="${escapeHtml(name)}" data-uid="${info.uid ?? ''}">
-            <div class="kt-npc-card-header"><span class="kt-npc-name">${escapeHtml(name)}${isOrphan ? ' ⚠' : ''}</span><span class="kt-npc-meta">${(info.keywords || [name]).join(', ')}</span></div>
+            <div class="kt-npc-card-header"><span class="kt-npc-name">${escapeHtml(name)}${isOrphan ? ' <span aria-hidden="true">⚠</span><span class="mwt-sr-only">(orphaned — lorebook entry missing)</span>' : ''}</span><span class="kt-npc-meta">${(info.keywords || [name]).join(', ')}</span></div>
             <div class="kt-npc-actions">
                 ${!isOrphan ? `
                     <button class="mwt-btn kt-npc-update" data-name="${escapeHtml(name)}" data-type="${type}">Update</button>
-                    ${type === 'minor' ? `<button class="mwt-btn kt-npc-promote" data-name="${escapeHtml(name)}">⬆ Promote</button>` : ''}
-                    ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)">📋 Enrich</button>` : ''}
-                    ${showEnrich ? `<button class="mwt-btn kt-npc-fields" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Refresh individual dossier fields (agenda, appearance, secrets, …)">🎯 Fields</button>` : ''}
-                    ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations">🌱 Growth</button>` : ''}
-                    ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}">⬇ Demote</button>` : ''}
-                    <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}">📖 View</button>
+                    ${type === 'minor' ? `<button class="mwt-btn kt-npc-promote" data-name="${escapeHtml(name)}"><span aria-hidden="true">⬆</span> Promote</button>` : ''}
+                    ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)"><span aria-hidden="true">📋</span> Enrich</button>` : ''}
+                    ${showEnrich ? `<button class="mwt-btn kt-npc-fields" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Refresh individual dossier fields (agenda, appearance, secrets, …)"><span aria-hidden="true">🎯</span> Fields</button>` : ''}
+                    ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations"><span aria-hidden="true">🌱</span> Growth</button>` : ''}
+                    ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}"><span aria-hidden="true">⬇</span> Demote</button>` : ''}
+                    <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}"><span aria-hidden="true">📖</span> View</button>
                 ` : ''}
-                <button class="mwt-btn kt-npc-identity" data-name="${escapeHtml(name)}" title="Rename, aliases, and merges — identity management">✏️ Identity</button>
+                <button class="mwt-btn kt-npc-identity" data-name="${escapeHtml(name)}" title="Rename, aliases, and merges — identity management"><span aria-hidden="true">✏️</span> Identity</button>
                 <button class="mwt-btn kt-npc-remove" data-name="${escapeHtml(name)}">Remove</button>
             </div></div>`;
     }).join('')}</div>`;
@@ -626,7 +626,7 @@ function wireNpcListEvents(el, _type) {
                 }
                 ktSetStatus(`Enrich failed: ${err.message}`, 'error');
             }
-            finally { setControlBusy(btn, false); btn.textContent = '📋 Enrich'; }
+            finally { setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">📋</span> Enrich'; }
         });
     });
 
@@ -781,7 +781,9 @@ function renderStateTrackerContent() {
                 <h3>Register a State Tracker</h3>
                 <p style="color:var(--mwt-text-dim);font-size:12px">Create a lorebook entry in <strong>${getStateLorebookName()}</strong> with comment starting with <code>${TRACKER_SENTINEL}</code>.</p>
                 <div style="display:flex;gap:8px;margin-top:8px">
+                    <label class="mwt-sr-only" for="kt-state-uid">UID</label>
                     <input type="number" id="kt-state-uid" placeholder="UID" min="0" class="mwt-input" style="width:80px" />
+                    <label class="mwt-sr-only" for="kt-state-name">Display name</label>
                     <input type="text" id="kt-state-name" placeholder="Display name" class="mwt-input" style="flex:1" />
                     <button id="kt-state-register" class="mwt-btn mwt-btn-primary">Register</button>
                 </div>
@@ -794,8 +796,8 @@ function renderStateTrackerContent() {
                     return `<div class="kt-npc-card">
                         <div class="kt-npc-card-header"><span class="kt-npc-name">${escapeHtml(name)}</span><span class="kt-npc-meta">UID ${info.uid}${enabled ? '' : ' · off'}${alwaysUpdate ? ' · always' : ''}</span></div>
                         <div class="kt-npc-actions">
-                            <label><input type="checkbox" class="kt-state-enabled" data-name="${escapeHtml(name)}" ${enabled ? 'checked' : ''} /> Auto</label>
-                            <label><input type="checkbox" class="kt-state-always" data-name="${escapeHtml(name)}" ${alwaysUpdate ? 'checked' : ''} /> Always</label>
+                            <label for="kt-state-enabled-${escapeHtml(name)}"><input type="checkbox" id="kt-state-enabled-${escapeHtml(name)}" class="kt-state-enabled" data-name="${escapeHtml(name)}" ${enabled ? 'checked' : ''} /> Auto</label>
+                            <label for="kt-state-always-${escapeHtml(name)}"><input type="checkbox" id="kt-state-always-${escapeHtml(name)}" class="kt-state-always" data-name="${escapeHtml(name)}" ${alwaysUpdate ? 'checked' : ''} /> Always</label>
                             <button class="mwt-btn kt-state-update" data-name="${escapeHtml(name)}">Update</button>
                             <button class="mwt-btn kt-state-remove" data-name="${escapeHtml(name)}">Remove</button>
                             <button class="mwt-btn kt-state-view" data-name="${escapeHtml(name)}">📖 View</button>
@@ -1056,7 +1058,7 @@ async function openGrowthProfileModal(name, triggerBtn) {
             <div class="mwt-modal-backdrop"></div>
             <div class="mwt-modal-panel">
                 <div class="mwt-modal-header">
-                    <h3>🌱 Growth Profile — ${escapeHtml(name)}</h3>
+                    <h3><span aria-hidden="true">🌱</span> Growth Profile — ${escapeHtml(name)}</h3>
                     <button class="mwt-modal-close" title="Close">&times;</button>
                 </div>
                 <div class="mwt-modal-body">
@@ -1165,17 +1167,17 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             ${list.map(o => `
                 <div class="kt-growth-obs" data-obs-id="${escapeHtml(o.id || '')}" data-tier="${escapeHtml(o.tier || 'raw')}">
                     <div class="kt-growth-obs-header">
-                        ${o.canon ? '<span class="kt-growth-obs-canon" title="Canon: user-authored, authoritative, outranks inference">👑 canon</span>' : ''}
-                        ${o.tier === 'consolidated' ? '<span class="kt-growth-obs-tier" title="Consolidated from raw observations">🔗 consolidated</span>' : ''}
+                        ${o.canon ? '<span class="kt-growth-obs-canon" title="Canon: user-authored, authoritative, outranks inference"><span aria-hidden="true">👑</span> canon</span>' : ''}
+                        ${o.tier === 'consolidated' ? '<span class="kt-growth-obs-tier" title="Consolidated from raw observations"><span aria-hidden="true">🔗</span> consolidated</span>' : ''}
                     </div>
                     <div class="kt-growth-obs-claim" contenteditable="true" data-field="claim">${escapeHtml(o.claim)}</div>
-                    <div class="kt-growth-obs-quote">"${escapeHtml(o.quote)}"${o.msgIdx != null ? ` <span class="kt-growth-obs-msgidx">[msg ${o.msgIdx}]</span>` : ''}${o.verified === false ? ` <span class="kt-growth-obs-unverified" title="This quote could not be matched word-for-word to its cited message — it may be paraphrased. Trace the message to confirm.">⚠ not verbatim</span>` : ''}</div>
+                    <div class="kt-growth-obs-quote">"${escapeHtml(o.quote)}"${o.msgIdx != null ? ` <span class="kt-growth-obs-msgidx">[msg ${o.msgIdx}]</span>` : ''}${o.verified === false ? ` <span class="kt-growth-obs-unverified" title="This quote could not be matched word-for-word to its cited message — it may be paraphrased. Trace the message to confirm."><span aria-hidden="true">⚠</span> not verbatim</span>` : ''}</div>
                     ${o.tier !== 'consolidated' ? `<div class="kt-growth-obs-tools">
-                        <button class="mwt-btn kt-growth-obs-canon-btn" data-action="canon" data-id="${escapeHtml(o.id || '')}">${o.canon ? '👑 Remove canon' : '👑 Promote to canon'}</button>
-                        <button class="mwt-btn kt-growth-obs-del-btn" data-action="delete" data-id="${escapeHtml(o.id || '')}" title="Delete this observation">🗑</button>
+                        <button class="mwt-btn kt-growth-obs-canon-btn" data-action="canon" data-id="${escapeHtml(o.id || '')}">${o.canon ? '<span aria-hidden="true">👑</span> Remove canon' : '<span aria-hidden="true">👑</span> Promote to canon'}</button>
+                        <button class="mwt-btn kt-growth-obs-del-btn" data-action="delete" data-id="${escapeHtml(o.id || '')}" title="Delete this observation" aria-label="Delete observation">🗑</button>
                     </div>` : `<div class="kt-growth-obs-tools">
-                        <button class="mwt-btn kt-growth-con-del-btn" data-action="con-delete" data-id="${escapeHtml(o.id || '')}" title="Delete this consolidated claim">🗑</button>
-                        <button class="mwt-btn kt-growth-con-expand-btn" data-action="con-expand" data-id="${escapeHtml(o.id || '')}" title="Undo consolidation — restore source observations to raw">↩ Expand</button>
+                        <button class="mwt-btn kt-growth-con-del-btn" data-action="con-delete" data-id="${escapeHtml(o.id || '')}" title="Delete this consolidated claim" aria-label="Delete consolidated claim">🗑</button>
+                        <button class="mwt-btn kt-growth-con-expand-btn" data-action="con-expand" data-id="${escapeHtml(o.id || '')}" title="Undo consolidation — restore source observations to raw"><span aria-hidden="true">↩</span> Expand</button>
                     </div>`}
                 </div>
             `).join('')}
@@ -1189,17 +1191,17 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
         : '';
 
     return `
-        ${truncated ? `<div class="kt-growth-warning">⚠️ <strong>This profile looks cut off mid-sentence.</strong> The model's response was likely truncated by a response-length cap <em>below</em> your Max Tokens — most often the connection profile's own preset. Open the browser console for <code>finish_reason</code> / <code>completion_tokens</code>, raise the effective cap, then regenerate.</div>` : ''}
-        ${existingProfile ? `<div class="kt-growth-existing-note">📝 An existing profile was found in the NPC Profiles lorebook. The generated profile below will replace it when you save.</div>` : ''}
-        ${captureNote ? `<div class="kt-growth-capture-note">📊 ${escapeHtml(captureNote)}</div>` : ''}
+        ${truncated ? `<div class="kt-growth-warning"><span aria-hidden="true">⚠️</span> <strong>This profile looks cut off mid-sentence.</strong> The model's response was likely truncated by a response-length cap <em>below</em> your Max Tokens — most often the connection profile's own preset. Open the browser console for <code>finish_reason</code> / <code>completion_tokens</code>, raise the effective cap, then regenerate.</div>` : ''}
+        ${existingProfile ? `<div class="kt-growth-existing-note"><span aria-hidden="true">📝</span> An existing profile was found in the NPC Profiles lorebook. The generated profile below will replace it when you save.</div>` : ''}
+        ${captureNote ? `<div class="kt-growth-capture-note"><span aria-hidden="true">📊</span> ${escapeHtml(captureNote)}</div>` : ''}
         <div class="kt-growth-actions-toolbar">
-            <div class="kt-growth-section-label">⚙️ Actions <span class="kt-growth-hint">— explicit steps; nothing fires until you press a button</span></div>
+            <div class="kt-growth-section-label"><span aria-hidden="true">⚙️</span> Actions <span class="kt-growth-hint">— explicit steps; nothing fires until you press a button</span></div>
             <div class="kt-growth-actions-buttons">
-                <button class="mwt-btn mwt-btn-primary" id="kt-growth-capture" title="Extract new behavioral evidence (observations + verbatim quotes) from recent messages and append it to the evidence store. One API call.">🔍 Capture Evidence</button>
-                <button class="mwt-btn mwt-btn-primary" id="kt-growth-regenerate" title="Synthesize the profile from existing evidence (no re-capture). One API call. Disabled if no evidence on file." ${observations.length === 0 ? 'disabled' : ''}>📝 Generate Profile</button>
-                <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims. Consumed raw entries are archived. Disabled if fewer than 2 non-canon raw observations." ${nonCanonRawCount < 2 ? 'disabled' : ''}>🔗 Consolidate</button>
-                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (one-time/bounded).">📦 Backfill</button>
-                <button class="mwt-btn" id="kt-growth-catchup" title="Continuously read ALL history (summarized + live) until evidence is caught up to the current chat. Fires a notification when done.">🚀 Catch Up</button>
+                <button class="mwt-btn mwt-btn-primary" id="kt-growth-capture" title="Extract new behavioral evidence (observations + verbatim quotes) from recent messages and append it to the evidence store. One API call."><span aria-hidden="true">🔍</span> Capture Evidence</button>
+                <button class="mwt-btn mwt-btn-primary" id="kt-growth-regenerate" title="Synthesize the profile from existing evidence (no re-capture). One API call. Disabled if no evidence on file." ${observations.length === 0 ? 'disabled' : ''}><span aria-hidden="true">📝</span> Generate Profile</button>
+                <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims. Consumed raw entries are archived. Disabled if fewer than 2 non-canon raw observations." ${nonCanonRawCount < 2 ? 'disabled' : ''}><span aria-hidden="true">🔗</span> Consolidate</button>
+                <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (one-time/bounded)."><span aria-hidden="true">📦</span> Backfill</button>
+                <button class="mwt-btn" id="kt-growth-catchup" title="Continuously read ALL history (summarized + live) until evidence is caught up to the current chat. Fires a notification when done."><span aria-hidden="true">🚀</span> Catch Up</button>
             </div>
             <div class="kt-growth-catchup-progress" id="kt-growth-catchup-progress" style="display:none"></div>
         </div>
@@ -1210,31 +1212,31 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             ${renderObsList('speech', 'Speech')}
         </div>
         <div class="kt-growth-profile-section">
-            <div class="kt-growth-section-label">📝 Generated Profile <span class="kt-growth-hint">(edit freely before saving)</span></div>
-            <textarea class="kt-growth-profile-editor" id="kt-growth-profile-text">${escapeHtml(profile)}</textarea>
+            <div class="kt-growth-section-label" id="kt-growth-profile-label"><span aria-hidden="true">📝</span> Generated Profile <span class="kt-growth-hint">(edit freely before saving)</span></div>
+            <textarea class="kt-growth-profile-editor" id="kt-growth-profile-text" aria-labelledby="kt-growth-profile-label">${escapeHtml(profile)}</textarea>
             <div class="kt-growth-actions">
-                <button class="mwt-btn mwt-btn-primary" id="kt-growth-save">💾 Save to Lorebook</button>
-                <button class="mwt-btn" id="kt-growth-copy">📋 Copy Profile</button>
-                <button class="mwt-btn" id="kt-growth-copy-evidence">📋 Copy Evidence</button>
-                <button class="mwt-btn" id="kt-growth-psychoanalyze" title="Generate a depth-oriented psychoanalytic portrait (copy-only — NEVER injected or saved)">🧠 Psychoanalyze</button>
+                <button class="mwt-btn mwt-btn-primary" id="kt-growth-save"><span aria-hidden="true">💾</span> Save to Lorebook</button>
+                <button class="mwt-btn" id="kt-growth-copy"><span aria-hidden="true">📋</span> Copy Profile</button>
+                <button class="mwt-btn" id="kt-growth-copy-evidence"><span aria-hidden="true">📋</span> Copy Evidence</button>
+                <button class="mwt-btn" id="kt-growth-psychoanalyze" title="Generate a depth-oriented psychoanalytic portrait (copy-only — NEVER injected or saved)"><span aria-hidden="true">🧠</span> Psychoanalyze</button>
             </div>
         </div>
         <div class="kt-growth-psychoanalyze-section" id="kt-growth-psychoanalyze-container" style="display:none">
-            <div class="kt-growth-section-label">🧠 Psychoanalytic Portrait <span class="kt-growth-hint">(copy-only · NEVER injected or saved to any lorebook)</span></div>
-            <div class="kt-growth-psychoanalyze-warning">⚠️ <strong>This is a dead-end analytical view.</strong> It reads the full character entry including <code>Personality:</code> as historical baseline. It is never injected, never saved, and never read by any other system. Copy it externally (notepad, etc.) to compare against future portraits.</div>
+            <div class="kt-growth-section-label" id="kt-growth-psychoanalyze-label"><span aria-hidden="true">🧠</span> Psychoanalytic Portrait <span class="kt-growth-hint">(copy-only · NEVER injected or saved to any lorebook)</span></div>
+            <div class="kt-growth-psychoanalyze-warning"><span aria-hidden="true">⚠️</span> <strong>This is a dead-end analytical view.</strong> It reads the full character entry including <code>Personality:</code> as historical baseline. It is never injected, never saved, and never read by any other system. Copy it externally (notepad, etc.) to compare against future portraits.</div>
             <div class="kt-growth-psychoanalyze-content"></div>
         </div>
         ${overrides.length > 0 ? `<div class="kt-growth-overrides-section">
-            <div class="kt-growth-section-label">📌 User Notes (survive regeneration) <span class="kt-growth-hint">— hand-edits pinned to the profile</span></div>
+            <div class="kt-growth-section-label"><span aria-hidden="true">📌</span> User Notes (survive regeneration) <span class="kt-growth-hint">— hand-edits pinned to the profile</span></div>
             ${overrides.map(o => `
                 <div class="kt-growth-override" data-override-id="${escapeHtml(o.id)}">
                     <div class="kt-growth-override-text" contenteditable="true">${escapeHtml(o.text)}</div>
-                    <button class="mwt-btn kt-growth-override-del" data-id="${escapeHtml(o.id)}" title="Delete this user note">🗑</button>
+                    <button class="mwt-btn kt-growth-override-del" data-id="${escapeHtml(o.id)}" title="Delete this user note" aria-label="Delete user note">🗑</button>
                 </div>
             `).join('')}
         </div>` : ''}
         <div class="kt-growth-overrides-add">
-            <button class="mwt-btn" id="kt-growth-add-override" title="Add a user note that survives profile regeneration">📌 Add User Note</button>
+            <button class="mwt-btn" id="kt-growth-add-override" title="Add a user note that survives profile regeneration"><span aria-hidden="true">📌</span> Add User Note</button>
         </div>
         <div class="kt-growth-explainer">
             <strong>How this works:</strong> The profile above is generated solely from the behavioral
@@ -1287,7 +1289,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         } catch (err) {
             flash(`Save failed: ${err.message}`, 'error');
         } finally {
-            setControlBusy(btn, false); btn.textContent = '💾 Save to Lorebook';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">💾</span> Save to Lorebook';
         }
     });
 
@@ -1355,7 +1357,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             container.style.display = '';
             contentDiv.innerHTML = `
                 ${truncated ? '<div class="kt-growth-warning" style="margin-bottom:8px">⚠️ <strong>This portrait looks cut off mid-sentence.</strong> The model may have hit a response-length cap below your Max Tokens. Raise the effective cap and regenerate.</div>' : ''}
-                <textarea class="kt-growth-psychoanalyze-editor" id="kt-growth-psychoanalyze-text">${escapeHtml(header + portrait)}</textarea>
+                <textarea class="kt-growth-psychoanalyze-editor" id="kt-growth-psychoanalyze-text" aria-labelledby="kt-growth-psychoanalyze-label">${escapeHtml(header + portrait)}</textarea>
                 <div class="kt-growth-actions">
                     <button class="mwt-btn mwt-btn-primary" id="kt-growth-copy-psychoanalyze">📋 Copy Portrait</button>
                     <span class="kt-growth-hint" style="margin-left:8px">⚠ NEVER injected or saved — copy externally only</span>
@@ -1392,7 +1394,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             const panelContainer = modal.querySelector('#kt-growth-psychoanalyze-container');
             if (panelContainer) panelContainer.style.display = '';
         } finally {
-            setControlBusy(btn, false); btn.textContent = '🧠 Psychoanalyze';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🧠</span> Psychoanalyze';
         }
     });
 
@@ -1421,12 +1423,12 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
                 const header = obsEl.querySelector('.kt-growth-obs-header');
                 if (isCanon) {
                     if (!header.querySelector('.kt-growth-obs-canon')) {
-                        header.innerHTML = '<span class="kt-growth-obs-canon" title="Canon: user-authored, authoritative, outranks inference">👑 canon</span>';
+                        header.innerHTML = '<span class="kt-growth-obs-canon" title="Canon: user-authored, authoritative, outranks inference"><span aria-hidden="true">👑</span> canon</span>';
                     }
-                    btn.textContent = '👑 Remove canon';
+                    btn.innerHTML = '<span aria-hidden="true">👑</span> Remove canon';
                 } else {
                     header.querySelector('.kt-growth-obs-canon')?.remove();
-                    btn.textContent = '👑 Promote to canon';
+                    btn.innerHTML = '<span aria-hidden="true">👑</span> Promote to canon';
                 }
             }
             flash(isCanon ? 'Promoted to canon.' : 'Canon removed.');
@@ -1504,7 +1506,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         } catch (err) {
             flash(`Capture failed: ${err.message}`, 'error');
         } finally {
-            setControlBusy(btn, false); btn.textContent = '🔍 Capture Evidence';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🔍</span> Capture Evidence';
         }
     });
 
@@ -1529,7 +1531,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             await refreshGrowthModalContent(modal, name, triggerBtn, msg);
         } catch (err) {
             flash(`Consolidation failed: ${err.message}`, 'error');
-            setControlBusy(btn, false); btn.textContent = '🔗 Consolidate';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🔗</span> Consolidate';
         }
     });
 
@@ -1565,7 +1567,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             flash('Profile generated from existing evidence.', 'success');
         } catch (err) {
             flash(`Generation failed: ${err.message}`, 'error');
-            setControlBusy(btn, false); btn.textContent = '📝 Generate Profile';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">📝</span> Generate Profile';
         }
     });
 
@@ -1590,7 +1592,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             await refreshGrowthModalContent(modal, name, triggerBtn, msg);
         } catch (err) {
             flash(`Backfill failed: ${err.message}`, 'error');
-            setControlBusy(btn, false); btn.textContent = '📦 Backfill';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">📦</span> Backfill';
         }
     });
 
@@ -1684,7 +1686,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             flash(`Catch-up failed: ${err.message}`, 'error');
             notify('Knowledge Tracker', `Catch-up failed for ${name}: ${err.message}`, 'error');
         } finally {
-            setControlBusy(btn, false); btn.textContent = '🚀 Catch Up';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🚀</span> Catch Up';
             // Re-enable the other action buttons (refreshGrowthModalContent
             // re-renders and re-wires them, but this covers the failure path
             // where the modal isn't re-rendered). Clearing busy enables by
@@ -1785,7 +1787,7 @@ function createKnowledgeViewModal(name, content) {
     const viewModal = document.createElement('div');
     viewModal.id = 'kt-view-modal';
     viewModal.className = 'mwt-modal kt-view-modal-overlay';
-    viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
+    viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close" aria-label="Close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
     document.body.appendChild(viewModal);
     decorateModalShell(viewModal, { title: name, destroyOnClose: true });
     return viewModal;
@@ -1839,7 +1841,7 @@ function openIdentityModal(name) {
         <div class="mwt-modal-backdrop"></div>
         <div class="mwt-modal-panel">
             <div class="mwt-modal-header">
-                <h3>✏️ Identity — ${escapeHtml(key)}</h3>
+                <h3><span aria-hidden="true">✏️</span> Identity — ${escapeHtml(key)}</h3>
                 <button class="mwt-modal-close" title="Close">&times;</button>
             </div>
             <div class="mwt-modal-body">
@@ -1851,11 +1853,12 @@ function openIdentityModal(name) {
                     <p class="kt-identity-note">Alternate spellings, titles, and nicknames that resolve to this NPC. Exact match only — a good alias is what the model actually calls the character.</p>
                     <div class="kt-identity-aliases">
                         ${aliases.length === 0 ? '<span class="kt-identity-empty">No aliases yet.</span>' : aliases.map(a => `
-                            <span class="kt-alias-chip">${escapeHtml(a)}<button class="kt-alias-chip-x" data-alias="${escapeHtml(a)}" title="Remove this alias">&times;</button></span>
+                            <span class="kt-alias-chip">${escapeHtml(a)}<button class="kt-alias-chip-x" data-alias="${escapeHtml(a)}" title="Remove this alias" aria-label="Remove alias ${escapeHtml(a)}">&times;</button></span>
                         `).join('')}
                     </div>
                     <div class="kt-identity-row">
-                        <input type="text" class="mwt-input kt-alias-input" placeholder="Add an alias (e.g. The Vixen)" />
+                        <label class="mwt-sr-only" for="kt-alias-input">Add an alias</label>
+                        <input type="text" id="kt-alias-input" class="mwt-input kt-alias-input" placeholder="Add an alias (e.g. The Vixen)" />
                         <button class="mwt-btn kt-alias-add">Add alias</button>
                     </div>
                 </div>
@@ -1864,7 +1867,8 @@ function openIdentityModal(name) {
                     <h4>Rename</h4>
                     <p class="kt-identity-note">Changes the canonical name across the registry, relationships, stances, evidence, dossier watermarks, and lorebook entry labels. The old name is kept as an alias, so existing references keep resolving.</p>
                     <div class="kt-identity-row">
-                        <input type="text" class="mwt-input kt-rename-input" placeholder="New canonical name" value="${escapeHtml(key)}" />
+                        <label class="mwt-sr-only" for="kt-rename-input">New canonical name</label>
+                        <input type="text" id="kt-rename-input" class="mwt-input kt-rename-input" placeholder="New canonical name" value="${escapeHtml(key)}" />
                         <button class="mwt-btn mwt-btn-primary kt-rename-go">Rename</button>
                     </div>
                 </div>
@@ -1873,7 +1877,8 @@ function openIdentityModal(name) {
                     <h4>Merge another NPC into this one</h4>
                     <p class="kt-identity-note">Folds a duplicate identity (e.g. a stray "Sophie" record for "Sophie Simpson") into this NPC: its evidence, relationships, and aliases are absorbed and its name becomes an alias. The absorbed registry record is removed; its lorebook entry is left for manual deletion. This cannot be undone automatically.</p>
                     <div class="kt-identity-row">
-                        <input type="text" class="mwt-input kt-merge-input" placeholder="NPC to absorb into ${escapeHtml(key)}" />
+                        <label class="mwt-sr-only" for="kt-merge-input">NPC to absorb into ${escapeHtml(key)}</label>
+                        <input type="text" id="kt-merge-input" class="mwt-input kt-merge-input" placeholder="NPC to absorb into ${escapeHtml(key)}" />
                         <button class="mwt-btn kt-merge-go">Merge into ${escapeHtml(key)}</button>
                     </div>
                 </div>
@@ -2024,7 +2029,7 @@ async function openDossierFieldRefreshModal(name) {
         <div class="mwt-modal-backdrop"></div>
         <div class="mwt-modal-panel">
             <div class="mwt-modal-header">
-                <h3>🎯 Refresh fields — ${escapeHtml(name)}</h3>
+                <h3><span aria-hidden="true">🎯</span> Refresh fields — ${escapeHtml(name)}</h3>
                 <button class="mwt-modal-close" title="Close">&times;</button>
             </div>
             <div class="mwt-modal-body">
@@ -2034,8 +2039,8 @@ async function openDossierFieldRefreshModal(name) {
                         const chip = dossierStalenessChip(r.staleness);
                         const checked = r.selectable && r.staleness.stale ? 'checked' : '';
                         const disabled = r.selectable ? '' : 'disabled';
-                        return `<label class="kt-dfr-row${r.selectable ? '' : ' kt-dfr-row--locked'}">
-                            <input type="checkbox" class="kt-dfr-field" data-key="${escapeHtml(r.key)}" ${checked} ${disabled} />
+                        return `<label class="kt-dfr-row${r.selectable ? '' : ' kt-dfr-row--locked'}" for="kt-dfr-field-${escapeHtml(r.key)}">
+                            <input type="checkbox" id="kt-dfr-field-${escapeHtml(r.key)}" class="kt-dfr-field" data-key="${escapeHtml(r.key)}" ${checked} ${disabled} />
                             <span class="kt-dfr-row-main">
                                 <span class="kt-dfr-row-label">${escapeHtml(r.label)}</span>
                                 <span class="kt-dfr-row-value">${r.value ? escapeHtml(r.value.slice(0, 140)) + (r.value.length > 140 ? '…' : '') : '<em>(not set)</em>'}</span>
@@ -2050,7 +2055,7 @@ async function openDossierFieldRefreshModal(name) {
                 <button class="mwt-btn kt-dfr-select-stale">Select stale</button>
                 <button class="mwt-btn kt-dfr-clear">Clear all</button>
                 <span style="flex:1"></span>
-                <button class="mwt-btn mwt-btn-primary kt-dfr-run" title="Re-derive the selected fields from recent messages and stage the result for review">🔄 Refresh selected</button>
+                <button class="mwt-btn mwt-btn-primary kt-dfr-run" title="Re-derive the selected fields from recent messages and stage the result for review"><span aria-hidden="true">🔄</span> Refresh selected</button>
             </div>
         </div>`;
     document.body.appendChild(modal);
@@ -2188,9 +2193,9 @@ function renderRelationshipContent() {
     const recentChanges = getRecentRelationshipChanges();
     const changesSection = recentChanges.length > 0 ? `
         <div class="kt-rel-section">
-            <button class="kt-rel-section-header" id="kt-rel-changes-toggle" title="${state.relChangesExpanded ? 'Collapse' : 'Expand'} the recent-changes log for this session">
-                <span class="kt-rel-section-caret">${state.relChangesExpanded ? '▾' : '▸'}</span>
-                <span class="kt-rel-section-title">🕘 Recent Changes</span>
+            <button class="kt-rel-section-header" id="kt-rel-changes-toggle" title="${state.relChangesExpanded ? 'Collapse' : 'Expand'} the recent-changes log for this session" aria-expanded="${state.relChangesExpanded}">
+                <span class="kt-rel-section-caret" aria-hidden="true">${state.relChangesExpanded ? '▾' : '▸'}</span>
+                <span class="kt-rel-section-title"><span aria-hidden="true">🕘</span> Recent Changes</span>
                 <span class="kt-rel-count-badge">${recentChanges.length}</span>
                 <span class="kt-rel-section-hint">this session — auto &amp; manual</span>
             </button>
@@ -2198,7 +2203,7 @@ function renderRelationshipContent() {
             <div class="kt-rel-list kt-rel-changes-list">
                 ${recentChanges.map(c => `
                 <div class="kt-rel-row kt-rel-change-row">
-                    <span class="kt-rel-change-origin" title="${c.origin === 'manual' ? 'Changed by you' : 'Changed by auto-extraction'}">${c.origin === 'manual' ? '✍️' : '🤖'}</span>
+                    <span class="kt-rel-change-origin" title="${c.origin === 'manual' ? 'Changed by you' : 'Changed by auto-extraction'}"><span aria-hidden="true">${c.origin === 'manual' ? '✍️' : '🤖'}</span><span class="mwt-sr-only">${c.origin === 'manual' ? 'changed by you' : 'changed by auto-extraction'}</span></span>
                     <span class="kt-rel-change-desc">${escapeHtml(describeRelationshipChange(c))}</span>
                     <span class="kt-rel-change-age">${escapeHtml(formatHistoryAge(c.ts || Date.now()))}</span>
                 </div>`).join('')}
@@ -2211,19 +2216,26 @@ function renderRelationshipContent() {
     // otherwise push the graph and edge list far down the tab.
     const stancesSection = stanceEntries.length ? `
         <div class="kt-rel-section">
-            <button class="kt-rel-section-header" id="kt-rel-stances-toggle" title="${state.relStancesExpanded ? 'Collapse' : 'Expand'} the per-NPC stance list">
-                <span class="kt-rel-section-caret">${state.relStancesExpanded ? '▾' : '▸'}</span>
+            <button class="kt-rel-section-header" id="kt-rel-stances-toggle" title="${state.relStancesExpanded ? 'Collapse' : 'Expand'} the per-NPC stance list" aria-expanded="${state.relStancesExpanded}">
+                <span class="kt-rel-section-caret" aria-hidden="true">${state.relStancesExpanded ? '▾' : '▸'}</span>
                 <span class="kt-rel-section-title">Stances toward {{user}}</span>
                 <span class="kt-rel-count-badge">${stanceEntries.length}</span>
             </button>
             ${state.relStancesExpanded ? `<div class="kt-rel-list">${stanceEntries.map(([n, s]) => {
                  const locked = !isStanceAutoManaged(n);
+                 const stanceTitle = locked ? 'Locked — you set this, so auto-extraction will not change it. Click to hand it back to auto-updating.' : 'Auto-managed — extraction may update this. Click to lock it.';
+                 // The name is the action this press performs, not the state
+                 // it is in: the button is a toggle, so a locked one unlocks.
+                 // (State still reaches AT through the title/description.)
+                 const stanceName = locked
+                     ? `Unlock stance of ${escapeHtml(n)} (hand back to auto-updating)`
+                     : `Lock stance of ${escapeHtml(n)} (currently auto-managed)`;
                  return `<div class="kt-rel-row">
                  <span class="kt-rel-from">${escapeHtml(n)}</span>
                  <span class="kt-rel-type">${escapeHtml(s)}</span>
                  <span class="kt-rel-notes">toward {{user}}</span>
-                 <button class="kt-stance-lock ${locked ? 'locked' : ''}" data-name="${escapeHtml(n)}" title="${locked ? 'Locked — you set this, so auto-extraction will not change it. Click to hand it back to auto-updating.' : 'Auto-managed — extraction may update this. Click to lock it.'}">${locked ? '🔒' : '🔓'}</button>
-                 <button class="kt-stance-clear" data-name="${escapeHtml(n)}" title="Clear stance">✕</button>
+                 <button class="kt-stance-lock ${locked ? 'locked' : ''}" data-name="${escapeHtml(n)}" title="${stanceTitle}" aria-label="${stanceName}">${locked ? '🔒' : '🔓'}</button>
+                 <button class="kt-stance-clear" data-name="${escapeHtml(n)}" title="Clear stance" aria-label="Clear stance of ${escapeHtml(n)}">✕</button>
              </div>`;
              }).join('')}</div>` : ''}
         </div>` : '';
@@ -2231,25 +2243,25 @@ function renderRelationshipContent() {
     return `
        <div class="kt-rel-container">
            <div class="kt-rel-toolbar">
-               <button id="kt-rel-sync-all" class="mwt-btn mwt-btn-primary" title="Write relationship blocks to all NPC lorebook entries">💾 Sync to Lorebooks</button>
+               <button id="kt-rel-sync-all" class="mwt-btn mwt-btn-primary" title="Write relationship blocks to all NPC lorebook entries"><span aria-hidden="true">💾</span> Sync to Lorebooks</button>
                <span style="font-size:12px;color:var(--mwt-text-dim)">${allEdges.length} relationship(s)</span>
                <span class="kt-rel-view-toggle">
-                   <button class="kt-rel-view-btn ${viewMode === 'graph' ? 'active' : ''}" data-view="graph" title="Graph view">🕸️ Graph</button>
-                   <button class="kt-rel-view-btn ${viewMode === 'list' ? 'active' : ''}" data-view="list" title="List view">📋 List</button>
+                   <button class="kt-rel-view-btn ${viewMode === 'graph' ? 'active' : ''}" data-view="graph" title="Graph view"><span aria-hidden="true">🕸️</span> Graph</button>
+                   <button class="kt-rel-view-btn ${viewMode === 'list' ? 'active' : ''}" data-view="list" title="List view"><span aria-hidden="true">📋</span> List</button>
                </span>
             </div>
            <div class="kt-rel-add-row">
-               <select id="kt-rel-from" class="mwt-input" style="min-width:120px"><option value="">From…</option>${npcOptions}</select>
-               <select id="kt-rel-type" class="mwt-input" style="min-width:100px">${typeOptions}</select>
-               <input id="kt-rel-type-custom" class="mwt-input" type="text" placeholder="Custom type…" style="display:none;min-width:100px" />
-               <select id="kt-rel-to" class="mwt-input" style="min-width:120px"><option value="">To…</option>${npcOptions}</select>
-               <input id="kt-rel-notes" class="mwt-input" type="text" placeholder="Notes (optional)" style="flex:1;min-width:120px" />
+               <select id="kt-rel-from" class="mwt-input" style="min-width:120px" aria-label="Relationship from (NPC)"><option value="">From…</option>${npcOptions}</select>
+               <select id="kt-rel-type" class="mwt-input" style="min-width:100px" aria-label="Relationship type">${typeOptions}</select>
+               <input id="kt-rel-type-custom" class="mwt-input" type="text" placeholder="Custom type…" style="display:none;min-width:100px" aria-label="Custom relationship type" />
+               <select id="kt-rel-to" class="mwt-input" style="min-width:120px" aria-label="Relationship to (NPC)"><option value="">To…</option>${npcOptions}</select>
+               <input id="kt-rel-notes" class="mwt-input" type="text" placeholder="Notes (optional)" style="flex:1;min-width:120px" aria-label="Relationship notes" />
                <button id="kt-rel-add" class="mwt-btn mwt-btn-primary">+ Add</button>
             </div>
            <div class="kt-rel-add-row">
-               <span style="font-size:12px;color:var(--mwt-text-dim)">Stance toward {{user}}:</span>
+               <label for="kt-stance-npc" style="font-size:12px;color:var(--mwt-text-dim)">Stance toward {{user}}:</label>
                <select id="kt-stance-npc" class="mwt-input" style="min-width:120px"><option value="">NPC…</option>${npcOptions}</select>
-               <select id="kt-stance-value" class="mwt-input" style="min-width:100px">${stanceOptions}</select>
+               <select id="kt-stance-value" class="mwt-input" style="min-width:100px" aria-label="Stance value">${stanceOptions}</select>
                <button id="kt-stance-set" class="mwt-btn mwt-btn-primary">Set</button>
                <span style="flex:1;min-width:160px;font-size:11px;color:var(--mwt-text-dim)">How far this NPC pushes before backing off. Unset NPCs fall back to persona.</span>
             </div>
@@ -2267,16 +2279,24 @@ function renderRelationshipContent() {
            <div class="kt-rel-list">
                  ${allEdges.map(e => {
                      const reverse = (rels[e.to] || []).find(r => r.target === e.from);
-                     const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${escapeHtml(reverse.type)}">↩ ${escapeHtml(reverse.type)}</span>` : '';
+                     const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${escapeHtml(reverse.type)}"><span aria-hidden="true">↩</span> ${escapeHtml(reverse.type)}</span>` : '';
                      const locked = !isEdgeAutoManaged(e);
+                     const lockTitle = locked
+                         ? 'Locked — you entered this, so auto-extraction will not change it. Click to hand it back to auto-updating.'
+                         : 'Auto-managed — extraction may update this. Click to lock it.';
+                     // Same rule as the stance lock above: the name is the
+                     // action the press performs, so a locked edge unlocks.
+                     const lockName = locked
+                         ? `Unlock relationship ${escapeHtml(e.from)} to ${escapeHtml(e.to)} (hand back to auto-updating)`
+                         : `Lock relationship ${escapeHtml(e.from)} to ${escapeHtml(e.to)} (currently auto-managed)`;
                      return `<div class="kt-rel-row" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}">
                        <span class="kt-rel-from">${escapeHtml(e.from)}</span>
                        <span class="kt-rel-type">${escapeHtml(e.type)}</span>
                        <span class="kt-rel-to">${escapeHtml(e.to)}</span>
                          ${e.notes ? `<span class="kt-rel-notes">${escapeHtml(e.notes)}</span>` : ''}
                          ${reverseLabel}
-                       <button class="kt-rel-lock ${locked ? 'locked' : ''}" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="${locked ? 'Locked — you entered this, so auto-extraction will not change it. Click to hand it back to auto-updating.' : 'Auto-managed — extraction may update this. Click to lock it.'}">${locked ? '🔒' : '🔓'}</button>
-                       <button class="kt-rel-remove" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="Remove">✕</button>
+                       <button class="kt-rel-lock ${locked ? 'locked' : ''}" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="${lockTitle}" aria-label="${lockName}">${locked ? '🔒' : '🔓'}</button>
+                       <button class="kt-rel-remove" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}" title="Remove" aria-label="Remove relationship ${escapeHtml(e.from)} to ${escapeHtml(e.to)}">✕</button>
                      </div>`;
                  }).join('')}
              </div>`)}
@@ -2880,7 +2900,7 @@ function wireRelationshipEvents(el) {
         } catch (err) {
             ktSetStatus(`Sync failed: ${err.message}`, 'error');
         } finally {
-            setControlBusy(btn, false); btn.textContent = '💾 Sync to Lorebooks';
+            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">💾</span> Sync to Lorebooks';
         }
     });
 }

@@ -127,7 +127,7 @@ export function showKnowledgeSettings() {
             <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Headers: JSON object of extra HTTP headers. Leave blank if unsure.</p>
         </div>
         <div style="margin-top:12px">
-            <label class="mwt-label">Lorebook scope</label>
+            <label class="mwt-label" for="kt-cfg-scope">Lorebook scope</label>
             <select id="kt-cfg-scope" class="mwt-input">
                 <option value="global" ${s.scope === 'global' || !s.scope ? 'selected' : ''}>Global — one shared set of lorebooks</option>
                 <option value="character" ${s.scope === 'character' ? 'selected' : ''}>Per character — one set per character card</option>
@@ -136,12 +136,12 @@ export function showKnowledgeSettings() {
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Which lorebooks NPC entries are written to. <strong>Global</strong> shares one "Knowledge Tracker" book across every chat and character — two characters with an NPC of the same name will share (and both inject) the same entry. <strong>Per character</strong> gives each card its own books, kept across all chats with that card. <strong>Per chat</strong> gives every chat its own. Changing this does not move existing entries; the previous books are left untouched.</p>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="kt-cfg-bind-kt-chat" ${s.bindKnowledgeToChat ? 'checked' : ''}> Switch the Knowledge Tracker lorebook on automatically (this chat's World Info slot)</label>
+            <label for="kt-cfg-bind-kt-chat"><input type="checkbox" id="kt-cfg-bind-kt-chat" ${s.bindKnowledgeToChat ? 'checked' : ''}> Switch the Knowledge Tracker lorebook on automatically (this chat's World Info slot)</label>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">SillyTavern keeps <strong>one</strong> bound lorebook per chat. When ON, MWT claims that slot for its Knowledge book — but only when the slot is empty or already holds an MWT book; a book you chose yourself is never replaced. When OFF, enable the book by hand in the World Info panel.</p>
             <div style="margin-top:6px">
-                <label><input type="checkbox" id="kt-cfg-bind-state" ${s.bindStateBook ? 'checked' : ''}> Switch the State Tracker lorebook on automatically</label>
+                <label for="kt-cfg-bind-state"><input type="checkbox" id="kt-cfg-bind-state" ${s.bindStateBook ? 'checked' : ''}> Switch the State Tracker lorebook on automatically</label>
                 <div id="kt-cfg-state-scope-row" style="margin-top:6px;${s.bindStateBook ? '' : 'display:none'}">
-                    <label class="mwt-label">State activation target</label>
+                    <label class="mwt-label" for="kt-cfg-state-scope">State activation target</label>
                     <select id="kt-cfg-state-scope" class="mwt-input">
                         <option value="character" ${stateScopeChoice === 'character' ? 'selected' : ''}>Character — this card's additional books</option>
                         <option value="global" ${stateScopeChoice === 'global' ? 'selected' : ''}>Global — the shared World Info selection</option>
@@ -154,43 +154,43 @@ export function showKnowledgeSettings() {
             </div>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="kt-cfg-auto-trigger" ${s.autoTriggerEnabled ? 'checked' : ''}> Auto-trigger state tracker updates</label>
+            <label for="kt-cfg-auto-trigger"><input type="checkbox" id="kt-cfg-auto-trigger" ${s.autoTriggerEnabled ? 'checked' : ''}> Auto-trigger state tracker updates</label>
             <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                <label style="font-size:12px;color:var(--mwt-text-dim)">Every <input type="number" id="kt-cfg-auto-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.autoTriggerEveryN || 5}" min="1" max="100"> messages</label>
-                <label style="font-size:12px;color:var(--mwt-text-dim)">Cooldown <input type="number" id="kt-cfg-cooldown" class="mwt-input" style="width:60px;display:inline-block" value="${s.trackerCooldownMsgs || 3}" min="0" max="50"> messages</label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-auto-every">Every <input type="number" id="kt-cfg-auto-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.autoTriggerEveryN || 5}" min="1" max="100"> messages</label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-cooldown">Cooldown <input type="number" id="kt-cfg-cooldown" class="mwt-input" style="width:60px;display:inline-block" value="${s.trackerCooldownMsgs || 3}" min="0" max="50"> messages</label>
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Auto-trigger scans state trackers every N user messages. Cooldown prevents re-updating recently changed trackers.</p>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="kt-cfg-npc-autoscan" ${s.npcAutoScanEnabled ? 'checked' : ''}> Auto-scan for NPCs (minor/major)</label>
+            <label for="kt-cfg-npc-autoscan"><input type="checkbox" id="kt-cfg-npc-autoscan" ${s.npcAutoScanEnabled ? 'checked' : ''}> Auto-scan for NPCs (minor/major)</label>
             <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                <label style="font-size:12px;color:var(--mwt-text-dim)">Every <input type="number" id="kt-cfg-npc-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.npcAutoScanEveryN || 10}" min="1" max="100"> messages</label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-npc-every">Every <input type="number" id="kt-cfg-npc-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.npcAutoScanEveryN || 10}" min="1" max="100"> messages</label>
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Auto-scan analyses recent messages for new or updated NPCs every N user messages and stages proposals for review.</p>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="kt-cfg-dossier-mode" ${s.dossierMode ? 'checked' : ''}> 📋 Dossier Mode (richer NPC entries)</label>
+            <label for="kt-cfg-dossier-mode"><input type="checkbox" id="kt-cfg-dossier-mode" ${s.dossierMode ? 'checked' : ''}> <span aria-hidden="true">📋</span> Dossier Mode (richer NPC entries)</label>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, NPC scans capture detailed dossier fields (role, appearance, voice, background, personality, secrets, agenda, canon lock, etc.). Major NPCs gain an <strong>📋 Enrich</strong> button to fill in all dossier fields from chat history, and a <strong>🎯 Fields</strong> button to refresh individual stale fields. Entries stay in the same lorebook. Off = the minimal format.</p>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="kt-cfg-growth-auto" ${s.growthAutoCaptureEnabled ? 'checked' : ''}> 🌱 Auto-capture growth evidence (continuous)</label>
+            <label for="kt-cfg-growth-auto"><input type="checkbox" id="kt-cfg-growth-auto" ${s.growthAutoCaptureEnabled ? 'checked' : ''}> <span aria-hidden="true">🌱</span> Auto-capture growth evidence (continuous)</label>
             <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                <label style="font-size:12px;color:var(--mwt-text-dim)">Every <input type="number" id="kt-cfg-growth-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.growthAutoCaptureEveryN || 15}" min="1" max="100"> messages</label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-growth-every">Every <input type="number" id="kt-cfg-growth-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.growthAutoCaptureEveryN || 15}" min="1" max="100"> messages</label>
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, captures behavioral observations for major profiled NPCs on a message cadence and appends them to the raw evidence tier. Uses a timestamp watermark so only the <em>delta</em> (new messages) is processed — summary-proof by construction (observations are distilled while raw messages are live). Only affects NPCs that already have a growth evidence file; run "Generate growth profile" once per NPC to enroll it.</p>
             <div style="margin-top:6px">
-                <label><input type="checkbox" id="kt-cfg-growth-debug" ${s.growthDebugToasts ? 'checked' : ''}> Show "Auto-capturing…" start toast (debug)</label>
+                <label for="kt-cfg-growth-debug"><input type="checkbox" id="kt-cfg-growth-debug" ${s.growthDebugToasts ? 'checked' : ''}> Show "Auto-capturing…" start toast (debug)</label>
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, the auto-capture cadence fires a toast when it starts (useful for testing). Off by default — completion toasts for results/errors always fire regardless.</p>
             </div>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="kt-cfg-track-mainchar" ${s.trackMainCharAsNpc ? 'checked' : ''}> 🎭 Track AI characters ({{char}} + group members) as NPCs</label>
+            <label for="kt-cfg-track-mainchar"><input type="checkbox" id="kt-cfg-track-mainchar" ${s.trackMainCharAsNpc ? 'checked' : ''}> <span aria-hidden="true">🎭</span> Track AI characters ({{char}} + group members) as NPCs</label>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, the AI-played cast is no longer excluded from scans — the character card ({{char}}), <em>and every member of a group chat</em>, flow into the NPC registry like any other character, so growth profiles and relationships apply to them too. Only {{user}} stays excluded. Useful for non-scenario cards where the character itself is the focus, and for group chats where you want relationships tracked between the cast.</p>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="kt-cfg-rel-auto" ${s.relationshipAutoExtractEnabled ? 'checked' : ''}> 🔗 Auto-log relationships (extract + save)</label>
+            <label for="kt-cfg-rel-auto"><input type="checkbox" id="kt-cfg-rel-auto" ${s.relationshipAutoExtractEnabled ? 'checked' : ''}> <span aria-hidden="true">🔗</span> Auto-log relationships (extract + save)</label>
             <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                <label style="font-size:12px;color:var(--mwt-text-dim)">Every <input type="number" id="kt-cfg-rel-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.relationshipAutoExtractEveryN || 10}" min="1" max="100"> messages</label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-rel-every">Every <input type="number" id="kt-cfg-rel-every" class="mwt-input" style="width:60px;display:inline-block" value="${s.relationshipAutoExtractEveryN || 10}" min="1" max="100"> messages</label>
             </div>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, scans recent messages on a cadence, extracts relationship edges (between tracked NPCs) and each NPC's stance toward {{user}}, saves them to the relationship store, and re-syncs the affected lorebook entries. Manual edits are preserved — extraction only adds or updates, never deletes.</p>
         </div>

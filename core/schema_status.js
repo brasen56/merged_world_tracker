@@ -528,15 +528,15 @@ export function renderPausedStoresBanner(rawModuleId) {
                 <span class="mwt-pause-banner-note">Your original data was not changed, and other modules are unaffected. This is not ordinary inactivity: the module stopped itself rather than use data it cannot trust.</span>
             </div>
             <div class="mwt-pause-banner-actions">
-                <button type="button" class="mwt-btn" data-mwt-pause-retry="${escapeHtml(pause.store)}" title="Re-run this store's preparation">↻ Retry</button>
-                <button type="button" class="mwt-btn" data-mwt-pause-export="1" title="Download every quarantined record as JSON, so it can be repaired outside MWT and re-imported through the checked path">⬇ Download recovery data</button>
+                <button type="button" class="mwt-btn" data-mwt-pause-retry="${escapeHtml(pause.store)}" title="Re-run this store's preparation"><span aria-hidden="true">↻</span> Retry</button>
+                <button type="button" class="mwt-btn" data-mwt-pause-export="1" title="Download every quarantined record as JSON, so it can be repaired outside MWT and re-imported through the checked path"><span aria-hidden="true">⬇</span> Download recovery data</button>
             </div>
         </div>`;
     }).join('');
 
     return `
     <div class="mwt-pause-banner" data-mwt-pause-banner="${escapeHtml(id)}" role="alert">
-        <div class="mwt-pause-banner-head">⛔ Paused store — action needed</div>
+        <div class="mwt-pause-banner-head"><span aria-hidden="true">⛔</span> Paused store — action needed</div>
         ${rows}
     </div>`;
 }

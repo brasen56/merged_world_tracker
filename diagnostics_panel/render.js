@@ -326,13 +326,13 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
         if (!r.injectionAllowed) classes.push('mwt-diag-health-row--gated');
         if (r.busy) classes.push('mwt-diag-health-row--busy');
         const errFlag = r.errors?.length
-            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(r.errors.join('\n'))}">⚠</span>`
+            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(r.errors.join('\n'))}"><span aria-hidden="true">⚠</span><span class="mwt-sr-only">has error${r.errors.length !== 1 ? 's' : ''}</span></span>`
             : '';
         // §5.4: a paused module is PAUSED on this row — never readable as
         // ordinary off/busy inactivity. The banner below repeats the message
         // because the badge alone would hide it behind a tooltip.
         const pauseFlag = r.paused
-            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(String(r.paused.message || r.paused.reasonCode))}">⛔ PAUSED</span>`
+            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(String(r.paused.message || r.paused.reasonCode))}"><span aria-hidden="true">⛔</span> PAUSED</span>`
             : '';
         return `
             <tr class="${classes.join(' ')}" data-module="${r.id}">
@@ -353,7 +353,7 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
     const pausedRows = rows.filter((r) => r.paused);
     const pausedBanner = pausedRows.length
         ? `<div class="mwt-diag-panic mwt-diag-paused">
-            ${pausedRows.map((r) => `⛔ <strong>${r.label} is PAUSED</strong> — <span title="${escapeHtml(String(r.paused.reasonCode))}">${escapeHtml(String(r.paused.message || r.paused.reasonCode))}</span>`).join('<br>')}
+            ${pausedRows.map((r) => `<span aria-hidden="true">⛔</span> <strong>${r.label} is PAUSED</strong> — <span title="${escapeHtml(String(r.paused.reasonCode))}">${escapeHtml(String(r.paused.message || r.paused.reasonCode))}</span>`).join('<br>')}
             The module stopped itself rather than use data it cannot trust; its own tab has the banner, a Retry, and the recovery export. Other modules are unaffected.
         </div>`
         : '';
@@ -663,7 +663,7 @@ export function renderScopeSnapshot(snapshot, { formatTime = (ts) => new Date(ts
 
     const bindingRows = bindings.map((row) => `
         <tr data-binding="${escapeHtml(String(row.key))}">
-            <td class="mwt-diag-env-value">${row.isCurrent ? '<span class="mwt-diag-scope-current" title="the identity this chat currently resolves to">● </span>' : ''}${escapeHtml(String(row.key))}</td>
+            <td class="mwt-diag-env-value">${row.isCurrent ? '<span class="mwt-diag-scope-current" title="the identity this chat currently resolves to"><span aria-hidden="true">●</span><span class="mwt-sr-only">current — </span></span>' : ''}${escapeHtml(String(row.key))}</td>
             <td>${escapeHtml(String(row.knowledge ?? '—'))}</td>
             <td>${escapeHtml(String(row.state ?? '—'))}</td>
             <td>${escapeHtml(String(row.profiles ?? '—'))}</td>
@@ -991,7 +991,7 @@ export function renderInjectionSnapshot(snapshot, { formatTime = (ts) => new Dat
         if (r.enabled === false) classes.push('mwt-diag-health-row--off');
         if (!r.gate) classes.push('mwt-diag-health-row--gated');
         const errFlag = r.errors?.length
-            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(r.errors.join('\n'))}">⚠</span>`
+            ? ` <span class="mwt-diag-badge mwt-diag-badge--fail" title="${escapeHtml(r.errors.join('\n'))}"><span aria-hidden="true">⚠</span><span class="mwt-sr-only">has error${r.errors.length !== 1 ? 's' : ''}</span></span>`
             : '';
         const onCell = r.enabled === null
             ? '<span class="mwt-diag-dim" title="Knowledge has no injection flag — its gates (panic switch / enableKnowledge) govern SCANNING, and its lorebook entries are always live in SillyTavern.">n/a</span>'
@@ -1031,7 +1031,7 @@ export function renderInjectionSnapshot(snapshot, { formatTime = (ts) => new Dat
     ` : '';
     const otherWarnings = warnings.filter((w) => w.id !== 'knowledge-lorebook-caveat');
     const warningList = otherWarnings.length ? `<ul class="mwt-diag-scope-warnings">${otherWarnings.map((w) => `
-        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+        <li><span aria-hidden="true">${w.level === 'fail' ? '⛔' : '⚠'}</span> <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
     `).join('')}</ul>` : '';
 
     // The recorded payloads — Phase 2 snapshots, collapsed by default with
@@ -1175,7 +1175,7 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
     // collector's one warning today); it reuses the Scope pane's banner list
     // markup, like the Injection pane does.
     const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
-        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+        <li><span aria-hidden="true">${w.level === 'fail' ? '⛔' : '⚠'}</span> <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
     `).join('')}</ul>` : '';
 
     // The most recent call — one detail card of exactly what Phase 1 captured.
@@ -1354,7 +1354,7 @@ export function renderLogSnapshot(snapshot, { formatTime = (ts) => new Date(ts).
     // The banner list reuses the Scope pane's warning markup, like the
     // Last request + Injection panes do.
     const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
-        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+        <li><span aria-hidden="true">${w.level === 'fail' ? '⛔' : '⚠'}</span> <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
     `).join('')}</ul>` : '';
 
     // The filter row — chips carry the whole-ring counts (they are the
@@ -1706,7 +1706,7 @@ export function renderIntegritySnapshot(snapshot, { formatTime = (ts) => new Dat
     }).join('');
 
     const warningList = warnings.length ? `<ul class="mwt-diag-scope-warnings">${warnings.map((w) => `
-        <li>${w.level === 'fail' ? '⛔' : '⚠'} <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
+        <li><span aria-hidden="true">${w.level === 'fail' ? '⛔' : '⚠'}</span> <code>${escapeHtml(w.id)}</code> ${escapeHtml(w.text)}</li>
     `).join('')}</ul>` : '';
 
     const bannerNote = (s.bannerLevel === 'ok')

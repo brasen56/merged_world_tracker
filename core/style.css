@@ -145,6 +145,26 @@ html {
     outline-offset: 2px;
 }
 
+/* ─── Screen-reader-only text (accessibility plan §4.4 / Slice 4) ─────────────
+   For meaning that is otherwise carried by color or a lone emoji — the
+   diagnostics "current" dot, error badges, the interiority ✋ manual badge.
+   The visible glyph stays; this adds the textual equivalent for assistive
+   technology without changing the layout. The clip pattern (rather than
+   display:none/visibility:hidden) keeps the text in the accessibility tree
+   and announceable. */
+.mwt-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
 /* ─── Modal overlay ────────────────────────────────────────────────────────── */
 
 .mwt-modal {

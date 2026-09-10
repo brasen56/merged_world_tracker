@@ -97,7 +97,7 @@ function showEntryEditor(snapshot) {
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                 <button id="sc-save-edit" class="mwt-btn mwt-btn-primary">Save</button>
                 <button id="sc-regenerate-btn" class="mwt-btn" ${!snapshot.manual && hasValidSettings() ? '' : 'disabled'}>Regenerate</button>
-                ${snapshot._consolidatedFrom?.length ? '<button id="sc-undo-consolidate" class="mwt-btn">↩ Undo Consolidation</button>' : ''}
+                ${snapshot._consolidatedFrom?.length ? '<button id="sc-undo-consolidate" class="mwt-btn"><span aria-hidden="true">↩</span> Undo Consolidation</button>' : ''}
                 <button id="sc-delete-btn" class="mwt-btn" style="background:var(--mwt-danger)">Delete</button>
                 <button id="sc-back-btn" class="mwt-btn">← Back</button>
             </div>
@@ -227,7 +227,7 @@ function showPreviewInjection() {
             </p>
             <pre style="white-space:pre-wrap;font-family:var(--mwt-font-mono);font-size:12px;line-height:1.5;background:var(--mwt-bg-light);padding:12px;border-radius:var(--mwt-radius);border:1px solid var(--mwt-border);max-height:60vh;overflow-y:auto">${escapeHtml(injected)}</pre>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8">
-                <button id="mwt-sc-preview-copy" class="mwt-btn mwt-btn-primary">📋 Copy to Clipboard</button>
+                <button id="mwt-sc-preview-copy" class="mwt-btn mwt-btn-primary"><span aria-hidden="true">📋</span> Copy to Clipboard</button>
                 <button id="mwt-sc-preview-close" class="mwt-btn">Close</button>
             </div>
         `,
@@ -258,11 +258,11 @@ function showInjectionSelector() {
     const selectedForInjection = data.selectedForInjection || [];
     el.innerHTML = `<div>
         <h3>Injection Settings</h3>
-        <div><label><input type="radio" name="sc-inject-mode" value="recent" ${currentMode === 'recent' ? 'checked' : ''}> Recent</label><label><input type="radio" name="sc-inject-mode" value="selected" ${currentMode === 'selected' ? 'checked' : ''}> Selected</label><label><input type="radio" name="sc-inject-mode" value="all" ${currentMode === 'all' ? 'checked' : ''}> All</label><label><input type="radio" name="sc-inject-mode" value="range" ${currentMode === 'range' ? 'checked' : ''}> Range</label></div>
+        <div><label for="sc-inject-mode-recent"><input type="radio" id="sc-inject-mode-recent" name="sc-inject-mode" value="recent" ${currentMode === 'recent' ? 'checked' : ''}> Recent</label><label for="sc-inject-mode-selected"><input type="radio" id="sc-inject-mode-selected" name="sc-inject-mode" value="selected" ${currentMode === 'selected' ? 'checked' : ''}> Selected</label><label for="sc-inject-mode-all"><input type="radio" id="sc-inject-mode-all" name="sc-inject-mode" value="all" ${currentMode === 'all' ? 'checked' : ''}> All</label><label for="sc-inject-mode-range"><input type="radio" id="sc-inject-mode-range" name="sc-inject-mode" value="range" ${currentMode === 'range' ? 'checked' : ''}> Range</label></div>
         <div id="sc-inject-mode-options">
-            <div id="sc-recent-options" style="display:${currentMode === 'recent' ? 'block' : 'none'}"><label>Count: <input type="number" id="sc-inject-count" value="${currentCount}" min="1" max="${snapshots.length}"></label></div>
-            <div id="sc-selected-options" style="display:${currentMode === 'selected' ? 'block' : 'none'}">${snapshots.map(s => `<label><input type="checkbox" class="sc-inject-select-cb" data-id="${escapeHtml(s.id)}" ${selectedForInjection.includes(s.id) ? 'checked' : ''}> ${escapeHtml(s.worldDate || s.createdAt)} — ${escapeHtml((s.text || '').slice(0, 50))}</label>`).join('<br>')}</div>
-            <div id="sc-range-options" style="display:${currentMode === 'range' ? 'block' : 'none'}"><label>From: <input type="datetime-local" id="sc-inject-from" value="${data.injectFromDate || ''}"></label><label>To: <input type="datetime-local" id="sc-inject-to" value="${data.injectToDate || ''}"></label></div>
+            <div id="sc-recent-options" style="display:${currentMode === 'recent' ? 'block' : 'none'}"><label for="sc-inject-count">Count: <input type="number" id="sc-inject-count" value="${currentCount}" min="1" max="${snapshots.length}"></label></div>
+            <div id="sc-selected-options" style="display:${currentMode === 'selected' ? 'block' : 'none'}">${snapshots.map((s, i) => `<label for="sc-inject-select-${i}"><input type="checkbox" id="sc-inject-select-${i}" class="sc-inject-select-cb" data-id="${escapeHtml(s.id)}" ${selectedForInjection.includes(s.id) ? 'checked' : ''}> ${escapeHtml(s.worldDate || s.createdAt)} — ${escapeHtml((s.text || '').slice(0, 50))}</label>`).join('<br>')}</div>
+            <div id="sc-range-options" style="display:${currentMode === 'range' ? 'block' : 'none'}"><label for="sc-inject-from">From: <input type="datetime-local" id="sc-inject-from" value="${data.injectFromDate || ''}"></label><label for="sc-inject-to">To: <input type="datetime-local" id="sc-inject-to" value="${data.injectToDate || ''}"></label></div>
         </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-apply-injection" class="mwt-btn mwt-btn-primary">Apply</button><button id="sc-cancel-injection" class="mwt-btn">Cancel</button></div>
     </div>`;
@@ -305,12 +305,12 @@ function showSettingsModal() {
             <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Headers: JSON object of extra HTTP headers sent with each API request. Example: <code>{"X-Organization":"my-org"}</code>. Leave blank if unsure.</p>
         </div>
         <div style="margin-top:12px">
-            <label><input type="checkbox" id="sc-filter-system" ${s.filterSystem !== false ? 'checked' : ''}> Filter system messages <span style="font-size:11px;color:var(--mwt-text-dim)">(hides SillyTavern system prompts, jailbreaks, etc.)</span></label><br>
-            <label><input type="checkbox" id="sc-filter-ooc" ${s.filterOoc !== false ? 'checked' : ''}> Filter OOC messages <span style="font-size:11px;color:var(--mwt-text-dim)">(hides messages starting with <code>(</code>, <code>[OOC]</code>, or <code>OOC:</code>)</span></label><br>
-            <label><input type="checkbox" id="sc-auto-snapshot" ${s.autoSnapshot ? 'checked' : ''}> Auto-snapshot</label><br>
-            <label><input type="checkbox" id="sc-sync-ws" ${s.syncWorldState !== false ? 'checked' : ''}> Sync World State</label>
+            <label for="sc-filter-system"><input type="checkbox" id="sc-filter-system" ${s.filterSystem !== false ? 'checked' : ''}> Filter system messages <span style="font-size:11px;color:var(--mwt-text-dim)">(hides SillyTavern system prompts, jailbreaks, etc.)</span></label><br>
+            <label for="sc-filter-ooc"><input type="checkbox" id="sc-filter-ooc" ${s.filterOoc !== false ? 'checked' : ''}> Filter OOC messages <span style="font-size:11px;color:var(--mwt-text-dim)">(hides messages starting with <code>(</code>, <code>[OOC]</code>, or <code>OOC:</code>)</span></label><br>
+            <label for="sc-auto-snapshot"><input type="checkbox" id="sc-auto-snapshot" ${s.autoSnapshot ? 'checked' : ''}> Auto-snapshot</label><br>
+            <label for="sc-sync-ws"><input type="checkbox" id="sc-sync-ws" ${s.syncWorldState !== false ? 'checked' : ''}> Sync World State</label>
         </div>
-        <div style="margin-top:8px"><label>Auto-snapshot threshold: <input type="number" id="sc-auto-threshold" class="mwt-input" style="width:80px;display:inline-block" value="${s.autoSnapshotThreshold || 40}" min="5" max="500"></label> <span style="font-size:11px;color:var(--mwt-text-dim)">messages between auto-generations</span></div>
+        <div style="margin-top:8px"><label for="sc-auto-threshold">Auto-snapshot threshold: <input type="number" id="sc-auto-threshold" class="mwt-input" style="width:80px;display:inline-block" value="${s.autoSnapshotThreshold || 40}" min="5" max="500"></label> <span style="font-size:11px;color:var(--mwt-text-dim)">messages between auto-generations</span></div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button><button id="sc-cancel-settings" class="mwt-btn">Cancel</button></div>
     </div>`;
     el.querySelector('#sc-save-settings')?.addEventListener('click', () => {
@@ -377,7 +377,7 @@ export function renderContent() {
                 <button id="sc-new-entry-btn" class="mwt-btn">+ Blank Entry</button>
                 <button id="sc-consolidate-mode-btn" class="mwt-btn ${state.consolidateMode ? 'mwt-btn-primary' : ''}" ${snapshots.length < 2 ? 'disabled' : ''}>${state.consolidateMode ? '✓ Selecting' : 'Consolidate'}</button>
                 <button id="sc-bulk-delete-btn" class="mwt-btn" ${snapshots.length < 1 ? 'disabled' : ''}>${state.bulkDeleteMode ? '✓ Selecting' : 'Bulk Delete'}</button>
-                <button id="sc-trash-btn" class="mwt-btn">🗑 Trash (${(getChronicleData()._deletedBin || []).length})</button>
+                <button id="sc-trash-btn" class="mwt-btn"><span aria-hidden="true">🗑</span> Trash (${(getChronicleData()._deletedBin || []).length})</button>
             </div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap;margin-top:8px">
                 <input type="text" id="sc-search-input" class="mwt-input" placeholder="Search entries…" value="${escapeHtml(state.pendingSearch)}" style="flex:1">
@@ -402,11 +402,11 @@ export function renderContent() {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:4px">
             <div class="sc-status"><span class="sc-status-text" role="status" aria-live="polite" aria-atomic="true"></span></div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
-                <button id="sc-inject-toggle" class="mwt-btn" style="font-size:12px">${isInjectionEnabled() ? '📥 Injection ON' : '📤 Injection OFF'}</button>
-                <button id="sc-preview-injection" class="mwt-btn" style="font-size:12px">📄 Preview</button>
+                <button id="sc-inject-toggle" class="mwt-btn" style="font-size:12px">${isInjectionEnabled() ? '<span aria-hidden="true">📥</span> Injection ON' : '<span aria-hidden="true">📤</span> Injection OFF'}</button>
+                <button id="sc-preview-injection" class="mwt-btn" style="font-size:12px"><span aria-hidden="true">📄</span> Preview</button>
                 <span class="mwt-token-info${_injStats.tokenEstimate > 4000 ? ' mwt-token-info--danger' : _injStats.tokenEstimate > 2000 ? ' mwt-token-info--warn' : ''}" style="font-size:11px">~${_injStats.tokenEstimate} tokens (${_injStats.entriesToInject} entries)</span>
-                <button id="sc-inject-settings" class="mwt-btn" style="font-size:12px">⚙</button>
-                <button id="sc-stats-btn" class="mwt-btn" style="font-size:12px">📊 Stats</button>
+                <button id="sc-inject-settings" class="mwt-btn" style="font-size:12px" title="Injection settings" aria-label="Injection settings"><span aria-hidden="true">⚙</span></button>
+                <button id="sc-stats-btn" class="mwt-btn" style="font-size:12px"><span aria-hidden="true">📊</span> Stats</button>
                 <button id="sc-export-json" class="mwt-btn" style="font-size:12px">Export JSON</button>
                 <button id="sc-export-md" class="mwt-btn" style="font-size:12px">Export MD</button>
                 <button id="sc-import-btn" class="mwt-btn" style="font-size:12px">Import</button>
