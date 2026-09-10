@@ -247,6 +247,12 @@ export function showKnowledgeSettings() {
         // reloadStores('scope change') then prunes the ledger and binds the
         // new books, so this branch is the full activation story.
         if (chosenScope !== previousScope) {
+            // The relationship NPC/type filters reference the previous scope's
+            // NPC/type universe — the re-render below would otherwise carry
+            // them into a different lorebook's edge set (the same staleness a
+            // chat change resets in onChatChanged).
+            state.relFilterNpc = '';
+            state.relFilterType = '';
             import('./activation.js')
                 .then((m) => m.removeActivationBindings({ chat: true, state: true }))
                 .catch(() => { /* activation must never block the reload */ })

@@ -93,4 +93,22 @@ describe('Knowledge chat-change sweep closes through the shared path', () => {
         expect(host.inert).toBeFalsy();
         expect(document.getElementById('kt-view-modal')).toBeNull();
     });
+
+    test('both sweeps drop the previous chat\'s relationship filters', async () => {
+        state.relFilterNpc = 'Mara';
+        state.relFilterType = 'ally';
+
+        Knowledge.onChatChanged();
+        await flushMicrotasks();
+
+        expect(state.relFilterNpc).toBe('');
+        expect(state.relFilterType).toBe('');
+
+        state.relFilterNpc = 'Jonah';
+        state.relFilterType = 'mentor';
+        Knowledge.onChatChangedWhilePaused();
+
+        expect(state.relFilterNpc).toBe('');
+        expect(state.relFilterType).toBe('');
+    });
 });

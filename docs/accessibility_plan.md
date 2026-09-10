@@ -439,6 +439,9 @@ consumer rather than duplicating the contract.
   path;
 - status updates land in the live region;
 - the list view renders the same edge set as the graph data;
+- the NPC/type filters are label-associated, both views consume the same
+  filtered edge set, and the visible/total count plus active filters land in
+  the filter-summary live region;
 - the Graph/List toggle exposes pressed state;
 - card actions are keyboard-operable.
 

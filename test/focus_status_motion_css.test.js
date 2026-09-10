@@ -68,10 +68,12 @@ describe('focus-visible scoping and pairing (§4.3)', () => {
 
     test('every outline: none declaration has at least one :focus-visible pair in its sheet', () => {
         const count = (s, re) => (s.match(re) || []).length;
-        // The verified plan baseline: core 1, knowledge 10, chronicle 4, story 4.
+        // The verified plan baseline: core 1, chronicle 4, story 4. Knowledge
+        // went 10 → 11 in Slice 5: the graph node focus rule pairs its
+        // outline:none with the :focus/:focus-visible circle-stroke ring.
         const expected = {
             'core/style.css': 1,
-            'knowledge/style.css': 10,
+            'knowledge/style.css': 11,
             'chronicle/style.css': 4,
             'story_planner/style.css': 4,
         };

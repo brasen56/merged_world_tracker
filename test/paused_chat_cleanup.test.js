@@ -178,6 +178,10 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
         ktState.notificationEntries = { growth: [{}] };
         ktState.unreadGrowthEvidenceCount = 3;
         ktState.messageCounter = 9;
+        // Relationship filters reference the previous chat's NPC/type
+        // universe — a kept NPC filter can hide every relationship here.
+        ktState.relFilterNpc = 'Mara';
+        ktState.relFilterType = 'ally';
 
         pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'blocked' });
         Knowledge.onChatChangedWhilePaused();
@@ -189,6 +193,8 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
         expect(ktState._cachedTokenCount).toBe(0);
         expect(ktState.notificationEntries).toEqual({});
         expect(ktState.unreadGrowthEvidenceCount).toBe(0);
+        expect(ktState.relFilterNpc).toBe('');
+        expect(ktState.relFilterType).toBe('');
         expect(globalThis.document.dispatchEvent).toHaveBeenCalled();
         // The in-memory counter survives untouched and the blocked counters
         // store was not written (the full handler restores + persists them).

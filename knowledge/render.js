@@ -293,6 +293,19 @@ export function renderNpcsSubTab() {
     else if (state.activeSubTab === 'state') wireStateTrackerEvents(el);
     else if (state.activeSubTab === 'relationships') wireRelationshipEvents(el);
 
+    // Populate the relationship filter-summary live region one task AFTER the
+    // render inserted it empty — the same "announce the change, not the
+    // insertion" contract as #kt-status below, but deferred to its own task
+    // so the insertion and the text change reach the accessibility tree as
+    // two separate mutations. Without this, a filter change re-renders the
+    // region already populated and screen readers are not required to
+    // announce the new counts at all.
+    const relFilterSummaryEl = el.querySelector('#kt-rel-filter-summary');
+    if (relFilterSummaryEl) {
+        const summaryText = state._relFilterSummaryText || '';
+        setTimeout(() => { relFilterSummaryEl.textContent = summaryText; }, 0);
+    }
+
     // Re-apply persisted status message
     if (state._lastKtStatusMsg) {
         const statusEl = el.querySelector('#kt-status');
@@ -311,7 +324,14 @@ export function renderNpcsSubTab() {
 // ─── Staging sub-tab ─────────────────────────────────────────────────────────
 
 function renderStagingContent(count) {
-    if (count === 0) return '<div class="kt-empty">No pending proposals.<br>Click <strong>🔍 Scan</strong> to analyse recent messages.</div>';
+    if (count === 0) return '<div class="kt-empty" role="status">No pending proposals.<br>Click <strong><span aria-hidden="true">🔍</span> Scan</strong> to analyse recent messages.</div>';
+    // Slice 5 (a11y plan §4.6): each proposal is a real <button>, not a
+    // clickable div. It was the last essential MWT operation with no keyboard
+    // path at all — Accept All / Dismiss All were reachable, but selecting one
+    // proposal to review, edit, or act on singly was pointer-only. aria-pressed
+    // carries the selection, which also retires the colour-only --active state
+    // ("never colour alone"). Buttons fire click on Enter and Space natively,
+    // so wireStagingEvents' existing click handler is the whole keyboard path.
     return `
         <div class="kt-staging-alert">
             <span class="kt-staging-alert-icon" aria-hidden="true">📬</span>
@@ -323,12 +343,12 @@ function renderStagingContent(count) {
             <span>${count} proposal(s)</span>
         </div>
         <div class="kt-staging-layout">
-            <div class="kt-staging-list" id="kt-staging-list">
+            <div class="kt-staging-list" id="kt-staging-list" role="group" aria-label="Pending proposals">
                 ${state.stagingItems.map(item => `
-                    <div class="kt-staging-item ${state.activeItemId === item.id ? 'kt-staging-item--active' : ''}" data-id="${item.id}">
+                    <button type="button" class="kt-staging-item ${state.activeItemId === item.id ? 'kt-staging-item--active' : ''}" data-id="${item.id}" aria-pressed="${state.activeItemId === item.id}">
                         <span class="kt-staging-badge">${item.action === 'create' ? 'New' : 'Update'} ${item.type}</span>
                         <span class="kt-staging-name">${escapeHtml(item.name)}</span>
-                    </div>`).join('')}
+                    </button>`).join('')}
             </div>
             <div class="kt-staging-detail" id="kt-staging-detail">
                 ${state.activeItemId ? renderDetailForItem(state.stagingItems.find(i => i.id === state.activeItemId)) : '<div class="kt-detail-empty">Select a proposal.</div>'}
@@ -373,8 +393,11 @@ function renderDetailForItem(item) {
         </div>`;
     }
 
+    // Slice 5 (a11y plan §4.6), same contract as the cards: the selected
+    // proposal's name is a real heading (h4 — same level as the card names)
+    // so heading navigation lands on the detail pane too.
     return `<div class="kt-detail-inner">
-        <div class="kt-detail-name">${escapeHtml(item.name)}</div>
+        <h4 class="kt-detail-name">${escapeHtml(item.name)}</h4>
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
         <div class="kt-detail-section"><label class="kt-detail-label" for="kt-proposal-editor">Proposed</label><textarea class="kt-detail-editor" id="kt-proposal-editor">${escapeHtml(editorContent)}</textarea></div>
@@ -515,7 +538,13 @@ function wireStagingEvents(el) {
 // ─── NPC list sub-tab ────────────────────────────────────────────────────────
 
 function renderNpcListContent(type, entries) {
-    if (Object.keys(entries).length === 0) return `<div class="kt-empty">No ${type} NPCs tracked yet.</div>`;
+    // Slice 5 (a11y plan §4.6): empty states are polite live regions
+    // (role="status"). They render already populated — a node inserted with
+    // its content is not required to be announced at all — so the role is
+    // best-effort and harmless: what it buys is that a later text change in
+    // the region is announced instead of silently redrawn (the same contract
+    // #kt-rel-filter-summary defers its population for).
+    if (Object.keys(entries).length === 0) return `<div class="kt-empty" role="status">No ${type} NPCs tracked yet.</div>`;
     const sorted = sortEntries(entries, 'name');
     const dossierMode = getSettings().dossierMode === true;
     return `<div class="kt-npc-list">${sorted.map(([name, info]) => {
@@ -524,8 +553,12 @@ function renderNpcListContent(type, entries) {
         // ✏️ Identity stays available on orphans too: a record whose lorebook
         // entry was deleted (uid null) is exactly the duplicate a merge folds
         // back into its canonical owner, and both identity legs are uid-safe.
+        // Slice 5 (a11y plan §4.6): the card name is a real heading (h4 —
+        // the modal title is h3) so heading navigation lands on cards; every
+        // action stays a real <button> and the card container itself is never
+        // interactive, so keyboard operation and focus order come natively.
         return `<div class="kt-npc-card${isOrphan ? ' kt-npc-card--orphan' : ''}" data-name="${escapeHtml(name)}" data-uid="${info.uid ?? ''}">
-            <div class="kt-npc-card-header"><span class="kt-npc-name">${escapeHtml(name)}${isOrphan ? ' <span aria-hidden="true">⚠</span><span class="mwt-sr-only">(orphaned — lorebook entry missing)</span>' : ''}</span><span class="kt-npc-meta">${(info.keywords || [name]).join(', ')}</span></div>
+            <div class="kt-npc-card-header"><h4 class="kt-npc-name">${escapeHtml(name)}${isOrphan ? ' <span aria-hidden="true">⚠</span><span class="mwt-sr-only">(orphaned — lorebook entry missing)</span>' : ''}</h4><span class="kt-npc-meta">${(info.keywords || [name]).join(', ')}</span></div>
             <div class="kt-npc-actions">
                 ${!isOrphan ? `
                     <button class="mwt-btn kt-npc-update" data-name="${escapeHtml(name)}" data-type="${type}">Update</button>
@@ -788,13 +821,16 @@ function renderStateTrackerContent() {
                     <button id="kt-state-register" class="mwt-btn mwt-btn-primary">Register</button>
                 </div>
             </div>
-            ${entries.length === 0 ? '<div class="kt-empty">No state trackers registered.</div>' : `
+            ${entries.length === 0 ? '<div class="kt-empty" role="status">No state trackers registered.</div>' : `
             <div class="kt-state-list">
                 ${entries.map(([name, info]) => {
                     const enabled = info.enabled !== false;
                     const alwaysUpdate = !!info.alwaysUpdate;
+                    // Slice 5 (a11y plan §4.6): same card contract as the NPC
+                    // lists — the name is a real h4 heading under the h3
+                    // "Register a State Tracker" section above.
                     return `<div class="kt-npc-card">
-                        <div class="kt-npc-card-header"><span class="kt-npc-name">${escapeHtml(name)}</span><span class="kt-npc-meta">UID ${info.uid}${enabled ? '' : ' · off'}${alwaysUpdate ? ' · always' : ''}</span></div>
+                        <div class="kt-npc-card-header"><h4 class="kt-npc-name">${escapeHtml(name)}</h4><span class="kt-npc-meta">UID ${info.uid}${enabled ? '' : ' · off'}${alwaysUpdate ? ' · always' : ''}</span></div>
                         <div class="kt-npc-actions">
                             <label for="kt-state-enabled-${escapeHtml(name)}"><input type="checkbox" id="kt-state-enabled-${escapeHtml(name)}" class="kt-state-enabled" data-name="${escapeHtml(name)}" ${enabled ? 'checked' : ''} /> Auto</label>
                             <label for="kt-state-always-${escapeHtml(name)}"><input type="checkbox" id="kt-state-always-${escapeHtml(name)}" class="kt-state-always" data-name="${escapeHtml(name)}" ${alwaysUpdate ? 'checked' : ''} /> Always</label>
@@ -2166,15 +2202,40 @@ function relEdgeColor(type) {
     return REL_EDGE_COLORS[(type || '').toLowerCase()] || '#6366f1';
 }
 
-function renderRelationshipContent() {
+/**
+ * Flatten the store's from→targets relationship map into one edge list, plus
+ * the raw map (the list view needs it for reverse-edge lookups). The single
+ * source for the Graph view, the List view, and the filter below — a11y plan
+ * §4.6 requires both views to consume the identical edge set.
+ */
+function getRelationshipEdges() {
     const rels = getRelationships();
-    const npcNames = getAllNpcNames();
-    const allEdges = [];
+    const edges = [];
     for (const [from, targets] of Object.entries(rels)) {
         for (const r of targets) {
-            allEdges.push({ from, to: r.target, type: r.type, notes: r.notes || '', source: r.source });
+            edges.push({ from, to: r.target, type: r.type, notes: r.notes || '', source: r.source });
         }
     }
+    return { rels, edges };
+}
+
+/**
+ * Apply the sub-tab's NPC/type filters (state.relFilterNpc / relFilterType).
+ * An edge is kept when it involves the filtered NPC on either side and, when
+ * a type is selected, is of that type. Shared by renderRelationshipContent()
+ * and renderRelationshipGraph() so a filter can never desync the two views.
+ */
+function filterRelationshipEdges(edges) {
+    const npc = state.relFilterNpc || '';
+    const type = state.relFilterType || '';
+    if (!npc && !type) return edges;
+    return edges.filter(e => (!npc || e.from === npc || e.to === npc) && (!type || e.type === type));
+}
+
+function renderRelationshipContent() {
+    const npcNames = getAllNpcNames();
+    const { rels, edges: allEdges } = getRelationshipEdges();
+    const visibleEdges = filterRelationshipEdges(allEdges);
 
     const npcOptions = npcNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
     const typeOptions = RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join('') + '<option value="__other__">Other…</option>';
@@ -2183,8 +2244,55 @@ function renderRelationshipContent() {
 
     const viewMode = state.relViewMode || 'graph';
 
-    // Collect unique types present for the legend
-    const presentTypes = [...new Set(allEdges.map(e => e.type))];
+    // Collect unique types present for the legend and the sr-only summary.
+    // Derived from the FILTERED set so the legend only names colors that are
+    // actually drawn (the filter menu below deliberately uses the unfiltered
+    // set, so its choices never shrink as filters combine).
+    const presentTypes = [...new Set(visibleEdges.map(e => e.type))];
+    // Slice 5 (a11y plan §4.6): the graph's accessible summary names the edge
+    // and node counts (and the legend's types) as text.
+    const nodeCount = new Set(visibleEdges.flatMap(e => [e.from, e.to])).size;
+
+    // ── Slice 5 (a11y plan §4.6, item 5): accessible filter summary ──
+    // Labeled NPC/type filters narrow the edge set BEFORE the Graph/List
+    // split, and a polite live region names the active filters plus the
+    // visible/total counts so the result is announced, not just redrawn.
+    const filterNpc = state.relFilterNpc || '';
+    const filterType = state.relFilterType || '';
+    // The menus only offer choices that exist in the unfiltered edge set; a
+    // stale active value (e.g. its NPC was deleted mid-session) is appended
+    // so the control shows what is actually filtering instead of "All".
+    const filterNpcNames = [...new Set(allEdges.flatMap(e => [e.from, e.to]))].sort((a, b) => a.localeCompare(b));
+    if (filterNpc && !filterNpcNames.includes(filterNpc)) filterNpcNames.push(filterNpc);
+    const filterTypeNames = [...new Set(allEdges.map(e => e.type))];
+    if (filterType && !filterTypeNames.includes(filterType)) filterTypeNames.push(filterType);
+    const filterDescParts = [];
+    if (filterNpc) filterDescParts.push(`NPC: ${filterNpc}`);
+    if (filterType) filterDescParts.push(`type: ${filterType}`);
+    const filterSummaryText = filterDescParts.length > 0
+        ? `Showing ${visibleEdges.length} of ${allEdges.length} relationship${allEdges.length === 1 ? '' : 's'} — filter: ${filterDescParts.join(', ')}.`
+        : `Showing all ${allEdges.length} relationship${allEdges.length === 1 ? '' : 's'}. No filter active.`;
+    // Stashed for renderNpcsSubTab, which populates the (initially empty)
+    // live region below one task AFTER this markup lands: a node inserted
+    // already populated is not required to be announced, and applying a
+    // filter re-renders the whole panel — region included — so the new counts
+    // would otherwise redraw silently for assistive tech.
+    state._relFilterSummaryText = filterSummaryText;
+    const filterSection = allEdges.length > 0 ? `
+        <div class="kt-rel-add-row kt-rel-filter-row">
+            <label for="kt-rel-filter-npc" style="font-size:12px;color:var(--mwt-text-dim)">Filter by NPC:</label>
+            <select id="kt-rel-filter-npc" class="mwt-input" style="min-width:120px">
+                <option value="">All NPCs</option>
+                ${filterNpcNames.map(n => `<option value="${escapeHtml(n)}"${n === filterNpc ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+            </select>
+            <label for="kt-rel-filter-type" style="font-size:12px;color:var(--mwt-text-dim)">Filter by type:</label>
+            <select id="kt-rel-filter-type" class="mwt-input" style="min-width:100px">
+                <option value="">All types</option>
+                ${filterTypeNames.map(t => `<option value="${escapeHtml(t)}"${t === filterType ? ' selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+            </select>
+            <button id="kt-rel-filter-clear" class="mwt-btn" title="Clear the NPC and type filters">Clear</button>
+            <span id="kt-rel-filter-summary" class="kt-rel-filter-summary" role="status" aria-live="polite" aria-atomic="true" style="font-size:12px;color:var(--mwt-text-dim)"></span>
+        </div>` : '';
 
     // ── Collapsible: Recent Changes ──
     // The auto-extract toast names up to three changes; this log keeps the full
@@ -2245,9 +2353,9 @@ function renderRelationshipContent() {
            <div class="kt-rel-toolbar">
                <button id="kt-rel-sync-all" class="mwt-btn mwt-btn-primary" title="Write relationship blocks to all NPC lorebook entries"><span aria-hidden="true">💾</span> Sync to Lorebooks</button>
                <span style="font-size:12px;color:var(--mwt-text-dim)">${allEdges.length} relationship(s)</span>
-               <span class="kt-rel-view-toggle">
-                   <button class="kt-rel-view-btn ${viewMode === 'graph' ? 'active' : ''}" data-view="graph" title="Graph view"><span aria-hidden="true">🕸️</span> Graph</button>
-                   <button class="kt-rel-view-btn ${viewMode === 'list' ? 'active' : ''}" data-view="list" title="List view"><span aria-hidden="true">📋</span> List</button>
+               <span class="kt-rel-view-toggle" role="group" aria-label="Relationship view">
+                   <button class="kt-rel-view-btn ${viewMode === 'graph' ? 'active' : ''}" data-view="graph" title="Graph view" aria-pressed="${viewMode === 'graph'}"><span aria-hidden="true">🕸️</span> Graph</button>
+                   <button class="kt-rel-view-btn ${viewMode === 'list' ? 'active' : ''}" data-view="list" title="List view" aria-pressed="${viewMode === 'list'}"><span aria-hidden="true">📋</span> List</button>
                </span>
             </div>
            <div class="kt-rel-add-row">
@@ -2267,17 +2375,27 @@ function renderRelationshipContent() {
             </div>
             ${changesSection}
             ${stancesSection}
-            ${allEdges.length === 0 ? '<div class="kt-empty">No relationships tracked yet.</div>' : (viewMode === 'graph' ? `
+             ${filterSection}
+            ${allEdges.length === 0 ? '<div class="kt-empty" role="status">No relationships tracked yet.</div>' : visibleEdges.length === 0 ? '<div class="kt-empty" role="status">No relationships match the current filters.</div>' : (viewMode === 'graph' ? `
                 <div class="kt-rel-graph-wrap">
-                    <svg id="kt-rel-graph" class="kt-rel-graph" xmlns="http://www.w3.org/2000/svg"></svg>
+                    <p class="mwt-sr-only" id="kt-rel-graph-desc">Relationship graph: ${visibleEdges.length} relationship${visibleEdges.length === 1 ? '' : 's'} between ${nodeCount} NPC${nodeCount === 1 ? '' : 's'}. Types present: ${presentTypes.map(t => escapeHtml(t)).join(', ')}.</p>
+                    <svg id="kt-rel-graph" class="kt-rel-graph" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Relationship graph" aria-describedby="kt-rel-graph-desc"></svg>
                     <div class="kt-rel-graph-legend">
                         ${presentTypes.map(t => `<span class="kt-rel-legend-item"><span class="kt-rel-legend-swatch" style="background:${relEdgeColor(t)}"></span>${escapeHtml(t)}</span>`).join('')}
                     </div>
-                    <div class="kt-rel-graph-hint">Click a node to view • Drag to rearrange • Scroll to zoom</div>
+                    <div class="kt-rel-graph-controls">
+                        <button type="button" class="kt-rel-graph-ctrl" id="kt-rel-zoom-in" title="Zoom in" aria-label="Zoom in"><span aria-hidden="true">+</span></button>
+                        <button type="button" class="kt-rel-graph-ctrl" id="kt-rel-zoom-out" title="Zoom out" aria-label="Zoom out"><span aria-hidden="true">−</span></button>
+                        <button type="button" class="kt-rel-graph-ctrl" id="kt-rel-zoom-reset" title="Reset pan and zoom" aria-label="Reset view"><span aria-hidden="true">⟲</span></button>
+                        <span class="kt-rel-graph-zoom-level" id="kt-rel-zoom-level">Zoom 100%</span>
+                        <span class="mwt-sr-only" id="kt-rel-zoom-announce" role="status" aria-live="polite" aria-atomic="true"></span>
+                    </div>
+                    <div class="kt-rel-graph-summary" id="kt-rel-node-summary" role="status" aria-live="polite" aria-atomic="true"></div>
+                    <div class="kt-rel-graph-hint">Click a node to open its dossier, or Tab to a node and press Enter to hear its relationships (Enter again opens) • Drag to rearrange (cosmetic only) • Scroll to zoom, or use the zoom buttons above • Prefer plain text? Switch to List view</div>
                 </div>
             ` : `
            <div class="kt-rel-list">
-                 ${allEdges.map(e => {
+                 ${visibleEdges.map(e => {
                      const reverse = (rels[e.to] || []).find(r => r.target === e.from);
                      const reverseLabel = reverse ? `<span class="kt-rel-reverse" title="${escapeHtml(e.to)} sees ${escapeHtml(e.from)} as: ${escapeHtml(reverse.type)}"><span aria-hidden="true">↩</span> ${escapeHtml(reverse.type)}</span>` : '';
                      const locked = !isEdgeAutoManaged(e);
@@ -2439,19 +2557,17 @@ function renderRelationshipGraph() {
     const svg = state.modal?.querySelector('#kt-rel-graph');
     if (!svg) return;
 
-    const rels = getRelationships();
-    const allEdges = [];
-    for (const [from, targets] of Object.entries(rels)) {
-        for (const r of targets) {
-            allEdges.push({ from, to: r.target, type: r.type, notes: r.notes || '' });
-        }
-    }
-    if (allEdges.length === 0) { svg.innerHTML = ''; return; }
+    // Same source + filter as renderRelationshipContent() (a11y plan §4.6):
+    // the graph draws exactly the edge set the list view renders, so a filter
+    // can never desync the two views. The layout cache's _edgeSig derives
+    // from this filtered list, so a filter change recomputes the layout.
+    const visibleEdges = filterRelationshipEdges(getRelationshipEdges().edges);
+    if (visibleEdges.length === 0) { svg.innerHTML = ''; return; }
 
     // Use cached layout if available (preserves drag), else compute
-    if (!state._graphData || state._graphData._edgeSig !== JSON.stringify(allEdges.map(e => [e.from, e.to, e.type]).sort())) {
-        state._graphData = computeGraphLayout(allEdges);
-        state._graphData._edgeSig = JSON.stringify(allEdges.map(e => [e.from, e.to, e.type]).sort());
+    if (!state._graphData || state._graphData._edgeSig !== JSON.stringify(visibleEdges.map(e => [e.from, e.to, e.type]).sort())) {
+        state._graphData = computeGraphLayout(visibleEdges);
+        state._graphData._edgeSig = JSON.stringify(visibleEdges.map(e => [e.from, e.to, e.type]).sort());
     }
     const data = state._graphData;
 
@@ -2466,7 +2582,7 @@ function renderRelationshipGraph() {
     // <defs> for arrowheads per type color
     const defs = document.createElementNS(ns, 'defs');
     const typeColors = new Map();
-    for (const e of allEdges) typeColors.set(e.type, relEdgeColor(e.type));
+    for (const e of visibleEdges) typeColors.set(e.type, relEdgeColor(e.type));
     for (const [type, color] of typeColors) {
         const marker = document.createElementNS(ns, 'marker');
         marker.setAttribute('id', `arrow-${type.replace(/[^a-z0-9]/gi, '')}`);
@@ -2537,11 +2653,19 @@ function renderRelationshipGraph() {
     const nodeGroup = document.createElementNS(ns, 'g');
     nodeGroup.setAttribute('class', 'kt-rel-graph-nodes');
     for (const [name, pos] of data.nodes) {
+        // Slice 5 (a11y plan §4.6): every node is a real Tab stop with an
+        // accessible name that carries its edge count, so the keyboard path
+        // announces more than a bare label (wireRelationshipGraphInteractions
+        // adds the Enter/Space selection handler).
+        const relCount = data.edges.filter(e => e.from === name || e.to === name).length;
         const g = document.createElementNS(ns, 'g');
         g.setAttribute('class', 'kt-rel-graph-node');
         g.setAttribute('data-name', name);
         g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
         g.style.cursor = 'pointer';
+        g.setAttribute('tabindex', '0');
+        g.setAttribute('role', 'button');
+        g.setAttribute('aria-label', `${name} — ${relCount} relationship${relCount === 1 ? '' : 's'}`);
 
         const circle = document.createElementNS(ns, 'circle');
         circle.setAttribute('r', '14');
@@ -2568,6 +2692,13 @@ function renderRelationshipGraph() {
     wireRelationshipGraphInteractions(svg, data);
 }
 
+// Pending debounced zoom announcement for the relationship graph (see
+// wireRelationshipGraphInteractions). Module-scoped so a re-render that
+// re-wires a fresh graph cancels a gesture that was still settling — the
+// stale closure would otherwise announce the previous gesture's zoom level
+// into the new (reset-to-100%) announce region a moment later.
+let pendingZoomAnnounceTimer = null;
+
 function wireRelationshipGraphInteractions(svg, data) {
     // Seed pan/zoom state from the viewBox ATTRIBUTE, not svg.viewBox.baseVal.
     // SVGRect exposes `width`/`height` — there are no `w`/`h` properties — so
@@ -2580,6 +2711,111 @@ function wireRelationshipGraphInteractions(svg, data) {
     const [vbX, vbY, vbW, vbH] = (svg.getAttribute('viewBox') || '0 0 600 400')
         .trim().split(/\s+/).map(Number);
     const vbState = { x: vbX, y: vbY, w: vbW, h: vbH };
+    // The seeded viewBox is the reset target and the 100% zoom reference.
+    const vbBase = { x: vbX, y: vbY, w: vbW, h: vbH };
+
+    // ── Slice 5 (a11y plan §4.6): labeled zoom/reset + announced level ──
+    // The wheel handler stays the pointer path; these buttons give the same
+    // operations a keyboard path. All lookups are optional-chained because the
+    // controls live in the wrap markup OUTSIDE the svg, and older fake-DOM
+    // harnesses pre-attach a bare svg with no wrap around it.
+    // A re-wired graph starts from the seeded viewBox again — a wheel gesture
+    // that was still debouncing against the OLD graph must not fire into the
+    // fresh announce region.
+    if (pendingZoomAnnounceTimer !== null) { clearTimeout(pendingZoomAnnounceTimer); pendingZoomAnnounceTimer = null; }
+    const zoomLevelEl = () => state.modal?.querySelector?.('#kt-rel-zoom-level');
+    const zoomAnnounceEl = () => state.modal?.querySelector?.('#kt-rel-zoom-announce');
+    const zoomText = () => `Zoom ${Math.max(1, Math.round((vbBase.w / vbState.w) * 100))}%`;
+    // The visible percentage is PLAIN TEXT and updates on every zoom change —
+    // it must not be a live region, because the wheel path fires once per
+    // wheel event and a touchpad gesture would queue one announcement per
+    // notch. Announcements go to the dedicated sr-only region instead:
+    // discrete operations (the buttons below) speak immediately, the wheel
+    // path debounces to one announcement per settled gesture.
+    const updateZoomLevel = () => {
+        const el = zoomLevelEl();
+        if (el) el.textContent = zoomText();
+    };
+    const setZoomAnnouncement = () => {
+        const el = zoomAnnounceEl();
+        if (el) el.textContent = zoomText();
+    };
+    const announceZoomLevel = () => {
+        // A discrete op supersedes any gesture that is still settling.
+        if (pendingZoomAnnounceTimer !== null) { clearTimeout(pendingZoomAnnounceTimer); pendingZoomAnnounceTimer = null; }
+        setZoomAnnouncement();
+    };
+    const announceZoomLevelDebounced = () => {
+        if (pendingZoomAnnounceTimer !== null) clearTimeout(pendingZoomAnnounceTimer);
+        pendingZoomAnnounceTimer = setTimeout(() => {
+            pendingZoomAnnounceTimer = null;
+            setZoomAnnouncement();
+        }, 500);
+    };
+    const applyZoom = (factor) => {
+        const newW = Math.max(150, Math.min(2400, vbState.w * factor));
+        const newH = newW * (vbState.h / vbState.w);
+        // Centre-anchored — the button analogue of the wheel handler's
+        // cursor-anchored zoom.
+        vbState.x += (vbState.w - newW) / 2;
+        vbState.y += (vbState.h - newH) / 2;
+        vbState.w = newW;
+        vbState.h = newH;
+        svg.setAttribute('viewBox', `${vbState.x} ${vbState.y} ${vbState.w} ${vbState.h}`);
+        updateZoomLevel();
+        announceZoomLevel(); // a button press is a discrete, keyboard-path op
+    };
+    const resetView = () => {
+        vbState.x = vbBase.x;
+        vbState.y = vbBase.y;
+        vbState.w = vbBase.w;
+        vbState.h = vbBase.h;
+        svg.setAttribute('viewBox', `${vbBase.x} ${vbBase.y} ${vbBase.w} ${vbBase.h}`);
+        updateZoomLevel();
+        announceZoomLevel();
+    };
+    state.modal?.querySelector?.('#kt-rel-zoom-in')?.addEventListener?.('click', () => applyZoom(0.8));
+    state.modal?.querySelector?.('#kt-rel-zoom-out')?.addEventListener?.('click', () => applyZoom(1.25));
+    state.modal?.querySelector?.('#kt-rel-zoom-reset')?.addEventListener?.('click', resetView);
+    updateZoomLevel();
+
+    // ── Slice 5 (a11y plan §4.6): keyboard node selection + summary ──
+    // First activation selects and announces the node's edge list into the
+    // #kt-rel-node-summary live region; a second activation opens the dossier
+    // (the same thing a pointer click does). Pointer clicks also select first,
+    // so the summary is up to date when the modal closes again.
+    let selectedName = null;
+    let selectedNodeG = null;
+    const summaryEl = () => state.modal?.querySelector?.('#kt-rel-node-summary');
+    const describeNode = (name) => {
+        const outgoing = data.edges.filter(e => e.from === name);
+        const incoming = data.edges.filter(e => e.to === name && e.from !== name);
+        const parts = [];
+        if (outgoing.length) parts.push(`outgoing: ${outgoing.map(e => `${e.type} → ${e.to}`).join(', ')}`);
+        if (incoming.length) parts.push(`incoming: ${incoming.map(e => `${e.type} ← ${e.from}`).join(', ')}`);
+        const n = outgoing.length + incoming.length;
+        return `${name}: ${n} relationship${n === 1 ? '' : 's'}${parts.length ? ` (${parts.join('; ')})` : ''}. Press Enter again to open the dossier.`;
+    };
+    // Attribute-based class toggle (not classList): the Node-suite fake DOM
+    // implements get/setAttribute only.
+    const setNodeSelected = (g, on) => {
+        const cls = (g.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+        const sel = 'kt-rel-graph-node--selected';
+        const i = cls.indexOf(sel);
+        if (on && i === -1) cls.push(sel);
+        if (!on && i !== -1) cls.splice(i, 1);
+        g.setAttribute('class', cls.join(' '));
+        if (on) g.setAttribute('aria-current', 'true');
+        else g.removeAttribute('aria-current');
+    };
+    const selectNode = (g, name) => {
+        if (selectedNodeG && selectedNodeG !== g) setNodeSelected(selectedNodeG, false);
+        selectedNodeG = g;
+        selectedName = name;
+        setNodeSelected(g, true);
+        const el = summaryEl();
+        if (el) el.textContent = describeNode(name);
+    };
 
     // Node dragging
     let dragNode = null;
@@ -2620,6 +2856,9 @@ function wireRelationshipGraphInteractions(svg, data) {
                 try { nodeG.releasePointerCapture(ev.pointerId); } catch { /* */ }
                 if (!didDrag) {
                     const name = nodeG.getAttribute('data-name');
+                    // Select first (Slice 5): the summary box reflects the node
+                    // the dossier belongs to once the modal closes.
+                    selectNode(nodeG, name);
                     openNpcViewModal(name);
                 }
                 dragNode = null;
@@ -2629,6 +2868,19 @@ function wireRelationshipGraphInteractions(svg, data) {
         nodeG.addEventListener('pointermove', onPointerMove);
         nodeG.addEventListener('pointerup', onPointerUp);
         nodeG.addEventListener('pointercancel', onPointerUp);
+        // Keyboard selection (Slice 5): Enter/Space select + announce; a
+        // second activation opens the dossier like a pointer click. Space is
+        // prevented so it never scrolls the panel behind the graph.
+        nodeG.addEventListener('keydown', (ev) => {
+            if (ev.key !== 'Enter' && ev.key !== ' ') return;
+            ev.preventDefault?.();
+            const name = nodeG.getAttribute('data-name');
+            if (selectedName === name) {
+                void openNpcViewModal(name, nodeG);
+                return;
+            }
+            selectNode(nodeG, name);
+        });
     });
 
     // Pan via background drag
@@ -2669,6 +2921,8 @@ function wireRelationshipGraphInteractions(svg, data) {
         vbState.w = newW;
         vbState.h = newH;
         svg.setAttribute('viewBox', `${vbState.x} ${vbState.y} ${vbState.w} ${vbState.h}`);
+        updateZoomLevel();
+        announceZoomLevelDebounced();
     }, { passive: false });
 }
 
@@ -2732,6 +2986,11 @@ function updateEdges(svg, data) {
     }
 }
 
+// The relationship filter-row controls whose focus must survive the panel
+// re-render that a filter change triggers — the two selects and the Clear
+// button (the chronicle search input's hadFocus pattern, applied to selects).
+const REL_FILTER_FOCUS_IDS = new Set(['kt-rel-filter-npc', 'kt-rel-filter-type', 'kt-rel-filter-clear']);
+
 function wireRelationshipEvents(el) {
     const typeSelect = el.querySelector('#kt-rel-type');
     const customInput = el.querySelector('#kt-rel-type-custom');
@@ -2748,6 +3007,38 @@ function wireRelationshipEvents(el) {
             state.relViewMode = btn.dataset.view;
             renderNpcsSubTab();
         });
+    });
+
+    // NPC/type filters (Slice 5, a11y plan §4.6 item 5): a change re-renders
+    // from the shared filtered edge set; #kt-rel-filter-summary announces the
+    // new active filters and visible/total counts as a polite live region.
+    // The re-render replaces the whole panel — the focused select included —
+    // so remember which filter-row control had focus and hand it back to its
+    // replacement (the same select re-renders with its value selected);
+    // without this, keyboard focus falls out of the control to <body>.
+    const filterNpcSelect = el.querySelector('#kt-rel-filter-npc');
+    const filterTypeSelect = el.querySelector('#kt-rel-filter-type');
+    const restoreRelFilterFocus = (previouslyFocusedId) => {
+        if (!REL_FILTER_FOCUS_IDS.has(previouslyFocusedId)) return;
+        const replacement = getNpcsContentEl()?.querySelector(`#${previouslyFocusedId}`);
+        replacement?.focus?.();
+    };
+    const applyRelFilters = () => {
+        const focusedId = document.activeElement?.id;
+        state.relFilterNpc = filterNpcSelect?.value || '';
+        state.relFilterType = filterTypeSelect?.value || '';
+        renderNpcsSubTab();
+        restoreRelFilterFocus(focusedId);
+    };
+    filterNpcSelect?.addEventListener('change', applyRelFilters);
+    filterTypeSelect?.addEventListener('change', applyRelFilters);
+
+    el.querySelector('#kt-rel-filter-clear')?.addEventListener('click', () => {
+        const focusedId = document.activeElement?.id;
+        state.relFilterNpc = '';
+        state.relFilterType = '';
+        renderNpcsSubTab();
+        restoreRelFilterFocus(focusedId);
     });
 
     // Collapsible section toggles — Recent Changes and the stance list. Pure

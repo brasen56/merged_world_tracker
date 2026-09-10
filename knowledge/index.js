@@ -585,6 +585,12 @@ export function onChatChanged() {
     // non-global scope the relationship store itself is per-chat, so a stale
     // log from the previous chat would be actively misleading.
     clearRecentRelationshipChanges();
+    // Same staleness class: the NPC/type filters reference the previous
+    // chat's relationship universe. A kept filter (e.g. an NPC that only
+    // exists there) silently hides every relationship in this chat until the
+    // user notices and clears it, making valid data look absent.
+    state.relFilterNpc = '';
+    state.relFilterType = '';
     state.stagingItems = [];
     state.activeItemId = null;
     state.activeSubTab = 'staging';
@@ -635,6 +641,10 @@ export function onChatChangedWhilePaused() {
     // previous chat is actively misleading, and clearing it is a pure
     // in-memory assignment — nothing about the pause blocks it.
     clearRecentRelationshipChanges();
+    // The relationship NPC/type filters are equally stale here and equally
+    // clearable — a pure in-memory assignment, so the pause doesn't block it.
+    state.relFilterNpc = '';
+    state.relFilterType = '';
     state.stagingItems = [];
     state.activeItemId = null;
     state.activeSubTab = 'staging';

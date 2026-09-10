@@ -53,6 +53,20 @@ export const state = {
     activeSubTab: 'staging',
     /** Relationship sub-tab view mode: 'graph' | 'list' */
     relViewMode: 'graph',
+    /** Relationship sub-tab edge filters (a11y plan §4.6, Slice 5 item 5):
+     *  NPC name and/or relationship type; '' = not filtered. Applied by
+     *  filterRelationshipEdges() in render.js to the ONE edge set shared by
+     *  the Graph and List views. Session state, not persisted — cleared on
+     *  chat change (both sweeps) and on a Knowledge scope change, because a
+     *  filter references the previous chat's/book's NPC and type universe. */
+    relFilterNpc: '',
+    relFilterType: '',
+    /** Last text computed for the #kt-rel-filter-summary live region.
+     *  renderRelationshipContent writes it; renderNpcsSubTab defers it into
+     *  the initially-empty region one task later so the change is ANNOUNCED
+     *  rather than silently redrawn (a node inserted already populated is
+     *  not required to be announced). */
+    _relFilterSummaryText: '',
     /** Whether the "Stances toward {{user}}" list is expanded. Collapsed by
      *  default: with a large NPC cast the per-NPC stance rows otherwise push
      *  the graph/edge list far down the tab. */

@@ -168,14 +168,28 @@
     max-height: 60vh;
 }
 
+/* Slice 5 (a11y plan §4.6): a staging proposal is a real <button>, so this
+   rule also resets the user-agent button chrome the old <div> never had —
+   background, font, colour, alignment and width. The focus ring comes from
+   the shared core rule ([class^="kt-"]:focus-visible), so nothing here may
+   suppress the outline. */
 .kt-staging-item {
     padding: 8px 10px;
     border-radius: var(--mwt-radius);
     border: 1px solid var(--mwt-border);
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    /* No width: the list is a column flex container, so the item stretches
+       exactly as the old div did. border-box keeps the padding + 1px border
+       inside the list's 200px track (this sheet has no global box-sizing). */
+    box-sizing: border-box;
     cursor: pointer;
     transition: all var(--mwt-transition);
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 2px;
 }
 
@@ -244,6 +258,13 @@
     color: var(--mwt-text);
     padding-bottom: 4px;
     border-bottom: 1px solid var(--mwt-border);
+}
+
+/* Slice 5 (a11y plan §4.6): the proposal name is a real <h4> heading —
+ * neutralize the UA's h4 margins so the flex-gap layout is unchanged
+ * (same rule as h4.kt-npc-name on the cards). */
+h4.kt-detail-name {
+    margin: 0;
 }
 
 .kt-detail-section {
@@ -370,6 +391,12 @@
     font-weight: 600;
     font-size: 14px;
     color: var(--mwt-text);
+}
+
+/* Slice 5 (a11y plan §4.6): card names are real <h4> headings — neutralize
+ * the UA's h4 margins so the card header layout is unchanged. */
+h4.kt-npc-name {
+    margin: 0;
 }
 
 .kt-npc-meta {
@@ -1813,12 +1840,106 @@
     position: absolute;
     bottom: 6px;
     right: 8px;
+    max-width: 75%;
+    text-align: right;
+    line-height: 1.4;
     font-size: 10px;
     color: var(--mwt-text-dim);
     pointer-events: none;
     background: rgba(26, 26, 46, 0.7);
     padding: 2px 6px;
     border-radius: 3px;
+}
+
+/* ── Slice 5 (a11y plan §4.6): zoom/reset controls, zoom level, summary ──── */
+
+.kt-rel-graph-controls {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    background: rgba(26, 26, 46, 0.85);
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+}
+
+.kt-rel-graph-ctrl {
+    background: var(--mwt-bg-light);
+    border: none;
+    color: var(--mwt-text);
+    width: 26px;
+    height: 24px;
+    line-height: 1;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-family: var(--mwt-font);
+    transition: background 0.15s, color 0.15s;
+}
+
+.kt-rel-graph-ctrl:hover {
+    background: var(--mwt-bg-lighter);
+    color: #fff;
+}
+
+.kt-rel-graph-zoom-level {
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+    padding: 0 4px;
+    min-width: 62px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* The selected-node summary: visible AND a polite live region, so the same
+ * text serves sighted users and screen readers. */
+.kt-rel-graph-summary {
+    position: absolute;
+    bottom: 6px;
+    left: 8px;
+    max-width: calc(100% - 220px);
+    font-size: 11px;
+    color: var(--mwt-text);
+    background: rgba(26, 26, 46, 0.8);
+    border: 1px solid var(--mwt-border);
+    padding: 4px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+/* Hide the CHROME when empty, never the box: this element is a live region,
+ * and display:none takes it out of the accessibility tree entirely. Selecting
+ * a node would then flip it from absent to present-with-content in one step —
+ * the same "inserted already populated" case #kt-rel-filter-summary defers
+ * around, which assistive tech is not required to announce. Staying rendered
+ * (empty, zero-footprint) is what makes the text change an announceable
+ * mutation. Do not swap this back to display:none / visibility:hidden. */
+.kt-rel-graph-summary:empty {
+    border-color: transparent;
+    background: transparent;
+    padding: 0;
+}
+
+/* Keyboard focus ring on graph nodes (paired with the :focus rule per a11y
+ * plan §4.3 — never outline:none without a replacement). */
+.kt-rel-graph-node:focus {
+    outline: none;
+}
+
+.kt-rel-graph-node:focus .kt-rel-graph-node-circle,
+.kt-rel-graph-node:focus-visible .kt-rel-graph-node-circle {
+    stroke: #fff;
+    stroke-width: 3;
+}
+
+.kt-rel-graph-node--selected .kt-rel-graph-node-circle,
+.kt-rel-graph-node[aria-current="true"] .kt-rel-graph-node-circle {
+    stroke: var(--mwt-accent);
+    stroke-width: 3;
+    filter: drop-shadow(0 0 4px rgba(122, 162, 255, 0.6));
 }
 
 /* ── Mobile / Touch Responsive (Knowledge-specific) ────────────────────────── */

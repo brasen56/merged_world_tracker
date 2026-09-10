@@ -19,6 +19,7 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const coreCss = stripComments(read('core/style.css'));
 const interiorityCss = stripComments(read('interiority/style.css'));
 const budgetCss = stripComments(read('budget/style.css'));
+const knowledgeCss = stripComments(read('knowledge/style.css'));
 
 describe('.mwt-sr-only (Slice 4 item 5)', () => {
     test('the utility exists and is hidden without display:none', () => {
@@ -91,5 +92,39 @@ describe('interiority per-NPC fieldset and help-group styles (Slice 4 follow-up)
         const help = interiorityCss.match(/\.mwt-int-ctl-help\s*\{([^}]*)\}/);
         expect(help).not.toBeNull();
         expect(help[1]).not.toMatch(/flex-basis/);
+    });
+});
+
+// Slice 5 follow-up: a live region must stay RENDERED to be announceable.
+
+describe('the graph node-summary live region stays in the accessibility tree', () => {
+    test('its empty state hides chrome only — never display:none / visibility:hidden', () => {
+        // #kt-rel-node-summary renders empty and is populated when a node is
+        // selected. display:none would take it out of the accessibility tree,
+        // so selecting a node would flip it from absent to
+        // present-with-content in one step — the same "inserted already
+        // populated" case #kt-rel-filter-summary defers around, which
+        // assistive tech is not required to announce.
+        const rule = knowledgeCss.match(/\.kt-rel-graph-summary:empty\s*\{([^}]*)\}/);
+        expect(rule).not.toBeNull();
+        expect(rule[1]).not.toMatch(/display:\s*none/);
+        expect(rule[1]).not.toMatch(/visibility:\s*hidden/);
+        // It still has to disappear visually when there is nothing to say.
+        expect(rule[1]).toMatch(/border-color:\s*transparent/);
+        expect(rule[1]).toMatch(/background:\s*transparent/);
+    });
+
+    test('the staging proposal button resets the user-agent chrome it inherited', () => {
+        // The proposal moved from <div> to <button> (§4.6): without these the
+        // UA background/font/centering would repaint the list, and without
+        // border-box the padding + border would overflow its 200px track.
+        const rule = knowledgeCss.match(/\.kt-staging-item\s*\{([^}]*)\}/);
+        expect(rule).not.toBeNull();
+        for (const decl of [/background:\s*none/, /font:\s*inherit/, /color:\s*inherit/, /text-align:\s*left/, /box-sizing:\s*border-box/]) {
+            expect(rule[1], String(decl)).toMatch(decl);
+        }
+        // The shared core rule paints the focus ring; nothing here may
+        // suppress it.
+        expect(rule[1]).not.toMatch(/outline:\s*none/);
     });
 });

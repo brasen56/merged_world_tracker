@@ -12,6 +12,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.7.0]
+
+### Added
+- Accessibility Slice 5 — cards and relationship views
+  (`docs/accessibility_plan.md` §5 Slice 5 / §4.6): labeled zoom-in / zoom-out
+  / reset controls on the relationship graph with an announced zoom level
+  (also updated by wheel zoom); keyboard node selection (Tab to a node,
+  Enter/Space to select, Enter again to open the dossier) with the selected
+  node's relationships announced into a live-region summary box; and a
+  screen-reader-only graph summary (edge count, node count, types present).
+- Relationship NPC/type filters (Slice 5 item 5, same plan): label-associated
+  selects narrow the ONE edge set consumed by both the Graph and List views,
+  a polite live region (`#kt-rel-filter-summary`) announces the active
+  filters plus the visible/total counts, and a filter that selects nothing
+  gets its own announced empty state ("No relationships match the current
+  filters").
+
+### Changed
+- The relationship Graph/List toggle exposes pressed state (`aria-pressed`)
+  inside a labeled group.
+- NPC and State Tracker card names — and the staging detail's proposal name —
+  are real `<h4>` headings (cards keep real action buttons; the card container
+  stays non-interactive, so keyboard operation and focus order are native).
+- The graph hint now covers the keyboard and List-view paths instead of
+  pointer gestures only, while keeping the pinned pointer contracts
+  ("Scroll to zoom", drag to rearrange); it also points at the
+  keyboard-reachable zoom/reset buttons above it and marks drag-to-rearrange
+  as cosmetic-only.
+- Relationship, NPC-list, state-tracker, and staging empty states are polite
+  live regions (`role="status"`). They render already populated — a node
+  inserted with its content is not required to be announced at all — so this
+  is best-effort: the role is harmless, and any later text change in the
+  region is announced rather than silently redrawn.
+- Pointer clicks on graph nodes also mark the node selected, so the summary
+  box matches the dossier when the view modal closes.
+- Staging proposals are real <button>s with aria-pressed inside a labeled group, not clickable <div>s. Selecting a proposal to review, edit, or Accept/Dismiss singly was the last essential MWT operation with no keyboard path — only the batch Accept All / Dismiss All were reachable — and its selected state was carried by colour alone.
+
+### Fixed
+- The relationship graph's zoom level no longer queues one live-region
+  announcement per wheel event: the visible percentage is now plain text
+  (updated on every zoom change) and announcements moved to a dedicated
+  screen-reader-only polite region — the zoom-in/out/reset buttons announce
+  their discrete level immediately, while the wheel path debounces to a
+  single announcement once the gesture settles (a button press mid-gesture
+  supersedes the pending one, and re-rendering the graph cancels it too).
+- Changing or clearing the relationship NPC/type filters no longer strands
+  keyboard focus on `<body>`: the panel re-render still replaces the whole
+  tab, but focus is handed back to the replacement control (the same select,
+  re-rendered with its value selected, or the Clear button). The
+  `#kt-rel-filter-summary` live region now renders empty and is populated a
+  task after the render, so the new counts and active filters are actually
+  announced instead of silently redrawn — a node inserted already populated
+  is not required to be announced at all.
+- Relationship NPC/type filters are cleared on chat change (both the full
+  `onChatChanged` sweep and `onChatChangedWhilePaused`) and on a Knowledge
+  scope change: a stale filter from another chat or lorebook could otherwise
+  hide every relationship in the new one, making valid data look absent
+  until the user noticed and cleared it.
+- The relationship graph's selected-node summary is announced again: its empty state hid the box with display: none, which removes it from the accessibility tree, so selecting a node flipped the live region from absent to present-with-content in one step — the case assistive tech is not required to announce. It now stays rendered with transparent chrome, and carries aria-atomic like the zoom region.
+
 ## [2.6.5]
 
 ### Changed
