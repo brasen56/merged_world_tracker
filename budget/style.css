@@ -77,8 +77,63 @@
     border-radius: 4px;
 }
 
-.mwt-budget-row--idle td {
+/* Slice 4 (a11y plan §4.4): the module cell is the row header (th
+   scope="row"). The shared health-table th rule above styles column headers
+   (10px, uppercase, dim) — a row header is data, so it keeps the body-cell
+   look. vertical-align is part of that: the .mwt-diag-health-table td rule
+   this cell used to match sets `middle`, and neither th rule does, so without
+   it the name falls back to inherit (→ baseline) and rides high against the
+   input cells — visibly so now the plan cell is two lines tall. */
+.mwt-budget-table th[scope="row"] {
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--mwt-text, inherit);
+    padding: 6px 8px;
+    vertical-align: middle;
+    white-space: normal;
+    font-weight: 600;
+}
+
+.mwt-budget-row--idle td,
+.mwt-budget-row--idle th {
     opacity: 0.6;
+}
+
+/* The former tooltip-only column explanations (priority, tokens, action,
+   soft/hard cap), now visible under the table (a11y plan §5 Slice 4 item 3).
+   The ids are the aria-describedby targets for the column headers and the
+   per-module inputs. */
+.mwt-budget-help {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 6px 0 0;
+}
+
+.mwt-budget-help p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--mwt-text-dim, #999);
+}
+
+/* The modeled action's reason/displacement note, visible under the badge
+   (it was a td title before). */
+.mwt-budget-plan-reason {
+    font-size: 11px;
+    color: var(--mwt-text-dim, #999);
+    white-space: normal;
+    max-width: 260px;
+    margin-top: 2px;
+    line-height: 1.4;
+}
+
+/* The context-limit note, visible under the usage bar (the unknown-limit
+   branch always showed it; the known-limit branch hid it in a tooltip). */
+.mwt-budget-bar-note {
+    font-size: 11px;
+    margin: 0 0 12px;
 }
 
 .mwt-budget-caps {

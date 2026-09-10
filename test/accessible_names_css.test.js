@@ -18,6 +18,7 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
 
 const coreCss = stripComments(read('core/style.css'));
 const interiorityCss = stripComments(read('interiority/style.css'));
+const budgetCss = stripComments(read('budget/style.css'));
 
 describe('.mwt-sr-only (Slice 4 item 5)', () => {
     test('the utility exists and is hidden without display:none', () => {
@@ -42,5 +43,53 @@ describe('visible edit-form help (Slice 4 item 3)', () => {
         const rule = interiorityCss.match(/\.mwt-int-edit-help\s*\{([^}]*)\}/);
         expect(rule).not.toBeNull();
         expect(rule[1]).toMatch(/font-size:\s*11px/);
+    });
+});
+
+// Slice 4 scope-miss follow-up (budget/panel.js + the per-NPC help dedup):
+// the new visible-help and structural styles the sweep relies on.
+
+describe('budget pane help styles (Slice 4 scope-miss follow-up)', () => {
+    test('the visible help block, plan reason, and bar note styles exist', () => {
+        for (const selector of ['.mwt-budget-help', '.mwt-budget-help p', '.mwt-budget-plan-reason', '.mwt-budget-bar-note']) {
+            const rule = budgetCss.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{`));
+            expect(rule, selector).not.toBeNull();
+        }
+    });
+
+    test('the scope="row" module cell overrides the shared header-cell chrome', () => {
+        // The shared .mwt-diag-health-table th rule styles column headers
+        // (10px uppercase dim); a row header is data and must not inherit it.
+        const rule = budgetCss.match(/\.mwt-budget-table th\[scope="row"\]\s*\{([^}]*)\}/);
+        expect(rule).not.toBeNull();
+        expect(rule[1]).toMatch(/text-transform:\s*none/);
+        expect(rule[1]).toMatch(/font-size:\s*12px/);
+        // The idle-row dimming covers the row header too (it is a th now).
+        expect(budgetCss).toMatch(/\.mwt-budget-row--idle td,\s*\n?\s*\.mwt-budget-row--idle th\s*\{/);
+    });
+});
+
+describe('interiority per-NPC fieldset and help-group styles (Slice 4 follow-up)', () => {
+    test('the fieldset resets its user-agent chrome and the name line keeps the shared flex rule', () => {
+        const reset = interiorityCss.match(/fieldset\.mwt-int-controls-row\s*\{([^}]*)\}/);
+        expect(reset).not.toBeNull();
+        // A fieldset's UA margin and min-width: min-content would both break
+        // the row; border/padding/background come from .mwt-int-controls-row.
+        expect(reset[1]).toMatch(/margin:\s*0/);
+        expect(reset[1]).toMatch(/min-width:\s*0/);
+        // No bespoke legend rule: the name line reuses .mwt-int-ledger-entry-main,
+        // which is a real flex item (a rendered legend is not — see the
+        // markup test in accessible_names.test.js).
+        expect(interiorityCss).not.toMatch(/\.mwt-int-controls-legend\s*\{/);
+        const nameLine = interiorityCss.match(/\.mwt-int-ledger-entry-main\s*\{([^}]*)\}/);
+        expect(nameLine).not.toBeNull();
+        expect(nameLine[1]).toMatch(/flex:\s*1 1 240px/);
+    });
+
+    test('the once-rendered help group exists and the per-snippet rule no longer flexes inside a row', () => {
+        expect(interiorityCss).toMatch(/\.mwt-int-ctl-help-group\s*\{/);
+        const help = interiorityCss.match(/\.mwt-int-ctl-help\s*\{([^}]*)\}/);
+        expect(help).not.toBeNull();
+        expect(help[1]).not.toMatch(/flex-basis/);
     });
 });

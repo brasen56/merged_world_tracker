@@ -304,40 +304,55 @@ function renderNpcControlsList() {
     const rows = [];
     const seen = new Set();
     let rowIdx = 0;
+    let hasControlRows = false;
     // Explicit control records first (insertion order = the store map's).
     for (const [npcKey, control] of Object.entries(getInteriorityData().npcControls)) {
         const boundary = getEvidenceBoundary(npcKey);
         seen.add(npcKey.toLowerCase());
+        hasControlRows = true;
         // Row-suffixed ids (index is unique per render and always id-safe —
         // NPC names can contain spaces), so each control gets an explicit
-        // label[for] association; helpId anchors the persistent help line
-        // every control references via aria-describedby (a11y plan §5
-        // Slice 4 items 3–4).
+        // label[for] association (a11y plan §5 Slice 4 items 3–4). The
+        // dial explanations live in four STATIC snippets rendered once
+        // after the list (see the return below) and each control references
+        // only its own snippet — the first Slice 4 pass repeated the whole
+        // four-part paragraph per row and pointed every control's
+        // aria-describedby at all of it, so each dial announced all four
+        // explanations, once per NPC. The fieldset carries the NPC's name as
+        // the row context instead of repeating it in labels.
+        //
+        // The name rides in the ordinary name line, with the fieldset pointed
+        // at it by aria-labelledby, rather than in a <legend>: a rendered
+        // legend is excluded from the fieldset's anonymous content box, so it
+        // never becomes a flex item — it stacked above the dials (measured:
+        // 34px → 50px per row, and `flex: 1 1 240px` on it was inert) instead
+        // of sitting opposite them under `justify-content: space-between`.
+        // aria-labelledby takes precedence over a legend for the group name
+        // anyway, so the grouping is unchanged and the layout is the one the
+        // plain div had.
         const uid = `-${rowIdx++}`;
-        const helpId = `mwt-int-ctl-help${uid}`;
         rows.push(`
-        <div class="mwt-int-controls-row" data-npc="${escapeHtml(npcKey)}">
-            <div class="mwt-int-ledger-entry-main">
+        <fieldset class="mwt-int-controls-row" data-npc="${escapeHtml(npcKey)}" aria-labelledby="mwt-int-ctl-npc${uid}">
+            <div class="mwt-int-ledger-entry-main" id="mwt-int-ctl-npc${uid}">
                 <span class="mwt-int-ledger-npc">${escapeHtml(npcKey)}</span>
                 ${boundary ? `<span style="color:var(--mwt-text-dim);font-size:11px" title="Generation turn this NPC's intentions were last successfully evaluated">· last evaluated turn ${boundary.turn}</span>` : ''}
             </div>
             <div class="mwt-int-controls-fields">
                 <label for="mwt-int-ctl-privacy${uid}">
-                    <input type="checkbox" id="mwt-int-ctl-privacy${uid}" class="mwt-int-ctl-privacy" data-npc="${escapeHtml(npcKey)}" aria-describedby="${helpId}" ${control.privacyExcluded ? 'checked' : ''}> privacy
+                    <input type="checkbox" id="mwt-int-ctl-privacy${uid}" class="mwt-int-ctl-privacy" data-npc="${escapeHtml(npcKey)}" aria-describedby="mwt-int-ctl-help-privacy" ${control.privacyExcluded ? 'checked' : ''}> privacy
                 </label>
                 <label for="mwt-int-ctl-pause${uid}">
-                    <input type="checkbox" id="mwt-int-ctl-pause${uid}" class="mwt-int-ctl-pause" data-npc="${escapeHtml(npcKey)}" aria-describedby="${helpId}" ${control.pauseNewProposals ? 'checked' : ''}> pause new
+                    <input type="checkbox" id="mwt-int-ctl-pause${uid}" class="mwt-int-ctl-pause" data-npc="${escapeHtml(npcKey)}" aria-describedby="mwt-int-ctl-help-pause" ${control.pauseNewProposals ? 'checked' : ''}> pause new
                 </label>
                 <label for="mwt-int-ctl-cooldown${uid}">
-                    cooldown <input type="number" min="0" max="200" style="width:52px" class="mwt-input mwt-int-ctl-cooldown" id="mwt-int-ctl-cooldown${uid}" data-npc="${escapeHtml(npcKey)}" aria-describedby="${helpId}" value="${control.cooldownTurns || 0}">
+                    cooldown <input type="number" min="0" max="200" style="width:52px" class="mwt-input mwt-int-ctl-cooldown" id="mwt-int-ctl-cooldown${uid}" data-npc="${escapeHtml(npcKey)}" aria-describedby="mwt-int-ctl-help-cooldown" value="${control.cooldownTurns || 0}">
                 </label>
                 <label for="mwt-int-ctl-cap${uid}">
-                    cap <input type="number" min="0" max="20" style="width:44px" class="mwt-input mwt-int-ctl-cap" id="mwt-int-ctl-cap${uid}" data-npc="${escapeHtml(npcKey)}" aria-describedby="${helpId}" value="${control.activeCap || 0}">
+                    cap <input type="number" min="0" max="20" style="width:44px" class="mwt-input mwt-int-ctl-cap" id="mwt-int-ctl-cap${uid}" data-npc="${escapeHtml(npcKey)}" aria-describedby="mwt-int-ctl-help-cap" value="${control.activeCap || 0}">
                 </label>
                 <button class="mwt-int-ctl-remove-btn mwt-btn mwt-btn-sm" data-npc="${escapeHtml(npcKey)}" title="Remove this control record" aria-label="Remove control record">✕</button>
             </div>
-            <p id="${helpId}" class="mwt-int-ctl-help">privacy: never send this NPC's dossier (knowledge entry, character core, relationships) in any interiority call · pause new: block NEW engine proposals — existing intentions are still evaluated every turn · cooldown: after an accepted proposal, block further proposals for this many turns (0 = off) · cap: max ACTIVE engine-authored intentions (0 = unlimited; nothing is auto-evicted)</p>
-        </div>`);
+        </fieldset>`);
     }
     // NPCs with an evidence boundary but no control record (informational).
     for (const entry of getLedger()) {
@@ -359,7 +374,20 @@ function renderNpcControlsList() {
     if (rows.length === 0) {
         return '<p style="color:var(--mwt-text-dim);font-size:12px">No per-NPC controls. Add one by NPC name — privacy exclusion withholds the dossier; the cost dials pause only NEW proposals.</p>';
     }
-    return rows.join('');
+    // The four dial explanations, rendered ONCE for the whole list: each
+    // control's aria-describedby points at exactly its own snippet, so
+    // focusing a dial announces only that dial's explanation no matter how
+    // many NPC rows exist.
+    const helpSnippets = hasControlRows
+        ? `
+        <div class="mwt-int-ctl-help-group">
+            <p id="mwt-int-ctl-help-privacy" class="mwt-int-ctl-help">privacy: never send this NPC's dossier (knowledge entry, character core, relationships) in any interiority call</p>
+            <p id="mwt-int-ctl-help-pause" class="mwt-int-ctl-help">pause new: block NEW engine proposals — existing intentions are still evaluated every turn</p>
+            <p id="mwt-int-ctl-help-cooldown" class="mwt-int-ctl-help">cooldown: after an accepted proposal, block further proposals for this many turns (0 = off)</p>
+            <p id="mwt-int-ctl-help-cap" class="mwt-int-ctl-help">cap: max ACTIVE engine-authored intentions (0 = unlimited; nothing is auto-evicted)</p>
+        </div>`
+        : '';
+    return rows.join('') + helpSnippets;
 }
 
 // ─── Inner states (v2 §18 — persistent affective line) ───────────────────────

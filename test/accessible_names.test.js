@@ -24,6 +24,9 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createFloatingButtonBar, renderApiSettingsFields } from '../core/ui.js';
+// The Budget pane renderer, for its DOM-level contract below (the pane the
+// a11y plan's source inventory missed — BUG scope miss filed mid-Slice 4).
+import { renderBudgetSnapshot } from '../budget/panel.js';
 // Renderers as source text — see the file header (main_tabbar_adoption
 // precedent). knowledge/settings.js is swept with knowledge/render.js: the
 // settings cog panel renders from it.
@@ -35,6 +38,7 @@ import worldStateSource from '../world_state/render.js?raw';
 import backupSource from '../backup/render.js?raw';
 import chronicleSource from '../chronicle/render.js?raw';
 import diagnosticsSource from '../diagnostics_panel/render.js?raw';
+import budgetPanelSource from '../budget/panel.js?raw';
 import schemaStatusSource from '../core/schema_status.js?raw';
 import uiSource from '../core/ui.js?raw';
 import indexSource from '../index.js?raw';
@@ -51,6 +55,7 @@ const SOURCES = {
     'core/schema_status.js': schemaStatusSource,
     'core/ui.js': uiSource,
     'index.js': indexSource,
+    'budget/panel.js': budgetPanelSource,
 };
 
 // ─── Source scanner: icon-only buttons must carry aria-label (§6.4) ──────────
@@ -402,6 +407,7 @@ const RESWEPT_SOURCES = {
     'story_planner/render.js': storyPlannerSource,
     'knowledge/settings.js': knowledgeSettingsSource,
     'knowledge/render.js': knowledgeSource,
+    'budget/panel.js': budgetPanelSource,
 };
 
 describe('re-swept forms associate every label explicitly (Slice 4 item 4)', () => {
@@ -488,17 +494,45 @@ describe('tooltip-only explanations became visible help text', () => {
         expect(interioritySource).not.toContain('title="Maximum accepted new intentions');
     });
 
-    test('interiority per-NPC controls have persistent, adjacent help (Slice 4 item 3)', () => {
+    test('interiority per-NPC controls: four help snippets rendered once, one per dial (Slice 4 item 3)', () => {
         // The privacy / pause new / cooldown / cap explanations moved from
-        // title-only tooltips to a persistent help line rendered under every
-        // control row, wired to the controls via aria-describedby.
-        expect(interioritySource).toContain('class="mwt-int-ctl-help"');
+        // title-only tooltips to persistent help — first as one combined
+        // paragraph per row, with every dial's aria-describedby pointing at
+        // the whole thing (each control announced all four explanations, one
+        // full paragraph per NPC). They are now four snippets rendered ONCE
+        // under the list, each dial referencing only its own.
+        expect(interioritySource).toContain('class="mwt-int-ctl-help-group"');
         expect(interioritySource).toContain("privacy: never send this NPC's dossier");
         expect(interioritySource).toContain('pause new: block NEW engine proposals');
         expect(interioritySource).toContain('cooldown: after an accepted proposal');
         expect(interioritySource).toContain('cap: max ACTIVE engine-authored intentions');
-        // All four dials of a row reference the same help line.
-        expect(interioritySource.match(/aria-describedby="\$\{helpId\}"/g)?.length).toBe(4);
+        // Each snippet id renders exactly once (after the list, not per row),
+        // and exactly one control template references each snippet.
+        for (const dial of ['privacy', 'pause', 'cooldown', 'cap']) {
+            expect(interioritySource.match(new RegExp(`id="mwt-int-ctl-help-${dial}"`, 'g'))?.length, dial).toBe(1);
+            expect(interioritySource.match(new RegExp(`aria-describedby="mwt-int-ctl-help-${dial}"`, 'g'))?.length, dial).toBe(1);
+        }
+        // The per-row whole-paragraph pattern is gone.
+        expect(interioritySource).not.toContain('aria-describedby="${helpId}"');
+        expect(interioritySource).not.toContain('const helpId');
+    });
+
+    test('interiority per-NPC control rows are fieldsets named by the NPC', () => {
+        // The fieldset gives every dial in the row its NPC context without
+        // repeating the NPC name in each label. The name is referenced by
+        // aria-labelledby rather than held in a <legend>: a rendered legend
+        // takes no part in the fieldset's flex layout, so it stacked above
+        // the dials instead of sitting opposite them (34px → 50px per row).
+        expect(interioritySource).toContain('<fieldset class="mwt-int-controls-row"');
+        expect(interioritySource).toContain('aria-labelledby="mwt-int-ctl-npc${uid}"');
+        expect(interioritySource).toContain('<div class="mwt-int-ledger-entry-main" id="mwt-int-ctl-npc${uid}">');
+        expect(interioritySource).toContain('<span class="mwt-int-ledger-npc">${escapeHtml(npcKey)}</span>');
+        // Markup only — the comment above the template explains why there is
+        // no legend, so the raw source still mentions the tag.
+        expect(stripLineComments(stripBlockComments(interioritySource))).not.toContain('<legend');
+        // Boundary-only rows carry no controls and stay plain divs — the same
+        // name line and the same flex row, so the two shapes still match.
+        expect(interioritySource).toContain('mwt-int-controls-row--readonly');
     });
 
     test('interiority per-NPC control labels no longer carry the explanations as titles', () => {
@@ -522,6 +556,181 @@ describe('tooltip-only explanations became visible help text', () => {
         expect(storyPlannerSource.match(/aria-describedby="sp-inject-mode-help"/g)?.length).toBe(1);
         expect(storyPlannerSource).toContain('<input type="radio" id="sp-inject-mode-${m.key}" name="sp-inject-mode" value="${m.key}" aria-describedby="sp-inject-mode-help"');
         expect(storyPlannerSource).toContain('INJECT_MODES.map(m => `<strong>${escapeHtml(m.label)}:</strong> ${escapeHtml(m.blurb)}`).join(\' · \')');
+    });
+
+    test('budget: the column explanations render visibly under the table, not as th titles', () => {
+        // Priority / Estimated tokens / Budget action / Soft cap / Hard cap
+        // meanings — cap behavior and the modeled action among them — were
+        // tooltip-only on the <th>s; they are now a visible help block whose
+        // ids the headers and every per-module input reference via
+        // aria-describedby.
+        for (const id of ['priority', 'tokens', 'action', 'soft', 'hard']) {
+            expect(budgetPanelSource, id).toContain(`id="mwt-budget-help-${id}"`);
+            expect(budgetPanelSource, id).toContain(`aria-describedby="mwt-budget-help-${id}"`);
+        }
+        expect(budgetPanelSource).not.toMatch(/<th[^>]*\stitle=/);
+        // The modeled action's reason is visible in the cell, not a td title.
+        expect(budgetPanelSource).toContain('class="mwt-budget-plan-reason"');
+        expect(budgetPanelSource).not.toContain('planTitle');
+        // The banner glyphs (🛡 / 👀 / ⚠) are decorative and hidden; the
+        // truncate result is spelled out instead of an arrow-plus-number.
+        expect(budgetPanelSource).toContain('<span aria-hidden="true">🛡</span>');
+        expect(budgetPanelSource).toContain('<span aria-hidden="true">👀</span>');
+        expect(budgetPanelSource).toContain('<span aria-hidden="true">⚠</span>');
+        expect(budgetPanelSource).toContain('truncates to ~${Number(r.plan.tokensAfter).toLocaleString()}');
+    });
+});
+
+// ─── Budget pane: table semantics and named inputs (Slice 4 scope-miss) ──────
+// budget/panel.js was absent from the plan's source inventory; these pin the
+// markup contract the rest of the sweep already guarantees elsewhere: column
+// and row header scopes, per-input names like "Chronicle soft cap", and
+// descriptions that resolve inside the pane.
+
+/**
+ * A minimal but fully-shaped collectBudgetSnapshot() stand-in. The labels are
+ * PRODUCTION-shaped — emoji-led, exactly as BUDGET_MODULE_SPECS defines them —
+ * because plain-label fixtures masked the accessible-name bug this block pins:
+ * the pane must split the decorative icon (aria-hidden) from the plain module
+ * name every accessible name and textual summary uses.
+ */
+const BUDGET_SNAP = {
+    generatedAt: 0,
+    mwtVersion: 'test',
+    enforce: false,
+    contextLimit: { value: 8192, source: 'test', note: 'probe note' },
+    contextLimitOverride: 0,
+    globalHardCap: 0,
+    injectedTokens: 500,
+    storedTokens: 1200,
+    projected: { dropped: 1, truncated: 1, keptTokens: 300, totalBefore: 1200 },
+    modules: [
+        { id: 'world_state', label: '🌍 World State', mechanism: 'rebuild', advisory: false, priority: 1, softCap: 0, hardCap: 0, tokens: 0, tokenKind: 'injected', registered: false, plan: null },
+        { id: 'chronicle', label: '📜 Chronicle', advisory: false, priority: 2, softCap: 500, hardCap: 0, tokens: 900, tokenKind: 'injected', registered: true, plan: { action: 'truncate', reason: 'Over soft cap (500)', tokensBefore: 900, tokensAfter: 480, displaced: ['world_state', 'story_planner'] } },
+        { id: 'knowledge', label: '🧠 Knowledge', advisory: true, priority: 3, softCap: 0, hardCap: 0, tokens: 1200, tokenKind: 'stored', registered: false, plan: null },
+    ],
+    dropOrder: [{ label: '🗺️ Story Planner', priority: 5 }],
+};
+
+/** The plain names and decorative icons the pane must derive from those labels. */
+const BUDGET_PLAIN = { world_state: 'World State', chronicle: 'Chronicle', knowledge: 'Knowledge' };
+const BUDGET_ICONS = { world_state: '🌍', chronicle: '📜', knowledge: '🧠' };
+
+describe('budget table: scopes, named inputs, hidden banner glyphs', () => {
+    const render = () => {
+        const holder = document.createElement('div');
+        holder.innerHTML = renderBudgetSnapshot(BUDGET_SNAP, { formatTime: () => '12:00:00' });
+        return holder;
+    };
+
+    test('every column header carries scope="col"; every module cell is a scope="row" th', () => {
+        const holder = render();
+        const colHeaders = [...holder.querySelectorAll('thead th')];
+        expect(colHeaders).toHaveLength(6);
+        for (const th of colHeaders) expect(th.getAttribute('scope')).toBe('col');
+        const rowHeads = [...holder.querySelectorAll('tbody th[scope="row"]')];
+        expect(rowHeads).toHaveLength(BUDGET_SNAP.modules.length);
+        // Forward with the split's intent: the decorative icon sits in an
+        // aria-hidden span and the header's exposed text is the PLAIN module
+        // name — the combined textContent is never asserted to equal the
+        // emoji-led spec label.
+        expect(rowHeads.map((th) => {
+            const icon = th.querySelector('span[aria-hidden="true"]');
+            return th.textContent.replace(icon?.textContent ?? '', '').trim();
+        })).toEqual(BUDGET_SNAP.modules.map((m) => BUDGET_PLAIN[m.id]));
+    });
+
+    test('each input is named "<Module> priority/soft cap/hard cap" and described by its column help', () => {
+        const holder = render();
+        const inputs = [...holder.querySelectorAll('.mwt-budget-priority, .mwt-budget-soft, .mwt-budget-hard')];
+        expect(inputs).toHaveLength(BUDGET_SNAP.modules.length * 3);
+        for (const input of inputs) {
+            const label = BUDGET_PLAIN[input.dataset.module];
+            const expected = {
+                'mwt-budget-priority': `${label} priority`,
+                'mwt-budget-soft': `${label} soft cap`,
+                'mwt-budget-hard': `${label} hard cap`,
+            }[input.className];
+            expect(input.getAttribute('aria-label'), input.outerHTML).toBe(expected);
+            const desc = input.getAttribute('aria-describedby');
+            expect(desc, expected).toMatch(/^mwt-budget-help-(priority|soft|hard)$/);
+            expect(holder.querySelector(`#${desc}`), expected).not.toBeNull();
+        }
+        // The advisory module's inputs stay explicitly disabled.
+        for (const input of holder.querySelectorAll('input[data-module="knowledge"]')) {
+            expect(input.disabled).toBe(true);
+        }
+    });
+
+    test('the modeled action reads as text: "truncates to ~N" plus a visible reason', () => {
+        const holder = render();
+        const planCell = holder.querySelector('tr[data-module="chronicle"] .mwt-budget-plan');
+        expect(planCell.querySelector('.mwt-diag-badge').textContent).toBe('truncates to ~480');
+        expect(planCell.querySelector('.mwt-budget-plan-reason').textContent).toContain('Over soft cap (500)');
+        // An idle module's lone "—" carries its meaning as sr-only text.
+        const idleCell = holder.querySelector('tr[data-module="world_state"] .mwt-budget-plan');
+        expect(idleCell.querySelector('.mwt-sr-only').textContent).toContain('nothing to model');
+    });
+
+    test('the displacement note names modules plainly, not by raw id', () => {
+        // planBudgetDecision's displaced array holds module IDS (core/budget.js
+        // pushes victim.id), and the note under the badge must read with the
+        // same plain names the drop-order summary uses — "(would displace:
+        // World State, Story Planner)" — not the raw snake_case ids.
+        const holder = render();
+        const reason = holder.querySelector('tr[data-module="chronicle"] .mwt-budget-plan-reason');
+        expect(reason.textContent).toContain('would displace: World State, Story Planner');
+        expect(reason.textContent).not.toContain('world_state');
+        expect(reason.textContent).not.toContain('story_planner');
+    });
+
+    test('a label that is only an emoji renders its glyph once, not duplicated', () => {
+        // Latent splitModuleLabel case (no current spec is emoji-only): the
+        // fallback must not echo the glyph as both icon and name — the header
+        // renders it exactly once, with no aria-hidden icon span.
+        const snap = {
+            ...BUDGET_SNAP,
+            modules: BUDGET_SNAP.modules.map((m) => (m.id === 'world_state' ? { ...m, label: '🌍' } : m)),
+        };
+        const holder = document.createElement('div');
+        holder.innerHTML = renderBudgetSnapshot(snap, { formatTime: () => '12:00:00' });
+        const th = holder.querySelector('tr[data-module="world_state"] th[scope="row"]');
+        expect(th.querySelector('span[aria-hidden="true"]')).toBeNull();
+        expect(th.textContent.trim()).toBe('🌍');
+    });
+
+    test('the mode banner and context-limit note are glyph-independent and visible', () => {
+        const holder = render();
+        const banner = holder.querySelector('.mwt-budget-mode');
+        expect(banner).not.toBeNull();
+        expect(banner.firstElementChild.getAttribute('aria-hidden')).toBe('true');
+        // The note under the usage bar is real text, not a title tooltip.
+        expect(holder.querySelector('.mwt-budget-bar-note').textContent).toBe('probe note');
+        expect(holder.querySelector('.mwt-budget-bar-wrap').getAttribute('title')).toBeNull();
+    });
+
+    test('the emoji-led spec labels never reach an accessible name or textual summary', () => {
+        // BUDGET_MODULE_SPECS labels are emoji-led ("🌍 World State"): the
+        // row header keeps the glyph visible but hides it from assistive
+        // tech, and every name/summary the pane builds from a label — the
+        // three per-input aria-labels, the drop-order note — uses the plain
+        // module name only (a11y plan §4.4 decorative-emoji rule).
+        const holder = render();
+        // Row headers: the icon sits in an aria-hidden span and the exposed
+        // text is exactly the plain name.
+        for (const th of holder.querySelectorAll('tbody th[scope="row"]')) {
+            const id = th.closest('tr').dataset.module;
+            const icon = th.querySelector('span[aria-hidden="true"]');
+            expect(icon, th.outerHTML).not.toBeNull();
+            expect(icon.textContent).toBe(BUDGET_ICONS[id]);
+            expect(th.textContent.replace(icon.textContent, '').trim()).toBe(BUDGET_PLAIN[id]);
+        }
+        // No accessible name in the pane announces a glyph.
+        for (const el of holder.querySelectorAll('[aria-label]')) {
+            expect(el.getAttribute('aria-label'), el.outerHTML).not.toMatch(/\p{Extended_Pictographic}/u);
+        }
+        // The drop-order summary is a plain-name textual summary.
+        expect(holder.querySelector('.mwt-diag-note strong').textContent).toBe('Story Planner (P5)');
     });
 });
 

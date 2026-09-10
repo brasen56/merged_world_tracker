@@ -338,6 +338,22 @@ button.mwt-int-conflict-badge {
     opacity: 0.75;
 }
 
+/* Slice 4 follow-up (a11y plan §4.4): each NPC's controls now group in a
+   <fieldset> named by its NPC through aria-labelledby — row context without
+   repeating the name in every label. The name line keeps its ordinary
+   .mwt-int-ledger-entry-main styling and stays a flex item, so the row still
+   reads name-left / dials-right. (A <legend> would not: the rendered legend
+   sits outside the fieldset's anonymous content box, so it takes no part in
+   the flex layout and stacks above the dials.)
+
+   Only the fieldset's own user-agent chrome needs resetting — border, padding
+   and background already come from .mwt-int-controls-row above; margin and
+   the min-width: min-content default do not. */
+fieldset.mwt-int-controls-row {
+    margin: 0;
+    min-width: 0;
+}
+
 .mwt-int-controls-fields {
     display: flex;
     flex-wrap: wrap;
@@ -355,11 +371,19 @@ button.mwt-int-conflict-badge {
 }
 
 /* Slice 4 (a11y plan §4.4 / §5 Slice 4 item 3): the per-NPC control dial
-   explanations used to be tooltip-only titles. They now live in a
-   persistent help line under each row, referenced from every control via
-   aria-describedby, so keyboard and screen-reader users get them reliably. */
+   explanations used to be tooltip-only titles. They now live in four
+   persistent snippets rendered ONCE under the list (not a combined paragraph
+   per row), each referenced via aria-describedby from exactly its own dial,
+   so keyboard and screen-reader users get them reliably and one at a
+   time. */
+.mwt-int-ctl-help-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 12px;
+}
+
 .mwt-int-ctl-help {
-    flex-basis: 100%;
     font-size: 11px;
     color: var(--mwt-text-dim);
     margin: 0;

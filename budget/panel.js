@@ -188,6 +188,49 @@ function badge(text, tone) {
 }
 
 /**
+ * Split a module label into its decorative leading icon and the plain module
+ * name. BUDGET_MODULE_SPECS labels are emoji-led ("🌍 World State"), and the
+ * emoji is visual sugar (a11y plan §4.4): it renders inside an aria-hidden
+ * span and never rides into an accessible name or a textual summary. A label
+ * with no leading emoji — the shape hand-built test snapshots use — passes
+ * through whole, and so does a label that is ONLY an emoji (it has no plain
+ * name to expose; splitting it would render the glyph twice), so all of these
+ * shapes name their rows identically.
+ *
+ * @param {string} label — a spec label (or any snapshot row's label)
+ * @returns {{icon: string, name: string}} icon is '' when there is none; name
+ *   is always the text an accessible name or summary should use
+ */
+function splitModuleLabel(label) {
+    const raw = String(label ?? '');
+    // One emoji sequence — a pictographic base plus any VS-16, skin-tone
+    // modifier, or ZWJ-joined continuation — then the separator and the rest.
+    const m = raw.match(/^(\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic})*)\s*(.*)$/u);
+    // No match, or nothing after the emoji: pass the whole label through as
+    // the name with no icon split. Falling back to `raw` as the name here
+    // (m[2] || raw) would make an emoji-only label yield name === icon — the
+    // glyph would render twice (once aria-hidden, once not) and ride into
+    // every accessible name built from `name`.
+    if (!m || !m[2]) return { icon: '', name: raw };
+    return { icon: m[1], name: m[2] };
+}
+
+/**
+ * Plain display name for a module ID. planBudgetDecision's `displaced` array
+ * holds module IDS (core/budget.js pushes victim.id), and the note under the
+ * badge must read with the same plain names the drop-order summary uses —
+ * "(would displace: World State)" — not raw snake_case ids. An id with no
+ * spec (hand-built snapshots, forward-compat) passes through unchanged.
+ *
+ * @param {string} id — a module id (a BUDGET_MODULE_SPECS id, or any string)
+ * @returns {string} the spec label's plain name, or the id itself when unknown
+ */
+function modulePlainName(id) {
+    const spec = BUDGET_MODULE_SPECS.find((s) => s.id === id);
+    return spec ? splitModuleLabel(spec.label).name : String(id ?? '');
+}
+
+/**
  * Render the pane markup from a snapshot (pure string builder; injectable
  * formatTime keeps Node tests deterministic — renderHealthSnapshot's rule).
  *
@@ -199,27 +242,40 @@ export function renderBudgetSnapshot(snapshot, { formatTime = (ts) => new Date(t
     const s = snapshot || {};
     const rows = Array.isArray(s.modules) ? s.modules : [];
 
+    // The registered-vs-stored tokens explanation lives in the visible help
+    // block under the table (#mwt-budget-help-tokens), not in a tooltip
+    // (a11y plan §5 Slice 4 item 3).
     const tokensCell = (r) => {
         const n = Number(r.tokens) || 0;
         const amount = n.toLocaleString();
         if (r.tokenKind === 'stored') {
-            return `<span class="mwt-budget-tokens-stored" title="Library size on disk — SillyTavern activates only entries whose keywords match, so this is NOT prompt load">${amount} <span class="mwt-diag-dim">stored</span></span>`;
+            return `<span class="mwt-budget-tokens-stored">${amount} <span class="mwt-diag-dim">stored</span></span>`;
         }
-        return `<span title="Registered payload tokens (what setExtensionPrompt received)">${r.registered ? amount : '<span class="mwt-diag-dim">not registered</span>'}</span>`;
+        return `<span>${r.registered ? amount : '<span class="mwt-diag-dim">not registered</span>'}</span>`;
     };
 
+    // The modeled action's reason (and displacement note) ride visibly under
+    // the badge — the action must not live in a tooltip alone — and the
+    // truncate result is spelled out rather than an arrow-plus-number whose
+    // meaning was carried by the arrow glyph and the badge color.
     const planCell = (r) => {
-        if (r.advisory) return `<span class="mwt-diag-dim" title="Knowledge injects through SillyTavern's World Info keyword activation, not MWT's injection seam — the budget reports it but cannot manage it.">advisory only</span>`;
-        if (!r.plan) return `<span class="mwt-diag-dim" title="No payload registered right now — nothing to model.">—</span>`;
-        if (r.plan.action === 'keep') return badge('keeps', 'ok');
-        if (r.plan.action === 'truncate') return badge(`→ ~${Number(r.plan.tokensAfter).toLocaleString()}`, 'warn');
-        return badge('drops', 'fail');
+        if (r.advisory) return '<span class="mwt-diag-dim">advisory only</span>';
+        if (!r.plan) return `<span class="mwt-diag-dim">—<span class="mwt-sr-only"> nothing registered — nothing to model</span></span>`;
+        // displaced holds module IDS — map them to plain names like the
+        // drop-order summary below does, and escape the list like its escaped
+        // sibling `reason` on the same line.
+        const displacedNote = r.plan.displaced?.length
+            ? ` (would displace: ${escapeHtml(r.plan.displaced.map(modulePlainName).join(', '))})`
+            : '';
+        const detail = `<div class="mwt-budget-plan-reason">${escapeHtml(r.plan.reason)}${displacedNote}</div>`;
+        if (r.plan.action === 'keep') return badge('keeps', 'ok') + detail;
+        if (r.plan.action === 'truncate') return badge(`truncates to ~${Number(r.plan.tokensAfter).toLocaleString()}`, 'warn') + detail;
+        return badge('drops', 'fail') + detail;
     };
 
     const rowHtml = rows.map((r) => {
         const classes = ['mwt-budget-row'];
         if (!r.registered && !r.advisory) classes.push('mwt-budget-row--idle');
-        const planTitle = r.plan ? `${escapeHtml(r.plan.reason)}${r.plan.displaced?.length ? ` (would displace: ${r.plan.displaced.join(', ')})` : ''}` : '';
         // Knowledge is advisory only: it reaches the prompt through
         // SillyTavern World Info activation rather than MWT's shared seam, so
         // enforcement cannot read or apply priority/soft/hard values for it.
@@ -228,14 +284,23 @@ export function renderBudgetSnapshot(snapshot, { formatTime = (ts) => new Date(t
         const advisoryDisabled = r.advisory
             ? ' disabled title="Advisory only — Knowledge is not managed by MWT budget enforcement"'
             : '';
+        // Slice 4 (a11y plan §4.4 / §5 Slice 4 items 1+3): the module cell is
+        // the row header (scope="row"), and every per-module input is named
+        // "«Module» priority/soft cap/hard cap" with its column's visible
+        // help snippet as the description — the bare number inputs announced
+        // as nothing but their value before.
+        // The spec labels are emoji-led ("🌍 World State"), so the icon is
+        // split off and hidden (aria-hidden) while every textual surface —
+        // the row header and the three input names — uses the plain name only.
+        const { icon, name } = splitModuleLabel(r.label);
         return `
             <tr class="${classes.join(' ')}" data-module="${r.id}">
-                <td class="mwt-budget-module">${r.label}</td>
-                <td><input class="mwt-budget-priority" data-module="${r.id}" type="number" min="${BUDGET_LIMITS.priorityMin}" max="${BUDGET_LIMITS.priorityMax}" step="1" value="${r.priority}"${advisoryDisabled}></td>
+                <th scope="row" class="mwt-budget-module">${icon ? `<span aria-hidden="true">${escapeHtml(icon)}</span> ` : ''}${escapeHtml(name)}</th>
+                <td><input class="mwt-budget-priority" data-module="${r.id}" type="number" min="${BUDGET_LIMITS.priorityMin}" max="${BUDGET_LIMITS.priorityMax}" step="1" value="${r.priority}" aria-label="${escapeHtml(name)} priority" aria-describedby="mwt-budget-help-priority"${advisoryDisabled}></td>
                 <td>${tokensCell(r)}</td>
-                <td class="mwt-budget-plan" title="${planTitle}">${planCell(r)}</td>
-                <td><input class="mwt-budget-soft" data-module="${r.id}" type="number" min="0" max="${BUDGET_LIMITS.capMax}" step="50" value="${r.softCap}"${advisoryDisabled}></td>
-                <td><input class="mwt-budget-hard" data-module="${r.id}" type="number" min="0" max="${BUDGET_LIMITS.capMax}" step="50" value="${r.hardCap}"${advisoryDisabled}></td>
+                <td class="mwt-budget-plan">${planCell(r)}</td>
+                <td><input class="mwt-budget-soft" data-module="${r.id}" type="number" min="0" max="${BUDGET_LIMITS.capMax}" step="50" value="${r.softCap}" aria-label="${escapeHtml(name)} soft cap" aria-describedby="mwt-budget-help-soft"${advisoryDisabled}></td>
+                <td><input class="mwt-budget-hard" data-module="${r.id}" type="number" min="0" max="${BUDGET_LIMITS.capMax}" step="50" value="${r.hardCap}" aria-label="${escapeHtml(name)} hard cap" aria-describedby="mwt-budget-help-hard"${advisoryDisabled}></td>
             </tr>`;
     }).join('');
 
@@ -247,11 +312,18 @@ export function renderBudgetSnapshot(snapshot, { formatTime = (ts) => new Date(t
     if (limit && limit > 0) {
         const pct = Math.min(100, Math.round((injected / limit) * 100));
         const over = injected > limit;
+        // The limit's source note rides visibly under the bar — the
+        // unknown-limit branch already shows it, and it was tooltip-only here
+        // (a11y plan §5 Slice 4 item 3).
+        const barNote = s.contextLimit.note
+            ? `<div class="mwt-budget-bar-note mwt-diag-dim">${escapeHtml(s.contextLimit.note)}</div>`
+            : '';
         barHtml = `
-            <div class="mwt-budget-bar-wrap" title="${escapeHtml(s.contextLimit.note || '')}">
+            <div class="mwt-budget-bar-wrap">
                 <div class="mwt-budget-bar"><div class="mwt-budget-bar-fill${over ? ' mwt-budget-bar-fill--over' : ''}" style="width:${pct}%"></div></div>
                 <span class="mwt-budget-bar-label">${injected.toLocaleString()} / ${limit.toLocaleString()} tokens (${pct}%)${over ? ' — OVER' : ''}</span>
-            </div>`;
+            </div>
+            ${barNote}`;
     } else {
         barHtml = `
             <div class="mwt-budget-bar-wrap">
@@ -259,9 +331,11 @@ export function renderBudgetSnapshot(snapshot, { formatTime = (ts) => new Date(t
             </div>`;
     }
 
+    // Slice 4 item 2: the banner glyphs are decorative — the banner text
+    // carries the whole meaning — so they sit in aria-hidden spans.
     const modeBanner = s.enforce
-        ? `<div class="mwt-budget-mode mwt-budget-mode--enforce">🛡 <strong>ENFORCE is ON for this chat</strong> — over-cap injections are truncated or dropped at the shared injection seam. Re-apply a module's injection (toggle it, or trigger a refresh) for the new caps to take effect on its current payload.</div>`
-        : `<div class="mwt-budget-mode mwt-budget-mode--observe">👀 <strong>Observe mode (default)</strong> — injection applies are not modified. The chat-change lifecycle still clears stale cross-chat injection snapshots. The "Budget action" column models what enforcement WOULD do with the current caps.</div>`;
+        ? `<div class="mwt-budget-mode mwt-budget-mode--enforce"><span aria-hidden="true">🛡</span> <strong>ENFORCE is ON for this chat</strong> — over-cap injections are truncated or dropped at the shared injection seam. Re-apply a module's injection (toggle it, or trigger a refresh) for the new caps to take effect on its current payload.</div>`
+        : `<div class="mwt-budget-mode mwt-budget-mode--observe"><span aria-hidden="true">👀</span> <strong>Observe mode (default)</strong> — injection applies are not modified. The chat-change lifecycle still clears stale cross-chat injection snapshots. The "Budget action" column models what enforcement WOULD do with the current caps.</div>`;
 
     // The pre-send summary: "1 dropped · 1 truncated · ~800 of 1,200 tokens
     // kept" at current sizes. Only meaningful when something is registered.
@@ -273,15 +347,17 @@ export function renderBudgetSnapshot(snapshot, { formatTime = (ts) => new Date(t
             ${s.enforce ? '(applied at each module\'s next injection apply)' : '(would be, if enforcement were on)'}</div>`
         : '';
 
+    // Plain names only (splitModuleLabel): this is a textual summary, and the
+    // emoji-led spec labels would otherwise announce their glyphs here too.
     const dropOrderText = (Array.isArray(s.dropOrder) ? s.dropOrder : [])
-        .map((d) => `${d.label} (P${d.priority})`).join(' → ');
+        .map((d) => `${splitModuleLabel(d.label).name} (P${d.priority})`).join(' → ');
 
     const storedStat = stored > 0
-        ? `<span class="mwt-diag-dim" title="Knowledge lorebook library size on disk — not prompt load. SillyTavern activates only matching entries.">+ ${stored.toLocaleString()} stored (advisory)</span>`
+        ? `<span class="mwt-diag-dim">+ ${stored.toLocaleString()} stored (advisory)</span>`
         : '';
 
     const errBanner = s.errors?.length
-        ? `<div class="mwt-diag-panic">⚠ Some rows degraded: ${escapeHtml(s.errors.join('; '))}</div>`
+        ? `<div class="mwt-diag-panic"><span aria-hidden="true">⚠</span> Some rows degraded: ${escapeHtml(s.errors.join('; '))}</div>`
         : '';
 
     return `
@@ -299,16 +375,23 @@ export function renderBudgetSnapshot(snapshot, { formatTime = (ts) => new Date(t
             <table class="mwt-diag-health-table mwt-budget-table">
                 <thead>
                     <tr>
-                        <th>Module</th>
-                        <th title="Lower number = kept longer when the budget must drop content">Priority</th>
-                        <th>Estimated tokens</th>
-                        <th title="What enforcement would do with the CURRENTLY registered payload under the current caps">Budget action</th>
-                        <th title="Over soft cap → truncate with a marker. 0 = off.">Soft cap</th>
-                        <th title="Over hard cap → drop the injection. 0 = off.">Hard cap</th>
+                        <th scope="col">Module</th>
+                        <th scope="col" aria-describedby="mwt-budget-help-priority">Priority</th>
+                        <th scope="col" aria-describedby="mwt-budget-help-tokens">Estimated tokens</th>
+                        <th scope="col" aria-describedby="mwt-budget-help-action">Budget action</th>
+                        <th scope="col" aria-describedby="mwt-budget-help-soft">Soft cap</th>
+                        <th scope="col" aria-describedby="mwt-budget-help-hard">Hard cap</th>
                     </tr>
                 </thead>
                 <tbody>${rowHtml}</tbody>
             </table>
+            <div class="mwt-budget-help">
+                <p id="mwt-budget-help-priority"><strong>Priority</strong> — lower number = kept longer when the budget must drop content.</p>
+                <p id="mwt-budget-help-tokens"><strong>Estimated tokens</strong> — registered payload tokens (what setExtensionPrompt received); the stored figure is Knowledge's library size on disk — SillyTavern activates only entries whose keywords match, so this is NOT prompt load.</p>
+                <p id="mwt-budget-help-action"><strong>Budget action</strong> — what enforcement would do with the CURRENTLY registered payload under the current caps.</p>
+                <p id="mwt-budget-help-soft"><strong>Soft cap</strong> — over the soft cap → truncate with a marker. 0 = off.</p>
+                <p id="mwt-budget-help-hard"><strong>Hard cap</strong> — over the hard cap → drop the injection. 0 = off.</p>
+            </div>
             <div class="mwt-budget-controls">
                 <label class="mwt-budget-enforce-label" for="mwt-budget-enforce">
                     <input type="checkbox" id="mwt-budget-enforce" ${s.enforce ? 'checked' : ''}>

@@ -12,6 +12,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.6.5]
+
+### Changed
+
+- **Every icon-only control now has an accessible name, decorative emoji are
+  hidden from assistive technology, tooltip-only explanations became visible
+  help text, form labels are associated with their controls, and the last
+  color/emoji-only state indicators gained text equivalents** (Slice 4 of the
+  accessibility pass, `docs/accessibility_plan.md` §4.4 and §5; tests in
+  `test/accessible_names.test.js` and `test/accessible_names_css.test.js`):
+  - Every emoji/symbol-only button across the six module renderers, the
+    diagnostics panel, the paused-store banners, and the extensions drawer
+    now carries an `aria-label` — the interiority ledger actions
+    (✔ done / 🚫 dismiss / 💤 sleep / ✎ edit / ✕ remove / ⏰ wake / 🔁
+    reopen / per-NPC control and inner-state rows), the Knowledge growth
+    observation/consolidated/override delete buttons, the identity alias
+    chip ✕, the settings cog, the Story Planner pin/delete/back-a-beat
+    buttons, and the chronicle injection-settings gear. State-dependent
+    buttons (the relationship/stance 🔒/🔓 locks, the 📌/📍 pin, the
+    notification bell) get state-aware names. Both locks are toggles, so
+    their name is the action the press performs — a locked one reads
+    "Unlock … (hand back to auto-updating)", not "Lock … (currently
+    locked)" — with the state itself still carried by the tooltip.
+  - Decorative leading emoji on buttons, headings, badges, and section
+    labels are wrapped in `aria-hidden="true"` spans so the accessible name
+    is the text, not "sparkle Scan" — the same treatment Slice 2 gave the
+    tab labels, now applied across the module toolbars, the global Settings
+    tab's section headings and grid labels, and the diagnostics/backup
+    banners. A tail of emoji-led controls is still bare and is tracked as
+    follow-up work rather than claimed here — including the Knowledge
+    State sub-tab's Export/Import/View and its 📊 Evidence / 📋 Copy
+    Portrait labels, four World State `<summary>` elements and the
+    auto-refresh banner, the two Chronicle ⚙ Settings buttons plus
+    📊 Statistics / ★ BASE / ✓ Selecting, three diagnostics copy/run
+    buttons, the backup panel's 💾 heading and its two section labels,
+    and the interiority add-form Save/Cancel.
+    Buttons whose label is restored or rewritten from JS (`textContent =
+    '📦 Backfill'` and friends, the Story Planner / World State injection and
+    auto toggles' `refreshButtonLabels` rewrites, the auto-generate banner,
+    the document-status chip, and the ⚡ Delta / 🔄 Refresh / 🎲 Regenerate
+    Section / 🎲 Generate Plan busy-and-restore cycles) go through
+    `innerHTML` with the hidden span so the treatment survives every
+    interaction, not just the first render. `test/accessible_names.test.js`
+    scans both renderers for any remaining `textContent` write that embeds a
+    raw emoji, so a regression fails instead of quietly un-hiding the glyph.
+  - The Budget tab's module rows carry this too: `BUDGET_MODULE_SPECS`
+    labels are emoji-led ("🌍 World State"), so the row headers and all
+    three per-input aria-labels were announcing the decorative glyph, and
+    the drop-order note joined the raw labels. The pane now splits the
+    leading icon from the plain module name, hides the icon with
+    aria-hidden, and builds the row header, the priority/soft/hard input
+    names, and the drop-order summary from the plain name only. The
+    `test/accessible_names.test.js` fixture uses production-shaped
+    emoji-led labels, so it can no longer mask the mismatch.
+  - The floating button bar — built from `div`s, so nothing was implicit —
+    now exposes `role="button"`, `tabindex="0"`, and an `aria-label` on
+    every button (and on the collapsed 🌐 hub button), activates on Enter
+    and Space like a real button, keeps its `aria-label` in step with the
+    dynamic Knowledge pending-proposal title, and hides the countdown
+    digits from assistive technology (§4.4: countdowns are never announced).
+    The extensions-drawer quick-open buttons carry names too.
+  - Title triage per §4.4: settings-field explanations that existed only as
+    tooltips became visible help text — the Interiority edit form's
+    Priority / in-world expiry / turn-expiry fields gained inline help
+    (`.mwt-int-edit-help`), and the Closure Dedup / Max Turns Open dials
+    gained the help paragraphs their neighbors already had (the duplicate
+    tooltips on Thoughts-every / Grace Period / Max New/NPC / Dormant Poll
+    were dropped). Supplementary tooltips on already-named controls stay.
+    The Story Planner's All/Pinned/Active inject modes also moved out of a
+    `title` on the label: one visible help line under the group — built from
+    `INJECT_MODES`, so it cannot drift from `data.js` — carries all three
+    descriptions, and every radio references it via `aria-describedby`.
+  - `for`/`id` associations: `renderApiSettingsFields` (the shared settings
+    renderer behind the global panel and every module panel — nine fields)
+    now emits `label[for]` for each control, and the sweep associated the
+    Interiority settings dials and inline edit form, the Knowledge settings
+    form and relationship/stance add-rows (`aria-label`s on the From/To/
+    type/notes inputs, a real `label` for the stance NPC), the staging
+    detail's Proposed/Keywords fields, the World State settings fields, and
+    the Story Planner settings fields. The global Settings tab followed:
+    every injection Depth/Role control, the connection-profile select, the
+    button-style select and the coordinator/boundary checkboxes are now
+    associated, the four injection group headers became `<div
+    class="mwt-label">` (a `<label>` around no control is not a label), and
+    the floating-button and per-tracker rows point *both* cells at the row's
+    checkbox so its name reads "World State Visible" rather than one of six
+    identical "Visible"s. Story Planner and the Knowledge settings form were
+    finished the same way. `test/accessible_names.test.js` now scans every
+    `<label>` in those three sources rather than spot-checking ids — the
+    per-file scan is what caught the gap. The Knowledge renderer got the
+    same completion: the State Tracker register row's UID/display-name
+    fields and the identity modal's alias/rename/merge inputs gained
+    `sr-only` `label[for]`s (their meaning lived only in disappearing
+    placeholders), the two Generated Profile textareas are named by their
+    visible section headings through `aria-labelledby`, and the per-tracker
+    Auto/Always toggles and the dossier field-picker rows switched from
+    implicit nesting to unique name/key-suffixed `for`/`id` pairs — after
+    which `knowledge/render.js` joined the per-file scan.
+  - The inner-state edit form no longer emits a fixed
+    `id="mwt-int-state-edit-line"`. Opening a second editor does not close
+    the first, so two of them put duplicate ids in the DOM and pointed the
+    second NPC's `label[for]` at the first NPC's input; the id now takes a
+    per-open counter.
+  - No essential state is color- or emoji-only anymore: the diagnostics
+    current-scope `●` dot reads as "current —", the ⚠ error badges read as
+    "has error(s)", the interiority ✋ manual badge reads as
+    "user-authored", the Knowledge orphan ⚠ reads as
+    "(orphaned — lorebook entry missing)", and the relationship
+    recent-changes ✍️/🤖 origins read as "changed by you"/"changed by
+    auto-extraction" — each through a new `.mwt-sr-only` utility (clip
+    pattern, still in the accessibility tree) while the visible glyph is
+    `aria-hidden`. The relationship collapsible section headers also expose
+    `aria-expanded`, and the Knowledge Graph/List toggle and lock buttons
+    keep their tooltips alongside the new names (pressed state is Slice 5).
+  - `budget/panel.js` — missed by the plan's source inventory — joined the
+    sweep: every column header carries `scope="col"` and the module cell is
+    a `scope="row"` row header; the per-module priority/soft/hard-cap
+    inputs are named ("Chronicle soft cap") and described by their
+    column's help; the Priority / Estimated tokens / Budget action /
+    Soft cap / Hard cap explanations moved from `<th>` tooltips to a
+    visible help block under the table whose ids the headers and every
+    input reference via `aria-describedby`; the modeled action's reason and
+    displacement note render visibly in the plan cell; the context-limit
+    note rides under the usage bar instead of a tooltip; the 🛡/👀/⚠ banner
+    glyphs are `aria-hidden`; the truncate result reads "truncates to ~N"
+    instead of an arrow-plus-number whose meaning lived in the glyph and
+    badge color; and the idle "—" carries sr-only text.
+    `budget/panel.js` also joined the per-file label and icon-button scans
+    in `test/accessible_names.test.js`.
+  - The interiority per-NPC controls no longer render one identical help
+    paragraph per NPC with all four dials' `aria-describedby` pointing at
+    the whole thing (eight NPCs meant eight copies of the paragraph, and
+    every dial announced all four explanations). The four explanations now
+    render once under the list, each dial references only its own snippet,
+    and each NPC's controls group in a `<fieldset>` named by the NPC
+    through `aria-labelledby` — row context without repeating the name in
+    every label. The name is referenced rather than held in a `<legend>`:
+    a rendered legend sits outside the fieldset's anonymous content box, so
+    it takes no part in the flex layout and stacked above the dials instead
+    of sitting opposite them (34px → 50px per row, with `flex: 1 1 240px`
+    on it inert). Referencing the ordinary name line keeps the committed
+    layout exactly — measured identical to the `div` row — and keeps the
+    control and boundary-only rows the same shape.
+  - Not claimed as automated: real screen-reader pronunciation and
+    `:focus-visible` rendering stay in the §7 manual QA checklist, per
+    plan §6.5.
+
 ## [2.6.4]
 
 ### Changed
