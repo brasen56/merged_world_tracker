@@ -42,7 +42,10 @@
 .mwt-overview-maintenance > ul { margin: 0; padding-left: 18px; }
 .mwt-overview-finding + .mwt-overview-finding { margin-top: 6px; }
 .mwt-overview-review { margin: 4px 0 0; padding-left: 18px; color: var(--mwt-text-dim); font-size: 12px; }
-.mwt-overview-maintenance code,
-.mwt-overview-maintenance-clean code { overflow-wrap: anywhere; }
-.mwt-overview-maintenance-clean { margin: 0 0 14px; color: var(--mwt-text-dim); font-size: 12px; }
+.mwt-overview-maintenance code { overflow-wrap: anywhere; }
 .mwt-overview-maintenance-error { margin: 0 0 14px; color: var(--mwt-error, #b44); }
+.mwt-overview-tools { border-top: 1px solid var(--mwt-border); margin: 0 0 14px; padding-top: 8px; }
+.mwt-overview-tools summary { cursor: pointer; color: var(--mwt-text-dim); }
+.mwt-overview-tools > p { color: var(--mwt-text-dim); font-size: 12px; }
+.mwt-overview-tool-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.mwt-overview-tool-consequence { color: var(--mwt-danger, #b44); }

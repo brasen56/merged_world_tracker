@@ -9,6 +9,10 @@
 import { escapeHtml } from '../core/diff.js';
 import { collectOverviewSnapshot } from './status.js';
 import { collectGuardedMaintenanceFindings } from './maintenance.js';
+import { collectMaintenanceTools, maintenanceActions, applyPrunePlan, applyRelinkPlan } from './maintenance.js';
+import { createModal, showModal, setStatus } from '../core/modal.js';
+import { setControlBusy } from '../core/ui.js';
+import { assertSameScope, captureScope } from '../core/scope.js';
 
 const EMOJI = '<span aria-hidden="true">';
 
@@ -41,14 +45,6 @@ function countText(count, singular, plural = `${singular}s`) {
 }
 
 // ─── 🧰 Maintenance ──────────────────────────────────────────────────────────
-
-// Read-only console twins, named in the clean state for power users.
-const MAINTENANCE_COMMANDS = [
-    'MWT.profiles.duplicates()',
-    'MWT.profiles.relink()',
-    'MWT.npcs.auditDuplicates()',
-    'MWT.interiority.deletions()',
-];
 
 const IDENTITY_KINDS = [
     ['untracked-entry', 'untracked entry', 'untracked entries'],
@@ -113,14 +109,6 @@ function describeIdentities(finding) {
     return { summary: sentences.join(' '), review: [] };
 }
 
-function describeDeletions(finding) {
-    const n = Number(finding.count) || 0;
-    return {
-        summary: `${countText(n, 'record')} ${n === 1 ? 'keeps a deleted intention' : 'keep deleted intentions'} from being proposed again.`,
-        review: [],
-    };
-}
-
 function describeGeneric(finding) {
     return { summary: `${countText(finding.count, 'finding')}.`, review: [] };
 }
@@ -129,7 +117,6 @@ const MAINTENANCE_KINDS = {
     'duplicate-profiles': { label: 'Duplicate profiles', describe: describeDuplicates },
     'relink-candidates': { label: 'Profile links', describe: describeRelink },
     'npc-identity-audit': { label: 'NPC identities', describe: describeIdentities },
-    'deleted-intentions': { label: 'Deleted intentions', describe: describeDeletions },
 };
 
 function renderReview(items) {
@@ -145,23 +132,38 @@ function renderReview(items) {
  */
 export function renderMaintenanceFindings(findings = []) {
     if (!Array.isArray(findings)) return '';
-    if (findings.length === 0) {
-        const commands = MAINTENANCE_COMMANDS.map((command) => `<code>${escapeHtml(command)}</code>`).join(', ');
-        return `<p class="mwt-overview-maintenance-clean" role="status">${EMOJI}🧰</span> No maintenance findings. Console audits: ${commands}.</p>`;
-    }
+    if (findings.length === 0) return '';
     const rows = findings.map((finding) => {
         if (finding.kind === 'maintenance-error') {
             return `<li class="mwt-overview-finding"><strong>${escapeHtml(finding.source || 'Maintenance audit')}</strong> — unavailable: ${escapeHtml(finding.error || 'unknown error')}</li>`;
         }
         const { label, describe } = MAINTENANCE_KINDS[finding.kind] || { label: 'Maintenance finding', describe: describeGeneric };
         const { summary, review } = describe(finding);
-        return `<li class="mwt-overview-finding"><strong>${escapeHtml(label)}</strong> — ${escapeHtml(summary)} <code>${escapeHtml(finding.command || 'review manually')}</code>${renderReview(review)}</li>`;
+        const action = finding.kind === 'duplicate-profiles'
+            ? '<button type="button" data-maintenance-action="prune">Preview profile prune</button>'
+            : finding.kind === 'relink-candidates'
+                ? '<button type="button" data-maintenance-action="relink">Preview profile relink</button>'
+                : '';
+        return `<li class="mwt-overview-finding"><strong>${escapeHtml(label)}</strong> — ${escapeHtml(summary)} <code>${escapeHtml(finding.command || 'review manually')}</code>${action}${renderReview(review)}</li>`;
     }).join('');
     return `<section class="mwt-overview-maintenance" aria-label="Maintenance findings">
-        <h3>${EMOJI}🧰</span> Maintenance</h3>
+        <h3>${EMOJI}🔎</span> Findings</h3>
         <p>These checks are read-only — each finding names the console command with the full details.</p>
         <ul>${rows}</ul>
     </section>`;
+}
+
+function renderToolsDisclosure(tools = {}) {
+    const evidence = tools.evidenceNames || [];
+    const deletions = Number(tools.deletionCount) || 0;
+    return `<details class="mwt-overview-tools">
+        <summary>${EMOJI}🧰</span> Tools</summary>
+        <p>Destructive maintenance actions are hidden here until you deliberately open them.</p>
+        <div class="mwt-overview-tool-grid">
+            <button type="button" data-maintenance-action="clear-evidence" ${evidence.length ? '' : 'disabled'}>Clear all evidence (${evidence.length} NPCs)</button>
+            <button type="button" data-maintenance-action="clear-deletions" ${deletions ? '' : 'disabled'}>Clear deleted intentions (${deletions})</button>
+        </div>
+    </details>`;
 }
 
 function renderHealth(value) {
@@ -229,6 +231,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
             ${renderCell('quarantine', 'Quarantine', (value) => `${Number(value?.total) || 0} quarantined records`, { icon: '🗂️', tab: 'diagnostics', empty: !(Number(cellValue(snapshot.quarantine, {})?.total) || 0) })}
         </div>
         <div data-overview-maintenance></div>
+        <div data-overview-tools></div>
         <footer class="mwt-overview-footer">Something looks wrong? ${linkButton('diagnostics', 'Open Diagnostics')} · ${linkButton('budget', 'Open Budget')}</footer>
     </section>`;
 }
@@ -245,11 +248,24 @@ export function renderOverviewPane({ collect = collectOverviewSnapshot } = {}) {
 export function wireOverviewPane(root, {
     collect = collectOverviewSnapshot,
     collectMaintenance = collectGuardedMaintenanceFindings,
+    collectTools = collectMaintenanceTools,
+    actions = maintenanceActions,
+    prune = applyPrunePlan,
+    relink = applyRelinkPlan,
 } = {}) {
     if (!root?.querySelector) return;
     const pane = root.querySelector('.mwt-tab-content[data-tab="overview"]');
     if (!pane) return;
+    pane._mwtRoot = root;
+    pane._mwtWireOptions = { collect, collectMaintenance, collectTools, actions, prune, relink };
     const maintenanceHost = pane.querySelector('[data-overview-maintenance]');
+    const toolsHost = pane.querySelector('[data-overview-tools]');
+    if (toolsHost) {
+        Promise.resolve().then(() => collectTools()).then((tools) => {
+            if (toolsHost.isConnected) toolsHost.innerHTML = renderToolsDisclosure(tools);
+            if (toolsHost.isConnected) wireMaintenanceActions(pane, { actions, prune, relink, collectTools });
+        });
+    }
     if (maintenanceHost) {
         // A refresh or close detaches this host before a slow audit settles,
         // so a superseded result can never overwrite a newer one.
@@ -258,6 +274,10 @@ export function wireOverviewPane(root, {
             maintenanceHost.innerHTML = result.ok
                 ? renderMaintenanceFindings(result.value)
                 : `<p class="mwt-overview-maintenance-error" role="status">Maintenance audit unavailable: ${escapeHtml(result.error)}</p>`;
+            if (result.ok) {
+                pane._mwtFindings = result.value;
+                wireMaintenanceActions(pane, { actions, prune, relink, collectTools });
+            }
         });
     }
     pane.querySelectorAll('[data-overview-tab]').forEach((button) => {
@@ -265,8 +285,82 @@ export function wireOverviewPane(root, {
     });
     pane.querySelector('#mwt-overview-refresh')?.addEventListener('click', () => {
         pane.innerHTML = renderOverviewPane({ collect });
-        wireOverviewPane(root, { collect, collectMaintenance });
+        wireOverviewPane(root, { collect, collectMaintenance, collectTools, actions, prune, relink });
         // The clicked button was just replaced; keep keyboard focus on its twin.
         pane.querySelector('#mwt-overview-refresh')?.focus();
+    });
+}
+
+function openActionModal(pane, title, preview, apply, consequence, scopeToken) {
+    const id = 'mwt-overview-tool-modal';
+    const modal = createModal({
+        id, title,
+        content: `<div class="mwt-overview-tool-preview">${preview}</div>
+            <p class="mwt-overview-tool-consequence"><strong>Before continuing:</strong> ${escapeHtml(consequence)}</p>
+            <button type="button" class="mwt-btn" data-tool-confirm disabled>Confirm and apply</button>`,
+    });
+    const confirm = modal.querySelector('[data-tool-confirm]');
+    const ready = preview && preview !== '<p>No actionable changes found.</p>';
+    confirm.disabled = !ready;
+    confirm.addEventListener('click', async () => {
+        setControlBusy(confirm, true);
+        setStatus(modal, 'Applying…', 'info');
+        try {
+            const result = await apply(scopeToken);
+            if (result?.ok === false || result?.success === false) {
+                setStatus(modal, result.reason || result.error || 'The action could not be applied.', 'error');
+                return;
+            }
+            setStatus(modal, 'Applied. Refresh Overview to re-check findings.', 'success');
+            confirm.disabled = true;
+            modal._mwtActionCompleted = true;
+            const root = pane._mwtRoot;
+            pane.innerHTML = renderOverviewPane({ collect: pane._mwtWireOptions?.collect });
+            wireOverviewPane(root, pane._mwtWireOptions || {});
+        } catch (error) {
+            setStatus(modal, error?.message || String(error), 'error');
+        } finally {
+            setControlBusy(confirm, false);
+            if (modal._mwtActionCompleted) confirm.disabled = true;
+        }
+    });
+    showModal(id);
+}
+
+function wireMaintenanceActions(pane, { actions, prune, relink, collectTools }) {
+    pane.querySelectorAll('[data-maintenance-action]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const kind = button.dataset.maintenanceAction;
+            if (kind === 'clear-deletions' || kind === 'clear-evidence') {
+                const scopeToken = captureScope();
+                const tools = await collectTools();
+                if (!assertSameScope(scopeToken).ok) return;
+                const isEvidence = kind === 'clear-evidence';
+                const names = tools.evidenceNames || [];
+                const count = isEvidence ? names.length : tools.deletionCount;
+                if (!count) return;
+                openActionModal(pane, isEvidence ? 'Clear all evidence' : 'Clear deleted intentions',
+                    `<p>${count} ${isEvidence ? 'NPC evidence files' : 'deletion records'} will be cleared.</p>${isEvidence ? `<p>Affected NPCs: ${escapeHtml(names.join(', '))}</p>` : ''}`,
+                    () => {
+                        if (!assertSameScope(scopeToken).ok) return { ok: false, reason: 'The chat changed. Review a fresh preview before applying.' };
+                        return isEvidence ? actions.clearAllEvidence() : actions.clearDeletedIntentions();
+                    },
+                    isEvidence ? 'This cannot be undone and rebuilding evidence costs API calls.' : 'These intentions may be proposed again.', scopeToken);
+                return;
+            }
+            const finding = (pane._mwtFindings || []).find((item) => item.kind === (kind === 'prune' ? 'duplicate-profiles' : 'relink-candidates'));
+            if (!finding) return;
+            const rows = kind === 'prune' ? (finding.toDelete || []) : (finding.rows || []);
+            const table = rows.length
+                ? `<table><tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.npc || '')}</td><td>${escapeHtml(String(row.uid ?? row.linkUid ?? ''))}</td><td>${escapeHtml(String(row.keptUid ?? row.was ?? ''))}</td></tr>`).join('')}</tbody></table>`
+                : '<p>No actionable changes found.</p>';
+            const apply = kind === 'prune'
+                ? (scopeToken) => prune({ previewRows: rows, scopeToken })
+                : (scopeToken) => relink({ previewRows: rows, scopeToken });
+            const scopeToken = captureScope();
+            openActionModal(pane, kind === 'prune' ? 'Preview profile prune' : 'Preview profile relink', table, apply, kind === 'prune'
+                ? 'Only automatically safe duplicate entries are deleted; unnamed and tied-size groups remain manual.'
+                : 'The registry pointers will be changed, and ambiguous candidates are not automatically selected.', scopeToken);
+        });
     });
 }

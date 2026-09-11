@@ -3,8 +3,8 @@
 **Project:** one build covering two `TODO.md` §3 items — the **Unified MWT
 dashboard** and the remaining (mutating) half of **User-facing UI for the
 existing `window.MWT.*` console tools**.
-**Status:** In progress — Phases 1–2 landed 2026-09-10; Phase 3 implemented;
-Phase 4 waits on open decision point §4.3.4. Target version ≈ 2.8.0 (adjust
+**Status:** In progress — Phases 1–3 landed 2026-09-10; Phase 4 implemented
+with the Findings/Tools split from §4.3.4. Target version ≈ 2.8.0 (adjust
 freely).
 **Origin:** the 2026-09-10 review question "should those two §3 items be one
 build?" — answer and rationale in §1.
@@ -182,23 +182,20 @@ own tests, no new core logic):
 1. **Tab position: first = default landing.** A dashboard you must hunt for
    isn't a dashboard. Cost: the first-open landing moves off 🌍 World State
    (`renderMainTabShell` marks index 0 active; `TABS` order decides).
-   Alternative: slot before 🩺 Diagnostics and keep 🌍 as landing.
 2. **No live refresh in v1** — open-and-read + 🔄. Revisit only if testers ask.
-3. **🧰 hidden when clean** — the "dangerous buttons in a daily view" problem
-   solves itself; the section's empty state names the console commands for
-   power users.
-4. **OPEN — findings vs. tools (decide before Phase 4).** Raised in the
+3. **Findings hidden when clean; Tools remains collapsed** — the "dangerous
+   buttons in a daily view" problem solves itself without hiding access to the
+   deliberate maintenance actions.
+4. **Decision — findings vs. tools.** Raised in the
    Phase 3 review: two of the four §2.2 tools don't fit "🧰 only renders when
    an audit finds something." Interiority tombstones are normal state (every
    intention deletion writes one, capped at 200), so a deleted-intentions
    *finding* keeps 🧰 visible for nearly everyone — and the count already has
    its own status card. `evidence.clearAll` has no finding that could ever
    surface it, and no UI anywhere clears evidence today.
-   *Recommendation:* drop deleted intentions from the findings (the card keeps
-   the count) and split 🧰 into **Findings** (hidden when clean) and a
-   collapsed **Tools** disclosure holding clear-deletions and
-   clear-all-evidence. *Alternative:* put those two actions in their owning
-   tabs (💭 Interiority, 🧠 Knowledge).
+   *Decision:* drop deleted intentions from the findings (the card keeps the
+   count) and split 🧰 into **Findings** (hidden when clean) and a collapsed
+   **Tools** disclosure holding clear-deletions and clear-all-evidence.
 
 ---
 
@@ -247,8 +244,10 @@ Phase 2 alone already retires the "Unified MWT dashboard" checkbox's spirit
   from applying — the UI needs plan-only; the console keeps plan + apply).
 - `collectMaintenanceFindings()` → finding rows: duplicate profiles (count +
   needs-review count), relink candidates (count + `otherCandidates` warnings),
-  NPC identity audit rows (read-only guidance — its cleanup is manual **by
-  design**), deleted-intention records count.
+  and NPC identity audit rows (read-only guidance — its cleanup is manual **by
+  design**). Deleted intentions are deliberately **not** a finding — the §4.3.4
+  decision keeps their count on the status card and moves both clear tools
+  into the collapsed Tools disclosure instead.
 - Rewire the console bridge onto the shared module; **parity tests** pin the
   console output shapes so behavior cannot drift.
 - **Acceptance:** 🧰 hidden when clean; each finding names the underlying

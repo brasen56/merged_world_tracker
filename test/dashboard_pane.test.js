@@ -70,20 +70,21 @@ describe('Overview pane', () => {
 });
 
 describe('Overview maintenance wiring', () => {
-    test('fills the maintenance host from the injected collector', async () => {
+    test('drops deleted intentions from findings and keeps them in Tools', async () => {
         const root = mountPane({
-            collectMaintenance: async () => ({ ok: true, value: [{ kind: 'deleted-intentions', count: 2, command: 'MWT.interiority.deletions()', rows: [] }] }),
+            collectMaintenance: async () => ({ ok: true, value: [] }),
+            collectTools: () => ({ evidenceNames: [], deletionCount: 2 }),
         });
         await flush();
-        expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance')).not.toBeNull();
-        expect(maintenanceHost(root).textContent).toContain('2 records keep deleted intentions from being proposed again');
+        expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance')).toBeNull();
+        expect(root.querySelector('.mwt-overview-tools').textContent).toContain('Clear deleted intentions (2)');
     });
 
     test('a clean audit leaves only the one-line clean state', async () => {
         const root = mountPane();
         await flush();
         expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance')).toBeNull();
-        expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance-clean[role="status"]')).not.toBeNull();
+        expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance-clean')).toBeNull();
     });
 
     test('a failed maintenance collection renders its own status line', async () => {
@@ -101,20 +102,17 @@ describe('Overview maintenance wiring', () => {
         root.querySelector('#mwt-overview-refresh').click();
         expect(pending).toHaveLength(2);
         pending[1]({ ok: true, value: [] });
-        pending[0]({ ok: true, value: [{ kind: 'deleted-intentions', count: 2, command: 'x', rows: [] }] });
+            pending[0]({ ok: true, value: [] });
         await flush();
-        expect(maintenanceHost(root).textContent).toContain('No maintenance findings');
+        expect(maintenanceHost(root).textContent).toBe('');
         expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance')).toBeNull();
     });
 });
 
 describe('Maintenance findings', () => {
-    test('a clean audit renders a one-line status naming the console audits', () => {
+    test('a clean audit hides Findings', () => {
         document.body.innerHTML = renderMaintenanceFindings([]);
-        const status = document.querySelector('.mwt-overview-maintenance-clean');
-        expect(status.getAttribute('role')).toBe('status');
-        expect(status.textContent).toContain('No maintenance findings');
-        expect(status.textContent).toContain('MWT.profiles.duplicates()');
+        expect(document.body.textContent).toBe('');
         expect(document.querySelector('.mwt-overview-maintenance')).toBeNull();
     });
 
@@ -180,12 +178,6 @@ describe('Maintenance findings', () => {
         }]);
         expect(document.body.textContent).toContain('The NPC registry for this chat is empty');
         expect(document.body.textContent).toContain('From Lorebooks');
-    });
-
-    test('deleted intentions describe what the records do', () => {
-        document.body.innerHTML = renderMaintenanceFindings([{ kind: 'deleted-intentions', count: 12, command: 'MWT.interiority.deletions()', rows: [] }]);
-        expect(document.body.textContent).toContain('12 records keep deleted intentions from being proposed again.');
-        expect(document.body.textContent).not.toContain('retained for review');
     });
 
     test('audit errors and unknown kinds stay truthful', () => {
