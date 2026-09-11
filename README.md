@@ -14,6 +14,7 @@
   - [🗺️ Story Planner](#-story-planner)
   - [💭 Interiority](#-interiority)
   - [Shared Core](#shared-core)
+  - [🏠 Overview](#-overview)
   - [🩺 Diagnostics](#-diagnostics)
   - [📊 Budget](#-budget)
   - [Slash Commands & Macros](#slash-commands--macros)
@@ -221,6 +222,17 @@ All five modules share a common infrastructure:
 - **Injection Helpers** — Shared extension-prompt injection with optional XML structural-boundary wrapping
 - **Schema Validation & Self-Repair** — Every store MWT persists (chat metadata, lorebook registries, settings, browser-local records) is version-stamped and validated on load. Old formats migrate themselves automatically, a store that can't be safely understood pauses at most its own module (visibly, with a banner) rather than corrupting data, and rejected records are quarantined — preserved, reported, and exportable — never silently dropped or fed to the AI. See [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained)
 - **Unified Backup & Restore** — A Backup / Restore panel in the Settings tab exports every module's chat data as one versioned JSON envelope. Restore runs a two-step dry run (preview the exact per-section changes, then confirm), with an Undo that replays the in-memory pre-restore snapshot; quarantined records can be exported separately as recovery data
+
+### 🏠 Overview
+
+The **🏠 Overview** tab is the MWT modal's landing view: one page showing everything waiting on you in this chat, with a deep link from every signal straight to the module that owns it. The status cards only observe; the maintenance actions below (🔎 Findings previews and 🧰 Tools) change data only through a preview → confirm modal. The pane follows the open-and-read refresh model (re-open the modal or press 🔄 Refresh).
+
+- **Status cards** — World State staleness (messages since refresh, delta counts), Knowledge (pending staging items, unread growth evidence), Story Planner (awaiting / overdue beats), Interiority (active / dormant intentions, deleted-intention records), Budget (injected tokens vs context limit, observe / enforce), Coordinator (running / queued jobs, a "background HELD" flag while background work is paused), one compact health line per module, and quarantined record counts. Every card carries a one-click **Open …** button into the relevant tab
+- **Guarded cells** — each card's data source is independently guarded, so a broken subsystem renders its own "Unavailable" card instead of blanking the pane
+- **🔎 Findings** — a maintenance section that appears only when an audit finds something: duplicate NPC profiles, profile relink candidates, and NPC identity-audit guidance (its cleanup is manual by design — the finding prints the steps). Duplicate and relink findings offer a **Preview …** button: preview → consequence-stated confirm → apply, where the apply step **re-plans from scratch** and refuses with "review a fresh preview" if the chat or the profile book changed since the preview. Unnamed and tied-size duplicate groups need human judgment, so they are listed as review items and never auto-applied. Relink points each profile at its largest candidate entry (newest on ties), and its preview shows how many **other candidates** each link had — anything above 0 means duplicates worth reviewing first. Hidden entirely while the audits run clean
+- **🧰 Tools** — a collapsed disclosure holding the two deliberate destructive actions: **Clear all evidence** (names every affected NPC, warns which generated profiles would be left unbacked and that rebuilding evidence costs API calls, and re-checks the NPC list at confirm) and **Clear deleted intentions** (warns those intentions may be proposed again). On hosts that don't expose a chat id, both refuse with an explanation and point at their console twins
+
+The same audits and write actions remain available to power users through the `window.MWT.*` console bridge (see **[DIAGNOSTICS_CONSOLE_GUIDE.md](DIAGNOSTICS_CONSOLE_GUIDE.md)**) — one collector, two surfaces.
 
 ### 🩺 Diagnostics
 
@@ -592,6 +604,7 @@ merged_world_tracker/
 │   ├── prompts.js        # NPC scan, state-update, evidence, profile, and consolidation prompts
 │   ├── registry.js       # NPC + State Tracker registry operations (chat metadata)
 │   ├── lorebook.js       # Lorebook read/write, scan, state update, staging enrichment, profile persistence
+│   ├── profiles_audit.js # Profile duplicate/relink audits + prune planning (shared by the console bridge and Overview 🧰)
 │   ├── staging.js        # Build staging items from scan results
 │   ├── relationships.js  # Relationship storage, change logging, and graph layout computation
 │   ├── evidence.js       # Two-tier evidence store (raw/consolidated/archived), ILS watermark tracking, user overrides
@@ -618,7 +631,7 @@ merged_world_tracker/
     └── render.js         # Settings UI + per-message thought block rendering
 ```
 
-The tree above lists the five user-facing modules; four more support directories keep the data-safety layer, the Budget panel, and diagnostics running (see [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained), [📊 Budget](#-budget), and [🩺 Diagnostics](#-diagnostics)):
+The tree above lists the five user-facing modules; five more support directories keep the data-safety layer, the Overview dashboard, the Budget panel, and diagnostics running (see [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained), [🏠 Overview](#-overview), [📊 Budget](#-budget), and [🩺 Diagnostics](#-diagnostics)):
 
 ```
 ├── schema/               # Schema validation & migrations engine
@@ -638,6 +651,11 @@ The tree above lists the five user-facing modules; four more support directories
 ├── budget/               # 📊 Budget tab (enforcement engine lives in core/budget.js)
 │   ├── panel.js          # Budget panel UI — shares the one planner the injection seam uses
 │   └── style.css         # Budget panel styles
+├── dashboard/            # 🏠 Overview tab (read-only status cards + 🧰 Maintenance)
+│   ├── status.js         # Guarded status-snapshot collector (one cell per module signal)
+│   ├── render.js         # Overview pane — cards, deep links, findings, preview/confirm modals
+│   ├── maintenance.js    # Read-only maintenance findings + guarded apply wrappers
+│   └── style.css         # Overview pane styles
 └── diagnostics_panel/    # 🩺 Diagnostics tab (read-only, in-memory)
     ├── render.js         # Panel shell, sub-tab strip, Health/Environment panes, Copy Report
     ├── health.js         # ❤️ Health snapshot (per-module status)

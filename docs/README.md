@@ -9,6 +9,7 @@ repo root; live planning documents live here; everything historical lives in
 | Document | Status | What it is |
 | --- | --- | --- |
 | [TODO.md](./TODO.md) | **Live queue** | The single reconciled work list for remaining improvement/feature work (§1 subsystems, §2 reliability, §3 features, §4 UX/a11y, §5 housekeeping, §6 test coverage). |
+| [overview_dashboard_plan.md](./overview_dashboard_plan.md) | Complete | The 🏠 Overview dashboard + 🧰 Maintenance build (both TODO §3-F items). Shipped as v2.8.0 — see CHANGELOG; kept as the design record. |
 | [accessibility_plan.md](./accessibility_plan.md) | Active | Project A — the accessibility pass (TODO §4). Implementation slices 1–5 landed across v2.6.x–v2.7.0; the §7 manual QA checklist governs release sign-off. |
 | [settings_workspace_plan.md](./settings_workspace_plan.md) | Parked | Project B — the Settings information-architecture redesign. Starts only after Project A has landed and had real-world use. |
 | [KNOWLEDGE_RELATIONSHIP_CONTEXT_ROADMAP.md](./KNOWLEDGE_RELATIONSHIP_CONTEXT_ROADMAP.md) | Deferred | Trigger-based roadmap for contextual relationship injection. Not scheduled; pick up only if one of its stated triggers fires. |

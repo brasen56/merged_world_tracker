@@ -3,9 +3,11 @@
 **Project:** one build covering two `TODO.md` §3 items — the **Unified MWT
 dashboard** and the remaining (mutating) half of **User-facing UI for the
 existing `window.MWT.*` console tools**.
-**Status:** In progress — Phases 1–3 landed 2026-09-10; Phase 4 implemented
-with the Findings/Tools split from §4.3.4. Target version ≈ 2.8.0 (adjust
-freely).
+**Status:** **COMPLETE — shipped as v2.8.0 (2026-09-11).** Phases 1–3 landed
+2026-09-10; Phase 4 with the Findings/Tools split from §4.3.4; Phase 5
+(docs, CHANGELOG, TODO tick-off, version bump) landed 2026-09-11 — receipts
+in the CHANGELOG 2.8.0 entry and the landed notes on both `docs/TODO.md` §3
+items.
 **Origin:** the 2026-09-10 review question "should those two §3 items be one
 build?" — answer and rationale in §1.
 

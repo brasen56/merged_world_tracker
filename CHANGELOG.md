@@ -12,6 +12,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.0]
+
+### Added
+
+- **🏠 Overview tab — the unified MWT dashboard** (TODO §3, planned in
+  [`docs/overview_dashboard_plan.md`](docs/overview_dashboard_plan.md)):
+  one page of everything waiting on you in this chat, and the new
+  first tab of the MWT modal.
+  - **Status cards** for every module signal — World State staleness
+    (messages since refresh, delta counts), Knowledge (pending staging
+    items, unread growth evidence), Story Planner (awaiting / overdue
+    beats), Interiority (active / dormant intentions, deleted-intention
+    records), Budget (injected tokens vs context limit, observe / enforce —
+    summary only), Coordinator (running / queued jobs, a "background HELD"
+    flag while background work is paused), one compact ❤️ health line per
+    module, and quarantined record counts. Every card is a one-click deep
+    link into the tab that owns the signal.
+  - **Open-and-read refresh model** (the Diagnostics D2 rule) with a 🔄
+    Refresh button, and **independently guarded cells**: one broken status
+    accessor renders its own "Unavailable" card instead of blanking the
+    pane, and the Findings and Tools sections below fail the same way, each
+    with its own error line.
+  - **🧰 Maintenance**, split per the plan's §4.3.4 decision: a **🔎
+    Findings** list (duplicate NPC profiles, profile relink candidates, NPC
+    identity-audit guidance) that stays hidden while the audits run clean
+    and names its console twin for the full tables, and a collapsed **🧰
+    Tools** disclosure holding the two always-relevant clear actions.
+  - **Guarded write tools** — the "user-facing UI for the `window.MWT.*`
+    console tools" TODO §3 item: profile **prune**, profile **relink**,
+    **clear all evidence**, and **clear deleted intentions** each open a
+    preview → consequence-stated confirm → apply modal. The prune preview
+    mirrors the console dry run (NPC, delete / keep uid, size, entry
+    preview) with its caveat that deleted profiles are regeneratable only
+    while their evidence remains; unnamed and tied-size duplicate groups
+    render as "review by hand" and are never actionable. The relink preview
+    shows each link's **other candidates** — relink picks the largest entry
+    (newest on ties), so anything above 0 means the duplicates deserve a
+    look first. An evidence clear names every affected NPC, warns which
+    generated profiles would be left unbacked, and warns that rebuilding
+    costs API calls; a deletions clear warns the intentions may be proposed
+    again.
+  - **Confirm re-checks before writing.** Prune and relink **re-plan from
+    scratch** and an evidence clear re-reads its NPC list; if the chat, the
+    profile book, or that list changed since the preview, confirm refuses
+    with "review a fresh preview" (the backup-restore precedent). On hosts
+    that don't expose a chat id, prune and relink still work — the re-plan
+    is their guard — while the two clears refuse with an explanation naming
+    the console command that still works there. Every write is
+    busy-guarded, reports through the modal status bar, and re-renders the
+    pane after applying.
+- `knowledge/profiles_audit.js` — the profile duplicate/relink audits and
+  prune planning (`auditProfiles()`, `planProfilePrune()`,
+  `planProfileRelink()`, `auditNpcIdentities()`) extracted from the
+  `index.js` console-bridge closures, with planning split from applying so
+  the UI can preview a plan without ever executing it. Tests in
+  `test/profiles_audit.test.js`.
+
+### Changed
+
+- The MWT modal now opens on 🏠 **Overview** instead of 🌍 World State (plan
+  §4.3.1 — a dashboard you must hunt for isn't a dashboard). World State
+  keeps its place immediately after it.
+- The `MWT.profiles.{list,duplicates,pruneDuplicates,relink}` /
+  `MWT.npcs.auditDuplicates()` console bridge is now a thin `console.table`
+  wrapper over the shared `knowledge/profiles_audit.js` module, and the
+  `MWT.evidence.clear*` orphaned-profile warning shares its check and
+  wording with the Overview's evidence clear through `knowledge/evidence.js`
+  — one collector, two surfaces. Console output is unchanged; the shared
+  functions are pinned by tests.
+
+### Fixed
+
+- `MWT.profiles.pruneDuplicates()` could queue a comment-less profile entry
+  for deletion: its "never prune unnamed entries" guard compared `''` with
+  `'(unnamed)'` and never fired. The extraction's shared `nameKey()` closed
+  it (pinned in `test/profiles_audit.test.js`).
+
 ## [2.7.0]
 
 ### Added

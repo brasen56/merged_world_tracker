@@ -12,12 +12,14 @@
 >   The shared primitives (`core/scope.js`, `core/revision.js`, `core/prompt.js`,
 >   `core/api.js`) are built **and** wired into production.
 > - 🟢 **Tests:** 9 files / 165 tests at audit time → 21 files / 430 at the last
->   glance → **75 files / 1925 tests now** (suite re-run 2026-09-03, all green —
+>   glance → **99 files / 2493 tests now** (suite re-run 2026-09-11, all green —
 >   includes the schema validation + migrations milestone, Parts 1–7, the
 >   World State delta-mode feature, the Knowledge per-field dossier
->   refresh, the entity identity + alias service, and the §6 deeper-coverage
+>   refresh, the entity identity + alias service, the §6 deeper-coverage
 >   pass: API failure families, generation commit races, import/export round
->   trips, lorebook hydration retry, and modal interactions).
+>   trips, lorebook hydration retry, and modal interactions, and the
+>   Overview dashboard: status collector, pane, profile-audit extraction,
+>   and maintenance tools).
 > - 🟢 **Lint + CI:** ESLint (correctness-only) + GitHub Actions (lint+test, Node
 >   20 & 22) shipped and green. `manifest.json homePage` populated. The Appendix A
 >   zero-churn rule expansion (`eqeqeq`, `prefer-const`, `no-shadow`, …) landed in
@@ -286,15 +288,21 @@ subsystem *replaces one thing instead of twenty*.
   Completion receipts / structured outcome response fields stay deferred by
   design (only if failures surviving Tiers 1–3 justify their response-schema
   cost — none have).
-- [ ] **F — Unified MWT dashboard.** One view showing tracker health, stale data,
+- [x] **F — Unified MWT dashboard.** One view showing tracker health, stale data,
   pending staging items, overdue beats, active intentions, token load, and last
   successful run per module. *(Source: PI UX)*
   `[plan drafted 2026-09-10]` — merged with the console-tools UI item below
   into [`overview_dashboard_plan.md`](overview_dashboard_plan.md): one 🏠
   Overview tab, status cards + a 🧰 Maintenance section.
+  **COMPLETE 2026-09-11 (v2.8.0)** — the 🏠 Overview tab is the modal's first
+  tab: guarded status cards with deep links for every signal (per-module
+  health lines, World State staleness, staging + growth evidence, beats,
+  intentions, budget summary, coordinator, quarantine), plus 🔎 Findings and
+  🧰 Tools. Receipts: CHANGELOG 2.8.0; the design record stays at
+  [`overview_dashboard_plan.md`](overview_dashboard_plan.md).
 - [ ] **F — "Pause background automation for this chat"** as a control **separate**
   from disabling injection. *(Source: PI UX)*
-- [ ] **F — User-facing UI for the existing `window.MWT.*` console tools**
+- [x] **F — User-facing UI for the existing `window.MWT.*` console tools**
   (profile duplicate/relink, evidence diagnostics) instead of requiring console
   commands. *(Source: PI UX)* `[partly done 2026-08-21]` — the *read-only* half
   now has a UI: the 🩺 Diagnostics tab + 📋 Copy Report render everything
@@ -308,6 +316,14 @@ subsystem *replaces one thing instead of twenty*.
   stays read-only by contract, and DIAGNOSTICS_PANEL.md §I.2 already reserved
   this promotion for "a home for them." The console tools remain the
   power-user path (one collector, two surfaces).
+  **COMPLETE 2026-09-11 (v2.8.0)** — the mutating toolset ships as Overview's
+  🔎 Findings (prune / relink previews) + 🧰 Tools (clear all evidence /
+  clear deletions): preview→confirm modals that re-check at confirm —
+  prune and relink re-plan, the clears re-verify the chat (the evidence
+  clear also its NPC list) — and refuse if anything changed. The console
+  bridge stays the power-user path, now a thin wrapper over the shared
+  `knowledge/profiles_audit.js` (console output unchanged). Receipts:
+  CHANGELOG 2.8.0.
 - [ ] **F — Cross-module undo/redo / unified history view**, not only per-module
   history stacks. *(Source: PI UX)*
 
@@ -520,9 +536,10 @@ style/formatting out unless you want a separate `npm run format` check.
 
 *Drafted 2026-08-06 from `archive/audits/Potential_Improvements.md` and
 `archive/audits/REMEDIATION_MAP.md`. Update the "Status at a glance" counts when
-you tick items off. Last reconciled against the repo **2026-09-04**: schema
+you tick items off. Last reconciled against the repo **2026-09-11**: schema
 validation + migrations complete through 2.0.0 (Parts 1–7); World State delta
 mode shipped (§3-F); Knowledge per-field dossier refresh shipped (§3-F); the
 §6 optional-coverage pass is now fully landed (the generation coordinator
-shipped in 2.4.0 unlocked its scheduler item); suite at 77 files / 1983 tests,
-all green.*
+shipped in 2.4.0 unlocked its scheduler item); the unified Overview dashboard +
+console-tools UI shipped in 2.8.0 (both §3-F items ticked); suite at 99 files /
+2493 tests, all green.*

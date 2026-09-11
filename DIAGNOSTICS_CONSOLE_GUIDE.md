@@ -17,6 +17,13 @@
 > been doing this session?", and "do my stores reference things that
 > exist?". Phase 13 finalized the copy report (it now serializes the tab
 > accessors too) and added the `MWT.diagnostics.report()` console counterpart.
+>
+> **v2.8.0:** the mutating maintenance tools — `MWT.profiles.{duplicates,
+> pruneDuplicates,relink}`, `MWT.evidence.clear*`, and
+> `MWT.interiority.clearDeletions` — now also have a no-devtools home: the 🏠
+> Overview tab's 🔎 Findings and 🧰 Tools sections render the same audits and
+> wrap the same guarded writes in preview→confirm modals. The console tools
+> remain the power-user path — one collector, two surfaces.
 
 ## What this is
 
@@ -387,7 +394,9 @@ the validators' own reason strings — never previews, quotes, or quarantined
 records), and every string is still secret-scrubbed. No repair is offered
 on purpose: cleanup stays on `MWT.profiles.{duplicates,pruneDuplicates,relink}`
 / `MWT.evidence.clear*` / `MWT.interiority.clearDeletions`, which all have
-dry-run guards.
+dry-run guards. (Since v2.8.0 those same tools are also reachable without
+devtools from the 🏠 Overview tab's 🧰 Maintenance section, behind
+preview→confirm modals; the console remains the power-user path.)
 
 Two readings that are NOT faults: "evidence with no profile" (capture ran,
 the profile has not been generated yet — ordinary mid-pipeline) and absent
