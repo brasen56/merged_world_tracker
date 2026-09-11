@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.1]
+
+### Added
+
+- Phase 0 of world_state_improvement_roadmap.md
+ -  reusable World State fixtures and corresponding tests
+
 ## [2.8.0]
 
 ### Added
