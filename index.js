@@ -121,6 +121,9 @@ import { renderDiagnosticsPanel, wireDiagnosticsPanel } from './diagnostics_pane
 // (budget/panel.js on top of core/budget.js).
 import { collectBudgetSnapshot, renderBudgetPane, wireBudgetTab } from './budget/panel.js';
 import { renderOverviewPane, wireOverviewPane } from './dashboard/render.js';
+// Shared with the Overview 🧰 Maintenance section — the console bridge below
+// only prints and applies these plans, so the two surfaces cannot drift.
+import { auditNpcIdentities, auditProfiles, planProfilePrune, planProfileRelink } from './knowledge/profiles_audit.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -1087,33 +1090,10 @@ try {
     // entry for the same NPC instead of overwriting. The pointer loss is fixed
     // going forward (immediate flush + loud setProfileUid), but chats that
     // already accumulated duplicates need a way to see and prune them.
+    //
+    // The audit and planning logic lives in knowledge/profiles_audit.js; the
+    // functions below own only the console output and the apply step.
     const profileLorebookApi = await import('./knowledge/lorebook.js');
-
-    /** Group profile entries by NPC name and mark which uid the registry points at. */
-    const auditProfiles = async () => {
-        const entries = await profileLorebookApi.listProfileEntries();
-        const groups = new Map();
-        for (const e of entries) {
-            const key = e.name.toLowerCase().trim() || '(unnamed)';
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push(e);
-        }
-        const rows = [];
-        for (const [, list] of groups) {
-            const referenced = registryApi.getProfileUid(list[0].name);
-            for (const e of list) {
-                rows.push({
-                    npc: e.name,
-                    uid: e.uid,
-                    referenced: e.uid === referenced,
-                    duplicate: list.length > 1,
-                    chars: e.chars,
-                    preview: e.preview,
-                });
-            }
-        }
-        return rows;
-    };
 
     // ── Lorebook scope diagnostics ──────────────────────────────────────────
     //
@@ -1225,27 +1205,9 @@ try {
             return rows;
         },
         pruneDuplicates: async (confirm) => {
-            const rows = await auditProfiles();
-            const byNpc = new Map();
-            for (const r of rows) {
-                const key = r.npc.toLowerCase().trim();
-                if (!byNpc.has(key)) byNpc.set(key, []);
-                byNpc.get(key).push(r);
-            }
-
-            // Per NPC: keep the registry-referenced entry; if none is referenced,
-            // keep the LARGEST (a truncated/failed generation is the likelier
-            // orphan) and break ties on the highest uid (most recent). Never
-            // auto-delete when nothing is referenced AND sizes tie — that case
-            // needs eyes, not a heuristic.
-            const toDelete = [];
-            const needsReview = [];
-            for (const [key, list] of byNpc) {
-                if (list.length < 2) continue;
-                // Entries with no comment/name all collapse into one bucket, so
-                // they are not necessarily the same NPC — pruning across them
-                // could delete a different character's profile. Never automate.
-                if (key === '(unnamed)') {
+            const { toDelete, needsReview } = planProfilePrune(await auditProfiles());
+            for (const { reason, npc, rows: list } of needsReview) {
+                if (reason === 'unnamed') {
                     console.warn(
                         `[MWT] ${list.length} profile entries have no NPC name (uids ` +
                         `${list.map(r => r.uid).join(', ')}). They cannot be grouped reliably — ` +
@@ -1253,19 +1215,8 @@ try {
                     );
                     continue;
                 }
-                const referenced = list.find(r => r.referenced);
-                let keep = referenced;
-                if (!keep) {
-                    const sorted = [...list].sort((a, b) => b.chars - a.chars || b.uid - a.uid);
-                    if (sorted[0].chars === sorted[1].chars) { needsReview.push(list); continue; }
-                    keep = sorted[0];
-                }
-                for (const r of list) if (r.uid !== keep.uid) toDelete.push({ ...r, keptUid: keep.uid });
-            }
-
-            for (const list of needsReview) {
                 console.warn(
-                    `[MWT] "${list[0].npc}" has ${list.length} entries, none referenced by the registry ` +
+                    `[MWT] "${npc}" has ${list.length} entries, none referenced by the registry ` +
                     `and identical in size (uids ${list.map(r => r.uid).join(', ')}). Skipped — ` +
                     `inspect them and delete by hand.`
                 );
@@ -1305,37 +1256,12 @@ try {
                 return [];
             }
 
-            const grouped = new Map();
-            for (const e of await profileLorebookApi.listProfileEntries()) {
-                const key = e.name.toLowerCase().trim();
-                if (!key) continue; // unnamed entries can't be matched to an NPC
-                if (!grouped.has(key)) grouped.set(key, []);
-                grouped.get(key).push(e);
-            }
-
-            const planned = [];
-            for (const [, list] of grouped) {
-                const npc = list[0].name;
-                const regKey = registryApi.resolveRegistryKey(reg, npc);
-                if (regKey == null) {
-                    console.warn(
-                        `[MWT] Profile entry "${npc}" has no matching NPC registry entry — skipped. ` +
-                        `Scan that NPC into the Knowledge book first, then re-run.`
-                    );
-                    continue;
-                }
-                const current = reg[regKey]?.profileUid;
-                // Already pointing at an entry that really exists: leave it be.
-                if (current != null && list.some(e => e.uid === current)) continue;
-                // Largest first, newest to break ties — same heuristic as
-                // pruneDuplicates, for the same reason: a truncated generation
-                // is the likelier orphan.
-                const pick = [...list].sort((a, b) => b.chars - a.chars || b.uid - a.uid)[0];
-                planned.push({
-                    npc, registryKey: regKey, linkUid: pick.uid, chars: pick.chars,
-                    was: current == null ? '(none)' : `${current} (dangling)`,
-                    otherCandidates: list.length - 1,
-                });
+            const { planned, unmatched } = await planProfileRelink({ registry: reg });
+            for (const { npc } of unmatched) {
+                console.warn(
+                    `[MWT] Profile entry "${npc}" has no matching NPC registry entry — skipped. ` +
+                    `Scan that NPC into the Knowledge book first, then re-run.`
+                );
             }
 
             if (planned.length === 0) {
@@ -1389,49 +1315,7 @@ try {
                 );
             }
 
-            const rows = [];
-
-            // 1) Registry identities that alias each other, or collide.
-            for (const group of registryApi.auditRegistryAliases(reg)) {
-                for (const e of group.entries) {
-                    rows.push({
-                        kind: group.kind === 'ambiguous' ? 'ambiguous-name' : 'registry-alias',
-                        npc: e.name,
-                        uid: e.uid,
-                        type: e.type,
-                        detail: group.kind === 'ambiguous'
-                            ? `shorthand collision: ${group.names.join(' / ')} — NOT proven to be one NPC`
-                            : `aliases: ${group.names.join(' / ')}`,
-                    });
-                }
-            }
-
-            // 2) Physical lorebook entries whose label is NOT the entry their
-            //    canonical registry identity points at — the visible half of a
-            //    duplicate (or an entry the registry never tracked at all).
-            for (const e of await profileLorebookApi.listKnowledgeEntries()) {
-                const canon = registryApi.resolveRegistryKey(reg, e.name);
-                if (canon == null) {
-                    rows.push({
-                        kind: 'untracked-entry',
-                        npc: e.name || '(unlabelled)',
-                        uid: e.uid,
-                        type: '—',
-                        detail: `in book, no registry record (${e.chars} chars: "${e.preview}")`,
-                    });
-                    continue;
-                }
-                const regUid = reg[canon]?.uid;
-                if (regUid !== e.uid) {
-                    rows.push({
-                        kind: 'entry-not-linked',
-                        npc: e.name,
-                        uid: e.uid,
-                        type: reg[canon]?.type ?? '—',
-                        detail: `canonical identity "${canon}" points at uid ${regUid ?? '(none)'} (${e.chars} chars: "${e.preview}")`,
-                    });
-                }
-            }
+            const rows = await auditNpcIdentities({ registry: reg });
 
             if (rows.length === 0) {
                 console.log('[MWT] No duplicate NPC identities found in the registry or lorebook.');

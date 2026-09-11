@@ -3,7 +3,8 @@
 **Project:** one build covering two `TODO.md` §3 items — the **Unified MWT
 dashboard** and the remaining (mutating) half of **User-facing UI for the
 existing `window.MWT.*` console tools**.
-**Status:** Planned 2026-09-10, not started. Target version ≈ 2.8.0 (adjust
+**Status:** In progress — Phases 1–2 landed 2026-09-10; Phase 3 implemented;
+Phase 4 waits on open decision point §4.3.4. Target version ≈ 2.8.0 (adjust
 freely).
 **Origin:** the 2026-09-10 review question "should those two §3 items be one
 build?" — answer and rationale in §1.
@@ -186,6 +187,18 @@ own tests, no new core logic):
 3. **🧰 hidden when clean** — the "dangerous buttons in a daily view" problem
    solves itself; the section's empty state names the console commands for
    power users.
+4. **OPEN — findings vs. tools (decide before Phase 4).** Raised in the
+   Phase 3 review: two of the four §2.2 tools don't fit "🧰 only renders when
+   an audit finds something." Interiority tombstones are normal state (every
+   intention deletion writes one, capped at 200), so a deleted-intentions
+   *finding* keeps 🧰 visible for nearly everyone — and the count already has
+   its own status card. `evidence.clearAll` has no finding that could ever
+   surface it, and no UI anywhere clears evidence today.
+   *Recommendation:* drop deleted intentions from the findings (the card keeps
+   the count) and split 🧰 into **Findings** (hidden when clean) and a
+   collapsed **Tools** disclosure holding clear-deletions and
+   clear-all-evidence. *Alternative:* put those two actions in their owning
+   tabs (💭 Interiority, 🧠 Knowledge).
 
 ---
 
@@ -253,6 +266,13 @@ Phase 2 alone already retires the "Unified MWT dashboard" checkbox's spirit
   - **evidence.clearAll** — affected NPC names + API-cost warning; two-step
     confirm matching the backup-restore precedent.
   - **clearDeletions** — count + "these intentions may be proposed again."
+- **Re-plan at confirm; never apply the previewed plan.** The console's
+  `pruneDuplicates(true)` / `relink(true)` recompute their plan when
+  confirming, and `deleteProfileEntries()` resolves the book at call time — so
+  a preview applied after a chat switch (or a background profile write) could
+  delete those uids from a different book. Capture the book name + uids at
+  preview, re-plan at confirm, and refuse with a fresh preview if they differ
+  (the backup-restore fingerprint precedent).
 - **Acceptance:** jsdom tests per tool — preview content, skip-cases rendered
   but not actionable, confirm applies via stubbed API, refusal paths covered.
 
@@ -261,6 +281,11 @@ Phase 2 alone already retires the "Unified MWT dashboard" checkbox's spirit
 - README + CHANGELOG entries; cross-note in `DIAGNOSTICS_CONSOLE_GUIDE.md`
   (console tools remain the power-user path); tick both TODO §3 items with
   landed notes pointing here; bump version.
+- CHANGELOG **Fixed** line owed by Phase 3: `MWT.profiles.pruneDuplicates()`
+  could queue a comment-less profile entry for deletion — its "never prune
+  unnamed entries" guard compared `''` with `'(unnamed)'` and never fired.
+  The extraction's `nameKey()` closed it (pinned in
+  `test/profiles_audit.test.js`).
 
 ---
 

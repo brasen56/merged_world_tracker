@@ -8,6 +8,7 @@
 
 import { escapeHtml } from '../core/diff.js';
 import { collectOverviewSnapshot } from './status.js';
+import { collectGuardedMaintenanceFindings } from './maintenance.js';
 
 const EMOJI = '<span aria-hidden="true">';
 
@@ -37,6 +38,130 @@ function card({ label, icon, body, tab, empty = false }) {
 function countText(count, singular, plural = `${singular}s`) {
     const n = Number(count) || 0;
     return `${n} ${n === 1 ? singular : plural}`;
+}
+
+// ─── 🧰 Maintenance ──────────────────────────────────────────────────────────
+
+// Read-only console twins, named in the clean state for power users.
+const MAINTENANCE_COMMANDS = [
+    'MWT.profiles.duplicates()',
+    'MWT.profiles.relink()',
+    'MWT.npcs.auditDuplicates()',
+    'MWT.interiority.deletions()',
+];
+
+const IDENTITY_KINDS = [
+    ['untracked-entry', 'untracked entry', 'untracked entries'],
+    ['entry-not-linked', 'unlinked entry', 'unlinked entries'],
+    ['registry-alias', 'alias record'],
+    ['ambiguous-name', 'ambiguous name'],
+];
+
+// Longer lists stay in the console command's output.
+const REVIEW_LIMIT = 5;
+
+/** "A, B, C and 4 more" — keeps a finding to one scannable line. */
+function nameList(names = [], max = 3) {
+    const unique = [...new Set(names.filter(Boolean))];
+    const shown = unique.slice(0, max).join(', ');
+    return unique.length > max ? `${shown} and ${unique.length - max} more` : shown;
+}
+
+function describeDuplicates(finding) {
+    const prune = Number(finding.pruneCount) || 0;
+    const names = nameList(finding.prunableNpcs);
+    return {
+        summary: prune
+            ? `${countText(prune, 'extra entry', 'extra entries')} can be pruned automatically${names ? ` (${names})` : ''}.`
+            : 'nothing can be pruned automatically.',
+        review: (finding.review || []).map((group) => (group.reason === 'unnamed'
+            ? `${countText(group.count, 'entry', 'entries')} with no NPC name — they may belong to different characters.`
+            : `${group.npc} — ${countText(group.count, 'entry', 'entries')} of identical size, none linked to the registry.`)),
+    };
+}
+
+function describeRelink(finding) {
+    const names = finding.relinkNpcs || [];
+    const crowded = Number(finding.withOtherCandidates) || 0;
+    let summary = names.length
+        ? `${countText(names.length, 'profile')} can be relinked to ${names.length === 1 ? 'its' : 'their'} NPC (${nameList(names)}).`
+        : 'nothing can be relinked automatically.';
+    if (crowded) {
+        summary += ` ${countText(crowded, 'NPC')} also ${crowded === 1 ? 'has' : 'have'} duplicate entries — check duplicates before relinking.`;
+    }
+    return {
+        summary,
+        review: (finding.unmatched || []).map(({ npc }) => `${npc} — no NPC registry record; scan the NPC into the Knowledge book first.`),
+    };
+}
+
+function describeIdentities(finding) {
+    const byKind = finding.byKind || {};
+    const parts = IDENTITY_KINDS
+        .filter(([kind]) => byKind[kind])
+        .map(([kind, singular, plural]) => countText(byKind[kind], singular, plural));
+    const sentences = [`${parts.join(' · ') || countText(finding.count, 'finding')}.`];
+    const names = nameList((finding.rows || []).map((row) => row.npc));
+    if (names) sentences.push(`Involves ${names}.`);
+    if (byKind['ambiguous-name']) {
+        sentences.push('Ambiguous short names are not proven to be one character — rename the short record instead of merging.');
+    }
+    if (finding.registryEmpty) {
+        sentences.push('The NPC registry for this chat is empty: if these entries are real, the From Lorebooks button re-adopts them.');
+    }
+    sentences.push('Cleanup is manual, in the World Info editor — the console command prints the steps.');
+    return { summary: sentences.join(' '), review: [] };
+}
+
+function describeDeletions(finding) {
+    const n = Number(finding.count) || 0;
+    return {
+        summary: `${countText(n, 'record')} ${n === 1 ? 'keeps a deleted intention' : 'keep deleted intentions'} from being proposed again.`,
+        review: [],
+    };
+}
+
+function describeGeneric(finding) {
+    return { summary: `${countText(finding.count, 'finding')}.`, review: [] };
+}
+
+const MAINTENANCE_KINDS = {
+    'duplicate-profiles': { label: 'Duplicate profiles', describe: describeDuplicates },
+    'relink-candidates': { label: 'Profile links', describe: describeRelink },
+    'npc-identity-audit': { label: 'NPC identities', describe: describeIdentities },
+    'deleted-intentions': { label: 'Deleted intentions', describe: describeDeletions },
+};
+
+function renderReview(items) {
+    if (!items.length) return '';
+    const shown = items.slice(0, REVIEW_LIMIT).map((text) => `<li>Review by hand: ${escapeHtml(text)}</li>`);
+    if (items.length > REVIEW_LIMIT) shown.push(`<li>…and ${items.length - REVIEW_LIMIT} more — see the console command.</li>`);
+    return `<ul class="mwt-overview-review">${shown.join('')}</ul>`;
+}
+
+/**
+ * Render the 🧰 Maintenance section, or a one-line clean state naming the
+ * console audits when no audit found anything (plan §4.3.3).
+ */
+export function renderMaintenanceFindings(findings = []) {
+    if (!Array.isArray(findings)) return '';
+    if (findings.length === 0) {
+        const commands = MAINTENANCE_COMMANDS.map((command) => `<code>${escapeHtml(command)}</code>`).join(', ');
+        return `<p class="mwt-overview-maintenance-clean" role="status">${EMOJI}🧰</span> No maintenance findings. Console audits: ${commands}.</p>`;
+    }
+    const rows = findings.map((finding) => {
+        if (finding.kind === 'maintenance-error') {
+            return `<li class="mwt-overview-finding"><strong>${escapeHtml(finding.source || 'Maintenance audit')}</strong> — unavailable: ${escapeHtml(finding.error || 'unknown error')}</li>`;
+        }
+        const { label, describe } = MAINTENANCE_KINDS[finding.kind] || { label: 'Maintenance finding', describe: describeGeneric };
+        const { summary, review } = describe(finding);
+        return `<li class="mwt-overview-finding"><strong>${escapeHtml(label)}</strong> — ${escapeHtml(summary)} <code>${escapeHtml(finding.command || 'review manually')}</code>${renderReview(review)}</li>`;
+    }).join('');
+    return `<section class="mwt-overview-maintenance" aria-label="Maintenance findings">
+        <h3>${EMOJI}🧰</span> Maintenance</h3>
+        <p>These checks are read-only — each finding names the console command with the full details.</p>
+        <ul>${rows}</ul>
+    </section>`;
 }
 
 function renderHealth(value) {
@@ -103,6 +228,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
             ${renderCell('deletedIntentions', 'Deleted intentions', (value) => `${Array.isArray(value) ? value.length : Number(value) || 0} records`, { icon: '🗑️', tab: 'interiority', empty: !cellValue(snapshot.deletedIntentions, []).length })}
             ${renderCell('quarantine', 'Quarantine', (value) => `${Number(value?.total) || 0} quarantined records`, { icon: '🗂️', tab: 'diagnostics', empty: !(Number(cellValue(snapshot.quarantine, {})?.total) || 0) })}
         </div>
+        <div data-overview-maintenance></div>
         <footer class="mwt-overview-footer">Something looks wrong? ${linkButton('diagnostics', 'Open Diagnostics')} · ${linkButton('budget', 'Open Budget')}</footer>
     </section>`;
 }
@@ -116,15 +242,31 @@ export function renderOverviewPane({ collect = collectOverviewSnapshot } = {}) {
     }
 }
 
-export function wireOverviewPane(root, { collect = collectOverviewSnapshot } = {}) {
+export function wireOverviewPane(root, {
+    collect = collectOverviewSnapshot,
+    collectMaintenance = collectGuardedMaintenanceFindings,
+} = {}) {
     if (!root?.querySelector) return;
     const pane = root.querySelector('.mwt-tab-content[data-tab="overview"]');
     if (!pane) return;
+    const maintenanceHost = pane.querySelector('[data-overview-maintenance]');
+    if (maintenanceHost) {
+        // A refresh or close detaches this host before a slow audit settles,
+        // so a superseded result can never overwrite a newer one.
+        collectMaintenance().then((result) => {
+            if (!maintenanceHost.isConnected) return;
+            maintenanceHost.innerHTML = result.ok
+                ? renderMaintenanceFindings(result.value)
+                : `<p class="mwt-overview-maintenance-error" role="status">Maintenance audit unavailable: ${escapeHtml(result.error)}</p>`;
+        });
+    }
     pane.querySelectorAll('[data-overview-tab]').forEach((button) => {
         button.addEventListener('click', () => root.querySelector(`#mwt-tab-${button.dataset.overviewTab}`)?.click());
     });
     pane.querySelector('#mwt-overview-refresh')?.addEventListener('click', () => {
         pane.innerHTML = renderOverviewPane({ collect });
-        wireOverviewPane(root, { collect });
+        wireOverviewPane(root, { collect, collectMaintenance });
+        // The clicked button was just replaced; keep keyboard focus on its twin.
+        pane.querySelector('#mwt-overview-refresh')?.focus();
     });
 }
