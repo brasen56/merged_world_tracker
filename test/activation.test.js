@@ -2,7 +2,7 @@
  * test/activation.test.js — the lorebook auto-activation write path.
  *
  * The properties worth protecting (design doc:
- * upcoming_work_misc/LOREBOOK_ACTIVATION_PLAN.md):
+ * archive/completed_plans/LOREBOOK_ACTIVATION_PLAN.md):
  *   1. The Knowledge book claims the chat's ONE bound-book slot, and only
  *      when it is empty or already ours — a foreign book is never replaced,
  *      only reported.

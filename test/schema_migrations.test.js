@@ -1,7 +1,7 @@
 /**
  * Part 2 tests — version manifest, migrations, and quarantine dry runs
  * (delivery slice §11 "Part 2" of
- * upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md).
+ * archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md).
  *
  * Acceptance being pinned here:
  *   - every authoritative store's real legacy shapes dry-run migrate through

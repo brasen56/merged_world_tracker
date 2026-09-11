@@ -1,7 +1,6 @@
 /** @vitest-environment jsdom */
 
-// Regression coverage for the Accessibility Slice 3 review findings
-// (BUG_REPORTS/bugs_temp.md):
+// Regression coverage for the Accessibility Slice 3:
 //
 //   A11Y-S3-01 — backup preview Confirm left aria-busy="true" forever on
 //                failure paths (busy must clear in `finally`; eligibility is
@@ -12,7 +11,7 @@
 //                recovery export, Chronicle Snapshot/Regenerate, Interiority
 //                Generate Now, Knowledge accept/batch/clipboard/relationship
 //                handlers).
-//   A11Y-S3-04 — the sweep's re-audit (bugs_temp P2 follow-ups): the Scan
+//   A11Y-S3-04 — the sweep's re-audit: the Scan
 //                replacement button, Promote/Demote, state-tracker
 //                register/export/import, both #kt-view-modal open paths, and
 //                the Growth modal open; plus the catch-up eligibility restore
@@ -225,7 +224,7 @@ describe('A11Y-S3-03: remaining async handlers own their busy state (source)', (
 });
 
 // ─── A11Y-S3-04: the remaining Knowledge sweep + eligibility restore ─────────
-// The P2 follow-ups from BUG_REPORTS/bugs_temp.md's re-audit of Slice 3: the
+// The P2 follow-ups from re-audit of Slice 3: the
 // sweep still missed Knowledge's Scan replacement button, Promote/Demote, the
 // state-tracker register/export/import controls, both #kt-view-modal open
 // paths, and the Growth modal's opening reads; and the catch-up loop cleared

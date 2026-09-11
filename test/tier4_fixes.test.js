@@ -2,7 +2,7 @@
  * test/tier4_fixes.test.js — Tests for the Tier 4 bug fixes.
  *
  * Covers the pure-function / data-path regressions for the low-severity batch
- * tracked in Audit_Reports/REMEDIATION_MAP.md (lines 558–560):
+ * tracked in archive/audits/REMEDIATION_MAP.md (lines 558–560):
  *
  * - CORE-06: retryAsync invalid-input and non-Error rejection edges
  * - CHRONICLE-06: range injection open-ended semantics + reversed-range normalisation

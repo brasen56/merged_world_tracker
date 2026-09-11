@@ -154,7 +154,7 @@ describe('appendRawObservations', () => {
     });
 
     test('dedups against archivedRaw after consolidation (Tier 2 fix #6)', () => {
-        // Regression test for BUG_REPORTS/VERIFICATION_RESULTS.md Tier 2 bug #6.
+        // Regression test for archive/bug_reports/VERIFICATION_RESULTS.md Tier 2 bug #6.
         // After consolidation moves observations to archivedRaw, a capture pass
         // that overlaps those same messages must NOT re-add them to raw[].
         // Previously the dedup set only scanned raw[], so re-worded claims

@@ -2,7 +2,7 @@
  * core/schema.js — Generic, dependency-free validation/migration engine.
  *
  * One shared contract for every authoritative MWT store (design §3–§4 of
- * upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md):
+ * archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md):
  *
  *   - a store DESCRIPTOR: id, chat-metadata key (or lorebook location),
  *     currentVersion, createDefault(), ordered migrations, validate();

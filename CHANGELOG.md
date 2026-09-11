@@ -348,7 +348,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     page inertness is restored before the old chat's modals are discarded —
     a bare `remove()` used to leave the rest of the application inert.
   - The inertness behind that claim is now fail-safe rather than
-    fire-and-forget (BUG_REPORTS/bugs_temp.md; tests in
+    fire-and-forget; tests in
     `test/modal_inert_guards.test.js`): every inert value MWT changes is
     recorded in a managed map with an exported `releaseManagedInert()`
     rollback; a `MutationObserver` on `document.body` inerts overlays added
@@ -418,10 +418,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Interiority lifecycle v2 — the deferred lifecycle substrate** (the
   "Deferred lifecycle work" tier of
-  `upcoming_work_misc/INTERIORITY_LIFECYCLE_IMPLEMENTATION_PLAN.md` §4 /
+  `archive/completed_plans/INTERIORITY_LIFECYCLE_IMPLEMENTATION_PLAN.md` §4 /
   TODO.md §3-F; record shape, retention caps, rollback semantics, and backup
   behavior specified first in
-  `upcoming_work_misc/INTERIORITY_LIFECYCLE_V2_SPEC.md`). The interiority store
+  `archive/completed_plans/INTERIORITY_LIFECYCLE_V2_SPEC.md`). The interiority store
   migrates v1 → v2 with three new containers, all validated and
   quarantine-preserving like the rest of the store:
   - **`lifecycleHistory`** — bounded (150 records), occurrence-specific audit
@@ -1231,7 +1231,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Low-cost delta mode for World State** (TODO §3-F; source:
-  `Audit_Reports/Potential_Improvements.md` §3). Full refreshes are expensive —
+  `archive/audits/Potential_Improvements.md` §3). Full refreshes are expensive —
   auto-refresh now has an incremental mode that asks the model ONLY for the
   sections that changed and applies a strictly validated patch.
   - **New module `world_state/delta.js`** (leaf, mirrors provenance.js):
@@ -2096,7 +2096,7 @@ coverage in `test/restore_quarantine_integrity.test.js`):
   several measured migrations exceeded the 50 ms synchronous boundary. The
   harness now asserts p95 over 20 runs (tolerating exactly one environment
   outlier) and records median/p95/worst; baselines re-recorded in
-  `upcoming_work_misc/SCHEMA_PERF_BASELINES.md`.
+  `archive/completed_plans/SCHEMA_PERF_BASELINES.md`.
 
 Three more integrity fixes (regression coverage in
 `test/restore_quarantine_integrity.test.js` and
@@ -2153,7 +2153,7 @@ Three more integrity fixes (regression coverage in
     change (`reloadStores`); the Scope & storage diagnostics warnings now point
     at the toggles; the settings panel warns when the State target is wider
     than the underlying book's scope. Design doc:
-    `upcoming_work_misc/LOREBOOK_ACTIVATION_PLAN.md`; implementation:
+    `archive/completed_plans/LOREBOOK_ACTIVATION_PLAN.md`; implementation:
     `knowledge/activation.js` (+ suite `test/activation.test.js`).
 
 - **Lorebook auto-activation — safety rules** — the guarantees the feature
@@ -2227,7 +2227,7 @@ Three more integrity fixes (regression coverage in
   and §7.2's budgets are now ENFORCED by `test/schema_perf_harness.test.js`
   against a ~1,925-record reference fixture — fast gate p95 ≤ 5 ms, every 0 → 1
   migration < 50 ms — with recorded baselines in
-  `upcoming_work_misc/SCHEMA_PERF_BASELINES.md` (all migrations pass with an
+  `archive/completed_plans/SCHEMA_PERF_BASELINES.md` (all migrations pass with an
   order of magnitude of headroom; none needs a module-local preparation state
   on performance grounds). Merge/replace previews now include import-time
   quarantine results in their skipped counts (§10.3).

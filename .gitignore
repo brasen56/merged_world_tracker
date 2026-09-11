@@ -17,9 +17,7 @@ Thumbs.db
 
 # Reference copy of the Aikobots fork (port compatibility work) — not part of the extension
 Aikobots-4/
-BUG_REPORTS/
-Completed_Roadmaps/
-Audit_Reports/
-upcoming_work_misc/
+# Historical working documents (audits, bug reports, completed/superseded plans) — see archive/README.md
+archive/
 .claude/
 test_presets/

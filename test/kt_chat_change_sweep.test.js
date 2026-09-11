@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 /**
  * test/kt_chat_change_sweep.test.js — the chat-change sweep CLOSE PATH
- * (docs/accessibility_plan.md §6.2; BUG_REPORTS/bugs_temp.md).
+ * (docs/accessibility_plan.md §6.2).
  *
  * Both Knowledge chat-change sweeps (knowledge/index.js onChatChanged and
  * onChatChangedWhilePaused) drop the four body-mounted kt- modals of the

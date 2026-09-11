@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 /**
  * test/modal_inert_guards.test.js — fail-safes for the managed-inert modal
- * backdrop (BUG_REPORTS/bugs_temp.md).
+ * backdrop
  *
  * core/modal.js marks every non-modal document.body child `inert` while a
  * dialog is open. That is correct modal behavior, but it must never be able
@@ -159,12 +159,12 @@ describe('managed inert fail-safes', () => {
         expect(foreign.inert).toBeFalsy(); // …so the foreign dialog was never inerted…
         expect(document.activeElement).toBe(foreign.querySelector('#foreign-btn')); // …and focus was not stolen
         expect(warnSpy).toHaveBeenCalledTimes(1);
-        // The refusal is also user-visible (bugs_temp.md): a click that does
+        // The refusal is also user-visible: a click that does
         // nothing must not be console-only.
         expect(toasts).toEqual([{ message: 'Modal not opened — another dialog has focus. Close it first.', title: 'Merged World Tracker' }]);
 
         // Once focus leaves the foreign dialog, the same open works normally.
-        // The protection is now symmetric (bugs_temp.md): the foreign
+        // The protection is now symmetric: the foreign
         // [role=dialog] body child is spared as a live dialog, while ordinary
         // background is inerted as before.
         const plainHost = document.createElement('div');
@@ -226,7 +226,7 @@ describe('managed inert fail-safes', () => {
     });
 });
 
-describe('native dialogs and foreign modal changes (bugs_temp.md P1/P2)', () => {
+describe('native dialogs and foreign modal changes', () => {
     test('refuses to open while focus is inside a native <dialog> popup (implicit dialog role)', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const toasts = [];
@@ -248,7 +248,7 @@ describe('native dialogs and foreign modal changes (bugs_temp.md P1/P2)', () => 
     });
 
     test('keeps a foreign div[role="dialog"] appended while a modal is open live too', async () => {
-        // bugs_temp.md: the protection used to be asymmetric — open-time
+        // the protection used to be asymmetric — open-time
         // refusal covers [role=dialog] and native <dialog> alike, but once a
         // modal was already up only the native popup was spared; a plain
         // div[role=dialog] from another extension still got inerted by
@@ -274,7 +274,7 @@ describe('native dialogs and foreign modal changes (bugs_temp.md P1/P2)', () => 
     });
 
     test('ignores attribute churn on unrelated body children without going blind', async () => {
-        // bugs_temp.md: SillyTavern toggles classes (and styles) on #sheld,
+        // SillyTavern toggles classes (and styles) on #sheld,
         // #top-bar, and the drawer roots the whole time a modal is open. The
         // observer now filters attribute records down to modal roots and
         // native dialogs — this pins that the noise neither releases the

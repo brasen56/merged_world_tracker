@@ -248,7 +248,7 @@ const MAX_CATCH_UP_PASSES = 8;
  *
  * A single message whose line alone exceeds the character budget can never be
  * scanned WHOLE by any window (the sliding full-refresh scan has the same
- * known limitation — see BUG_REPORTS/07 #1). Skipping it while advancing the
+ * known limitation — see archive/bug_reports/07_world_state.md #1). Skipping it while advancing the
  * watermark past it would stamp the document reconciled over content no scan
  * ever saw (the oversized-message rule), so its leading portion is
  * included with the explicit OVERSIZED_SCAN_NOTE marker instead: the model

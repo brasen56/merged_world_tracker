@@ -1,8 +1,6 @@
 /** @vitest-environment jsdom */
 /**
- * test/kt_view_modal_singleton.test.js — the #kt-view-modal singleton race
- * (BUG_REPORTS/bugs_temp.md, P2: "View-modal singleton guard has an async
- * race").
+ * test/kt_view_modal_singleton.test.js — the #kt-view-modal singleton race.
  *
  * #kt-view-modal has two async open paths — the NPC dossier path
  * (openNpcViewModal, wired to .kt-npc-view) and the State Tracker path

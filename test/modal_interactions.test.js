@@ -440,7 +440,7 @@ describe('onClose veto', () => {
     });
 
     test('returning false keeps the modal open through hideModal (the programmatic route)', () => {
-        // §6.2 (docs/accessibility_plan.md, bugs_temp.md): hideModal routes
+        // §6.2 (docs/accessibility_plan.md: hideModal routes
         // through the same _closeModal as × / backdrop / Escape and is the
         // path dozens of module call sites use — the veto must hold here too.
         const modal = openModal('mwt-veto-hide', { onClose: () => false });

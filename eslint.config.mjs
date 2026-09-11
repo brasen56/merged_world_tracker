@@ -35,11 +35,8 @@ export default [
             '.git/**',
             // Reference / working-doc directories (gitignored, not shipped):
             'Aikobots-4/**',
-            'BUG_REPORTS/**',
-            'Completed_Roadmaps/**',
-            'Audit_Reports/**',
+            'archive/**',
             '.claude/**',
-            'upcoming_work_misc/**',
             // JSON-only directories:
             'test_presets/**',
             'manifest.json',

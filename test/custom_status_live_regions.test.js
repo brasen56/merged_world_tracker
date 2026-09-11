@@ -1,8 +1,7 @@
 /** @vitest-environment jsdom */
 
 // Live-region coverage for the custom status writers that never routed
-// through setStatus() (BUG_REPORTS/bugs_temp.md, P2: "Custom status writers
-// bypass live-region semantics"):
+// through setStatus():
 //
 //   - Interiority's setIntStatus() (#mwt-int-status),
 //   - Chronicle's scSetStatus() (.sc-status-text),

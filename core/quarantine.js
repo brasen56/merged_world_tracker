@@ -1,7 +1,7 @@
 /**
  * core/quarantine.js — Pure quarantine records, fingerprinting, and dedup.
  *
- * Design §5 of upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md:
+ * Design §5 of archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md:
  * invalid records are never silently dropped. They are preserved whole,
  * fingerprinted, and deduplicated so a repeated load does not append the same
  * record twice.

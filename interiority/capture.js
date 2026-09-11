@@ -2,7 +2,7 @@
  * interiority/capture.js — Opt-in, generation-scoped intentions diagnostics capture.
  *
  * Lifecycle plan Tier 1 item 4
- * (upcoming_work_misc/INTERIORITY_LIFECYCLE_IMPLEMENTATION_PLAN.md):
+ * (archive/completed_plans/INTERIORITY_LIFECYCLE_IMPLEMENTATION_PLAN.md):
  * diagnosing the reported "completed action re-proposed as a plan" failure
  * class requires seeing a WHOLE intentions generation — every constituent
  * call (unified / split / strict modes issue different calls), the prompts

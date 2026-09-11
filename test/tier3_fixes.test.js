@@ -3,7 +3,7 @@
  *
  * Covers the pure-function regressions that are not already covered by other
  * unit tests, plus the Tier 3 *completions* tracked in
- * Audit_Reports/tier3_incomplete (STORY-PLANNER-07 prompt escaping, makeArc
+ * archive/audits tier-3 follow-ups (STORY-PLANNER-07 prompt escaping, makeArc
  * validation, WORLD-STATE-07 import validation, KNOWLEDGE-07 atomic update,
  * INTERIORITY-06 prompt-path caps, WORLD-STATE-08/09 timer guards).
  *

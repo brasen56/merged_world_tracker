@@ -106,7 +106,7 @@ export const DEFAULT_HEALTH_MODULES = {
  * The four countdown modules disagree on the interval field name — World
  * State / Knowledge / Story Planner return `{ counter, interval }`, Chronicle
  * `{ counter, threshold }` — and their counters can exceed the interval
- * (BUG_REPORTS: "Countdown can go negative"), so `remaining` is clamped at 0.
+ * (archive/bug_reports: "Countdown can go negative"), so `remaining` is clamped at 0.
  * Interiority (Phase 4 `getAutoStatus()`) has no main-generation countdown at
  * all: `perTurn: true` means it fires on every AI message, and the counter /
  * interval describe the §20 dormant-intentions poll instead — those extras

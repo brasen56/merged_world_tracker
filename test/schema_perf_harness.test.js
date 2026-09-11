@@ -17,7 +17,7 @@
  * preparation state instead — so exceeding the budget here is a design gate,
  * not a flaky timing.
  *
- * Recorded baselines live in upcoming_work_misc/SCHEMA_PERF_BASELINES.md;
+ * Recorded baselines live in archive/completed_plans/SCHEMA_PERF_BASELINES.md;
  * re-record them (run this file and copy the table it prints) whenever a
  * migration or validator changes shape.
  *

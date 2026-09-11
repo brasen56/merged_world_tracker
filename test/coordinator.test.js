@@ -500,7 +500,7 @@ describe('user-generation policy', () => {
         _setCoordinatorResolvers({ getGlobalSettings: () => ({ pauseBackgroundJobsDuringGeneration: true }) });
         beginUserGeneration();
         // ST can fire BOTH GENERATION_STOPPED and GENERATION_ENDED for one
-        // generation (BUG_REPORTS/01_core.md #4) — the depth must floor at 0.
+        // generation (archive/bug_reports/01_core.md #4) — the depth must floor at 0.
         endUserGeneration();
         endUserGeneration();
         beginUserGeneration();

@@ -16,7 +16,7 @@
  *         status, wakeHint,
  *           ↑ 'active'|'dormant' (§20)   ↑ free-text wake condition
  *         priority, expiresOn, expiresTurn, reopenedFrom }
- *           ↑ optional lifecycle fields (v2 — see INTERIORITY_LIFECYCLE_V2_SPEC.md)
+ *           ↑ optional lifecycle fields (v2 — see archive/completed_plans/INTERIORITY_LIFECYCLE_V2_SPEC.md)
  *     ],
  *     turnCounter: 0,           ↑ incremented each generation (§20 lazy poll)
  *     deletedIntentions: [      ↑ tombstones for USER-deleted intentions
@@ -228,7 +228,7 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // only — never persisted; surfaced solely through the Diagnostics
         // Copy Report's content opt-in. Temporary reporter-facing tool.
         captureIntentionsDiagnostics: false,
-        // ── Deferred lifecycle work (spec INTERIORITY_LIFECYCLE_V2_SPEC §2/§4)
+        // ── Deferred lifecycle work (spec archive/completed_plans/INTERIORITY_LIFECYCLE_V2_SPEC.md §2/§4)
         // Cross-turn closure dedup window, in generation turns. A proposal
         // that conservatively matches a closure recorded within this window
         // for the same canonical NPC is rejected as "recently closed" — an

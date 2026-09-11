@@ -2,7 +2,7 @@
  * world_state/delta.js — Low-cost delta refresh: patch protocol, document
  * status bookkeeping, and the delta-vs-full planning decision.
  *
- * Implements TODO §3 item F (source: Audit_Reports/Potential_Improvements.md
+ * Implements TODO §3 item F (source: archive/audits/Potential_Improvements.md
  * §3, "Low-cost delta mode for World State"):
  *   - parseDeltaPatch()/applyDeltaPatch() — the validated patch the model is
  *     asked to produce (### UPDATE: / ### REMOVE: / ### NO CHANGES). Parsing

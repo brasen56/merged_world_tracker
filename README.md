@@ -18,6 +18,7 @@
   - [📊 Budget](#-budget)
   - [Slash Commands & Macros](#slash-commands--macros)
   - [Mobile & Touch](#mobile--touch)
+  - [♿ Accessibility](#-accessibility)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
@@ -57,7 +58,7 @@ Instead of juggling multiple standalone extensions, MWT provides a single tabbed
 | **📜 Chronicle** | Generates timestamped summaries of RP events with consolidation, editing, and flexible injection |
 | **🧠 Knowledge** | Scans for NPCs, tracks their knowledge and relationships, and manages state entries via lorebooks |
 | **🗺️ Story Planner** | Brainstorms structured plot arcs across five timeline sections, managed as editable cards with selective injection — inspiration the AI can draw on, not a fixed roadmap |
-| **💭 Interiority** | Generates out-of-band NPC private thoughts and a persistent hidden-intentions ledger that drives on-screen actions without leaking secrets to the narrator |
+| **💭 Interiority** | Generates out-of-band NPC private thoughts and a persistent hidden-intentions ledger — with priority, expiry, and per-NPC privacy controls — that drives on-screen actions without leaking secrets to the narrator |
 
 All five modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output.
 
@@ -198,7 +199,13 @@ Generates NPC private thoughts and a persistent **intentions ledger** in a separ
 - **Knowledge-Grounded** — Each NPC's thoughts are limited to their own Knowledge Ledger + witnessed events
 - **Per-Message Display** — Thoughts render as collapsible blocks attached to individual chat messages (never in chat history)
 - **Ledger Lifecycle** — Intentions are evaluated each turn: executed (done), dropped (with in-voice reason), or carried forward
-- **Rollback on Swipe/Edit/Delete** — Ledger snapshots per message make it trivial to revert state when messages change
+- **Priority** — Every intention carries a priority (low / normal / high / urgent, set in the edit form). Priority sorts the ledger panel and annotates the narrator injection so urgent plans read as urgent — the model is never asked to invent one
+- **Expiry, Split by Kind** — In-world expiry labels ("no longer plausible once…") ride the ledger line, the prompt, and the injection; a per-entry turn expiry closes that specific plan after N turns; and the **Max Turns Open** setting (default: never) auto-closes engine-authored plans only — your hand-authored (✋) plans are never auto-evicted, and per-entry overrides always win
+- **Lifecycle History** — Completions, drops, expiries, merges, sleeps, wakes, and reopens are logged newest-first with their reasons and supersession links. Any closure can be 🔁 **reopened** (it returns as an active, user-owned plan), and the log can be cleared
+- **Manual Lifecycle Actions** — Per-entry ✔ **mark done** and 🚫 **dismiss** (no longer plausible — closes the plan without permanently blocking it), 💤 **sleep** to schedule an intention (no per-turn narrator demands until its wake condition is near; ⏰ **wake** or the periodic dormant poll brings it back), and ⚠ duplicate/occasion conflict badges with a one-click **merge** that records the supersession
+- **Proposal Guardrails** — A per-NPC accepted-proposal cap (**Max New/NPC**, default 2 — completion/drop evaluation is unaffected, and malformed or duplicate proposals never consume the cap), owner-checked close IDs (one NPC's response block can never close another NPC's plan), a same-response replay guard (a plan cannot be executed and re-proposed verbatim in one response), and a **Closure Dedup** window (recent closures suppress near-identical re-proposals for that NPC — an independently motivated repetition after the window stays legal). Completion is also separated from abandonment grace: an `executed` mark may close an engine plan still inside its **Grace Period** once genuine story time has elapsed with the plan live, while `dropped` marks keep the full grace window
+- **Per-NPC Controls** — Per NPC: a **privacy exclusion** that withholds their dossier-derived context (knowledge entry, character core, relationships) from every interiority call while leaving intentions tracking and the actor/witness rules intact, plus creation-only cost dials — **pause new proposals**, a **cooldown** after each accepted proposal, and an **active-plan cap**. Existing plans are always evaluated while proposals are gated, and nothing is ever auto-evicted to meet a cap
+- **Rollback on Swipe/Edit/Delete** — Ledger snapshots per message make it trivial to revert state when messages change; lifecycle history and evidence boundaries roll back with the ledger
 - **Manual Ledger Editing** — Add, edit, or delete intentions directly in the UI
 
 ### Shared Core
@@ -276,6 +283,22 @@ Macros let you place content anywhere (Author's Note, prompt manager block, char
 - **Responsive Layout** — Modal adapts to small screens (breakpoints at 768px and 480px)
 - **Collapse Mode** — Optionally collapse the floating buttons into a single hub button
 - **Right-Click / Long-Press** — Quick-toggle any tracker via the floating button's context menu
+
+### ♿ Accessibility
+
+MWT is built to be fully operable without a mouse and usable with a screen reader:
+
+- **Real Dialogs** — Every modal is a proper dialog (labelled by its heading) with `aria-modal` backed by real page inertness. Focus moves into the dialog on open, stays trapped inside it (Tab wraps first ↔ last, skipping disabled and hidden-panel controls), and returns to the button that opened it on close — whether closed via ×, Escape, or the backdrop. Stacked dialogs resolve to the one you actually see on top
+- **Keyboard Navigation** — The main tab strip and the Diagnostics sub-tabs are keyboard-operable tablists (← / → to move, Enter / Space to activate), every panel is reachable keyboard-only, and inactive tabs and panels are hidden from the accessibility tree
+- **Visible Focus** — Keyboard focus gets a clear outline on every interactive control in both themes, scoped to MWT's own surfaces so SillyTavern's UI is never restyled
+- **Accessible Names** — Every control has a real name (emoji-only buttons included), form fields are associated with their labels, tooltips that carried essential meaning became visible help text, and no state is color- or emoji-only anymore — badges and origin icons carry screen-reader text
+- **Status Announcements** — Status bars and module status lines are polite live regions (`role="status"`), async controls expose their busy state (`aria-busy` alongside disabled, cleared on error paths too), and countdown digits are never announced
+- **Reduced Motion** — With `prefers-reduced-motion` enabled, pulses, transitions, and graph animation are suppressed — functional timers keep counting, they just stop animating
+- **Keyboard Graph, Cards & Staging** — The relationship graph has labeled zoom in/out/reset controls and full keyboard node selection (Tab to a node, Enter to select, Enter again to open) with a screen-reader-only summary, plus NPC/type filters whose results are announced; staging proposals are real buttons with a pressed state, so reviewing, accepting, and dismissing never requires a mouse; NPC and tracker cards use real headings with native action buttons
+
+The full implementation plan, verified baseline, and manual QA checklist are in [docs/accessibility_plan.md](docs/accessibility_plan.md).
+
+Contributor-facing documents — the live work queue (`docs/TODO.md`), the parked Settings-workspace plan, and the full documentation map — live in [docs/](docs/README.md). Historical audits, bug-report rounds, and completed design docs are kept in `archive/` locally (untracked).
 
 ---
 
@@ -483,10 +506,19 @@ Regeneration is continuity-aware: the previous plan is fed back so still-relevan
    - **Batched** (default) — one API call per turn for all scene NPCs
    - **Strict** — one call per NPC for true knowledge isolation (higher cost)
 5. Set **Max NPCs** (default 4) to cap how many characters are processed per turn
-6. View the **Ledger** — a list of open intentions with NPC name, action, trigger condition, and in-world "since" time. Click any entry to edit or delete it
+6. View the **Ledger** — a list of open intentions with NPC name, action, trigger condition, in-world "since" time, turns open, priority badge, and any in-world expiry note. Each entry has its own controls:
+   - ✔ **Done** — mark the plan completed (recorded in Lifecycle History)
+   - 🚫 **Dismiss** — close it as no longer plausible, without permanently blocking it
+   - 💤 **Sleep** — schedule it: no per-turn narrator demands until its wake condition is near. Scheduled plans move to their own list (with a 📅 wake hint), and ⏰ **wake** brings one back on demand
+   - ✎ **Edit** — change the wording, priority (low/normal/high/urgent), in-world expiry, or per-entry turn expiry
+   - ✕ **Remove** — delete it and never re-propose it
+   - ⚠ duplicate/conflict badges offer a one-click merge of near-identical plans
 7. Click **➕ Add Intention** to manually create a new ledger entry
-8. In the chat, click the 💭 icon on any AI message to expand/collapse that message's thought blocks — each NPC's private reaction and thought is displayed there
-9. Thoughts are never injected into the prompt and never appear in chat history — only the flat, mechanical ledger lines reach the narrator
+8. Check **Lifecycle History** below the ledger — every completion, drop, expiration, merge, sleep, wake, and reopen is listed newest-first with its reason and supersession links. 🔁 **reopen** restores any closure as an active, user-owned plan
+9. Use **Per-NPC Controls** to add a privacy exclusion (withhold that NPC's dossier from every interiority call) or creation-only cost dials — pause new proposals, a cooldown after each accepted proposal, and an active-plan cap
+10. Tune the lifecycle dials in module settings: **Grace Period** (minimum turns a plan must survive before it can be executed or dropped), **Max New/NPC** (accepted-proposal cap, default 2), **Closure Dedup** (how many turns a recent closure suppresses near-identical re-proposals), and **Max Turns Open** (auto-expire engine plans after N turns; never applies to ✋ user-authored ones). A temporary, opt-in intentions diagnostics capture for issue reports also lives here — in-memory only, never saved
+11. In the chat, click the 💭 icon on any AI message to expand/collapse that message's thought blocks — each NPC's private reaction and thought is displayed there
+12. Thoughts are never injected into the prompt and never appear in chat history — only the flat, mechanical ledger lines reach the narrator
 
 ---
 
@@ -500,13 +532,16 @@ merged_world_tracker/
 ├── core/                 # Shared infrastructure
 │   ├── index.js          # Barrel re-exports for all core modules
 │   ├── api.js            # OpenAI-compatible + Connection Profile API client with retry
+│   ├── budget.js         # Context/token budget engine — per-module soft/hard caps, global cap, drop-order planning
 │   ├── commands.js       # Slash command and macro registration
 │   ├── context.js        # SillyTavern context, chat, metadata, token helpers
+│   ├── coordinator.js    # Cross-module generation coordinator + cancellation model
 │   ├── diagnostics.js    # In-memory diagnostics ring buffer + last-run map (read-only, never persisted)
 │   ├── diff.js           # LCS line/word diff computation and HTML rendering
 │   ├── event_router.js   # SillyTavern message-event routing (pure dispatch decisions)
 │   ├── file.js           # Download / file-pick helpers
 │   ├── injection.js      # Extension prompt injection helpers + XML tag wrapping
+│   ├── main_tabs.js      # Main modal tab shell — render + wireTablist seam (keyboard tab navigation)
 │   ├── message_identity.js # Stable message UUIDs that survive swipes/regens (receipt dedup)
 │   ├── metadata.js       # Chat metadata access (world state / chronicle / registry)
 │   ├── modal.js          # Modal lifecycle, status bar, button bar helpers
@@ -521,7 +556,8 @@ merged_world_tracker/
 │   ├── settings.js       # Settings manager factory (extension_settings + localStorage)
 │   ├── settings_schema.js # Settings-record versioning + validation (fail-open, never destructive)
 │   ├── strip.js          # Non-narrative content stripping for scanner contexts
-│   └── ui.js             # API field renderer, floating button bar, drawer, wand menu
+│   ├── ui.js             # API field renderer, floating button bar, drawer, wand menu
+│   └── version.js        # Extension version constant (kept in sync with manifest/package)
 ├── world_state/          # World State Tracker module
 │   ├── index.js          # Orchestrator — public API and lifecycle hooks
 │   ├── data.js           # Constants, state, data access (leaf)
@@ -573,13 +609,16 @@ merged_world_tracker/
 └── interiority/          # Interiority module (NPC thoughts & hidden intentions)
     ├── index.js          # Orchestrator — public API, event wiring, work queue
     ├── data.js           # Constants, chat-metadata storage, settings, ledger helpers
+    ├── lifecycle.js      # Lifecycle history, cross-turn closure dedup, evidence boundaries, per-NPC controls
+    ├── capture.js        # Opt-in, in-memory-only intentions generation diagnostics capture
     ├── prompts.js        # System prompt, JSON output contract, injection format
     ├── generation.js     # Context assembly, batched/strict API calls, validation
     ├── injection.js      # <mwt_npc_intentions> extension-prompt injection
+    ├── schema.js         # Store descriptor + record validators
     └── render.js         # Settings UI + per-message thought block rendering
 ```
 
-The tree above lists the five user-facing modules; three more support directories keep the data-safety layer and diagnostics running (see [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained) and [🩺 Diagnostics](#-diagnostics)):
+The tree above lists the five user-facing modules; four more support directories keep the data-safety layer, the Budget panel, and diagnostics running (see [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained), [📊 Budget](#-budget), and [🩺 Diagnostics](#-diagnostics)):
 
 ```
 ├── schema/               # Schema validation & migrations engine
@@ -596,6 +635,9 @@ The tree above lists the five user-facing modules; three more support directorie
 │   ├── validate.js       # Compatibility adapter over the schema registry
 │   ├── recovery.js       # Quarantine recovery export/clear — refused records stay recoverable
 │   └── render.js         # Backup / Restore panel UI
+├── budget/               # 📊 Budget tab (enforcement engine lives in core/budget.js)
+│   ├── panel.js          # Budget panel UI — shares the one planner the injection seam uses
+│   └── style.css         # Budget panel styles
 └── diagnostics_panel/    # 🩺 Diagnostics tab (read-only, in-memory)
     ├── render.js         # Panel shell, sub-tab strip, Health/Environment panes, Copy Report
     ├── health.js         # ❤️ Health snapshot (per-module status)
@@ -657,7 +699,7 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 
 ## Data Storage
 
-- **Chat data** (world state text, chronicle entries, growth evidence store, story plan text, interiority ledger + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
+- **Chat data** (world state text, chronicle entries, growth evidence store, story plan text, interiority ledger + lifecycle history + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
 - **Lorebook bookkeeping** (NPC registry, state tracker registry, relationships) lives inside the Knowledge Tracker and State Tracker lorebooks themselves, in a single disabled entry titled `[MWT:store]` — see [the section below](#the-mwtstore-entry--what-it-is-and-why-its-there) for exactly what it is and why it can never reach your prompt
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback — validated and version-stamped as of 2.0 (a bad record repairs itself; your values are never silently deleted)
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID — malformed records are filtered from the view as of 2.0 and the list heals itself on the next edit

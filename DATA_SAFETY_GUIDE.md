@@ -344,4 +344,4 @@ update — this one included — fully recoverable from your side.
 
 The complete engineering plan — contracts, performance budgets, test matrix,
 and delivery order — lives in
-[`upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md`](upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md).
+[`archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md`](archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md).

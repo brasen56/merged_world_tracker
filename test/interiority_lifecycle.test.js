@@ -1,7 +1,7 @@
 /**
  * test/interiority_lifecycle.test.js — the deferred lifecycle substrate
  * (INTERIORITY_LIFECYCLE_IMPLEMENTATION_PLAN.md §4 / TODO.md §3-F, spec
- * upcoming_work_misc/INTERIORITY_LIFECYCLE_V2_SPEC.md).
+ * archive/completed_plans/INTERIORITY_LIFECYCLE_V2_SPEC.md).
  *
  * Covers the four pillars the spec adds on top of the Tier 1–3 fixes:
  *   §2 lifecycle history      — bounded occurrence records, conservative

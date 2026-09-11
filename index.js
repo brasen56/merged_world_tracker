@@ -815,7 +815,7 @@ function onAnyEvent(names, handler) {
 
 // The user-generation DEPTH must move exactly once per generation. Registering
 // the decrement on BOTH GENERATION_STOPPED and GENERATION_ENDED (builds can
-// fire the pair for one generation — BUG_REPORTS/01_core.md #4) needs a
+// fire the pair for one generation — archive/bug_reports/01_core.md #4) needs a
 // heuristic to collapse them, and every heuristic has a failure mode: a
 // time-window deduper early-releases when a slow proxy separates the pair by
 // more than the window, and permanently wedges when the terminals of two

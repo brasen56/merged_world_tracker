@@ -1,6 +1,6 @@
 /**
  * Validator-parity tests — Part 1 acceptance of
- * upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md.
+ * archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md.
  *
  * backup/validate.js became a compatibility adapter over schema/registry.js.
  * These tests pin the adapter's observable behavior to the exact output the

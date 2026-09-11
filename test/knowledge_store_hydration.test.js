@@ -1,7 +1,7 @@
 /**
  * test/knowledge_store_hydration.test.js — Part 4: isolated Knowledge
  * lorebook hydration validation (delivery slice §11 "Part 4" of
- * upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md, design §6.7).
+ * archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md, design §6.7).
  *
  * The acceptance being pinned here:
  *   - a book becomes WRITABLE only after parse → version gate → migration →

@@ -1,6 +1,6 @@
 /**
  * Engine tests for the schema subsystem — design §10.1 of
- * upcoming_work_misc/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md.
+ * archive/completed_plans/SCHEMA_VALIDATION_MIGRATIONS_PLAN.md.
  *
  * These exercise the GENERIC contracts with synthetic descriptors (migration
  * order, blocking, idempotence, no-mutation, future-version refusal,

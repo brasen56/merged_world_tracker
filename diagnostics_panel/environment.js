@@ -304,7 +304,7 @@ export function detectWorldInfo(wiState = knowledgeState) {
  * `{ ok: false, error }`, or null/undefined = not probed.
  *
  * `constructPrompt` is its own line item because it is the one member the
- * Aikobots-4 fork removed (Completed_Roadmaps/porting_guide.md item 2):
+ * Aikobots-4 fork removed (archive/ideas/porting_guide.md item 2):
  * core/api.js feature-detects around its absence, so "present but without
  * constructPrompt" is a working, reportable fork state — not a failure.
  *

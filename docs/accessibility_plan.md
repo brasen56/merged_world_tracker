@@ -10,10 +10,10 @@ code-grounded reviews.
 `core/style.css`, `knowledge/render.js`, `knowledge/index.js`,
 `diagnostics_panel/render.js`, `vitest.config.js`.
 
-> An earlier draft cited `Audit_Reports/Potential_Improvements.md` as a primary
-> source. That file is not in the checkout — `Audit_Reports/` holds the seven
-> `AUDIT_*.md` files and `REMEDIATION_MAP.md`. `TODO.md` §4's "(Source: PI UX)"
-> tags refer to it, so treat TODO §4 itself as the requirement of record.
+> An earlier draft cited the audit-round wishlist as a primary source. That
+> file is not gone — it lives at `archive/audits/Potential_Improvements.md`
+> (local history, not tracked). `TODO.md` §4's "(Source: PI UX)" tags refer to
+> it, so treat TODO §4 itself as the requirement of record.
 
 ---
 

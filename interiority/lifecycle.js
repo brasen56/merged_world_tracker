@@ -4,7 +4,7 @@
  * Deferred lifecycle work (INTERIORITY_LIFECYCLE_IMPLEMENTATION_PLAN.md §4 /
  * TODO.md §3-F). Record shape, retention caps, rollback semantics, ownership
  * rules, and backup merge/replace behavior are specified in
- * upcoming_work_misc/INTERIORITY_LIFECYCLE_V2_SPEC.md — this module is the
+ * archive/completed_plans/INTERIORITY_LIFECYCLE_V2_SPEC.md — this module is the
  * implementation of §2–§5 of that spec:
  *
  *   lifecycleHistory   — bounded, occurrence-specific engine/user lifecycle
