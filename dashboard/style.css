@@ -1,0 +1,31 @@
+/* Read-only Overview layout. Theme colors come from the shared MWT variables. */
+.mwt-overview-header,
+.mwt-overview-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.mwt-overview-header p { color: var(--mwt-text-dim); margin: 4px 0 0; }
+.mwt-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+    margin: 14px 0;
+}
+.mwt-overview-card {
+    border: 1px solid var(--mwt-border);
+    border-radius: 6px;
+    padding: 12px;
+    background: var(--mwt-bg-secondary, transparent);
+}
+.mwt-overview-card h3 { margin: 0 0 8px; font-size: 14px; }
+.mwt-overview-card-body { min-height: 24px; color: var(--mwt-text-dim); }
+.mwt-overview-card button,
+.mwt-overview-footer button { margin-top: 8px; }
+.mwt-overview-error { border-color: var(--mwt-error, #b44); }
+.mwt-overview-error p { margin: 0; color: var(--mwt-error, #b44); }
+.mwt-overview-empty { opacity: .75; }
+.mwt-overview-health { margin: 0; padding-left: 18px; font-size: 12px; }
+.mwt-overview-footer { justify-content: flex-start; color: var(--mwt-text-dim); font-size: 12px; }

@@ -120,6 +120,7 @@ import { renderDiagnosticsPanel, wireDiagnosticsPanel } from './diagnostics_pane
 // TODO §2 context budget: the 📊 Budget tab's collector/renderer/wiring
 // (budget/panel.js on top of core/budget.js).
 import { collectBudgetSnapshot, renderBudgetPane, wireBudgetTab } from './budget/panel.js';
+import { renderOverviewPane, wireOverviewPane } from './dashboard/render.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -213,6 +214,7 @@ const { getSettings, saveSettings } = createSettingsManager({
 // ─── Tab definitions ─────────────────────────────────────────────────────────
 
 const TABS = [
+    { id: 'overview', label: '🏠 Overview', module: null },
     { id: 'world-state', label: '🌍 World State', module: WorldState },
     { id: 'chronicle', label: '📜 Chronicle', module: Chronicle },
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
@@ -441,6 +443,7 @@ function renderSettingsTab() {
 }
 
 function buildTabContent(tab) {
+    if (tab.id === 'overview') return renderOverviewPane();
     if (tab.id === 'settings') return renderSettingsTab();
     // Diagnostics Phase 5 — the panel shell (placeholders for tabs 1–7).
     if (tab.id === 'diagnostics') return renderDiagnosticsPanel();
@@ -564,6 +567,9 @@ function renderModal() {
     // Wire the 📊 Budget tab's Save control (TODO §2). Same
     // rebind-every-render rule.
     wireBudgetTab(modal, { setStatusFn: (root, message, type, ms) => setStatus(modal, message, type, ms) });
+
+    // Overview is read-only and follows the same rebind-every-render rule.
+    wireOverviewPane(modal);
 
     // Wire connection profile toggle (hide API fields when a profile is selected)
     const profileSelect = modal.querySelector('#mwt-s-connection-profile');

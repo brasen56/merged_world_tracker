@@ -28,6 +28,7 @@ import source from '../index.js?raw';
 // Mirrors TABS in index.js (not importable in Vitest — see the file header).
 // If a tab changes there, update this list.
 const TABS = [
+    { id: 'overview', label: '🏠 Overview' },
     { id: 'world-state', label: '🌍 World State' },
     { id: 'chronicle', label: '📜 Chronicle' },
     { id: 'knowledge', label: '🧠 Knowledge' },
@@ -129,17 +130,17 @@ describe('Main tab bar (render/wire seam integration)', () => {
         const host = renderHost();
         const field = host.querySelector('#mwt-fx-field-knowledge');
         field.value = 'edited';
-        const knowledgePanel = panelsOf(host)[2];
+        const knowledgePanel = panelsOf(host)[3];
 
-        tabsOf(host)[2].click();
+        tabsOf(host)[3].click();
         tabsOf(host)[0].click();
-        tabsOf(host)[2].click();
+        tabsOf(host)[3].click();
 
-        tabsOf(host).forEach((tab, i) => expect(tab.getAttribute('aria-selected')).toBe(String(i === 2)));
-        panelsOf(host).forEach((panel, i) => expect(panel.hidden).toBe(i !== 2));
+        tabsOf(host).forEach((tab, i) => expect(tab.getAttribute('aria-selected')).toBe(String(i === 3)));
+        panelsOf(host).forEach((panel, i) => expect(panel.hidden).toBe(i !== 3));
         // Switching only toggles attributes — the panel node and its field
         // values are never rebuilt.
-        expect(panelsOf(host)[2]).toBe(knowledgePanel);
+        expect(panelsOf(host)[3]).toBe(knowledgePanel);
         expect(host.querySelector('#mwt-fx-field-knowledge').value).toBe('edited');
     });
 
@@ -151,12 +152,12 @@ describe('Main tab bar (render/wire seam integration)', () => {
         expect(tabs[1].getAttribute('aria-selected')).toBe('true');
         press('ArrowLeft', tabs[1]);
         expect(tabs[0].getAttribute('aria-selected')).toBe('true');
-        // Wrap in both directions across all eight tabs.
+        // Wrap in both directions across all nine tabs.
         press('ArrowLeft', tabs[0]);
-        expect(tabs[7].getAttribute('aria-selected')).toBe('true');
-        press('End', tabs[7]);
-        expect(tabs[7].getAttribute('aria-selected')).toBe('true');
-        press('Home', tabs[7]);
+        expect(tabs[8].getAttribute('aria-selected')).toBe('true');
+        press('End', tabs[8]);
+        expect(tabs[8].getAttribute('aria-selected')).toBe('true');
+        press('Home', tabs[8]);
         expect(tabs[0].getAttribute('aria-selected')).toBe('true');
         // Up/Down are not the declared orientation — no-op.
         press('ArrowDown', tabs[0]);
@@ -180,7 +181,7 @@ describe('Main tab bar (render/wire seam integration)', () => {
         // markup's first-tab state is re-normalized and activation works.
         host.innerHTML = renderMainTabShell(TABS, buildContent);
         wireMainTabBar(host);
-        expect(host.querySelector('#mwt-tab-world-state').getAttribute('aria-selected')).toBe('true');
+        expect(host.querySelector('#mwt-tab-overview').getAttribute('aria-selected')).toBe('true');
         expect(host.querySelector('#mwt-tabpanel-budget').hidden).toBe(true);
 
         // Worst case — wiring the same surviving bar twice must not stack
