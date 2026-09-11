@@ -59,7 +59,7 @@ export function renderContent() {
         <div class="mwt-interiority-tab">
             <div class="mwt-flex mwt-gap-4" style="margin-bottom:12px;flex-wrap:wrap">
                 <button id="mwt-int-show-settings" class="mwt-btn"><span aria-hidden="true">⚙</span> Settings</button>
-                <button id="mwt-int-generate" class="mwt-btn mwt-btn-primary"><span aria-hidden="true">💭</span> Generate Now</button>
+                <button id="mwt-int-generate" class="mwt-btn mwt-btn-primary"${state.isGenerating ? ' disabled aria-busy="true"' : ''}><span aria-hidden="true">💭</span> Generate Now</button>
                 <button id="mwt-int-clear-ledger" class="mwt-btn" title="Remove all ledger entries"><span aria-hidden="true">🗑</span> Clear Ledger</button>
             </div>
             <div id="mwt-int-status" class="mwt-int-status" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -726,6 +726,9 @@ function wireEvents(el) {
     // including the failure paths triggerGenerate reports through status.
     const generateBtn = el.querySelector('#mwt-int-generate');
     generateBtn?.addEventListener('click', async () => {
+        // Gate (world_state refresh pattern): a mid-generation renderContent()
+        // swaps in a fresh ENABLED twin — refuse the second concurrent start.
+        if (state.isGenerating) { setIntStatus('Already generating.', 'info'); return; }
         setControlBusy(generateBtn, true);
         try {
             setIntStatus('Generating...', 'info');
@@ -747,6 +750,12 @@ function wireEvents(el) {
     if (!state._busyListenerWired) {
         state._busyListenerWired = true;
         document.addEventListener('mwt:busy-changed', () => {
+            // Keep the LIVE Generate button in step across mid-generation
+            // re-renders: a fresh twin renders enabled while state.isGenerating
+            // is true (the markup now disables it at render time, and this
+            // re-enables whichever button is in the DOM when the run ends).
+            const liveBtn = getContentEl()?.querySelector('#mwt-int-generate');
+            if (liveBtn?.isConnected) setControlBusy(liveBtn, state.isGenerating);
             if (!state.isGenerating) {
                 // Only clear if the status element still shows "Generating..."
                 const statusEl = getContentEl()?.querySelector('#mwt-int-status');

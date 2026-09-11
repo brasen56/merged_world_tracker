@@ -24,6 +24,16 @@
 .mwt-overview-card-body { min-height: 24px; color: var(--mwt-text-dim); }
 .mwt-overview-card button,
 .mwt-overview-footer button { margin-top: 8px; }
+/* The pane's buttons carry the shared .mwt-btn chrome (theme-aware background
+   and text — the host default left them white-on-white); overview contexts
+   size them compactly so they sit inside cards and finding rows. */
+.mwt-overview-card .mwt-btn,
+.mwt-overview-footer .mwt-btn,
+.mwt-overview-maintenance .mwt-btn,
+.mwt-overview-tools .mwt-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+}
 .mwt-overview-error { border-color: var(--mwt-error, #b44); }
 .mwt-overview-error p { margin: 0; color: var(--mwt-error, #b44); }
 .mwt-overview-empty { opacity: .75; }

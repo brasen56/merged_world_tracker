@@ -35,7 +35,9 @@ function errorCard(label, cell) {
 }
 
 function linkButton(tab, text) {
-    return `<button type="button" class="mwt-overview-link" data-overview-tab="${escapeHtml(tab)}">${escapeHtml(text)}</button>`;
+    // mwt-btn supplies the theme-aware chrome — without it the host's default
+    // button background met the pane's inherited text color (white on white).
+    return `<button type="button" class="mwt-btn mwt-overview-link" data-overview-tab="${escapeHtml(tab)}">${escapeHtml(text)}</button>`;
 }
 
 function card({ label, icon, body, tab, empty = false }) {
@@ -151,9 +153,9 @@ export function renderMaintenanceFindings(findings = []) {
         const { label, describe } = MAINTENANCE_KINDS[finding.kind] || { label: 'Maintenance finding', describe: describeGeneric };
         const { summary, review } = describe(finding);
         const action = finding.kind === 'duplicate-profiles'
-            ? '<button type="button" data-maintenance-action="prune">Preview profile prune</button>'
+            ? '<button type="button" class="mwt-btn" data-maintenance-action="prune">Preview profile prune</button>'
             : finding.kind === 'relink-candidates'
-                ? '<button type="button" data-maintenance-action="relink">Preview profile relink</button>'
+                ? '<button type="button" class="mwt-btn" data-maintenance-action="relink">Preview profile relink</button>'
                 : '';
         return `<li class="mwt-overview-finding"><strong>${escapeHtml(label)}</strong> — ${escapeHtml(summary)} <code>${escapeHtml(finding.command || 'review manually')}</code>${action}${renderReview(review)}</li>`;
     }).join('');
@@ -171,8 +173,8 @@ function renderToolsDisclosure(tools = {}) {
         <summary>${EMOJI}🧰</span> Tools</summary>
         <p>Destructive maintenance actions are hidden here until you deliberately open them.</p>
         <div class="mwt-overview-tool-grid">
-            <button type="button" data-maintenance-action="clear-evidence" ${evidence.length ? '' : 'disabled'}>Clear all evidence (${countText(evidence.length, 'NPC')})</button>
-            <button type="button" data-maintenance-action="clear-deletions" ${deletions ? '' : 'disabled'}>Clear deleted intentions (${deletions})</button>
+            <button type="button" class="mwt-btn" data-maintenance-action="clear-evidence" ${evidence.length ? '' : 'disabled'}>Clear all evidence (${countText(evidence.length, 'NPC')})</button>
+            <button type="button" class="mwt-btn" data-maintenance-action="clear-deletions" ${deletions ? '' : 'disabled'}>Clear deleted intentions (${deletions})</button>
         </div>
     </details>`;
 }
