@@ -1,4 +1,4 @@
-/* Read-only Overview layout. Theme colors come from the shared MWT variables. */
+/* Overview layout. Theme colors come from the shared MWT variables. */
 .mwt-overview-header,
 .mwt-overview-footer {
     display: flex;
@@ -47,5 +47,10 @@
 .mwt-overview-tools { border-top: 1px solid var(--mwt-border); margin: 0 0 14px; padding-top: 8px; }
 .mwt-overview-tools summary { cursor: pointer; color: var(--mwt-text-dim); }
 .mwt-overview-tools > p { color: var(--mwt-text-dim); font-size: 12px; }
+.mwt-overview-tools-error { margin: 0 0 14px; color: var(--mwt-error, #b44); }
 .mwt-overview-tool-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .mwt-overview-tool-consequence { color: var(--mwt-danger, #b44); }
+.mwt-overview-tool-preview table { border-collapse: collapse; margin: 4px 0; }
+.mwt-overview-tool-preview th,
+.mwt-overview-tool-preview td { border: 1px solid var(--mwt-border); padding: 2px 6px; text-align: left; font-size: 12px; }
+.mwt-overview-tool-preview th { color: var(--mwt-text-dim); }

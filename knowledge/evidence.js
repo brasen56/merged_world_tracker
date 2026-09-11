@@ -551,6 +551,50 @@ export function clearAllEvidence() {
     return count;
 }
 
+// ─── Orphaned profiles (evidence clear consequences) ──────────────────────────
+
+/**
+ * Which of these evidence-cleared NPCs still have a generated profile entry.
+ *
+ * Shared by the console bridge (`MWT.evidence.clear*`) and the Overview Tools
+ * preview/apply so the two surfaces cannot drift: the orphan warning is only
+ * truthful if both compute the same set. `readProfileUid` is injected (rather
+ * than imported) to keep this module free of a registry import edge.
+ *
+ * @param {string[]} names — evidence-map keys about to lose their evidence
+ * @param {Function} readProfileUid — registry reader (knowledge/registry.js getProfileUid)
+ * @returns {string[]} names whose profile entry survives the clear unbacked
+ */
+export function findOrphanedProfiles(names, readProfileUid) {
+    return (names || []).filter((name) => {
+        try { return readProfileUid(name) !== null; } catch { return false; }
+    });
+}
+
+/**
+ * One shared wording for the "profiles left unbacked by evidence" warning.
+ *
+ * The default tense is what the console twin prints after applying;
+ * `prospective: true` states the same consequence BEFORE the clear, for the
+ * Overview Tools preview.
+ *
+ * @param {string[]} orphaned — result of {@link findOrphanedProfiles}
+ * @param {object} [options]
+ * @param {boolean} [options.prospective] — phrase as "would be" (preview time)
+ * @returns {string} empty when there is nothing to warn about
+ */
+export function orphanedProfilesWarning(orphaned, { prospective = false } = {}) {
+    if (!Array.isArray(orphaned) || orphaned.length === 0) return '';
+    const names = orphaned.join(', ');
+    return prospective
+        ? `${orphaned.length} generated profile(s) would be left UNBACKED by evidence: ${names}. `
+            + 'Their entries would remain in the "NPC Profiles" lorebook with nothing supporting them — '
+            + 're-capture and regenerate, or delete those entries by hand.'
+        : `[MWT] ⚠ ${orphaned.length} generated profile(s) are now UNBACKED by evidence: ${names}.\n`
+            + 'Their entries still exist in the "NPC Profiles" lorebook but nothing supports them anymore. '
+            + 'Re-capture and regenerate, or delete those entries manually.';
+}
+
 /**
  * Stamp `meta.updatedAt` and persist.
  *

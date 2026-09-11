@@ -177,7 +177,7 @@ describe('Overview maintenance findings', () => {
             previewRows: [{ npc: 'Mira', registryKey: 'Mira', linkUid: 4, was: '(none)' }],
             registry: { Mira: {} }, listProfileEntries: async () => [], plan, setUid, flush, bookName: 'Profiles',
         });
-        expect(result).toEqual({ success: true, applied: 1 });
+        expect(result).toEqual({ ok: true, applied: 1 });
         expect(setUid).toHaveBeenCalledWith('Mira', 4);
         expect(flush).toHaveBeenCalledWith('Profiles');
     });
@@ -234,6 +234,27 @@ describe('applyPrunePlan write guards', () => {
         const silent = await applyPrunePlan({ ...deps, deleteEntries: async () => ({ success: false }) });
         expect(silent).toEqual({ ok: false, reason: 'Profile entries could not be deleted.' });
     });
+
+    test('applies on a host without a chat id — the reduced-scope guard (backup-restore precedent)', async () => {
+        delete globalThis.SillyTavern; // unknown identity: a strict identity check would refuse forever
+        const deleteEntries = vi.fn(async () => ({ success: true, deleted: 1 }));
+        const result = await applyPrunePlan({ previewRows, audit: async () => auditRows, deleteEntries, scopeToken: captureScope() });
+        expect(result).toMatchObject({ ok: true });
+        expect(deleteEntries).toHaveBeenCalledWith([2]);
+    });
+
+    test('refuses when the uid pair matches but the NPC label differs', async () => {
+        // Lorebook uids are small per-book numbers; uid+keptUid alone can
+        // accidentally match a completely different NPC's group.
+        const deleteEntries = vi.fn();
+        const result = await applyPrunePlan({
+            previewRows: [{ npc: 'Tobin', uid: 2, keptUid: 1 }],
+            audit: async () => auditRows,
+            deleteEntries,
+        });
+        expect(result).toEqual({ ok: false, reason: 'The profile book changed. Review a fresh preview before applying.' });
+        expect(deleteEntries).not.toHaveBeenCalled();
+    });
 });
 
 describe('applyRelinkPlan write guards', () => {
@@ -262,7 +283,7 @@ describe('applyRelinkPlan write guards', () => {
         const setUid = vi.fn(() => true);
         const flush = vi.fn(async () => true);
         const result = await applyRelinkPlan({ ...base, previewRows, plan: freshPlan, setUid, flush, scopeToken: captureScope() });
-        expect(result).toEqual({ success: true, applied: 1 });
+        expect(result).toEqual({ ok: true, applied: 1 });
         expect(setUid).toHaveBeenCalledWith('Mira', 4);
         expect(flush).toHaveBeenCalledWith('Profiles');
     });
@@ -278,6 +299,14 @@ describe('applyRelinkPlan write guards', () => {
     test('reports a failed lorebook flush', async () => {
         const result = await applyRelinkPlan({ ...base, previewRows, plan: freshPlan, setUid: () => true, flush: async () => false });
         expect(result).toEqual({ ok: false, reason: 'The Knowledge lorebook could not be saved.' });
+    });
+
+    test('applies on a host without a chat id — the reduced-scope guard', async () => {
+        delete globalThis.SillyTavern; // unknown identity: a strict identity check would refuse forever
+        const setUid = vi.fn(() => true);
+        const flush = vi.fn(async () => true);
+        const result = await applyRelinkPlan({ ...base, previewRows, plan: freshPlan, setUid, flush, scopeToken: captureScope() });
+        expect(result).toEqual({ ok: true, applied: 1 });
     });
 });
 
@@ -368,7 +397,7 @@ describe('Overview tool confirmation modals', () => {
                 clearDeletedIntentions: vi.fn(() => ({ ok: true, count: 0 })),
             },
             prune: vi.fn(async () => ({ ok: true })),
-            relink: vi.fn(async () => ({ success: true, applied: 1 })),
+            relink: vi.fn(async () => ({ ok: true, applied: 1 })),
             ...options,
         });
         return root;
@@ -439,7 +468,7 @@ describe('Overview tool confirmation modals', () => {
     });
 
     test('relink: confirm applies the previewed rows', async () => {
-        const relink = vi.fn(async () => ({ success: true, applied: 1 }));
+        const relink = vi.fn(async () => ({ ok: true, applied: 1 }));
         const root = mountOverviewPane({ relink, collectMaintenance: async () => ({ ok: true, value: [relinkFinding()] }) });
         await flush();
         root.querySelector('[data-maintenance-action="relink"]').click();
@@ -514,7 +543,7 @@ describe('Overview tool confirmation modals', () => {
         expect(collect).toHaveBeenCalledTimes(1);
     });
 
-    test('clear-evidence: a chat switch while the inventory loads opens no modal at all', async () => {
+    test('clear-evidence: a chat switch while the inventory loads is refused visibly, not silently', async () => {
         let calls = 0;
         const collectTools = async () => {
             calls += 1;
@@ -526,7 +555,26 @@ describe('Overview tool confirmation modals', () => {
         await flush();
         root.querySelector('[data-maintenance-action="clear-evidence"]').click();
         await flush();
-        expect(modal()).toBeNull();
+        expect(modal()).not.toBeNull();
+        expect(statusText()).toContain('The chat changed while the inventory loaded');
+        expect(confirmButton().disabled).toBe(true);
+        expect(clearAllEvidence).not.toHaveBeenCalled();
+    });
+
+    test('clear tools refuse visibly on hosts without a chat id, naming the console twin', async () => {
+        delete globalThis.SillyTavern; // unknown identity: the strict check can never verify the chat
+        const clearAllEvidence = vi.fn();
+        const root = mountOverviewPane({
+            collectTools: () => ({ evidenceNames: ['Mira'], deletionCount: 0 }),
+            actions: { clearAllEvidence, clearDeletedIntentions: vi.fn() },
+        });
+        await flush();
+        root.querySelector('[data-maintenance-action="clear-evidence"]').click();
+        await flush();
+        expect(modal()).not.toBeNull();
+        expect(statusText()).toContain('This host does not expose a chat id');
+        expect(statusText()).toContain('MWT.evidence.clearAll(true)');
+        expect(confirmButton().disabled).toBe(true);
         expect(clearAllEvidence).not.toHaveBeenCalled();
     });
 
@@ -544,5 +592,140 @@ describe('Overview tool confirmation modals', () => {
         await flush();
         expect(clearDeletedIntentions).not.toHaveBeenCalled();
         expect(statusText()).toContain('The chat changed');
+    });
+
+    test('one click runs one handler: buttons bind only inside their own section', async () => {
+        const collectTools = vi.fn(() => ({ evidenceNames: ['Mira'], deletionCount: 2 }));
+        const root = mountOverviewPane({
+            collectTools,
+            // Production order: the Tools inventory is synchronous and renders
+            // first; the Findings audits read lorebooks and settle later. An
+            // instantly resolving fake settles Findings FIRST — the one order
+            // in which the old pane-wide binder never doubled the Tools
+            // buttons, so this test could not fail against it.
+            collectMaintenance: () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, value: [pruneFinding(), relinkFinding()] }), 0)),
+        });
+        await flush();
+        // Both sections rendered, Tools first, before the click.
+        expect(root.querySelector('[data-maintenance-action="prune"]')).not.toBeNull();
+        // The Findings wiring must neither re-collect tools nor re-bind the
+        // Tools buttons — that used to give every Tools button two listeners.
+        expect(collectTools).toHaveBeenCalledTimes(1);
+        root.querySelector('[data-maintenance-action="clear-deletions"]').click();
+        await flush();
+        expect(collectTools).toHaveBeenCalledTimes(2); // exactly one handler ran
+        expect(modal().textContent).toContain('2 deletion records will be cleared');
+    });
+
+    test('prune: the preview table labels its columns, shows entry previews and the console caveat', async () => {
+        const root = mountOverviewPane({
+            collectMaintenance: async () => ({ ok: true, value: [pruneFinding([
+                { npc: 'Mira', uid: 2, keptUid: 1, chars: 20, preview: 'Mira — cautious tavern keeper' },
+            ])] }),
+        });
+        await flush();
+        root.querySelector('[data-maintenance-action="prune"]').click();
+        const headers = [...modal().querySelectorAll('th')].map((th) => th.textContent);
+        expect(headers).toEqual(['NPC', 'Delete uid', 'Keep uid', 'Size', 'Preview']);
+        expect(modal().textContent).toContain('Mira — cautious tavern keeper');
+        expect(modal().textContent).toContain('regeneratable from evidence, but only if the evidence is still there');
+    });
+
+    test('relink: the preview table shows otherCandidates and the console duplicate caveat', async () => {
+        const root = mountOverviewPane({
+            relink: vi.fn(async () => ({ ok: true, applied: 1 })),
+            collectMaintenance: async () => ({ ok: true, value: [{
+                ...relinkFinding(),
+                rows: [{ npc: 'Mira', registryKey: 'Mira', linkUid: 4, was: '(none)', otherCandidates: 2 }],
+            }] }),
+        });
+        await flush();
+        root.querySelector('[data-maintenance-action="relink"]').click();
+        const headers = [...modal().querySelectorAll('th')].map((th) => th.textContent);
+        expect(headers).toEqual(['NPC', 'Link to uid', 'Was', 'Other candidates']);
+        expect([...modal().querySelectorAll('tbody td')].map((td) => td.textContent)).toEqual(['Mira', '4', '(none)', '2']);
+        expect(modal().textContent).toContain('Check "otherCandidates" is 0');
+    });
+
+    test('clear-evidence: the preview warns which profiles would be left unbacked', async () => {
+        const clearAllEvidence = vi.fn(async () => ({ ok: true, count: 1, orphaned: ['Mira'] }));
+        const root = mountOverviewPane({
+            collectTools: () => ({
+                evidenceNames: ['Mira'], deletionCount: 0, registryBackedNames: ['Mira'],
+                orphanWarning: '1 generated profile(s) would be left UNBACKED by evidence: Mira.',
+            }),
+            actions: { clearAllEvidence, clearDeletedIntentions: vi.fn() },
+        });
+        await flush();
+        root.querySelector('[data-maintenance-action="clear-evidence"]').click();
+        await flush();
+        expect(modal().textContent).toContain('would be left UNBACKED by evidence: Mira');
+        confirmButton().click();
+        await flush();
+        expect(clearAllEvidence).toHaveBeenCalledTimes(1);
+        expect(statusText()).toContain('1 generated profile now unbacked by evidence: Mira');
+    });
+
+    test('clear-evidence: an NPC added after the preview refuses to apply', async () => {
+        let extra = false;
+        const collectTools = () => ({ evidenceNames: extra ? ['Mira', 'Tobin'] : ['Mira'], deletionCount: 0 });
+        const clearAllEvidence = vi.fn();
+        const root = mountOverviewPane({ collectTools, actions: { clearAllEvidence, clearDeletedIntentions: vi.fn() } });
+        await flush();
+        root.querySelector('[data-maintenance-action="clear-evidence"]').click();
+        await flush();
+        extra = true; // background capture enrolls Tobin while the modal sits open
+        confirmButton().click();
+        await flush();
+        expect(clearAllEvidence).not.toHaveBeenCalled();
+        expect(statusText()).toContain('The evidence list changed');
+    });
+
+    test('clear-evidence: a chat switch during the confirm-time recheck refuses, even with an identical NPC list', async () => {
+        // Two chats with one character often share the same NPCs, so the name
+        // comparison alone cannot tell them apart: the scope must be checked
+        // again AFTER the confirm-time inventory await, not only before it.
+        let calls = 0;
+        const collectTools = () => {
+            calls += 1;
+            if (calls === 3) bumpEpoch(); // 1 = wiring, 2 = preview, 3 = confirm-time recheck
+            return { evidenceNames: ['Mira'], deletionCount: 0 };
+        };
+        const clearAllEvidence = vi.fn();
+        const root = mountOverviewPane({ collectTools, actions: { clearAllEvidence, clearDeletedIntentions: vi.fn() } });
+        await flush();
+        root.querySelector('[data-maintenance-action="clear-evidence"]').click();
+        await flush();
+        confirmButton().click();
+        await flush();
+        expect(clearAllEvidence).not.toHaveBeenCalled();
+        expect(statusText()).toContain('The chat changed');
+    });
+
+    test('a failing tools inventory renders its own error line, not an empty Tools section', async () => {
+        const root = mountOverviewPane({ collectTools: () => { throw new Error('evidence store locked'); } });
+        await flush();
+        const status = root.querySelector('.mwt-overview-tools-error');
+        expect(status).not.toBeNull();
+        expect(status.getAttribute('role')).toBe('status');
+        expect(status.textContent).toContain('evidence store locked');
+    });
+
+    test('prune: after an apply, closing the modal lands focus on the Refresh control', async () => {
+        const root = mountOverviewPane({
+            prune: vi.fn(async () => ({ ok: true })),
+            collectMaintenance: async () => ({ ok: true, value: [pruneFinding()] }),
+        });
+        // The visible tab carries .active in production; focusability checks
+        // treat a non-active tab content as hidden.
+        paneOf(root).classList.add('active');
+        await flush();
+        root.querySelector('[data-maintenance-action="prune"]').click();
+        confirmButton().click();
+        await flush();
+        // The re-render destroyed the opener button; the modal's focus restore
+        // must have been retargeted at the Refresh button, not fall to <body>.
+        modal().querySelector('.mwt-modal-close').click();
+        expect(document.activeElement).toBe(paneOf(root).querySelector('#mwt-overview-refresh'));
     });
 });

@@ -80,7 +80,15 @@ describe('Overview maintenance wiring', () => {
         expect(root.querySelector('.mwt-overview-tools').textContent).toContain('Clear deleted intentions (2)');
     });
 
-    test('a clean audit leaves only the one-line clean state', async () => {
+    test('Tools counts stay plural-correct at one', async () => {
+        const root = mountPane({ collectTools: () => ({ evidenceNames: ['Mira'], deletionCount: 1 }) });
+        await flush();
+        const tools = root.querySelector('.mwt-overview-tools').textContent;
+        expect(tools).toContain('Clear all evidence (1 NPC)');
+        expect(tools).toContain('Clear deleted intentions (1)');
+    });
+
+    test('a clean audit renders no Findings section at all', async () => {
         const root = mountPane();
         await flush();
         expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance')).toBeNull();
@@ -98,11 +106,18 @@ describe('Overview maintenance wiring', () => {
 
     test('a superseded maintenance result never overwrites a newer one', async () => {
         const pending = [];
+        // The stale result carries a REAL finding: if it ever won, the pane
+        // would show it. Resolving both empty made this test vacuous.
+        const staleFinding = {
+            kind: 'duplicate-profiles', count: 1, entries: 2, pruneCount: 1, prunableNpcs: ['Mira'],
+            review: [], toDelete: [{ npc: 'Mira', uid: 2, keptUid: 1 }],
+            command: 'MWT.profiles.pruneDuplicates()', rows: [],
+        };
         const root = mountPane({ collectMaintenance: () => new Promise((resolve) => pending.push(resolve)) });
         root.querySelector('#mwt-overview-refresh').click();
         expect(pending).toHaveLength(2);
-        pending[1]({ ok: true, value: [] });
-            pending[0]({ ok: true, value: [] });
+        pending[1]({ ok: true, value: [] });            // the newer render settles clean…
+        pending[0]({ ok: true, value: [staleFinding] }); // …then the stale audit arrives late
         await flush();
         expect(maintenanceHost(root).textContent).toBe('');
         expect(maintenanceHost(root).querySelector('.mwt-overview-maintenance')).toBeNull();
@@ -137,7 +152,7 @@ describe('Maintenance findings', () => {
         }]);
         const text = document.body.textContent;
         expect(text).toContain('2 profiles can be relinked to their NPC (Mira, Tobin).');
-        expect(text).toContain('1 NPC also has duplicate entries — check duplicates before relinking.');
+        expect(text).toContain('1 NPC also has duplicate entries — the preview auto-picks the largest entry (newest on ties). Check "otherCandidates" is 0 there: anything higher means duplicates exist and MWT.profiles.duplicates() is worth a look first.');
         expect(text).not.toContain('needs manual review');
         expect(document.querySelector('.mwt-overview-review').textContent).toContain('Ghost — no NPC registry record');
     });

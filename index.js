@@ -571,7 +571,8 @@ function renderModal() {
     // rebind-every-render rule.
     wireBudgetTab(modal, { setStatusFn: (root, message, type, ms) => setStatus(modal, message, type, ms) });
 
-    // Overview is read-only and follows the same rebind-every-render rule.
+    // Overview follows the same rebind-every-render rule; its maintenance
+    // tools wire their own guarded preview→confirm modals.
     wireOverviewPane(modal);
 
     // Wire connection profile toggle (hide API fields when a profile is selected)
@@ -1004,19 +1005,14 @@ try {
 
     /**
      * Warn when cleared NPCs still have a profile entry in the NPC Profiles
-     * lorebook — it is now unbacked by any evidence.
+     * lorebook — it is now unbacked by any evidence. The predicate and the
+     * wording are shared with the Overview Tools surface through
+     * knowledge/evidence.js, so the two cannot drift.
      */
     const warnOrphanedProfiles = (names) => {
-        const orphaned = names.filter(n => {
-            try { return registryApi.getProfileUid(n) !== null; } catch { return false; }
-        });
+        const orphaned = evidenceApi.findOrphanedProfiles(names, registryApi.getProfileUid);
         if (orphaned.length === 0) return;
-        console.warn(
-            `[MWT] ⚠ ${orphaned.length} generated profile(s) are now UNBACKED by evidence: ` +
-            `${orphaned.join(', ')}.\n` +
-            `Their entries still exist in the "NPC Profiles" lorebook but nothing supports them ` +
-            `anymore. Re-capture and regenerate, or delete those entries manually.`
-        );
+        console.warn(evidenceApi.orphanedProfilesWarning(orphaned));
     };
 
     window.MWT = window.MWT || {};

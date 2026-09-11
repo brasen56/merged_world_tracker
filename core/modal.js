@@ -133,6 +133,23 @@ export function hideModal(id) {
 }
 
 /**
+ * Retarget a modal's focus-restore target.
+ *
+ * For callers that destroy the original opener while the modal is still open
+ * (e.g. a pane re-render replaced the button that opened the modal): closing
+ * would otherwise fall back to body and drop keyboard focus. Passing the
+ * replacement control keeps the close-restore behavior meaningful. The
+ * replacement is ignored unless it is actually connected to the document.
+ *
+ * @param {HTMLElement|string} modalOrId — modal element or its DOM id
+ * @param {HTMLElement} element — the new focus-restore target
+ */
+export function setModalOpener(modalOrId, element) {
+    const modal = typeof modalOrId === 'string' ? document.getElementById(modalOrId) : modalOrId;
+    if (modal && element?.isConnected) modal._mwtOpener = element;
+}
+
+/**
  * Emergency rollback for the managed-inert bookkeeping: restore every inert
  * value MWT changed (best effort, per element) and stop the body watcher.
  * Normal closes restore entries one by one; this rolls the whole set back.

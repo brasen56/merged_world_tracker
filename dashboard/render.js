@@ -1,16 +1,23 @@
 /**
- * dashboard/render.js — the read-only Overview tab.
+ * dashboard/render.js — the Overview tab.
  *
  * Rendering is deliberately independent from the main entry point.  This
  * keeps the pane testable under jsdom and makes a failed status accessor a
- * local card error rather than a blank dashboard.
+ * local card error rather than a blank dashboard. The 🧰 maintenance tools
+ * wired here change data — always behind a preview→confirm modal — while the
+ * audits feeding the Findings list stay read-only.
  */
 
 import { escapeHtml } from '../core/diff.js';
 import { collectOverviewSnapshot } from './status.js';
-import { collectGuardedMaintenanceFindings } from './maintenance.js';
-import { collectMaintenanceTools, maintenanceActions, applyPrunePlan, applyRelinkPlan } from './maintenance.js';
-import { createModal, showModal, setStatus } from '../core/modal.js';
+import {
+    applyPrunePlan,
+    applyRelinkPlan,
+    collectGuardedMaintenanceFindings,
+    collectMaintenanceTools,
+    maintenanceActions,
+} from './maintenance.js';
+import { createModal, setModalOpener, setStatus, showModal } from '../core/modal.js';
 import { setControlBusy } from '../core/ui.js';
 import { assertSameScope, captureScope } from '../core/scope.js';
 
@@ -83,7 +90,10 @@ function describeRelink(finding) {
         ? `${countText(names.length, 'profile')} can be relinked to ${names.length === 1 ? 'its' : 'their'} NPC (${nameList(names)}).`
         : 'nothing can be relinked automatically.';
     if (crowded) {
-        summary += ` ${countText(crowded, 'NPC')} also ${crowded === 1 ? 'has' : 'have'} duplicate entries — check duplicates before relinking.`;
+        // The console twin's wording (MWT.profiles.relink): relink does pick a
+        // candidate automatically — largest entry, newest on ties — so the
+        // honest warning is about otherCandidates, not about skipping.
+        summary += ` ${countText(crowded, 'NPC')} also ${crowded === 1 ? 'has' : 'have'} duplicate entries — the preview auto-picks the largest entry (newest on ties). Check "otherCandidates" is 0 there: anything higher means duplicates exist and MWT.profiles.duplicates() is worth a look first.`;
     }
     return {
         summary,
@@ -127,8 +137,9 @@ function renderReview(items) {
 }
 
 /**
- * Render the 🧰 Maintenance section, or a one-line clean state naming the
- * console audits when no audit found anything (plan §4.3.3).
+ * Render the 🔎 Findings section from non-empty findings. An empty list
+ * renders nothing at all — the Overview cards above already show the
+ * healthy state, and a separate "clean" line would just repeat them.
  */
 export function renderMaintenanceFindings(findings = []) {
     if (!Array.isArray(findings)) return '';
@@ -148,7 +159,7 @@ export function renderMaintenanceFindings(findings = []) {
     }).join('');
     return `<section class="mwt-overview-maintenance" aria-label="Maintenance findings">
         <h3>${EMOJI}🔎</span> Findings</h3>
-        <p>These checks are read-only — each finding names the console command with the full details.</p>
+        <p>The audits are read-only; each finding names the console command with the full details. The Preview buttons open a confirmation before anything is applied.</p>
         <ul>${rows}</ul>
     </section>`;
 }
@@ -160,7 +171,7 @@ function renderToolsDisclosure(tools = {}) {
         <summary>${EMOJI}🧰</span> Tools</summary>
         <p>Destructive maintenance actions are hidden here until you deliberately open them.</p>
         <div class="mwt-overview-tool-grid">
-            <button type="button" data-maintenance-action="clear-evidence" ${evidence.length ? '' : 'disabled'}>Clear all evidence (${evidence.length} NPCs)</button>
+            <button type="button" data-maintenance-action="clear-evidence" ${evidence.length ? '' : 'disabled'}>Clear all evidence (${countText(evidence.length, 'NPC')})</button>
             <button type="button" data-maintenance-action="clear-deletions" ${deletions ? '' : 'disabled'}>Clear deleted intentions (${deletions})</button>
         </div>
     </details>`;
@@ -216,7 +227,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
 
     return `<section class="mwt-overview" aria-label="Overview dashboard">
         <div class="mwt-overview-header"><div><h2>${EMOJI}🏠</span> Overview</h2>
-            <p>Read-only status for this chat. Open a module for details.</p></div>
+            <p>Status for this chat. Open a module for details.</p></div>
             <button type="button" id="mwt-overview-refresh" class="mwt-btn" title="Refresh Overview">🔄 Refresh</button>
         </div>
         <div class="mwt-overview-grid">
@@ -261,9 +272,19 @@ export function wireOverviewPane(root, {
     const maintenanceHost = pane.querySelector('[data-overview-maintenance]');
     const toolsHost = pane.querySelector('[data-overview-tools]');
     if (toolsHost) {
+        // A failing inventory must not become an unhandled rejection with a
+        // silently empty Tools section — render the failure locally.
         Promise.resolve().then(() => collectTools()).then((tools) => {
-            if (toolsHost.isConnected) toolsHost.innerHTML = renderToolsDisclosure(tools);
-            if (toolsHost.isConnected) wireMaintenanceActions(pane, { actions, prune, relink, collectTools });
+            if (!toolsHost.isConnected) return;
+            toolsHost.innerHTML = renderToolsDisclosure(tools);
+            // Bind ONLY inside the section that just rendered. Binding
+            // pane-wide here AND again when Findings settles gave every
+            // button two click handlers (doubled modals, doubled previews).
+            wireMaintenanceActions(toolsHost, { pane, actions, collectTools });
+        }).catch((error) => {
+            if (toolsHost.isConnected) {
+                toolsHost.innerHTML = `<p class="mwt-overview-tools-error" role="status">Tools unavailable: ${escapeHtml(String(error?.message ?? error))}</p>`;
+            }
         });
     }
     if (maintenanceHost) {
@@ -275,8 +296,7 @@ export function wireOverviewPane(root, {
                 ? renderMaintenanceFindings(result.value)
                 : `<p class="mwt-overview-maintenance-error" role="status">Maintenance audit unavailable: ${escapeHtml(result.error)}</p>`;
             if (result.ok) {
-                pane._mwtFindings = result.value;
-                wireMaintenanceActions(pane, { actions, prune, relink, collectTools });
+                wireMaintenanceActions(maintenanceHost, { pane, findings: result.value, actions, prune, relink });
             }
         });
     }
@@ -291,7 +311,59 @@ export function wireOverviewPane(root, {
     });
 }
 
-function openActionModal(pane, title, preview, apply, consequence, scopeToken) {
+const NO_ACTION_PREVIEW = '<p>No actionable changes found.</p>';
+const CHAT_CHANGED_REASON = 'The chat changed. Review a fresh preview before applying.';
+const EVIDENCE_LIST_CHANGED_REASON = 'The evidence list changed since this preview — background capture may have added an NPC. Preview again.';
+
+/**
+ * Accurate wording for a failed strict scope check on the clear tools. An
+ * unknown identity did not "change" — the host simply never exposed a chat
+ * id, so say that and point at the console twin that still works there.
+ */
+function clearScopeRefusal(check, isEvidence) {
+    if (check.reason === 'identity-unknown') {
+        const twin = isEvidence ? 'MWT.evidence.clearAll(true)' : 'MWT.interiority.clearDeletions()';
+        return `This host does not expose a chat id, so this tool cannot verify which chat it would erase. The console twin (${twin}) still works there.`;
+    }
+    return 'The chat changed while the inventory loaded. Nothing was applied — reopen this tool from the refreshed pane.';
+}
+
+/** Order-insensitive name-list comparison for the confirm-time recheck. */
+function sameNameList(left = [], right = []) {
+    const a = [...left].sort();
+    const b = [...right].sort();
+    return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
+/** The prune preview mirrors the console dry-run table: uids, size, preview. */
+function renderPrunePreviewTable(rows) {
+    const body = rows.map((row) => `<tr>` +
+        `<td>${escapeHtml(row.npc || '(unnamed)')}</td>` +
+        `<td>${escapeHtml(String(row.uid ?? ''))}</td>` +
+        `<td>${escapeHtml(String(row.keptUid ?? ''))}</td>` +
+        `<td>${escapeHtml(String(row.chars ?? ''))}</td>` +
+        `<td>${escapeHtml(row.preview || '')}</td>` +
+        `</tr>`).join('');
+    return `<table><thead><tr><th>NPC</th><th>Delete uid</th><th>Keep uid</th><th>Size</th><th>Preview</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/** The relink preview shows otherCandidates — the column the caveat is about. */
+function renderRelinkPreviewTable(rows) {
+    const body = rows.map((row) => `<tr>` +
+        `<td>${escapeHtml(row.npc || '')}</td>` +
+        `<td>${escapeHtml(String(row.linkUid ?? ''))}</td>` +
+        `<td>${escapeHtml(String(row.was ?? ''))}</td>` +
+        `<td>${escapeHtml(String(row.otherCandidates ?? 0))}</td>` +
+        `</tr>`).join('');
+    return `<table><thead><tr><th>NPC</th><th>Link to uid</th><th>Was</th><th>Other candidates</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * Open the shared preview→confirm modal. `{ refusal }` shows a visible,
+ * accurate refusal instead of an actionable preview: confirm starts disabled
+ * and the reason lands in the status bar. Returns the modal element.
+ */
+function openActionModal(pane, title, preview, apply, consequence, scopeToken, { refusal = '' } = {}) {
     const id = 'mwt-overview-tool-modal';
     const modal = createModal({
         id, title,
@@ -300,7 +372,7 @@ function openActionModal(pane, title, preview, apply, consequence, scopeToken) {
             <button type="button" class="mwt-btn" data-tool-confirm disabled>Confirm and apply</button>`,
     });
     const confirm = modal.querySelector('[data-tool-confirm]');
-    const ready = preview && preview !== '<p>No actionable changes found.</p>';
+    const ready = !refusal && preview && preview !== NO_ACTION_PREVIEW;
     confirm.disabled = !ready;
     confirm.addEventListener('click', async () => {
         setControlBusy(confirm, true);
@@ -311,12 +383,21 @@ function openActionModal(pane, title, preview, apply, consequence, scopeToken) {
                 setStatus(modal, result.reason || result.error || 'The action could not be applied.', 'error');
                 return;
             }
-            setStatus(modal, 'Applied. Refresh Overview to re-check findings.', 'success');
+            // Surface the orphan consequence here too: the clear action knows
+            // which profiles it actually left unbacked.
+            const orphanNote = Array.isArray(result?.orphaned) && result.orphaned.length
+                ? ` ${countText(result.orphaned.length, 'generated profile')} now unbacked by evidence: ${result.orphaned.join(', ')}.`
+                : '';
+            setStatus(modal, `Applied.${orphanNote} The pane has been refreshed — findings are re-checked automatically.`, 'success');
             confirm.disabled = true;
             modal._mwtActionCompleted = true;
             const root = pane._mwtRoot;
             pane.innerHTML = renderOverviewPane({ collect: pane._mwtWireOptions?.collect });
             wireOverviewPane(root, pane._mwtWireOptions || {});
+            // The re-render destroyed the button that opened this modal, so
+            // closing it would drop focus to <body>. Retarget the restore at
+            // the Refresh control — its fresh twin — to keep focus in the pane.
+            setModalOpener(modal, pane.querySelector('#mwt-overview-refresh'));
         } catch (error) {
             setStatus(modal, error?.message || String(error), 'error');
         } finally {
@@ -325,42 +406,100 @@ function openActionModal(pane, title, preview, apply, consequence, scopeToken) {
         }
     });
     showModal(id);
+    if (refusal) setStatus(modal, refusal, 'error');
+    return modal;
 }
 
-function wireMaintenanceActions(pane, { actions, prune, relink, collectTools }) {
-    pane.querySelectorAll('[data-maintenance-action]').forEach((button) => {
+/** Open a modal that only states a refusal/error — confirm stays disabled. */
+function openRefusalModal(pane, title, message) {
+    return openActionModal(pane, title, `<p>${escapeHtml(message)}</p>`,
+        () => ({ ok: false, reason: message }), 'Nothing will be applied from this preview.', null, { refusal: message });
+}
+
+/** The two clear tools: inventory → strict scope → preview naming consequences. */
+async function openClearActionModal(pane, isEvidence, { actions, collectTools }) {
+    const title = isEvidence ? 'Clear all evidence' : 'Clear deleted intentions';
+    const scopeToken = captureScope();
+    const tools = await collectTools();
+    // Strict identity is deliberate here — a clear erases this chat's data —
+    // but a refusal must be visible and accurate, never a silent no-op.
+    const scopeCheck = assertSameScope(scopeToken);
+    if (!scopeCheck.ok) {
+        openRefusalModal(pane, title, clearScopeRefusal(scopeCheck, isEvidence));
+        return;
+    }
+    const names = tools.evidenceNames || [];
+    const count = isEvidence ? names.length : Number(tools.deletionCount) || 0;
+    if (!count) return;
+    const body = isEvidence
+        ? `<p>${countText(count, 'NPC evidence file')} will be cleared.</p>`
+            + (names.length ? `<p>Affected NPCs: ${escapeHtml(names.join(', '))}</p>` : '')
+            + (tools.orphanWarning ? `<p class="mwt-overview-tool-consequence">${escapeHtml(tools.orphanWarning)}</p>` : '')
+        : `<p>${countText(count, 'deletion record')} will be cleared.</p>`;
+    openActionModal(pane, title, body, async () => {
+        if (!assertSameScope(scopeToken).ok) return { ok: false, reason: CHAT_CHANGED_REASON };
+        if (isEvidence) {
+            // Background capture can enroll an NPC while the modal sat open;
+            // never clear a list the user was not shown.
+            const fresh = await collectTools();
+            // Check the scope again AFTER the await (core/scope.js: after each
+            // await, before every commit). Two chats with one character often
+            // share an NPC list, so the name comparison alone can't catch a switch.
+            if (!assertSameScope(scopeToken).ok) return { ok: false, reason: CHAT_CHANGED_REASON };
+            if (!sameNameList(fresh.evidenceNames, names)) return { ok: false, reason: EVIDENCE_LIST_CHANGED_REASON };
+            return actions.clearAllEvidence();
+        }
+        return actions.clearDeletedIntentions();
+    }, isEvidence ? 'This cannot be undone and rebuilding evidence costs API calls.' : 'These intentions may be proposed again.', scopeToken);
+}
+
+/** The two plan tools: finding rows → labelled preview table → guarded apply. */
+function openPlanActionModal(pane, kind, { findings, prune, relink }) {
+    const finding = (findings || []).find((item) => item.kind === (kind === 'prune' ? 'duplicate-profiles' : 'relink-candidates'));
+    if (!finding) return;
+    const isPrune = kind === 'prune';
+    const rows = isPrune ? (finding.toDelete || []) : (finding.rows || []);
+    const table = rows.length
+        ? (isPrune ? renderPrunePreviewTable(rows) : renderRelinkPreviewTable(rows))
+        : NO_ACTION_PREVIEW;
+    openActionModal(pane, isPrune ? 'Preview profile prune' : 'Preview profile relink', table,
+        (scopeToken) => (isPrune ? prune : relink)({ previewRows: rows, scopeToken }),
+        isPrune
+            ? 'Only automatically safe duplicate entries are deleted; unnamed and tied-size groups remain manual. Deleted profiles are regeneratable from evidence, but only if the evidence is still there.'
+            : 'The registry pointers will be changed; each link targets the largest entry (newest on ties). Check "otherCandidates" is 0: anything higher means duplicates exist and MWT.profiles.duplicates() is worth a look first.',
+        captureScope());
+}
+
+/**
+ * Bind the maintenance action buttons inside ONE freshly rendered section —
+ * never pane-wide, or buttons alive when two sections settle get double
+ * listeners (doubled modals on one click).
+ */
+function wireMaintenanceActions(section, {
+    pane,
+    findings = [],
+    actions = maintenanceActions,
+    prune = applyPrunePlan,
+    relink = applyRelinkPlan,
+    collectTools = collectMaintenanceTools,
+} = {}) {
+    section.querySelectorAll('[data-maintenance-action]').forEach((button) => {
         button.addEventListener('click', async () => {
             const kind = button.dataset.maintenanceAction;
-            if (kind === 'clear-deletions' || kind === 'clear-evidence') {
-                const scopeToken = captureScope();
-                const tools = await collectTools();
-                if (!assertSameScope(scopeToken).ok) return;
-                const isEvidence = kind === 'clear-evidence';
-                const names = tools.evidenceNames || [];
-                const count = isEvidence ? names.length : tools.deletionCount;
-                if (!count) return;
-                openActionModal(pane, isEvidence ? 'Clear all evidence' : 'Clear deleted intentions',
-                    `<p>${count} ${isEvidence ? 'NPC evidence files' : 'deletion records'} will be cleared.</p>${isEvidence ? `<p>Affected NPCs: ${escapeHtml(names.join(', '))}</p>` : ''}`,
-                    () => {
-                        if (!assertSameScope(scopeToken).ok) return { ok: false, reason: 'The chat changed. Review a fresh preview before applying.' };
-                        return isEvidence ? actions.clearAllEvidence() : actions.clearDeletedIntentions();
-                    },
-                    isEvidence ? 'This cannot be undone and rebuilding evidence costs API calls.' : 'These intentions may be proposed again.', scopeToken);
-                return;
+            const title = kind === 'clear-evidence' ? 'Clear all evidence'
+                : kind === 'clear-deletions' ? 'Clear deleted intentions'
+                    : kind === 'prune' ? 'Preview profile prune' : 'Preview profile relink';
+            try {
+                if (kind === 'clear-deletions' || kind === 'clear-evidence') {
+                    await openClearActionModal(pane, kind === 'clear-evidence', { actions, collectTools });
+                    return;
+                }
+                openPlanActionModal(pane, kind, { findings, prune, relink });
+            } catch (error) {
+                // e.g. the tools inventory itself failed — visible, not an
+                // unhandled rejection with a click that did nothing.
+                openRefusalModal(pane, title, `The tool could not load its data: ${error?.message ?? error}`);
             }
-            const finding = (pane._mwtFindings || []).find((item) => item.kind === (kind === 'prune' ? 'duplicate-profiles' : 'relink-candidates'));
-            if (!finding) return;
-            const rows = kind === 'prune' ? (finding.toDelete || []) : (finding.rows || []);
-            const table = rows.length
-                ? `<table><tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.npc || '')}</td><td>${escapeHtml(String(row.uid ?? row.linkUid ?? ''))}</td><td>${escapeHtml(String(row.keptUid ?? row.was ?? ''))}</td></tr>`).join('')}</tbody></table>`
-                : '<p>No actionable changes found.</p>';
-            const apply = kind === 'prune'
-                ? (scopeToken) => prune({ previewRows: rows, scopeToken })
-                : (scopeToken) => relink({ previewRows: rows, scopeToken });
-            const scopeToken = captureScope();
-            openActionModal(pane, kind === 'prune' ? 'Preview profile prune' : 'Preview profile relink', table, apply, kind === 'prune'
-                ? 'Only automatically safe duplicate entries are deleted; unnamed and tied-size groups remain manual.'
-                : 'The registry pointers will be changed, and ambiguous candidates are not automatically selected.', scopeToken);
         });
     });
 }
