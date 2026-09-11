@@ -289,6 +289,9 @@ subsystem *replaces one thing instead of twenty*.
 - [ ] **F — Unified MWT dashboard.** One view showing tracker health, stale data,
   pending staging items, overdue beats, active intentions, token load, and last
   successful run per module. *(Source: PI UX)*
+  `[plan drafted 2026-09-10]` — merged with the console-tools UI item below
+  into [`overview_dashboard_plan.md`](overview_dashboard_plan.md): one 🏠
+  Overview tab, status cards + a 🧰 Maintenance section.
 - [ ] **F — "Pause background automation for this chat"** as a control **separate**
   from disabling injection. *(Source: PI UX)*
 - [ ] **F — User-facing UI for the existing `window.MWT.*` console tools**
@@ -299,6 +302,12 @@ subsystem *replaces one thing instead of twenty*.
   (`MWT.profiles.pruneDuplicates` / `relink`, `MWT.evidence.clearAll`,
   `MWT.interiority.clearDeletions`), which Diagnostics v1 deliberately left
   console-only (read-only by contract — DIAGNOSTICS_PANEL.md §I.1).
+  `[plan drafted 2026-09-10]` — the mutating toolset is now planned as the 🧰
+  Maintenance section of the Overview dashboard
+  ([`overview_dashboard_plan.md`](overview_dashboard_plan.md)): Diagnostics
+  stays read-only by contract, and DIAGNOSTICS_PANEL.md §I.2 already reserved
+  this promotion for "a home for them." The console tools remain the
+  power-user path (one collector, two surfaces).
 - [ ] **F — Cross-module undo/redo / unified history view**, not only per-module
   history stacks. *(Source: PI UX)*
 
