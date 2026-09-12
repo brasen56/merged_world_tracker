@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.2]
+
+### Changed
+
+- Implemented Phase 2 of the World State reliability roadmap: Chronicle scene
+  anchors now pass through a World State-owned, range- and revision-checked
+  synchronization boundary instead of writing World State metadata directly.
+- Added safe Chronicle date/time normalization for minute-less clocks,
+  qualitative times, 24-hour clocks, and `Unknown`, plus compact-location
+  preservation and deferred synchronization while World State is busy.
+- Added chronology, watermark, pause, consolidation, atomic-history, location,
+  qualitative-time, and World State/Chronicle concurrency coverage tests.
+
 ## [2.8.1]
 
 ### Added

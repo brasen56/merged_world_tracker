@@ -27,6 +27,7 @@ import { applyWorldStateInjection } from './injection.js';
 import { getRecentMessagesForScan } from './refresh.js';
 import { buildProvenance, groundingGate, collectRegistryAliasGroups } from './provenance.js';
 import { getDeltaStatus, buildPartialRefreshStatus } from './delta.js';
+import { settleSceneAnchorSync } from './scene.js';
 
 export { extractOnlySection, replaceSection };
 
@@ -373,6 +374,7 @@ export async function regenerateSection(sectionName, variety = 2) {
         throw err;
     } finally {
         state.wstIsRefreshing = false;
+        settleSceneAnchorSync();
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
 }

@@ -383,6 +383,7 @@ export {
     parseWorldStateSections,
     parseCurrentScene,
     normalizePresentValue,
+    normalizeSceneAnchor,
     patchCurrentScene,
     validateWorldStateDocument,
     projectWorldState,

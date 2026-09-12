@@ -624,8 +624,21 @@ describe('CHRONICLE date/time sync — the trailing-time split stays bounded', (
         // syncWorldState defaults to true; the seeded world state gives the
         // sync somewhere to write so the Date/Time split is observable.
         saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
-        const { setWorldStateData } = await import('../world_state/data.js');
-        setWorldStateData({ text: '## Current Scene\n\nDate: Old Date\nTime: 09:00' });
+        const { state: worldStateState, setWorldStateData } = await import('../world_state/data.js');
+        // This suite shares the World State state singleton with the preceding
+        // debounce-refusal test, which deliberately leaves an edit dirty.
+        // Date/time parsing exercises an idle sync, so reset that UI-only state.
+        worldStateState.isDirty = false;
+        worldStateState.editorPersistTimer = null;
+        worldStateState.editSessionActive = false;
+        setWorldStateData({ text: [
+            '## Current Scene',
+            'Date: Old Date',
+            'Time: 09:00',
+            'Location: Old location',
+            'Present: Mara',
+            'Situation: Mara is recording the crossing.',
+        ].join('\n') });
     });
 
     function chronicleWithDateLine(dateLine) {
@@ -691,9 +704,8 @@ describe('CHRONICLE date/time sync — the trailing-time split stays bounded', (
 
         const { getWorldStateText } = await import('../world_state/data.js');
         const ws = getWorldStateText();
-        // No trailing time → the whole (trimmed) line is the date, and the
-        // Time field is left exactly as it was.
+        // Phase 2 recognizes qualitative times and keeps them out of Date.
         expect(ws).toContain('Date: Midsummer Eve');
-        expect(ws).toContain('Time: 09:00');
+        expect(ws).toContain('Time: Dawn');
     });
 });

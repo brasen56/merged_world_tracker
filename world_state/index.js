@@ -32,6 +32,7 @@ import {
 } from './refresh.js';
 import { render, wireEvents } from './render.js';
 import { deriveDocumentStatus } from './delta.js';
+import { resetSceneAnchorSync } from './scene.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ export function getModuleWireEvents() { return wireEvents; }
 export { getWorldStateText, applyWorldStateInjection, onMessageReceived, resetAutoRefreshCounter };
 
 export function onChatChanged() {
+    resetSceneAnchorSync();
     state.isDirty = false;
     state.autoSaveLastText = getWorldStateText();
     state.autoRefreshQueued = false;

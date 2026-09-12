@@ -161,6 +161,88 @@ export function normalizePresentValue(value) {
     return inspectPresentValue(value).names;
 }
 
+const QUALITATIVE_TIMES = [
+    'late afternoon', 'early afternoon', 'late morning', 'early morning',
+    'dawn', 'morning', 'noon', 'afternoon', 'evening', 'dusk', 'night', 'midnight',
+];
+// A 24-hour clock never has a meridiem suffix. Keeping the formats separate
+// prevents contradictory values such as "14:30pm" from being normalized.
+const CLOCK_AT_END_RE = /(?:^|[\s,]+)((?:(?:[01]?\d|2[0-3]):[0-5]\d|(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*[ap]\.?(?:m\.?)?))$/i;
+// Check this only after CLOCK_AT_END_RE: it identifies clock-shaped suffixes
+// which look date-like because of their digits but are not valid clocks.
+const INVALID_CLOCK_AT_END_RE = /(?:^|[\s,]+)(?:\d{1,2}:\d{2}(?:\s*[ap]\.?(?:m\.?)?)?|\d{1,2}\s*[ap]\.?(?:m\.?)?)$/i;
+const ANCHOR_TAIL_CHARS = 64;
+const AMBIGUOUS_TIME_PROSE_RE = /\b(?:about|around|approximately|approx\.?|roughly|nearly|circa|after|before)\b/i;
+
+function looksLikeDate(value) {
+    return /\d/.test(value)
+        || /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december|today|tomorrow|yesterday|year|eve|day)\b/i.test(value);
+}
+
+function compactLocationWins(current, offered) {
+    if (!current || !offered || offered.length <= current.length) return false;
+    const compact = value => value.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/)
+        .filter(word => word && !['a', 'an', 'the', 'at', 'in', 'on', 'of'].includes(word));
+    const currentWords = compact(current);
+    const offeredWords = compact(offered);
+    if (!currentWords.length || currentWords.length > offeredWords.length) return false;
+    return offeredWords.some((_, start) => currentWords.every(
+        (word, offset) => offeredWords[start + offset] === word,
+    ));
+}
+
+/**
+ * Normalize Chronicle's combined Time Anchor into a safe Current Scene patch.
+ * Ambiguous values fail closed: the current Date/Time are retained and a
+ * warning is returned instead of manufacturing precision.
+ */
+export function normalizeSceneAnchor({ dateTime, location, current = {} } = {}) {
+    const patch = {};
+    const warnings = [];
+    const anchor = typeof dateTime === 'string' ? dateTime.trim() : '';
+    if (anchor) {
+        if (/^unknown$/i.test(anchor)) {
+            patch.date = 'Unknown';
+        } else if (AMBIGUOUS_TIME_PROSE_RE.test(anchor)) {
+            warnings.push({ code: 'ambiguous-date-time', message: `Could not safely split approximate Chronicle anchor "${anchor}".` });
+        } else {
+            // Bound the end-anchored clock search. Running a leading `\s+`
+            // alternative over a model-produced 200k-space line is quadratic.
+            const tail = anchor.length > ANCHOR_TAIL_CHARS ? anchor.slice(-ANCHOR_TAIL_CHARS) : anchor;
+            const clock = tail.match(CLOCK_AT_END_RE);
+            const qualitative = QUALITATIVE_TIMES.find(value =>
+                anchor.toLowerCase() === value || anchor.toLowerCase().endsWith(` ${value}`));
+            if (clock) {
+                const time = clock[1].trim();
+                const clockStart = anchor.length - tail.length + clock.index;
+                const date = anchor.slice(0, clockStart).replace(/[\s,]+$/, '').trim();
+                if (date) patch.date = date;
+                patch.time = time;
+            } else if (INVALID_CLOCK_AT_END_RE.test(tail)) {
+                warnings.push({ code: 'invalid-clock', message: `Chronicle anchor "${anchor}" ends with an invalid or contradictory clock.` });
+            } else if (qualitative) {
+                const date = anchor.slice(0, anchor.length - qualitative.length).replace(/[\s,]+$/, '').trim();
+                if (date) patch.date = date;
+                patch.time = qualitative[0].toUpperCase() + qualitative.slice(1);
+            } else if (looksLikeDate(anchor)) {
+                patch.date = anchor;
+            } else {
+                warnings.push({ code: 'ambiguous-date-time', message: `Could not safely split Chronicle anchor "${anchor}".` });
+            }
+        }
+    }
+
+    const offeredLocation = typeof location === 'string' ? location.trim() : '';
+    if (offeredLocation) {
+        if (/\r|\n/.test(offeredLocation)) {
+            warnings.push({ code: 'invalid-location', message: 'Chronicle location was not a single line.' });
+        } else if (!compactLocationWins(current.location, offeredLocation)) {
+            patch.location = offeredLocation;
+        }
+    }
+    return { ok: Object.keys(patch).length > 0, patch, warnings };
+}
+
 function parseSceneFields(section) {
     const fields = Object.fromEntries(CURRENT_SCENE_FIELDS.map(label => [label.toLowerCase(), []]));
     const issues = [];

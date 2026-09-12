@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
     normalizePresentValue,
+    normalizeSceneAnchor,
     parseCurrentScene,
     parseWorldStateSections,
     patchCurrentScene,
@@ -63,6 +64,52 @@ describe('normalizePresentValue', () => {
         ['Alex ([kitchen), Bob', ['Alex ([kitchen)', 'Bob']],
     ])('conservatively preserves names when annotations are malformed: %s', (value, expected) => {
         expect(normalizePresentValue(value)).toEqual(expected);
+    });
+});
+
+describe('normalizeSceneAnchor', () => {
+    test.each([
+        ['June 4, 2026 2pm', { date: 'June 4, 2026', time: '2pm' }],
+        ['June 4, 2026 2:30pm', { date: 'June 4, 2026', time: '2:30pm' }],
+        ['June 4, 2026 14:30', { date: 'June 4, 2026', time: '14:30' }],
+        ['June 4, 2026 late afternoon', { date: 'June 4, 2026', time: 'Late afternoon' }],
+        ['Unknown', { date: 'Unknown' }],
+    ])('splits an unambiguous Chronicle anchor: %s', (dateTime, patch) => {
+        expect(normalizeSceneAnchor({ dateTime }).patch).toEqual(patch);
+    });
+
+    test('fails closed on ambiguous time prose', () => {
+        const result = normalizeSceneAnchor({ dateTime: 'sometime after the meeting' });
+        expect(result.ok).toBe(false);
+        expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'ambiguous-date-time' }));
+    });
+
+    test.each(['around 2pm', 'June 4, 2026 around 2pm', 'about 2 bells after sunset'])
+    ('fails closed on approximate or relative time prose: %s', dateTime => {
+        const result = normalizeSceneAnchor({ dateTime });
+        expect(result.ok).toBe(false);
+        expect(result.patch).toEqual({});
+        expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'ambiguous-date-time' }));
+    });
+
+    test('only preserves a compact location when its words remain contiguous and ordered', () => {
+        expect(normalizeSceneAnchor({
+            location: 'The harbour office on Customs Row', current: { location: 'Harbour office' },
+        }).patch).toEqual({});
+        expect(normalizeSceneAnchor({
+            location: 'Office across the harbour', current: { location: 'Harbour office' },
+        }).patch).toEqual({ location: 'Office across the harbour' });
+        expect(normalizeSceneAnchor({
+            location: 'Old Harbour officer station', current: { location: 'Harbour office' },
+        }).patch).toEqual({ location: 'Old Harbour officer station' });
+    });
+
+    test.each(['June 4, 2026 14:30pm', 'June 4, 2026 00:30 AM', 'June 4, 2026 25:00'])
+    ('fails closed on an invalid or contradictory clock: %s', dateTime => {
+        const result = normalizeSceneAnchor({ dateTime });
+        expect(result.ok).toBe(false);
+        expect(result.patch).toEqual({});
+        expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'invalid-clock' }));
     });
 });
 

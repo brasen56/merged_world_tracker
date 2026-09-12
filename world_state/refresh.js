@@ -32,6 +32,7 @@ import {
 } from './data.js';
 import { applyWorldStateInjection } from './injection.js';
 import { buildProvenance, groundingGate, applyExpiry, collectRegistryAliasGroups } from './provenance.js';
+import { settleSceneAnchorSync } from './scene.js';
 import {
     DeltaPatchError, planAutoRefresh, getDeltaStatus, buildRefreshStatusDelta,
     buildPartialRefreshStatus, digestText, isDeltaModeEnabled,
@@ -662,6 +663,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         throw err;
     } finally {
         state.wstIsRefreshing = false;
+        settleSceneAnchorSync();
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         if (state.autoRefreshQueued) {
             state.autoRefreshQueued = false;
@@ -924,6 +926,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
         throw err;
     } finally {
         state.wstIsRefreshing = false;
+        settleSceneAnchorSync();
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
         if (state.autoRefreshQueued) {
             state.autoRefreshQueued = false;

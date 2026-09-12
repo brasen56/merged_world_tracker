@@ -1,9 +1,8 @@
 /**
  * Phase 0 characterization coverage for docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md.
  *
- * Several assertions deliberately pin unsafe CURRENT behavior. They are the
- * red/green hand-off for later phases: Phase 2 will invert the old Chronicle
- * chronology and concurrency outcomes; Phases 3-6 will change prompt size,
+ * Phase 2 inverts the original unsafe Chronicle chronology and concurrency
+ * characterizations. Phases 3-6 will change prompt size,
  * hook separation, and projection measurements.
  */
 
@@ -13,6 +12,7 @@ import {
     resetCoreStubs, setFakeApi, setFakeChat, getFakeMeta, estimateTokens,
 } from './stubs/core.js';
 import { _resetEpoch } from '../core/scope.js';
+import { _resetPausedStores, pauseStore } from '../core/schema_status.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../world_state/prompts.js';
 import { CHRONICLE_SYSTEM_PROMPT } from '../chronicle/prompts.js';
 import { buildInjectionPayload } from '../world_state/injection.js';
@@ -150,6 +150,7 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
     beforeEach(() => {
         resetCoreStubs();
         _resetEpoch();
+        _resetPausedStores();
         globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'chat-A' }) };
         globalThis.document = { dispatchEvent: vi.fn() };
         setFakeChat(CHAT);
@@ -182,6 +183,7 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
     });
 
     afterEach(() => {
+        _resetPausedStores();
         chronicleState.isGenerating = false;
         chronicleState.isMainGenerating = false;
         _render.renderContent = null;
@@ -194,9 +196,9 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
 
     test.each([
         ['June 4, 2026 2:30pm', 'June 4, 2026', '2:30pm'],
-        ['June 4, 2026 2pm', 'June 4, 2026 2pm', 'Late afternoon'],
-        ['June 4, 2026 late afternoon', 'June 4, 2026 late afternoon', 'Late afternoon'],
-        ['June 4, 2026 evening', 'June 4, 2026 evening', 'Late afternoon'],
+        ['June 4, 2026 2pm', 'June 4, 2026', '2pm'],
+        ['June 4, 2026 late afternoon', 'June 4, 2026', 'Late afternoon'],
+        ['June 4, 2026 evening', 'June 4, 2026', 'Evening'],
         ['Unknown', 'Unknown', 'Late afternoon'],
     ])('captures current Chronicle sync outcome for anchor %s', async (anchor, expectedDate, expectedTime) => {
         seedWorldState(MINIMAL_SCENE);
@@ -212,6 +214,16 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
         expect(getWorldStateField('Date')).toBe(expectedDate);
         expect(getWorldStateField('Time')).toBe(expectedTime);
         expect(getWorldStateField('Location')).toBe('Harbour office');
+    });
+
+    test('reports a Chronicle anchor normalization warning instead of dropping it', async () => {
+        seedWorldState(MINIMAL_SCENE);
+        response = chronicleOutput('June 4, 2026 around 2pm');
+
+        await generateSnapshot();
+
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('World State scene sync warning'));
+        expect(getWorldStateField('Date')).toBe('Unknown');
     });
 
     test('records equal generated output estimates for hook modes off and passive', async () => {
@@ -279,12 +291,27 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
         expect(requests[0].userContent).toContain('Message 0 in the harbour chronology.');
         expect(requests[0].userContent).toContain('Message 3 in the harbour chronology.');
         expect(requests[0].userContent).not.toContain('Message 4 in the harbour chronology.');
-        // Current unsafe baseline: an accepted regeneration of an older range
-        // rewinds World State. Phase 2 should invert these final assertions.
-        expect(getWorldStateText()).toContain('Date: June 1, 2026');
-        expect(getWorldStateText()).toContain('Time: 2:30pm');
-        expect(getWorldStateText()).toContain('Location: Old ferry landing');
+        expect(getWorldStateText()).toBe(UNCHANGED_SCENE_BEFORE);
         expect(getSnapshots().find(s => s.id === 'new')?.toIndex).toBe(7);
+    });
+
+    test('does not inject, sync World State, or report success when regeneration write is refused', async () => {
+        const snapshot = makeChronicleSnapshot({
+            id: 'entry', createdAt: '2026-06-04T00:00:00.000Z', fromIndex: 4, toIndex: 7,
+            anchorValue: 'June 4, 2026 evening', location: 'Harbour office',
+        });
+        seedChronicle([snapshot]);
+        seedWorldState(MINIMAL_SCENE);
+        response = () => {
+            pauseStore('chronicle', { reasonCode: 'test-refusal', message: 'refuse regeneration write' });
+            return chronicleOutput('June 5, 2026 2pm', 'Customs quay');
+        };
+
+        await regenerateSnapshot('entry');
+
+        expect(getSnapshots().find(entry => entry.id === 'entry')?.text).toBe(snapshot.text);
+        expect(getWorldStateText()).toBe(MINIMAL_SCENE);
+        expect(chronicleState.selectedSnapshotId).not.toBe('entry');
     });
 
     test('reproduces an older-range consolidation changing the present scene', async () => {
@@ -312,10 +339,34 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
         expect(requests[0].userContent).toContain(second.text);
         expect(requests[0].userContent).not.toContain(newest.text);
         expect(getSnapshots().some(s => s.id === 'newest' && s.toIndex === 7)).toBe(true);
-        // Current unsafe baseline: consolidating [0, 3] rewinds a scene whose
-        // newest Chronicle range ends at 7. Phase 2 should leave this unchanged.
-        expect(getWorldStateText()).toContain('Date: June 2, 2026 late afternoon');
-        expect(getWorldStateText()).toContain('Location: Old ferry landing');
+        expect(getWorldStateText()).toBe(UNCHANGED_SCENE_BEFORE);
+    });
+
+    test('preserves a snapshot created while a consolidation preview is open', async () => {
+        const first = makeChronicleSnapshot({
+            id: 'first', createdAt: '2026-06-01T00:00:00.000Z', fromIndex: 0, toIndex: 1,
+            anchorValue: 'June 1, 2026 2pm', location: 'Customs quay',
+        });
+        const second = makeChronicleSnapshot({
+            id: 'second', createdAt: '2026-06-02T00:00:00.000Z', fromIndex: 2, toIndex: 3,
+            anchorValue: 'June 2, 2026 late afternoon', location: 'Old ferry landing',
+        });
+        const concurrent = makeChronicleSnapshot({
+            id: 'concurrent', createdAt: '2026-06-04T00:00:00.000Z', fromIndex: 4, toIndex: 7,
+            anchorValue: 'June 4, 2026 evening', location: 'Harbour office',
+        });
+        seedChronicle([first, second]);
+        seedWorldState(UNCHANGED_SCENE_BEFORE);
+        response = chronicleOutput('June 2, 2026 late afternoon', 'Old ferry landing');
+        _render.showConsolidationPreview = (_entries, _prompt, onConfirm) => { consolidationCompletion = onConfirm; };
+
+        await consolidateEntries(['first', 'second']);
+        setChronicleData({ snapshots: [...getSnapshots(), concurrent] });
+        await consolidationCompletion('');
+
+        expect(getSnapshots().some(entry => entry.id === 'concurrent')).toBe(true);
+        expect(getSnapshots()).toHaveLength(2);
+        expect(getWorldStateText()).toBe(UNCHANGED_SCENE_BEFORE);
     });
 
     test('proves a Chronicle sync can invalidate an in-flight World State refresh', async () => {
@@ -347,16 +398,15 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
         }
         expect(snapshot.fromIndex).toBe(0);
         expect(snapshot.toIndex).toBe(7);
-        expect(getWorldStateText()).toContain('Date: June 4, 2026 evening');
+        // The candidate is deferred while World State owns the document.
+        expect(getWorldStateText()).toBe(UNCHANGED_SCENE_BEFORE);
 
         releaseRefresh(UNCHANGED_SCENE_REFRESH);
         const result = await refresh;
 
-        // Current unsafe baseline: Chronicle's direct metadata write changes
-        // the captured revision, so the already-paid refresh is discarded.
-        expect(result).toBeNull();
-        expect(getWorldStateText()).toContain('Date: June 4, 2026 evening');
-        expect(getWorldStateText()).not.toContain('Customs Row');
+        expect(result).toBe(UNCHANGED_SCENE_REFRESH);
+        expect(getWorldStateText()).toBe(UNCHANGED_SCENE_REFRESH);
+        expect(getWorldStateText()).toContain('Customs Row');
         expect(getFakeMeta().world_state_tracker_metadata.text).toBe(getWorldStateText());
     });
 });
