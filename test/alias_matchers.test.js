@@ -99,6 +99,44 @@ describe('groundingGate consults the alias list', () => {
         expect(gate.cleanedText).toBeUndefined();
     });
 
+    // The roster reads a bare "Alex and Lorraine" as two names, so the gate must
+    // judge both — grounding the whole entry lets the word "and" (present in
+    // almost any evidence) vouch for an invented Lorraine.
+    test('strict mode rejects an invented name joined by a bare "and"', () => {
+        const gate = groundingGate(SCENE_WITH_PRESENT.replace('Alex, Lorraine, The Vixen', 'Alex and Lorraine'), {
+            scanText: 'Alex waits by the harbour and watches the door.',
+            priorText: '',
+            mode: 'strict',
+        });
+        expect(gate.ok).toBe(false);
+        expect(gate.reason).toMatch(/Lorraine/);
+        expect(gate.reason).not.toMatch(/Alex/);
+    });
+
+    test('soft mode rewrites only the entry that lost a name', () => {
+        const gate = groundingGate(SCENE_WITH_PRESENT.replace('Alex, Lorraine, The Vixen', 'Salt and Pepper, Alex and Lorraine'), {
+            scanText: 'Salt and Pepper argue while Alex waits by the harbour.',
+            priorText: '',
+            mode: 'soft',
+        });
+        expect(gate.ok).toBe(true);
+        // "Salt and Pepper" is fully grounded and keeps its saved form; it is
+        // never serialized as the split "Salt, Pepper".
+        expect(gate.cleanedText).toContain('Present: Salt and Pepper, Alex\n');
+        expect(gate.stripped).toEqual([expect.objectContaining({ label: 'Lorraine', source: 'present' })]);
+    });
+
+    test('a pinned Present name containing "and" is judged whole', () => {
+        const gate = groundingGate(SCENE_WITH_PRESENT.replace('Alex, Lorraine, The Vixen', 'Lord of Blood and Bone'), {
+            scanText: 'Rain falls outside.',
+            priorText: '',
+            pinned: ['Lord of Blood and Bone'],
+            mode: 'strict',
+        });
+        expect(gate.ok).toBe(true);
+        expect(gate.stripped).toHaveLength(0);
+    });
+
     test('a bold entry under an approved alias spelling is not a phantom', () => {
         // Neither "Vixen" nor "Mara Vance" appears in the evidence — the old
         // gate stripped this entry even though the user vouched for the name.

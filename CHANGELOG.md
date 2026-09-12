@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.6]
+
+### Fixed
+
+- The World State grounding gate now checks each `Present:` entry name by
+  name, the same way Interiority's roster reads it. Previously a bare
+  `Present: Mara and Derek` was judged as one label, and the word-level
+  grounding rule accepted it off the word "and" — so an invented Derek passed
+  strict grounding and still reached the roster. Pinned and alias-approved
+  entries are still judged whole, so a real name such as
+  `Lord of Blood and Bone` is never split. In soft mode only the entry that
+  lost a name is rewritten; every other entry keeps its saved form.
+- Strict grounding can now reject output it previously accepted (an invented
+  name joined to a real one by "and"), so full refresh and section
+  regeneration may use their existing grounding retry slightly more often.
+  Delta refresh still discards a strict grounding failure without a retry.
+  Grounding remains off by default.
+
 ## [2.8.5]
 
 ### Changed

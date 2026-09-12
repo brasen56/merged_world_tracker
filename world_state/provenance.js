@@ -19,7 +19,7 @@
 
 import {
     getChat, getStableHistoryEnd, wholePhraseRegex,
-    parseCurrentScene, patchCurrentScene,
+    parseCurrentScene, patchCurrentScene, normalizePresentValue,
 } from '../core/index.js';
 import {
     getWorldStateText, getProvenance, getMaxScanMessages,
@@ -462,17 +462,30 @@ export function groundingGate(newText, opts = {}) {
         return aliases != null && aliases.some(alias => aliasPhraseGrounded(alias, haystacks));
     };
 
-    const isGrounded = ({ key, label }) => (
-        !pinnedSet.has(key)
-        && !aliasSpellings.has(key)
-        && !nameIsGrounded(label, haystacks)
-        && !groundedViaAliasBridge(label)
+    const isVouched = ({ key, label }) => (
+        pinnedSet.has(key)
+        || aliasSpellings.has(key)
+        || groundedViaAliasBridge(label)
     );
-    const boldPhantoms = extractBoldNames(newText).filter(isGrounded);
+    const isPhantom = entry => !isVouched(entry) && !nameIsGrounded(entry.label, haystacks);
+    const boldPhantoms = extractBoldNames(newText).filter(isPhantom);
     const scene = parseCurrentScene(newText);
-    const presentPhantoms = scene.present
-        .map(label => ({ key: label.toLowerCase(), label, source: 'present' }))
-        .filter(isGrounded);
+    // Ground each Present entry as the names readers take from it. The saved
+    // entry keeps a bare conjunction ("Salt and Pepper" may be one name), but
+    // Interiority's roster splits "Mara and Derek" into two — and the
+    // word-level rule would ground that whole entry off the word "and", letting
+    // an invented Derek onto the roster. A pinned or alias-vouched entry is
+    // still judged whole, so a real conjunction name is never split apart.
+    const presentChecks = scene.present.map(entry => {
+        const whole = { key: entry.toLowerCase(), label: entry };
+        const names = isVouched(whole)
+            ? [entry]
+            : normalizePresentValue(entry, { splitBareConjunctions: true });
+        const phantomNames = names.filter(name => isPhantom({ key: name.toLowerCase(), label: name }));
+        return { entry, names, phantomNames };
+    });
+    const presentPhantoms = presentChecks.flatMap(({ phantomNames }) => phantomNames
+        .map(label => ({ key: label.toLowerCase(), label, source: 'present' })));
     const phantoms = [...boldPhantoms, ...presentPhantoms];
 
     if (phantoms.length === 0) return { ok: true, cleanedText: newText, stripped: [] };
@@ -486,11 +499,14 @@ export function groundingGate(newText, opts = {}) {
     }
     let cleanedText = stripNameLines(newText, boldPhantoms.map(entry => entry.label));
     if (presentPhantoms.length && scene.section) {
-        const rejected = new Set(presentPhantoms.map(entry => entry.key));
-        // patchCurrentScene serializes an empty remaining roster as the shared
-        // `Present: None` representation instead of dropping the scalar.
+        // Entries with no phantom keep their exact saved form; only an entry
+        // that lost a name is replaced by its surviving names. patchCurrentScene
+        // serializes an empty remaining roster as the shared `Present: None`
+        // representation instead of dropping the scalar.
         cleanedText = patchCurrentScene(cleanedText, {
-            present: scene.present.filter(name => !rejected.has(name.toLowerCase())),
+            present: presentChecks.flatMap(({ entry, names, phantomNames }) => (
+                phantomNames.length ? names.filter(name => !phantomNames.includes(name)) : [entry]
+            )),
         });
     }
     return { ok: true, cleanedText, stripped: phantoms };
