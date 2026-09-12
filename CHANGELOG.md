@@ -12,6 +12,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.5]
+
+### Changed
+
+- Implemented Phase 5 of the World State reliability roadmap
+  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): downstream modules now read
+  World State through shared core accessors instead of each maintaining its
+  own scene parser, and every prompt consumer receives a factual projection
+  that excludes hook sections.
+- Added consumer-facing World State accessors in `core/metadata.js`:
+  `getWorldStateRaw`, `getWorldStateFactual`, `getWorldStateHooks`, and
+  `getCurrentWorldStateScene`. Projections are computed at read time so
+  legacy and manually edited documents are never rewritten just by being
+  read, and `Archive (Stale)` is excluded from every prompt projection.
+- Made tolerant Current Scene reads line-safe and indentation-aware, with
+  canonical parsed fields taking precedence over stale case variants.
+- Kept legacy bare-`and` roster splitting on read while write normalization
+  preserves names such as `Salt and Pepper`; comma/semicolon lists and Oxford
+  comma conjunctions are still normalized before generated output is saved.
+- Unified case-insensitive hook-section matching between projections and
+  refresh stripping, and made projection section filters consistent in every
+  view.
+- Routed Interiority's roster construction and world-time lookup through
+  `getCurrentWorldStateScene()`, replacing its private `Present:` and
+  `Time:` regular expressions with the shared parser that owns field
+  boundaries and Present annotation normalization. The Knowledge-registry
+  fallback and alias handling are preserved.
+- Routed Chronicle's World State date/time reads (snapshot generation,
+  regeneration, and manual entry creation) through `getCurrentWorldStateScene()`
+  and switched its `Current World State` context to the factual projection.
+- Gave Knowledge's eight World State call sites (evidence capture, psycho
+  analysis, continuous capture, ILS backfill, scan, NPC update, NPC enrich,
+  and dossier field refresh) the factual projection so Story Momentum, Plot
+  Seeds, and Potential Entrances no longer reach factual consumers as
+  established context.
+- Gave Story Planner the factual projection; its own planning machinery
+  already supplies future-facing material.
+- Rewrote narrator injection (`buildInjectionPayload`) to place the factual
+  view under the continuity header and all hook sections under the
+  hook-mode header, using the shared projections for both live injection and
+  the Preview modal. The previous private `splitWorldState` helper (which
+  only split out Plot Seeds and stripped Archive) is removed in favor of the
+  shared contract.
+- Made `getTotalTokens()` estimate the same payload `buildInjectionPayload`
+  actually injects (factual projection, hook projection, mode-specific hook
+  headers, optional structural tags, and the 30,000-character body cap), so
+  the floating token badge and budget diagnostics agree with the registered
+  and previewed injection.
+
+### Added
+
+- Added Phase 5 regression coverage (`test/world_state_phase5_bugs.test.js`)
+  for the non-scene section promotion guard, heading-free legacy scene
+  documents, downstream factual-context filtering, narrator hook placement,
+  and token-diagnostic parity with the projected payload across all hook modes
+  and structural-boundary settings.
+- Mirrored the new accessors in `test/stubs/core.js` so the barrel→stub
+  alias stays faithful to the real core API.
+
 ## [2.8.4]
 
 ### Changed

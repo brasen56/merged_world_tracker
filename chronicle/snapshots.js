@@ -9,7 +9,7 @@ import {
     getContextSafe, getChat,
     resolveApiCall, normaliseOutput,
     notify,
-    getCurrentWorldState,
+    getCurrentWorldState, getWorldStateFactual, getCurrentWorldStateScene,
     captureScope, assertSameScope, isCancellation,
     captureRevision,
 } from '../core/index.js';
@@ -196,10 +196,11 @@ export async function generateSnapshot(isAuto = false) {
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     scSetStatus('Generating chronicle entry…', 'info');
     notify('Session Chronicle', 'Generating chronicle entry…', 'info');
-    const worldState = getCurrentWorldState().trim();
-    const wsDateMatch = worldState.match(/^Date:\s*(.+)$/m);
-    const wsTimeMatch = worldState.match(/^Time:\s*(.+)$/m);
-    const worldDate = wsDateMatch ? `${wsDateMatch[1].trim()}${wsTimeMatch ? ' ' + wsTimeMatch[1].trim() : ''}` : new Date().toLocaleDateString();
+    const worldState = getWorldStateFactual().trim();
+    const scene = getCurrentWorldStateScene();
+    const worldDate = scene?.date
+        ? `${scene.date.trim()}${scene.time ? ` ${scene.time.trim()}` : ''}`
+        : new Date().toLocaleDateString();
     const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
 
     try {
@@ -321,7 +322,7 @@ export async function regenerateSnapshot(snapshotId) {
         scSetStatus('No messages for regeneration.', 'error');
         return;
     }
-    const worldState = getCurrentWorldState().trim();
+    const worldState = getWorldStateFactual().trim();
     const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
 
     // CHRONICLE-01: Regeneration needs the same scope guard as generation.
@@ -562,10 +563,10 @@ export async function consolidateEntries(ids, baseId = null) {
 // ─── Manual entry ────────────────────────────────────────────────────────────
 
 export function createManualEntry() {
-    const worldState = getCurrentWorldState().trim();
-    const wsDateMatch = worldState.match(/^Date:\s*(.+)$/m);
-    const wsTimeMatch = worldState.match(/^Time:\s*(.+)$/m);
-    const worldDate = wsDateMatch ? `${wsDateMatch[1].trim()}${wsTimeMatch ? ' ' + wsTimeMatch[1].trim() : ''}` : new Date().toLocaleDateString();
+    const scene = getCurrentWorldStateScene();
+    const worldDate = scene?.date
+        ? `${scene.date.trim()}${scene.time ? ` ${scene.time.trim()}` : ''}`
+        : new Date().toLocaleDateString();
     const entry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt: new Date().toISOString(), worldDate,

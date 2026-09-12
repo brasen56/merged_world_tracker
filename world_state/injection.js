@@ -4,16 +4,16 @@
  * Depends on data.js and settings.js (leaf modules).
  */
 
-import { applyExtensionPromptInjection, getGlobalSettings, wrapInTag, injectionAllowed, truncateText } from '../core/index.js';
+import {
+    applyExtensionPromptInjection, getGlobalSettings, wrapInTag, injectionAllowed, truncateText,
+    getWorldStateFactual, getWorldStateHooks,
+} from '../core/index.js';
 // Part 6 injection pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import { getSettings } from './settings.js';
-import { stripHookSections } from './prompts.js';
-import {
-    getWorldStateText, isInjectionEnabled, NEXT_SECTION_LOOKAHEAD,
-} from './data.js';
+import { getWorldStateText, isInjectionEnabled } from './data.js';
 
 // ─── Injection constants ─────────────────────────────────────────────────────
 
@@ -50,6 +50,11 @@ export const EXTENSION_PROMPT_KEY = 'mwt_world_state_injection';
  */
 const INJECTION_BODY_BUDGET = 30000;
 
+// Keep optional narrative hooks from bypassing the factual-body budget. Hooks
+// are useful context, but they must never turn a large imported document into
+// an unbounded narrator injection.
+const INJECTION_HOOK_BUDGET = 10000;
+
 // ─── Hook mode helpers ───────────────────────────────────────────────────────
 
 export function getHookMode() {
@@ -72,39 +77,6 @@ export function structuralBoundariesEnabled() {
 }
 
 /**
- * Split a world-state document into its body and the Plot Seeds section text.
- * Also strips the "## Archive (Stale)" section (quarantine-mode expiry, see
- * STALE_ENTRY_EXPIRY_DESIGN.md §5.2) — it's kept in the saved document for the
- * user to review/purge, but never injected into the prompt.
- * Returns { worldStateBody, seedsText }.
- */
-function splitWorldState(text) {
-    // Line-anchored like extractOnlySection/replaceSection (WORLD-STATE-06),
-    // with the same quadratic-rescan consequence in mind: an unanchored
-    // `\s*` before the literal is retried at EVERY position inside a long
-    // whitespace run, rescanning the rest of the run each time — quadratic
-    // in the worst case. The `(?:^|\n)` gate fails in O(1) at non-newline
-    // positions, so the leading `\s*` only ever runs right after a line
-    // break. This matters here because the chronicle world-state sync can
-    // feed a whitespace-heavy model-generated Date line straight into this
-    // injection rebuild (audit P3 follow-up). Note: the section-name
-    // boundary stays a negative lookahead, not `\b` — "Archive (Stale)"
-    // ends in punctuation, and `\b` (which requires a word char on at
-    // least one side) never matches there.
-    const archivePattern = new RegExp(`(?:^|\\n)\\s*## Archive \\(Stale\\)(?![A-Za-z0-9_])[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
-    const withoutArchive = text.replace(archivePattern, '');
-
-    const seedsPattern = new RegExp(`## Plot Seeds\\b[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
-    const seedsMatch = withoutArchive.match(seedsPattern);
-    const seedsBlock = seedsMatch ? seedsMatch[0] : '';
-    const seedsText = seedsBlock.replace(/^## Plot Seeds[^\n]*\n?/, '').trim();
-    const worldStateBody = seedsMatch
-        ? withoutArchive.replace(seedsBlock, '').replace(/\n{3,}/g, '\n\n').trim()
-        : withoutArchive.trim();
-    return { worldStateBody, seedsText };
-}
-
-/**
  * Assemble the full World State injection payload (used both for live
  * injection and for the Preview modal).
  *
@@ -117,8 +89,15 @@ function splitWorldState(text) {
  * @returns {string}      — the fully assembled payload (headers + body + tags)
  */
 export function buildInjectionPayload(text) {
-    const source = getHookMode() === 'off' ? stripHookSections(text) : text;
-    const { worldStateBody: rawBody, seedsText } = splitWorldState(source);
+    // Use the shared projections for every prompt path. This keeps Archive
+    // (Stale) out and prevents hook suggestions from being presented as facts.
+    // `text` remains an explicit argument for preview compatibility, while the
+    // live path passes the stored document through the same core contract.
+    const source = typeof text === 'string' ? text : getWorldStateText();
+    const rawBody = getWorldStateFactual(source);
+    const hooksText = getHookMode() === 'off'
+        ? ''
+        : truncateText(getWorldStateHooks(source), INJECTION_HOOK_BUDGET);
     // WORLD-STATE-03: Cap the injected body so a large imported state doesn't
     // dominate the narrator context window every turn. truncateText keeps the
     // beginning (the most structured/important sections) and appends a clear
@@ -128,21 +107,21 @@ export function buildInjectionPayload(text) {
     const seedsHeader = getPlotSeedsHeader();
 
     // World State block: header + body, optionally wrapped.
-    const wsInner = `${WORLD_STATE_INJECTION_HEADER}\n\n${worldStateBody}`;
-    const wsBlock = useTags ? wrapInTag('mwt_world_state', wsInner) : wsInner;
+    const wsInner = worldStateBody ? `${WORLD_STATE_INJECTION_HEADER}\n\n${worldStateBody}` : '';
+    const wsBlock = wsInner && (useTags ? wrapInTag('mwt_world_state', wsInner) : wsInner);
 
     // Plot Seeds block: only when seeds exist and hook mode is not 'off'.
-    if (seedsText && seedsHeader) {
-        const seedsInner = `${seedsHeader}\n\n${seedsText}`;
+    if (hooksText && seedsHeader) {
+        const seedsInner = `${seedsHeader}\n\n${hooksText}`;
         const seedsBlock = useTags
             ? wrapInTag('mwt_plot_seeds', seedsInner)
             : seedsInner;
-        return useTags
+        return wsBlock ? (useTags
             ? `${wsBlock}\n\n${seedsBlock}`
-            : `${wsBlock}\n\n---\n\n${seedsBlock}`;
+            : `${wsBlock}\n\n---\n\n${seedsBlock}`) : seedsBlock;
     }
 
-    return wsBlock;
+    return wsBlock || '';
 }
 
 // ─── Placement resolution (Phase 9 diagnostics) ──────────────────────────────
@@ -232,7 +211,7 @@ export function applyWorldStateInjection() {
             // false so the generic injector doesn't add an additional wrapper.
             useTags: false,
         });
-        console.log(`[MWT:WorldState] Injected ${text.length} chars at depth ${placement.depth.value}`);
+        console.log(`[MWT:WorldState] Injected ${payload.length} chars at depth ${placement.depth.value}`);
     } catch (err) {
         console.warn('[MWT:WorldState] Injection failed:', err);
     }

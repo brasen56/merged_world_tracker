@@ -5,7 +5,7 @@
  */
 
 import {
-    WORLD_STATE_HOOK_SECTIONS, parseWorldStateSections,
+    WORLD_STATE_HOOK_SECTIONS, isWorldStateHookSection, parseWorldStateSections,
 } from '../core/world_state_document.js';
 
 export const HOOK_SECTIONS = WORLD_STATE_HOOK_SECTIONS;
@@ -125,7 +125,7 @@ export function stripHookSections(text) {
     const source = typeof text === 'string' ? text : '';
     const parsed = parseWorldStateSections(source);
     const ranges = parsed.sections
-        .filter(section => HOOK_SECTIONS.includes(section.name))
+        .filter(section => isWorldStateHookSection(section.name))
         .map(section => ({ start: section.start, end: section.end }));
     if (!ranges.length) return source;
 

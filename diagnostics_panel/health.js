@@ -59,7 +59,7 @@ export const HEALTH_MODULE_SPECS = [
  *
  * Four of the five getTotalTokens() accessors measure the payload the module
  * hands to setExtensionPrompt right now:
- *   - World State  → header + world state text (world_state/index.js)
+ *   - World State  → the complete assembled injection payload (world_state/index.js)
  *   - Chronicle    → 0 when injection is off, else the joined entries
  *   - Story Planner→ getInjectedTokenCount()
  *   - Interiority  → the ACTIVE ledger lines only (dormant excluded, §20)

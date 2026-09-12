@@ -63,6 +63,13 @@ describe('normalizePresentValue', () => {
         expect(normalizePresentValue(EMPTY_PRESENT_VALUE)).toEqual([]);
     });
 
+    test('normalizes list punctuation without splitting conjunctions inside names', () => {
+        expect(normalizePresentValue('Alex, Mara, and Derek')).toEqual(['Alex', 'Mara', 'Derek']);
+        expect(normalizePresentValue('Alex; Mara')).toEqual(['Alex', 'Mara']);
+        expect(normalizePresentValue('Lord of Blood and Bone')).toEqual(['Lord of Blood and Bone']);
+        expect(normalizePresentValue('Salt and Pepper')).toEqual(['Salt and Pepper']);
+    });
+
     test.each([
         ['Alex (kitchen, Bob, Carol', ['Alex (kitchen', 'Bob', 'Carol']],
         ['Alex, Bob]', ['Alex', 'Bob]']],

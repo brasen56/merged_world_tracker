@@ -9,6 +9,10 @@ import {
     validateQuarantineStoreData,
     QUARANTINE_METADATA_KEY,
 } from './quarantine.js';
+import {
+    readCurrentScene,
+    projectWorldState,
+} from './world_state_document.js';
 
 export const WORLD_STATE_METADATA_KEY = 'world_state_tracker_metadata';
 
@@ -173,3 +177,13 @@ export function preserveQuarantinedRecords(storeId, issues, { sourceVersion = nu
 export function getCurrentWorldState() {
     return getChatMeta()?.[WORLD_STATE_METADATA_KEY]?.text || '';
 }
+
+/**
+ * Consumer-facing World State accessors. The stored Markdown remains the source
+ * of truth; projections are deliberately computed at read time so legacy and
+ * manually edited documents are never rewritten just by being read.
+ */
+export function getWorldStateRaw() { return getCurrentWorldState(); }
+export function getWorldStateFactual(text = getWorldStateRaw()) { return projectWorldState(text, { view: 'factual' }); }
+export function getWorldStateHooks(text = getWorldStateRaw()) { return projectWorldState(text, { view: 'hooks' }); }
+export function getCurrentWorldStateScene() { return readCurrentScene(getWorldStateRaw()); }

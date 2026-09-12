@@ -30,7 +30,7 @@
  */
 
 import {
-    getChat, getChatMeta, stripNonNarrative, getCurrentWorldState,
+    getChat, getChatMeta, stripNonNarrative, getWorldStateFactual,
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
     getStableHistoryEnd, captureScope, isCancellation,
 } from '../core/index.js';
@@ -344,7 +344,7 @@ export async function captureEvidence(name, uid) {
         } catch { /* ignore load errors */ }
     }
 
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
 
     const userContent = [
@@ -549,7 +549,7 @@ export async function runPsychoanalyzeProfile(name) {
     } catch { /* ignore load errors — proceed with evidence only */ }
 
     // Step 3: gather optional world context (same as captureEvidence)
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
     const worldContext = [
         worldState ? `<world_state>\n${worldState}\n</world_state>` : '',
@@ -1086,7 +1086,7 @@ export async function runContinuousCapture(name, opts = {}) {
         if (content) existingContext = content;
     } catch { /* ignore */ }
 
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
 
     const userContent = [
@@ -1371,7 +1371,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         if (content) existingContext = content;
     } catch { /* ignore */ }
 
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
 
     const userContent = [

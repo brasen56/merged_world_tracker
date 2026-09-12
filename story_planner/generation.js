@@ -7,7 +7,7 @@
 import {
     getChat,
     resolveApiCall, normaliseOutput, notify,
-    getCurrentWorldState, getLatestChronicleEntry,
+    getWorldStateFactual, getLatestChronicleEntry,
     stripNonNarrative, getStableHistoryEnd,
     captureScope, assertSameScope, isCancellation,
     captureRevision, sameRevision,
@@ -85,7 +85,7 @@ export function buildUserPrompt(recentText, reminderReason = '') {
     // Cross-module grounding. Both getters return '' when the user isn't using
     // that module (no World State document / no Chronicle snapshots), in which
     // case the block is simply omitted — generation still proceeds normally.
-    const ws = getCurrentWorldState().trim();
+    const ws = getWorldStateFactual().trim();
     const wsBlock = ws
         ? wrapTag('current_world_state',
             '[The current tracked state of the story. Ground your arcs in these threads, pressures, obligations, and character states.]\n' + ws)

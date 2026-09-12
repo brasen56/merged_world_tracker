@@ -368,6 +368,13 @@ export function getCurrentWorldState() {
     return _meta[WORLD_STATE_METADATA_KEY]?.text || '';
 }
 
+import { projectWorldState, readCurrentScene } from '../../core/world_state_document.js';
+
+export function getWorldStateRaw() { return getCurrentWorldState(); }
+export function getWorldStateFactual(text = getWorldStateRaw()) { return projectWorldState(text, { view: 'factual' }); }
+export function getWorldStateHooks(text = getWorldStateRaw()) { return projectWorldState(text, { view: 'hooks' }); }
+export function getCurrentWorldStateScene() { return readCurrentScene(getWorldStateRaw()); }
+
 // â”€â”€â”€ Re-exports of pure modules (so tests importing them via the barrel
 //     still work without pulling in the ST-dependent originals) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These ARE safe to use as-is because they have no ST dependencies.
@@ -381,8 +388,10 @@ export {
     WORLD_STATE_ARCHIVE_SECTION,
     CURRENT_SCENE_FIELDS,
     EMPTY_PRESENT_VALUE,
+    isWorldStateHookSection,
     parseWorldStateSections,
     parseCurrentScene,
+    readCurrentScene,
     normalizePresentValue,
     normalizeSceneAnchor,
     patchCurrentScene,

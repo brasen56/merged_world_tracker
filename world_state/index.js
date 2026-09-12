@@ -25,7 +25,7 @@ import {
     setWorldSetting,
 } from './data.js';
 import {
-    WORLD_STATE_INJECTION_HEADER, applyWorldStateInjection,
+    applyWorldStateInjection, buildInjectionPayload,
 } from './injection.js';
 import {
     refreshWorldState, onMessageReceived, restartAutoSaveTimer,
@@ -204,8 +204,7 @@ export function isRefreshing() {
 export function getTotalTokens() {
     const text = getWorldStateText();
     if (!text) return 0;
-    const fullInjected = `${WORLD_STATE_INJECTION_HEADER}\n\n${text}`;
-    return estimateTokens(fullInjected);
+    return estimateTokens(buildInjectionPayload(text));
 }
 
 /** Returns true if the world state editor has unsaved changes */

@@ -11,7 +11,7 @@
 import {
     getChatMeta, getContextSafe, getRecentMessages, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
-    getCurrentWorldState, wholePhraseRegex,
+    getCurrentWorldStateScene, wholePhraseRegex,
     assertSameScope, isCancellation,
 } from '../core/index.js';
 
@@ -190,28 +190,11 @@ export async function buildSceneRoster(virtuallyActiveIds = []) {
         return false;
     };
 
-    // 1. Parse `Present:` from world state. The world-state template emits
-    //    comma-separated names — do not split on hyphens ("Jean-Luc") or
-    //    other characters that can appear inside a single name.
+    // 1. Read the shared Current Scene contract. The core parser owns field
+    //    boundaries and Present annotation normalization.
     let sceneNames = [];
-    const worldState = getCurrentWorldState();
-    if (worldState) {
-        const presentMatch = worldState.match(/^Present:\s*(.+)$/im);
-        if (presentMatch) {
-            sceneNames = presentMatch[1]
-                // The template asks for names only, but the model routinely
-                // annotates each name with a parenthetical location/status —
-                // "Simon (living room, unpacking)". Those parentheticals
-                // contain commas, so strip every bracketed group BEFORE
-                // splitting on commas; otherwise each annotation shatters into
-                // garbage roster tokens ("Simon (living room", "unpacking)",
-                // "Charlotte ", "asleep)", ...).
-                .replace(/\s*[([][^)\]]*[)\]]/g, '')
-                .split(/[,;]|\band\b/i)
-                .map(s => s.trim())
-                .filter(Boolean);
-        }
-    }
+    const scene = getCurrentWorldStateScene();
+    if (scene?.section || scene?.legacy) sceneNames = scene.present || [];
 
     // 2. UNION in Knowledge Tracker registry names that appear in recent
     //    messages. This now runs ALWAYS, not only when `Present:` is empty.

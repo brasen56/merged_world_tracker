@@ -9,7 +9,7 @@
 import {
     getChat, getPlayerNames, getUserNames,
     resolveApiCall, normaliseOutput, parseJsonLenient,
-    getCurrentWorldState, getLatestChronicleEntry,
+    getWorldStateFactual, getLatestChronicleEntry,
     stripNonNarrative, getStableHistoryEnd,
     isCancellation,
 } from '../core/index.js';
@@ -1077,7 +1077,7 @@ export async function runScan({ trigger = null } = {}) {
     const registry = getRegistry();
     const knownNames = Object.keys(registry).filter(name => registry[name].uid !== null && registry[name].uid !== undefined);
     const recentMessages = getRecentMessages();
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
     if (!recentMessages) throw new Error('No recent messages to scan.');
 
@@ -1187,7 +1187,7 @@ export async function runNpcUpdate(name, uid) {
     if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
     const currentContent = stripRelationshipBlock(rawContent);
     const recentMessages = getRecentMessages();
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     if (!recentMessages) throw new Error('No recent messages.');
     const userContent = [`<entity>${name}</entity>`, `<current_entry>\n${currentContent}\n</current_entry>`, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), `Identify new info about ${name}. Output only JSON.`].filter(Boolean).join('\n');
     // Use the dossier update prompt when the existing entry is a dossier, or
@@ -1268,7 +1268,7 @@ export async function runNpcEnrich(name, uid) {
     if (!rawContent) throw new Error(`Could not load entry for "${name}".`);
     const currentContent = stripRelationshipBlock(rawContent);
     const recentMessages = getRecentMessages(50);
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
     if (!recentMessages) throw new Error('No recent messages.');
 
@@ -1407,7 +1407,7 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
         throw new Error('No refreshable dossier fields selected (canon lock is manual-only; personality belongs to 🌱 Growth when a profile exists).');
     }
     const recentMessages = getRecentMessages();
-    const worldState = getCurrentWorldState();
+    const worldState = getWorldStateFactual();
     if (!recentMessages) throw new Error('No recent messages.');
     // Show the model the exact text it is re-deriving — null marks fields the
     // entry doesn't carry yet (the refresh may fill them).

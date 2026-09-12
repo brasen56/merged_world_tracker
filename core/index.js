@@ -31,6 +31,10 @@ export { createModal, showModal, hideModal, setStatus, formatDate } from './moda
 export { applyExtensionPromptInjection, roleToNumber, wrapInTag } from './injection.js';
 export {
     getCurrentWorldState,
+    getWorldStateRaw,
+    getWorldStateFactual,
+    getWorldStateHooks,
+    getCurrentWorldStateScene,
     getLatestChronicleEntry,
     patchChatMeta,
     persistChatMeta,
@@ -90,8 +94,10 @@ export {
     WORLD_STATE_ARCHIVE_SECTION,
     CURRENT_SCENE_FIELDS,
     EMPTY_PRESENT_VALUE,
+    isWorldStateHookSection,
     parseWorldStateSections,
     parseCurrentScene,
+    readCurrentScene,
     normalizePresentValue,
     normalizeSceneAnchor,
     patchCurrentScene,

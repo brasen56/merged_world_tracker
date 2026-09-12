@@ -52,8 +52,8 @@
 
 import {
     getChatMeta, persistChatMeta, preserveQuarantinedRecords, getUserNames,
+    getCurrentWorldStateScene,
     createSettingsManager, syncSharedConnectionSettings,
-    getCurrentWorldState,
     getChat, getContextSafe,
 } from '../core/index.js';
 // §7.5 scope discipline (migrateIndexKeys): direct import (not the barrel) so
@@ -1904,8 +1904,5 @@ function generateEntryId() {
  * @returns {string}
  */
 export function getWorldTime() {
-    const ws = getCurrentWorldState();
-    if (!ws) return '';
-    const m = ws.match(/^Time:\s*(.+)$/im);
-    return m ? m[1].trim() : '';
+    return getCurrentWorldStateScene()?.time?.trim() || '';
 }

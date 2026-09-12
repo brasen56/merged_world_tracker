@@ -31,6 +31,7 @@ export const EMPTY_PRESENT_VALUE = 'None';
 export const WORLD_STATE_ARCHIVE_SECTION = 'Archive (Stale)';
 
 const KNOWN_SECTION_SET = new Set([...WORLD_STATE_SECTIONS, WORLD_STATE_ARCHIVE_SECTION]);
+const WORLD_STATE_HOOK_SECTION_SET = new Set(WORLD_STATE_HOOK_SECTIONS.map(name => name.toLowerCase()));
 const FIELD_KEY_BY_LABEL = Object.freeze(Object.fromEntries(
     CURRENT_SCENE_FIELDS.map(label => [label, label.toLowerCase()]),
 ));
@@ -99,12 +100,22 @@ export function parseWorldStateSections(text) {
     };
 }
 
-function splitPresentNames(value) {
+/** Return whether a section name belongs to the optional narrative-hook view. */
+export function isWorldStateHookSection(name) {
+    return typeof name === 'string' && WORLD_STATE_HOOK_SECTION_SET.has(name.toLowerCase());
+}
+
+function splitPresentNames(value, { splitBareConjunctions = false } = {}) {
     if (String(value ?? '').trim().toLowerCase() === EMPTY_PRESENT_VALUE.toLowerCase()) return [];
     const seen = new Set();
     const names = [];
-    for (const part of value.split(',')) {
-        const name = part.trim().replace(/\s+/g, ' ');
+    const separator = splitBareConjunctions ? /[,;]|\band\b/i : /[,;]/;
+    for (const part of String(value ?? '').split(separator)) {
+        // A conjunction at the start of a comma/semicolon-delimited item is
+        // list grammar (including the Oxford-comma form), not part of a name.
+        // A bare conjunction inside an item may be part of a real name, so
+        // write normalization preserves it unless this is a tolerant read.
+        const name = part.trim().replace(/^(?:and|&)\s+/i, '').replace(/\s+/g, ' ');
         if (!name || seen.has(name)) continue;
         seen.add(name);
         names.push(name);
@@ -112,7 +123,7 @@ function splitPresentNames(value) {
     return names;
 }
 
-function inspectPresentValue(value) {
+function inspectPresentValue(value, options = {}) {
     const source = Array.isArray(value) ? value.join(', ') : asText(value);
     let cleaned = '';
     const stack = [];
@@ -151,7 +162,7 @@ function inspectPresentValue(value) {
     // Never return the partially stripped value when delimiters are malformed:
     // doing so can erase every roster entry after an unmatched opener.
     return {
-        names: splitPresentNames(delimiterIssue ? source : cleaned),
+        names: splitPresentNames(delimiterIssue ? source : cleaned, options),
         delimiterIssue,
     };
 }
@@ -162,8 +173,8 @@ function inspectPresentValue(value) {
  * source order and linguistically unusual names are preserved. Malformed
  * annotations are retained conservatively; parseCurrentScene reports them.
  */
-export function normalizePresentValue(value) {
-    return inspectPresentValue(value).names;
+export function normalizePresentValue(value, options = {}) {
+    return inspectPresentValue(value, options).names;
 }
 
 const QUALITATIVE_TIMES = [
@@ -333,6 +344,56 @@ export function parseCurrentScene(text) {
         raw,
         section,
         issues,
+    };
+}
+
+/**
+ * Read a scene tolerantly without rebuilding a second document. Generated
+ * documents use canonical field casing, while imported and hand-edited
+ * documents may use casing variants. In both cases the returned section and
+ * parser issues refer to the original saved text.
+ */
+export function readCurrentScene(text) {
+    const parsed = parseCurrentScene(text);
+    if (!parsed.section) {
+        const source = asText(text);
+        if (!source.trim() || parseWorldStateSections(source).sections.some(section => section.known)) return parsed;
+        const legacy = {};
+        for (const label of CURRENT_SCENE_FIELDS) {
+            const value = source.match(new RegExp(`^[ \\t]*${label}[ \\t]*:[ \\t]*(.*)$`, 'im'))?.[1]?.trim();
+            if (value !== undefined) legacy[label.toLowerCase()] = value;
+        }
+        return Object.keys(legacy).length ? {
+            ...parsed,
+            ...legacy,
+            raw: { ...parsed.raw, ...legacy },
+            present: normalizePresentValue(legacy.present, { splitBareConjunctions: true }),
+            legacy: true,
+        } : parsed;
+    }
+
+    const values = {};
+    for (const label of CURRENT_SCENE_FIELDS) {
+        const key = label.toLowerCase();
+        // Canonical fields have already been parsed line-by-line (including
+        // indentation). Only use the tolerant regex when that strict value is
+        // absent, so a stale case variant cannot override a real field.
+        const strictValue = parsed.raw[key];
+        const value = strictValue !== undefined
+            ? strictValue.trim()
+            : parsed.section.body.match(new RegExp(`^[ \\t]*${label}[ \\t]*:[ \\t]*(.*)$`, 'im'))?.[1]?.trim();
+        if (value !== undefined) values[label.toLowerCase()] = value;
+    }
+    return {
+        ...parsed,
+        date: values.date,
+        time: values.time,
+        location: values.location,
+        present: values.present === undefined
+            ? []
+            : normalizePresentValue(values.present, { splitBareConjunctions: true }),
+        situation: values.situation,
+        raw: { ...parsed.raw, ...values },
     };
 }
 
@@ -514,23 +575,33 @@ export function validateWorldStateDocument(text, options = {}) {
 export function projectWorldState(text, options = {}) {
     const parsed = parseWorldStateSections(text);
     const view = options.view || 'all';
-    let selected;
-    if (options.sections) {
-        selected = new Set(options.sections);
-    } else if (view === 'factual') {
-        selected = new Set(WORLD_STATE_FACTUAL_SECTIONS);
-    } else if (view === 'hooks') {
-        selected = new Set(WORLD_STATE_HOOK_SECTIONS);
-    } else if (view === 'all') {
-        selected = new Set(WORLD_STATE_SECTIONS);
-    } else {
+    if (!['all', 'factual', 'hooks'].includes(view)) {
         throw new TypeError(`Unknown World State projection view "${view}".`);
     }
-    const excluded = new Set(options.excludeSections || []);
-    excluded.add(WORLD_STATE_ARCHIVE_SECTION);
-    return parsed.sections
-        .filter(section => selected.has(section.name) && !excluded.has(section.name))
+    // Legacy World State documents may contain the old field-only format with
+    // no level-two section headers. Preserve that readable content rather than
+    // silently injecting an empty projection; once a document has recognized
+    // sections, the normal factual/hook filtering below applies. A field-only
+    // legacy document is all factual scene data — it has no hook sections, so
+    // the hooks view must return '' rather than duplicating the full text
+    // (which would otherwise be injected a second time under the hook header).
+    if (parsed.sections.length === 0) return view === 'hooks' ? '' : asText(text).trim();
+    const isArchive = name => WORLD_STATE_ARCHIVE_SECTION.toLowerCase() === name.toLowerCase();
+
+    const selected = Array.isArray(options.sections)
+        ? new Set(options.sections.map(name => String(name).toLowerCase()))
+        : null;
+    const excluded = new Set((options.excludeSections || []).map(name => String(name).toLowerCase()));
+    const sections = parsed.sections
+        .filter(section => !isArchive(section.name))
+        .filter(section => view === 'all'
+            || (view === 'hooks' ? isWorldStateHookSection(section.name) : !isWorldStateHookSection(section.name)))
+        .filter(section => !selected || selected.has(section.name.toLowerCase()))
+        .filter(section => !excluded.has(section.name.toLowerCase()))
         .map(section => section.raw.trim())
-        .filter(Boolean)
-        .join(parsed.lineEnding + parsed.lineEnding);
+        .filter(Boolean);
+    // Preamble is factual hand-edited context. Keep it in factual/all views
+    // unless an explicit section allow-list asks for sections only.
+    if (view !== 'hooks' && !selected && parsed.preamble.trim()) sections.unshift(parsed.preamble.trim());
+    return sections.join(parsed.lineEnding + parsed.lineEnding);
 }
