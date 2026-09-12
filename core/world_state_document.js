@@ -465,6 +465,11 @@ export function patchCurrentScene(text, patch = {}) {
     return result;
 }
 
+// World State details are structured as scalar fields or bullets. A
+// free-standing sentence is therefore prose leakage; deliberately do not match
+// bullets, so factual entries such as "- Alex entered..." remain valid.
+const UNSTRUCTURED_PROSE_RE = /^\s*(?![-+*#>`]|(?:Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn)\b[^\r\n]*:)[A-Z][^\r\n]*[.!?]\s*$/m;
+
 const RP_MARKERS = Object.freeze([
     { pattern: /^\s*(?:[-+]\s+)?\*(?!\*)[^*\r\n]+\*(?!\*)\s*$/m, label: 'asterisk-formatted action' },
     { pattern: /^\s*(?:```|~~~)/m, label: 'fenced prose' },
@@ -487,14 +492,123 @@ const RP_MARKERS = Object.freeze([
     { pattern: /\b(?:you see|you notice|you feel)\b/i, label: 'second-person narration' },
     { pattern: /^(?:Meanwhile|Suddenly|As you|The (?:air|room|silence|darkness))\b/im, label: 'narrative prose opener' },
     {
-        // World State details are structured as scalar fields or bullets. A
-        // free-standing sentence is therefore prose leakage; deliberately do
-        // not match bullets, so factual entries such as "- Alex entered..."
-        // remain valid.
-        pattern: /^\s*(?![-+*#>`]|(?:Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn)\b[^\r\n]*:)[A-Z][^\r\n]*[.!?]\s*$/m,
+        pattern: UNSTRUCTURED_PROSE_RE,
         label: 'unstructured narrative prose',
+        hint: 'Write each entry as its own "- " bullet line.',
     },
 ]);
+
+// Enough located lines for a retry to fix every offending entry, without one
+// bad section turning the retry reminder into a wall of quoted text.
+const MAX_MARKER_LINES = 3;
+const MARKER_LINE_PREVIEW_CHARS = 120;
+
+/** Find the lines (and their sections) a roleplay marker matched. */
+function locateMarkerLines(pattern, parsed) {
+    const source = parsed.text;
+    const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+    const located = [];
+    const seenLineStarts = new Set();
+    let match;
+    while (located.length < MAX_MARKER_LINES && (match = re.exec(source)) !== null) {
+        if (!match[0]) {
+            re.lastIndex++;
+            continue;
+        }
+        // A leading `^\s*` can start on a blank line above the offending text,
+        // so anchor on the first non-whitespace character the marker matched.
+        const offset = match.index + match[0].length - match[0].trimStart().length;
+        const lineStart = source.lastIndexOf('\n', offset - 1) + 1;
+        if (seenLineStarts.has(lineStart)) continue;
+        seenLineStarts.add(lineStart);
+        const lineEnd = source.indexOf('\n', offset);
+        const line = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd).trim();
+        const section = parsed.sections.filter(entry => entry.start <= offset).at(-1)?.name ?? null;
+        located.push({ section, line });
+    }
+    return located;
+}
+
+// A bare placeholder where the prompt asks for the section to be omitted.
+const PLACEHOLDER_LINE_RE = /^\(?(?:none|n\/a|nothing)(?:\s+(?:currently|yet|so far|at (?:this|the) (?:time|moment)))?\)?[.!]?$/i;
+// Titles and initials end in a period without ending the sentence.
+const NON_TERMINAL_ABBREVIATIONS = new Set(['mr', 'mrs', 'ms', 'dr', 'st', 'jr', 'sr', 'lt', 'capt', 'sgt', 'prof', 'mt', 'vs']);
+
+function isSingleSentence(line) {
+    const boundary = /(\p{L}+)?[.!?]+["”’')\]]*\s+(?=["“(]?\p{Lu})/gu;
+    let match;
+    while ((match = boundary.exec(line)) !== null) {
+        const word = match[1] || '';
+        if (!NON_TERMINAL_ABBREVIATIONS.has(word.toLowerCase()) && !/^\p{Lu}$/u.test(word)) return false;
+    }
+    return true;
+}
+
+/**
+ * Repair objective formatting slips in GENERATED output before validation.
+ *
+ * Outside Current Scene, a one-sentence line that is not a bullet gains a
+ * `- ` at its own indentation, and a bare placeholder line ("None.", "N/A") is
+ * dropped — along with its section when nothing else remains. A line is only
+ * bulleted when the unstructured-prose check is the ONLY marker it trips, so
+ * dialogue, asterisk actions, second-person narration, and narrative openers
+ * still reject, as do multi-sentence paragraphs. Bulleting costs no real
+ * protection: the validator already accepts narration written as a bullet.
+ *
+ * This changes saved bytes, so editor and import writes must never use it.
+ *
+ * @returns {{ text: string, changes: Array<{ kind: 'bulleted'|'dropped-placeholder'|'dropped-empty-section', section: string, line?: string }> }}
+ */
+export function normalizeGeneratedDocument(text) {
+    const source = asText(text);
+    const parsed = parseWorldStateSections(source);
+    const otherMarkers = RP_MARKERS.filter(marker => marker.pattern !== UNSTRUCTURED_PROSE_RE);
+    const changes = [];
+    let result = source;
+    let droppedFinalSection = false;
+    // Splice from the last section back so earlier offsets stay valid.
+    for (const section of [...parsed.sections].reverse()) {
+        if (section.name === 'Current Scene') continue;
+        const sectionChanges = [];
+        const parts = section.body.split(/(\r?\n)/);
+        const kept = [];
+        let droppedPlaceholder = false;
+        for (let index = 0; index < parts.length; index += 2) {
+            const line = parts[index];
+            const eol = parts[index + 1] ?? '';
+            const trimmed = line.trim();
+            if (PLACEHOLDER_LINE_RE.test(trimmed)) {
+                droppedPlaceholder = true;
+                sectionChanges.push({ kind: 'dropped-placeholder', section: section.name, line: trimmed });
+                continue;
+            }
+            if (UNSTRUCTURED_PROSE_RE.test(line)
+                && isSingleSentence(trimmed)
+                && !otherMarkers.some(marker => marker.pattern.test(trimmed))) {
+                const indent = line.slice(0, line.length - line.trimStart().length);
+                kept.push(`${indent}- ${trimmed}`, eol);
+                sectionChanges.push({ kind: 'bulleted', section: section.name, line: trimmed });
+                continue;
+            }
+            kept.push(line, eol);
+        }
+        if (!sectionChanges.length) continue;
+
+        const body = kept.join('');
+        let replacement = source.slice(section.start, section.headerEnd) + body;
+        if (droppedPlaceholder && !body.trim()) {
+            replacement = '';
+            sectionChanges.push({ kind: 'dropped-empty-section', section: section.name });
+            if (section.end === source.length) droppedFinalSection = true;
+        }
+        result = result.slice(0, section.start) + replacement + result.slice(section.end);
+        changes.unshift(...sectionChanges);
+    }
+    // Dropping the final section leaves the separator that belonged to the
+    // section before it; remove only those orphaned line breaks.
+    if (droppedFinalSection) result = result.replace(/(?:\r?\n[ \t]*)+$/, '');
+    return { text: result, changes };
+}
 
 /**
  * Validate a document without mutating it.
@@ -529,9 +643,18 @@ export function validateWorldStateDocument(text, options = {}) {
             }));
         }
     }
+    // Name the section and line: a bare marker label gives a validation retry
+    // nothing to fix, so the model repeats the same mistake.
     for (const marker of RP_MARKERS) {
-        if (marker.pattern.test(source)) {
-            issues.push(issue('roleplay-leakage', `Roleplay marker detected: ${marker.label}.`));
+        for (const { section, line } of locateMarkerLines(marker.pattern, parsed)) {
+            const where = section ? `in ## ${section}` : 'before the first section';
+            const preview = line.length > MARKER_LINE_PREVIEW_CHARS
+                ? `${line.slice(0, MARKER_LINE_PREVIEW_CHARS - 1)}…`
+                : line;
+            const hint = marker.hint ? ` ${marker.hint}` : '';
+            issues.push(issue('roleplay-leakage', `Roleplay marker detected: ${marker.label} ${where}: "${preview}".${hint}`, {
+                marker: marker.label, section, line,
+            }));
         }
     }
 

@@ -15,6 +15,7 @@ import {
     truncateText,
     setStatus,
     validateWorldStateDocument,
+    normalizeGeneratedDocument,
 } from '../core/index.js';
 // Part 6 (§7.4) pause guard + the store id it checks. Direct import (not the
 // barrel) so the REAL pause singleton is read even under the test
@@ -38,6 +39,7 @@ import {
     DeltaPatchError, planAutoRefresh, getDeltaStatus, buildRefreshStatusDelta,
     buildPartialRefreshStatus, digestText, isDeltaModeEnabled,
     buildDeltaSystemPrompt, buildDeltaUserMessage, parseDeltaPatch, applyDeltaPatch,
+    bodyHasSectionHeader,
 } from './delta.js';
 
 // ─── Message scan helpers ────────────────────────────────────────────────────
@@ -162,6 +164,45 @@ function validateGeneratedDocument(text) {
     const contract = validateWorldStateDocument(normalizedText, { mode });
     if (!contract.ok) return { ok: false, reason: contract.errors.map(entry => entry.message).join(' ') };
     return { ok: true, text: normalizedText, warnings: contract.warnings };
+}
+
+function logFormattingRepairs(changes) {
+    if (!changes.length) return;
+    const summary = changes
+        .map(change => (change.line ? `${change.kind} in ## ${change.section}: "${change.line}"` : `${change.kind}: ## ${change.section}`))
+        .join('; ');
+    console.log(`[MWT:WorldState] Repaired generated formatting before validation — ${summary}`);
+}
+
+/**
+ * A full refresh's output is entirely model-written, so formatting repair
+ * (normalizeGeneratedDocument) may apply to the whole document. Other paths
+ * validate documents that still contain saved editor/import content and must
+ * not use this.
+ */
+function validateFullRefreshOutput(text) {
+    const repaired = normalizeGeneratedDocument(text);
+    logFormattingRepairs(repaired.changes);
+    return validateGeneratedDocument(repaired.text);
+}
+
+/**
+ * Apply the same formatting repair to the section bodies a delta patch
+ * generated — never to the saved sections it leaves untouched. An update
+ * holding only a placeholder ("None.") becomes a removal.
+ */
+function repairDeltaOperations(ops) {
+    return ops.map(operation => {
+        if (operation.type !== 'update' || operation.section === 'Current Scene') return operation;
+        const body = operation.body.trim();
+        const withHeader = bodyHasSectionHeader(body, operation.section) ? body : `## ${operation.section}\n${body}`;
+        const repaired = normalizeGeneratedDocument(withHeader);
+        if (!repaired.changes.length) return operation;
+        logFormattingRepairs(repaired.changes);
+        return repaired.text.trim()
+            ? { ...operation, body: repaired.text }
+            : { type: 'remove', section: operation.section };
+    });
 }
 
 /**
@@ -510,7 +551,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         let rawModelText = normaliseOutput(result);
         let text = rawModelText;
         if (getSettings().hookMode === 'off') text = stripHookSections(text);
-        let validation = validateGeneratedDocument(text);
+        let validation = validateFullRefreshOutput(text);
         if (validation.ok) text = validation.text;
 
         if (!validation.ok) {
@@ -525,7 +566,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             rawModelText = normaliseOutput(result);
             text = rawModelText;
             if (getSettings().hookMode === 'off') text = stripHookSections(text);
-            validation = validateGeneratedDocument(text);
+            validation = validateFullRefreshOutput(text);
             if (!validation.ok) {
                 logRejectedGeneratedOutput('Validation retry', rawModelText, validation.reason);
                 throw new Error(`Model output rejected after retry: ${validation.reason}`);
@@ -576,7 +617,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                 rawModelText = normaliseOutput(result);
                 text = rawModelText;
                 if (getSettings().hookMode === 'off') text = stripHookSections(text);
-                validation = validateGeneratedDocument(text);
+                validation = validateFullRefreshOutput(text);
                 if (!validation.ok) {
                     logRejectedGeneratedOutput('Grounding retry', rawModelText, validation.reason);
                     throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
@@ -865,7 +906,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
             return finalText;
         }
 
-        const applied = applyDeltaPatch(baselineText, parsed.ops);
+        const applied = applyDeltaPatch(baselineText, repairDeltaOperations(parsed.ops));
         if (!applied.ok) throw new DeltaPatchError(`Patch failed to apply: ${applied.reason}`);
         let finalText = applied.text;
 

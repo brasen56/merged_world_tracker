@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
     EMPTY_PRESENT_VALUE,
+    normalizeGeneratedDocument,
     normalizePresentValue,
     normalizeSceneAnchor,
     parseCurrentScene,
@@ -303,6 +304,82 @@ describe('validateWorldStateDocument', () => {
         expect(custom.warnings.map(entry => entry.code)).toEqual(expect.arrayContaining([
             'present-needs-normalization', 'compactness-target-exceeded',
         ]));
+    });
+
+    test('names the section and line a roleplay marker matched, with a fix hint', () => {
+        const line = 'Derek left the office. The manifest never came.';
+        const result = validateWorldStateDocument(`${MINIMAL_SCENE}\n\n## Story Momentum\n${line}`);
+
+        expect(result.errors).toContainEqual(expect.objectContaining({
+            code: 'roleplay-leakage',
+            section: 'Story Momentum',
+            line,
+            message: `Roleplay marker detected: unstructured narrative prose in ## Story Momentum: "${line}". Write each entry as its own "- " bullet line.`,
+        }));
+    });
+
+    test('reports each offending line separately, capped per marker', () => {
+        const prose = ['One. Two.', 'Three. Four.', 'Five. Six.', 'Seven. Eight.'];
+        const result = validateWorldStateDocument(`${MINIMAL_SCENE}\n\n## Recent Changes\n${prose.join('\n')}`);
+        const located = result.errors.filter(entry => entry.marker === 'unstructured narrative prose');
+
+        expect(located.map(entry => entry.line)).toEqual(prose.slice(0, 3));
+    });
+});
+
+describe('normalizeGeneratedDocument', () => {
+    test('bullets a one-sentence hook line so the document validates', () => {
+        const text = `${MINIMAL_SCENE}\n\n## Story Momentum\nThe harbour master will likely ask questions.`;
+        const repaired = normalizeGeneratedDocument(text);
+
+        expect(repaired.text).toBe(`${MINIMAL_SCENE}\n\n## Story Momentum\n- The harbour master will likely ask questions.`);
+        expect(repaired.changes).toEqual([{
+            kind: 'bulleted', section: 'Story Momentum', line: 'The harbour master will likely ask questions.',
+        }]);
+        // The Situation line also ends with a period; scene fields were never prose.
+        expect(validateWorldStateDocument(repaired.text).ok).toBe(true);
+    });
+
+    test('bullets a wrapped continuation at its own indentation and keeps CRLF', () => {
+        const text = `${MINIMAL_SCENE}\n\n## Active Threads\n- **Manifest** [active]: The guild refuses to unload.\n  Tensions are rising.`
+            .replaceAll('\n', '\r\n');
+        const repaired = normalizeGeneratedDocument(text);
+
+        expect(repaired.text).toBe(text.replace('  Tensions are rising.', '  - Tensions are rising.'));
+        expect(validateWorldStateDocument(repaired.text).ok).toBe(true);
+    });
+
+    test('treats title abbreviations as part of one sentence', () => {
+        const repaired = normalizeGeneratedDocument(`${MINIMAL_SCENE}\n\n## Pending\nDr. Aboud is expected at the docks by dawn.`);
+        expect(repaired.text).toContain('- Dr. Aboud is expected at the docks by dawn.');
+    });
+
+    test('drops placeholder lines and the sections they leave empty', () => {
+        const threads = '## Active Threads\n- **Manifest** [active]: delayed';
+        expect(normalizeGeneratedDocument(`${MINIMAL_SCENE}\n\n## Pending\nNone.\n\n${threads}`).text)
+            .toBe(`${MINIMAL_SCENE}\n\n${threads}`);
+        expect(normalizeGeneratedDocument(`${MINIMAL_SCENE}\n\n## Unresolved Threads\nN/A`).text).toBe(MINIMAL_SCENE);
+
+        const mixed = normalizeGeneratedDocument(`${MINIMAL_SCENE}\n\n## Pending\nNone currently.\n- Derek owes the manifest by dawn.`);
+        expect(mixed.text).toBe(`${MINIMAL_SCENE}\n\n## Pending\n- Derek owes the manifest by dawn.`);
+    });
+
+    test.each([
+        'Mara glared at Derek. The rain kept falling.',
+        'Mara said, "We leave at dawn."',
+        'You see the harbour lights.',
+        'Suddenly, the door opens.',
+        '  The room goes silent.',
+    ])('leaves real roleplay leakage for the validator to reject: %s', leaked => {
+        const text = `${MINIMAL_SCENE}\n\n## Recent Changes\n${leaked}`;
+
+        expect(normalizeGeneratedDocument(text)).toEqual({ text, changes: [] });
+        expect(validateWorldStateDocument(text).errors).toContainEqual(expect.objectContaining({ code: 'roleplay-leakage' }));
+    });
+
+    test('never edits Current Scene', () => {
+        const text = `${MINIMAL_SCENE}\nThe rain continues.`;
+        expect(normalizeGeneratedDocument(text)).toEqual({ text, changes: [] });
     });
 });
 

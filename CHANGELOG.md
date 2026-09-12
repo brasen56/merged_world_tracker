@@ -12,6 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.7]
+
+### Added
+- Enhanced logging for rejected model outputs (World State)
+
+### Fixed
+
+- World State full refreshes were rejected whenever the model wrote an entry
+  without a bullet (for example a plain sentence under `## Story Momentum`),
+  because the Phase 4 validator treats any unbulleted sentence as roleplay
+  prose. Generated output now has these formatting slips repaired before
+  validation: outside Current Scene, a one-sentence unbulleted line becomes a
+  `- ` bullet at its own indentation, and a bare placeholder line (`None.`,
+  `N/A`) is dropped along with a section it leaves empty. Delta refresh
+  applies the same repair to the section bodies it generated, never to saved
+  sections. Editor and import writes are unchanged.
+- Real roleplay leakage still rejects: dialogue, asterisk actions,
+  second-person narration, narrative openers, fenced prose, and
+  multi-sentence unbulleted paragraphs.
+- Roleplay-marker rejections now name the section and the offending line
+  (up to three per marker), for example
+  `unstructured narrative prose in ## Story Momentum: "…"`. The message
+  reaches the console log and the validation retry reminder, so the retry can
+  fix the actual line instead of repeating the mistake.
+
 ## [2.8.6]
 
 ### Fixed

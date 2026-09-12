@@ -389,7 +389,7 @@ export function parseDeltaPatch(raw) {
 }
 
 /** Does this body already open with the section's own header line? */
-function bodyHasSectionHeader(body, sectionName) {
+export function bodyHasSectionHeader(body, sectionName) {
     const first = body.split('\n')[0]?.trim() || '';
     const escaped = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`^#{1,6}\\s*\\*{0,2}${escaped}\\*{0,2}\\s*$`, 'i').test(first);

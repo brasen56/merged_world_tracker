@@ -99,6 +99,7 @@ export {
     parseCurrentScene,
     readCurrentScene,
     normalizePresentValue,
+    normalizeGeneratedDocument,
     normalizeSceneAnchor,
     patchCurrentScene,
     validateWorldStateDocument,

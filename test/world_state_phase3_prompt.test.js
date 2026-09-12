@@ -117,8 +117,9 @@ describe('Phase 3 hook-mode write and injection boundaries', () => {
     });
 
     test('logs the complete model output for both failed validation attempts', async () => {
-        const first = `${FACTUAL_DOCUMENT}\nFirst attempt leaked narrative prose.`;
-        const retry = `${FACTUAL_DOCUMENT}\nRetry also leaked narrative prose.`;
+        // Two sentences: a one-sentence slip is repaired into a bullet, not rejected.
+        const first = `${FACTUAL_DOCUMENT}\nFirst attempt leaked narrative prose. It kept going.`;
+        const retry = `${FACTUAL_DOCUMENT}\nRetry also leaked narrative prose. It kept going.`;
         let attempt = 0;
         setWorldStateData({ text: FACTUAL_DOCUMENT });
         setFakeApi(() => (++attempt === 1 ? first : retry));
@@ -138,6 +139,76 @@ describe('Phase 3 hook-mode write and injection boundaries', () => {
             log.mockRestore();
             warn.mockRestore();
             error.mockRestore();
+        }
+    });
+
+    test('full refresh repairs an unbulleted one-sentence hook instead of rejecting it', async () => {
+        saveSettings({ hookMode: 'passive' });
+        setWorldStateData({ text: FACTUAL_DOCUMENT });
+        let calls = 0;
+        setFakeApi(() => {
+            calls++;
+            return `${FACTUAL_DOCUMENT}\n\n## Story Momentum\nThe delay may force a decision.`;
+        });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+        try {
+            const updated = await refreshWorldState();
+
+            expect(calls).toBe(1);
+            expect(updated).toBe(`${FACTUAL_DOCUMENT}\n\n## Story Momentum\n- The delay may force a decision.`);
+            expect(log).toHaveBeenCalledWith(expect.stringContaining('bulleted in ## Story Momentum: "The delay may force a decision."'));
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    test('a rejected attempt tells the retry which line to fix', async () => {
+        const requests = [];
+        setWorldStateData({ text: FACTUAL_DOCUMENT });
+        setFakeApi(request => {
+            requests.push(request);
+            return requests.length === 1 ? `${FACTUAL_DOCUMENT}\nDerek left. The manifest never came.` : FACTUAL_DOCUMENT;
+        });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        try {
+            await refreshWorldState();
+
+            expect(requests).toHaveLength(2);
+            expect(requests[1].userContent).toContain('unstructured narrative prose in ## Recent Changes: "Derek left. The manifest never came."');
+            expect(getWorldStateText()).toBe(FACTUAL_DOCUMENT);
+        } finally {
+            log.mockRestore();
+            warn.mockRestore();
+        }
+    });
+
+    test('delta repairs only the section bodies it generated', async () => {
+        saveSettings({ hookMode: 'passive' });
+        // A bare "None" in a SAVED section is valid and must survive; the same
+        // placeholder in a generated update turns that update into a removal.
+        const baseline = `${FACTUAL_DOCUMENT}\n\n## Pending\n- Derek owes the manifest by dawn.\n\n## Unresolved Threads\nNone`;
+        setWorldStateData({ text: baseline, deltaStatus: buildRefreshStatusDelta('full', baseline, {}, 0) });
+        setFakeApi(() => [
+            '### UPDATE: Pending',
+            '## Pending',
+            'None.',
+            '### UPDATE: Story Momentum',
+            '## Story Momentum',
+            'The delay may force a decision.',
+        ].join('\n'));
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+        try {
+            const updated = await refreshWorldStateDelta();
+
+            expect(updated).not.toContain('## Pending');
+            expect(updated).toContain('## Unresolved Threads\nNone');
+            expect(updated).toContain('## Story Momentum\n- The delay may force a decision.');
+        } finally {
+            log.mockRestore();
         }
     });
 
