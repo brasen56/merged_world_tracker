@@ -374,6 +374,19 @@ export function getCurrentWorldState() {
 
 export { escapeHtml, computeLcsDiff, buildInlineDiff, renderDiffHtml, renderLineDiff } from '../../core/diff.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from '../../core/strip.js';
+export {
+    WORLD_STATE_SECTIONS,
+    WORLD_STATE_FACTUAL_SECTIONS,
+    WORLD_STATE_HOOK_SECTIONS,
+    WORLD_STATE_ARCHIVE_SECTION,
+    CURRENT_SCENE_FIELDS,
+    parseWorldStateSections,
+    parseCurrentScene,
+    normalizePresentValue,
+    patchCurrentScene,
+    validateWorldStateDocument,
+    projectWorldState,
+} from '../../core/world_state_document.js';
 
 // Tier 0 shared primitives â€” pure modules, safe to re-export directly.
 export {

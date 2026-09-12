@@ -83,6 +83,19 @@ export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from './strip.js';
 export { getOrCreateReceiptIdentity } from './message_identity.js';
 export { MWT_VERSION } from './version.js';
+export {
+    WORLD_STATE_SECTIONS,
+    WORLD_STATE_FACTUAL_SECTIONS,
+    WORLD_STATE_HOOK_SECTIONS,
+    WORLD_STATE_ARCHIVE_SECTION,
+    CURRENT_SCENE_FIELDS,
+    parseWorldStateSections,
+    parseCurrentScene,
+    normalizePresentValue,
+    patchCurrentScene,
+    validateWorldStateDocument,
+    projectWorldState,
+} from './world_state_document.js';
 
 // Tier 0 shared primitives (scope, revision, prompt helpers).
 export {

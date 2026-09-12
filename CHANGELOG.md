@@ -17,7 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Phase 0 of world_state_improvement_roadmap.md
- -  reusable World State fixtures and corresponding tests
+  - reusable World State fixtures and corresponding tests
+- Phase 1 of `docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`:
+  - a dependency-free shared World State Markdown parser and `Current Scene`
+    contract in `core/world_state_document.js`;
+  - byte-preserving scene patching, `Present` normalization, structural/default/
+    custom validation modes, and factual/hook projections;
+  - production-barrel and test-stub exports plus focused contract coverage.
+
 
 ## [2.8.0]
 
