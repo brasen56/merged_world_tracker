@@ -9,6 +9,7 @@ import {
     captureScope, assertSameScope,
     captureRevision, sameRevision,
     truncateText, isCancellation,
+    validateWorldStateDocument,
 } from '../core/index.js';
 // Part 6 (§7.4) pause guard + the store id it checks. Direct import (not the
 // barrel) so the REAL pause singleton is read even under the test
@@ -320,6 +321,20 @@ export async function regenerateSection(sectionName, variety = 2) {
         // direct regeneration of a hook section and legacy hook sections that
         // may still be present elsewhere in the document.
         if (getSettings().hookMode === 'off') updated = stripHookSections(updated);
+
+        // A section protocol response is not sufficient proof that a generated
+        // Current Scene is valid. Validate the complete replacement document
+        // before the checked write; generated Present values are normalized by
+        // patching only the generated section, never editor/import content.
+        if (sectionName === 'Current Scene') {
+            const sceneValidation = validateWorldStateDocument(updated, { mode: 'structural' });
+            if (!sceneValidation.ok) {
+                throw new Error(`Section regen validation failed: ${sceneValidation.errors.map(entry => entry.message).join(' ')}`);
+            }
+            if (sceneValidation.normalizedText !== updated) {
+                updated = sceneValidation.normalizedText;
+            }
+        }
 
         // Checked write (design §8): ONE commit carries BOTH the outgoing
         // document's history snapshot and the regenerated document. A refused

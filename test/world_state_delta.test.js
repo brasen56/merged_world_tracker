@@ -570,6 +570,26 @@ describe('refreshWorldStateDelta / runScheduledWorldStateRefresh', () => {
         expect(state.wstIsRefreshing).toBe(false);
     });
 
+    test('refuses a protocol-valid delta whose patched Current Scene is structurally invalid', async () => {
+        const { refreshWorldStateDelta } = await import('../world_state/refresh.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        seedReconciledDoc(BASELINE, { msgIndex: 2 });
+        CURRENT_FAKE_RESPONSE = [
+            '### UPDATE: Current Scene',
+            '## Current Scene',
+            'Date: March 5, 2026',
+            'Time: Evening',
+            'Location: Harbour office',
+            'Present: Alex',
+            // Situation is deliberately missing: marker parsing succeeds, but
+            // Phase 4 must reject the completed patched document.
+        ].join('\n');
+
+        await expect(refreshWorldStateDelta()).rejects.toThrow(/missing the Situation field/i);
+        expect(getWorldStateText()).toBe(BASELINE);
+        expect(getWorldStateData().autoSaveHistory).toHaveLength(0);
+    });
+
     test('"### NO CHANGES" keeps the document but advances the bookkeeping', async () => {
         const { refreshWorldStateDelta } = await import('../world_state/refresh.js');
         const { getDeltaStatus } = await import('../world_state/delta.js');

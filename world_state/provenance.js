@@ -17,7 +17,10 @@
  * circular deps with refresh.js / sections.js, which import this instead.
  */
 
-import { getChat, getStableHistoryEnd, wholePhraseRegex } from '../core/index.js';
+import {
+    getChat, getStableHistoryEnd, wholePhraseRegex,
+    parseCurrentScene, patchCurrentScene,
+} from '../core/index.js';
 import {
     getWorldStateText, getProvenance, getMaxScanMessages,
     extractOnlySection, replaceSection,
@@ -394,7 +397,8 @@ function stripNameLines(text, labels) {
 }
 
 /**
- * Anti-invention gate. Checks every bolded name in `newText` against the
+ * Anti-invention gate. Checks every bolded name and Current Scene Present name
+ * in `newText` against the
  * union of (scan window text) ∪ (prior state text) ∪ (pinned entities) ∪
  * (user-approved registry aliases). Names that appear nowhere in that union
  * are "phantoms."
@@ -458,12 +462,18 @@ export function groundingGate(newText, opts = {}) {
         return aliases != null && aliases.some(alias => aliasPhraseGrounded(alias, haystacks));
     };
 
-    const phantoms = extractBoldNames(newText).filter(({ key, label }) => (
+    const isGrounded = ({ key, label }) => (
         !pinnedSet.has(key)
         && !aliasSpellings.has(key)
         && !nameIsGrounded(label, haystacks)
         && !groundedViaAliasBridge(label)
-    ));
+    );
+    const boldPhantoms = extractBoldNames(newText).filter(isGrounded);
+    const scene = parseCurrentScene(newText);
+    const presentPhantoms = scene.present
+        .map(label => ({ key: label.toLowerCase(), label, source: 'present' }))
+        .filter(isGrounded);
+    const phantoms = [...boldPhantoms, ...presentPhantoms];
 
     if (phantoms.length === 0) return { ok: true, cleanedText: newText, stripped: [] };
 
@@ -474,7 +484,16 @@ export function groundingGate(newText, opts = {}) {
     for (const { label } of phantoms) {
         console.warn(`[MWT:WorldState] Grounding gate stripped ungrounded name: "${label}"`);
     }
-    return { ok: true, cleanedText: stripNameLines(newText, phantoms.map(p => p.label)), stripped: phantoms };
+    let cleanedText = stripNameLines(newText, boldPhantoms.map(entry => entry.label));
+    if (presentPhantoms.length && scene.section) {
+        const rejected = new Set(presentPhantoms.map(entry => entry.key));
+        // patchCurrentScene serializes an empty remaining roster as the shared
+        // `Present: None` representation instead of dropping the scalar.
+        cleanedText = patchCurrentScene(cleanedText, {
+            present: scene.present.filter(name => !rejected.has(name.toLowerCase())),
+        });
+    }
+    return { ok: true, cleanedText, stripped: phantoms };
 }
 
 /**

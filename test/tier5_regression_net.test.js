@@ -323,12 +323,22 @@ describe('WORLD-STATE-10 — parsing, provenance, injection, and refresh barrier
         const { refreshWorldState } = await import('../world_state/refresh.js');
         saveSettings({ apiUrl: 'https://example.test', modelName: 'test' });
         setFakeChat([{ mes: 'A'.repeat(100) }]);
-        let release;
-        setFakeApi(() => new Promise(resolve => { release = resolve; }));
+        setFakeApi(async () => [
+            '## Current Scene',
+            'Date: Unknown',
+            'Time: Evening',
+            'Location: Study',
+            'Present: Mara',
+            'Situation: Mara waits in the study.',
+            '',
+            '## Recent Changes',
+            '- Nothing.',
+            '',
+            '## Active Threads',
+            '- None.',
+        ].join('\n'));
         const pending = refreshWorldState();
-        await Promise.resolve();
         bumpEpoch();
-        release('## Current Scene\nMara\n## Recent Changes\nNothing\n## Active Threads\nNone');
         await expect(pending).resolves.toBeNull();
         expect(getFakeMeta().world_state_tracker_metadata?.text).toBeUndefined();
     });

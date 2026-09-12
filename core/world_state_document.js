@@ -21,6 +21,10 @@ export const WORLD_STATE_SECTIONS = Object.freeze([
 export const WORLD_STATE_FACTUAL_SECTIONS = Object.freeze(WORLD_STATE_SECTIONS.slice(0, 8));
 export const WORLD_STATE_HOOK_SECTIONS = Object.freeze(WORLD_STATE_SECTIONS.slice(8));
 export const CURRENT_SCENE_FIELDS = Object.freeze(['Date', 'Time', 'Location', 'Present', 'Situation']);
+// A scalar field must remain present even when no character is established to
+// be in the scene. This explicit value avoids treating an empty field as a
+// malformed document while keeping the parsed roster unambiguous.
+export const EMPTY_PRESENT_VALUE = 'None';
 
 // This section is produced by the existing expiry feature. It is readable for
 // compatibility, but intentionally excluded from every prompt projection.
@@ -96,6 +100,7 @@ export function parseWorldStateSections(text) {
 }
 
 function splitPresentNames(value) {
+    if (String(value ?? '').trim().toLowerCase() === EMPTY_PRESENT_VALUE.toLowerCase()) return [];
     const seen = new Set();
     const names = [];
     for (const part of value.split(',')) {
@@ -338,7 +343,7 @@ function serializePatchValue(key, value) {
         if (inspected.delimiterIssue) {
             throw new TypeError('Current Scene patch field "present" contains malformed annotation delimiters.');
         }
-        serialized = inspected.names.join(', ');
+        serialized = inspected.names.join(', ') || EMPTY_PRESENT_VALUE;
     } else {
         serialized = String(value ?? '').trim();
     }
@@ -472,7 +477,7 @@ export function validateWorldStateDocument(text, options = {}) {
     let normalizedText = source;
     const presentIsMalformed = scene.issues.some(entry => entry.code === 'malformed-present-annotations');
     if (scene.raw.present !== undefined && !presentIsMalformed) {
-        const normalizedPresent = scene.present.join(', ');
+        const normalizedPresent = scene.present.join(', ') || EMPTY_PRESENT_VALUE;
         if (normalizedPresent !== scene.raw.present.trim()) {
             const severity = mode === 'default-contract' ? 'error' : 'warning';
             issues.push({

@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+    EMPTY_PRESENT_VALUE,
     normalizePresentValue,
     normalizeSceneAnchor,
     parseCurrentScene,
@@ -56,6 +57,10 @@ describe('normalizePresentValue', () => {
             'The Vixen, Captain of the Guard, Old Man Jenkins, Vix, The Vixen',
         )).toEqual(['The Vixen', 'Captain of the Guard', 'Old Man Jenkins', 'Vix']);
         expect(normalizePresentValue('')).toEqual([]);
+    });
+
+    test('parses the explicit empty roster representation as no names', () => {
+        expect(normalizePresentValue(EMPTY_PRESENT_VALUE)).toEqual([]);
     });
 
     test.each([

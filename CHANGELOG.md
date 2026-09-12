@@ -12,6 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.4]
+
+### Changed
+
+- Implemented Phase 4 of the World State reliability roadmap
+  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): full refreshes now use the shared
+  World State document validator before grounding and commit, while delta
+  refreshes, Current Scene regeneration, and Chronicle scene-anchor patches
+  validate their complete resulting documents before writing.
+- Extended generated-output normalization and grounding to `Current Scene`
+  `Present` values. Parenthetical/bracketed annotations and exact duplicates are
+  normalized without rejecting legitimate titles or epithets; soft grounding
+  removes only unsupported names while preserving order, and an empty roster is
+  serialized consistently as `Present: None`. Strict grounding remains
+  fail-closed according to each path's existing retry policy.
+- Exported the shared validator and scene helpers through `core/index.js`, and
+  bumped the synchronized extension version to `2.8.4` in the package, manifest,
+  and core version constant.
+
+### Added
+
+- Added Phase 4 regression coverage for full, delta, section, and Chronicle
+  validation boundaries; Present normalization and empty-roster handling;
+  alias-aware grounding; and strict versus soft grounding behavior.
+
 ## [2.8.3]
 
 ### Changed

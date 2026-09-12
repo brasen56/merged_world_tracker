@@ -14,6 +14,7 @@ import {
     getOrCreateReceiptIdentity,
     truncateText,
     setStatus,
+    validateWorldStateDocument,
 } from '../core/index.js';
 // Part 6 (§7.4) pause guard + the store id it checks. Direct import (not the
 // barrel) so the REAL pause singleton is read even under the test
@@ -144,36 +145,23 @@ export function getMessagesSinceForScan(sinceMsg) {
 }
 
 // ─── Prompt builders ─────────────────────────────────────────────────────────
-
 function buildSystemPrompt() {
     const settings = getSettings();
     const custom = settings.customPrompt?.trim();
     return custom || buildDefaultSystemPrompt(settings.hookMode);
 }
 
-function validateOutput(text) {
-    if (!text) return { ok: false, reason: 'empty response' };
-
-    if (!text.startsWith('## Current Scene')) {
-        const preview = text.slice(0, 100).replace(/\n/g, ' ');
-        return { ok: false, reason: `output does not start with "## Current Scene". First 100 chars: "${preview}"` };
-    }
-
-    // "Name: "quoted..."" at line start signals leaked dialogue. Exclude the
-    // template's own single-word field labels (Mood, Situation, Date, \u2026), which
-    // legitimately carry quoted values like `Mood: "determined but frayed"` and
-    // would otherwise trigger a false rejection.
-    const FIELD_LABELS = 'Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn';
-    const rpMarkers = [
-        { pattern: new RegExp(`^(?!(?:${FIELD_LABELS})\\b)[A-Z][a-z]+:\\s*["\u201C\u201D]`, 'm'), label: 'dialogue formatting (Name: "...)' },
-        { pattern: /\b(you see|you notice|you feel)\b/i, label: 'second-person narration' },
-        { pattern: /^(Meanwhile|Suddenly|As you|The (?:air|room|silence|darkness))\b/im, label: 'narrative prose opener' },
-    ];
-    for (const { pattern, label } of rpMarkers) {
-        if (pattern.test(text)) return { ok: false, reason: `RP marker detected: ${label}` };
-    }
-
-    return { ok: true };
+function validateGeneratedDocument(text) {
+    const settings = getSettings();
+    // Structural validation is always mandatory. Its normalizedText is only
+    // adopted for generated output, never for editor/import writes.
+    const structural = validateWorldStateDocument(text, { mode: 'structural' });
+    if (!structural.ok) return { ok: false, reason: structural.errors.map(entry => entry.message).join(' ') };
+    const normalizedText = structural.normalizedText;
+    const mode = settings.customPrompt?.trim() ? 'custom-prompt' : 'default-contract';
+    const contract = validateWorldStateDocument(normalizedText, { mode });
+    if (!contract.ok) return { ok: false, reason: contract.errors.map(entry => entry.message).join(' ') };
+    return { ok: true, text: normalizedText, warnings: contract.warnings };
 }
 
 // WORLD-STATE-03: Maximum character budget for the prior world state fed into
@@ -499,7 +487,8 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         });
         let text = normaliseOutput(result);
         if (getSettings().hookMode === 'off') text = stripHookSections(text);
-        let validation = validateOutput(text);
+        let validation = validateGeneratedDocument(text);
+        if (validation.ok) text = validation.text;
 
         if (!validation.ok) {
             console.warn(`[MWT:WorldState] First attempt rejected: ${validation.reason} — retrying once`);
@@ -512,10 +501,11 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             });
             text = normaliseOutput(result);
             if (getSettings().hookMode === 'off') text = stripHookSections(text);
-            validation = validateOutput(text);
+            validation = validateGeneratedDocument(text);
             if (!validation.ok) {
                 throw new Error(`Model output rejected after retry: ${validation.reason}`);
             }
+            text = validation.text;
         }
 
         // WORLD-STATE-01: Assert scope immediately before any writes. A chat
@@ -560,8 +550,9 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                 });
                 text = normaliseOutput(result);
                 if (getSettings().hookMode === 'off') text = stripHookSections(text);
-                validation = validateOutput(text);
+                validation = validateGeneratedDocument(text);
                 if (!validation.ok) throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
+                text = validation.text;
                 // WORLD-STATE-01: Re-assert scope after the grounding retry await.
                 // A chat switch during the retry must discard the result before
                 // any write — the initial check does not cover this gap.
@@ -853,6 +844,20 @@ export async function refreshWorldStateDelta(isAuto = false) {
         // instruction: a delta UPDATE can otherwise reintroduce a hook section
         // into a document that was previously cleaned by a full refresh.
         if (getSettings().hookMode === 'off') finalText = stripHookSections(finalText);
+
+        // Delta markers only prove that the patch protocol was well formed;
+        // validate the complete resulting document before it can be grounded
+        // or committed. Only a generated Current Scene update may be safely
+        // normalized here, preserving unrelated manual editor content.
+        const deltaValidation = validateWorldStateDocument(finalText, { mode: 'structural' });
+        if (!deltaValidation.ok) {
+            throw new DeltaPatchError(`Patched document rejected: ${deltaValidation.errors.map(entry => entry.message).join(' ')}`);
+        }
+        if (parsed.ops.some(operation => operation.section === 'Current Scene')) {
+            const deltaContract = validateGeneratedDocument(finalText);
+            if (!deltaContract.ok) throw new DeltaPatchError(`Patched document rejected: ${deltaContract.reason}`);
+            finalText = deltaContract.text;
+        }
 
         // ── Grounding gate (§5.3) on the PATCHED document, same policy as the
         // full refresh. One deliberate difference: no second API retry on a

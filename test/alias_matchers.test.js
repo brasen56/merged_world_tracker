@@ -55,6 +55,50 @@ beforeEach(() => {
 // ─── World State: the grounding gate ─────────────────────────────────────────
 
 describe('groundingGate consults the alias list', () => {
+    const SCENE_WITH_PRESENT = [
+        '## Current Scene',
+        'Date: Unknown',
+        'Time: Evening',
+        'Location: Harbour office',
+        'Present: Alex, Lorraine, The Vixen',
+        'Situation: The group waits for the manifest.',
+    ].join('\n');
+
+    test('soft mode removes only ungrounded Present names in source order', () => {
+        const gate = groundingGate(SCENE_WITH_PRESENT, {
+            scanText: 'Alex waits by the harbour. The Vixen watches from the door.',
+            priorText: '',
+            aliasGroups: GROUPS,
+            mode: 'soft',
+        });
+        expect(gate.ok).toBe(true);
+        expect(gate.cleanedText).toContain('Present: Alex, The Vixen');
+        expect(gate.cleanedText).not.toContain('Lorraine');
+        expect(gate.stripped).toContainEqual(expect.objectContaining({ label: 'Lorraine', source: 'present' }));
+    });
+
+    test('soft mode serializes an empty grounded roster without dropping Present', () => {
+        const gate = groundingGate(SCENE_WITH_PRESENT.replace('Alex, Lorraine, The Vixen', 'Lorraine'), {
+            scanText: 'Rain falls outside.',
+            priorText: '',
+            mode: 'soft',
+        });
+        expect(gate.ok).toBe(true);
+        expect(gate.cleanedText).toContain('Present: None');
+    });
+
+    test('strict mode rejects an ungrounded Present name without changing text', () => {
+        const gate = groundingGate(SCENE_WITH_PRESENT, {
+            scanText: 'Alex waits by the harbour. The Vixen watches from the door.',
+            priorText: '',
+            aliasGroups: GROUPS,
+            mode: 'strict',
+        });
+        expect(gate.ok).toBe(false);
+        expect(gate.reason).toMatch(/Lorraine/);
+        expect(gate.cleanedText).toBeUndefined();
+    });
+
     test('a bold entry under an approved alias spelling is not a phantom', () => {
         // Neither "Vixen" nor "Mara Vance" appears in the evidence — the old
         // gate stripped this entry even though the user vouched for the name.

@@ -204,13 +204,20 @@ describe('WORLD-STATE-04 — strict grounding fails closed', () => {
 
     const UNGROUNDED = [
         '## Current Scene',
-        '- **Phantom Stranger** enters the room.',
+        'Date: Unknown',
+        'Time: Evening',
+        'Location: Study',
+        'Present: Mara',
+        'Situation: Mara waits in the study.',
         '',
         '## Pending',
-        'An unpaid debt.',
+        '- An unpaid debt.',
         '',
         '## Active Threads',
-        'The debt is still owed.',
+        '- The debt is still owed.',
+        '',
+        '## Key Character States',
+        '- **Phantom Stranger**: Current status is unknown.',
     ].join('\n');
 
     beforeEach(async () => {

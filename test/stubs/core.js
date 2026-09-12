@@ -380,6 +380,7 @@ export {
     WORLD_STATE_HOOK_SECTIONS,
     WORLD_STATE_ARCHIVE_SECTION,
     CURRENT_SCENE_FIELDS,
+    EMPTY_PRESENT_VALUE,
     parseWorldStateSections,
     parseCurrentScene,
     normalizePresentValue,
