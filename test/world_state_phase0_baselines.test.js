@@ -46,12 +46,12 @@ const CHAT = Array.from({ length: 10 }, (_, i) => ({
 // wording or estimator refinements do not turn these measurements into brittle
 // snapshots, while material prompt-size changes remain visible.
 const TOKEN_BASELINES = Object.freeze({
-    defaultSystemPrompt: 1565,
+    defaultSystemPrompt: 1270,
     customSystemPrompt: 16,
     hookBearingStored: 124,
-    hookOffInjected: 160,
+    hookOffInjected: 122,
     hookPassiveInjected: 269,
-    hookOffGenerated: 124,
+    hookOffGenerated: 76,
     hookPassiveGenerated: 124,
 });
 
@@ -226,7 +226,7 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
         expect(getWorldStateField('Date')).toBe('Unknown');
     });
 
-    test('records equal generated output estimates for hook modes off and passive', async () => {
+    test('records that hook mode changes built-in generation as well as injection', async () => {
         const { refreshWorldState } = await import('../world_state/refresh.js');
         const generatedTokens = {};
 
@@ -240,19 +240,19 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
 
             const generated = await refreshWorldState();
 
-            expect(generated).toBe(HOOK_BEARING_SCENE);
+            expect(generated).toBe(hookMode === 'off'
+                ? HOOK_BEARING_SCENE.replace(/\n\n## Story Momentum[\s\S]*$/, '')
+                : HOOK_BEARING_SCENE);
             expect(requests).toHaveLength(1);
-            expect(requests[0].systemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
             generatedTokens[hookMode] = estimateTokens(generated);
             expectNearTokenBaseline(
                 generatedTokens[hookMode],
                 hookMode === 'off' ? TOKEN_BASELINES.hookOffGenerated : TOKEN_BASELINES.hookPassiveGenerated,
             );
-            // Current baseline: hook mode affects injection, not generation.
-            expect(requests[0].systemPrompt).toContain('## Plot Seeds');
+            expect(requests[0].systemPrompt.includes('## Plot Seeds')).toBe(hookMode !== 'off');
         }
 
-        expect(generatedTokens.off).toBe(generatedTokens.passive);
+        expect(generatedTokens.off).toBeLessThan(generatedTokens.passive);
     });
 
     test('proves a custom system prompt replaces the default on the real refresh path', async () => {

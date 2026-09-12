@@ -10,6 +10,7 @@ import { applyExtensionPromptInjection, getGlobalSettings, wrapInTag, injectionA
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import { getSettings } from './settings.js';
+import { stripHookSections } from './prompts.js';
 import {
     getWorldStateText, isInjectionEnabled, NEXT_SECTION_LOOKAHEAD,
 } from './data.js';
@@ -116,7 +117,8 @@ function splitWorldState(text) {
  * @returns {string}      — the fully assembled payload (headers + body + tags)
  */
 export function buildInjectionPayload(text) {
-    const { worldStateBody: rawBody, seedsText } = splitWorldState(text);
+    const source = getHookMode() === 'off' ? stripHookSections(text) : text;
+    const { worldStateBody: rawBody, seedsText } = splitWorldState(source);
     // WORLD-STATE-03: Cap the injected body so a large imported state doesn't
     // dominate the narrator context window every turn. truncateText keeps the
     // beginning (the most structured/important sections) and appends a clear

@@ -16,7 +16,7 @@ import {
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 
-import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
+import { buildDefaultSystemPrompt, HOOK_SECTIONS, stripHookSections } from './prompts.js';
 import { getSettings, hasValidSettings, getPinnedEntities } from './settings.js';
 import {
     state, SECTIONS, VARIETY_LABELS,
@@ -34,15 +34,16 @@ export { extractOnlySection, replaceSection };
 // ─── Section prompt builders ─────────────────────────────────────────────────
 
 function buildSystemPrompt() {
-    const custom = getSettings().customPrompt?.trim();
-    return custom || DEFAULT_SYSTEM_PROMPT;
+    const settings = getSettings();
+    const custom = settings.customPrompt?.trim();
+    return custom || buildDefaultSystemPrompt(settings.hookMode);
 }
 
 function buildSectionSystemPrompt(sectionName, variety) {
     const baseSystem = buildSystemPrompt();
 
     let extra = '';
-    if (sectionName === 'Plot Seeds') {
+    if (HOOK_SECTIONS.includes(sectionName)) {
         if (variety >= 4) {
             extra = `
 
@@ -60,11 +61,6 @@ VARIETY MODE (level ${variety}/5 — ${VARIETY_LABELS[variety]}):
 - Mix safer and bolder seeds.
 - Consider less obvious escalations of existing pressures.`;
         }
-    } else if (variety >= 4) {
-        extra = `
-
-VARIETY MODE (level ${variety}/5 — ${VARIETY_LABELS[variety]}):
-- Prefer bolder, more vivid, less default interpretations where the section allows it.`;
     }
 
     const override = `
@@ -94,7 +90,9 @@ const SECTION_CONTEXT_BUDGET = 30000;
  *  may have shifted (the frozen-evidence rule, same fix as the delta/full paths).
  */
 function buildSectionUserMessage(sectionName, scanText) {
-    const fullState = truncateText(getWorldStateText().trim() || 'None yet.', SECTION_CONTEXT_BUDGET);
+    const stored = getWorldStateText();
+    const projected = getSettings().hookMode === 'off' ? stripHookSections(stored) : stored;
+    const fullState = truncateText(projected.trim() || 'None yet.', SECTION_CONTEXT_BUDGET);
     const recent = scanText || 'No recent messages.';
     return [
         '### Full Current World State (for context only — do not include in output)',
@@ -168,7 +166,9 @@ export async function regenerateSection(sectionName, variety = 2) {
     try {
         const s = getSettings();
         const baseTemp = isNaN(Number(s.temperature)) ? 0.3 : Number(s.temperature);
-        const tempBoost = { 1: 0, 2: 0.05, 3: 0.3, 4: 0.55, 5: 0.85 }[variety] || 0;
+        const hookSection = HOOK_SECTIONS.includes(sectionName);
+        const effectiveVariety = hookSection ? variety : 2;
+        const tempBoost = hookSection ? ({ 1: 0, 2: 0.05, 3: 0.3, 4: 0.55, 5: 0.85 }[effectiveVariety] || 0) : 0;
         const temperature = Math.min(1.4, baseTemp + tempBoost);
 
         const sectionSettings = { ...s, temperature };
@@ -191,7 +191,7 @@ export async function regenerateSection(sectionName, variety = 2) {
 
         const _wsApi3 = resolveApiCall({ moduleSettings: sectionSettings });
         const raw = await _wsApi3.fetchFn({
-            systemPrompt: buildSectionSystemPrompt(sectionName, variety),
+            systemPrompt: buildSectionSystemPrompt(sectionName, effectiveVariety),
             userContent: buildSectionUserMessage(sectionName, scanWindowText),
             settings: _wsApi3.settings,
             retries: 1,
@@ -251,7 +251,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                 console.warn(`[MWT:WorldState] Grounding gate rejected section "${sectionName}": ${grounding.reason} — retrying once`);
                 const _wsApiRetry = resolveApiCall({ moduleSettings: sectionSettings });
                 const rawRetry = await _wsApiRetry.fetchFn({
-                    systemPrompt: buildSectionSystemPrompt(sectionName, variety),
+                    systemPrompt: buildSectionSystemPrompt(sectionName, effectiveVariety),
                     userContent: buildSectionUserMessage(sectionName, scanWindowText) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
                     settings: _wsApiRetry.settings,
                     retries: 1,
@@ -314,7 +314,12 @@ export async function regenerateSection(sectionName, variety = 2) {
         // deliberately only protects the target section, so it cannot catch
         // this; re-reading is what makes the write surgical.
         const docNow = getWorldStateText();
-        const updated = replaceSection(docNow, sectionName, cleaned);
+        let updated = replaceSection(docNow, sectionName, cleaned);
+
+        // Keep Hook Mode Off at the final write boundary. This covers both a
+        // direct regeneration of a hook section and legacy hook sections that
+        // may still be present elsewhere in the document.
+        if (getSettings().hookMode === 'off') updated = stripHookSections(updated);
 
         // Checked write (design §8): ONE commit carries BOTH the outgoing
         // document's history snapshot and the regenerated document. A refused

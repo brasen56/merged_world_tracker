@@ -34,6 +34,7 @@ import {
 } from './injection.js';
 import { refreshWorldState, refreshWorldStateDelta, restartAutoSaveTimer } from './refresh.js';
 import { regenerateSection } from './sections.js';
+import { HOOK_SECTIONS } from './prompts.js';
 import { buildProvenance, getStalenessReport, purgeStaleEntries } from './provenance.js';
 import { deriveDocumentStatus, getDeltaReconcileEvery, getDeltaStaleAfterMsgs } from './delta.js';
 
@@ -483,9 +484,11 @@ export function render() {
     const autoInterval = getAutoRefreshInterval();
     const maxScan = getMaxScanMessages(s);
 
-    const sectionOptions = SECTIONS.map(sec =>
-        `<option value="${escapeHtml(sec)}">${escapeHtml(sec)}</option>`
-    ).join('');
+    const sectionOptions = SECTIONS.map(sec => {
+        const hookSection = HOOK_SECTIONS.includes(sec);
+        const disabled = hookSection && s.hookMode === 'off' ? ' disabled' : '';
+        return `<option value="${escapeHtml(sec)}" data-hook-section="${hookSection}"${disabled}>${escapeHtml(sec)}</option>`;
+    }).join('');
 
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
@@ -517,13 +520,13 @@ export function render() {
                     </select>
                     <div class="mwt-flex mwt-gap-4" style="align-items:center">
                         <label class="mwt-label" style="margin:0;white-space:nowrap" for="ws-variety-slider">Variety:</label>
-                        <input id="ws-variety-slider" type="range" min="1" max="5" value="2" style="width:120px" aria-label="Regeneration variety">
-                        <span id="ws-variety-label" style="font-size:11px;color:#c4b5fd;min-width:80px">${VARIETY_LABELS[2]}</span>
+                        <input id="ws-variety-slider" type="range" min="1" max="5" value="2" style="width:120px" aria-label="Regeneration variety" disabled>
+                        <span id="ws-variety-label" style="font-size:11px;color:#c4b5fd;min-width:80px">Not used</span>
                     </div>
                     <button id="ws-regen-section" class="mwt-btn" style="background:#6d28d9;border-color:#7c3aed;color:#fff"><span aria-hidden="true">🎲</span> Regenerate Section</button>
                 </div>
-                <p style="font-size:11px;color:var(--mwt-text-dim);margin:6px 0 0">Regenerate a single section with adjustable variety. Higher variety = bolder, more unexpected results.</p>
-                <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Note:</b> The temperature boost only applies when using a custom API connection (URL + Model). With a Connection Profile, temperature is controlled by the profile/preset — variety then only changes the prompt text.</p>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin:6px 0 0">Variety applies only to Story Momentum, Plot Seeds, and Potential Entrances. Factual sections always use the base temperature and factual instructions.</p>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Note:</b> The temperature boost for hook sections only applies when using a custom API connection (URL + Model). With a Connection Profile, temperature is controlled by the profile/preset.</p>
             </div>
         </details>
 
@@ -590,7 +593,7 @@ export function render() {
                 <div>
                     <select id="ws-grounding-mode" class="mwt-input" style="max-width:180px">
                         <option value="soft" ${(s.groundingMode || 'soft') === 'soft' ? 'selected' : ''}>Soft (strip + log)</option>
-                        <option value="strict" ${s.groundingMode === 'strict' ? 'selected' : ''}>Strict (retry once, then soft-fallback)</option>
+                        <option value="strict" ${s.groundingMode === 'strict' ? 'selected' : ''}>Strict (retry once, then discard)</option>
                     </select>
                 </div>
 
@@ -659,7 +662,7 @@ export function render() {
 
                 <label class="mwt-label" for="ws-custom-prompt">Custom Prompt</label>
                 <textarea id="ws-custom-prompt" class="mwt-input" rows="3" placeholder="Leave blank for default prompt">${escapeHtml(s.customPrompt || '')}</textarea>
-                <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Prompt: Overrides the system prompt sent to the AI. Must start with instructions to output "## Current Scene". Leave blank to use the built-in default prompt. Click "Reset Prompt" to clear.</p>
+                <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Prompt completely replaces the built-in generation prompt. Structural output checks still apply, but built-in compactness guidance is not added. With Hook Mode Off, hook sections are removed before saving and injection. Click "Reset Prompt" to clear.</p>
 
                 <label class="mwt-label" for="ws-hook-mode">Hook Mode</label>
                 <div>
@@ -669,7 +672,7 @@ export function render() {
                         <option value="proactive" ${s.hookMode === 'proactive' ? 'selected' : ''}>Proactive</option>
                         <option value="assertive" ${s.hookMode === 'assertive' ? 'selected' : ''}>Assertive</option>
                     </select>
-                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Off:</b> Plot Seeds are not injected into the prompt. <b>Passive:</b> Model is encouraged to use a hook if the scene allows. <b>Proactive:</b> Model should introduce a hook unless the scene is at a climax — player pre-approval is stated. <b>Assertive:</b> Model must introduce at least one hook — the world moves without player permission.</p>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Off:</b> built-in generation, saved output, and injection omit Story Momentum, Plot Seeds, and Potential Entrances. <b>Passive:</b> hooks remain optional. <b>Proactive:</b> the narrator should introduce a hook unless the scene is at a climax. <b>Assertive:</b> the narrator must introduce at least one hook.</p>
                 </div>
 
                 <label class="mwt-label" for="ws-message-filter">Message Filter</label>
@@ -824,17 +827,28 @@ export function wireEvents() {
         scheduleEditorPersist();
     });
 
-    // Variety slider
-    state.modal.querySelector('#ws-variety-slider')?.addEventListener('input', (e) => {
+    // Variety is meaningful only for hook sections. Keep the inactive state
+    // visible in the UI as well as enforcing the boundary in sections.js.
+    const sectionSelect = state.modal.querySelector('#ws-section-select');
+    const varietySlider = state.modal.querySelector('#ws-variety-slider');
+    const varietyLabel = state.modal.querySelector('#ws-variety-label');
+    const syncVarietyAvailability = () => {
+        const enabled = HOOK_SECTIONS.includes(sectionSelect?.value) && getHookMode() !== 'off';
+        if (varietySlider) varietySlider.disabled = !enabled;
+        if (varietyLabel) {
+            const level = parseInt(varietySlider?.value || '2', 10);
+            varietyLabel.textContent = enabled ? (VARIETY_LABELS[level] || `Level ${level}`) : 'Not used';
+        }
+    };
+    sectionSelect?.addEventListener('change', syncVarietyAvailability);
+    varietySlider?.addEventListener('input', (e) => {
         const val = parseInt(e.target.value, 10);
-        const label = state.modal.querySelector('#ws-variety-label');
-        if (label) label.textContent = VARIETY_LABELS[val] || `Level ${val}`;
+        if (varietyLabel) varietyLabel.textContent = VARIETY_LABELS[val] || `Level ${val}`;
     });
+    syncVarietyAvailability();
 
     // Regenerate section
     state.modal.querySelector('#ws-regen-section')?.addEventListener('click', async () => {
-        const sectionSelect = state.modal.querySelector('#ws-section-select');
-        const varietySlider = state.modal.querySelector('#ws-variety-slider');
         const regenBtn = state.modal.querySelector('#ws-regen-section');
         const sectionName = sectionSelect?.value;
         const variety = parseInt(varietySlider?.value || '2', 10);

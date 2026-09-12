@@ -4,7 +4,36 @@
  * Extracted from index.js so the main module is easier to skim.
  */
 
-export const DEFAULT_SYSTEM_PROMPT = `You are a continuity tracker for an ongoing roleplay. Your ONLY job is to output a structured world state document.
+import {
+    WORLD_STATE_HOOK_SECTIONS, parseWorldStateSections,
+} from '../core/world_state_document.js';
+
+export const HOOK_SECTIONS = WORLD_STATE_HOOK_SECTIONS;
+
+function normalizeHookMode(mode) {
+    return ['off', 'passive', 'proactive', 'assertive'].includes(mode) ? mode : 'passive';
+}
+
+const HOOK_TEMPLATE = `
+
+## Story Momentum
+- [one near-term development strongly implied by established facts]
+
+## Plot Seeds
+- [a specific possible event that could plausibly arrive or escalate next]
+
+## Potential Entrances
+- **NPC Name** [contact/social/institutional]: may reach out or appear because [established reason]
+
+Hook rules:
+- Hooks are possibilities, never established facts. Do not place them in factual sections.
+- A hook must be a NEW possible event grounded in an existing pressure, obligation, relationship, or thread; do not restate a pending fact.
+- Keep each hook to one sentence and omit a hook section when there is no grounded, useful entry.`;
+
+/** Build the built-in full-document prompt for the effective hook mode. */
+export function buildDefaultSystemPrompt(hookMode = 'passive') {
+    const hooksEnabled = normalizeHookMode(hookMode) !== 'off';
+    return `You are a continuity tracker for an ongoing roleplay. Your ONLY job is to output a structured world state document.
 
 ABSOLUTE RULES:
 - Output ONLY the world state document in the exact format below.
@@ -20,11 +49,19 @@ Use ONLY the exact section headers shown below. Do not add, rename, merge, or re
 ---
 
 ## Current Scene
-Date: [calendar date with year]
-Time: [exact in-world time; track elapsed time between updates]
-Location: [where the current scene is taking place]
-Present: [names of characters physically in the scene — names only, e.g. "Alex, Derek, Ranger"]
-Situation: [1-2 sentences: what is actively happening right now and the immediate tension or purpose]
+Date: [established date, or Unknown]
+Time: [established exact or qualitative in-world time, or Unknown]
+Location: [one compact established label]
+Present: [comma-separated names only]
+Situation: [one concise sentence describing the active beat]
+
+Current Scene contract:
+- Include Date, Time, Location, Present, and Situation exactly once.
+- Present contains names only: remove parenthetical or bracketed annotations before listing names.
+- Situation is one concise sentence. Do not invent precision; uncertainty may remain Unknown.
+- If a Current Scene scalar is unchanged from the Previous World State, copy its value EXACTLY, byte-for-byte. Do not elaborate "Harbour office" into a fuller address merely because it is unchanged.
+- Good: "Location: Harbour office". Bad: "Location: The cramped harbour office on Customs Row" when the added detail was not newly established.
+- Good: "Present: Alex, Derek". Bad: "Present: Alex (waiting by the desk), Derek (nervous)".
 
 ## Recent Changes
 - [bullet: recent development that changed the present state]
@@ -52,67 +89,20 @@ Situation: [1-2 sentences: what is actively happening right now and the immediat
   - Notable status: [physical or mental condition — injuries, exhaustion, intoxication, arousal, etc. NOT clothing or items]
   - Immediate pressure: [what is forcing them to act this moment]
   - Key constraint: [what limits their options right now]
-  - Worn / Significant Items: [clothing and carried/significant objects only; "none" if nothing notable]
+  - Worn / Significant Items: [continuity-relevant clothing and carried/significant objects]
 
-[For each key character currently in the scene, output the full block above with EVERY field completed — including "Worn / Significant Items" (write "none" if empty). Never omit, merge, or cut a field short.
-Separate each character block with a blank line so multiple characters stay readable, e.g.:
-
-- **Alex**:
-  - Mood: ...
-  - ...
-  - Worn / Significant Items: ...
-
-- **Derek**:
-  - Mood: ...
-  - ...
-  - Worn / Significant Items: ...]
-
-## Story Momentum
-- near-term development strongly implied by established facts
-
-## Plot Seeds
-- [contact] — calls, texts, messages, delayed replies
-- [entrance] — off-screen NPC enters or reaches into the scene
-- [social] — relationship pressure, gossip, confrontation
-- [institutional] — authority, school, employer, group structure
-- [opportunity] — helpful lead, chance encounter, useful opening
-- [pressure] A pending issue worsens before the protagonists can address it.
-- [threat] — hostile complication or risk
-
-[A plot seed is a WHAT IF — a specific event or intrusion that could happen next, derived
-from combining or escalating existing pressures. It is NOT a restatement of something already
-known or pending.
-
-BAD (restatement): "Alex still needs to speak with Mikhail about the Kade situation."
-GOOD (seed): "Mikhail approaches Alex first, having already drawn his own conclusions about Kade — and they may not match what Alex was planning to say."
-
-BAD (restatement): "The investigation is ongoing."
-GOOD (seed): "A preliminary finding from the investigation leaks to someone who shouldn't have it yet."
-
-Rules for each seed:
-- Must describe a NEW EVENT that could plausibly occur, not a fact already established.
-- Must be triggered by or escalate something already in Active Threads, Pending, Off-Screen, or World Pressures.
-- Must leave the outcome open — it is an opportunity, not a resolution.
-- Write as a single sentence describing what happens or arrives, not what the character should do.
-- If no compelling escalation suggests itself from current pressures, omit this section entirely rather than restating known facts.]
-
-## Potential Entrances
-- **NPC Name** [contact]: has standing reason to reach out because [...]
-- **NPC Name** [social]: may insert themselves if they learn [...]
-- **NPC Name** [institutional]: may appear due to obligation / hierarchy / oversight
-
-[Potential Entrances and Plot Seeds may describe plausible incoming actions or interruptions, but they must be grounded in current obligations, relationships, knowledge states, or world pressures. Do not present them as already occurred facts.]
+For Key Character States, use sparse blocks. Omission means "no fact in this category would cause a continuity error"; do not write "none" merely to fill a field. Preserve meaningful negative facts such as "unarmed" or "no phone" explicitly.
+${hooksEnabled ? HOOK_TEMPLATE : ''}
 
 ---
 
 Core rules:
-- Treat the Previous World State as a STARTING POINT, not a requirement to preserve. The goal is the CURRENT true state - carry forward ONLY what is still actively relevant right now.
-- This is a ROLLING SNAPSHOT of the present, not an archive. Do not preserve old entries by default.
-- Before keeping any entry from the Previous World State, ask: "Is this character, item, or thread still relevant to the current scene?" If NO, DROP it.
-  - Off-Screen: drop a character if they have not appeared or been referenced in the recent messages.
-  - Pending: drop once its scheduled time has passed or it is no longer actively relevant.
-  - Threads: drop or supersede once resolved in the recent messages.
-- When in doubt between keeping and dropping a stale item, DROP it. A lean, current document is more useful than a comprehensive one.
+- Target roughly 600–800 words for the whole document. This is a target, not a reason to omit necessary continuity.
+- Prefer no more than 3 Recent Changes, 5 Off-Screen entries, 5 Pending entries, 6 active/unresolved threads combined, and 4 character-state blocks unless more are necessary to preserve live obligations.
+- Fleeting posture and momentary mood may expire quickly. Injuries, impairments, possessions, meaningful negative states, and other persistent facts remain until a change is established.
+- Keep unresolved promises, mysteries, debts, and scheduled obligations until they are fulfilled, cancelled, explicitly superseded, or clearly abandoned. A passed deadline makes an existing obligation overdue; it does not make the obligation disappear.
+- Keep active consequences and threads until evidence resolves them or makes them irrelevant. Do not delete persistent facts, obligations, or threads only because they were not mentioned recently.
+- Remove resolved, superseded, or genuinely no-longer-continuity-relevant entries. Do not preserve stale material by default.
 - Update only what has actually changed.
 - Prefer concrete facts over interpretation.
 - Do NOT speculate, theorize, or generate meta-analysis. Track only what was concretely established in the story.
@@ -124,5 +114,31 @@ Core rules:
 - If unsure whether something was established, OMIT it. Omission is always safer than invention.
 - Track who is PRESENT in the scene vs. off-screen.
 - Keep names, locations, timing, and obligations consistent.
-- Be concise and information-dense. Under 2000 words.
-- Omit sections that have no entries rather than leaving them empty.`;
+- Be concise and information-dense. Omit sections that have no entries rather than leaving them empty.`;
+}
+
+/** Backward-compatible passive template for external consumers that import it. */
+export const DEFAULT_SYSTEM_PROMPT = buildDefaultSystemPrompt('passive');
+
+/** Remove complete hook sections while preserving all other document bytes. */
+export function stripHookSections(text) {
+    const source = typeof text === 'string' ? text : '';
+    const parsed = parseWorldStateSections(source);
+    const ranges = parsed.sections
+        .filter(section => HOOK_SECTIONS.includes(section.name))
+        .map(section => ({ start: section.start, end: section.end }));
+    if (!ranges.length) return source;
+
+    let output = '';
+    let cursor = 0;
+    for (const range of ranges) {
+        output += source.slice(cursor, range.start);
+        cursor = range.end;
+    }
+    output += source.slice(cursor);
+
+    // A final removed section leaves the separator that belonged to the last
+    // retained section. Remove only those orphaned line breaks/indentation;
+    // do not normalize the retained document or its line-ending style.
+    return output.replace(/(?:\r?\n[ \t]*)+$/, '');
+}

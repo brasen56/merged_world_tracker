@@ -21,7 +21,7 @@ import {
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 
-import { DEFAULT_SYSTEM_PROMPT } from './prompts.js';
+import { buildDefaultSystemPrompt, stripHookSections } from './prompts.js';
 import { getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL, getPinnedEntities } from './settings.js';
 import {
     state, getWorldStateText, setWorldStateDataChecked,
@@ -146,8 +146,9 @@ export function getMessagesSinceForScan(sinceMsg) {
 // ─── Prompt builders ─────────────────────────────────────────────────────────
 
 function buildSystemPrompt() {
-    const custom = getSettings().customPrompt?.trim();
-    return custom || DEFAULT_SYSTEM_PROMPT;
+    const settings = getSettings();
+    const custom = settings.customPrompt?.trim();
+    return custom || buildDefaultSystemPrompt(settings.hookMode);
 }
 
 function validateOutput(text) {
@@ -156,19 +157,6 @@ function validateOutput(text) {
     if (!text.startsWith('## Current Scene')) {
         const preview = text.slice(0, 100).replace(/\n/g, ' ');
         return { ok: false, reason: `output does not start with "## Current Scene". First 100 chars: "${preview}"` };
-    }
-
-    const expectedSections = [
-        '## Recent Changes',
-        '## Key Character States',
-        '## Active Threads',
-        '## Pending',
-        '## Off-Screen',
-        '## World Pressures',
-    ];
-    const found = expectedSections.filter(s => text.includes(s)).length;
-    if (found < 2) {
-        return { ok: false, reason: `only ${found} expected section(s) found — model may have summarised instead of generating a world state` };
     }
 
     // "Name: "quoted..."" at line start signals leaked dialogue. Exclude the
@@ -202,7 +190,10 @@ const PREV_STATE_BUDGET = 30000;
  *  arriving mid-await may have shifted (the frozen-evidence rule).
  */
 function buildUserMessage(scanText, reminderReason = '') {
-    const prev = truncateText(getWorldStateText().trim(), PREV_STATE_BUDGET);
+    const settings = getSettings();
+    const stored = getWorldStateText();
+    const projected = settings.hookMode === 'off' ? stripHookSections(stored) : stored;
+    const prev = truncateText(projected.trim(), PREV_STATE_BUDGET);
     const recent = scanText || 'No recent messages.';
     const isFirstRun = !prev;
     const lines = [
@@ -507,6 +498,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             trigger: isAuto ? 'auto' : 'manual',
         });
         let text = normaliseOutput(result);
+        if (getSettings().hookMode === 'off') text = stripHookSections(text);
         let validation = validateOutput(text);
 
         if (!validation.ok) {
@@ -519,6 +511,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                 trigger: isAuto ? 'auto' : 'manual',
             });
             text = normaliseOutput(result);
+            if (getSettings().hookMode === 'off') text = stripHookSections(text);
             validation = validateOutput(text);
             if (!validation.ok) {
                 throw new Error(`Model output rejected after retry: ${validation.reason}`);
@@ -566,6 +559,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                     trigger: isAuto ? 'auto' : 'manual',
                 });
                 text = normaliseOutput(result);
+                if (getSettings().hookMode === 'off') text = stripHookSections(text);
                 validation = validateOutput(text);
                 if (!validation.ok) throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
                 // WORLD-STATE-01: Re-assert scope after the grounding retry await.
@@ -769,6 +763,9 @@ export async function refreshWorldStateDelta(isAuto = false) {
     try {
         const systemPrompt = buildDeltaSystemPrompt(buildSystemPrompt());
         const prevText = baselineText.trim();
+        const promptPrevText = getSettings().hookMode === 'off'
+            ? stripHookSections(prevText)
+            : prevText;
 
         // TODO §1: same pre-flight alias capture as the full refresh. The
         // collection used to sit inside the grounding block AFTER the
@@ -782,7 +779,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
         const _wsApiD1 = resolveApiCall({ moduleSettings: getSettings() });
         let result = await _wsApiD1.fetchFn({
             systemPrompt,
-            userContent: buildDeltaUserMessage({ prevText, recentText: scanWindow.text }),
+            userContent: buildDeltaUserMessage({ prevText: promptPrevText, recentText: scanWindow.text }),
             settings: _wsApiD1.settings,
             trigger: isAuto ? 'auto' : 'manual',
         });
@@ -793,7 +790,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
             const _wsApiD2 = resolveApiCall({ moduleSettings: getSettings() });
             result = await _wsApiD2.fetchFn({
                 systemPrompt,
-                userContent: buildDeltaUserMessage({ prevText, recentText: scanWindow.text, reminderReason: parsed.reason }),
+                userContent: buildDeltaUserMessage({ prevText: promptPrevText, recentText: scanWindow.text, reminderReason: parsed.reason }),
                 settings: _wsApiD2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
             });
@@ -811,27 +808,51 @@ export async function refreshWorldStateDelta(isAuto = false) {
             return null;
         }
 
-        // Nothing changed: no text write (no history snapshot of an unchanged
-        // document — mirrors pushToHistory's no-op), but the bookkeeping still
-        // advances so staleness resets and the no-op counts toward the
-        // reconciliation cadence.
+        // Nothing changed in factual continuity. Hook Mode Off still owns the
+        // persistence boundary, so an older document may need a hook-only
+        // cleanup even when the model correctly reports no factual changes.
         if (parsed.noChanges) {
             // The watermark is scanWindow.to — where this delta's scan
             // actually ended (the stable-history cutoff), not chat length.
-            const status = buildPartialRefreshStatus(baselineStatus, baselineText, baselineText, scanWindow.to);
-            const written = setWorldStateDataChecked({ deltaStatus: status });
+            const finalText = getSettings().hookMode === 'off'
+                ? stripHookSections(baselineText)
+                : baselineText;
+            const textChanged = finalText !== baselineText;
+            if (textChanged && !sameRevision(wsRevision, getWorldStateText())) {
+                console.warn('[MWT:WorldState] Document was edited during delta generation — discarding hook cleanup to preserve user changes.');
+                setStatus(state.modal, 'World State was edited during the delta refresh — result discarded.', 'warning', 6000);
+                return null;
+            }
+            const status = buildPartialRefreshStatus(baselineStatus, baselineText, finalText, scanWindow.to);
+            const written = textChanged
+                ? commitHistorySnapshot(baselineText, { text: finalText, deltaStatus: status })
+                : setWorldStateDataChecked({ deltaStatus: status });
             if (!written.ok) {
                 console.warn(`[MWT:WorldState] Delta refresh (no changes) refused at the store write (${written.reason ?? 'unknown reason'}).`);
                 return null;
             }
+            if (textChanged) {
+                state.autoSaveLastText = finalText;
+                state.isDirty = false;
+                state.editSessionActive = false;
+                applyWorldStateInjection();
+                try { setProvenance(buildProvenance()); } catch (err) {
+                    console.warn('[MWT:WorldState] Provenance build failed (non-fatal):', err.message);
+                }
+            }
             console.log('[MWT:WorldState] Delta refresh — model reported no changes.');
             setStatus(state.modal, 'Delta refresh: no changes since the last refresh.', 'info', 4000);
-            return baselineText;
+            return finalText;
         }
 
         const applied = applyDeltaPatch(baselineText, parsed.ops);
         if (!applied.ok) throw new DeltaPatchError(`Patch failed to apply: ${applied.reason}`);
         let finalText = applied.text;
+
+        // Hook Mode Off is a persistence boundary, not only a generation
+        // instruction: a delta UPDATE can otherwise reintroduce a hook section
+        // into a document that was previously cleaned by a full refresh.
+        if (getSettings().hookMode === 'off') finalText = stripHookSections(finalText);
 
         // ── Grounding gate (§5.3) on the PATCHED document, same policy as the
         // full refresh. One deliberate difference: no second API retry on a

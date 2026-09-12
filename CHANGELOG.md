@@ -12,6 +12,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.3]
+
+### Changed
+
+- Implemented Phase 3 of the World State reliability roadmap
+  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): the fixed default generation
+  prompt is now built by a hook-mode-aware `buildDefaultSystemPrompt(hookMode)`
+  in `world_state/prompts.js`.
+- Rewrote the built-in prompt around the `Current Scene` contract: good/bad
+  examples and a byte-for-byte "copy unchanged scalars exactly" rule, a
+  ~600–800-word whole-document target (the 2,000-token API allowance is
+  retained), preferred item counts as targets rather than truncation limits,
+  sparse Key Character States with omission semantics, and durable retention
+  rules that keep unresolved promises, debts, obligations, injuries, and
+  active consequences until they resolve, expire, or are superseded.
+- Hook Mode Off now affects generation as well as injection. The built-in
+  prompt omits Story Momentum, Plot Seeds, and Potential Entrances, and
+  `stripHookSections` removes any returned or legacy hook sections before the
+  checked write on the full-refresh, delta-refresh, and section-regeneration
+  paths, and before injection.
+- Restricted the Variety control to hook sections. Factual section
+  regeneration no longer receives "bolder" instructions or a temperature
+  boost (effective variety is clamped to 2), and grounding retries on factual
+  sections stay free of creative instructions.
+- Updated the Custom Prompt help text to state it fully replaces the built-in
+  prompt, that structural checks still apply but compactness guidance is not
+  added, and that Hook Mode Off still strips hook sections before saving and
+  injection; updated the Hook Mode description to match its new behavior.
+- Relabeled strict grounding to "retry once, then discard" so the option
+  matches its actual fail-closed behavior.
+- Refreshed the Phase 0 token baselines for the smaller default prompt and
+  hook-mode-aware generation.
+
+### Added
+
+- `test/world_state_phase3_prompt.test.js` covering the compact prompt
+  contract, hook-mode generation/injection/write boundaries, the delta and
+  section-regeneration strip boundaries, and the Variety temperature and
+  instruction boundary for factual vs. hook sections.
+
 ## [2.8.2]
 
 ### Changed

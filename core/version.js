@@ -6,4 +6,4 @@
  * synchronous and dependency-free; the release checklist owns the sync.
  */
 
-export const MWT_VERSION = '2.8.2';
+export const MWT_VERSION = '2.8.3';
