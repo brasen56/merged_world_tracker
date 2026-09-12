@@ -116,6 +116,31 @@ describe('Phase 3 hook-mode write and injection boundaries', () => {
         expect(request.systemPrompt).not.toContain('600–800 words');
     });
 
+    test('logs the complete model output for both failed validation attempts', async () => {
+        const first = `${FACTUAL_DOCUMENT}\nFirst attempt leaked narrative prose.`;
+        const retry = `${FACTUAL_DOCUMENT}\nRetry also leaked narrative prose.`;
+        let attempt = 0;
+        setWorldStateData({ text: FACTUAL_DOCUMENT });
+        setFakeApi(() => (++attempt === 1 ? first : retry));
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        try {
+            await expect(refreshWorldState()).rejects.toThrow('Model output rejected after retry');
+
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining('First attempt rejected'));
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining('Validation retry rejected'));
+            expect(log).toHaveBeenCalledWith(expect.stringContaining(first));
+            expect(log).toHaveBeenCalledWith(expect.stringContaining(retry));
+            expect(getWorldStateText()).toBe(FACTUAL_DOCUMENT);
+        } finally {
+            log.mockRestore();
+            warn.mockRestore();
+            error.mockRestore();
+        }
+    });
+
     test('removes legacy hook sections from injection when hook mode is off', () => {
         expect(buildInjectionPayload(HOOK_DOCUMENT)).toContain('## Current Scene');
         for (const section of HOOK_SECTIONS) expect(buildInjectionPayload(HOOK_DOCUMENT)).not.toContain(section);

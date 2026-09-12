@@ -164,6 +164,28 @@ function validateGeneratedDocument(text) {
     return { ok: true, text: normalizedText, warnings: contract.warnings };
 }
 
+/**
+ * Surface a rejected response while it is still available. API diagnostics
+ * intentionally omit response bodies, and the final thrown error only carries
+ * the validator summary, so without this log the actual formatting mistake is
+ * otherwise lost. Log the normalized response from before hook-mode
+ * post-processing so an unexpected hook is visible even when mode `off`
+ * removes it before validation.
+ */
+function logRejectedGeneratedOutput(attempt, output, reason, { retrying = false } = {}) {
+    const text = typeof output === 'string' ? output : String(output ?? '');
+    console.warn(
+        `[MWT:WorldState] ${attempt} rejected: ${reason}` +
+        (retrying ? ' — retrying once' : ''),
+    );
+    console.log([
+        `[MWT:WorldState] Rejected model output (${attempt.toLowerCase()}, ${text.length} chars):`,
+        '----- BEGIN REJECTED WORLD STATE -----',
+        text || '(empty output)',
+        '----- END REJECTED WORLD STATE -----',
+    ].join('\n'));
+}
+
 // WORLD-STATE-03: Maximum character budget for the prior world state fed into
 // the refresh prompt. The recent-messages scan is already capped at 20k chars,
 // but the entire saved document went in as <previous> with no cap — a large
@@ -485,13 +507,14 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             // press is foreground.
             trigger: isAuto ? 'auto' : 'manual',
         });
-        let text = normaliseOutput(result);
+        let rawModelText = normaliseOutput(result);
+        let text = rawModelText;
         if (getSettings().hookMode === 'off') text = stripHookSections(text);
         let validation = validateGeneratedDocument(text);
         if (validation.ok) text = validation.text;
 
         if (!validation.ok) {
-            console.warn(`[MWT:WorldState] First attempt rejected: ${validation.reason} — retrying once`);
+            logRejectedGeneratedOutput('First attempt', rawModelText, validation.reason, { retrying: true });
             const _wsApi2 = resolveApiCall({ moduleSettings: getSettings() });
             result = await _wsApi2.fetchFn({
                 systemPrompt,
@@ -499,10 +522,12 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                 settings: _wsApi2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
             });
-            text = normaliseOutput(result);
+            rawModelText = normaliseOutput(result);
+            text = rawModelText;
             if (getSettings().hookMode === 'off') text = stripHookSections(text);
             validation = validateGeneratedDocument(text);
             if (!validation.ok) {
+                logRejectedGeneratedOutput('Validation retry', rawModelText, validation.reason);
                 throw new Error(`Model output rejected after retry: ${validation.reason}`);
             }
             text = validation.text;
@@ -548,10 +573,14 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                     settings: _wsApi3.settings,
                     trigger: isAuto ? 'auto' : 'manual',
                 });
-                text = normaliseOutput(result);
+                rawModelText = normaliseOutput(result);
+                text = rawModelText;
                 if (getSettings().hookMode === 'off') text = stripHookSections(text);
                 validation = validateGeneratedDocument(text);
-                if (!validation.ok) throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
+                if (!validation.ok) {
+                    logRejectedGeneratedOutput('Grounding retry', rawModelText, validation.reason);
+                    throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
+                }
                 text = validation.text;
                 // WORLD-STATE-01: Re-assert scope after the grounding retry await.
                 // A chat switch during the retry must discard the result before
