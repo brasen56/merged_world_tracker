@@ -31,6 +31,7 @@
   - [Per-Tracker Enable & Panic Switch](#per-tracker-enable--panic-switch)
 - [Usage Guide](#usage-guide)
   - [World State](#world-state)
+    - [Choosing Full vs. Delta Auto-Refresh](#choosing-full-vs-delta-auto-refresh)
   - [Session Chronicle](#session-chronicle)
   - [Knowledge Tracker](#knowledge-tracker)
   - [Story Planner](#story-planner)
@@ -73,9 +74,13 @@ Maintains a live, structured document describing the current state of the rolepl
 
 - **LLM-Powered Refresh** — Generates a full world state document from recent chat messages using a carefully tuned system prompt
 - **Auto-Refresh** — Automatically re-scans every N messages (configurable interval)
+- **Reliable Current Scene** — Validates the shared `Current Scene` contract (Date, Time, Location, Present, and Situation), preserves unchanged established details, normalizes the Present roster, and keeps the saved document human-readable
 - **Per-Section Regeneration** — Regenerate individual sections (e.g., just "Plot Seeds" or "Key Character States") without refreshing the entire document
 - **⚡ Delta Refresh (Low-Cost Mode)** — Instead of regenerating the whole document, a delta refresh asks the model only for the sections that changed and applies a strictly validated patch protocol (`### UPDATE:` / `### REMOVE:` / `### NO CHANGES` — malformed patches are rejected, never half-applied). Off by default; turn it on in World State settings to use it for the scheduled auto-refresh, or run it on demand with the **⚡ Delta** button. A full refresh still runs when there is no baseline document, after manual edits, and on a configurable reconciliation cadence (default: every 5 consecutive partial updates)
 - **Document Status Chip** — A live chip above the editor says where the document stands: 🟢 **Fully reconciled** (last full refresh), 🟡 **Delta ×N** (N partial updates since the last full refresh), ✏️ **Manually edited** (edited or imported since the last refresh, not yet LLM-reconciled), or 🔴 **Stale · N msgs** (N messages since the last refresh of any kind; threshold configurable, default 15)
+- **Continuity-Safe Chronicle Sync** — Chronicle time and location anchors are range-, revision-, and chronology-checked before they can update the current scene. Older entries cannot overwrite newer World State evidence, and a sync waits safely for an active World State operation to finish
+- **Compact, Separate Prompt Views** — The saved document remains a complete continuity record, while prompt consumers receive factual and hook-aware projections. Hook mode affects both generation and injection; `Archive (Stale)` stays saved for reference but is not injected
+- **Injection Diagnostics** — Diagnostics → Injection breaks World State usage down by semantic section, factual versus hook totals, omissions, and the final post-Budget payload, using the same projection as live injection and Preview
 - **Variety Control** — Adjust regeneration variety from *Conservative* (1) to *Chaotic* (5) for creative exploration
 - **Structured Sections** including:
   - Current Scene (date, time, present characters, situation)
@@ -434,6 +439,22 @@ Each tracker can be individually enabled/disabled. Disabling a tracker stops it 
 9. Watch the **document status chip** (🟢 reconciled / 🟡 delta / ✏️ manual / 🔴 stale) — hover it for the exact message counts and delta tally behind the status
 10. Use **⏪ Revert** to restore a previous version from auto-save history, or **📋 History** to browse all snapshots
 11. Use **📄 Preview Injection** to see exactly what will be injected
+
+#### Choosing Full vs. Delta Auto-Refresh
+
+**Full refresh** rebuilds the whole document from the scan window. Use it for the first document, after substantial manual changes, or whenever you want a complete reconciliation. **Delta refresh** sends the existing document as a baseline and asks the model for only the sections that changed; MWT validates and applies that patch, leaving unmentioned sections intact. It is best for normal, incremental roleplay and usually costs less.
+
+Enabling **Delta Mode** changes the *kind* of scheduled refresh, not its timing. If Auto-Refresh is currently every **10 messages**, keep it at **10** when you first switch on Delta Mode. The first eligible scheduled run uses delta; MWT automatically uses a full refresh instead when it needs a clean baseline: the first generation, an imported or manually edited document, after a rejected delta patch, and after the reconciliation cadence.
+
+The two Delta Refresh defaults are separate from Auto-Refresh:
+
+| Setting | Default | What it does | Recommended starting point |
+|---|---:|---|---|
+| **Auto-Refresh every N messages** | `5` | Sets how often a scheduled refresh attempt occurs | Keep your existing `10`; lower it only if you want the World State to follow faster scene changes more closely |
+| **Full Refresh Every** | `5` delta/section updates | Forces the *next scheduled* update to be a full reconciliation after that many consecutive partial updates | Keep `5` |
+| **Stale After** | `15` messages | Changes only when the status chip says the document is stale; it does **not** trigger a refresh | Keep `15`, or raise it if a 10-message cadence makes the warning noisier than useful |
+
+For example, with Auto-Refresh set to `10` and Full Refresh Every set to `5`, MWT normally makes up to five scheduled delta updates at 10-message intervals, then makes the following scheduled update a full refresh. Manual section regenerations also count as partial updates toward that same reconciliation counter. The `15`-message stale threshold is only an attention signal: it does not cause an API call or override the 10-message schedule. Delta Mode remains opt-in while its long-term default is evaluated from real-use reliability and cost measurements.
 
 ### Session Chronicle
 
