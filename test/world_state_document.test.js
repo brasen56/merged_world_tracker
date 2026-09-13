@@ -10,6 +10,7 @@ import {
     parseWorldStateSections,
     patchCurrentScene,
     projectWorldState,
+    projectWorldStateSections,
     validateWorldStateDocument,
 } from '../core/world_state_document.js';
 import {
@@ -397,5 +398,34 @@ describe('projectWorldState', () => {
         expect(hooks).toContain('## Potential Entrances');
         expect(hooks).not.toContain('## Current Scene');
         expect(projectWorldState(text)).not.toContain('Old secret');
+    });
+
+    test('exposes the parts each view joins, so attribution cannot drift from the projection', () => {
+        const crlf = `Hand note.\n\n${MINIMAL_SCENE}\n\n## Notes\n- keep\n\n## Archive (Stale)\n- old\n\n## plot seeds\n- courier`
+            .replaceAll('\n', '\r\n');
+        const cases = [
+            [HOOK_BEARING_SCENE, {}],
+            [HOOK_BEARING_SCENE, { view: 'factual' }],
+            [HOOK_BEARING_SCENE, { view: 'hooks', excludeSections: ['plot seeds'] }],
+            [crlf, { view: 'factual' }],
+            [crlf, { view: 'factual', sections: ['Notes'] }],
+            [crlf, { view: 'hooks' }],
+            ['Date: June 4\nPresent: Alex', { view: 'factual' }],
+            ['Date: June 4\nPresent: Alex', { view: 'hooks' }],
+            ['', { view: 'factual' }],
+        ];
+        for (const [text, options] of cases) {
+            const { parts, separator } = projectWorldStateSections(text, options);
+            expect(parts.map(part => part.text).join(separator)).toBe(projectWorldState(text, options));
+        }
+
+        const factual = projectWorldStateSections(crlf, { view: 'factual' });
+        expect(factual.separator).toBe('\r\n\r\n');
+        expect(factual.parts.map(part => [part.kind, part.name])).toEqual([
+            ['preamble', null], ['section', 'Current Scene'], ['section', 'Notes'],
+        ]);
+        expect(factual.archived).toEqual([{ name: 'Archive (Stale)', text: '## Archive (Stale)\r\n- old' }]);
+        expect(projectWorldStateSections('Date: June 4', { view: 'factual' }).parts)
+            .toEqual([{ kind: 'legacy', name: null, text: 'Date: June 4' }]);
     });
 });

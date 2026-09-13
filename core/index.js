@@ -104,6 +104,7 @@ export {
     patchCurrentScene,
     validateWorldStateDocument,
     projectWorldState,
+    projectWorldStateSections,
 } from './world_state_document.js';
 
 // Tier 0 shared primitives (scope, revision, prompt helpers).

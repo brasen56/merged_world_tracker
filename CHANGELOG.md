@@ -12,6 +12,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.8]
+
+### Added
+
+- Implemented the measurement-only scope of Phase 6 in
+  `docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`. World State injection snapshots now
+  report stored and injected estimated tokens per semantic section, separate
+  factual/hook totals, final registered payload tokens, outer Budget action,
+  and explicit section omission/partial-truncation reasons.
+- Extended the existing Diagnostics → Injection tab with the World State
+  section-measurement table. Measurements are attached to the frozen snapshot
+  of the exact payload registered with SillyTavern rather than rebuilt when the
+  panel opens.
+- Added Phase 6 regression coverage for factual/hook measurements, hook-mode
+  omissions, legacy cap visibility, snapshot transport/copy isolation, and
+  diagnostics rendering.
+
+### Changed
+
+- Centralized World State narrator payload construction in
+  `buildInjectionProjection()`. Live injection, preview, and the existing
+  `buildInjectionPayload()` compatibility API now share that builder without
+  changing payload bytes.
+- Section measurement now runs only when a live injection records its
+  snapshot. `buildInjectionPayload()`, and with it the floating token badge
+  (`getTotalTokens()`, every 5 seconds) and the Preview, assemble the payload
+  without token counting, so the badge makes one tokenizer call per refresh
+  instead of one per section.
+- Added `projectWorldStateSections()` to the core World State document module:
+  the parts a projection view selects, their separator, and the archived
+  sections it excludes. `projectWorldState()` is now a join over it, and
+  injection diagnostics attribute tokens from the same parts with exact
+  offsets instead of re-deriving the selection rules and searching the text.
+  Report output is unchanged; the truncation marker length now comes from the
+  shared `TRUNCATION_MARKER`.
+- Deferred Phase 6 bounded-selection items 1–7 (priority ranking, semantic
+  entry selection, and whole-entry dropping) pending real-use measurements and
+  the Phase 7 Gate A decision. Existing factual/hook projections, legacy
+  character caps, and the outer cross-module Budget remain unchanged.
+
 ## [2.8.7]
 
 ### Added

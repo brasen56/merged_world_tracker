@@ -286,6 +286,9 @@ export function collectInjectionSnapshot({
             depth: typeof raw.depth === 'number' ? raw.depth : null,
             at: typeof raw.at === 'number' ? raw.at : null,
             ageSec: typeof raw.at === 'number' ? Math.max(0, Math.round((generatedAt - raw.at) / 1000)) : null,
+            ...(raw.diagnostics && typeof raw.diagnostics === 'object'
+                ? { diagnostics: raw.diagnostics }
+                : {}),
         } : null;
 
         // Token estimate, with the KIND stated (a bare number invites the

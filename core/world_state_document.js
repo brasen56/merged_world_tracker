@@ -694,37 +694,74 @@ export function validateWorldStateDocument(text, options = {}) {
     return { ok: errors.length === 0, mode, issues, errors, warnings, normalizedText, parsed, scene };
 }
 
-/** Build a consumer view while leaving the saved Markdown untouched. */
-export function projectWorldState(text, options = {}) {
+/**
+ * The parts a projection view selects, in output order, plus the separator
+ * projectWorldState() joins them with. Consumers that attribute a projected
+ * string back to its sections (injection diagnostics) use this rather than
+ * re-deriving the selection rules, so the two can never disagree.
+ *
+ * `kind` is 'section' for a `##` section, 'preamble' for text before the first
+ * header, or 'legacy' for a header-free document. `archived` lists the
+ * `Archive (Stale)` sections every view excludes.
+ *
+ * @returns {{
+ *   parts: Array<{ kind: 'section'|'preamble'|'legacy', name: string|null, text: string }>,
+ *   separator: string,
+ *   archived: Array<{ name: string, text: string }>,
+ * }}
+ */
+export function projectWorldStateSections(text, options = {}) {
     const parsed = parseWorldStateSections(text);
     const view = options.view || 'all';
     if (!['all', 'factual', 'hooks'].includes(view)) {
         throw new TypeError(`Unknown World State projection view "${view}".`);
     }
+    const separator = parsed.lineEnding + parsed.lineEnding;
     // Legacy World State documents may contain the old field-only format with
     // no level-two section headers. Preserve that readable content rather than
     // silently injecting an empty projection; once a document has recognized
     // sections, the normal factual/hook filtering below applies. A field-only
     // legacy document is all factual scene data — it has no hook sections, so
-    // the hooks view must return '' rather than duplicating the full text
+    // the hooks view must return nothing rather than duplicating the full text
     // (which would otherwise be injected a second time under the hook header).
-    if (parsed.sections.length === 0) return view === 'hooks' ? '' : asText(text).trim();
+    if (parsed.sections.length === 0) {
+        const legacy = asText(text).trim();
+        return {
+            parts: view !== 'hooks' && legacy ? [{ kind: 'legacy', name: null, text: legacy }] : [],
+            separator,
+            archived: [],
+        };
+    }
     const isArchive = name => WORLD_STATE_ARCHIVE_SECTION.toLowerCase() === name.toLowerCase();
 
     const selected = Array.isArray(options.sections)
         ? new Set(options.sections.map(name => String(name).toLowerCase()))
         : null;
     const excluded = new Set((options.excludeSections || []).map(name => String(name).toLowerCase()));
-    const sections = parsed.sections
-        .filter(section => !isArchive(section.name))
-        .filter(section => view === 'all'
-            || (view === 'hooks' ? isWorldStateHookSection(section.name) : !isWorldStateHookSection(section.name)))
-        .filter(section => !selected || selected.has(section.name.toLowerCase()))
-        .filter(section => !excluded.has(section.name.toLowerCase()))
-        .map(section => section.raw.trim())
-        .filter(Boolean);
+    const parts = [];
+    const archived = [];
+    for (const section of parsed.sections) {
+        const body = section.raw.trim();
+        if (isArchive(section.name)) {
+            if (body) archived.push({ name: section.name, text: body });
+            continue;
+        }
+        const inView = view === 'all'
+            || (view === 'hooks' ? isWorldStateHookSection(section.name) : !isWorldStateHookSection(section.name));
+        const lower = section.name.toLowerCase();
+        if (!inView || (selected && !selected.has(lower)) || excluded.has(lower) || !body) continue;
+        parts.push({ kind: 'section', name: section.name, text: body });
+    }
     // Preamble is factual hand-edited context. Keep it in factual/all views
     // unless an explicit section allow-list asks for sections only.
-    if (view !== 'hooks' && !selected && parsed.preamble.trim()) sections.unshift(parsed.preamble.trim());
-    return sections.join(parsed.lineEnding + parsed.lineEnding);
+    if (view !== 'hooks' && !selected && parsed.preamble.trim()) {
+        parts.unshift({ kind: 'preamble', name: null, text: parsed.preamble.trim() });
+    }
+    return { parts, separator, archived };
+}
+
+/** Build a consumer view while leaving the saved Markdown untouched. */
+export function projectWorldState(text, options = {}) {
+    const { parts, separator } = projectWorldStateSections(text, options);
+    return parts.map(part => part.text).join(separator);
 }

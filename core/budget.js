@@ -169,7 +169,7 @@ export function _setBudgetSettingsReader(fn) {
 // _resetBudgetEnforcementState() between tests.
 
 /**
- * @typedef {{payload: string, enabled: boolean, depth: number, role: number}} DesiredEntry
+ * @typedef {{payload: string, enabled: boolean, depth: number, role: number, diagnostics?: object}} DesiredEntry
  */
 
 /** @type {Record<string, DesiredEntry>} module id → last desired payload */
@@ -177,6 +177,26 @@ const _desiredPayloads = Object.create(null);
 
 /** @type {Set<string>} module ids currently displaced (slot cleared by budget) */
 const _displacedIds = new Set();
+
+/**
+ * Retain module-owned diagnostics while making the recorded outer-budget
+ * outcome truthful. The registry stores only metadata supplied through the
+ * shared seam, so this remains generic to every budget-managed module.
+ *
+ * @param {object|undefined} diagnostics
+ * @param {string} payload
+ * @param {boolean} enabled
+ * @param {string} outerBudgetAction
+ * @returns {object|undefined}
+ */
+function budgetedDiagnostics(diagnostics, payload, enabled, outerBudgetAction) {
+    if (!diagnostics || typeof diagnostics !== 'object') return undefined;
+    return {
+        ...diagnostics,
+        registeredPayloadTokens: enabled ? estimateTokens(payload) : 0,
+        outerBudgetAction,
+    };
+}
 
 /**
  * Wipe the desired-payload registry and displaced set. Test isolation only;
@@ -903,6 +923,7 @@ export function rebalanceBudgetInjections({
                 role: desired.role,
                 depth: desired.depth,
                 enabled: true,
+                diagnostics: budgetedDiagnostics(desired.diagnostics, plan.payload, true, plan.action),
             });
             _displacedIds.delete(spec.id);
             record({
@@ -963,12 +984,13 @@ export function clearDesiredBudgetInjection(key, { setEP = getSetExtensionPrompt
  * @param {boolean} opts.enabled — whether the apply is active
  * @param {number} [opts.depth] — the placement depth the apply will use
  * @param {number} [opts.role] — the placement role number the apply will use
+ * @param {object} [opts.diagnostics] — optional module-owned snapshot metadata
  * @param {object} [opts.deps] — injectable for tests: { settings, setEP, now }
  * @returns {{payload: string, enabled: boolean, decision: object|null}}
  *   `decision` is the plan actually applied (null = no decision was needed
  *   or the budget was unavailable).
  */
-export function enforceInjectionBudget({ key, payload, enabled, depth = 0, role = 0 }, {
+export function enforceInjectionBudget({ key, payload, enabled, depth = 0, role = 0, diagnostics }, {
     settings = getBudgetSettings(),
     setEP = getSetExtensionPrompt(),
 } = {}) {
@@ -983,7 +1005,13 @@ export function enforceInjectionBudget({ key, payload, enabled, depth = 0, role 
         // budget lets through, so a rebalance pass can re-admit it later if it
         // was displaced. A drop still records the desired payload — the module
         // wanted to inject it; the budget refused this turn.
-        _desiredPayloads[spec.id] = { payload: String(payload ?? ''), enabled: !!enabled, depth: Number(depth) || 0, role: Number(role) || 0 };
+        _desiredPayloads[spec.id] = {
+            payload: String(payload ?? ''),
+            enabled: !!enabled,
+            depth: Number(depth) || 0,
+            role: Number(role) || 0,
+            ...(diagnostics && typeof diagnostics === 'object' ? { diagnostics } : {}),
+        };
 
         const plan = planBudgetDecision({
             spec,
@@ -1038,7 +1066,15 @@ export function enforceInjectionBudget({ key, payload, enabled, depth = 0, role 
                 if (typeof setEP === 'function') {
                     setEP(victim.key, '', 1, 0, undefined, 0);
                 }
-                recordInjection({ key: victim.key, payload: '', role: 0, depth: 0, enabled: false });
+                const desired = _desiredPayloads[victim.id];
+                recordInjection({
+                    key: victim.key,
+                    payload: '',
+                    role: 0,
+                    depth: 0,
+                    enabled: false,
+                    diagnostics: budgetedDiagnostics(desired?.diagnostics, '', false, 'displaced'),
+                });
                 _displacedIds.add(victim.id);
                 record({
                     level: 'warn',

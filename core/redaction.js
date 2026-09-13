@@ -144,6 +144,9 @@ export const CONTENT_KEYS = Object.freeze([
     // surface that serializes a roster outside that umbrella, same reasoning
     // as pinnedEntities above.
     'roster',
+    // World State Phase 6 per-section injection measurements. Standard names
+    // dominate, but unknown hand-authored headings are still chat content.
+    'sectionName',
 ]);
 
 /**

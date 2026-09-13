@@ -682,6 +682,76 @@ describe('applyExtensionPromptInjection × budget (the real seam)', () => {
         expect(applyExtensionPromptInjection({ key: 'mwt_world_state_injection', header: '', body: payloadOf(100), enabled: true, fallbackDepth: 4 })).toBe(true);
         expect(getInjectedSnapshot('session_chronicle_injection').payload).toBe(payloadOf(400));
     });
+
+    test('preserves module diagnostics through budget displacement and restoration', () => {
+        const { meta } = fakeSetExtensionPrompt();
+        meta[BUDGET_METADATA_KEY] = {
+            enforce: true,
+            globalHardCap: 1000,
+            modules: {
+                world_state: { priority: 4 },
+                chronicle: { priority: 1 },
+            },
+        };
+        const diagnostics = {
+            kind: 'world-state-sections',
+            sections: [{ sectionName: 'Current Scene', storedTokens: 10 }],
+        };
+
+        expect(applyExtensionPromptInjection({
+            key: 'mwt_world_state_injection', header: '', body: payloadOf(600), enabled: true,
+            fallbackDepth: 4, diagnostics,
+        })).toBe(true);
+        expect(applyExtensionPromptInjection({
+            key: 'session_chronicle_injection', header: '', body: payloadOf(600), enabled: true,
+            fallbackDepth: 7,
+        })).toBe(true);
+
+        let worldState = getInjectedSnapshot('mwt_world_state_injection');
+        expect(worldState.enabled).toBe(false);
+        expect(worldState.diagnostics).toMatchObject({
+            kind: 'world-state-sections', registeredPayloadTokens: 0, outerBudgetAction: 'displaced',
+        });
+        expect(worldState.diagnostics.sections).toEqual(diagnostics.sections);
+
+        applyExtensionPromptInjection({
+            key: 'session_chronicle_injection', header: '', body: '', enabled: false, fallbackDepth: 7,
+        });
+        worldState = getInjectedSnapshot('mwt_world_state_injection');
+        expect(worldState.enabled).toBe(true);
+        expect(worldState.diagnostics).toMatchObject({
+            kind: 'world-state-sections', outerBudgetAction: 'keep',
+        });
+        expect(worldState.diagnostics.registeredPayloadTokens).toBe(estimateTokensOf(worldState.payload));
+        expect(worldState.diagnostics.sections).toEqual(diagnostics.sections);
+    });
+
+    test('preserves module diagnostics through global-cap drop and restoration', () => {
+        const { meta } = fakeSetExtensionPrompt();
+        meta[BUDGET_METADATA_KEY] = { enforce: true, globalHardCap: 500 };
+        const diagnostics = { kind: 'world-state-sections', sections: [{ sectionName: 'Pending', storedTokens: 8 }] };
+
+        expect(applyExtensionPromptInjection({
+            key: 'mwt_world_state_injection', header: '', body: payloadOf(700), enabled: true,
+            fallbackDepth: 4, diagnostics,
+        })).toBe(false);
+        let worldState = getInjectedSnapshot('mwt_world_state_injection');
+        expect(worldState.diagnostics).toMatchObject({
+            kind: 'world-state-sections', registeredPayloadTokens: 0, outerBudgetAction: 'drop',
+        });
+
+        meta[BUDGET_METADATA_KEY].globalHardCap = 1000;
+        applyExtensionPromptInjection({
+            key: 'session_chronicle_injection', header: '', body: payloadOf(100), enabled: true, fallbackDepth: 7,
+        });
+        worldState = getInjectedSnapshot('mwt_world_state_injection');
+        expect(worldState.enabled).toBe(true);
+        expect(worldState.diagnostics).toMatchObject({
+            kind: 'world-state-sections', outerBudgetAction: 'keep',
+        });
+        expect(worldState.diagnostics.registeredPayloadTokens).toBe(estimateTokensOf(worldState.payload));
+        expect(worldState.diagnostics.sections).toEqual(diagnostics.sections);
+    });
 });
 
 // ─── 8. The panel — collector ────────────────────────────────────────────────

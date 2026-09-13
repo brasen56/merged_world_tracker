@@ -118,6 +118,21 @@ describe('applyExtensionPromptInjection records what it sent', () => {
         });
     });
 
+    test('a clear keeps module measurements but reports zero registered tokens', () => {
+        fakeSetExtensionPrompt();
+
+        applyExtensionPromptInjection({
+            key: 'mwt_test_injection', body: 'not sent', enabled: false, fallbackDepth: 4,
+            diagnostics: { kind: 'world-state-sections', registeredPayloadTokens: 99 },
+        });
+
+        expect(getInjectedSnapshot('mwt_test_injection').diagnostics).toMatchObject({
+            kind: 'world-state-sections',
+            registeredPayloadTokens: 0,
+            outerBudgetAction: 'clear',
+        });
+    });
+
     test('a non-finite globalDepth falls back to the module depth in the snapshot', () => {
         fakeSetExtensionPrompt();
 
@@ -160,14 +175,21 @@ describe('injection snapshot store', () => {
     });
 
     test('getters return copies that cannot mutate internal state', () => {
-        recordInjection({ key: 'k', payload: 'p', role: 0, depth: 2, enabled: true });
+        recordInjection({
+            key: 'k', payload: 'p', role: 0, depth: 2, enabled: true,
+            diagnostics: { sections: [{ sectionName: 'Current Scene', storedTokens: 5 }] },
+        });
 
         getInjectedSnapshot('k').payload = 'tampered';
+        getInjectedSnapshot('k').diagnostics.sections[0].storedTokens = 999;
         expect(getInjectedSnapshot('k').payload).toBe('p');
+        expect(getInjectedSnapshot('k').diagnostics.sections[0].storedTokens).toBe(5);
 
         const all = getAllInjectedSnapshots();
         all.k.payload = 'tampered-again';
+        all.k.diagnostics.sections.push({ sectionName: 'Pending' });
         expect(getInjectedSnapshot('k').payload).toBe('p');
+        expect(getInjectedSnapshot('k').diagnostics.sections).toHaveLength(1);
     });
 
     test('clearInjections wipes snapshots without touching events', () => {

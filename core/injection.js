@@ -2,7 +2,7 @@
  * core/injection.js — Shared prompt injection helpers.
  */
 
-import { getSetExtensionPrompt } from './context.js';
+import { getSetExtensionPrompt, estimateTokens } from './context.js';
 import { escapePromptBoundary } from './prompt.js';
 import { recordInjection } from './diagnostics.js';
 // TODO §2 context budget: the ONE seam every setExtensionPrompt injection
@@ -64,6 +64,8 @@ export function wrapInTag(tag, body) {
  *                                        enabled, wraps the full payload in
  *                                        `<wrapperTag>…</wrapperTag>`
  * @param {boolean} [opts.useTags=true] — master switch for tag wrapping
+ * @param {object} [opts.diagnostics] — optional module-owned measurement
+ *        metadata stored beside (never inside) the recorded payload
  *
  * Phase 2 diagnostics: every apply that reaches setExtensionPrompt (including
  * clears) records a per-key snapshot `{ key, payload, role, depth, enabled, at }`
@@ -81,6 +83,7 @@ export function applyExtensionPromptInjection({
     globalRole = 'system',
     wrapperTag,
     useTags = true,
+    diagnostics,
 }) {
     const setEP = getSetExtensionPrompt();
     if (!setEP) return false;
@@ -92,7 +95,12 @@ export function applyExtensionPromptInjection({
         setEP(key, '', 1, depth, undefined, role);
         // Phase 2 diagnostics: record the cleared state too — "it was cleared
         // at T" is exactly as diagnostic as what the slot contained before.
-        recordInjection({ key, payload: '', role, depth, enabled: false });
+        recordInjection({
+            key, payload: '', role, depth, enabled: false,
+            diagnostics: diagnostics && typeof diagnostics === 'object'
+                ? { ...diagnostics, registeredPayloadTokens: 0, outerBudgetAction: 'clear' }
+                : undefined,
+        });
         // Disabled/empty applies bypass enforceInjectionBudget entirely, so
         // explicitly forget this desired payload and let any other displaced
         // module reclaim the capacity it just freed (TODO §2 P2).
@@ -105,6 +113,7 @@ export function applyExtensionPromptInjection({
     // multiple independently-wrapped blocks and passes the final string here).
     const inner = header?.trim() ? `${header}\n\n${body}` : body;
     let payload = (useTags && wrapperTag) ? wrapInTag(wrapperTag, inner) : inner;
+    const preBudgetPayload = payload;
 
     // TODO §2 context budget. The per-chat budget gets the FINAL payload —
     // after header/wrapper assembly, before registration — and may return a
@@ -115,7 +124,7 @@ export function applyExtensionPromptInjection({
     // RE-INJECT a previously displaced module at its correct placement when
     // capacity is freed (TODO §2 P2 — displaced modules are no longer
     // one-way).
-    const budgeted = enforceInjectionBudget({ key, payload, enabled: true, depth, role });
+    const budgeted = enforceInjectionBudget({ key, payload, enabled: true, depth, role, diagnostics });
     payload = budgeted.payload;
     const finalEnabled = enabled && budgeted.enabled;
 
@@ -127,7 +136,20 @@ export function applyExtensionPromptInjection({
     // MWT registered, not that a generation ran afterwards or that
     // SillyTavern placed the payload in the final prompt — placement is not
     // observable from here (the panel design calls it Unverified).
-    recordInjection({ key, payload, role, depth, enabled: finalEnabled });
+    recordInjection({
+        key, payload, role, depth, enabled: finalEnabled,
+        diagnostics: diagnostics && typeof diagnostics === 'object'
+            ? {
+                ...diagnostics,
+                registeredPayloadTokens: finalEnabled ? estimateTokens(payload) : 0,
+                outerBudgetAction: budgeted.decision
+                    ? (budgeted.payload === preBudgetPayload && budgeted.decision.action !== 'drop'
+                        ? 'keep'
+                        : budgeted.decision.action)
+                    : 'keep',
+            }
+            : undefined,
+    });
     // TODO §2 P2 — now that this incoming payload's active snapshot exists,
     // safely re-admit any lower-priority module it previously displaced if
     // the current allocation has capacity again. This must occur AFTER the

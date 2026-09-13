@@ -257,6 +257,22 @@ describe('collectInjectionSnapshot — rows, provenance, tokens', () => {
         expect(snap.registeredTokens).toBe(3);
     });
 
+    test('carries World State section measurements from the recorded snapshot', () => {
+        const diagnostics = {
+            kind: 'world-state-sections',
+            factual: { storedTokens: 10, injectedTokens: 9 },
+            hooks: { storedTokens: 4, injectedTokens: 0 },
+            sections: [{ sectionName: 'Plot Seeds', view: 'hooks', storedTokens: 4, injectedTokens: 0, status: 'omitted', reason: 'hook mode off' }],
+            omitted: [{ kind: 'section', sectionName: 'Plot Seeds', view: 'hooks', status: 'omitted', reason: 'hook mode off' }],
+            entries: [],
+        };
+        const snap = collectInjectionSnapshot(deps({
+            injections: () => ({ 'k-ws': { ...LIVE_SNAP, diagnostics } }),
+        }));
+
+        expect(snap.modules[0].snapshot.diagnostics).toEqual(diagnostics);
+    });
+
     test('a cleared snapshot is shown as a clear, not hidden', () => {
         const snap = collectInjectionSnapshot(deps({
             injections: () => ({ 'k-ws': { ...LIVE_SNAP, payload: '', enabled: false } }),
@@ -488,6 +504,31 @@ describe('renderInjectionSnapshot — banners, provenance, payloads', () => {
         expect(html).toContain('1m ago');
         expect(html).toContain('30s ago');
         expect(html).toContain('cleared');
+    });
+
+    test('renders stored/injected section measurements and omission reasons', () => {
+        const diagnostics = {
+            kind: 'world-state-sections',
+            factual: { storedTokens: 100, injectedTokens: 90 },
+            hooks: { storedTokens: 20, injectedTokens: 0 },
+            registeredPayloadTokens: 140,
+            outerBudgetAction: 'keep',
+            sections: [{ sectionName: '<Plot Seeds>', view: 'hooks', storedTokens: 20, injectedTokens: 0, status: 'omitted', reason: 'hook mode off' }],
+            omitted: [{ sectionName: '<Plot Seeds>' }],
+            entries: [],
+        };
+        const snapshot = collectInjectionSnapshot(renderDeps({
+            injections: () => ({ 'k-ws': { ...LIVE_SNAP, diagnostics } }),
+        }));
+        const html = renderInjectionSnapshot(snapshot, { formatTime: T });
+
+        expect(html).toContain('World State projection measurement');
+        expect(html).toContain('before outer Budget');
+        expect(html).toContain('100</strong> stored → <strong>90</strong> injected');
+        expect(html).toContain('hook mode off');
+        expect(html).toContain('&lt;Plot Seeds&gt;');
+        expect(html).not.toContain('<Plot Seeds>');
+        expect(html).toContain('priority selection is deferred');
     });
 
     test('payloads render collapsed + fully DEFERRED: no payload text in the markup at all', () => {

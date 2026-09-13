@@ -1060,6 +1060,37 @@ export function renderInjectionSnapshot(snapshot, { formatTime = (ts) => new Dat
         ? `<p class="mwt-diag-env-subheading">Recorded payloads — the exact strings last registered via setExtensionPrompt (collapsed; re-open this tab to refresh)</p>${payloadBlocks}`
         : '<p class="mwt-diag-dim">No injection registrations yet this session — snapshots are in-memory and appear after each module first applies its prompt (a reload clears them).</p>';
 
+    const worldStateMeasurement = rows.find(r => r.id === 'world_state')?.snapshot?.diagnostics;
+    let measurementSection = '';
+    if (worldStateMeasurement?.kind === 'world-state-sections') {
+        const sectionRows = Array.isArray(worldStateMeasurement.sections)
+            ? worldStateMeasurement.sections.map(section => `
+                <tr>
+                    <td>${escapeHtml(String(section.sectionName ?? 'Unknown'))}</td>
+                    <td>${escapeHtml(String(section.view ?? '—'))}</td>
+                    <td>${Number(section.storedTokens) || 0}</td>
+                    <td>${Number(section.injectedTokens) || 0}</td>
+                    <td>${escapeHtml(String(section.status ?? '—'))}${section.reason ? ` <span class="mwt-diag-dim">(${escapeHtml(String(section.reason))})</span>` : ''}</td>
+                </tr>`).join('')
+            : '';
+        const factual = worldStateMeasurement.factual || {};
+        const hooks = worldStateMeasurement.hooks || {};
+        const omitted = Array.isArray(worldStateMeasurement.omitted) ? worldStateMeasurement.omitted.length : 0;
+        measurementSection = `
+            <p class="mwt-diag-env-subheading">World State projection measurement — stored vs projected by semantic section (before outer Budget)</p>
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat">factual: <strong>${Number(factual.storedTokens) || 0}</strong> stored → <strong>${Number(factual.injectedTokens) || 0}</strong> injected tokens</span>
+                <span class="mwt-diag-health-stat">hooks: <strong>${Number(hooks.storedTokens) || 0}</strong> stored → <strong>${Number(hooks.injectedTokens) || 0}</strong> injected tokens</span>
+                <span class="mwt-diag-health-stat">final payload: <strong>${Number(worldStateMeasurement.registeredPayloadTokens) || 0}</strong> tokens · outer budget ${escapeHtml(String(worldStateMeasurement.outerBudgetAction ?? 'unknown'))}</span>
+                <span class="mwt-diag-health-stat"><strong>${omitted}</strong> omitted/partial section(s)</span>
+            </div>
+            ${sectionRows ? `<table class="mwt-diag-health-table">
+                <thead><tr><th>Section</th><th>View</th><th>Stored</th><th>Projected</th><th>Result</th></tr></thead>
+                <tbody>${sectionRows}</tbody>
+            </table>` : '<p class="mwt-diag-dim">No World State sections were measured.</p>'}
+            <p class="mwt-diag-note">Per-section projected tokens are measured before the separate outer cross-module Budget; “final payload” is measured from the exact post-Budget registration. Measurement only: Phase 6 priority selection is deferred. Existing factual/hook projection, legacy character caps, and the outer Budget remain unchanged. Entry omissions are reported when a future selector supplies them; none are introduced here.</p>`;
+    }
+
     const registeredTokens = (Number(s.registeredTokens) || 0).toLocaleString();
 
     return `
@@ -1079,6 +1110,7 @@ export function renderInjectionSnapshot(snapshot, { formatTime = (ts) => new Dat
                 </thead>
                 <tbody>${rowHtml}</tbody>
             </table>
+            ${measurementSection}
             ${payloadSection}
             <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. "Registered" is the Phase 2 snapshot: the exact
                 string MWT last handed to SillyTavern's <code>setExtensionPrompt</code> (frozen until re-applied), with its age —

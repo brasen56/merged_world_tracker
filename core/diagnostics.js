@@ -73,7 +73,7 @@ const _lastApiCalls = Object.create(null);
 
 /**
  * Injected-payload snapshots (Phase 2):
- *   { [key]: { key, payload, role, depth, enabled, at } }
+ *   { [key]: { key, payload, role, depth, enabled, at, diagnostics? } }
  *
  * ONE snapshot per setExtensionPrompt key, OVERWRITTEN on each apply — the
  * injected payload is a frozen snapshot until something re-applies it, so the
@@ -226,7 +226,7 @@ export function clearApiCalls() {
 /**
  * Record what applyExtensionPromptInjection (core/injection.js) actually sent
  * to SillyTavern's setExtensionPrompt: `{ key, payload, role, depth, enabled,
- * at }`. One snapshot per key, OVERWRITTEN on each apply — including applies
+ * at, diagnostics? }`. One snapshot per key, OVERWRITTEN on each apply — including applies
  * that CLEAR the slot (enabled:false, payload:''), because "it was cleared at
  * T" is exactly as diagnostic as what it contained before.
  *
@@ -244,8 +244,28 @@ export function clearApiCalls() {
  * @param {number}  [snapshot.role]    — numeric role actually sent (0|1|2)
  * @param {number}  [snapshot.depth]   — resolved depth actually sent
  * @param {boolean} [snapshot.enabled] — false when this apply cleared the slot
+ * @param {object}  [snapshot.diagnostics] — optional module-owned measurement metadata
  * @returns {object|undefined} a copy of the stored snapshot, or undefined on bad input
  */
+function cloneInjectionDiagnostics(value, seen = new WeakSet()) {
+    if (value === null || typeof value !== 'object') {
+        return ['string', 'number', 'boolean'].includes(typeof value) ? value : null;
+    }
+    if (seen.has(value)) return '[circular]';
+    seen.add(value);
+    if (Array.isArray(value)) {
+        const out = value.map(item => cloneInjectionDiagnostics(item, seen));
+        seen.delete(value);
+        return out;
+    }
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+        out[key] = cloneInjectionDiagnostics(item, seen);
+    }
+    seen.delete(value);
+    return out;
+}
+
 export function recordInjection(snapshot = {}) {
     if (!snapshot || typeof snapshot !== 'object') return undefined;
     const { key } = snapshot;
@@ -258,6 +278,9 @@ export function recordInjection(snapshot = {}) {
         depth: typeof snapshot.depth === 'number' ? snapshot.depth : null,
         enabled: snapshot.enabled === true,
         at: Date.now(),
+        ...(snapshot.diagnostics && typeof snapshot.diagnostics === 'object'
+            ? { diagnostics: cloneInjectionDiagnostics(snapshot.diagnostics) }
+            : {}),
     };
     _injections[key] = snap;
     record({
@@ -273,7 +296,10 @@ export function recordInjection(snapshot = {}) {
             at: snap.at,
         },
     });
-    return { ...snap };
+    return {
+        ...snap,
+        ...(snap.diagnostics ? { diagnostics: cloneInjectionDiagnostics(snap.diagnostics) } : {}),
+    };
 }
 
 /**
@@ -282,7 +308,10 @@ export function recordInjection(snapshot = {}) {
  */
 export function getInjectedSnapshot(key) {
     const snap = _injections[key];
-    return snap ? { ...snap } : undefined;
+    return snap ? {
+        ...snap,
+        ...(snap.diagnostics ? { diagnostics: cloneInjectionDiagnostics(snap.diagnostics) } : {}),
+    } : undefined;
 }
 
 /**
@@ -290,7 +319,13 @@ export function getInjectedSnapshot(key) {
  */
 export function getAllInjectedSnapshots() {
     const out = {};
-    for (const k of Object.keys(_injections)) out[k] = { ..._injections[k] };
+    for (const k of Object.keys(_injections)) {
+        const snap = _injections[k];
+        out[k] = {
+            ...snap,
+            ...(snap.diagnostics ? { diagnostics: cloneInjectionDiagnostics(snap.diagnostics) } : {}),
+        };
+    }
     return out;
 }
 

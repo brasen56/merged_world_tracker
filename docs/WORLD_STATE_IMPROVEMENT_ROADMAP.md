@@ -327,6 +327,12 @@ Exit criteria:
 
 **Purpose:** Reduce repeated prompt cost based on meaning rather than blind character truncation.
 
+**Scope update (implemented 2026-09-12):** The measurement work below is
+implemented. Bounded-selection items 1–7 are deferred while testing determines
+whether factual/hook projection already reduces normal payloads enough. No new
+selection, ranking, entry-dropping, or budgeting behavior is part of this phase
+for now.
+
 First add measurement:
 
 - Report stored and injected estimated tokens per section.
@@ -334,7 +340,25 @@ First add measurement:
 - Show factual and hook totals separately.
 - Extend the existing Injection diagnostics surface rather than introducing a second diagnostics system.
 
-Then implement bounded selection only where measurements justify it:
+Implementation notes:
+
+- `world_state/injection.js` now has one `buildInjectionProjection()` result for
+  live injection, preview payloads, and diagnostics. `buildInjectionPayload()`
+  remains the string-returning compatibility wrapper around that builder.
+- The report records stored and injected token estimates for every factual and
+  hook section, separate factual/hook totals, the final registered-payload token
+  count, and the existing outer Budget action. Section attribution describes the
+  semantic projection before that separate outer Budget; the final total is
+  measured from the exact post-Budget payload.
+- Existing projection omissions are explicit: hook sections when hook mode is
+  off, `Archive (Stale)` in every prompt view, and sections affected by the
+  legacy factual/hook character caps. The report exposes an empty entry-omission
+  list because no entry selector is being introduced in the narrowed scope.
+- Measurements travel beside the exact post-Budget payload in the existing
+  in-memory injection snapshot and render in the existing Diagnostics →
+  Injection tab. They never modify the saved World State document.
+
+Deferred — implement bounded selection only where measurements justify it:
 
 1. Always retain the complete valid `Current Scene`.
 2. Retain all due and overdue Pending items.
@@ -344,14 +368,18 @@ Then implement bounded selection only where measurements justify it:
 6. Keep hooks in their separate hook budget.
 7. Drop whole entries or sections from the tail of a priority ranking; never cut through a field, name, or bullet.
 
+Items 1–7 above are intentionally deferred pending the Phase 7 Gate A result.
+
 The cross-module Budget system remains the outer cap. The World State projection supplies a semantically ordered payload to that existing seam.
 
 Exit criteria:
 
-- The injection never contains a half section or truncated name.
-- Required scene and obligation content survives ordinary soft-cap enforcement.
+The semantic soft-cap guarantees, whole-entry dropping, and projection-failure
+fallback are deferred with items 1–7. The retained legacy character caps and
+outer Budget can still cut through a section. For the implemented measurement
+scope, the current criteria are:
+
 - Preview, live injection, and diagnostics use the same projection builder.
-- A projection failure falls back to the last safe raw factual view or omits the injection; it never changes stored World State.
 - Token reduction and omitted content are visible to the user.
 
 ### Phase 7 — Measurement gates and default decisions

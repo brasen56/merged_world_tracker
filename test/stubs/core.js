@@ -398,6 +398,7 @@ export {
     patchCurrentScene,
     validateWorldStateDocument,
     projectWorldState,
+    projectWorldStateSections,
 } from '../../core/world_state_document.js';
 
 // Tier 0 shared primitives â€” pure modules, safe to re-export directly.
@@ -545,7 +546,7 @@ export function getFakeStatusCalls() { return _statusCalls; }
 export const formatDate = notImplemented('formatDate');
 export function applyExtensionPromptInjection({
     key, header = '', body = '', enabled, globalDepth, fallbackDepth,
-    globalRole = 'system', wrapperTag, useTags = true,
+    globalRole = 'system', wrapperTag, useTags = true, diagnostics,
 }) {
     const role = globalRole === 'user' ? 1 : globalRole === 'assistant' ? 2 : 0;
     // Finite-depth guard, mirroring the real core/injection.js: a
@@ -580,7 +581,22 @@ export function applyExtensionPromptInjection({
     // returns early — and records nothing — when it is not). enabled mirrors
     // the FINAL post-budget state, exactly what the real seam records.
     if (typeof ctx.setExtensionPrompt === 'function') {
-        recordInjection({ key, payload, role, depth, enabled: finalEnabled });
+        recordInjection({
+            key, payload, role, depth, enabled: finalEnabled,
+            diagnostics: diagnostics && typeof diagnostics === 'object'
+                ? {
+                    ...diagnostics,
+                    registeredPayloadTokens: finalEnabled ? estimateTokens(payload) : 0,
+                    outerBudgetAction: !active
+                        ? 'clear'
+                        : budgeted.decision
+                        ? (budgeted.payload === built && budgeted.decision.action !== 'drop'
+                            ? 'keep'
+                            : budgeted.decision.action)
+                        : 'keep',
+                }
+                : undefined,
+        });
     }
     return finalEnabled;
 }
