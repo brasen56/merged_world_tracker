@@ -258,6 +258,14 @@ subsystem *replaces one thing instead of twenty*.
   "Select stale" bulk action) that stages into the normal review flow, watermark
   cleanup on NPC removal + chat switch. Tests in
   `test/dossier_field_refresh.test.js`. See CHANGELOG 2.2.0 "Added".*
+- [ ] **F — Story Planner reliability and creative controls.** Replace positional
+  beat progress with stable beat records; retain resolved/dropped ideas as bounded
+  generation memory; add full beat editing, Park and Focus controls, targeted arc
+  proposals, evidence-backed progress suggestions, and a compact story palette.
+  Safe Knowledge character grounding remains opt-in and excludes secrets, ledgers,
+  thoughts, and private intentions. Implement in dependency order from
+  [`STORY_PLANNER_IMPROVEMENT_ROADMAP.md`](STORY_PLANNER_IMPROVEMENT_ROADMAP.md),
+  beginning with the migration/merge reliability foundation.
 - [ ] **F — User-visible source & confidence tracking, cross-module.** The
   Knowledge evidence system already has quote receipts — surface that concept:
   source message range/index, source type (user-authored / assistant-authored /
