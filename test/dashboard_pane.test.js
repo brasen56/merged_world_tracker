@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { renderMaintenanceFindings, renderOverviewSnapshot, wireOverviewPane } from '../dashboard/render.js';
 
 const snapshot = (overrides = {}) => ({
@@ -59,6 +59,49 @@ describe('Overview pane', () => {
         expect(root.textContent).toContain('9 items pending staging');
     });
 
+    test('every Overview link starts the new tab at the top of the shared modal body', () => {
+        // All tabs share one scrolling body. On a phone the Overview itself
+        // scrolls, so a link that only switched tabs landed partway down.
+        const root = mountPane();
+        const body = document.createElement('div');
+        body.className = 'mwt-modal-body';
+        root.append(body);
+        for (const link of [
+            '.mwt-overview-footer [data-overview-tab="budget"]',
+            '.mwt-overview-card [data-overview-tab="diagnostics"]',
+            '.mwt-overview-card [data-overview-tab="world-state"]',
+        ]) {
+            body.scrollTop = 400;
+            root.querySelector(link).click();
+            expect(body.scrollTop, link).toBe(0);
+        }
+    });
+
+    test('Health opens the Health sub-tab even after Quarantine switched to Integrity', () => {
+        const root = mountPane();
+        const selected = [];
+        root.insertAdjacentHTML('beforeend', '<div class="mwt-diag-tab-bar">'
+            + '<button class="mwt-diag-tab-btn" data-diag-tab="health"></button>'
+            + '<button class="mwt-diag-tab-btn" data-diag-tab="integrity"></button></div>');
+        root.querySelectorAll('.mwt-diag-tab-btn').forEach((tab) => tab.addEventListener('click', () => selected.push(tab.dataset.diagTab)));
+        const cardLink = (label) => [...root.querySelectorAll('.mwt-overview-card .mwt-overview-link')]
+            .find((button) => button.textContent === `Open ${label}`);
+        cardLink('Quarantine').click();
+        cardLink('Health').click();
+        expect(selected).toEqual(['integrity', 'health']);
+    });
+
+    test('Coordinator deep link opens and scrolls to its disclosure', () => {
+        const root = mountPane();
+        const disclosure = document.createElement('details');
+        disclosure.id = 'mwt-settings-generation-coordinator';
+        disclosure.scrollIntoView = vi.fn();
+        root.append(disclosure);
+        root.querySelector('[data-overview-tab="settings"][data-overview-target="generation-coordinator"]').click();
+        expect(disclosure.open).toBe(true);
+        expect(disclosure.scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    });
+
     test('refresh keeps keyboard focus on the refresh control', () => {
         const root = mountPane();
         root.querySelector('#mwt-overview-refresh').focus();
@@ -66,6 +109,14 @@ describe('Overview pane', () => {
         const refreshed = root.querySelector('#mwt-overview-refresh');
         expect(refreshed.isConnected).toBe(true);
         expect(document.activeElement).toBe(refreshed);
+    });
+
+    test('Overview links move keyboard focus to the selected main tab', () => {
+        const root = mountPane();
+        const destination = root.querySelector('#mwt-tab-knowledge');
+        root.querySelector('[data-overview-tab="knowledge"]').focus();
+        root.querySelector('[data-overview-tab="knowledge"]').click();
+        expect(document.activeElement).toBe(destination);
     });
 });
 

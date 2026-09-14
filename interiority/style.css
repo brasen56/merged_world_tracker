@@ -19,6 +19,28 @@
     color: var(--mwt-text);
 }
 
+.mwt-int-disclosure {
+    border-top: 1px solid var(--mwt-border);
+    padding: 12px 0 4px;
+}
+
+.mwt-int-disclosure:last-child { border-bottom: 1px solid var(--mwt-border); }
+
+.mwt-int-disclosure summary {
+    cursor: pointer;
+    color: var(--mwt-text);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 2px 0;
+}
+
+.mwt-int-disclosure summary:focus-visible {
+    outline: 2px solid var(--mwt-accent);
+    outline-offset: 3px;
+}
+
+.mwt-int-disclosure[open] summary { margin-bottom: 8px; }
+
 /* ─── Status messages ────────────────────────────────────────────────────── */
 
 .mwt-int-status {

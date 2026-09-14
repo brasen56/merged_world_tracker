@@ -717,6 +717,17 @@ function _tombstone(data, entries) {
             npc: _normIntent(entry.npc),
             actions,
             triggers,
+            // Preserve readable text for the Deleted Intentions panel while
+            // retaining normalized fields above as the suppression index.
+            displayNpc: String(entry.npc ?? '').trim(),
+            displayActions: [...new Set([
+                entry.originalAction,
+                entry.action,
+            ].filter(v => v !== undefined && String(v).trim()).map(v => String(v).trim()))],
+            displayTriggers: [...new Set([
+                entry.originalTrigger,
+                entry.trigger,
+            ].filter(v => v !== undefined && String(v).trim()).map(v => String(v).trim()))],
             at: Date.now(),
         });
     }

@@ -34,17 +34,18 @@ function errorCard(label, cell) {
     </div>`;
 }
 
-function linkButton(tab, text) {
+function linkButton(tab, text, target = '') {
     // mwt-btn supplies the theme-aware chrome — without it the host's default
     // button background met the pane's inherited text color (white on white).
-    return `<button type="button" class="mwt-btn mwt-overview-link" data-overview-tab="${escapeHtml(tab)}">${escapeHtml(text)}</button>`;
+    const targetAttr = target ? ` data-overview-target="${escapeHtml(target)}"` : '';
+    return `<button type="button" class="mwt-btn mwt-overview-link" data-overview-tab="${escapeHtml(tab)}"${targetAttr}>${escapeHtml(text)}</button>`;
 }
 
-function card({ label, icon, body, tab, empty = false }) {
+function card({ label, icon, body, tab, target = '', empty = false }) {
     return `<article class="mwt-overview-card${empty ? ' mwt-overview-empty' : ''}">
         <h3>${EMOJI}${icon}</span> ${escapeHtml(label)}</h3>
         <div class="mwt-overview-card-body">${body}</div>
-        ${tab ? linkButton(tab, `Open ${label}`) : ''}
+        ${tab ? linkButton(tab, `Open ${label}`, target) : ''}
     </article>`;
 }
 
@@ -222,6 +223,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
             label: 'Knowledge',
             icon: '🧠',
             tab: 'knowledge',
+            target: 'staging',
             empty: !staging && !growth,
             body: `${countText(staging, 'item')} pending staging · ${countText(growth, 'unread growth item')}`,
         });
@@ -235,13 +237,13 @@ export function renderOverviewSnapshot(snapshot = {}) {
         <div class="mwt-overview-grid">
             ${renderCell('worldState', 'World State', () => worldBody, { icon: '🌍', tab: 'world-state' })}
             ${snapshot.staging?.ok ? renderKnowledge() : errorCard('Knowledge', snapshot.staging)}
-            ${renderCell('beats', 'Story Planner', () => `${countText(awaiting, 'beat')} awaiting · ${countText(overdue, 'beat')} overdue`, { icon: '🗺️', tab: 'story-planner', empty: !awaiting && !overdue })}
-            ${renderCell('intentions', 'Interiority', () => `${countText(active, 'active intention')} · ${countText(dormant, 'dormant intention')}`, { icon: '💭', tab: 'interiority', empty: !active && !dormant })}
+            ${renderCell('beats', 'Story Planner', () => `${countText(awaiting, 'beat')} awaiting · ${countText(overdue, 'beat')} overdue`, { icon: '🗺️', tab: 'story-planner', target: 'beats', empty: !awaiting && !overdue })}
+            ${renderCell('intentions', 'Interiority', () => `${countText(active, 'active intention')} · ${countText(dormant, 'dormant intention')}`, { icon: '💭', tab: 'interiority', target: 'active-intentions', empty: !active && !dormant })}
             ${renderCell('budget', 'Budget', () => `${injected.toLocaleString()} injected${limit ? ` of ${limit.toLocaleString()} tokens` : ' tokens'}${budgetValue.enforce ? ' · enforce on' : ' · observe mode'}`, { icon: '📊', tab: 'budget' })}
-            ${renderCell('coordinator', 'Coordinator', () => `${countText(running, 'running job')} · ${countText(queued, 'queued job')}${coordinatorValue.userGeneration?.backgroundPaused ? ' · background HELD' : ''}`, { icon: '🚦', tab: 'settings' })}
-            ${renderCell('health', 'Health', renderHealth, { icon: '❤️', tab: 'diagnostics' })}
-            ${renderCell('deletedIntentions', 'Deleted intentions', (value) => `${Array.isArray(value) ? value.length : Number(value) || 0} records`, { icon: '🗑️', tab: 'interiority', empty: !cellValue(snapshot.deletedIntentions, []).length })}
-            ${renderCell('quarantine', 'Quarantine', (value) => `${Number(value?.total) || 0} quarantined records`, { icon: '🗂️', tab: 'diagnostics', empty: !(Number(cellValue(snapshot.quarantine, {})?.total) || 0) })}
+            ${renderCell('coordinator', 'Coordinator', () => `${countText(running, 'running job')} · ${countText(queued, 'queued job')}${coordinatorValue.userGeneration?.backgroundPaused ? ' · background HELD' : ''}`, { icon: '🚦', tab: 'settings', target: 'generation-coordinator' })}
+            ${renderCell('health', 'Health', renderHealth, { icon: '❤️', tab: 'diagnostics', target: 'health' })}
+            ${renderCell('deletedIntentions', 'Deleted intentions', (value) => `${Array.isArray(value) ? value.length : Number(value) || 0} records`, { icon: '🗑️', tab: 'interiority', target: 'deleted-intentions', empty: !cellValue(snapshot.deletedIntentions, []).length })}
+            ${renderCell('quarantine', 'Quarantine', (value) => `${Number(value?.total) || 0} quarantined records`, { icon: '🗂️', tab: 'diagnostics', target: 'integrity', empty: !(Number(cellValue(snapshot.quarantine, {})?.total) || 0) })}
         </div>
         <div data-overview-maintenance></div>
         <div data-overview-tools></div>
@@ -303,7 +305,35 @@ export function wireOverviewPane(root, {
         });
     }
     pane.querySelectorAll('[data-overview-tab]').forEach((button) => {
-        button.addEventListener('click', () => root.querySelector(`#mwt-tab-${button.dataset.overviewTab}`)?.click());
+        button.addEventListener('click', () => {
+            const destinationTab = root.querySelector(`#mwt-tab-${button.dataset.overviewTab}`);
+            destinationTab?.click();
+            // The overview link is removed from the active panel after the
+            // click. Restore focus to the visible destination tab so keyboard
+            // users are never stranded in the hidden Overview panel.
+            destinationTab?.focus?.();
+            // Every tab panel shares the modal's one scrolling body, so a tab
+            // switch alone keeps the Overview's scroll offset — on a phone,
+            // where the Overview scrolls, that lands partway down the new tab.
+            // Every link starts at the top; a target below scrolls further.
+            const body = root.querySelector('.mwt-modal-body');
+            if (body) body.scrollTop = 0;
+            const target = button.dataset.overviewTarget;
+            if (target === 'generation-coordinator') {
+                const disclosure = root.querySelector('#mwt-settings-generation-coordinator');
+                disclosure?.setAttribute('open', '');
+                disclosure?.scrollIntoView?.({ block: 'start' });
+            } else if (target === 'health' || target === 'integrity') {
+                root.querySelector(`.mwt-diag-tab-btn[data-diag-tab="${target}"]`)?.click();
+            } else if (target === 'staging') {
+                root.querySelector('.kt-sub-tab[data-sub="staging"]')?.click();
+            } else if (target === 'beats') {
+                root.querySelector('#sp-arcs')?.scrollIntoView?.({ block: 'start' });
+            } else if (target === 'active-intentions' || target === 'deleted-intentions') {
+                root.querySelector(`#mwt-int-${target}`)?.setAttribute('open', '');
+                root.querySelector(`#mwt-int-${target}`)?.scrollIntoView?.({ block: 'start' });
+            }
+        });
     });
     pane.querySelector('#mwt-overview-refresh')?.addEventListener('click', () => {
         pane.innerHTML = renderOverviewPane({ collect });

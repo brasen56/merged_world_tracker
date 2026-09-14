@@ -19,7 +19,7 @@ import { setControlBusy } from '../core/ui.js';
 
 import {
     state, getSettings, saveSettings,
-    getLedger, getPerMessage, getPerMessageKeys, getInteriorityData,
+    getLedger, getDeletedIntentions, getPerMessage, getPerMessageKeys, getInteriorityData,
     getMsgKeyForIndex, buildKeyToIndexMap,
     removeLedgerEntries, updateLedgerEntry, setLedgerEntryDormant,
     addManualLedgerEntry, hasDuplicateIntention,
@@ -55,6 +55,15 @@ export function renderContent() {
     const ledger = getLedger();
     const msgKeys = getPerMessageKeys();
 
+    // Nearly every panel action ends in renderContent(), which rebuilds the
+    // whole tab. Carry the user's open/closed choices across the rebuild (the
+    // story_planner renderArcs() precedent), or a section snaps shut on every
+    // click inside it. A fresh tab (modal open, chat change) has no sections
+    // yet and gets the markup defaults.
+    const openSections = new Map(
+        [...el.querySelectorAll('details.mwt-int-disclosure[id]')].map((d) => [d.id, d.open]),
+    );
+
     el.innerHTML = `
         <div class="mwt-interiority-tab">
             <div class="mwt-flex mwt-gap-4" style="margin-bottom:12px;flex-wrap:wrap">
@@ -66,71 +75,96 @@ export function renderContent() {
 
             <div id="mwt-int-settings-panel" style="display:none;margin-bottom:16px"></div>
 
-            <h3><span aria-hidden="true">📋</span> Active Intentions (${ledger.filter(e => e.status !== 'dormant').length})</h3>
-            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Persistent NPC intentions injected into the narrator prompt. These are hidden plans that surface only as NPC actions when their trigger condition is met. Click ✎ to edit an intention if the story changes its context.
-            </p>
-            <div id="mwt-int-ledger-list" class="mwt-int-ledger-list">
-                ${renderLedgerList(ledger.filter(e => e.status !== 'dormant'))}
-            </div>
-            <div id="mwt-int-add-form-container" style="margin-top:8px"></div>
-            <button id="mwt-int-add-btn" class="mwt-btn" style="margin-top:8px"><span aria-hidden="true">➕</span> Add Intention</button>
+            <details id="mwt-int-active-intentions" class="mwt-int-disclosure" open>
+                <summary><span aria-hidden="true">📋</span> Active Intentions (${ledger.filter(e => e.status !== 'dormant').length})</summary>
+                <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                    Persistent NPC intentions injected into the narrator prompt. These are hidden plans that surface only as NPC actions when their trigger condition is met. Click ✎ to edit an intention if the story changes its context.
+                </p>
+                <div id="mwt-int-ledger-list" class="mwt-int-ledger-list">
+                    ${renderLedgerList(ledger.filter(e => e.status !== 'dormant'))}
+                </div>
+                <div id="mwt-int-add-form-container" style="margin-top:8px"></div>
+                <button id="mwt-int-add-btn" class="mwt-btn" style="margin-top:8px"><span aria-hidden="true">➕</span> Add Intention</button>
+            </details>
 
-            <hr style="border-color:var(--mwt-border);margin:16px 0">
+            <details id="mwt-int-deleted-intentions" class="mwt-int-disclosure">
+                <summary><span aria-hidden="true">🗑️</span> Deleted Intentions (${getDeletedIntentions().length})</summary>
+                <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                    Permanent user deletions. These entries are kept as tombstones so the engine will not propose the same intention again. Use the Overview Tools action to clear them deliberately.
+                </p>
+                ${getDeletedIntentions().length
+                    ? `<div class="mwt-int-deleted-list">${getDeletedIntentions().map((entry) => {
+                        // Imported tombstones may contain unknown display fields.
+                        // Keep malformed presentation data from taking down the
+                        // entire modal, while retaining the canonical actions.
+                        const actions = Array.isArray(entry.displayActions)
+                            ? entry.displayActions
+                            : (Array.isArray(entry.actions) ? entry.actions : []);
+                        return `<div class="mwt-int-deleted-entry"><strong>${escapeHtml(entry.displayNpc || entry.npc || 'Unknown NPC')}</strong> → ${escapeHtml(actions.join(', '))}</div>`;
+                    }).join('')}</div>`
+                    : '<p style="color:var(--mwt-text-dim);font-size:12px">No deleted intentions.</p>'}
+            </details>
 
-            <h3><span aria-hidden="true">📅</span> Scheduled Intentions (${ledger.filter(e => e.status === 'dormant').length})</h3>
-            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Dormant plans anchored to future events. Excluded from the narrator prompt and per-turn evaluation until their trigger is near — checked automatically every ${getDormantPollInterval()} turns, or click ⏰ to wake manually.
-            </p>
-            <div id="mwt-int-dormant-list" class="mwt-int-ledger-list">
-                ${renderDormantList(ledger.filter(e => e.status === 'dormant'))}
-            </div>
+            <details id="mwt-int-scheduled-intentions" class="mwt-int-disclosure">
+                <summary><span aria-hidden="true">📅</span> Scheduled Intentions (${ledger.filter(e => e.status === 'dormant').length})</summary>
+                <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                    Dormant plans anchored to future events. Excluded from the narrator prompt and per-turn evaluation until their trigger is near — checked automatically every ${getDormantPollInterval()} turns, or click ⏰ to wake manually.
+                </p>
+                <div id="mwt-int-dormant-list" class="mwt-int-ledger-list">
+                    ${renderDormantList(ledger.filter(e => e.status === 'dormant'))}
+                </div>
+            </details>
 
-            <hr style="border-color:var(--mwt-border);margin:16px 0">
+            <details id="mwt-int-inner-states" class="mwt-int-disclosure">
+                <summary><span aria-hidden="true">🎭</span> Inner States</summary>
+                <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                    Persistent one-line mood/disposition per NPC. Generated by the thoughts call and fed back next turn. Never injected into the narrator prompt. Click ✎ to correct a stale or wrong line.
+                </p>
+                <div id="mwt-int-inner-states-list" class="mwt-int-inner-states-list">
+                    ${renderInnerStatesList()}
+                </div>
+            </details>
 
-            <h3><span aria-hidden="true">🎭</span> Inner States</h3>
-            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Persistent one-line mood/disposition per NPC. Generated by the thoughts call and fed back next turn. Never injected into the narrator prompt. Click ✎ to correct a stale or wrong line.
-            </p>
-            <div id="mwt-int-inner-states-list" class="mwt-int-inner-states-list">
-                ${renderInnerStatesList()}
-            </div>
+            <details id="mwt-int-npc-controls" class="mwt-int-disclosure">
+                <summary><span aria-hidden="true">🎛</span> Per-NPC Controls</summary>
+                <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                    Privacy exclusion (never send this NPC's dossier in interiority calls) and creation-only cost controls (pause new proposals, cooldown, active cap). Existing intentions are always evaluated, and nothing is ever auto-evicted to meet a cap.
+                </p>
+                <div id="mwt-int-npc-controls-list" class="mwt-int-controls-list">
+                    ${renderNpcControlsList()}
+                </div>
+                <div class="mwt-flex mwt-gap-4" style="margin-top:8px;flex-wrap:wrap">
+                    <input type="text" id="mwt-int-controls-add-name" class="mwt-input" style="width:160px" placeholder="NPC name" aria-label="NPC name">
+                    <button id="mwt-int-controls-add-btn" class="mwt-btn mwt-btn-sm"><span aria-hidden="true">➕</span> Add control</button>
+                </div>
+            </details>
 
-            <hr style="border-color:var(--mwt-border);margin:16px 0">
+            <details id="mwt-int-lifecycle-history" class="mwt-int-disclosure">
+                <summary><span aria-hidden="true">🗂</span> Lifecycle History (last ${getLifecycleHistory().length}${getLifecycleHistory().length >= MAX_LIFECYCLE_EVENTS ? ', capped' : ''})</summary>
+                <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                    Occurrence-specific audit trail of completions, drops, expiries, merges, sleeps, wakes, and reopens — with reasons. Repeated near-identical proposals for a recently closed plan are suppressed within the dedup window; click 🔁 to reopen a closed plan.
+                </p>
+                <div id="mwt-int-lifecycle-list" class="mwt-int-lifecycle-list">
+                    ${renderLifecycleHistoryList()}
+                </div>
+            </details>
 
-            <h3><span aria-hidden="true">🎛</span> Per-NPC Controls</h3>
-            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Privacy exclusion (never send this NPC's dossier in interiority calls) and creation-only cost controls (pause new proposals, cooldown, active cap). Existing intentions are always evaluated, and nothing is ever auto-evicted to meet a cap.
-            </p>
-            <div id="mwt-int-npc-controls-list" class="mwt-int-controls-list">
-                ${renderNpcControlsList()}
-            </div>
-            <div class="mwt-flex mwt-gap-4" style="margin-top:8px;flex-wrap:wrap">
-                <input type="text" id="mwt-int-controls-add-name" class="mwt-input" style="width:160px" placeholder="NPC name" aria-label="NPC name">
-                <button id="mwt-int-controls-add-btn" class="mwt-btn mwt-btn-sm"><span aria-hidden="true">➕</span> Add control</button>
-            </div>
-
-            <hr style="border-color:var(--mwt-border);margin:16px 0">
-
-            <h3><span aria-hidden="true">🗂</span> Lifecycle History (last ${getLifecycleHistory().length}${getLifecycleHistory().length >= MAX_LIFECYCLE_EVENTS ? ', capped' : ''})</h3>
-            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Occurrence-specific audit trail of completions, drops, expiries, merges, sleeps, wakes, and reopens — with reasons. Repeated near-identical proposals for a recently closed plan are suppressed within the dedup window; click 🔁 to reopen a closed plan.
-            </p>
-            <div id="mwt-int-lifecycle-list" class="mwt-int-lifecycle-list">
-                ${renderLifecycleHistoryList()}
-            </div>
-
-            <hr style="border-color:var(--mwt-border);margin:16px 0">
-
-            <h3><span aria-hidden="true">💭</span> Recent Thoughts</h3>
-            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
-                Display-only NPC reactions from recent turns. These are never injected into the narrator prompt.
-            </p>
-            <div id="mwt-int-thoughts-list" class="mwt-int-thoughts-list">
-                ${renderThoughtsList(msgKeys)}
-            </div>
+            <details id="mwt-int-recent-thoughts" class="mwt-int-disclosure">
+                <summary><span aria-hidden="true">💭</span> Recent Thoughts</summary>
+                <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
+                    Display-only NPC reactions from recent turns. These are never injected into the narrator prompt.
+                </p>
+                <div id="mwt-int-thoughts-list" class="mwt-int-thoughts-list">
+                    ${renderThoughtsList(msgKeys)}
+                </div>
+            </details>
         </div>
     `;
+
+    for (const [id, open] of openSections) {
+        const section = el.querySelector(`#${id}`);
+        if (section) section.open = open;
+    }
 
     wireEvents(el);
 }

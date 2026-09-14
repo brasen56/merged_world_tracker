@@ -12,6 +12,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.9]
+
+### Added
+
+- **Deleted Intentions disclosure in the Interiority tab.** The tombstone
+  store — permanent user deletions kept so the engine will not re-propose the
+  same intention — now has its own collapsible section in-tab. Previously only
+  its count was visible on the Overview card and the Tools action.
+- **Deep links from the Overview cards.** The cards' "Open …" buttons now
+  land on the relevant section, not just the tab (`data-overview-target`).
+  Every Overview link, cards and footer alike, starts the new tab at the top
+  of the modal; Knowledge opens the Staging sub-tab; Story Planner scrolls to
+  the arc list; Interiority and Deleted-intentions open and scroll to their
+  disclosures; Coordinator opens and scrolls to the Generation Coordinator
+  disclosure in Settings; Health and Quarantine open the Diagnostics → Health
+  and Integrity sub-tabs. Covered by new cases in
+  `test/dashboard_pane.test.js`.
+
+### Changed
+
+- Settings sections are collapsible. The six global-settings blocks (API
+  Connection, Stable History, Generation Coordinator, Injection Settings,
+  Floating Buttons, Per-Tracker Enable) are now `<details>` disclosures
+  (`.mwt-settings-disclosure`) with theme-aware summaries and a
+  `:focus-visible` ring, replacing the `<h3>` + `<hr>` stack. API Connection
+  stays open by default; the rest start collapsed. Save Settings and Sync to
+  Modules sit in their own row below all six sections: Save writes every
+  section, so it has to stay reachable whichever sections are collapsed.
+- Interiority sections are collapsible. Active Intentions, Scheduled
+  Intentions, Inner States, Lifecycle History, Per-NPC Controls and
+  Recent Thoughts are now `<details>` disclosures (`.mwt-int-disclosure`);
+  Active Intentions is open by default, and each section keeps what the user 
+  opened or closed when a panel action (wake, done, edit, reopen, …) re-renders 
+  the tab. Inter-section `<hr>` rules were dropped in favor of the disclosures'
+  own top borders. Covered by `test/collapsible_sections.test.js`.
+
+### Fixed
+
+- Overview card links now land on the relevant section. The "Open …"
+  buttons only switched tabs before, so a card for "Deleted intentions" or
+  "Coordinator" dropped you at the top of a tab with no sign of what you came
+  for. On narrow screens, where the Overview itself scrolls, the tab switch
+  also kept the Overview's scroll offset and landed partway down the new tab.
+  The new handling (see Added) starts every link at the top, then opens the
+  right disclosure/sub-tab and scrolls it into view.
+
 ## [2.8.8]
 
 ### Added

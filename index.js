@@ -265,11 +265,15 @@ function renderSettingsTab() {
     //  - the float-button and per-tracker rows point BOTH cells' labels at the
     //    row's checkbox, so its name reads "World State Visible" rather than
     //    the six identical "Visible"s the right-hand cell alone would give.
+    // Save writes EVERY section, so its row sits below the collapsible
+    // sections rather than inside one — collapsing that section would hide it.
     return `
-        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-            These global API settings serve as defaults for all modules. Each module can override them in its own Settings panel.
-        </p>
-        <div class="mwt-settings-grid">
+        <details class="mwt-settings-disclosure" open>
+            <summary><span aria-hidden="true">🔌</span> API Connection</summary>
+            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
+                These global API settings serve as defaults for all modules. Each module can override them in its own Settings panel.
+            </p>
+            <div class="mwt-settings-grid">
             <label class="mwt-label" style="grid-column:1/2" for="mwt-s-connection-profile">Connection Profile</label>
             <select id="mwt-s-connection-profile" class="mwt-input" style="grid-column:2/3">
                 ${profileOptionsHtml}
@@ -281,30 +285,26 @@ function renderSettingsTab() {
             <div id="mwt-s-api-fields" style="grid-column:1/3;${apiFieldsStyle}" class="mwt-settings-grid">
                 ${renderApiSettingsFields(s, GLOBAL_API_FIELD_IDS)}
             </div>
-
-            <div></div>
-            <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
-                <button id="mwt-s-save" class="mwt-btn mwt-btn-primary">Save Settings</button>
-                <button id="mwt-s-sync" class="mwt-btn" title="Copy these API settings to all module-specific configs"><span aria-hidden="true">↓</span> Sync to Modules</button>
             </div>
-        </div>
+        </details>
 
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <h3 style="margin-bottom:8px"><span aria-hidden="true">🕒</span> Stable History</h3>
+        <details class="mwt-settings-disclosure">
+            <summary><span aria-hidden="true">🕒</span> Stable History</summary>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Defer the newest chat messages from World State, Chronicle, Knowledge, Relationships, Growth, and Story Planner scans. They are included on a later refresh instead of discarded. <strong>2</strong> usually means the latest user/assistant exchange. Interiority is intentionally excluded because it evaluates the current turn.
         </p>
-        <div class="mwt-settings-grid">
+            <div class="mwt-settings-grid">
             <label class="mwt-label" for="mwt-s-recent-history-exclude">Messages to defer</label>
             <input id="mwt-s-recent-history-exclude" class="mwt-input" type="number" value="${s.recentHistoryExclude ?? 2}" min="0" max="10" step="1">
-        </div>
+            </div>
+        </details>
 
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <h3 style="margin-bottom:8px"><span aria-hidden="true">🚦</span> Generation Coordinator</h3>
+        <details id="mwt-settings-generation-coordinator" class="mwt-settings-disclosure">
+            <summary><span aria-hidden="true">🚦</span> Generation Coordinator</summary>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             All tracker API calls go through one central queue. Each module runs at most one generation at a time; this caps how many may run in parallel <em>across</em> modules, so a burst of tracker work cannot stampede your API endpoint (manual clicks always jump ahead of automatic work). Switching chats cancels queued tracker jobs from the old chat. See what's queued any time with <code>MWT.coordinator.status()</code> in the console.
         </p>
-        <div class="mwt-settings-grid">
+            <div class="mwt-settings-grid">
             <label class="mwt-label" for="mwt-s-api-max-concurrent">Max parallel API calls</label>
             <input id="mwt-s-api-max-concurrent" class="mwt-input" type="number" value="${s.apiMaxConcurrent ?? 2}" min="1" max="8" step="1">
             <label class="mwt-label" for="mwt-s-pause-background" style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -314,14 +314,15 @@ function renderSettingsTab() {
             <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
                 When on, automatic calls (auto-refresh, auto-snapshot, NPC updates, auto-thoughts, …) wait until your own generation finishes. Button-pressed generations are never held.
             </p>
-        </div>
+            </div>
+        </details>
 
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <h3 style="margin-bottom:8px"><span aria-hidden="true">🔧</span> Injection Settings</h3>
+        <details class="mwt-settings-disclosure">
+            <summary><span aria-hidden="true">🔧</span> Injection Settings</summary>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Control how each module's entries are injected into the prompt. Depth = how far back from the bottom; Role = which message role. (Knowledge uses SillyTavern's built-in lorebook system and does not use extension prompt injection. Disabling the Knowledge tracker below only stops it from scanning/updating; existing lorebook entries will continue to be injected by SillyTavern's World Info until you disable them manually in the World Info panel.)
         </p>
-        <div class="mwt-settings-grid">
+            <div class="mwt-settings-grid">
             <div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">🌍</span> World State</div>
             <label class="mwt-label" for="mwt-s-ws-depth">Depth</label>
             <input id="mwt-s-ws-depth" class="mwt-input" type="number" value="${s.worldStateDepth ?? 4}" min="0" max="999">
@@ -358,13 +359,14 @@ function renderSettingsTab() {
                 <span>Wrap injected blocks in XML tags</span>
             </label>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
-                Wraps each injected reference block (World State, Plot Seeds, Chronicle) in tags like <code><mwt_world_state>…</mwt_world_state></code>.
+                Wraps each injected reference block (World State, Plot Seeds, Chronicle) in tags like <code>&lt;mwt_world_state&gt;…&lt;/mwt_world_state&gt;</code>.
                 Recommended for smaller / open models (24–70B) that bleed between sections. Frontier models don't need it; turn off to save a few tokens.
             </p>
         </div>
+        </details>
 
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <h3 style="margin-bottom:8px"><span aria-hidden="true">🔘</span> Floating Buttons</h3>
+        <details class="mwt-settings-disclosure">
+            <summary><span aria-hidden="true">📍</span> Floating Buttons</summary>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Show or hide individual floating buttons. You can also access the MWT modal from the Extensions panel drawer or the wand menu.
         </p>
@@ -406,8 +408,10 @@ function renderSettingsTab() {
             </div>
         </div>
 
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <h3 style="margin-bottom:8px"><span aria-hidden="true">🛑</span> Per-Tracker Enable</h3>
+        </details>
+
+        <details class="mwt-settings-disclosure">
+            <summary><span aria-hidden="true">🛑</span> Per-Tracker Enable</summary>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Disable a tracker you don't use: it stops injecting and scanning, and its floating button shows a red ✕
             (right-click it again to re-enable). To remove a button entirely, uncheck its "Visible" box in the
@@ -434,6 +438,13 @@ function renderSettingsTab() {
 
             <label class="mwt-label" for="mwt-s-enable-interiority"><span aria-hidden="true">💭</span> Interiority</label>
             <label for="mwt-s-enable-interiority" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-interiority" ${s.enableInteriority !== false ? 'checked' : ''}> Use this tracker</label>
+        </div>
+
+        </details>
+
+        <div class="mwt-settings-actions mwt-flex mwt-gap-4" style="flex-wrap:wrap">
+            <button id="mwt-s-save" class="mwt-btn mwt-btn-primary">Save Settings</button>
+            <button id="mwt-s-sync" class="mwt-btn" title="Copy these API settings to all module-specific configs"><span aria-hidden="true">↓</span> Sync to Modules</button>
         </div>
 
         <hr style="border-color:var(--mwt-border);margin:16px 0">

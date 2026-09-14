@@ -20,7 +20,7 @@ import { REGISTRY_KEY } from '../knowledge/state.js';
 import {
     getLedger, setLedger, restoreLedgerSnapshot,
     addLedgerEntry, updateLedgerEntry, hasDuplicateIntention, hasDuplicateIntentionIn,
-    removeLedgerEntries, isIntentionDeleted, clearDeletedIntentions,
+    removeLedgerEntries, isIntentionDeleted, clearDeletedIntentions, getDeletedIntentions,
     getInnerState, getInnerStates, setInnerState,
     getInnerStatesSnapshot, restoreInnerStatesSnapshot,
 } from '../interiority/data.js';
@@ -128,6 +128,25 @@ describe('a deleted intention stays deleted', () => {
 
         expect(hasDuplicateIntention('Ezra', 'call Dorothy', 'Monday morning')).toBe(true);
         expect(hasDuplicateIntention('Ezra', 'call Dorthy', 'Monday morning')).toBe(true);
+    });
+
+    test('deletion tombstones preserve readable casing and edit history', () => {
+        const entry = addLedgerEntry({
+            npc: 'Tobin', action: 'Confront the Mayor', trigger: 'after dusk',
+        }, 'day 1', 3);
+        updateLedgerEntry(entry.id, { action: 'Confront the Mayor publicly' });
+        removeLedgerEntries([entry.id], { tombstone: true });
+
+        const [tombstone] = getDeletedIntentions();
+        expect(tombstone.npc).toBe('tobin');
+        expect(tombstone.actions).toContain('confront the mayor');
+        expect(tombstone.actions).toContain('confront the mayor publicly');
+        expect(tombstone.displayNpc).toBe('Tobin');
+        expect(tombstone.displayActions).toEqual([
+            'Confront the Mayor',
+            'Confront the Mayor publicly',
+        ]);
+        expect(hasDuplicateIntention('Tobin', 'Confront the Mayor', 'whenever')).toBe(true);
     });
 
     test('a genuinely different intention is not suppressed', () => {

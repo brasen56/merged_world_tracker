@@ -444,6 +444,11 @@ describe('re-swept forms associate every label explicitly (Slice 4 item 4)', () 
         }
     });
 
+    test('structural-boundary example is escaped inside code markup', () => {
+        expect(indexSource).toContain('&lt;mwt_world_state&gt;…&lt;/mwt_world_state&gt;');
+        expect(indexSource).not.toContain('<code><mwt_world_state>');
+    });
+
     test('index.js float-button and per-tracker rows name their checkbox', () => {
         // Both cells label the row's checkbox, so its name carries the module
         // rather than being one of six identical "Visible"s.
