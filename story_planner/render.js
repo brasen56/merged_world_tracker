@@ -26,7 +26,7 @@ import { getSettings, saveSettings } from './settings.js';
 import {
     state, SECTIONS, ARC_STATUSES, INJECT_MODES, ENFORCEMENT_MODES,
     setPlanData, getPlanText,
-    getArcs, setArcs, addArc, updateArc, removeArc, toggleArcPinned,
+    getArcs, setArcs, addArc, updateArc, setArcStatus, removeArc, toggleArcPinned,
     isArcReady, getCurrentBeat, advanceBeat, retreatBeat,
     getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
     getPlanHistory, pushPlanToHistory, historyEntryToText, historyEntryToArcs,
@@ -600,7 +600,7 @@ function handleArcsChange(e) {
     if (action === 'section') {
         updateArc(id, { section: el.value });
     } else if (action === 'status') {
-        updateArc(id, { status: el.value });
+        setArcStatus(id, el.value);
     } else {
         return;
     }

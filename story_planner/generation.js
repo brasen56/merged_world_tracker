@@ -23,7 +23,7 @@ import { storyPlannerSchema } from './schema.js';
 import {
     state, getArcs, setArcs, pushPlanToHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
-    getDirectionHint, getArcCount,
+    getDirectionHint, getArcCount, buildClosedMemoryProjection,
 } from './data.js';
 import { applyPlanInjection } from './injection.js';
 
@@ -67,12 +67,16 @@ export function buildUserPrompt(recentText, reminderReason = '') {
     // of starting from a blank menu. Templates that omit {{previousPlan}} simply
     // don't get the block (the token resolves to empty).
     //
-    // Dropped arcs are withheld entirely — the user rejecting an idea should
-    // mean it stops coming back. Resolved/pinned arcs ARE sent, annotated, so
-    // the model knows what has already paid off and what the user cares about.
-    const kept = getArcs().filter(a => a.status !== 'dropped');
+    // Closed arcs are retained as a small memory projection. Their beat routes
+    // are historical detail and must not inflate every regeneration prompt.
+    const allArcs = getArcs();
+    const kept = allArcs.filter(a => a.status !== 'resolved' && a.status !== 'dropped');
     const prevPlan = serializeArcsToText(kept, { annotateStatus: true, beats: 'all' }).trim();
-    const prevBlock = prevPlan
+    const closedMemory = buildClosedMemoryProjection(allArcs);
+    const closedBlock = closedMemory
+        ? `<closed_story_ideas>\n[These ideas are closed. Do not propose a resolved payoff again or rephrase a dropped direction.]\n${closedMemory}\n</closed_story_ideas>`
+        : '';
+    const prevBlock = [closedBlock, prevPlan
         ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine this against what has since happened — do not simply repeat it.\n\n`
           + `NAMES ARE IDENTIFIERS. An arc's name is how its progress is tracked between generations. If you carry an arc forward, reproduce its name EXACTLY, character for character — do not rename, reword, shorten or otherwise improve it. A renamed arc is read as a brand-new one: its progress is lost and the original is left behind beside it as a duplicate. Only give a name you have not been shown to an arc that is genuinely new.\n\n`
           + `The [BRACKETED] tags are annotations from the tracker, not part of any name — never copy one into a name you write:\n`
@@ -80,7 +84,7 @@ export function buildUserPrompt(recentText, reminderReason = '') {
           + `- [RESOLVED] — already paid off; do not resurface it.\n`
           + `- [SETUP COMPLETE] — ready to happen; do not add more setup to it.\n`
           + `- Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress.]\n${escapePromptText(prevPlan)}\n</previous_plan>`
-        : '';
+        : ''].filter(Boolean).join('\n\n');
 
     // Cross-module grounding. Both getters return '' when the user isn't using
     // that module (no World State document / no Chronicle snapshots), in which

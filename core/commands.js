@@ -91,17 +91,33 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                     }
                     const arg = (args || '').toString().trim();
 
+                    if (arg.toLowerCase() === 'resolve' || arg.toLowerCase().startsWith('resolve ')) {
+                        const ref = arg.length > 7 ? arg.slice(8).trim() : '';
+                        const result = StoryPlanner.resolveReadyArc(ref);
+                        return result.message;
+                    }
                     if (arg) {
                         const result = StoryPlanner.markBeatPlanted(Number(arg));
                         return result.message;
                     }
 
                     const beats = StoryPlanner.listBeats();
-                    if (!beats.length) return 'No arcs are waiting on a setup beat.';
+                    const ready = typeof StoryPlanner.listReadyArcs === 'function' ? StoryPlanner.listReadyArcs() : [];
+                    if (!beats.length && !ready.length) return 'No arcs are waiting on a setup beat or Ready for resolution.';
                     const lines = beats.map(b =>
                         `${b.n}. [${b.step}, ${b.waited} turn${b.waited === 1 ? '' : 's'}] ${b.title} — ${b.beat}`,
                     );
-                    return `Setup beats waiting:\n${lines.join('\n')}\n\nMark one planted with /wt-beat <number>.`;
+                    const readyLines = ready.map(r =>
+                        `${r.ref}. [Ready, ${r.waited} turn${r.waited === 1 ? '' : 's'}] ${r.title}`,
+                    );
+                    const sections = [];
+                    if (lines.length) sections.push(`Setup beats waiting:\n${lines.join('\n')}`);
+                    if (readyLines.length) sections.push(`Ready arcs:\n${readyLines.join('\n')}`);
+                    const footer = [
+                        lines.length ? 'Mark one planted with /wt-beat <number>.' : '',
+                        readyLines.length ? 'Resolve one with /wt-beat resolve R1.' : '',
+                    ].filter(Boolean).join(' ');
+                    return `${sections.join('\n\n')}\n\n${footer}`;
                 } catch (err) {
                     return `Error: ${err.message}`;
                 }

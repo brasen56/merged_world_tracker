@@ -12,6 +12,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.11]
+
+### Added
+
+- **Ready-arc reminders and `/wt-beat resolve`.** An arc whose setup
+  is complete (all beats planted) now reminds the user after the same
+  nudge threshold as waiting beats, so a Ready payoff that sits
+  waiting no longer stalls silently. Ready arcs use a separate
+  `#ready` nudge-mark namespace so their reminders never disturb
+  waiting-beat numbering or marks. `/wt-beat` lists Ready arcs under
+  their own heading with stable `R1`, `R2`, … references, and
+  `/wt-beat resolve R1` resolves one through the shared `setArcStatus`
+  transition — no narrator injection or hidden state mutation. The
+  reminder is not an automatic model call; `turnsSinceAdvance`
+  continues to age through auto-generation and resets only when the
+  current beat changes or the arc is reopened. Closes the Ready-arc
+  lifecycle item in `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch
+  2"; tests in `test/beats.test.js` (`takeDueNudges` → Ready-arc
+  reminder).
+
+### Changed
+
+- **Closed arcs no longer inflate regeneration prompts.** Resolved
+  and dropped arcs are now withheld from the full `<previous_plan>`
+  block and sent instead as a bounded `<closed_story_ideas>` memory
+  projection — at most 20 arcs / 6000 characters, pinned first then
+  most recently updated, with title and close reason only and no beat
+  lists. The model still sees what has already paid off and what was
+  rejected, but prompt and history growth no longer accumulate with
+  every closed arc. The arcs themselves stay in storage and remain
+  visible; only the generation projection changes. Closes the
+  bounded-memory item in `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase
+  patch 2"; tests in `test/beats.test.js` (`closed regeneration
+  memory`).
+
+### Fixed
+
+- **The card status dropdown now resets age and reminder marks.**
+  Reopening an arc through the card's status dropdown previously
+  called `updateArc(id, { status })` directly, bypassing
+  `setArcStatus` — so a resolved-then-reopened arc kept its old
+  `turnsSinceAdvance` and stale nudge high-water mark, suppressing or
+  mis-timing the next reminder. Every UI status transition now goes
+  through the one `setArcStatus` path that resets age on reactivation
+  and clears marks on any status change. Closes the lifecycle item in
+  `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 2".
+- **The All-mode injection description no longer claims resolved arcs
+  are injected.** The injection-mode radio for "All" now reads "Inject
+  every active arc; resolved and dropped arcs are excluded," matching
+  what `getArcsForInjection()` already did. The old label ("Inject
+  every arc that is not dropped") contradicted the UI's promise that
+  resolving stops an arc from being suggested again.
+
 ## [2.8.10]
 
 ### Fixed

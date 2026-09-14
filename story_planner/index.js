@@ -26,7 +26,8 @@ import {
     getArcs, serializeArcsToText, incrementArcTurns,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
-    getArcsAwaitingBeat, takeDueNudges, advanceBeat, getCurrentBeat, getNudgeTurns,
+    getArcsAwaitingBeat, getOverdueReadyArcs, takeDueNudges, advanceBeat, getCurrentBeat, getNudgeTurns,
+    setArcStatus,
 } from './data.js';
 import { applyPlanInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
@@ -270,10 +271,12 @@ function notifyDueBeats() {
 
     const [first] = due;
     const extra = due.length > 1 ? ` (and ${due.length - 1} more)` : '';
+    const ready = isReadyArc(first);
     notify(
         'Story Planner',
-        `Waiting ${first.turnsSinceAdvance} turns: "${shortBeat(getCurrentBeat(first))}"${extra}. `
-        + 'Type /wt-beat to review, /wt-beat <n> to mark one planted.',
+        ready
+            ? `Ready ${first.turnsSinceAdvance} turns: "${shortBeat(first.title)}"${extra}. Type /wt-beat to review, /wt-beat resolve R1 to resolve a Ready arc.`
+            : `Waiting ${first.turnsSinceAdvance} turns: "${shortBeat(getCurrentBeat(first))}"${extra}. Type /wt-beat to review, /wt-beat <n> to mark one planted.`,
         'info',
     );
 }
@@ -287,7 +290,8 @@ export function getBeatStatus() {
     const threshold = getNudgeTurns();
     return {
         awaiting: awaiting.length,
-        overdue: awaiting.filter(a => (a.turnsSinceAdvance || 0) >= threshold).length,
+        overdue: awaiting.filter(a => (a.turnsSinceAdvance || 0) >= threshold).length
+            + getOverdueReadyArcs(threshold).length,
     };
 }
 
@@ -305,6 +309,40 @@ export function listBeats() {
         waited: arc.turnsSinceAdvance || 0,
         step: `${(arc.beatIndex || 0) + 1}/${arc.beats?.length || 0}`,
     }));
+}
+
+function isReadyArc(arc) {
+    return arc?.status === 'active'
+        && (arc?.beats?.length || 0) > 0
+        && (arc.beatIndex || 0) >= arc.beats.length;
+}
+
+/** Ready arcs use a separate namespace so numeric waiting-beat references stay stable. */
+export function listReadyArcs() {
+    return getArcs()
+        .filter(isReadyArc)
+        .map((arc, i) => ({
+            n: i + 1,
+            ref: `R${i + 1}`,
+            id: arc.id,
+            title: arc.title || '(untitled arc)',
+            waited: arc.turnsSinceAdvance || 0,
+        }));
+}
+
+export function resolveReadyArc(ref) {
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) {
+        return { ok: false, message: 'Story Planner is paused for this chat — its data could not be safely prepared.' };
+    }
+    const match = String(ref || '').trim().toUpperCase().match(/^R(\d+)$/);
+    if (!match) return { ok: false, message: 'Use a Ready reference such as R1.' };
+    const target = listReadyArcs()[Number(match[1]) - 1];
+    if (!target) return { ok: false, message: 'That Ready arc no longer exists.' };
+    const updated = setArcStatus(target.id, 'resolved');
+    if (!updated) return { ok: false, message: 'That arc no longer exists.' };
+    applyPlanInjection();
+    if (state.modal) refreshDisplay();
+    return { ok: true, message: `"${target.title}" — resolved.` };
 }
 
 /**

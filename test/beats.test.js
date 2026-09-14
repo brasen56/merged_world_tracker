@@ -11,7 +11,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { resetCoreStubs, getFakeMeta } from './stubs/core.js';
 import {
-    makeArc, setArcs, getArcs, advanceBeat,
+    makeArc, setArcs, getArcs, advanceBeat, buildClosedMemoryProjection,
     incrementArcTurns, getArcsAwaitingBeat, getOverdueArcs,
     takeDueNudges, getNudgeTurns, OVERDUE_TURNS,
 } from '../story_planner/data.js';
@@ -116,6 +116,32 @@ describe('takeDueNudges', () => {
         seedArc({ turns: getNudgeTurns() * 3 });
         getFakeMeta().story_planner_data.nudgeEnabled = false;
         expect(takeDueNudges()).toEqual([]);
+    });
+
+    test('reminds for an overdue Ready arc without adding it to waiting beats', () => {
+        const arc = seedArc({ beats: ['only step'] });
+        advanceBeat(arc.id);
+        setArcs([{ ...getArcs()[0], turnsSinceAdvance: getNudgeTurns() }]);
+        expect(getArcsAwaitingBeat()).toEqual([]);
+        expect(takeDueNudges().map(a => a.id)).toEqual([arc.id]);
+        expect(takeDueNudges()).toEqual([]);
+    });
+});
+
+describe('closed regeneration memory', () => {
+    test('is bounded and never includes closed beat lists', () => {
+        const arcs = Array.from({ length: 100 }, (_, i) => makeArc({
+            title: `Closed ${i}`,
+            body: `Reason ${i}`,
+            status: i % 2 ? 'dropped' : 'resolved',
+            beats: [`private setup route ${i}`],
+            updatedAt: i,
+        }));
+        const projection = buildClosedMemoryProjection(arcs);
+        expect(projection.length).toBeLessThanOrEqual(6000);
+        expect(projection.split('\n')).toHaveLength(20);
+        expect(projection).toContain('[resolved]');
+        expect(projection).not.toContain('private setup route');
     });
 });
 

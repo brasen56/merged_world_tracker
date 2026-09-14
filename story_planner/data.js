@@ -53,7 +53,7 @@ export const EXTENSION_PROMPT_KEY = 'mwt_story_plan_injection';
 
 /** Injection modes — mirrors chronicle's injectMode switch. */
 export const INJECT_MODES = [
-    { key: 'all', label: 'All', blurb: 'Inject every arc that is not dropped' },
+    { key: 'all', label: 'All', blurb: 'Inject every active arc; resolved and dropped arcs are excluded' },
     { key: 'pinned', label: 'Pinned', blurb: 'Inject only arcs you have pinned' },
     { key: 'active', label: 'Active', blurb: 'Inject only arcs still marked active' },
 ];
@@ -330,6 +330,37 @@ export function getOverdueArcs(threshold = getNudgeTurns()) {
     return getArcsAwaitingBeat()
         .filter(a => (a.turnsSinceAdvance || 0) >= threshold)
         .sort((x, y) => (y.turnsSinceAdvance || 0) - (x.turnsSinceAdvance || 0));
+}
+
+/** Ready arcs whose completed setup has been waiting long enough for a payoff check. */
+export function getOverdueReadyArcs(threshold = getNudgeTurns()) {
+    return getArcs()
+        .filter(a => a.status === 'active' && isArcReady(a) && (a.turnsSinceAdvance || 0) >= threshold)
+        .sort((x, y) => (y.turnsSinceAdvance || 0) - (x.turnsSinceAdvance || 0));
+}
+
+/**
+ * A bounded memory projection for regeneration. Closed arcs remain in storage,
+ * but their setup route is not useful to the model and can grow every prompt.
+ */
+export const MAX_CLOSED_MEMORY_ARCS = 20;
+export const MAX_CLOSED_MEMORY_CHARS = 6000;
+
+export function buildClosedMemoryProjection(arcs = getArcs()) {
+    const closed = (Array.isArray(arcs) ? arcs : [])
+        .filter(a => a.status === 'resolved' || a.status === 'dropped')
+        .sort((a, b) => (b.pinned === true) - (a.pinned === true)
+            || (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+    const lines = [];
+    let chars = 0;
+    for (const arc of closed) {
+        const reason = arc.body ? ` — ${String(arc.body).trim()}` : '';
+        const line = `- [${arc.status}] ${arc.title || '(untitled arc)'}${reason}`;
+        if (lines.length >= MAX_CLOSED_MEMORY_ARCS || chars + line.length + 1 > MAX_CLOSED_MEMORY_CHARS) break;
+        lines.push(line);
+        chars += line.length + 1;
+    }
+    return lines.join('\n');
 }
 
 // ─── Parsing / serialising ───────────────────────────────────────────────────
@@ -727,18 +758,31 @@ export function takeDueNudges() {
     // whole feature exists to catch.
     const keyFor = arc => `${arc.id}#${arc.beatIndex || 0}`;
     const awaiting = getArcsAwaitingBeat();
+    const ready = getArcs().filter(a => a.status === 'active' && isArcReady(a));
 
     // Reconcile BEFORE deciding what is due, so the result never depends on how
     // often this ran. Two ways a mark dies: its beat is gone (advanced, resolved,
     // deleted), or its wait fell back below the multiple it was recorded at
     // (a retreat, or an edit).
-    const live = new Map(awaiting.map(a => [keyFor(a), a.turnsSinceAdvance || 0]));
+    const live = new Map([
+        ...awaiting.map(a => [keyFor(a), a.turnsSinceAdvance || 0]),
+        ...ready.map(a => [`${a.id}#ready`, a.turnsSinceAdvance || 0]),
+    ]);
     for (const key of Object.keys(marks)) {
         if (!live.has(key) || Math.floor(live.get(key) / threshold) < marks[key]) delete marks[key];
     }
 
     for (const arc of awaiting) {
         const key = keyFor(arc);
+        const mult = Math.floor((arc.turnsSinceAdvance || 0) / threshold);
+        if (mult >= 1 && mult > (marks[key] || 0)) {
+            marks[key] = mult;
+            due.push(arc);
+        }
+    }
+
+    for (const arc of ready) {
+        const key = `${arc.id}#ready`;
         const mult = Math.floor((arc.turnsSinceAdvance || 0) / threshold);
         if (mult >= 1 && mult > (marks[key] || 0)) {
             marks[key] = mult;
