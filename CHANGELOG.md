@@ -12,15 +12,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.10]
+
+### Fixed
+
+- Regeneration no longer silently resets planted-beat progress. The
+  planted prefix is now preserved exactly from the stored arc, and one
+  normalized copy of each planted beat is stripped from the model's output
+  before the pending route is replaced — so a model that echoes the setup
+  beats it was shown cannot duplicate or displace them. The exact stored
+  strings stay in the prefix; only the normalized form is used for matching.
+  Reproduces and closes the positional-progress cases in
+  `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 1"; tests in
+  `test/plan.test.js` (`regeneration progress safety`).
+- A model response that omits pending beats can no longer mark an arc
+  Ready. When the model returns only the planted prefix (or nothing usable
+  beyond it), the stored pending suffix is retained, so regeneration cannot
+  complete setup or flip an arc to Ready merely by leaving beats out.
+- **Ready arcs ignore model beat output.** An arc whose beats are all planted
+  keeps its entire stored route and `beatIndex` regardless of what beats the
+  model returns, so a stale response cannot un-Ready or rewrite a completed
+  setup.
+- Beat-aging is preserved unless the current beat actually changes.
+  `turnsSinceAdvance` now resets only when the next beat the model proposes
+  differs (normalized) from the stored one; a model that rewords the same
+  step no longer silently zeroes the arc's age.
+- In-flight deletions and edits are no longer clobbered by a stale
+  response. Generation now captures the arc revision at start and rebases
+  against the current state when the user changed the plan during the call.
+  Arcs deleted while the request was in flight are not recreated from the
+  response (an in-flight tombstone, not a permanent ban on the idea), and
+  arcs that were materially edited keep the user's version rather than being
+  silently overwritten. A title the user re-added as a new arc during the
+  call is treated as live, not tombstoned. Covered by `test/plan.test.js`
+  (`regeneration progress safety`); see `docs/STORY_PLANNER_ROADMAP.md`
+  §"Pre-phase patch 1".
+
 ## [2.8.9]
 
 ### Added
 
-- **Deleted Intentions disclosure in the Interiority tab.** The tombstone
+- Deleted Intentions disclosure in the Interiority tab. The tombstone
   store — permanent user deletions kept so the engine will not re-propose the
   same intention — now has its own collapsible section in-tab. Previously only
   its count was visible on the Overview card and the Tools action.
-- **Deep links from the Overview cards.** The cards' "Open …" buttons now
+- Deep links from the Overview cards. The cards' "Open …" buttons now
   land on the relevant section, not just the tab (`data-overview-target`).
   Every Overview link, cards and footer alike, starts the new tab at the top
   of the modal; Knowledge opens the Staging sub-tab; Story Planner scrolls to

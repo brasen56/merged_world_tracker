@@ -292,6 +292,19 @@ export async function generatePlan(isAuto = false) {
         const currentArcs = getArcs();
         const arcsUnchanged = sameRevision(arcRevision, currentArcs);
         const mergeBase = arcsUnchanged ? arcsBeforeCall : currentArcs;
+        const currentById = new Map(currentArcs.map(arc => [arc.id, arc]));
+        const deletedIds = new Set(arcsBeforeCall
+            .filter(arc => !currentById.has(arc.id))
+            .map(arc => arc.id));
+        const deletedTitles = new Set(arcsBeforeCall
+            .filter(arc => deletedIds.has(arc.id))
+            .map(arc => normaliseArcTitleForRace(arc.title)));
+        const protectedIds = new Set(currentArcs
+            .filter(current => {
+                const before = arcsBeforeCall.find(arc => arc.id === current.id);
+                return before && !sameArcForGeneration(before, current);
+            })
+            .map(arc => arc.id));
         if (!arcsUnchanged) {
             console.log('[MWT:StoryPlanner] Plan changed during generation — rebasing against current state.');
         }
@@ -299,7 +312,11 @@ export async function generatePlan(isAuto = false) {
         // Merge rather than replace: arcs matched by name keep their id and
         // their planted-beat progress, and pinned / part-planted arcs the model
         // dropped are carried forward rather than lost.
-        const { arcs: newArcs, carried, matched, added } = mergeRegeneratedArcs(mergeBase, parsed);
+        const { arcs: newArcs, carried, matched, added } = mergeRegeneratedArcs(mergeBase, parsed, {
+            deletedIds,
+            deletedTitles,
+            protectedIds,
+        });
 
         setArcs(newArcs);
         applyPlanInjection();
@@ -322,4 +339,17 @@ export async function generatePlan(isAuto = false) {
         state.isGenerating = false;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
+}
+
+function normaliseArcTitleForRace(title) {
+    return String(title || '').toLowerCase().replace(/\s+/g, ' ').trim().replace(/[.!?,;_*#]/g, '');
+}
+
+function sameArcForGeneration(before, current) {
+    const comparable = arc => {
+        const copy = { ...arc };
+        delete copy.updatedAt;
+        return JSON.stringify(copy);
+    };
+    return comparable(before) === comparable(current);
 }

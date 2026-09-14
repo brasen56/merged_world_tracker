@@ -146,3 +146,92 @@ describe('arc flag round-trip', () => {
         expect(parsed.beats).toEqual(['Ezra drafts the language', 'Ezra shows it']);
     });
 });
+
+describe('regeneration progress safety', () => {
+    test('preserves the exact planted prefix and replaces only pending beats', () => {
+        const previous = makeArc({
+            title: 'Harbour Secret', section: 'emerging',
+            beats: ['Stored setup wording', 'Await the tide', 'Open the sealed room'],
+            beatIndex: 1, turnsSinceAdvance: 4,
+        });
+        const incoming = makeArc({
+            title: 'Harbour Secret', section: 'emerging',
+            beats: ['Stored setup wording', 'A model rewrite of the next step'],
+        });
+
+        const { arcs } = mergeRegeneratedArcs([previous], [incoming]);
+
+        expect(arcs[0].beats).toEqual(['Stored setup wording', 'A model rewrite of the next step']);
+        expect(arcs[0].beatIndex).toBe(1);
+        expect(arcs[0].turnsSinceAdvance).toBe(0); // the current beat changed
+    });
+
+    test('keeps stored pending beats when the model returns only planted beats', () => {
+        const previous = makeArc({
+            title: 'The Ledger', beats: ['Plant the clue', 'Confront the witness'],
+            beatIndex: 1, turnsSinceAdvance: 3,
+        });
+        // The parser removes [PLANTED] before merge; merge receives clean beat
+        // strings even when the model echoed the annotation.
+        const incoming = makeArc({ title: 'The Ledger', beats: ['Plant the clue'] });
+
+        const { arcs } = mergeRegeneratedArcs([previous], [incoming]);
+
+        expect(arcs[0].beats).toEqual(previous.beats);
+        expect(arcs[0].beatIndex).toBe(1);
+        expect(arcs[0].turnsSinceAdvance).toBe(3);
+    });
+
+    test('a Ready arc ignores model beat output and remains Ready', () => {
+        const previous = makeArc({
+            title: 'Ready Thread', beats: ['Already planted'], beatIndex: 1,
+            turnsSinceAdvance: 8,
+        });
+        const incoming = makeArc({ title: 'Ready Thread', beats: ['Invented setup'] });
+
+        const { arcs } = mergeRegeneratedArcs([previous], [incoming]);
+
+        expect(arcs[0].beats).toEqual(previous.beats);
+        expect(arcs[0].beatIndex).toBe(1);
+        expect(arcs[0].turnsSinceAdvance).toBe(8);
+    });
+
+    test('deleted and materially edited arcs are not resurrected or overwritten', () => {
+        const deleted = makeArc({ title: 'Deleted Arc' });
+        const edited = makeArc({ title: 'Edited Arc', body: 'User version' });
+        const incoming = [
+            makeArc({ title: 'Deleted Arc', body: 'Stale response' }),
+            makeArc({ title: 'Edited Arc', body: 'Model version' }),
+            makeArc({ title: 'New Arc', body: 'Fresh idea' }),
+        ];
+
+        const { arcs } = mergeRegeneratedArcs([edited], incoming, {
+            deletedIds: new Set([deleted.id]),
+            deletedTitles: new Set(['deleted arc']),
+            protectedIds: new Set([edited.id]),
+        });
+
+        expect(arcs.map(arc => arc.title)).toEqual(['Edited Arc', 'New Arc']);
+        expect(arcs.find(arc => arc.title === 'Edited Arc').body).toBe('User version');
+    });
+
+    test('a deleted title re-added by the user during the call is not tombstoned', () => {
+        // The user deleted the original 'Phoenix' arc and created a fresh one
+        // with the same title while generation was in flight. The in-flight
+        // tombstone must block the model's stale 'Phoenix' only when no live
+        // arc bears that title; the re-added arc is live and should be refreshed,
+        // not dropped.
+        const deleted = makeArc({ title: 'Phoenix', beats: ['Old setup', 'Old payoff'], beatIndex: 1 });
+        const readded = makeArc({ title: 'Phoenix', body: 'User recreated it' });
+        const incoming = [makeArc({ title: 'Phoenix', beats: ['Fresh setup', 'Fresh payoff'] })];
+
+        const { arcs } = mergeRegeneratedArcs([readded], incoming, {
+            deletedIds: new Set([deleted.id]),
+            deletedTitles: new Set(['phoenix']),
+        });
+
+        expect(arcs.map(arc => arc.title)).toEqual(['Phoenix']);
+        expect(arcs[0].id).toBe(readded.id);
+        expect(arcs[0].beats).toEqual(['Fresh setup', 'Fresh payoff']);
+    });
+});

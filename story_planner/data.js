@@ -422,18 +422,26 @@ function titleKey(title) {
  *
  * Rules:
  *  - Same (normalised) title as an existing arc → keep its id, beatIndex,
- *    pinned, status and age; take the model's refreshed body/section/beats.
+ *    pinned, status and age; take the model's refreshed body/section and
+ *    pending beats. The stored planted prefix is never model-authored data.
  *  - Existing arc the model dropped → discarded, UNLESS it is pinned or has
  *    beats already planted. Losing an in-progress arc is exactly the bug.
  *  - Everything else the model returned → added as new.
  *
  * @param {object[]} previous existing arcs
  * @param {object[]} incoming freshly parsed arcs
+ * @param {object} [options]
+ * @param {Set<string>} [options.protectedIds] arcs materially edited by the user
+ * @param {Set<string>} [options.deletedIds] arcs deleted while generation ran
+ * @param {Set<string>} [options.deletedTitles] titles deleted while generation ran
  * @returns {{arcs: object[], carried: number, matched: number, added: number}}
  */
-export function mergeRegeneratedArcs(previous, incoming) {
+export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     const prev = Array.isArray(previous) ? previous : [];
     const next = Array.isArray(incoming) ? incoming : [];
+    const protectedIds = options.protectedIds || new Set();
+    const deletedIds = options.deletedIds || new Set();
+    const deletedTitles = options.deletedTitles || new Set();
 
     const byTitle = new Map();
     for (const arc of prev) {
@@ -446,10 +454,49 @@ export function mergeRegeneratedArcs(previous, incoming) {
     const merged = next.map(fresh => {
         const key = titleKey(fresh.title);
         const old = key ? byTitle.get(key) : null;
+        // A response must not recreate an arc removed after generation began,
+        // even when the model repeats its title. This is an in-flight tombstone,
+        // not a permanent ban on creating the idea again later. A title the user
+        // re-added as a new (live) arc during the call is not tombstoned: the
+        // title ban applies only when no current arc bears that title, so the
+        // re-added arc can still be refreshed by the response instead of lost.
+        if (old && deletedIds.has(old.id)) return null;
+        if (!old && deletedTitles.has(key)) return null;
         if (!old || consumed.has(old.id)) return fresh;
         consumed.add(old.id);
         matched++;
-        const beats = fresh.beats?.length ? fresh.beats : (old.beats || []);
+        // User edits are authoritative. Do not let a stale response replace an
+        // arc whose title/body/section/progress was changed during the request.
+        if (protectedIds.has(old.id)) return { ...old };
+
+        const oldBeats = Array.isArray(old.beats) ? old.beats : [];
+        const oldIndex = Math.max(0, Math.min(old.beatIndex || 0, oldBeats.length));
+        if (oldIndex >= oldBeats.length && oldBeats.length > 0) {
+            return { ...fresh, id: old.id, pinned: old.pinned, status: old.status,
+                createdAt: old.createdAt, beats: oldBeats, beatIndex: oldIndex,
+                turnsSinceAdvance: old.turnsSinceAdvance || 0, updatedAt: Date.now() };
+        }
+        const planted = oldBeats.slice(0, oldIndex);
+        const oldPending = oldBeats.slice(oldIndex);
+        const incomingBeats = Array.isArray(fresh.beats) ? fresh.beats : [];
+
+        // The model sees planted beats in the previous-plan block and commonly
+        // echoes them. Remove one normalized copy of each before replacing the
+        // pending route, while retaining the exact stored strings in the prefix.
+        const remaining = [...incomingBeats];
+        for (const plantedBeat of planted) {
+            const wanted = normaliseBeatForMerge(plantedBeat);
+            const copy = remaining.findIndex(beat => normaliseBeatForMerge(beat) === wanted);
+            if (copy !== -1) remaining.splice(copy, 1);
+        }
+        // A model response containing only the planted prefix is not a usable
+        // route. Keep the stored pending suffix so regeneration cannot make an
+        // arc Ready merely by omitting setup beats.
+        const pending = remaining.length ? remaining : oldPending;
+        const beats = [...planted, ...pending];
+        const oldCurrent = oldIndex < oldBeats.length ? oldBeats[oldIndex] : '';
+        const newCurrent = planted.length < beats.length ? beats[planted.length] : '';
+        const currentChanged = normaliseBeatForMerge(oldCurrent) !== normaliseBeatForMerge(newCurrent);
         return {
             ...fresh,
             id: old.id,
@@ -457,19 +504,19 @@ export function mergeRegeneratedArcs(previous, incoming) {
             status: old.status,
             createdAt: old.createdAt,
             beats,
-            // The model may have rewritten the beat list; clamp rather than
-            // reset, so partially-planted setup is not re-proposed from zero.
-            beatIndex: clampBeatIndex(old.beatIndex, beats.length),
-            turnsSinceAdvance: old.turnsSinceAdvance || 0,
+            // The stored prefix determines progress. A Ready arc keeps its
+            // entire route and remains Ready regardless of model beat output.
+            beatIndex: oldIndex >= oldBeats.length ? oldIndex : planted.length,
+            turnsSinceAdvance: currentChanged ? 0 : (old.turnsSinceAdvance || 0),
             updatedAt: Date.now(),
         };
-    });
+    }).filter(Boolean);
 
     // Arcs the model dropped but that we refuse to lose.
     const carried = prev.filter(a =>
         !consumed.has(a.id)
         && a.status !== 'dropped'
-        && (a.pinned || (a.beatIndex || 0) > 0),
+        && (protectedIds.has(a.id) || a.pinned || (a.beatIndex || 0) > 0),
     );
 
     return {
@@ -478,6 +525,13 @@ export function mergeRegeneratedArcs(previous, incoming) {
         matched,
         added: merged.length - matched,
     };
+}
+
+/** Compare beat text without allowing harmless model formatting to defeat the
+ * planted-copy removal. The value returned to storage is always the original
+ * stored beat, never this normalized representation. */
+function normaliseBeatForMerge(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 
 // ─── Arc access + migration ──────────────────────────────────────────────────

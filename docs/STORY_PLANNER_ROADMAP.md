@@ -1,222 +1,782 @@
-# Story Planner Roadmap — Response
+# Story Planner reliability and creative-control roadmap
 
-**Status:** Reply for discussion, not a roadmap
-**Responds to:** `docs/STORY_PLANNER_IMPROVEMENT_ROADMAP.md` ("the roadmap")
-**Checked against:** branch `main` at `2b2a29f`
+**Status:** Canonical implementation roadmap
+**Date:** 2026-09-14
+**Sources:** `STORY_PLANNER_IMPROVEMENT_ROADMAP.md` and co-author review, 2026-09-14
+**Area:** Story Planner, Knowledge context projection, backup/restore, schema migrations, Budget, and Injection diagnostics
 
-## Summary
+The original improvement roadmap is retained as the historical design source. This
+document incorporates its detailed contracts and phase work together with the
+review findings, corrected sequencing, reproduced regressions, and additional
+guardrails below.
 
-- Every problem in the roadmap's §3 checks out against the code, and the 136-test planner baseline it cites still passes. We reproduced both headline bugs. The beat-progress bug is more likely to trigger than §3.1 suggests (§2).
-- We accept the direction and most of the §4 decisions as written (§1).
-- The main adjustment is order. The progress fix fits the current v1 store, so it can ship as a patch instead of waiting for the v2 migration (§3.1).
-- Keeping closed arcs needs bounds on more than the prompt. Unbounded, 100 resolved arcs add roughly 15,000 tokens to every regeneration and up to about 1.5 MB of plan history. Part of that growth already happens today (§3.2).
-- The identity scheme can be simpler: short per-request arc handles, and no beat ids in the prompt (§3.3).
-- One rule needs settling before Phase 1: when a beat's age resets. The natural reading of §5.1 silently disables overdue reminders for auto-generate users (§3.4).
-- There are four findings the roadmap doesn't cover. The most serious is that a Ready arc never leaves the prompt on its own (§4.1). Two are existing bugs we reproduced: the card's status dropdown skips the reopen reset (§4.2), and an arc deleted during generation comes back (§4.3).
+## 1. Goal
 
-## 1. What we accept as written
+Make Story Planner easier to maintain through a long roleplay and less likely to
+repeat, lose, or prematurely force its ideas. The planner should preserve what
+actually happened, remember what the user rejected, let useful ideas wait without
+becoming noise, and provide fine-grained ways to develop an arc without replacing
+the whole plan.
 
-- Decisions 1, 2, 5, 6, and 8: user-confirmed state is authoritative; completed setup is immutable during regeneration; no new automatic model call by default; targeted generation always produces a reviewable proposal; creative controls start small.
-- With notes: Decisions 3 and 10 (closed means remembered; stored history is complete) in §3.2, Decision 9 (identity markers in the Markdown format) in §3.3, Decision 4 (Pin, Park, and Focus are separate) in §3.5, and Decision 7 (a purpose-built safe projection) in §3.7.
-- Phase 0 first. Its fixtures are the red tests the §3.1 fix needs.
-- Skip kept distinct from Delete, and never counted as planted.
-- The injection-mode cleanup. `all` and `active` select the same arcs today (`story_planner/injection.js:43-47`), so mapping legacy `active` to `all` changes nothing for anyone.
-- Phase 5 as manual, quote-verified suggestions behind a decision gate. That matches the beat-detector design from August (never built), which rejected both automatic advancement and in-band self-reporting.
-- Phase 7's rule that optional automation is decided by measurement.
+The current core idea remains unchanged: long-range arcs contain concrete setup
+beats, the narrator sees only the current beat, and an arc becomes **Ready** once
+its setup is complete. This roadmap strengthens the identity and lifecycle around
+that mechanism rather than replacing it.
 
-## 2. Reproduced
+## 2. Current baseline
 
-These cases were run against the real `story_planner` exports under the project's test stubs, from a scratch folder outside the repository.
+The module already provides:
 
-**Beat progress (§3.1).** The likeliest trigger is not a reorder. The regeneration prompt asks the model to keep planted beats as-is and not to re-propose that setup (`story_planner/generation.js:82`). A model that follows only the second half lists just the remaining beats:
+- five time-horizon sections;
+- structured arc cards with title, description, section, status, and pinning;
+- ordered setup beats with planted/back controls and overdue reminders;
+- Ready promotion after every beat is planted;
+- All, Pinned, and Active injection modes plus Passive, Proactive, and Assertive push;
+- continuity-aware full-plan regeneration;
+- a per-chat direction hint and configurable arc count;
+- manual arc creation, history/revert, injection preview, automatic generation,
+  custom prompts, and shared prompt-budget enforcement;
+- factual World State and latest-Chronicle grounding;
+- scope/revision guards around asynchronous generation and schema-gated storage.
 
-| | Beats | `beatIndex` | State |
-|---|---|---|---|
-| Stored | servant mentions the rival · shipment arrives short · agent appears at a party | 2 | first two planted, third current |
-| Model returns | agent appears at a party · rival calls in a public debt | | |
-| After merge | agent appears at a party · rival calls in a public debt | 2 | **Ready**, no current beat |
-
-`mergeRegeneratedArcs` takes the model's list (`story_planner/data.js:452`) and keeps the old index, clamped to the new length (`:462`). Neither remaining beat has happened, but the arc moves under "Ready Now — setup is already planted; bring these to a head" (`story_planner/injection.js:70`). A model that repeats only the planted beats hits the same bug: two beats, index 2, Ready.
-
-**Closed ideas (§3.2).** We stored a pinned Dropped arc and a Resolved Immediate Hook, then ran one regeneration that returned an unrelated arc. Only the new arc survived. The carry rule excludes Dropped arcs outright, even pinned ones, and keeps other omitted arcs only if they are pinned or part-planted (`data.js:469-473`).
-
-## 3. Points we'd adjust
-
-### 3.1 Ship the progress fix before the migration
-
-The fix doesn't need the v2 store. It fits in `mergeRegeneratedArcs`:
-
-1. Keep the planted beats (`beats.slice(0, beatIndex)`) exactly as stored.
-2. The model's beats, minus copies of planted beats (normalized the way titles already are), become the remaining route.
-3. If that route is empty, keep the stored remaining beats. Regeneration cannot complete an arc's setup.
-4. If the stored arc is already Ready, ignore the model's beats. Regeneration cannot undo completed setup either.
-5. Set `beatIndex` to the number of planted beats, and keep `turnsSinceAdvance` as it is today (§3.4).
-
-This is the roadmap's own fallback for output without identifiers (§5.2, last paragraph), shipped early. The current prompt already asks models to repeat planted beats as-is, and step 2 absorbs those copies, so the patch needs no prompt change. The trade-off is that a model that rewords a planted beat produces a visible duplicate pending beat instead of a silent false Ready. That is the right direction to fail, and the user can correct it.
-
-The migration is the riskiest part of the roadmap: backup merge and replace, imports, history restores, and quarantine. Once the fix has shipped, the migration can land with its first consumers (Skip and the beat editor), either as the UI-free step §9 proposes or together with Phase 2.
-
-### 3.2 Closed memory: bound every surface, and don't rely on the prompt alone
-
-Keeping closed arcs is a small change to the merge's carry rule. The roadmap's risk table bounds the generation prompt, but a retained arc appears in four places. For scale, we serialized 100 resolved arcs, each with a 30-word description and three 16-word beats:
-
-| Surface | Today | With 100 resolved arcs kept |
-|---|---|---|
-| Regeneration prompt | Every non-Dropped arc is sent with its description and full beat list (`generation.js:73-74`) | About 61,000 characters (roughly 15,000 tokens) per regeneration. Title-only lines would be about 4,000 characters. |
-| Plan history | Each of up to 20 snapshots copies every arc (`data.js:738`) | About 75 KB live; up to about 1.5 MB with 20 snapshots |
-| `{{storyplan}}` | Excludes only Dropped arcs (`story_planner/index.js:398`) | All 100 with their beat lists, plus Parked arcs in v2 |
-| Card list | Closed arcs render dimmed inside their sections (`story_planner/render.js:207`) | They pile up beside the actionable cards |
-
-This growth already happens for Resolved arcs that had a planted beat, since the merge always carries those (`data.js:472`). Decision 3 extends it to every closed arc. Retention should therefore land together with its bounds:
-
-- A capped list of closed titles in the prompt (the roadmap's `<closed_story_ideas>`), with reasons once v2 has them.
-- Closed and Parked arcs filtered out of `{{storyplan}}`. The macro should keep ignoring the injection mode, as it deliberately does today. It is also the "does a plan exist" check behind the floating button (`index.js:393-395`), so an archive-only plan needs checking there.
-- A collapsed Archive group in the card list.
-- A decision about history. For example, snapshots could copy a closed arc only when it changed since the previous snapshot, or closed records could live outside the snapshotted list. Decision 10 rules out deleting planning records to save tokens, but it doesn't settle storing each one up to 21 times.
-
-**A guard that doesn't depend on the prompt.** Showing Dropped ideas to the model reverses a deliberate choice. The code withholds them because "the user rejecting an idea should mean it stops coming back" (`generation.js:70-73`), and naming a rejected idea can prime weaker or local models to regenerate it. We think the roadmap's direction is right, but it shouldn't rely on the prompt alone:
-
-- When a parsed arc's normalized title exactly matches a closed record, the merge absorbs it: no reopening, no rewrite, no new arc. The merge log and Diagnostics count it.
-- That count is Phase 7's closed-memory recurrence measurement, available without manual QA. It can also decide whether sending Dropped titles helps, by comparing the count with the titles sent and withheld.
-- Near-miss titles stay the prompt's job. A similarity hint in the UI is fine, as §5.2 says, but it never applies automatically.
-
-The guard is also what makes the help text true. The panel currently promises that marking an arc Resolved or Dropped stops it "being suggested again" (`render.js:411-412`).
-
-**Custom prompts.** Custom user prompts only receive blocks they have tokens for (`generation.js:121-127`). A prompt saved before closed memory or the story palette exists will silently get neither. Either append new blocks when their token is missing, or show a notice in settings. It is the same issue as §2.3 of the World State reply.
-
-### 3.3 Arc handles only; no beat ids in the prompt
-
-Once code owns planted history, the model never needs to repeat it. The v2 prompt can ask for the remaining steps only, and §3.1 step 2 covers models that repeat them anyway. Beat ids stay in storage for the editor and history, but no model ever sees one. That removes the beat half of the marker cases in the roadmap's §7.
-
-For arcs, assign short handles when the prompt is built (`A1`, `A2`, …) and keep them with the arcs captured at request time (`generation.js:217-218` already captures that list):
-
-- Models copy `A3` far more reliably than an id like `1726312345678-1a-x9f2`.
-- Forged and cross-chat identifiers can't occur, because a handle means nothing outside its request. Unknown or repeated handles fall back to title matching.
-- Names stop being the identity key. The "reproduce its name EXACTLY" instructions (`generation.js:77`, `story_planner/prompts.js:31`) can be relaxed, and a model that tidies a name no longer costs the arc its progress. On a handle match the stored title wins, which keeps today's behavior.
-- The merge can tell when the user changed or deleted an arc after the request was built (§4.3).
-
-Two format constraints:
-
-- The previous plan passes through `escapePromptText`, which escapes `<` and `&` (`core/prompt.js:47`). HTML-comment markers would reach the model as `&lt;!--`, so use a bracket form.
-- The parser already strips a leading `[Tag]` of up to 24 characters from arc bullets (`story_planner/schema.js:234`). A leading `[A1]` would be silently discarded today, so the new parser must read the handle before that cleanup.
-
-Handles don't need the v2 store either. They are a prompt and parser change.
-
-### 3.4 Settle when a beat's age resets
-
-§5.1 says "changing the current beat resets `turnsSinceAdvance`", and the Phase 2 exit criteria repeat it. If a regeneration counts as a change:
-
-- Auto-generate runs every 10 AI replies by default (`story_planner/settings.js:38`), and a beat becomes overdue at 12 turns (`data.js:82`). Both count the same event (`index.js:94`, `:103`).
-- A model that rewords the current beat on each run resets its age before it reaches 12. The injection's "still waiting after N turns" line (`injection.js:90`) and the reminder toast never appear. This is the silent stall the reminder exists to catch, and a dead reminder has shipped once already (the missing re-apply described at `index.js:89-94`).
-
-Proposal:
-
-- **Age counts turns since the arc's last progress event:** planted, skipped, back, or a user edit of the current beat. Regeneration never resets it.
-- **Reminder marks stay keyed by progress position**, as `arcId#beatIndex` is today (`data.js:674`). In v2 the position is the number of planted and skipped beats. If marks were keyed by beat id, a regeneration that mints a new pending beat would drop the mark and re-fire the reminder immediately for every overdue arc.
-
-The cost is that a newly generated beat can inherit an overdue age. We think that's acceptable, because it pushes the narrator toward an arc that really has been stuck.
-
-### 3.5 Decide what Pin protects
-
-When a pinned arc's title matches, its description, section, and beats are replaced by the model's (`data.js:452-459`). Pinning only matters when the model leaves the arc out. The card promises "Pin — keeps this arc through regeneration" (`render.js:214`). Phase 0 records this behavior in a test, but no phase decides between:
-
-- **Pin means survives.** Today's behavior.
-- **Pin means survives unchanged.** The model can only propose changes to a pinned arc, through Phase 4's "Develop this arc".
-
-We lean toward the second, because users often pin an arc right after editing it. The same question applies when the user has moved an arc to another section, and to Parked arcs. The roadmap says Parked arcs survive regeneration but not whether the model sees them. Proposal: send them as title-only `[PARKED]` lines, so the model doesn't re-propose them, and never rewrite them.
-
-### 3.6 Budget truncation and Focus
-
-The roadmap's §7 expects that "Budget truncation drops whole arcs". It doesn't: the truncator keeps a character prefix of the body (`core/budget.js:429-434`), which can leave an arc title without its `NOW:` line. No phase changes that.
-
-Focus is affected too. Sorting focused arcs first protects them from a cut at the end only if they sit at the top of the whole payload. Sorted within sections, a focused arc in the last section is cut before an unfocused arc in the first.
-
-This only matters once a user sets a Story Planner soft cap, which is off by default (`budget.js:97`, `:693`). If focused arcs are meant to survive truncation, either give them their own block after Ready Now, or make the budget cut between arcs.
-
-### 3.7 Safe character context (Phase 6.2)
-
-- **Core surface.** Story Planner imports nothing from other modules today, and the only edges between modules are chronicle → world_state and interiority → knowledge. Core has no Knowledge accessor, so this projection is new core surface, alongside `getWorldStateFactual`.
-- **Field list.** The dossier fields have no public/private split (`knowledge/lorebook.js:800-812`). `agenda` is "their main agenda in the story right now" (`knowledge/prompts.js:107`), which is often the hidden motive. `read_on_pc` is "what this NPC currently thinks of the player character" (`knowledge/prompts.js:106`), and it isn't on the exclusion list. Both need an explicit decision, and an allowlist would be safer than an exclusion list.
-- **Secrets.** The narrator already sees secrets, because every dossier field, Secrets included, is written into the lorebook entry (`knowledge/lorebook.js:850-853`). Excluding them from planning mostly keeps spoilers out of the arc cards the user reads. That's a good default, but "the secret comes out" is some of the best material a planner can work with, so an explicit opt-in may be worth adding later. This also reopens the July arc-rework decision to keep Knowledge relationships out of arc generation.
-
-## 4. Findings the roadmap doesn't cover
-
-### 4.1 A Ready arc never leaves the prompt on its own
-
-Reproduced: a Ready arc that had waited 40 turns, left out of a regeneration by the model, was kept, got no reminder, and was still the first arc in the injection under "Ready Now".
-
-- Reminders only consider arcs waiting on a beat (`data.js:319-323`), and the Ready Now block carries no age or overdue line (`injection.js:69-75`).
-- `/wt-beat` lists only waiting beats (`index.js:299-307`). The only planner commands are `/wt-plan` and `/wt-beat` (`core/commands.js:70`, `:87`), so no command can resolve an arc.
-- Regeneration carries Ready arcs even when the model leaves them out, because they have planted beats (`data.js:472`).
-- The injection header tells the narrator that Ready arcs are "usable in this scene. When a scene needs somewhere to go, take one and let it play out" (`prompts.js:130`).
-
-If the payoff already happened and the user didn't click Resolve, the narrator is invited to stage it again on every turn. This is the forgotten confirmation from the roadmap's §3.6, one step later, and regeneration can't clear it. Immediate Hooks get no reminder either. A regeneration does drop an unpinned hook the model leaves out, but auto-generate is off by default (`settings.js:40`), so a used hook stays on offer until the next manual generation.
-
-The data for a fix with no API calls already exists. `advanceBeat` resets `turnsSinceAdvance` when the final beat is planted (`data.js:278`), and `incrementArcTurns` keeps ageing Ready arcs (`:300-304`), so a Ready arc's age already means "turns since it became Ready". Proposal for Phase 3, not Phase 5:
-
-- A "did this happen?" reminder for Ready arcs past the threshold, with a Resolve action.
-- `/wt-beat` lists Ready arcs as a separate group (for example `R1`, `R2`) with a way to resolve one, so `/wt-beat 2` still means the second waiting beat.
-
-Phase 5 can still suggest resolutions later. This doesn't have to wait for it.
-
-### 4.2 The card's status dropdown skips the reopen reset
-
-`setArcStatus` resets an arc's age and clears its reminder marks when the arc is reopened (STORY-PLANNER-08, `data.js:566-580`), and `test/tier4_fixes.test.js:195-206` covers that. Nothing in production calls it. The card's status dropdown calls `updateArc(id, { status })` directly (`render.js:602-603`).
-
-Reproduced with two arcs whose current beat had waited 30 turns. Each was resolved and reopened through one path, followed by one reply:
-
-| Path | Age after reopening and one reply | Reminder |
-|---|---|---|
-| `updateArc` (what the dropdown calls) | 31 | fires immediately |
-| `setArcStatus` | 1 | none |
-
-The roadmap's reopen rule (§5.1), Park and Resume (Phase 3), and beat edits (Phase 2) all add transitions of this kind. They should all go through one transition function, and the tests should drive the handler the UI uses rather than the data function.
-
-### 4.3 An arc deleted during generation comes back
-
-The rebase comment says "pins/edits/deletes made during the call survive" (`generation.js:287-291`). Deletes don't. The merge runs against the current arcs (`:292-302`), where the deleted arc has no title match, so the model's copy of it (the model saw the arc in the previous plan) is added as a new arc.
-
-Reproduced: an arc with one planted beat, deleted while the call was in flight, came back as a new active arc with a new id and no progress.
-
-Reading the same merge, a description edited during the call is also lost: the model's copy matches by title, and its description replaces the user's. The roadmap's §7 test for mid-flight edits and deletes will catch both. The fix is to compare each parsed arc with the copy captured at request time (by handle once §3.3 lands, by title before that). If the user has deleted or changed that arc since, keep the user's version.
-
-### 4.4 Phase 5 needs the quote checker moved to core first
-
-`findQuoteMatch`, `quoteMatchesMessage`, and `normalizeForMatch` are private functions in `knowledge/growth.js` (`:147`, `:177`, `:218`), and no test calls them directly. Importing them from Story Planner would add a third edge between modules. Moving them to `core/`, with their own tests, is a prerequisite for Phase 5. Stable message identity already lives in core (`core/message_identity.js:31`).
-
-### 4.5 Smaller items
-
-- The "All" mode description says "Inject every arc that is not dropped" (`data.js:56`), but Resolved arcs are excluded too. Worth fixing now, even though Phase 3 replaces it.
-- §6 Phase 1 bundles work that §9 splits into two steps. With §3.1 of this reply, the progress fix moves ahead of both.
-- The palette's balanced default has to replace "Focus on major plot shifts, new character introductions, and escalating conflicts" in the default prompt (`prompts.js:28`). Custom system prompts keep their own wording, so the palette's effect on them should be measured separately.
-
-## 5. Additions to the evaluation set
-
-Phase 0 fixtures we'd add. Cases that describe current bugs should be run red against `2b2a29f` before any fix; the rest pin the new rules.
-
-- The model returns only the remaining beats of a part-planted arc (§2).
-- The model repeats only the planted beats of a part-planted arc. The arc must not become Ready.
-- The model adds beats to a Ready arc. The arc must stay Ready.
-- The model repeats planted beats with light rewording. A duplicate is acceptable; false progress is not.
-- The model returns the exact title of a Resolved or Dropped arc. The merge absorbs and counts it.
-- The user deletes an arc, or edits its description, while generation is in flight (§4.3).
-- An arc is reopened through the card's status dropdown after a long wait (§4.2).
-- Auto-generate at default settings, with a model that rewords the current beat on every run. The reminder must still fire by turn 12 (§3.4).
-- A Ready arc left unresolved past the threshold. A reminder fires, and `/wt-beat` can resolve it (§4.1).
-- A chat with 100 closed arcs: regeneration prompt size, history size, and `{{storyplan}}` output (§3.2).
-- A Story Planner soft cap smaller than the plan, if focused arcs are meant to survive truncation (§3.6).
-
-## 6. Proposed order for the roadmap discussion
-
-This is a starting point for discussion, not a roadmap:
-
-1. **Patch: the progress fix** (§3.1) and the mid-flight delete and edit guard (§4.3), with the bug fixtures run red first. No store or UI change.
-2. **Patch: lifecycle fixes.** One transition function for status changes (§4.2), the Ready-arc reminder and a way to resolve from `/wt-beat` (§4.1), and the "All" description. Also cap the closed arcs already sent to the model and drop their beat lists, which shrinks growth that happens today (§3.2).
-3. **Arc handles** in the full-plan prompt (§3.3), with the age and reminder-key rule settled (§3.4). Still on the v1 store.
-4. **v2 store, Skip, and the beat editor** (Phases 1 and 2).
-5. **Closed retention with its bounds** (§3.2): the Archive group, the macro filter, the history decision, and the guard with its count.
-6. **Park, Focus, and the mode cleanup** (Phase 3), with the Pin decision (§3.5) and the Budget and Focus decision (§3.6).
-7. **Targeted proposals** (Phase 4).
-8. **Quote checker to core, then manual Check progress** (Phase 5).
-9. **Story palette, then character context** once the core accessor and field list are settled (Phase 6).
-10. **Documentation and measurement** (Phase 7), including the closed-idea count and the comparison of sending versus withholding Dropped titles.
+Relevant seams:
+
+- `story_planner/schema.js` owns the canonical arc shape, parser, and store schema.
+- `story_planner/data.js` owns arc mutations, beat progress, regeneration merge,
+  settings resolution, reminders, and history.
+- `story_planner/generation.js` owns context construction, output validation, and
+  the full-plan generation commit.
+- `story_planner/injection.js` owns selection and the narrator-facing projection.
+- `story_planner/render.js` owns cards, settings, previews, and history UI.
+
+The existing planner-focused regression set passed at review time: 136 tests in
+`plan.test.js`, `beats.test.js`, `tier3_fixes.test.js`, `tier4_fixes.test.js`,
+`tier5_regression_net.test.js`, and `world_state_phase5_bugs.test.js`.
+
+## 3. Problems this roadmap addresses
+
+### 3.1 Beat progress is positional
+
+An arc currently stores `beats: string[]` and one `beatIndex`. During full-plan
+regeneration, the new beat list replaces the old one while the numeric index is
+retained and clamped. If the model rewrites or reorders the list, an unrelated new
+beat can occupy an already-planted position and silently count as completed.
+
+### 3.2 Closed ideas are not durable planning memory
+
+Resolved and dropped arcs leave narrator injection, as intended, but a later
+regeneration may remove them from storage. Dropped arcs are also omitted from the
+generation context. The planner can therefore suggest the same rejected or paid-off
+idea under a slightly different name.
+
+### 3.3 Beat maintenance is incomplete in the UI
+
+The card shows the current beat and supports planted/back. It does not expose the
+full sequence for editing, insertion, deletion, reordering, or an explicit
+"skipped/obsolete" result. A manually added long-range arc cannot be given a beat
+sequence from the normal card UI.
+
+### 3.4 Active is doing too many jobs
+
+An arc may be good but irrelevant to the current scene. Today the choices are to
+leave it Active, Resolve it, Drop it, delete it, or rely on Pinned-only injection.
+There is no lifecycle state meaning "keep this idea, but stop aging, reminding,
+and injecting it until I return to it."
+
+The All and Active injection modes are also behaviorally equivalent: every
+resolved and dropped arc is excluded before mode selection, so both modes select
+the same active arcs.
+
+### 3.5 Regeneration is too broad
+
+A weak pending beat, underdeveloped character arc, or good premise with a poor
+route currently requires manual editing or a full-plan generation. Full refreshes
+increase churn and expose every arc to merge ambiguity when only one needs help.
+
+### 3.6 Manual confirmation is reliable but easy to forget
+
+Only the user can currently confirm that a beat landed. When they forget, the same
+NOW instruction remains injected and eventually becomes overdue even if the event
+already happened on-screen.
+
+### 3.7 The default creative brief favors escalation
+
+The built-in prompt emphasizes major shifts, new character introductions, and
+escalating conflict. That is useful for momentum, but repeated generations can
+crowd out quiet character moments, consequences, relationship repair, discovery,
+and alternate outcomes. The direction hint can compensate, but only through
+free-form instructions the user has to rewrite for each chat.
+
+### 3.8 Ready arcs can remain in the prompt indefinitely
+
+Ready arcs age internally but do not currently receive an overdue reminder, appear
+in `/wt-beat`, or have a command-level path to Resolve. If the payoff already
+happened and the user missed the card action, the narrator can continue treating
+the same Ready arc as available on every turn.
+
+### 3.9 Lifecycle transitions are inconsistent
+
+The data-layer status transition helper resets age and reminder state when an arc
+is reopened, but the card status dropdown writes status directly. Reopening from
+the UI can therefore preserve an old age and trigger an immediate reminder.
+
+### 3.10 In-flight deletion can resurrect an arc
+
+Regeneration rebases against current arcs, but a deleted arc returned by the model
+can be added as a new arc. A user deletion made while generation is in flight must
+be treated as an explicit forget action and must not be undone by the response.
+
+## 4. Decisions this roadmap adopts
+
+1. **User-confirmed story state remains authoritative.** Automatic progress
+   checking may propose a change with evidence; it never plants a beat, resolves
+   an arc, or drops an idea without acceptance.
+2. **Completed setup is immutable during model regeneration.** A model may replace
+   pending beats. It cannot rewrite history or transfer completion by position.
+3. **Closed means remembered; delete means forgotten.** Resolved and dropped arcs
+   stay in a collapsed archive view and a bounded generation-memory projection.
+   Explicit deletion remains the way to remove the record entirely.
+4. **Pin, park, and focus are separate concepts.** Pin controls survival through
+   regeneration, Park controls lifecycle activity, and Focus controls present
+   narrative attention.
+5. **No extra automatic model call is enabled by default.** Progress checking is
+   manual first. A later automatic cadence is opt-in and justified by measurements.
+6. **Targeted generation always produces a reviewable proposal.** It does not
+   commit directly after the API response.
+7. **Planner grounding receives a purpose-built safe projection.** It never reads
+   NPC secrets, Knowledge Ledgers, private intentions, or Interiority thoughts.
+8. **Creative controls start small.** Add a compact story palette rather than a
+   second settings workspace. Keep the direction hint as the escape hatch.
+9. **The current Markdown full-plan format remains supported.** Built-in prompts
+   can carry stable identity markers, while custom prompts retain a conservative
+   title-match fallback.
+10. **Stored history is complete; prompt projections are bounded.** Do not delete
+    user planning records merely to save prompt tokens.
+
+11. **Reminder age has one explicit meaning.** `turnsSinceAdvance` measures turns
+    since the current beat became current, or since the arc became Ready. Editing
+    the current beat or reopening an arc resets the age; merely regenerating or
+    auto-generating does not. This keeps overdue reminders meaningful for users
+    who use automatic generation.
+
+## 5. Target data and behavior contract
+
+### 5.1 Arc shape
+
+The Story Planner store moves from schema v1 to v2. The exact property names may
+change during implementation, but the semantics should remain:
+
+```js
+{
+  id: "arc-...",
+  title: "The Rival's Gambit",
+  body: "A competitor makes a decisive public move.",
+  section: "emerging",
+  status: "active", // active | parked | resolved | dropped
+  pinned: false,
+  focused: true,
+  closeReason: "",
+  closedAt: null,
+  beats: [
+    {
+      id: "beat-...",
+      text: "A servant mentions the rival leaving before dawn.",
+      state: "planted", // pending | planted | skipped
+      stateReason: "",
+      updatedAt: 0
+    },
+    {
+      id: "beat-...",
+      text: "A damaged shipment arrives.",
+      state: "pending",
+      stateReason: "",
+      updatedAt: 0
+    }
+  ],
+  turnsSinceAdvance: 0,
+  createdAt: 0,
+  updatedAt: 0
+}
+```
+
+Rules:
+
+- the first pending beat is the current beat;
+- planted and skipped beats are historical records and never become current again
+  unless the user explicitly changes their state;
+- an arc with at least one beat and no pending beats is Ready;
+- changing the current beat resets `turnsSinceAdvance`;
+- Active arcs age and may inject; Parked, Resolved, and Dropped arcs do neither;
+- pinning does not override lifecycle exclusion from injection;
+- focus does not imply pinning and does not prevent regeneration;
+- resolving or dropping records a reason when provided;
+- reactivating a closed arc clears its close timestamp, resets its current-beat
+  age, and preserves the close/reopen event in history.
+
+### 5.2 Stable identity during generation
+
+The default full-plan prompt should carry short, opaque per-request arc handles in
+machine-readable annotations that are absent from user and narrator projections.
+Beat identifiers do not need to be exposed in the Markdown prompt. The captured
+arc handle establishes the merge boundary; stored planted/skipped beat objects are
+preserved exactly and pending output is matched conservatively within that arc.
+On merge, identity resolution follows this order:
+
+1. a valid arc handle emitted from the built-in prompt;
+2. an unambiguous exact normalized title match for compatibility;
+3. a new arc identifier.
+
+Within a matched arc, pending beats use an unambiguous exact normalized text match
+when possible. Otherwise they receive new identifiers and cannot inherit planted
+or skipped state.
+
+Do not use fuzzy semantic matching to transfer planted state automatically. A
+similarity match may be shown in a proposal UI, but ambiguity must never rewrite
+history or award progress.
+
+If the model omits every handle, the existing title fallback keeps custom and less
+compliant models usable. Missing, forged, duplicated, or cross-chat handles must
+fail safely; fuzzy semantic matching must never transfer progress automatically.
+Planted/skipped beats from the stored arc are still preserved exactly; only the
+pending suffix is eligible for replacement.
+
+### 5.3 Closed memory
+
+Resolved and dropped arcs remain ordinary canonical records with their status,
+reason, and timestamps. The UI presents them in a collapsed Archive view rather
+than intermixing them with actionable cards.
+
+Generation receives a bounded `<closed_story_ideas>` projection containing the
+most recently closed titles and concise reasons. The projection is bounded by
+whole records, with separate limits for record count and characters/tokens. It
+communicates:
+
+- resolved: this payoff already happened; do not propose it again;
+- dropped: the user rejected this direction; do not rephrase it as a new idea.
+
+Pinned closed records rank first, then recently closed records. Closed beat lists
+are not sent in the generation-memory projection. Omitted records stay stored and
+visible. The injection preview and narrator prompt never include this archive.
+
+### 5.4 Pacing and selection
+
+Replace the redundant selection choices with:
+
+- **All active** — every Active arc;
+- **Pinned only** — Active and pinned arcs;
+- **Focused only** — Active and focused arcs.
+
+The legacy stored `active` mode resolves as `all` and may be normalized during
+the v2 migration. Focused arcs sort before non-focused arcs in generation and in
+All-active injection. Recommend one to three focused arcs in help text, but do not
+hard-cap the user's selection.
+
+Parked arcs survive full regeneration without entering narrator injection, beat
+aging, overdue counts, or reminders. An optional `activateWhen` note may be added
+for the user's memory, but automatic wake-up is outside the initial phase.
+
+## 6. Delivery plan
+
+Each phase should land independently. The pre-phase patches and Phases 0–2 are
+the reliability foundation; later phases can be scheduled according to user
+demand.
+
+### Pre-phase patch 1 — Progress and commit-race safety
+
+Ship these fixes against the existing v1 store before migration:
+
+- Preserve the stored planted beat prefix exactly during regeneration.
+- Remove normalized copies of planted beats from model output before replacing
+  the pending route.
+- If the model returns no usable pending route, retain the stored pending beats;
+  regeneration can never complete setup or mark an arc Ready by omission.
+- If the stored arc is already Ready, ignore model beat output for its setup.
+- Preserve the existing age unless the current beat actually changes.
+- Capture deletion and edit revisions at generation start. If an arc was deleted
+  while the request was in flight, do not recreate it from the response. If it was
+  materially edited, keep the user version rather than silently overwriting it.
+
+Run the new regression fixtures red before the fix. This patch intentionally makes
+no store or UI change.
+
+Exit criteria:
+
+- the two reproduced positional-progress cases cannot produce false Ready state;
+- deleted or materially edited arcs cannot be resurrected or overwritten by an
+  in-flight response;
+- existing v1 fixtures and the full planner regression set remain green.
+
+### Pre-phase patch 2 — Lifecycle and bounded-memory safety
+
+Before the v2 migration, fix the lifecycle paths that do not require new storage:
+
+- Route the card status dropdown through one transition function so reopening
+  resets age and reminder marks consistently.
+- Add a Ready-arc reminder after its threshold and expose Ready arcs through
+  `/wt-beat`, with a Resolve path that does not disturb waiting-beat numbering.
+- Correct the All-mode description to say that resolved and dropped arcs are
+  excluded.
+- Bound closed arcs already sent to regeneration and omit their beat lists from
+  that projection, reducing prompt and history growth that occurs today.
+
+The Ready reminder is not an automatic model call. `turnsSinceAdvance` continues
+to age through auto-generation and resets only when the current beat changes or
+the arc is reopened.
+
+Exit criteria:
+
+- an overdue Ready arc is visible, remindable, and resolvable without narrator
+  injection becoming a hidden state mutation;
+- every UI status transition uses the same reset rules;
+- closed-memory prompt size is bounded and measured with a 100-closed-arc fixture.
+
+### Pre-phase patch 3 — Request handles
+
+Add short per-request arc handles to the built-in full-plan prompt while retaining
+the v1 store. Do not expose beat IDs in Markdown. Validate handles against the
+captured arc set and use only unambiguous exact title/text fallback when handles
+are absent. This makes the later v2 migration safer without coupling prompt
+compatibility to nested beat identifiers.
+
+### Phase 0 — Pin the current failure cases
+
+**Purpose:** Establish the invariants before changing the store.
+
+Work:
+
+- Add a regression where a regenerated beat list changes before a retained
+  `beatIndex`; prove the new event cannot inherit planted status.
+- Add a regression where the model returns only the remaining beats, or only the
+  planted beats, and prove the arc does not become Ready incorrectly.
+- Add a regression where a Ready arc receives new setup beats and prove it stays
+  Ready.
+- Add a regression for light rewording of planted beats: duplication may be
+  visible, but progress must never transfer silently.
+- Add resolved and dropped arcs, omit them from a subsequent generation, and
+  prove the planner retains their records.
+- Pin the existing equivalence between All and Active as the reason for the mode
+  cleanup.
+- Cover pinned arcs whose model-generated body or pending beats change.
+- Cover a Ready arc left unresolved past the threshold, including reminder and
+  `/wt-beat` resolution behavior.
+- Cover reopening through the card status dropdown after a long wait.
+- Cover deleting an arc or editing its description while generation is in flight.
+- Record current full-plan parsing behavior when identifiers are absent, malformed,
+  duplicated, or refer to an arc from another chat.
+- Record history, backup merge/replace, and import behavior for v1 string beats.
+
+Primary tests:
+
+- `test/plan.test.js`
+- `test/beats.test.js`
+- `test/generation_commit_races.test.js`
+- `test/schema_migrations.test.js`
+- `test/backup_schema_roundtrip.test.js`
+- `test/import_export_roundtrip.test.js`
+
+Exit criteria:
+
+- every data-loss or incorrect-progress case has a deterministic failing fixture;
+- fixtures distinguish user-confirmed state from model-authored proposals;
+- the pre-migration v1 records used by tests are preserved as compatibility fixtures.
+
+### Phase 1 — Store v2, durable identity, and closed memory
+
+**Purpose:** Remove positional progress transfer and make prior decisions durable.
+
+Work:
+
+- Add the v1 → v2 Story Planner migration.
+- Convert every legacy beat string to a canonical beat object with a new stable id.
+- Mark beats before `beatIndex` planted and the remainder pending; clamp exactly as
+  the current v1 reader does so existing plans retain their visible progress.
+- Add Parked status, focus, close reason, and close timestamp defaults.
+- Update schema validation, canonicalization, history restores, backup merge/replace,
+  and recovery exports for nested beat records and duplicate beat ids.
+- Preserve unknown future-version stores through the existing schema gate.
+- Add built-in prompt identity annotations and tolerant parsing.
+- Rewrite regeneration merge so planted/skipped beat objects are preserved exactly
+  and only pending beats can be replaced.
+- Retain omitted Resolved and Dropped arcs and build the bounded closed-memory
+  generation projection.
+- Treat explicit deletion as a deliberate forget action; history still captures
+  the pre-delete state.
+
+Implementation seams:
+
+- `story_planner/schema.js`: v2 types, migration, validation, marker parser.
+- `story_planner/data.js`: current-beat derivation, safe merge, closed projection.
+- `story_planner/generation.js`: identity-bearing previous plan and closed memory.
+- `backup/restore.js`: nested beat and closed-record merge behavior.
+
+Exit criteria:
+
+- no model output can transfer planted/skipped state solely by list position;
+- v1 plans, history snapshots, imports, and backups migrate without losing an arc
+  or its planted progress;
+- malformed/duplicate nested ids are quarantined or repaired according to the
+  central schema policy and remain recoverable;
+- resolved/dropped arcs survive any number of full-plan generations;
+- closed records never enter narrator injection or beat reminders;
+- prompt identity annotations are absent from cards, macros, previews, and injection.
+
+### Phase 2 — Full beat editor
+
+**Purpose:** Make every part of an arc maintainable without editing metadata.
+
+Work:
+
+- Add a collapsible **Setup beats** editor to every arc card.
+- Show planted, current, upcoming, and skipped states distinctly.
+- Support add, edit, delete, reorder, mark planted, mark skipped, undo, and restore
+  to pending.
+- Keep destructive deletion separate from Skip. Skip retains the beat and an
+  optional reason; Delete removes it after a specific confirmation.
+- Prevent pending beats from being moved before historical beats unless the user
+  explicitly changes those historical states.
+- Add **Generate setup beats** for a manual long-range arc with no beats; route it
+  through the targeted proposal flow from Phase 4 when that phase exists.
+- Snapshot once per completed edit operation rather than once per keystroke.
+- Reapply injection only when the current narrator-facing projection changes.
+- Preserve focus and expanded editor state when the card list re-renders.
+
+Exit criteria:
+
+- a user can create and maintain a complete long-range arc from the UI;
+- Skip never claims that an event happened;
+- changing a future beat does not reset or rewrite earlier progress;
+- changing the current beat resets its age and reminder high-water mark;
+- keyboard, screen-reader, touch, and narrow-layout behavior match the existing
+  accessibility contract;
+- history can restore beat order, text, ids, states, and reasons exactly.
+
+### Phase 3 — Parked arcs, focus, and injection-mode cleanup
+
+**Purpose:** Give the user control over when a good idea receives attention.
+
+Work:
+
+- Add Park/Resume actions and the Parked lifecycle state.
+- Keep the Ready-arc reminder and `/wt-beat` Resolve path from the pre-phase
+  lifecycle patch integrated with the new lifecycle presentation.
+- Add a lightweight Focus toggle separate from Pin.
+- Present Active/Ready sections first and Parked/Archive groups collapsed below.
+- Replace the Active injection radio with Focused only; relabel All as All active.
+- Resolve legacy `injectMode: "active"` to `all` and test global/per-chat setting
+  provenance through the migration.
+- Put focused arcs first in full-plan context and All-active injection.
+- Make push language focus-aware: Assertive advances at least one injected arc,
+  preferring a focused arc when one is available.
+- Add an optional `activateWhen` note to parked cards for human reference.
+- Update Overview counts so parked arcs are not awaiting/overdue and focused/ready
+  counts remain meaningful.
+
+Exit criteria:
+
+- Parked arcs survive regeneration but never age, remind, or inject;
+- Pin cannot accidentally reactivate a Parked/Resolved/Dropped arc;
+- Focused-only injection is empty and clearly explained when nothing is focused;
+- the Preview, Diagnostics, Budget panel, floating badge, and Overview agree on
+  which arcs are active, injected, focused, ready, and overdue;
+- old global and per-chat mode settings keep their prior behavior after migration.
+
+### Phase 4 — Targeted arc development
+
+**Purpose:** Improve one weak part of the plan without churning everything else.
+
+Add three card actions:
+
+1. **Rework remaining setup** — preserve arc identity, title, endpoint, and every
+   planted/skipped beat; propose a replacement pending route.
+2. **Develop this arc** — propose edits to the description, section, and pending
+   beats while preserving historical progress.
+3. **Suggest an alternate route** — create a new sibling proposal and leave the
+   source arc unchanged.
+
+Work:
+
+- Give targeted generation a small dedicated prompt contract rather than passing a
+  single arc through the full five-section parser.
+- Ground the call with the arc, its historical and pending beats, recent stable
+  messages, factual World State, latest Chronicle, direction hint, story palette,
+  and relevant closed memory.
+- Return a proposal with a field-level/beat-level diff and explicit Apply/Discard.
+- Preserve the captured chat scope and exact arc revision. If either changes while
+  the call is in flight, do not overwrite; rebuild the comparison against current
+  state or ask the user to generate again.
+- Push a history snapshot only when the proposal is applied.
+- Route the call through the central generation coordinator as a foreground manual
+  Story Planner job.
+- Add **Generate setup beats** as a special case of Rework remaining setup.
+
+Exit criteria:
+
+- no targeted operation changes an unrelated arc;
+- completed/skipped beats are immutable in model proposals;
+- Apply is disabled when the source arc was deleted or materially changed;
+- alternate route always receives fresh arc and beat ids;
+- cancelled, failed, rejected, or stale proposals make no persistent change and
+  consume no history slot;
+- custom full-plan prompts remain unaffected.
+
+### Phase 5 — Evidence-backed progress suggestions
+
+**Purpose:** Reduce repeated NOW instructions without turning inference into fact.
+
+**Prerequisite:** Move `findQuoteMatch`, `quoteMatchesMessage`, and
+`normalizeForMatch` from `knowledge/growth.js` into a tested `core/` seam before
+Story Planner consumes them. Stable message identity already lives in
+`core/message_identity.js`; Story Planner must not add a direct dependency on
+Knowledge's private helpers.
+
+Start with a manual **Check progress** action. Automatic checks remain behind a
+later decision gate.
+
+Work:
+
+- Inspect current beats and Ready arc payoffs against messages newer than each
+  item's last check watermark.
+- Require every suggestion to include a stable message identity and a short source
+  excerpt that can be verified against the current chat.
+- Return only proposals: **Beat appears planted**, **Arc may be resolved**, or
+  **No clear evidence**.
+- Show suggestions in one review panel with Accept, Ignore, and Open source.
+- Accepting a beat proposal performs the normal user-authored planted mutation.
+- Accepting a resolution proposal uses the normal Resolve flow and lets the user
+  enter or edit its reason.
+- Ignore suppresses only that evidence/item combination; it does not permanently
+  block later evidence.
+- On swipe/edit/delete, mark affected pending suggestions stale. Never silently
+  roll back a progress change the user already accepted.
+- Record last-checked watermarks only after a successful, scope-safe result.
+
+Decision gate for automatic checks:
+
+- enable an opt-in cadence only if manual use shows forgotten beats are common;
+- reuse an already-running full-plan refresh when possible;
+- expose call frequency and last result in Health/Diagnostics;
+- default remains off, and disabling it cancels queued checks.
+
+Exit criteria:
+
+- no unverified excerpt can be accepted as evidence;
+- ambiguous narration produces no proposed state change;
+- the model cannot directly mutate beat or arc status;
+- duplicate checks do not repeat an ignored or already-applied suggestion;
+- chat switch, retry, swipe, edit, delete, and concurrent card-edit cases are covered;
+- the initial manual feature adds no automatic API cost.
+
+### Phase 6 — Creative palette and safe character grounding
+
+**Purpose:** Broaden planning quality while keeping established facts, private
+knowledge, and hypothetical outcomes clearly separated.
+
+#### 6.1 Compact story palette
+
+Add a small per-chat control with:
+
+- emphasis chips: conflict, mystery, discovery, consequences, relationships,
+  character growth, quiet moments, and repair/reconciliation;
+- an escalation preference: restrained, balanced, or escalating;
+- an **allow new major characters** toggle;
+- the existing free-form Direction Hint.
+
+Rules:
+
+- no selection means balanced behavior and keeps current users near the existing
+  output;
+- chips are preferences, not quotas;
+- generated arcs describe attempts, pressures, and possible outcomes rather than
+  deciding what the user character will choose or whether an uncertain outcome
+  succeeds;
+- the prompt should prefer developing established threads and cast before adding
+  new rivals, villains, or institutions unless the user asks for expansion.
+
+#### 6.2 Safe character context
+
+Add an opt-in compact Knowledge projection for selected NPCs or the active cast.
+The projection may include stable identity, public role, established personality
+or profile traits, current public agenda, and concise relationship stances useful
+to the selected arc.
+
+It must exclude:
+
+- Secrets;
+- Knowledge Ledger contents;
+- Interiority thoughts and private intentions;
+- raw evidence quotes not explicitly selected for sharing;
+- any field hidden by the Planner's own context-selection control.
+
+Use Knowledge `entityId` values so selections survive rename/merge. Resolve the
+active cast through the shared Current Scene/alias service planned by the World
+State roadmap; do not import Interiority's generation module or require Interiority
+to be enabled.
+
+Keep this factual context inside a clearly labeled tag. Generated arcs remain
+hypotheses and must never flow back into Knowledge or World State as facts.
+
+Exit criteria:
+
+- restrained and quiet palettes measurably reduce forced escalation/new-cast churn
+  in fixed prompt fixtures;
+- no palette weakens the existing prohibition on writing actions, dialogue,
+  thoughts, or decisions for `{{user}}`;
+- selected characters survive approved renames and merges;
+- no secret, ledger entry, private intention, or thought appears in captured
+  requests, previews, logs, or generated plan context;
+- disabling Knowledge or safe character context yields the current factual
+  World State/Chronicle path without errors;
+- context is capped by whole character records and reported in request diagnostics.
+
+### Phase 7 — Documentation, observation, and default decisions
+
+**Purpose:** Finish the feature as a coherent user workflow and measure whether
+the optional automation is justified.
+
+Work:
+
+- Update the README Story Planner feature and usage sections.
+- Explain Pin vs Focus vs Park, Planted vs Skipped, Ready vs Resolved, and Archive
+  vs Delete in the panel's help text.
+- Update slash commands or add equivalents only where they shorten common actions;
+  keep `/wt-beat` backward compatible.
+- Extend Injection diagnostics with focused/parked/closed omission reasons and the
+  post-Budget payload.
+- Extend Health/Overview with last progress check and proposal counts if Phase 5
+  ships.
+- Record manual QA on a short chat, a long campaign, group chat, custom prompt,
+  narrow/mobile layout, and a chat containing migrated v1 history.
+- Measure false positive/negative progress suggestions, closed-memory recurrence,
+  planner request size, injection size, and targeted-vs-full generation use.
+
+Decision records:
+
+- whether progress checking deserves an opt-in automatic cadence;
+- whether `activateWhen` needs automatic wake evaluation;
+- whether the story palette should affect auto-generation defaults;
+- whether closed-memory ranking needs anything beyond pin + recency.
+
+Do not add those behaviors on intuition alone; record the observed trigger and
+result here or in a short follow-up decision note.
+
+## 7. Cross-cutting test plan
+
+### Pure data and schema
+
+- v1 → v2 migration is idempotent;
+- string beats map to stable objects with correct planted/pending states;
+- duplicate arc and beat ids never alias UI mutations;
+- current beat and Ready state derive from beat states, not array position;
+- skipped beats are historical but never treated as planted evidence;
+- nested length/type limits prevent metadata growth;
+- future schema versions remain untouched and pause only Story Planner;
+- history restores and backup/import paths preserve all new fields.
+
+### Generation and merge
+
+- compliant identity markers retain the correct arc and pending beat ids;
+- missing, forged, cross-chat, malformed, and duplicate markers fail safely;
+- title fallback never transfers progress between two ambiguous arcs;
+- model rewrites cannot alter planted/skipped records;
+- closed and parked records survive omission;
+- mid-flight edits, deletes, focus changes, parking, and chat switches do not get
+  overwritten;
+- targeted generation touches exactly one captured arc revision.
+
+### Injection and lifecycle
+
+- only Active arcs can inject or age;
+- All-active, Pinned-only, and Focused-only select exactly their documented sets;
+- Ready, current, overdue, and focus annotations agree across data, cards,
+  previews, diagnostics, and the registered prompt;
+- closed memory reaches generation only and never narrator injection;
+- Budget truncation drops whole arcs and keeps wrapper tags valid;
+- panic switch and tracker disable clear every new prompt surface.
+
+### UI and accessibility
+
+- full beat editing works with keyboard and touch;
+- icon controls have names that include the target arc/beat;
+- focus remains predictable after add/delete/reorder/re-render;
+- proposal dialogs trap/restore focus and expose a readable diff;
+- state is not communicated by color alone;
+- live status and busy states remain non-spamming;
+- reduced-motion and narrow-screen styles cover new controls.
+
+Likely test files to extend or add:
+
+- `test/plan.test.js`
+- `test/beats.test.js`
+- `test/story_planner_migration.test.js` (new)
+- `test/story_planner_targeted_generation.test.js` (new)
+- `test/story_planner_progress_check.test.js` (new)
+- `test/generation_commit_races.test.js`
+- `test/backup_schema_roundtrip.test.js`
+- `test/import_export_roundtrip.test.js`
+- `test/injection_diagnostics.test.js`
+- `test/budget.test.js`
+- `test/modal_accessibility.test.js`
+- `test/accessible_names.test.js`
+
+## 8. Risks and mitigations
+
+| Risk | Mitigation |
+| --- | --- |
+| v2 migration mislabels progress | Map exactly from the clamped v1 `beatIndex`; keep v1 fixtures and recovery export coverage |
+| Model drops or invents identity markers | Validate against the captured arc set; fall back to unambiguous exact matching; otherwise mint new ids without progress |
+| Full regeneration rewrites history | Preserve stored planted/skipped objects verbatim and replace pending beats only |
+| Closed memory grows indefinitely | Keep full storage, but rank and cap the generation projection by whole records |
+| Parked ideas never return | Make parked count visible and add explicit Resume; defer automatic wake until evidence justifies it |
+| Focus becomes another confusing status | Keep it as a separate star/spotlight control and explain it beside Pin/Park in one compact legend |
+| Beat editor overwhelms each card | Collapse the full sequence; keep the current beat and main actions visible by default |
+| Progress checker hallucinates completion | Require verified source excerpts and user acceptance; no evidence means no proposal |
+| Targeted proposal overwrites a live edit | Capture scope + exact arc revision and fail closed on mismatch |
+| Character grounding leaks secrets | Use a dedicated allowlist projection with explicit exclusions and request-capture tests |
+| Story palette becomes settings clutter | Start with a few chips, one escalation choice, and the existing direction hint |
+| More context increases request cost | Bound closed/character projections by whole records and report their sizes in Diagnostics |
+| New automation competes for API capacity | Manual first; coordinator-managed and opt-in only if the decision gate passes |
+
+## 9. Recommended implementation order
+
+1. Add the Phase 0 regression fixtures, including the reproduced positional,
+   lifecycle, Ready-arc, and in-flight deletion/edit cases.
+2. Ship the v1 progress/merge and commit-race patch; no store or UI change.
+3. Ship the v1 lifecycle fixes, Ready reminder/Resolve path, All-mode wording,
+   and bounded closed-memory projection.
+4. Add short per-request arc handles and settle the reminder-age rule on v1.
+5. Ship the v2 migration, stable beat objects, Skip, and the full beat editor.
+6. Add durable closed-memory retention, Archive presentation, macro filtering,
+   and import/export/history coverage with whole-record bounds.
+7. Add Park/Resume, Focus, and injection-mode cleanup.
+8. Add targeted arc proposals and Generate setup beats.
+9. Move quote verification to the tested `core/` seam, then add manual,
+   evidence-backed progress checking.
+10. Add the compact story palette.
+11. Add safe, opt-in Knowledge character grounding after the shared cast/scene
+    seam is available.
+12. Complete documentation, manual QA, measurements, and the optional-automation
+    decision records.
+
+Every slice should run `npm test` and `npm run lint`. Schema, merge, targeted
+generation, and progress-check slices should also run the relevant focused tests
+before the full suite. Cross-module slices need a manual SillyTavern check for
+chat switching, swipes, message edits/deletes, backup restore, injection preview,
+Budget enforcement, panic switch, and disabled trackers.
+
+## 10. Completion criteria
+
+This roadmap is complete when:
+
+- planted progress can never transfer to a different beat through regeneration;
+- closed decisions remain durable and suppress straightforward recurrence;
+- users can fully maintain a beat sequence, including an honest Skip action;
+- good ideas can be parked without aging or prompt cost;
+- users can focus present attention independently of pinning;
+- one arc can be developed or rerouted through a previewed, scope-safe proposal;
+- progress checks are evidence-backed suggestions and never hidden writes;
+- creative controls can ask for quieter or less escalatory planning;
+- optional character grounding is useful, bounded, and demonstrably free of
+  private Knowledge/Interiority material;
+- history, migration, import/export, backup/restore, diagnostics, Budget,
+  accessibility, and cross-chat safety cover every new field and workflow;
+- the full test suite, lint, and manual integration checklist pass.
