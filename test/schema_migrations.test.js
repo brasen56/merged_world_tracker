@@ -41,6 +41,10 @@ import {
 import { SCHEMA_STORE_IDS, STORE_SCHEMAS } from '../schema/registry.js';
 import { backfillSnapshotIds } from '../chronicle/schema.js';
 import { STORE_SENTINEL } from '../knowledge/schema.js';
+import { historyEntryToArcs, historyEntryToText } from '../story_planner/data.js';
+import {
+    V1_PROGRESS_ARC, cloneV1, makeV1PlannerStore,
+} from './fixtures/story_planner_phase0.js';
 
 // ─── Real-world legacy fixtures (one per store) ──────────────────────────────
 //
@@ -104,6 +108,34 @@ const LEGACY_FIXTURES = {
 function dryRun(id, input) {
     return prepareStore(STORE_SCHEMAS[id], input);
 }
+
+describe('Phase 0 — Story Planner v1 compatibility fixtures', () => {
+    test('current v1 string beats and structured history are a validation fixed point', () => {
+        const fixture = makeV1PlannerStore();
+        const result = prepareStore(STORE_SCHEMAS.storyPlanner, fixture, { version: 1 });
+
+        expect(result.status).toBe('valid');
+        expect(result.changed).toBe(false);
+        expect(result.issues).toEqual([]);
+        expect(result.data).toEqual(fixture);
+        expect(result.data.arcs[0].beats).toEqual(cloneV1(V1_PROGRESS_ARC.beats));
+        expect(result.data.history[0].arcs[0].beatIndex).toBe(V1_PROGRESS_ARC.beatIndex);
+    });
+
+    test('both v1 structured snapshots and legacy text snapshots remain restorable', () => {
+        const [structured, legacyText] = makeV1PlannerStore().history;
+
+        expect(historyEntryToArcs(structured)[0]).toEqual(cloneV1(V1_PROGRESS_ARC));
+        expect(historyEntryToText(structured)).toContain('Mara notices the duplicate seal.');
+        expect(historyEntryToArcs(legacyText)).toEqual([
+            expect.objectContaining({
+                title: 'Legacy text snapshot',
+                beats: ['A string beat survives'],
+                beatIndex: 0,
+            }),
+        ]);
+    });
+});
 
 // ─── Manifest ────────────────────────────────────────────────────────────────
 

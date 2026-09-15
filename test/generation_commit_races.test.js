@@ -611,5 +611,29 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         expect(getArcs().find(a => a.title === 'Harbour pact').pinned).toBe(true);
         expect(state.isGenerating).toBe(false);
     });
+
+    test('a description edit during the call is authoritative over the stale model copy', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const seeded = makeArc({
+            title: 'Mara hunts the missing manifest',
+            body: 'The model-authored endpoint before the request.',
+            beats: ['Search the customs office.'],
+        });
+        setArcs([seeded]);
+        CURRENT = () => {
+            setArcs(getArcs().map(arc => arc.id === seeded.id
+                ? { ...arc, body: 'User-edited endpoint while generation was in flight.' }
+                : { ...arc }));
+            return PLAN;
+        };
+
+        const arcs = await generatePlan();
+
+        const kept = arcs.find(arc => arc.id === seeded.id);
+        expect(kept).toBeTruthy();
+        expect(kept.body).toBe('User-edited endpoint while generation was in flight.');
+        expect(getArcs().find(arc => arc.id === seeded.id).body).toBe(kept.body);
+    });
 });
 

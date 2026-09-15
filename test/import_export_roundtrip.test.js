@@ -34,6 +34,10 @@ import {
 } from './stubs/core.js';
 import { _resetEpoch } from '../core/scope.js';
 import { canonicalizeRegistryIdentityClaims } from '../knowledge/schema.js';
+import { parsePlanTextToArcs, serializeArcsToText } from '../story_planner/data.js';
+import {
+    V1_CLOSED_ARCS, V1_PROGRESS_ARC, V1_READY_ARC, cloneV1,
+} from './fixtures/story_planner_phase0.js';
 
 // ─── Chronicle fixtures ───────────────────────────────────────────────────────
 
@@ -43,6 +47,35 @@ const SNAPS = [
 ];
 
 const ANCHOR = { id: 'm1', msgIndex: 1, name: 'Mara', start: 'The harbour office', end: 'the manifest', length: 42 };
+
+describe('Phase 0 — Story Planner v1 Markdown import/export behavior', () => {
+    test('portable Markdown preserves string beat text but intentionally carries no ids or progress', () => {
+        const source = [cloneV1(V1_PROGRESS_ARC), cloneV1(V1_READY_ARC), ...cloneV1(V1_CLOSED_ARCS)];
+        const exported = serializeArcsToText(source);
+        const imported = parsePlanTextToArcs(exported);
+
+        expect(exported).not.toContain(V1_PROGRESS_ARC.id);
+        // The serializer groups arcs by timeline section rather than preserving
+        // arbitrary storage order across sections.
+        expect(imported.map(arc => arc.title)).toEqual([
+            'The Harbour Ledger', 'The Customs Bribe', 'The Northern Detour', 'The Bell at Low Tide',
+        ]);
+        expect(imported[0].beats).toEqual(source[0].beats);
+        expect(imported.every(arc => arc.beatIndex === 0)).toBe(true);
+        expect(imported.every(arc => arc.status === 'active' && arc.pinned === false)).toBe(true);
+    });
+
+    test('annotated full-plan text keeps strings clean but annotations alone do not author progress', () => {
+        const source = cloneV1(V1_PROGRESS_ARC);
+        const exported = serializeArcsToText([source], { annotateStatus: true, beats: 'all' });
+        const [imported] = parsePlanTextToArcs(exported);
+
+        expect(exported).toContain('[PLANTED]');
+        expect(imported.beats).toEqual(source.beats);
+        expect(imported.beatIndex).toBe(0);
+        expect(imported.pinned).toBe(false);
+    });
+});
 
 /**
  * Soft-deleted snapshots (the `_deletedBin` trash). The source install keeps

@@ -12,6 +12,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.13]
+
+### Fixed
+
+- Resolved and dropped arcs are no longer silently lost when the model omits
+  them from a regenerated plan. Both are durable user decisions: they are
+  intentionally absent from the editable `<previous_plan>` block and represented
+  only in bounded closed memory, so an omission can never mean "delete this
+  record." The merge now always carries resolved and dropped arcs forward;
+  previously a dropped arc was discarded on every omission and a resolved arc
+  was retained only when it had progress or protection. Explicit `removeArc()`
+  remains the deliberate forget path.
+
+### Added
+
+- Phase 0 regression coverage pinning the current Story Planner behavior before
+  the store redesign (`docs/STORY_PLANNER_ROADMAP.md` Phase 0). The fixtures and
+  tests establish the invariants the later phases must preserve.
+  - Literal v1 compatibility records (`test/fixtures/story_planner_phase0.js`)
+    keep beats as strings; `beatIndex` is the only durable evidence that the
+    user confirmed a beat as planted, and model output is merely a proposal.
+  - `test/plan.test.js`: a regenerated beat list that inserts a new event
+    before the retained `beatIndex` cannot inherit planted status; a response
+    with only the remaining or only the planted beats cannot make the arc
+    Ready; a Ready arc stays Ready and keeps its confirmed route when new setup
+    is proposed; a lightly reworded planted beat may duplicate but never gains
+    planted status; resolved and dropped records survive omission; a pinned
+    arc survives omission and preserves user state while generated fields
+    change; and All and Active injection select the same v1 records, motivating
+    the later mode cleanup.
+  - `test/beats.test.js`: an overdue Ready arc is remindable and `/wt-beat
+    resolve` resolves its Ready reference; the card status dropdown reopens an
+    arc after a long wait through the shared transition.
+  - `test/generation_commit_races.test.js`: a description edit during the call
+    is authoritative over the stale model copy.
+  - `test/import_export_roundtrip.test.js`: portable Markdown preserves string
+    beat text but intentionally carries no ids or progress; status annotations
+    alone do not author progress.
+  - `test/schema_migrations.test.js`: current v1 string beats and structured
+    history are a validation fixed point; both structured and legacy text
+    snapshots remain restorable.
+  - `test/backup_schema_roundtrip.test.js`: backup merge keeps a current id
+    conflict and appends a distinct v1 string-beat record; an empty destination
+    receives the complete v1 planner section unchanged; exact restore replaces
+    a non-empty destination with the complete fixture.
+
 ## [2.8.12]
 
 ### Added

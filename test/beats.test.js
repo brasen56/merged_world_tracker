@@ -9,12 +9,15 @@
  */
 
 import { describe, test, expect, beforeEach } from 'vitest';
-import { resetCoreStubs, getFakeMeta } from './stubs/core.js';
+import { resetCoreStubs, getFakeMeta, getFakeNotifications } from './stubs/core.js';
 import {
-    makeArc, setArcs, getArcs, advanceBeat, buildClosedMemoryProjection,
+    state, makeArc, setArcs, getArcs, advanceBeat, buildClosedMemoryProjection,
     incrementArcTurns, getArcsAwaitingBeat, getOverdueArcs,
     takeDueNudges, getNudgeTurns, OVERDUE_TURNS,
+    setArcStatus,
 } from '../story_planner/data.js';
+import { V1_READY_ARC, cloneV1 } from './fixtures/story_planner_phase0.js';
+import { createCommands } from '../core/commands.js';
 
 beforeEach(() => resetCoreStubs());
 
@@ -213,5 +216,68 @@ describe('story planner render', () => {
         expect(html).not.toContain('<img src=x');
         expect(html).toContain('&lt;img src=x');
         expect(html).toContain('a beat &amp; more');
+    });
+});
+
+describe('Phase 0 — overdue Ready lifecycle', () => {
+    test('an overdue Ready arc is remindable and /wt-beat resolves its Ready reference', async () => {
+        const ready = cloneV1(V1_READY_ARC);
+        ready.turnsSinceAdvance = getNudgeTurns() - 1;
+        setArcs([ready]);
+
+        const StoryPlanner = await import('../story_planner/index.js');
+        await StoryPlanner.onMessageReceived();
+        expect(getArcs()[0].turnsSinceAdvance).toBe(getNudgeTurns());
+        expect(getFakeNotifications()).toContainEqual(expect.objectContaining({
+            title: 'Story Planner',
+            message: expect.stringContaining(`Ready ${getNudgeTurns()} turns: "${ready.title}"`),
+        }));
+        expect(getFakeMeta().story_planner_data.nudgeMarks).toHaveProperty(`${ready.id}#ready`);
+        expect(StoryPlanner.listBeats()).toEqual([]);
+        expect(StoryPlanner.listReadyArcs()).toEqual([expect.objectContaining({ ref: 'R1', id: ready.id })]);
+
+        let beatCommand;
+        createCommands({
+            registerSlashCommand: (name, handler) => { if (name === 'wt-beat') beatCommand = handler; },
+            macroRegistry: null,
+            modules: { WorldState: {}, Chronicle: {}, Knowledge: {}, StoryPlanner, Interiority: {} },
+        }).setupSlashCommands();
+
+        await expect(beatCommand('')).resolves.toContain(`R1. [Ready, ${getNudgeTurns()} turns] ${ready.title}`);
+        await expect(beatCommand('resolve R1')).resolves.toBe(`"${ready.title}" — resolved.`);
+        expect(getArcs()[0]).toMatchObject({ status: 'resolved', beatIndex: ready.beatIndex });
+    });
+
+    test('the card status dropdown reopens after a long wait through the shared transition', async () => {
+        const ready = cloneV1(V1_READY_ARC);
+        ready.turnsSinceAdvance = getNudgeTurns() * 3;
+        setArcs([ready]);
+        expect(takeDueNudges()).toHaveLength(1);
+        expect(getFakeMeta().story_planner_data.nudgeMarks).toHaveProperty(`${ready.id}#ready`);
+
+        setArcStatus(ready.id, 'resolved');
+        const listeners = {};
+        const arcsHost = {
+            innerHTML: '',
+            addEventListener: (type, handler) => { listeners[type] = handler; },
+            querySelectorAll: () => [],
+        };
+        state.modal = {
+            querySelector: selector => selector === '#sp-arcs' ? arcsHost : null,
+            querySelectorAll: () => [],
+        };
+        const { wireEvents } = await import('../story_planner/render.js');
+        wireEvents();
+        listeners.change({
+            target: {
+                closest: () => ({ dataset: { action: 'status', id: ready.id }, value: 'active' }),
+            },
+        });
+        const reopened = getArcs()[0];
+
+        expect(reopened).toMatchObject({ status: 'active', turnsSinceAdvance: 0 });
+        expect(getFakeMeta().story_planner_data.nudgeMarks).toEqual({});
+        expect(takeDueNudges()).toEqual([]);
+        state.modal = null;
     });
 });

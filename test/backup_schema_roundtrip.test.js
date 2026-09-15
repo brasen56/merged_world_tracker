@@ -21,6 +21,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 
 import { buildBackupEnvelope } from '../backup/data.js';
 import { prepareBackupSection, validateBackupEnvelope } from '../backup/validate.js';
+import { planRestore } from '../backup/restore.js';
 import { exportBackup, restoreBackup } from '../backup/index.js';
 import { STORE_SCHEMAS } from '../schema/registry.js';
 import { MANIFEST_METADATA_KEY } from '../schema/manifest.js';
@@ -41,6 +42,9 @@ import {
 } from './stubs/core.js';
 import { _resetEpoch } from '../core/scope.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
+import {
+    V1_CLOSED_ARCS, V1_PROGRESS_ARC, V1_READY_ARC, cloneV1, makeV1PlannerStore,
+} from './fixtures/story_planner_phase0.js';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -195,6 +199,48 @@ describe('Part 3 — prepareBackupSection migrates before validation', () => {
     });
 });
 
+describe('Phase 0 — Story Planner v1 backup merge/replace compatibility', () => {
+    test('merge keeps a current id conflict and appends a distinct v1 string-beat record', () => {
+        const current = makeV1PlannerStore();
+        current.arcs[0].body = 'Current user edit wins an id conflict.';
+        current.arcs = current.arcs.filter(item => item.id !== V1_READY_ARC.id);
+        const incomingConflict = cloneV1(V1_PROGRESS_ARC);
+        incomingConflict.body = 'Backup copy must not overwrite current.';
+        const incomingReady = cloneV1(V1_READY_ARC);
+        const file = buildBackupEnvelope({
+            metadata: {
+                storyPlanner: {
+                    arcs: [incomingConflict, incomingReady],
+                    history: makeV1PlannerStore().history,
+                },
+            },
+        });
+
+        const result = planRestore(file, { storyPlanner: current });
+        const restored = result.plan.sections.storyPlanner;
+
+        expect(result.ok).toBe(true);
+        expect(restored.arcs.find(item => item.id === incomingConflict.id).body)
+            .toBe('Current user edit wins an id conflict.');
+        expect(restored.arcs.find(item => item.id === incomingReady.id)).toEqual(incomingReady);
+        expect(restored.arcs.every(item => item.beats.every(beat => typeof beat === 'string'))).toBe(true);
+        // Story Planner history is a section scalar: merge keeps destination
+        // history, while an empty destination receives the backup whole.
+        expect(restored.history).toEqual(current.history);
+        expect(result.summary.storyPlanner.conflicts).toBe(1);
+    });
+
+    test('an empty destination receives the complete v1 planner section unchanged', () => {
+        const fixture = makeV1PlannerStore();
+        const file = buildBackupEnvelope({ metadata: { storyPlanner: fixture } });
+
+        const result = planRestore(file, {});
+
+        expect(result.ok).toBe(true);
+        expect(result.plan.sections.storyPlanner).toEqual(fixture);
+    });
+});
+
 describe('Part 3 — validateBackupEnvelope reports import quarantine and recovery data', () => {
     test('per-section quarantine records ride in result.quarantine with raw records preserved', () => {
         const file = backupFile();
@@ -265,6 +311,55 @@ describe('Part 3 — restore commits data, manifest, and quarantine in one trans
         _clearCacheForTests();
         _resetEpoch();
         delete globalThis.SillyTavern;
+    });
+
+    test('public exact restore replaces a non-empty destination with the complete v1 planner fixture', async () => {
+        const fixture = makeV1PlannerStore();
+        const destinationOnlyArc = arc('destination-only', 'Destination-only arc');
+        getFakeMeta().story_planner_data = {
+            arcs: [destinationOnlyArc],
+            history: [{
+                arcs: [destinationOnlyArc],
+                timestamp: 1756000020000,
+            }],
+        };
+        const file = buildBackupEnvelope({
+            identity: { chatId: 'chat-a', isUnknown: false, characterKey: null, groupKey: null, key: 'chat:chat-a' },
+            metadata: { storyPlanner: fixture },
+        });
+
+        const previewResult = await restoreBackup(file, { exact: true });
+        expect(previewResult).toMatchObject({ ok: false, committed: false, reason: 'confirmation-required' });
+        expect(previewResult.preview.previewToken).toBeTruthy();
+        expect(previewResult.preview.summary.storyPlanner).toMatchObject({
+            mode: 'exact', action: 'replaced', replaced: 1,
+        });
+
+        const result = await restoreBackup(file, {
+            exact: true,
+            confirm: true,
+            previewToken: previewResult.preview.previewToken,
+        });
+
+        expect(result).toMatchObject({ ok: true, committed: true });
+        expect(getFakeMeta().story_planner_data).toEqual(fixture);
+        expect(getFakeMeta().story_planner_data.arcs).not.toContainEqual(destinationOnlyArc);
+        expect(getFakeMeta().story_planner_data.history).not.toContainEqual({
+            arcs: [destinationOnlyArc],
+            timestamp: 1756000020000,
+        });
+        expect(getFakeMeta().story_planner_data.arcs.every(item => item.beats.every(beat => typeof beat === 'string')))
+            .toBe(true);
+        expect(getFakeMeta().story_planner_data.arcs.find(item => item.id === V1_PROGRESS_ARC.id))
+            .toMatchObject({ beatIndex: V1_PROGRESS_ARC.beatIndex, pinned: true });
+        expect(getFakeMeta().story_planner_data.arcs.find(item => item.id === V1_READY_ARC.id))
+            .toMatchObject({ beatIndex: V1_READY_ARC.beatIndex });
+        expect(getFakeMeta().story_planner_data.arcs)
+            .toEqual(expect.arrayContaining(V1_CLOSED_ARCS));
+        expect(getFakeMeta().story_planner_data.history).toEqual(fixture.history);
+        expect(getFakeMeta().story_planner_data.history[0].arcs[0].beats)
+            .toEqual(V1_PROGRESS_ARC.beats);
+        expect(getFakeMeta().story_planner_data.history[1].text).toMatch(/Legacy text snapshot/);
     });
 
     test('restore stamps the schema manifest for every restored section (§7.7)', async () => {

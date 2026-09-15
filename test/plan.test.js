@@ -19,12 +19,16 @@ import {
     setUsesGlobalDefaults, setPlanSetting,
 } from '../story_planner/data.js';
 import { buildUserPrompt, generatePlan } from '../story_planner/generation.js';
+import { getArcsForInjection } from '../story_planner/injection.js';
 import { saveSettings } from '../story_planner/settings.js';
 import { _resetEpoch } from '../core/scope.js';
 import { _resetPausedStores } from '../core/schema_status.js';
 import {
     resetCoreStubs, getFakeMeta, getFakeExtSettings, setFakeChat, setFakeApi,
 } from './stubs/core.js';
+import {
+    V1_CLOSED_ARCS, V1_PROGRESS_ARC, V1_READY_ARC, cloneV1,
+} from './fixtures/story_planner_phase0.js';
 
 describe('story planner settings scope', () => {
     beforeEach(() => resetCoreStubs());
@@ -158,6 +162,112 @@ describe('arc flag round-trip', () => {
 
         const [parsed] = parsePlanTextToArcs(annotated);
         expect(parsed.beats).toEqual(['Ezra drafts the language', 'Ezra shows it']);
+    });
+});
+
+describe('Phase 0 — v1 progress is user-confirmed state, not model-authored position', () => {
+    const regenerate = (stored, beats, extra = {}) => {
+        const incoming = makeArc({
+            title: stored.title,
+            body: extra.body ?? 'Model-refreshed proposal.',
+            section: stored.section,
+            beats,
+        });
+        const { arcs } = mergeRegeneratedArcs([stored], [incoming]);
+        return arcs[0];
+    };
+
+    test('inserting a new event before the retained beatIndex does not plant it', () => {
+        const stored = cloneV1(V1_PROGRESS_ARC);
+        const merged = regenerate(stored, [
+            'A courier arrives with a warning.',
+            ...stored.beats,
+        ]);
+
+        expect(merged.beats).toEqual([
+            stored.beats[0],
+            'A courier arrives with a warning.',
+            stored.beats[1],
+            stored.beats[2],
+        ]);
+        expect(merged.beatIndex).toBe(1);
+        expect(merged.beats.slice(0, merged.beatIndex)).toEqual([stored.beats[0]]);
+    });
+
+    test.each([
+        ['only remaining beats', V1_PROGRESS_ARC.beats.slice(1)],
+        ['only planted beats', V1_PROGRESS_ARC.beats.slice(0, V1_PROGRESS_ARC.beatIndex)],
+    ])('a response with %s cannot make the arc Ready', (_label, proposed) => {
+        const stored = cloneV1(V1_PROGRESS_ARC);
+        const merged = regenerate(stored, cloneV1(proposed));
+
+        expect(merged.beatIndex).toBe(1);
+        expect(merged.beatIndex).toBeLessThan(merged.beats.length);
+        expect(merged.beats[0]).toBe(stored.beats[0]);
+    });
+
+    test('a Ready arc stays Ready and keeps its confirmed route when setup is proposed', () => {
+        const stored = cloneV1(V1_READY_ARC);
+        const merged = regenerate(stored, ['A brand-new setup beat.', ...stored.beats]);
+
+        expect(merged.beats).toEqual(stored.beats);
+        expect(merged.beatIndex).toBe(stored.beatIndex);
+        expect(merged.beatIndex).toBe(merged.beats.length);
+        expect(merged.turnsSinceAdvance).toBe(stored.turnsSinceAdvance);
+    });
+
+    test('lightly reworded planted setup may duplicate, but never gains planted status', () => {
+        const stored = cloneV1(V1_PROGRESS_ARC);
+        const reworded = 'Mara spots the duplicate seal.';
+        const merged = regenerate(stored, [reworded, ...stored.beats.slice(1)]);
+
+        expect(merged.beats).toEqual([stored.beats[0], reworded, ...stored.beats.slice(1)]);
+        expect(merged.beatIndex).toBe(1);
+        expect(merged.beats.slice(merged.beatIndex)).toContain(reworded);
+    });
+
+    test('resolved and dropped records survive omission from generation', () => {
+        const [resolved, dropped] = cloneV1(V1_CLOSED_ARCS);
+        const active = cloneV1(V1_PROGRESS_ARC);
+        const incoming = makeArc({ title: active.title, body: 'Refreshed.', beats: active.beats });
+        const { arcs } = mergeRegeneratedArcs([active, resolved, dropped], [incoming]);
+
+        expect(arcs.map(arc => [arc.id, arc.status])).toEqual(expect.arrayContaining([
+            [resolved.id, 'resolved'],
+            [dropped.id, 'dropped'],
+        ]));
+    });
+
+    test('pinned arcs survive omission and preserve user state while generated fields change', () => {
+        const stored = cloneV1(V1_PROGRESS_ARC);
+        const omitted = mergeRegeneratedArcs([stored], []).arcs[0];
+        expect(omitted).toEqual(stored);
+
+        const changed = regenerate(stored, ['A revised pending route.'], { body: 'A revised endpoint.' });
+        expect(changed).toMatchObject({
+            id: stored.id,
+            pinned: true,
+            beatIndex: stored.beatIndex,
+            body: 'A revised endpoint.',
+        });
+        expect(changed.beats[0]).toBe(stored.beats[0]);
+        expect(changed.beats.slice(changed.beatIndex)).toEqual(['A revised pending route.']);
+    });
+
+    test('All and Active select the same v1 records, motivating the later mode cleanup', () => {
+        const active = cloneV1(V1_PROGRESS_ARC);
+        const ready = cloneV1(V1_READY_ARC);
+        const closed = cloneV1(V1_CLOSED_ARCS);
+        setArcs([active, ready, ...closed]);
+
+        setUsesGlobalDefaults(false);
+        setPlanSetting('injectMode', 'all');
+        const allIds = getArcsForInjection().map(arc => arc.id);
+        setPlanSetting('injectMode', 'active');
+        const activeIds = getArcsForInjection().map(arc => arc.id);
+
+        expect(allIds).toEqual([active.id, ready.id]);
+        expect(activeIds).toEqual(allIds);
     });
 });
 

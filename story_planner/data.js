@@ -562,11 +562,15 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         };
     }).filter(Boolean);
 
-    // Arcs the model dropped but that we refuse to lose.
+    // Arcs the model omitted but that we refuse to lose. Closed records are
+    // durable user decisions: they are intentionally absent from the editable
+    // previous-plan block and represented only in bounded closed memory, so an
+    // omission can never mean "delete this record." Explicit removeArc() remains
+    // the deliberate forget path.
     const carried = prev.filter(a =>
         !consumed.has(a.id)
-        && a.status !== 'dropped'
-        && (protectedIds.has(a.id) || a.pinned || (a.beatIndex || 0) > 0),
+        && (a.status === 'resolved' || a.status === 'dropped'
+            || protectedIds.has(a.id) || a.pinned || (a.beatIndex || 0) > 0),
     );
 
     return {
