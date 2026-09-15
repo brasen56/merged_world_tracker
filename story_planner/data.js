@@ -386,7 +386,7 @@ export function getSectionMeta(key) {
  * @param {object}  [opts]
  * @param {boolean} [opts.annotateStatus] mark non-active arcs (for the model)
  */
-export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all' } = {}) {
+export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all', handles } = {}) {
     const list = Array.isArray(arcs) ? arcs : [];
     const out = [];
     for (const sec of SECTIONS) {
@@ -400,7 +400,9 @@ export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all
             if (annotateStatus && isArcReady(arc)) flags.push('SETUP COMPLETE');
             const flag = flags.length ? ` [${flags.join(', ')}]` : '';
             const title = arc.title || '(untitled arc)';
-            out.push(arc.body ? `- ${title}${flag} — ${arc.body}` : `- ${title}${flag}`);
+            const handle = handles instanceof Map ? handles.get(arc.id) : handles?.[arc.id];
+            const handleMarker = handle ? `[ARC:${handle}] ` : '';
+            out.push(arc.body ? `- ${handleMarker}${title}${flag} — ${arc.body}` : `- ${handleMarker}${title}${flag}`);
 
             if (beats === 'all' && arc.beats?.length) {
                 arc.beats.forEach((beat, i) => {
@@ -452,9 +454,12 @@ function titleKey(title) {
  * survive a regenerate.
  *
  * Rules:
- *  - Same (normalised) title as an existing arc → keep its id, beatIndex,
- *    pinned, status and age; take the model's refreshed body/section and
- *    pending beats. The stored planted prefix is never model-authored data.
+ *  - Incoming arc already carrying an existing arc's id (the parser resolved a
+ *    request handle or an unambiguous title) → that arc. Otherwise the same
+ *    (normalised) title as an existing arc no incoming id has claimed → that
+ *    arc. Either way keep its id, beatIndex, pinned, status and age; take the
+ *    model's refreshed body/section and pending beats. The stored planted
+ *    prefix is never model-authored data.
  *  - Existing arc the model dropped → discarded, UNLESS it is pinned or has
  *    beats already planted. Losing an in-progress arc is exactly the bug.
  *  - Everything else the model returned → added as new.
@@ -474,26 +479,40 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     const deletedIds = options.deletedIds || new Set();
     const deletedTitles = options.deletedTitles || new Set();
 
+    const byId = new Map(prev.map(arc => [arc.id, arc]));
     const byTitle = new Map();
     for (const arc of prev) {
         const key = titleKey(arc.title);
         if (key && !byTitle.has(key)) byTitle.set(key, arc);
     }
+    // Reserve every arc an incoming id already names before any title match
+    // runs, so a marker-less duplicate earlier in the response cannot take the
+    // progress of the arc a later line was resolved to.
+    const claimedById = new Set(next.map(fresh => fresh.id).filter(id => byId.has(id)));
 
     const consumed = new Set();
     let matched = 0;
     const merged = next.map(fresh => {
         const key = titleKey(fresh.title);
-        const old = key ? byTitle.get(key) : null;
+        const titled = key ? byTitle.get(key) : null;
+        const old = byId.get(fresh.id)
+            || (titled && !claimedById.has(titled.id) ? titled : null);
         // A response must not recreate an arc removed after generation began,
         // even when the model repeats its title. This is an in-flight tombstone,
         // not a permanent ban on creating the idea again later. A title the user
         // re-added as a new (live) arc during the call is not tombstoned: the
         // title ban applies only when no current arc bears that title, so the
         // re-added arc can still be refreshed by the response instead of lost.
+        // The response's own id is checked as well: a deleted arc the model
+        // renamed, but carried by its request handle, matches no current arc or
+        // deleted title, so only its id shows that it was deleted.
+        if (deletedIds.has(fresh.id)) return null;
         if (old && deletedIds.has(old.id)) return null;
         if (!old && deletedTitles.has(key)) return null;
-        if (!old || consumed.has(old.id)) return fresh;
+        if (!old) return fresh;
+        // Two incoming arcs naming one id: the first carries it forward and
+        // the repeat is added as new rather than aliasing the same id.
+        if (consumed.has(old.id)) return fresh.id === old.id ? { ...fresh, id: newArcId() } : fresh;
         consumed.add(old.id);
         matched++;
         // User edits are authoritative. Do not let a stale response replace an

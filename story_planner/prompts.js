@@ -29,6 +29,7 @@ ABSOLUTE RULES:
 - You are STRICTLY FORBIDDEN from writing dialogue, actions, thoughts, or emotional reactions for {{user}}. Never describe what {{user}} does, feels, or says.
 - Do not predict or suggest what {{user}} should do next.
 - If you are shown a previous plan, an arc's name is its identifier: reproduce the name of any arc you carry forward EXACTLY as written, and never copy a [BRACKETED] annotation into a name. Renaming an arc loses its tracked progress and duplicates it.
+- The previous plan may put a tracker marker such as [ARC:…] in front of an arc's name. When you carry that arc forward, copy its marker exactly at the start of the bullet, before the name and outside any bold. Never put a marker on a new arc, on a beat, or on a different arc.
 - Be punchy and plot-focused.
 
 FORMAT:

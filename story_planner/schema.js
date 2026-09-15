@@ -237,6 +237,41 @@ function cleanBulletContent(raw) {
         .trim();
 }
 
+/** A request-local arc handle, wherever the model put it on the line. */
+const ARC_HANDLE_RE = /\[\s*ARC\s*:\s*([^\]]*?)\s*\]/gi;
+const ARC_HANDLE_STRIP_RE = /\s*\[\s*ARC\s*:[^\]]*\]\s*/gi;
+
+/**
+ * Remove every request-local arc handle from a bullet and return the handle
+ * separately from the prose.
+ *
+ * Models do not reliably keep the marker in front of the name: they bold it
+ * together with the name (`**[ARC:k7q] Title**`) or move it after the name
+ * like the other bracketed annotations. A marker left in place becomes part
+ * of the stored title, reaches the narrator, and forks the arc on merge, so
+ * it is stripped wherever it appears. Two different handles on one line are
+ * ambiguous and identify nothing.
+ */
+function extractArcHandle(raw) {
+    const text = String(raw);
+    const found = new Set([...text.matchAll(ARC_HANDLE_RE)]
+        .map(match => match[1].toLowerCase())
+        .filter(Boolean));
+    return {
+        handle: found.size === 1 ? [...found][0] : '',
+        content: text.replace(ARC_HANDLE_STRIP_RE, ' '),
+    };
+}
+
+/** Normalize titles for the request-local, unambiguous identity fallback. */
+function normaliseArcTitle(title) {
+    return String(title || '')
+        .toLocaleLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[.!?,;_*#]/g, '');
+}
+
 /**
  * Status flags `serializeArcsToText` appends to a title under `annotateStatus`.
  * Built from the same sources the serializer uses so the two can't drift.
@@ -263,6 +298,8 @@ function stripArcFlags(title) {
 /** Strip the leading marker and any "NOW:"/"NEXT:" label off a beat line. */
 function cleanBeatContent(raw) {
     return String(raw)
+        // Handles identify arcs only; one copied onto a beat is never beat text.
+        .replace(ARC_HANDLE_STRIP_RE, ' ')
         .replace(/\*\*/g, '')
         .replace(/^\s*(?:NOW|NEXT|BEAT|SETUP)\s*[:—-]\s*/i, '')
         .replace(/^\s*\[[^\]]{1,32}\]\s*/, '')  // our own "[beat 2 of 3 · 6 turns]" marker
@@ -303,13 +340,17 @@ function splitTitleBody(content) {
  * counts as an arc.
  *
  * @param {string} text
+ * @param {object} [options] regeneration identity; see resolveCapturedIdentities
+ * @param {Map<string, object>} [options.handles] lowercase handle → captured arc
+ * @param {object[]} [options.capturedArcs] the arcs shown to the model
  * @returns {object[]} arcs
  */
-export function parsePlanTextToArcs(text) {
+export function parsePlanTextToArcs(text, options = {}) {
     if (!text || !String(text).trim()) return [];
     const arcs = [];
     let section = DEFAULT_SECTION;
     let last = null;
+    const identities = [];
 
     for (const rawLine of String(text).split(/\r?\n/)) {
         const line = rawLine.trimEnd();
@@ -343,13 +384,16 @@ export function parsePlanTextToArcs(text) {
         // ── Arc bullet ──
         const bullet = line.match(/^[ \t]{0,3}[-*+][ \t]+(.+)$/);
         if (bullet) {
-            const content = cleanBulletContent(bullet[1]);
+            const extracted = extractArcHandle(bullet[1]);
+            const content = cleanBulletContent(extracted.content);
             if (!content) { last = null; continue; }
             const { title, body } = splitTitleBody(content);
             // preserveId:false mints a fresh id — identical to data.js's
-            // makeArc(), which is just sanitizeArc with this option.
+            // makeArc(), which is just sanitizeArc with this option. A captured
+            // identity, if any, replaces it once the whole response is read.
             last = sanitizeArc({ title: stripArcFlags(title), body, section }, { preserveId: false });
             arcs.push(last);
+            identities.push({ arc: last, handle: extracted.handle });
             continue;
         }
 
@@ -366,7 +410,62 @@ export function parsePlanTextToArcs(text) {
             }
         }
     }
+    resolveCapturedIdentities(identities, options);
     return arcs;
+}
+
+/**
+ * Give parsed arcs the ids of the captured arcs they carry forward.
+ *
+ * Handles are resolved for the whole response before any title fallback, so
+ * the line that kept its marker claims the arc even when a marker-less copy
+ * appears earlier. A handle binds only when it is valid for this request,
+ * appears on exactly one line, and does not contradict the line's title: a
+ * title that exactly names a different captured arc means the markers were
+ * swapped or copied, and moving planted progress on that evidence is worse
+ * than leaving identity to the title. A handle that fails any check is treated
+ * as absent, so the unambiguous-title fallback still applies to its line.
+ *
+ * @param {{arc: object, handle: string}[]} identities parsed arcs in order
+ * @param {object} options
+ * @param {Map<string, object>} [options.handles] lowercase handle → captured arc
+ * @param {object[]} [options.capturedArcs] the arcs shown to the model
+ */
+function resolveCapturedIdentities(identities, options) {
+    const handles = options.handles instanceof Map ? options.handles : new Map();
+    const captured = Array.isArray(options.capturedArcs) ? options.capturedArcs : [];
+    if (!identities.length || (!handles.size && !captured.length)) return;
+
+    const byTitle = new Map();
+    for (const arc of captured) {
+        const key = normaliseArcTitle(arc.title);
+        if (!key) continue;
+        byTitle.set(key, [...(byTitle.get(key) || []), arc]);
+    }
+    const lines = new Map();
+    for (const { handle } of identities) {
+        if (handle) lines.set(handle, (lines.get(handle) || 0) + 1);
+    }
+
+    const claimed = new Set();
+    const bound = new Set();
+    for (const entry of identities) {
+        const target = entry.handle && lines.get(entry.handle) === 1
+            ? handles.get(entry.handle) : null;
+        if (!target || claimed.has(target.id)) continue;
+        const titled = byTitle.get(normaliseArcTitle(entry.arc.title)) || [];
+        if (titled.length && !titled.some(arc => arc.id === target.id)) continue;
+        entry.arc.id = target.id;
+        claimed.add(target.id);
+        bound.add(entry);
+    }
+    for (const entry of identities) {
+        if (bound.has(entry)) continue;
+        const titled = byTitle.get(normaliseArcTitle(entry.arc.title)) || [];
+        if (titled.length !== 1 || claimed.has(titled[0].id)) continue;
+        entry.arc.id = titled[0].id;
+        claimed.add(titled[0].id);
+    }
 }
 
 // ─── Store validation ────────────────────────────────────────────────────────

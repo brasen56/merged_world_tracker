@@ -59,7 +59,7 @@ function buildSystemPrompt() {
     return custom || STORY_PLAN_SYSTEM_PROMPT;
 }
 
-export function buildUserPrompt(recentText, reminderReason = '') {
+export function buildUserPrompt(recentText, reminderReason = '', requestContext = {}) {
     const custom = getSettings().customUserPrompt?.trim();
     const template = custom || STORY_PLAN_USER_PROMPT;
 
@@ -70,11 +70,20 @@ export function buildUserPrompt(recentText, reminderReason = '') {
     // Closed arcs are retained as a small memory projection. Their beat routes
     // are historical detail and must not inflate every regeneration prompt.
     const allArcs = getArcs();
-    const kept = allArcs.filter(a => a.status !== 'resolved' && a.status !== 'dropped');
-    const prevPlan = serializeArcsToText(kept, { annotateStatus: true, beats: 'all' }).trim();
+    const kept = Array.isArray(requestContext.capturedArcs)
+        ? requestContext.capturedArcs
+        : allArcs.filter(a => a.status !== 'resolved' && a.status !== 'dropped');
+    // Handles are deliberately request-local: they are useful to the model for
+    // identity, but are never persisted and never expose v1 arc/beat IDs.
+    const requestHandles = requestContext.handles instanceof Map
+        ? requestContext.handles
+        : mintRequestHandles(kept);
+    const prevPlan = serializeArcsToText(kept, {
+        annotateStatus: true, beats: 'all', handles: requestHandles,
+    }).trim();
     const closedMemory = buildClosedMemoryProjection(allArcs);
     const closedBlock = closedMemory
-        ? `<closed_story_ideas>\n[These ideas are closed. Do not propose a resolved payoff again or rephrase a dropped direction.]\n${closedMemory}\n</closed_story_ideas>`
+        ? `<closed_story_ideas>\n[These ideas are closed. Do not propose a resolved payoff again or rephrase a dropped direction.]\n${escapePromptText(closedMemory)}\n</closed_story_ideas>`
         : '';
     const prevBlock = [closedBlock, prevPlan
         ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine this against what has since happened — do not simply repeat it.\n\n`
@@ -83,6 +92,7 @@ export function buildUserPrompt(recentText, reminderReason = '') {
           + `- [PINNED] — matters to the user; keep it unless the story has made it impossible.\n`
           + `- [RESOLVED] — already paid off; do not resurface it.\n`
           + `- [SETUP COMPLETE] — ready to happen; do not add more setup to it.\n`
+          + `- [ARC:…] in front of a name — the tracker's marker for that arc. When you carry the arc forward, copy its marker exactly at the start of the bullet, before the name and outside any bold, even if the story has changed the arc. Never put a marker on a new arc, on a beat, or on a different arc.\n`
           + `- Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress.]\n${escapePromptText(prevPlan)}\n</previous_plan>`
         : ''].filter(Boolean).join('\n\n');
 
@@ -220,6 +230,12 @@ export async function generatePlan(isAuto = false) {
     // the already-modified state as "previous."
     const arcsBeforeCall = getArcs();
     const arcRevision = captureRevision(arcsBeforeCall);
+    // The parser must use the same request snapshot that was shown to the
+    // model. Closed arcs are intentionally absent from the prompt and therefore
+    // cannot be addressed by a returned handle or fallback.
+    const capturedArcs = arcsBeforeCall.filter(a => a.status !== 'resolved' && a.status !== 'dropped');
+    const requestHandles = mintRequestHandles(capturedArcs);
+    const arcsByHandle = new Map(capturedArcs.map(arc => [requestHandles.get(arc.id), arc]));
 
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -241,7 +257,7 @@ export async function generatePlan(isAuto = false) {
         const resolved = resolveApiCall({ moduleSettings: getSettings() });
         let result = await resolved.fetchFn({
             systemPrompt,
-            userContent: buildUserPrompt(recent),
+            userContent: buildUserPrompt(recent, '', { capturedArcs, handles: requestHandles }),
             settings: resolved.settings,
             // Coordinator classification (TODO §1): scheduled auto-plans are
             // background work; the Generate button is foreground.
@@ -255,7 +271,7 @@ export async function generatePlan(isAuto = false) {
             const resolved2 = resolveApiCall({ moduleSettings: getSettings() });
             result = await resolved2.fetchFn({
                 systemPrompt,
-                userContent: buildUserPrompt(recent, validation.reason),
+                userContent: buildUserPrompt(recent, validation.reason, { capturedArcs, handles: requestHandles }),
                 settings: resolved2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
             });
@@ -276,7 +292,7 @@ export async function generatePlan(isAuto = false) {
             return null;
         }
 
-        const parsed = parsePlanTextToArcs(text);
+        const parsed = parsePlanTextToArcs(text, { handles: arcsByHandle, capturedArcs });
         if (parsed.length === 0) {
             // Validation passed (bullets were present) but nothing survived the
             // parse — bail rather than wiping a good plan with an empty one.
@@ -306,7 +322,10 @@ export async function generatePlan(isAuto = false) {
         const protectedIds = new Set(currentArcs
             .filter(current => {
                 const before = arcsBeforeCall.find(arc => arc.id === current.id);
-                return before && !sameArcForGeneration(before, current);
+                // Protect both edits to captured arcs and arcs created after the
+                // request began. The latter have no captured identity, but must
+                // not disappear merely because the stale response omitted them.
+                return !before || !sameArcForGeneration(before, current);
             })
             .map(arc => arc.id));
         if (!arcsUnchanged) {
@@ -343,6 +362,40 @@ export async function generatePlan(isAuto = false) {
         state.isGenerating = false;
         document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     }
+}
+
+// Consonant–digit–consonant (`k7q`): never a word the model reads as prose, and
+// none of the characters that are easy to confuse when copied back (0/o, 1/l/i).
+const HANDLE_LETTERS = 'bcdfghjkmnpqrstvwxz';
+const HANDLE_DIGITS = '23456789';
+
+/**
+ * Mint a short, unique handle for each arc shown to the model in one request.
+ *
+ * Handles are random rather than sequential: an `a1, a2, …` series reads as
+ * list numbering, which invites the model to renumber the markers in its own
+ * output order or to continue the series onto new arcs — both of which would
+ * hand one arc's progress to another.
+ *
+ * @param {object[]} arcs
+ * @returns {Map<string, string>} arc id → lowercase handle
+ */
+function mintRequestHandles(arcs) {
+    const pick = chars => chars[Math.floor(Math.random() * chars.length)];
+    const handles = new Map();
+    const used = new Set();
+    for (const arc of arcs) {
+        let handle;
+        do {
+            handle = pick(HANDLE_LETTERS) + pick(HANDLE_DIGITS) + pick(HANDLE_LETTERS);
+            // 2,888 three-character handles; lengthen rather than loop if a
+            // plan ever holds a meaningful fraction of them.
+            if (used.size > 500) handle += pick(HANDLE_DIGITS) + pick(HANDLE_LETTERS);
+        } while (used.has(handle));
+        used.add(handle);
+        handles.set(arc.id, handle);
+    }
+    return handles;
 }
 
 function normaliseArcTitleForRace(title) {

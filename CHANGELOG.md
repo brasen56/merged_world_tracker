@@ -12,11 +12,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.12]
+
+### Added
+
+- Request-local arc handles on the full-plan prompt. Regeneration now
+  prefixes each arc in `<previous_plan>` with a short random marker such
+  as `[ARC:k7q]`, minted per request from the non-closed arcs captured at
+  generation start. Handles are never persisted and never appear in the
+  injected plan, the `{{storyplan}}` macro, or History; stored arc ids
+  stay out of the prompt. An arc the model renames but keeps the marker
+  on now keeps its id and planted progress. Handles are random rather
+  than sequential so the model has no numbering to renumber or extend
+  onto new arcs. Closes `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase
+  patch 3".
+  - The marker is stripped wherever the model puts it — bolded with the
+    name, moved after it, in the body, or on a beat — and matched
+    case-insensitively, so it can never become part of a stored title.
+  - A handle binds only when it is valid for the request, appears on
+    exactly one line, and does not contradict the line's title. A title
+    that exactly names a different captured arc wins, so swapped markers
+    cannot move planted progress between arcs.
+  - A missing, unknown, duplicated, or contradicted handle falls back to
+    the title: the line binds to a captured arc only when exactly one
+    has that (normalised) title and no handle has already claimed it.
+  - Handles are resolved across the whole response before the title
+    fallback, and the merge reserves every id-resolved arc before
+    matching by title, so the line that kept its marker carries the arc
+    even when a marker-less copy appears earlier. Two incoming arcs can
+    no longer leave the merge sharing one id.
+  - The merge still matches remaining arcs by title, so generation keeps
+    working when the model or a custom prompt drops the markers.
+  - An arc deleted while generation runs stays deleted even when the
+    model renames it: the in-flight tombstone also checks the
+    handle-resolved id, not only titles.
+  - Both the built-in system prompt and the `<previous_plan>` legend
+    (which custom system prompts also receive) explain the marker.
+  - Tests in `test/plan.test.js`: handle placement, fallback, swap,
+    duplicate and precedence cases in the parser; id reservation in the
+    merge; and end-to-end `generatePlan` rename, leak, swap, mid-flight
+    add, and mid-flight delete-and-rename.
+
+### Fixed
+
+- An arc added by the user while a plan was generating is no longer
+  lost when the response commits. It had no captured identity, no
+  progress, and was not pinned, so the rebase merge discarded it; it is
+  now protected like an arc edited mid-flight.
+- Closed-arc memory is escaped before it is placed in
+  `<closed_story_ideas>`, so a title containing a closing tag cannot
+  break out of the block.
+
 ## [2.8.11]
 
 ### Added
 
-- **Ready-arc reminders and `/wt-beat resolve`.** An arc whose setup
+- Ready-arc reminders and `/wt-beat resolve`. An arc whose setup
   is complete (all beats planted) now reminds the user after the same
   nudge threshold as waiting beats, so a Ready payoff that sits
   waiting no longer stalls silently. Ready arcs use a separate
@@ -34,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Closed arcs no longer inflate regeneration prompts.** Resolved
+- Closed arcs no longer inflate regeneration prompts. Resolved
   and dropped arcs are now withheld from the full `<previous_plan>`
   block and sent instead as a bounded `<closed_story_ideas>` memory
   projection — at most 20 arcs / 6000 characters, pinned first then
@@ -49,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The card status dropdown now resets age and reminder marks.**
+- The card status dropdown now resets age and reminder marks.
   Reopening an arc through the card's status dropdown previously
   called `updateArc(id, { status })` directly, bypassing
   `setArcStatus` — so a resolved-then-reopened arc kept its old
