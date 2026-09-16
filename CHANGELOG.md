@@ -12,6 +12,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.15]
+
+### Added
+
+- Full Setup beats editor on every arc card. A collapsible `<details>`
+  editor lists every beat as its own row with an explicit state label
+  (Planted, Skipped, Current, or Upcoming — never color-only), a textarea
+  for the beat text, and a full action set: add, edit, delete, reorder
+  (move up/down), mark Planted, mark Skipped with an optional reason,
+  Undo (restore a Planted beat to pending), and Restore to pending (for a
+  Skipped beat). Closes `docs/STORY_PLANNER_ROADMAP.md` Phase 2.
+  - Skip and Delete are deliberately separate. Skip keeps the beat as a
+    historical record and stores an optional reason (prompted); Delete
+    permanently removes the beat after a specific confirmation that says
+    so. A blank beat text is rejected with a warning and redirected to
+    Delete rather than silently dropping the row.
+  - A pending beat cannot be moved in front of a historical (Planted or
+    Skipped) one. The data-layer boundary check and the per-row
+    `disabled` state on the move buttons agree, and
+    `reconcilePatchedBeats` keeps historical beats ahead of pending ones,
+    so the only way to cross the boundary is to change that historical
+    beat back to pending first.
+  - Generate setup beats appears on a manual long-range arc that has
+    no beats and is not in the `immediate` section. It is disabled with
+    help text that defers the action to the Phase 4 targeted-proposal
+    flow; each beatless arc gets its own unique
+    `sp-generate-beats-help-<id>` element so the help is described-by its
+    own button and never shared as a duplicate id.
+  - Accessibility matches the existing contract: every control has an
+    `aria-label` or associated `<label>`, state is text (not glyph-only),
+    move buttons are disabled rather than hidden when out of bounds, the
+    editor `<summary>` and the row action group carry focus-visible
+    outlines, and the narrow-layout media query stacks the row grid and
+    enlarges the touch targets.
+- Tests in `test/story_planner_phase2.test.js`: the add/edit/skip/
+  restore/plant/reorder/delete mutation contract; the pending-cannot-
+  cross-history boundary; current-vs-future edit age and nudge-mark
+  reset; one-snapshot-per-operation history with exact id/order/state/
+  reason restore; no-op unchanged edits; the editor markup contract
+  (explicit states, named controls, skip reason, deferred generation,
+  per-arc help ids); open-editor and focused-row preservation across a
+  re-render; and focus landing on the surviving neighbor row then the
+  Setup-beats summary across destructive deletes and the final
+  Planted-from-strip action.
+
+### Changed
+
+- Beat edits snapshot history once per completed operation, not per
+  keystroke. A new `commitBeatEdit()` seam takes the whole proposed
+  sequence, reconciles it through the existing record-preserving
+  `reconcilePatchedBeats`, and pushes exactly one pre-edit snapshot
+  before the store write. Text and skip-reason edits save on blur (like
+  the title/body fields), and an unchanged edit is a no-op that writes
+  no history step.
+- Injection is re-applied only when the narrator-facing projection
+  actually changes. Every arc mutation now goes through
+  `mutateWithProjectionCheck()`, which compares `buildInjectionBody()`
+  before and after and skips `applyPlanInjection()` when the projected
+  plan body is unchanged — so reordering pending beats or editing a
+  future beat no longer re-registers an identical prompt.
+- Changing the current beat resets its age and reminder high-water mark;
+  changing a future beat does not. `commitBeatEdit()` fingerprints the
+  current beat (`id` + text) and only zeroes `turnsSinceAdvance` and
+  clears the arc's nudge marks when that fingerprint changes, so editing
+  a later beat leaves the current beat's staleness and reminder state
+  intact.
+- Focus and expanded-editor state survive a card-list re-render.
+  `renderArcs()` captures which beat editors are open and which control
+  held focus before swapping the container's innerHTML, then restores
+  both: the same control when it still exists and is enabled, otherwise
+  the beat's text field, the surviving neighbor row that now occupies
+  the deleted beat's slot, and finally the arc's Setup-beats summary as
+  the last landmark that survives every beat mutation.
+- `advanceBeat()` and `retreatBeat()` now delegate to `setArcBeatState()`
+  instead of re-implementing the planted/pending flip, so the strip
+  actions and the editor actions share one canonical state transition.
+- Plan-history deduplication key captures durable planning decisions
+  rather than a text projection. `historyEntrySignature()` now serializes
+  a minimal `{ id, title, body, section, status, pinned, focused,
+  closeReason, closedAt, createdAt, beats: [{ id, text, state,
+  stateReason }] }` shape per arc, so Revert distinguishes beat order,
+  text, ids, states, and reasons exactly while ignoring bookkeeping-only
+  timestamps that would otherwise mint a meaningless snapshot on every
+  automatic aging tick.
+
 ## [2.8.14]
 
 ### Changed

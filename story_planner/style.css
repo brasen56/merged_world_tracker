@@ -280,6 +280,142 @@
     white-space: nowrap;
 }
 
+/* ─── Full beat editor ─────────────────────────────────────────────────────── */
+
+.sp-beat-editor {
+    margin-top: 6px;
+    border: 1px solid var(--mwt-border);
+    border-radius: 4px;
+    background: var(--mwt-bg);
+}
+
+.sp-beat-editor > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    color: var(--mwt-text);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.sp-beat-editor > summary:focus-visible {
+    outline: 2px solid var(--mwt-accent);
+    outline-offset: 2px;
+}
+
+.sp-beat-editor-count {
+    min-width: 1.5em;
+    border-radius: 999px;
+    background: var(--mwt-bg-lighter);
+    color: var(--mwt-text-dim);
+    font-size: 10px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.sp-beat-editor-help,
+.sp-beat-empty {
+    margin: 0;
+    padding: 0 8px 7px;
+    color: var(--mwt-text-dim);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.sp-beat-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0 8px;
+    list-style: none;
+}
+
+.sp-beat-row {
+    display: grid;
+    grid-template-columns: minmax(58px, auto) minmax(160px, 1fr) auto;
+    align-items: start;
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid var(--mwt-border);
+    border-left: 3px solid var(--mwt-border);
+    border-radius: 4px;
+    background: var(--mwt-bg-light);
+}
+
+.sp-beat-row--planted { border-left-color: var(--mwt-success); }
+.sp-beat-row--skipped { border-left-color: var(--mwt-text-dim); }
+.sp-beat-row--current { border-left-color: var(--mwt-accent); }
+
+.sp-beat-state {
+    padding-top: 5px;
+    color: var(--mwt-text-dim);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.sp-beat-row--current .sp-beat-state { color: var(--mwt-accent); }
+.sp-beat-row--planted .sp-beat-state { color: var(--mwt-success); }
+
+.sp-beat-edit-fields {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sp-beat-input,
+.sp-beat-reason {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--mwt-border);
+    border-radius: 4px;
+    background: var(--mwt-bg);
+    color: var(--mwt-text);
+    font-family: var(--mwt-font);
+    font-size: 11px;
+    padding: 4px 5px;
+}
+
+.sp-beat-input { resize: vertical; }
+.sp-beat-reason::placeholder { color: var(--mwt-text-dim); }
+
+.sp-beat-input:focus,
+.sp-beat-reason:focus {
+    border-color: var(--mwt-accent);
+}
+
+.sp-beat-input:focus-visible,
+.sp-beat-reason:focus-visible {
+    outline: 2px solid var(--mwt-accent);
+    outline-offset: 2px;
+}
+
+.sp-beat-row-actions,
+.sp-beat-editor-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.sp-beat-row-actions .mwt-btn,
+.sp-beat-editor-actions .mwt-btn {
+    min-height: 30px;
+    font-size: 11px;
+    padding: 3px 7px;
+}
+
+.sp-beat-icon { min-width: 30px; }
+
+.sp-beat-editor-actions {
+    padding: 7px 8px 8px;
+}
+
 /* A ready arc is the payoff of the whole mechanism — make it findable. */
 .sp-arc--ready { border-left-color: var(--mwt-success); }
 
@@ -377,4 +513,8 @@
     /* Stack the beat text above its buttons rather than squeezing both. */
     .sp-beats { flex-direction: column; gap: 6px; }
     .sp-beat-actions { align-self: flex-end; }
+    .sp-beat-row { grid-template-columns: 1fr; }
+    .sp-beat-state { padding-top: 0; }
+    .sp-beat-row-actions { justify-content: flex-start; }
+    .sp-beat-row-actions .mwt-btn { min-height: 36px; }
 }

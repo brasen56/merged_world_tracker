@@ -271,6 +271,12 @@ export function getCurrentBeat(arc) {
     return getCurrentBeatRecord(arc)?.text || '';
 }
 
+/** 1-based position of the pending beat for user-facing progress labels. */
+export function getCurrentBeatNumber(arc) {
+    const index = (arc?.beats || []).findIndex(beat => beat?.state === 'pending');
+    return index === -1 ? 0 : index + 1;
+}
+
 /** Derived display progress; never persisted as positional authority. */
 export function getBeatProgress(arc) {
     const beats = arc?.beats || [];
@@ -286,13 +292,7 @@ export function advanceBeat(id) {
     if (!arc) return null;
     const current = getCurrentBeatRecord(arc);
     if (!current) return arc;
-    const now = Date.now();
-    return updateArc(id, {
-        beats: arc.beats.map(beat => beat.id === current.id
-            ? { ...beat, state: 'planted', stateReason: '', updatedAt: now }
-            : beat),
-        turnsSinceAdvance: 0,
-    });
+    return setArcBeatState(id, current.id, 'planted');
 }
 
 /** Step back a beat — for when a beat was marked planted by mistake. */
@@ -301,12 +301,7 @@ export function retreatBeat(id) {
     if (!arc) return null;
     const history = [...(arc.beats || [])].reverse().find(beat => beat?.state === 'planted');
     if (!history) return arc;
-    return updateArc(id, {
-        beats: arc.beats.map(beat => beat.id === history.id
-            ? { ...beat, state: 'pending', stateReason: '', updatedAt: Date.now() }
-            : beat),
-        turnsSinceAdvance: 0,
-    });
+    return setArcBeatState(id, history.id, 'pending');
 }
 
 /**
@@ -771,6 +766,112 @@ function reconcilePatchedBeats(baseBeats, patchedBeats) {
     ];
 }
 
+// ─── Full beat editor mutations ──────────────────────────────────────────────
+
+/** A stable description of what the narrator currently sees as this arc's beat. */
+function currentBeatFingerprint(arc) {
+    const beat = getCurrentBeatRecord(arc);
+    return beat ? `${beat.id}\u0000${beat.text}` : '';
+}
+
+/** Compare user-authored beat state while ignoring bookkeeping timestamps. */
+function beatSequenceFingerprint(beats) {
+    return JSON.stringify((beats || []).map(({ id, text, state: beatState, stateReason }) => ({
+        id, text, state: beatState, stateReason,
+    })));
+}
+
+/**
+ * Commit one completed beat-editor operation.
+ *
+ * Every caller supplies the whole proposed sequence, so one history snapshot is
+ * written for one user operation (never for each keystroke). The ordinary arc
+ * update seam still canonicalizes the records and keeps historical beats ahead
+ * of pending ones. Reminder age belongs to the current beat, so only changing
+ * that beat's identity or text resets the counter and its high-water mark.
+ */
+function commitBeatEdit(id, proposedBeats) {
+    const arcs = getArcs();
+    const arc = arcs.find(candidate => candidate.id === id);
+    if (!arc) return null;
+
+    const beats = reconcilePatchedBeats(arc.beats, proposedBeats);
+    const nextShape = { ...arc, beats };
+    const currentChanged = currentBeatFingerprint(arc) !== currentBeatFingerprint(nextShape);
+    const same = beatSequenceFingerprint(arc.beats) === beatSequenceFingerprint(beats);
+    if (same) return arc;
+
+    pushPlanToHistory(arcs);
+    const updated = updateArc(id, {
+        beats,
+        ...(currentChanged ? { turnsSinceAdvance: 0 } : {}),
+    });
+    if (currentChanged) cleanNudgeMarksForArc(id);
+    return updated;
+}
+
+/** Add one pending setup beat and return the updated arc. */
+export function addArcBeat(id, text = 'New setup beat') {
+    const arc = getArcs().find(candidate => candidate.id === id);
+    if (!arc) return null;
+    const beat = sanitizeBeat({ text, state: 'pending', updatedAt: Date.now() });
+    if (!beat.text) return arc;
+    return commitBeatEdit(id, [...arc.beats, beat]);
+}
+
+/** Edit one beat's text or skipped-state reason. Blank text is not a delete. */
+export function updateArcBeat(id, beatId, patch = {}) {
+    const arc = getArcs().find(candidate => candidate.id === id);
+    const beat = arc?.beats.find(candidate => candidate.id === beatId);
+    if (!arc || !beat) return null;
+    const next = { ...beat, updatedAt: Date.now() };
+    if (Object.hasOwn(patch, 'text')) {
+        const text = String(patch.text ?? '').trim();
+        if (!text) return arc;
+        next.text = text;
+    }
+    if (Object.hasOwn(patch, 'stateReason')) next.stateReason = String(patch.stateReason ?? '').trim();
+    return commitBeatEdit(id, arc.beats.map(candidate => candidate.id === beatId ? next : candidate));
+}
+
+/** Mark any beat pending, planted, or skipped. Skip never counts as planted. */
+export function setArcBeatState(id, beatId, beatState, reason = '') {
+    if (!['pending', 'planted', 'skipped'].includes(beatState)) return null;
+    const arc = getArcs().find(candidate => candidate.id === id);
+    const beat = arc?.beats.find(candidate => candidate.id === beatId);
+    if (!arc || !beat) return null;
+    const stateReason = beatState === 'skipped' ? String(reason || beat.stateReason || '').trim() : '';
+    const next = { ...beat, state: beatState, stateReason, updatedAt: Date.now() };
+    return commitBeatEdit(id, arc.beats.map(candidate => candidate.id === beatId ? next : candidate));
+}
+
+/** Permanently remove one beat. The UI owns the specific confirmation. */
+export function removeArcBeat(id, beatId) {
+    const arc = getArcs().find(candidate => candidate.id === id);
+    if (!arc || !arc.beats.some(beat => beat.id === beatId)) return null;
+    return commitBeatEdit(id, arc.beats.filter(beat => beat.id !== beatId));
+}
+
+/**
+ * Move a beat one row within its historical or pending group.
+ * Pending beats cannot cross the historical boundary; changing a historical
+ * beat back to pending is the explicit operation that makes such a move legal.
+ */
+export function moveArcBeat(id, beatId, direction) {
+    const arc = getArcs().find(candidate => candidate.id === id);
+    if (!arc) return null;
+    const index = arc.beats.findIndex(beat => beat.id === beatId);
+    const offset = direction === 'up' || direction === -1 ? -1
+        : direction === 'down' || direction === 1 ? 1 : 0;
+    const target = index + offset;
+    if (!offset || index < 0 || target < 0 || target >= arc.beats.length) return arc;
+    const historical = beat => beat.state !== 'pending';
+    if (historical(arc.beats[index]) !== historical(arc.beats[target])) return arc;
+    const beats = [...arc.beats];
+    [beats[index], beats[target]] = [beats[target], beats[index]];
+    return commitBeatEdit(id, beats);
+}
+
 export function removeArc(id) {
     const arcs = getArcs();
     const remaining = arcs.filter(a => a.id !== id);
@@ -966,6 +1067,20 @@ export function historyEntryToText(entry) {
     return entry.text || '';
 }
 
+/** History-only projection that makes state and skip-reason changes visible. */
+export function historyEntryToDiffText(entry) {
+    if (!entry) return '';
+    if (!Array.isArray(entry.arcs)) return entry.text || '';
+    return JSON.stringify(sanitizeArcs(entry.arcs).map(arc => ({
+        id: arc.id, title: arc.title, body: arc.body, section: arc.section,
+        status: arc.status, pinned: arc.pinned, focused: arc.focused,
+        closeReason: arc.closeReason,
+        beats: arc.beats.map(({ id, text, state: beatState, stateReason }) => ({
+            id, text, state: beatState, stateReason,
+        })),
+    })), null, 2);
+}
+
 /** Restore a history entry to arcs, parsing legacy text snapshots as needed. */
 export function historyEntryToArcs(entry) {
     if (!entry) return [];
@@ -975,7 +1090,23 @@ export function historyEntryToArcs(entry) {
 
 function historyEntrySignature(entry) {
     if (Array.isArray(entry?.arcs)) {
-        return `arcs:${serializeArcsToText(entry.arcs, { annotateStatus: true, beats: 'all' })}`;
+        // History must distinguish every user-restorable planning decision,
+        // including stable ids and skip reasons, while ignoring bookkeeping-only
+        // timestamps so automatic aging does not create meaningless snapshots.
+        const durable = sanitizeArcs(entry.arcs).map(arc => ({
+            id: arc.id,
+            title: arc.title,
+            body: arc.body,
+            section: arc.section,
+            status: arc.status,
+            pinned: arc.pinned,
+            focused: arc.focused,
+            closeReason: arc.closeReason,
+            closedAt: arc.closedAt,
+            createdAt: arc.createdAt,
+            beats: arc.beats.map(({ id, text, state: beatState, stateReason }) => ({ id, text, state: beatState, stateReason })),
+        }));
+        return `arcs:${JSON.stringify(durable)}`;
     }
     return `text:${historyEntryToText(entry)}`;
 }

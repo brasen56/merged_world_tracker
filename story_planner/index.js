@@ -26,7 +26,7 @@ import {
     getArcs, serializeArcsToText, incrementArcTurns,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
-    getArcsAwaitingBeat, getOverdueReadyArcs, takeDueNudges, advanceBeat, getCurrentBeat, getBeatProgress, isArcReady, getNudgeTurns,
+    getArcsAwaitingBeat, getOverdueReadyArcs, takeDueNudges, advanceBeat, getCurrentBeat, getCurrentBeatNumber, getBeatProgress, isArcReady, getNudgeTurns,
     setArcStatus,
 } from './data.js';
 import { applyPlanInjection, getInjectedTokenCount } from './injection.js';
@@ -309,7 +309,7 @@ export function listBeats() {
             title: arc.title || '(untitled arc)',
             beat: getCurrentBeat(arc),
             waited: arc.turnsSinceAdvance || 0,
-            step: `${progress.done + 1}/${progress.total}`,
+            step: `${getCurrentBeatNumber(arc)}/${progress.total}`,
         };
     });
 }

@@ -25,11 +25,12 @@ import { setControlBusy } from '../core/ui.js';
 import { getSettings, saveSettings } from './settings.js';
 import {
     state, SECTIONS, ARC_STATUSES, INJECT_MODES, ENFORCEMENT_MODES,
-    setPlanData, getPlanText,
+    setPlanData,
     getArcs, setArcs, addArc, updateArc, setArcStatus, removeArc, toggleArcPinned, toggleArcFocused,
-    isArcReady, getCurrentBeat, getBeatProgress, advanceBeat, retreatBeat,
+    isArcReady, getCurrentBeat, getCurrentBeatNumber, getBeatProgress, advanceBeat, retreatBeat,
+    addArcBeat, updateArcBeat, setArcBeatState, removeArcBeat, moveArcBeat,
     getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
-    getPlanHistory, pushPlanToHistory, historyEntryToText, historyEntryToArcs,
+    getPlanHistory, pushPlanToHistory, historyEntryToDiffText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta,
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
@@ -192,7 +193,7 @@ function renderBeatStrip(arc) {
     return `
         <div class="sp-beats">
             <div class="sp-beat-line">
-                <span class="sp-beat-badge${overdue}" title="${waited} turn${waited === 1 ? '' : 's'} on this beat">${done + 1}/${total}</span>
+                <span class="sp-beat-badge${overdue}" title="${waited} turn${waited === 1 ? '' : 's'} on this beat">${getCurrentBeatNumber(arc)}/${total}</span>
                 <span class="sp-beat-text">${escapeHtml(beat)}</span>
             </div>
             <div class="sp-beat-actions">
@@ -201,6 +202,56 @@ function renderBeatStrip(arc) {
                 ${done > 0 ? `<button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Go back a beat" aria-label="Go back a beat">↺</button>` : ''}
             </div>
         </div>`;
+}
+
+/** Expanded, maintainable sequence. State text is explicit, never color-only. */
+function renderBeatEditor(arc) {
+    const arcId = escapeHtml(arc.id);
+    const currentId = arc.beats.find(beat => beat.state === 'pending')?.id;
+    const rows = arc.beats.map((beat, index) => {
+        const beatId = escapeHtml(beat.id);
+        const label = beat.state === 'planted' ? 'Planted'
+            : beat.state === 'skipped' ? 'Skipped'
+                : beat.id === currentId ? 'Current' : 'Upcoming';
+        const isHistorical = beat.state !== 'pending';
+        const canMoveUp = index > 0
+            && (beat.state !== 'pending') === (arc.beats[index - 1].state !== 'pending');
+        const canMoveDown = index < arc.beats.length - 1
+            && (beat.state !== 'pending') === (arc.beats[index + 1].state !== 'pending');
+        const target = escapeHtml(beat.text || `beat ${index + 1}`);
+        return `
+            <li class="sp-beat-row sp-beat-row--${beat.state}${beat.id === currentId ? ' sp-beat-row--current' : ''}" data-beat-id="${beatId}">
+                <span class="sp-beat-state">${label}</span>
+                <div class="sp-beat-edit-fields">
+                    <label class="mwt-sr-only" for="sp-beat-${beatId}">Setup beat ${index + 1} for ${escapeHtml(arc.title || 'untitled arc')}</label>
+                    <textarea id="sp-beat-${beatId}" class="sp-beat-input" rows="2" data-action="beat-text" data-id="${arcId}" data-beat-id="${beatId}">${escapeHtml(beat.text)}</textarea>
+                    ${beat.state === 'skipped' ? `
+                        <label class="mwt-sr-only" for="sp-beat-reason-${beatId}">Optional skip reason for ${target}</label>
+                        <input id="sp-beat-reason-${beatId}" class="sp-beat-reason" type="text" data-action="beat-reason" data-id="${arcId}" data-beat-id="${beatId}" value="${escapeHtml(beat.stateReason)}" placeholder="Optional skip reason">` : ''}
+                </div>
+                <div class="sp-beat-row-actions" role="group" aria-label="Actions for ${target}">
+                    <button class="mwt-btn sp-beat-icon" data-action="beat-up" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Move ${target} up" ${canMoveUp ? '' : 'disabled'}>↑</button>
+                    <button class="mwt-btn sp-beat-icon" data-action="beat-down" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Move ${target} down" ${canMoveDown ? '' : 'disabled'}>↓</button>
+                    ${beat.state === 'pending' ? `
+                        <button class="mwt-btn" data-action="beat-plant" data-id="${arcId}" data-beat-id="${beatId}"><span aria-hidden="true">✓</span> Planted</button>
+                        <button class="mwt-btn" data-action="beat-skip" data-id="${arcId}" data-beat-id="${beatId}">Skip</button>` : `
+                        <button class="mwt-btn" data-action="beat-pending" data-id="${arcId}" data-beat-id="${beatId}">${isHistorical && beat.state === 'planted' ? 'Undo' : 'Restore to pending'}</button>`}
+                    <button class="mwt-btn mwt-btn-danger" data-action="beat-delete" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Delete setup beat ${target}">Delete</button>
+                </div>
+            </li>`;
+    }).join('');
+    const canGenerate = arc.status === 'active' && arc.section !== 'immediate' && arc.beats.length === 0;
+    return `
+        <details class="sp-beat-editor" data-beat-editor-id="${arcId}">
+            <summary><span>Setup beats</span><span class="sp-beat-editor-count">${arc.beats.length}</span></summary>
+            <p class="sp-beat-editor-help">Historical beats (Planted or Skipped) stay before pending beats. Skip records that an event did not happen; Delete permanently removes the record.</p>
+            ${rows ? `<ol class="sp-beat-list">${rows}</ol>` : '<p class="sp-beat-empty">No setup beats yet.</p>'}
+            <div class="sp-beat-editor-actions">
+                <button class="mwt-btn" data-action="beat-add" data-id="${arcId}">+ Add setup beat</button>
+                ${canGenerate ? `<button class="mwt-btn" disabled aria-describedby="sp-generate-beats-help-${arcId}">Generate setup beats</button>` : ''}
+            </div>
+            ${canGenerate ? `<p id="sp-generate-beats-help-${arcId}" class="sp-beat-editor-help">Targeted setup generation will be available with the Phase 4 proposal flow.</p>` : ''}
+        </details>`;
 }
 
 function renderArcCard(arc) {
@@ -221,6 +272,7 @@ function renderArcCard(arc) {
             <textarea class="sp-arc-body" data-action="body" data-id="${escapeHtml(arc.id)}" rows="2"
                       placeholder="What shift does this arc introduce?" aria-label="Arc description for ${escapeHtml(arc.title || 'untitled arc')}">${escapeHtml(arc.body)}</textarea>
             ${renderBeatStrip(arc)}
+            ${renderBeatEditor(arc)}
             <div class="sp-arc-foot">
                 <select class="sp-arc-section" data-action="section" data-id="${escapeHtml(arc.id)}" title="Move to another section">
                     ${SECTIONS.map(s => `<option value="${s.key}" ${s.key === arc.section ? 'selected' : ''}>${escapeHtml(s.label)}</option>`).join('')}
@@ -287,11 +339,83 @@ function renderArcs() {
     const collapsed = new Set(
         [...host.querySelectorAll('.sp-section')].filter(d => !d.open).map(d => d.dataset.section),
     );
+    const openEditors = new Set(
+        [...host.querySelectorAll('.sp-beat-editor[open]')].map(d => d.dataset.beatEditorId),
+    );
+    const active = typeof document !== 'undefined' && host.contains(document.activeElement)
+        ? {
+            action: document.activeElement.dataset?.action,
+            id: document.activeElement.dataset?.id,
+            beatId: document.activeElement.dataset?.beatId,
+            value: 'value' in document.activeElement ? document.activeElement.value : undefined,
+            selectionStart: typeof document.activeElement.selectionStart === 'number' ? document.activeElement.selectionStart : null,
+            selectionEnd: typeof document.activeElement.selectionEnd === 'number' ? document.activeElement.selectionEnd : null,
+        }
+        : null;
+    // Where the focused control's beat row sits, captured before the swap
+    // removes it: a deleted beat has no row left to restore, so focus should
+    // move to the surviving row that takes its place (or the last one).
+    const activeRow = active?.beatId
+        ? host.querySelector(`.sp-beat-row[data-beat-id="${CSS.escape(active.beatId)}"]`)
+        : null;
+    const activeRowIndex = activeRow
+        ? [...activeRow.parentElement.children].filter(el => el.classList.contains('sp-beat-row')).indexOf(activeRow)
+        : -1;
     host.innerHTML = renderArcsInner();
     host.querySelectorAll('.sp-section').forEach(d => {
         if (collapsed.has(d.dataset.section)) d.open = false;
     });
+    host.querySelectorAll('.sp-beat-editor').forEach(d => {
+        if (openEditors.has(d.dataset.beatEditorId)) d.open = true;
+    });
+    if (active?.action && active.id) {
+        const arcSel = `[data-id="${CSS.escape(active.id)}"]`;
+        const exact = host.querySelector(`[data-action="${active.action}"]${arcSel}${active.beatId ? `[data-beat-id="${CSS.escape(active.beatId)}"]` : ''}`);
+        const beatText = active.beatId
+            ? host.querySelector(`[data-action="beat-text"]${arcSel}[data-beat-id="${CSS.escape(active.beatId)}"]`)
+            : null;
+        // The beat row itself is gone (delete): hand focus to the surviving
+        // neighbor that now occupies its slot, preferring the same action so
+        // repeated deletes stay on one key.
+        const rows = host.querySelectorAll(`.sp-beat-editor[data-beat-editor-id="${CSS.escape(active.id)}"] .sp-beat-row`);
+        const neighborRow = activeRowIndex >= 0 ? rows[Math.min(activeRowIndex, rows.length - 1)] : null;
+        const neighbor = neighborRow
+            ? (neighborRow.querySelector(`[data-action="${active.action}"]${arcSel}:not([disabled])`) || neighborRow.querySelector('[data-action="beat-text"]'))
+            : null;
+        // Last landmark: the arc's Setup-beats summary, which survives every
+        // beat mutation — e.g. ✓ planted on the final pending beat from the
+        // compact strip removes its own initiating control.
+        const summary = host.querySelector(`.sp-beat-editor[data-beat-editor-id="${CSS.escape(active.id)}"] > summary`);
+        const focusTarget = exact && !exact.disabled ? exact : beatText || neighbor || summary;
+        focusTarget?.focus();
+        if (focusTarget && active.value !== undefined && 'value' in focusTarget) {
+            focusTarget.value = active.value;
+            if (active.selectionStart !== null && typeof focusTarget.setSelectionRange === 'function') {
+                focusTarget.setSelectionRange(active.selectionStart, active.selectionEnd);
+            }
+        }
+    }
     refreshDisplay();
+}
+
+/** Update the compact beat strip without replacing the editor DOM. */
+function refreshBeatStrip(arc) {
+    if (!state.modal || !arc) return;
+    const card = state.modal.querySelector(`.sp-arc[data-id="${CSS.escape(arc.id)}"]`);
+    const strip = card?.querySelector('.sp-beats');
+    const beat = getCurrentBeat(arc);
+    if (!strip || !beat || isArcReady(arc)) return;
+
+    const { total } = getBeatProgress(arc);
+    const waited = arc.turnsSinceAdvance || 0;
+    const badge = strip.querySelector('.sp-beat-badge');
+    const text = strip.querySelector('.sp-beat-text');
+    if (text) text.textContent = beat;
+    if (badge) {
+        badge.textContent = `${getCurrentBeatNumber(arc)}/${total}`;
+        badge.classList.toggle('sp-beat-badge--overdue', waited >= getNudgeTurns());
+        badge.title = `${waited} turn${waited === 1 ? '' : 's'} on this beat`;
+    }
 }
 
 // ─── Render ──────────────────────────────────────────────────────────────────
@@ -443,7 +567,7 @@ function showRevertDiff() {
     if (history.length === 0) { alert('No history available to revert to.'); return; }
 
     const latest = history[history.length - 1];
-    const diffHtml = renderDiffHtml(computeLcsDiff(getPlanText(), historyEntryToText(latest)));
+    const diffHtml = renderDiffHtml(computeLcsDiff(historyEntryToDiffText({ arcs: getArcs() }), historyEntryToDiffText(latest)));
 
     const diffModal = createModal({
         id: 'mwt-sp-revert-modal',
@@ -497,7 +621,7 @@ function showPlanHistory() {
         el.addEventListener('click', () => {
             const idx = parseInt(el.dataset.idx, 10);
             const entry = history[idx];
-            const diffHtml = renderDiffHtml(computeLcsDiff(getPlanText(), historyEntryToText(entry)));
+            const diffHtml = renderDiffHtml(computeLcsDiff(historyEntryToDiffText({ arcs: getArcs() }), historyEntryToDiffText(entry)));
             const diffModal2 = createModal({
                 id: 'mwt-sp-hist-diff-modal',
                 title: `History: ${new Date(entry.timestamp).toLocaleString()}`,
@@ -552,6 +676,14 @@ function showInjectionPreview() {
 
 // ─── Arc interaction (delegated) ─────────────────────────────────────────────
 
+/** Persist a UI mutation and re-register the prompt only if its body changed. */
+function mutateWithProjectionCheck(mutate) {
+    const before = buildInjectionBody();
+    const result = mutate();
+    if (buildInjectionBody() !== before) applyPlanInjection();
+    return result;
+}
+
 /** Structural card actions: pin, focus, delete, add. */
 function handleArcsClick(e) {
     const btn = e.target.closest('[data-action]');
@@ -559,8 +691,7 @@ function handleArcsClick(e) {
     const action = btn.dataset.action;
 
     if (action === 'add') {
-        const arc = addArc({ section: btn.dataset.section || 'emerging' });
-        applyPlanInjection();
+        const arc = mutateWithProjectionCheck(() => addArc({ section: btn.dataset.section || 'emerging' }));
         renderArcs();
         // Focus the new card so the user can type straight away.
         const input = state.modal?.querySelector(`.sp-arc[data-id="${CSS.escape(arc.id)}"] .sp-arc-title`);
@@ -570,29 +701,50 @@ function handleArcsClick(e) {
 
     const id = btn.dataset.id;
     if (!id) return;
+    const beatId = btn.dataset.beatId;
 
     if (action === 'beat-done') {
-        advanceBeat(id);
-        applyPlanInjection();
+        mutateWithProjectionCheck(() => advanceBeat(id));
         renderArcs();
     } else if (action === 'beat-back') {
-        retreatBeat(id);
-        applyPlanInjection();
+        mutateWithProjectionCheck(() => retreatBeat(id));
+        renderArcs();
+    } else if (action === 'beat-add') {
+        const beforeIds = new Set(getArcs().find(arc => arc.id === id)?.beats.map(beat => beat.id) || []);
+        const updated = mutateWithProjectionCheck(() => addArcBeat(id));
+        const added = updated?.beats.find(beat => !beforeIds.has(beat.id));
+        renderArcs();
+        if (added) state.modal?.querySelector(`[data-action="beat-text"][data-beat-id="${CSS.escape(added.id)}"]`)?.focus();
+    } else if (action === 'beat-up' || action === 'beat-down') {
+        mutateWithProjectionCheck(() => moveArcBeat(id, beatId, action === 'beat-up' ? 'up' : 'down'));
+        renderArcs();
+    } else if (action === 'beat-plant') {
+        mutateWithProjectionCheck(() => setArcBeatState(id, beatId, 'planted'));
+        renderArcs();
+    } else if (action === 'beat-pending') {
+        mutateWithProjectionCheck(() => setArcBeatState(id, beatId, 'pending'));
+        renderArcs();
+    } else if (action === 'beat-skip') {
+        const reason = prompt('Why skip this setup beat? (Optional — leave blank if no reason is needed.)', '');
+        if (reason === null) return;
+        mutateWithProjectionCheck(() => setArcBeatState(id, beatId, 'skipped', reason));
+        renderArcs();
+    } else if (action === 'beat-delete') {
+        const beat = getArcs().find(arc => arc.id === id)?.beats.find(candidate => candidate.id === beatId);
+        if (!beat || !confirm(`Delete the setup beat "${beat.text}" permanently? This is different from Skip, which keeps the beat as history.`)) return;
+        mutateWithProjectionCheck(() => removeArcBeat(id, beatId));
         renderArcs();
     } else if (action === 'pin') {
-        toggleArcPinned(id);
-        applyPlanInjection();
+        mutateWithProjectionCheck(() => toggleArcPinned(id));
         renderArcs();
     } else if (action === 'focus') {
-        toggleArcFocused(id);
-        applyPlanInjection();
+        mutateWithProjectionCheck(() => toggleArcFocused(id));
         renderArcs();
     } else if (action === 'delete') {
         const arc = getArcs().find(a => a.id === id);
         const name = arc?.title ? `"${arc.title}"` : 'this arc';
         if (!confirm(`Delete ${name}? You can restore it with Revert (use Resolved, Dropped, or Parked to retain it without injecting).`)) return;
-        removeArc(id);
-        applyPlanInjection();
+        mutateWithProjectionCheck(() => removeArc(id));
         renderArcs();
     }
 }
@@ -605,13 +757,12 @@ function handleArcsChange(e) {
     if (!id) return;
 
     if (action === 'section') {
-        updateArc(id, { section: el.value });
+        mutateWithProjectionCheck(() => updateArc(id, { section: el.value }));
     } else if (action === 'status') {
-        setArcStatus(id, el.value);
+        mutateWithProjectionCheck(() => setArcStatus(id, el.value));
     } else {
         return;
     }
-    applyPlanInjection();
     renderArcs();
 }
 
@@ -623,15 +774,31 @@ function handleArcsBlur(e) {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const { action, id } = el.dataset;
-    if (!id || (action !== 'title' && action !== 'body')) return;
+    const beatId = el.dataset.beatId;
+    if (!id || !['title', 'body', 'beat-text', 'beat-reason'].includes(action)) return;
 
     const arc = getArcs().find(a => a.id === id);
     if (!arc) return;
     const value = el.value.trim();
+    if (action === 'beat-text' || action === 'beat-reason') {
+        const beat = arc.beats.find(candidate => candidate.id === beatId);
+        if (!beat) return;
+        const field = action === 'beat-text' ? 'text' : 'stateReason';
+        if (beat[field] === value) return;
+        if (field === 'text' && !value) {
+            el.value = beat.text;
+            notify('Story Planner', 'A setup beat cannot be blank. Use Delete to remove it.', 'warning');
+            return;
+        }
+        const wasCurrentBeat = field === 'text' && getCurrentBeat(arc) === beat.text;
+        const updated = mutateWithProjectionCheck(() => updateArcBeat(id, beatId, { [field]: value }));
+        if (wasCurrentBeat) refreshBeatStrip(updated);
+        refreshDisplay();
+        return;
+    }
     if (arc[action] === value) return;
 
-    updateArc(id, { [action]: value });
-    applyPlanInjection();
+    mutateWithProjectionCheck(() => updateArc(id, { [action]: value }));
     refreshDisplay();
 }
 
