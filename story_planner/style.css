@@ -328,6 +328,7 @@
 }
 
 .sp-pin,
+.sp-focus,
 .sp-arc-del {
     background: none;
     border: none;
@@ -344,6 +345,11 @@
 .sp-pin:hover {
     opacity: 1;
     background: rgba(255, 152, 0, 0.15);
+}
+
+.sp-focus:hover {
+    opacity: 1;
+    background: rgba(33, 150, 243, 0.15);
 }
 
 .sp-arc-del:hover {

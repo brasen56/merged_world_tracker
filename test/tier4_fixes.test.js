@@ -32,7 +32,7 @@ import { state as chronicleState } from '../chronicle/data.js';
 // STORY-PLANNER-08 / -09
 import {
     makeArc, sanitizeArcs, setArcs, getArcs,
-    removeArc, setArcStatus, takeDueNudges, getNudgeTurns,
+    removeArc, setArcStatus, takeDueNudges, getNudgeTurns, getCurrentBeatRecord,
 } from '../story_planner/data.js';
 
 // Fake-SillyTavern stubs
@@ -172,13 +172,14 @@ describe('STORY-PLANNER-08: nudge marks cleared on arc removal/status transition
         const threshold = getNudgeTurns();
         const arc = { ...makeArc({ title: 'Slow Burn', beats: ['one', 'two'] }), turnsSinceAdvance: threshold };
         setArcs([arc]);
-        takeDueNudges(); // records the `${arc.id}#0` mark
+        takeDueNudges(); // records the arc + stable beat-id mark
         return arc;
     }
 
     test('removeArc clears the arc nudge mark immediately', () => {
         const arc = seedAwaiting();
-        expect(Object.keys(getFakeMeta().story_planner_data.nudgeMarks)).toEqual([`${arc.id}#0`]);
+        expect(Object.keys(getFakeMeta().story_planner_data.nudgeMarks))
+            .toEqual([`${arc.id}#${getCurrentBeatRecord(arc).id}`]);
 
         expect(removeArc(arc.id)).toBe(true);
         expect(getFakeMeta().story_planner_data.nudgeMarks).toEqual({});

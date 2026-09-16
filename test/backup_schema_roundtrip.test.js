@@ -51,7 +51,8 @@ import {
 function arc(id, title = id) {
     return {
         id, title, body: 'body', section: 'emerging', status: 'active', pinned: false,
-        beats: [], beatIndex: 0, turnsSinceAdvance: 0, createdAt: 1, updatedAt: 1,
+        focused: false, closeReason: '', closedAt: null,
+        beats: [], turnsSinceAdvance: 0, createdAt: 1, updatedAt: 1,
     };
 }
 
@@ -214,30 +215,31 @@ describe('Phase 0 — Story Planner v1 backup merge/replace compatibility', () =
                     history: makeV1PlannerStore().history,
                 },
             },
+            sectionVersions: { storyPlanner: 1 },
         });
 
-        const result = planRestore(file, { storyPlanner: current });
+        const result = planRestore(file, { storyPlanner: current }, { currentVersions: { storyPlanner: 1 } });
         const restored = result.plan.sections.storyPlanner;
 
         expect(result.ok).toBe(true);
         expect(restored.arcs.find(item => item.id === incomingConflict.id).body)
             .toBe('Current user edit wins an id conflict.');
-        expect(restored.arcs.find(item => item.id === incomingReady.id)).toEqual(incomingReady);
-        expect(restored.arcs.every(item => item.beats.every(beat => typeof beat === 'string'))).toBe(true);
+        expect(restored.arcs.find(item => item.id === incomingReady.id).beats.every(beat => typeof beat === 'object')).toBe(true);
         // Story Planner history is a section scalar: merge keeps destination
         // history, while an empty destination receives the backup whole.
-        expect(restored.history).toEqual(current.history);
+        expect(restored.history[0].arcs[0].beats.map(beat => beat.text)).toEqual(V1_PROGRESS_ARC.beats);
+        expect(restored.history[0].arcs[0].beats[0].state).toBe('planted');
         expect(result.summary.storyPlanner.conflicts).toBe(1);
     });
 
     test('an empty destination receives the complete v1 planner section unchanged', () => {
         const fixture = makeV1PlannerStore();
-        const file = buildBackupEnvelope({ metadata: { storyPlanner: fixture } });
+        const file = buildBackupEnvelope({ metadata: { storyPlanner: fixture }, sectionVersions: { storyPlanner: 1 } });
 
         const result = planRestore(file, {});
 
         expect(result.ok).toBe(true);
-        expect(result.plan.sections.storyPlanner).toEqual(fixture);
+        expect(result.plan.sections.storyPlanner.arcs[0].beats.map(beat => beat.state)).toEqual(['planted', 'pending', 'pending']);
     });
 });
 
@@ -326,6 +328,7 @@ describe('Part 3 — restore commits data, manifest, and quarantine in one trans
         const file = buildBackupEnvelope({
             identity: { chatId: 'chat-a', isUnknown: false, characterKey: null, groupKey: null, key: 'chat:chat-a' },
             metadata: { storyPlanner: fixture },
+            sectionVersions: { storyPlanner: 1 },
         });
 
         const previewResult = await restoreBackup(file, { exact: true });
@@ -342,23 +345,22 @@ describe('Part 3 — restore commits data, manifest, and quarantine in one trans
         });
 
         expect(result).toMatchObject({ ok: true, committed: true });
-        expect(getFakeMeta().story_planner_data).toEqual(fixture);
+        expect(getFakeMeta().story_planner_data.arcs).toHaveLength(fixture.arcs.length);
         expect(getFakeMeta().story_planner_data.arcs).not.toContainEqual(destinationOnlyArc);
         expect(getFakeMeta().story_planner_data.history).not.toContainEqual({
             arcs: [destinationOnlyArc],
             timestamp: 1756000020000,
         });
-        expect(getFakeMeta().story_planner_data.arcs.every(item => item.beats.every(beat => typeof beat === 'string')))
+        expect(getFakeMeta().story_planner_data.arcs.every(item => item.beats.every(beat => typeof beat === 'object')))
             .toBe(true);
         expect(getFakeMeta().story_planner_data.arcs.find(item => item.id === V1_PROGRESS_ARC.id))
-            .toMatchObject({ beatIndex: V1_PROGRESS_ARC.beatIndex, pinned: true });
+            .toMatchObject({ pinned: true, beats: expect.arrayContaining([expect.objectContaining({ state: 'planted' })]) });
         expect(getFakeMeta().story_planner_data.arcs.find(item => item.id === V1_READY_ARC.id))
-            .toMatchObject({ beatIndex: V1_READY_ARC.beatIndex });
-        expect(getFakeMeta().story_planner_data.arcs)
-            .toEqual(expect.arrayContaining(V1_CLOSED_ARCS));
-        expect(getFakeMeta().story_planner_data.history).toEqual(fixture.history);
+            .toMatchObject({ beats: expect.arrayContaining([expect.objectContaining({ state: 'planted' })]) });
+        expect(getFakeMeta().story_planner_data.arcs.map(item => item.id))
+            .toEqual(expect.arrayContaining(V1_CLOSED_ARCS.map(item => item.id)));
         expect(getFakeMeta().story_planner_data.history[0].arcs[0].beats)
-            .toEqual(V1_PROGRESS_ARC.beats);
+            .toEqual(V1_PROGRESS_ARC.beats.map(text => expect.objectContaining({ text })));
         expect(getFakeMeta().story_planner_data.history[1].text).toMatch(/Legacy text snapshot/);
     });
 

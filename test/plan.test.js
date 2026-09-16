@@ -30,6 +30,9 @@ import {
     V1_CLOSED_ARCS, V1_PROGRESS_ARC, V1_READY_ARC, cloneV1,
 } from './fixtures/story_planner_phase0.js';
 
+const beatTexts = arc => arc.beats.map(beat => beat.text);
+const beatStates = arc => arc.beats.map(beat => beat.state);
+
 describe('story planner settings scope', () => {
     beforeEach(() => resetCoreStubs());
 
@@ -46,12 +49,12 @@ describe('story planner settings scope', () => {
     test('chat overrides remain isolated from global defaults', () => {
         getFakeExtSettings().mwt_story_planner = { injectMode: 'pinned', arcCount: 6 };
         setUsesGlobalDefaults(false);
-        setPlanSetting('injectMode', 'active');
+        setPlanSetting('injectMode', 'focused');
         setPlanSetting('arcCount', 18);
-        expect(getInjectMode()).toBe('active');
+        expect(getInjectMode()).toBe('focused');
         expect(getArcCount()).toBe(18);
         expect(getFakeExtSettings().mwt_story_planner.injectMode).toBe('pinned');
-        expect(getFakeMeta().story_planner_data.settingsOverride).toMatchObject({ injectMode: 'active', arcCount: 18 });
+        expect(getFakeMeta().story_planner_data.settingsOverride).toMatchObject({ injectMode: 'focused', arcCount: 18 });
     });
 
     test('entering local mode snapshots every effective setting', () => {
@@ -91,12 +94,12 @@ describe('story planner settings scope', () => {
         setUsesGlobalDefaults(true);
         expect(getInjectMode()).toBe('all');
         getFakeExtSettings().mwt_story_planner.injectMode = 'active';
-        expect(getInjectMode()).toBe('active');
+        expect(getInjectMode()).toBe('all');
 
         // Opt this chat back out of global defaults. The starting point must
         // be what was just in effect ('active'), not the old buried 'pinned'.
         setUsesGlobalDefaults(false);
-        expect(getInjectMode()).toBe('active');
+        expect(getInjectMode()).toBe('all');
     });
 });
 
@@ -161,7 +164,8 @@ describe('arc flag round-trip', () => {
         expect(annotated).toContain('[PLANTED]');
 
         const [parsed] = parsePlanTextToArcs(annotated);
-        expect(parsed.beats).toEqual(['Ezra drafts the language', 'Ezra shows it']);
+        expect(beatTexts(parsed)).toEqual(['Ezra drafts the language', 'Ezra shows it']);
+        expect(beatStates(parsed)).toEqual(['pending', 'pending']);
     });
 });
 
@@ -184,14 +188,13 @@ describe('Phase 0 — v1 progress is user-confirmed state, not model-authored po
             ...stored.beats,
         ]);
 
-        expect(merged.beats).toEqual([
+        expect(beatTexts(merged)).toEqual([
             stored.beats[0],
             'A courier arrives with a warning.',
             stored.beats[1],
             stored.beats[2],
         ]);
-        expect(merged.beatIndex).toBe(1);
-        expect(merged.beats.slice(0, merged.beatIndex)).toEqual([stored.beats[0]]);
+        expect(beatStates(merged)).toEqual(['planted', 'pending', 'pending', 'pending']);
     });
 
     test.each([
@@ -201,18 +204,16 @@ describe('Phase 0 — v1 progress is user-confirmed state, not model-authored po
         const stored = cloneV1(V1_PROGRESS_ARC);
         const merged = regenerate(stored, cloneV1(proposed));
 
-        expect(merged.beatIndex).toBe(1);
-        expect(merged.beatIndex).toBeLessThan(merged.beats.length);
-        expect(merged.beats[0]).toBe(stored.beats[0]);
+        expect(merged.beats.filter(beat => beat.state === 'planted').map(beat => beat.text)).toEqual([stored.beats[0]]);
+        expect(merged.beats.some(beat => beat.state === 'pending')).toBe(true);
     });
 
     test('a Ready arc stays Ready and keeps its confirmed route when setup is proposed', () => {
         const stored = cloneV1(V1_READY_ARC);
         const merged = regenerate(stored, ['A brand-new setup beat.', ...stored.beats]);
 
-        expect(merged.beats).toEqual(stored.beats);
-        expect(merged.beatIndex).toBe(stored.beatIndex);
-        expect(merged.beatIndex).toBe(merged.beats.length);
+        expect(beatTexts(merged)).toEqual(stored.beats);
+        expect(merged.beats.every(beat => beat.state === 'planted')).toBe(true);
         expect(merged.turnsSinceAdvance).toBe(stored.turnsSinceAdvance);
     });
 
@@ -221,9 +222,8 @@ describe('Phase 0 — v1 progress is user-confirmed state, not model-authored po
         const reworded = 'Mara spots the duplicate seal.';
         const merged = regenerate(stored, [reworded, ...stored.beats.slice(1)]);
 
-        expect(merged.beats).toEqual([stored.beats[0], reworded, ...stored.beats.slice(1)]);
-        expect(merged.beatIndex).toBe(1);
-        expect(merged.beats.slice(merged.beatIndex)).toContain(reworded);
+        expect(beatTexts(merged)).toEqual([stored.beats[0], reworded, ...stored.beats.slice(1)]);
+        expect(merged.beats.find(beat => beat.text === reworded).state).toBe('pending');
     });
 
     test('resolved and dropped records survive omission from generation', () => {
@@ -241,17 +241,18 @@ describe('Phase 0 — v1 progress is user-confirmed state, not model-authored po
     test('pinned arcs survive omission and preserve user state while generated fields change', () => {
         const stored = cloneV1(V1_PROGRESS_ARC);
         const omitted = mergeRegeneratedArcs([stored], []).arcs[0];
-        expect(omitted).toEqual(stored);
+        expect(omitted).toMatchObject({ id: stored.id, title: stored.title, pinned: true });
+        expect(beatTexts(omitted)).toEqual(stored.beats);
+        expect(beatStates(omitted)).toEqual(['planted', 'pending', 'pending']);
 
         const changed = regenerate(stored, ['A revised pending route.'], { body: 'A revised endpoint.' });
         expect(changed).toMatchObject({
             id: stored.id,
             pinned: true,
-            beatIndex: stored.beatIndex,
             body: 'A revised endpoint.',
         });
-        expect(changed.beats[0]).toBe(stored.beats[0]);
-        expect(changed.beats.slice(changed.beatIndex)).toEqual(['A revised pending route.']);
+        expect(changed.beats[0]).toMatchObject({ text: stored.beats[0], state: 'planted' });
+        expect(changed.beats.filter(beat => beat.state === 'pending').map(beat => beat.text)).toEqual(['A revised pending route.']);
     });
 
     test('All and Active select the same v1 records, motivating the later mode cleanup', () => {
@@ -311,7 +312,7 @@ describe('request-local arc handles', () => {
         expect(parsed.map(arc => arc.title)).toEqual(['The Ledger', 'The Rival', 'The Heir']);
         expect(parsed.map(arc => arc.id)).toEqual(['ledger-id', 'rival-id', 'heir-id']);
         expect(parsed[2].body).toBe('spaced and uppercased');
-        expect(parsed[2].beats).toEqual(['A beat that picked up a marker']);
+        expect(beatTexts(parsed[2])).toEqual(['A beat that picked up a marker']);
         expect(JSON.stringify(parsed)).not.toMatch(/ARC/);
     });
 
@@ -370,7 +371,7 @@ describe('request-local arc handles', () => {
         const kept = arcs.filter(a => a.id === 'ledger-id');
         expect(kept).toHaveLength(1);
         expect(kept[0].body).toBe('the carried arc');
-        expect(kept[0].beatIndex).toBe(1);
+        expect(beatStates(kept[0])[0]).toBe('planted');
         expect(new Set(arcs.map(a => a.id)).size).toBe(arcs.length);
     });
 });
@@ -384,7 +385,7 @@ describe('merge identity', () => {
         const { arcs } = mergeRegeneratedArcs([arc], [copy, carried]);
 
         expect(arcs.find(a => a.id === arc.id).body).toBe('carried');
-        expect(arcs.find(a => a.id === copy.id).beatIndex).toBe(0);
+        expect(arcs.find(a => a.id === copy.id).beats.every(beat => beat.state === 'pending')).toBe(true);
     });
 
     test('two incoming arcs naming one id never leave the merge sharing it', () => {
@@ -416,8 +417,8 @@ describe('regeneration progress safety', () => {
 
         const { arcs } = mergeRegeneratedArcs([previous], [incoming]);
 
-        expect(arcs[0].beats).toEqual(['Stored setup wording', 'A model rewrite of the next step']);
-        expect(arcs[0].beatIndex).toBe(1);
+        expect(beatTexts(arcs[0])).toEqual(['Stored setup wording', 'A model rewrite of the next step']);
+        expect(beatStates(arcs[0])).toEqual(['planted', 'pending']);
         expect(arcs[0].turnsSinceAdvance).toBe(0); // the current beat changed
     });
 
@@ -433,7 +434,6 @@ describe('regeneration progress safety', () => {
         const { arcs } = mergeRegeneratedArcs([previous], [incoming]);
 
         expect(arcs[0].beats).toEqual(previous.beats);
-        expect(arcs[0].beatIndex).toBe(1);
         expect(arcs[0].turnsSinceAdvance).toBe(3);
     });
 
@@ -447,7 +447,6 @@ describe('regeneration progress safety', () => {
         const { arcs } = mergeRegeneratedArcs([previous], [incoming]);
 
         expect(arcs[0].beats).toEqual(previous.beats);
-        expect(arcs[0].beatIndex).toBe(1);
         expect(arcs[0].turnsSinceAdvance).toBe(8);
     });
 
@@ -487,7 +486,7 @@ describe('regeneration progress safety', () => {
 
         expect(arcs.map(arc => arc.title)).toEqual(['Phoenix']);
         expect(arcs[0].id).toBe(readded.id);
-        expect(arcs[0].beats).toEqual(['Fresh setup', 'Fresh payoff']);
+        expect(beatTexts(arcs[0])).toEqual(['Fresh setup', 'Fresh payoff']);
     });
 });
 
@@ -567,7 +566,7 @@ describe('generatePlan request identity', () => {
         expect(arcs.map(arc => arc.title)).toEqual(['The Unpaid Debt', 'The Rival', 'Filler']);
         const renamed = arcs.find(arc => arc.id === ledger.id);
         expect(renamed.title).toBe('The Unpaid Debt');
-        expect(renamed.beatIndex).toBe(1);
+        expect(beatStates(renamed)[0]).toBe('planted');
     });
 
     test('a marker bolded with the name or moved after it neither leaks nor forks the arc', async () => {
@@ -587,8 +586,8 @@ describe('generatePlan request identity', () => {
 
         const arcs = getArcs();
         expect(arcs.map(arc => arc.title)).toEqual(['The Ledger', 'The Rival', 'Filler']);
-        expect(arcs.find(arc => arc.id === ledger.id).beats).toEqual(['b1', 'b2 rewritten']);
-        expect(arcs.find(arc => arc.id === rival.id).beatIndex).toBe(1);
+        expect(beatTexts(arcs.find(arc => arc.id === ledger.id))).toEqual(['b1', 'b2 rewritten']);
+        expect(beatStates(arcs.find(arc => arc.id === rival.id))[0]).toBe('planted');
         expect(serializeArcsToText(arcs)).not.toContain('ARC');
     });
 
@@ -608,8 +607,8 @@ describe('generatePlan request identity', () => {
         await generatePlan();
 
         const arcs = getArcs();
-        expect(arcs.find(arc => arc.id === ledger.id).beats).toEqual(['b1', 'b2']);
-        expect(arcs.find(arc => arc.id === rival.id).beats).toEqual(['r1', 'r2']);
+        expect(beatTexts(arcs.find(arc => arc.id === ledger.id))).toEqual(['b1', 'b2']);
+        expect(beatTexts(arcs.find(arc => arc.id === rival.id))).toEqual(['r1', 'r2']);
     });
 
     test('an arc the user adds while generation is in flight survives the commit', async () => {
@@ -622,6 +621,28 @@ describe('generatePlan request identity', () => {
         await generatePlan();
 
         expect(getArcs().map(arc => arc.title)).toContain('Added mid-flight');
+    });
+
+    test('an automatic turn increment during generation does not discard the returned refresh', async () => {
+        const { ledger } = seed();
+        respond = request => {
+            const before = getArcs();
+            setArcs(before.map(arc => arc.id === ledger.id
+                ? { ...arc, turnsSinceAdvance: arc.turnsSinceAdvance + 1 }
+                : arc));
+            return [
+                '## Horizon Arcs',
+                `- [ARC:${handleOf(request, 'The Ledger')}] The Ledger — refreshed by the model`,
+                '  1. b1',
+                '  2. b2',
+                '- The Rival — b',
+                '- Filler — c',
+            ].join('\n');
+        };
+
+        await generatePlan();
+
+        expect(getArcs().find(arc => arc.id === ledger.id).body).toBe('refreshed by the model');
     });
 
     test('an arc deleted in flight is not resurrected when the model renames it', async () => {

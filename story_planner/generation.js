@@ -71,8 +71,9 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     // are historical detail and must not inflate every regeneration prompt.
     const allArcs = getArcs();
     const kept = Array.isArray(requestContext.capturedArcs)
-        ? requestContext.capturedArcs
-        : allArcs.filter(a => a.status !== 'resolved' && a.status !== 'dropped');
+        ? [...requestContext.capturedArcs]
+        : allArcs.filter(a => a.status === 'active');
+    kept.sort((a, b) => (b.focused === true) - (a.focused === true));
     // Handles are deliberately request-local: they are useful to the model for
     // identity, but are never persisted and never expose v1 arc/beat IDs.
     const requestHandles = requestContext.handles instanceof Map
@@ -90,10 +91,9 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
           + `NAMES ARE IDENTIFIERS. An arc's name is how its progress is tracked between generations. If you carry an arc forward, reproduce its name EXACTLY, character for character — do not rename, reword, shorten or otherwise improve it. A renamed arc is read as a brand-new one: its progress is lost and the original is left behind beside it as a duplicate. Only give a name you have not been shown to an arc that is genuinely new.\n\n`
           + `The [BRACKETED] tags are annotations from the tracker, not part of any name — never copy one into a name you write:\n`
           + `- [PINNED] — matters to the user; keep it unless the story has made it impossible.\n`
-          + `- [RESOLVED] — already paid off; do not resurface it.\n`
           + `- [SETUP COMPLETE] — ready to happen; do not add more setup to it.\n`
           + `- [ARC:…] in front of a name — the tracker's marker for that arc. When you carry the arc forward, copy its marker exactly at the start of the bullet, before the name and outside any bold, even if the story has changed the arc. Never put a marker on a new arc, on a beat, or on a different arc.\n`
-          + `- Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [CURRENT] are in progress.]\n${escapePromptText(prevPlan)}\n</previous_plan>`
+          + `- Beats marked [PLANTED] have already happened on-screen: keep them as-is so they stay part of the record, and do not re-propose that setup. Beats marked [SKIPPED] did not happen: do not describe them as completed or re-add them as setup. Beats marked [CURRENT] are in progress.]\n${escapePromptText(prevPlan)}\n</previous_plan>`
         : ''].filter(Boolean).join('\n\n');
 
     // Cross-module grounding. Both getters return '' when the user isn't using
@@ -233,7 +233,9 @@ export async function generatePlan(isAuto = false) {
     // The parser must use the same request snapshot that was shown to the
     // model. Closed arcs are intentionally absent from the prompt and therefore
     // cannot be addressed by a returned handle or fallback.
-    const capturedArcs = arcsBeforeCall.filter(a => a.status !== 'resolved' && a.status !== 'dropped');
+    const capturedArcs = arcsBeforeCall
+        .filter(a => a.status === 'active')
+        .sort((a, b) => (b.focused === true) - (a.focused === true));
     const requestHandles = mintRequestHandles(capturedArcs);
     const arcsByHandle = new Map(capturedArcs.map(arc => [requestHandles.get(arc.id), arc]));
 
@@ -406,6 +408,12 @@ function sameArcForGeneration(before, current) {
     const comparable = arc => {
         const copy = { ...arc };
         delete copy.updatedAt;
+        delete copy.turnsSinceAdvance;
+        copy.beats = (copy.beats || []).map(beat => {
+            const beatCopy = { ...beat };
+            delete beatCopy.updatedAt;
+            return beatCopy;
+        });
         return JSON.stringify(copy);
     };
     return comparable(before) === comparable(current);

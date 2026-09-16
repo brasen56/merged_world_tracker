@@ -97,9 +97,10 @@ describe('STORY-PLANNER-04/-09: arc sanitizer', () => {
         expect(arc.body.length).toBeLessThanOrEqual(2000);
     });
 
-    test('rejects non-number beatIndex', () => {
+    test('rejects a malformed legacy beatIndex without transferring progress', () => {
         const arc = sanitizeArc({ id: 'test-2', beats: ['a', 'b'], beatIndex: 'banana' });
-        expect(arc.beatIndex).toBe(0);
+        expect(arc).not.toHaveProperty('beatIndex');
+        expect(arc.beats.every(beat => beat.state === 'pending')).toBe(true);
     });
 
     test('rejects NaN turnsSinceAdvance', () => {
@@ -134,7 +135,7 @@ describe('STORY-PLANNER-04/-09: arc sanitizer', () => {
         ]);
         expect(arcs).toHaveLength(2);
         expect(arcs[1].title.length).toBeLessThanOrEqual(200);
-        expect(arcs[1].beatIndex).toBe(0);
+        expect(arcs[1]).not.toHaveProperty('beatIndex');
     });
 });
 
@@ -149,7 +150,8 @@ describe('STORY-PLANNER-04/-09: makeArc validation', () => {
 
     test('rejects non-number beatIndex and NaN counters', () => {
         const arc = makeArc({ beats: ['a', 'b'], beatIndex: 'banana', turnsSinceAdvance: NaN });
-        expect(arc.beatIndex).toBe(0);
+        expect(arc).not.toHaveProperty('beatIndex');
+        expect(arc.beats.every(beat => beat.state === 'pending')).toBe(true);
         expect(arc.turnsSinceAdvance).toBe(0);
     });
 

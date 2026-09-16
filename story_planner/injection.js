@@ -40,11 +40,11 @@ function currentHeader() {
  * promise that resolving "stops it being suggested again."
  */
 export function getArcsForInjection() {
-    const arcs = getArcs().filter(a => a.status !== 'dropped' && a.status !== 'resolved');
+    const arcs = getArcs().filter(a => a.status === 'active');
     const mode = getInjectMode();
     if (mode === 'pinned') return arcs.filter(a => a.pinned);
-    if (mode === 'active') return arcs.filter(a => a.status === 'active');
-    return arcs;
+    if (mode === 'focused') return arcs.filter(a => a.focused);
+    return [...arcs].sort((a, b) => (b.focused === true) - (a.focused === true));
 }
 
 /**
@@ -67,7 +67,10 @@ export function buildInjectionBody() {
     const out = [];
 
     if (ready.length) {
-        out.push('## Ready Now — setup is already planted; bring these to a head when the scene allows');
+        const allPlanted = ready.every(arc => arc.beats.every(beat => beat.state === 'planted'));
+        out.push(allPlanted
+            ? '## Ready Now — setup is already planted; bring these to a head when the scene allows'
+            : '## Ready Now — no setup beats are pending; bring these to a head when the scene allows');
         for (const arc of ready) {
             out.push(arc.body ? `- ${arc.title || '(untitled arc)'} — ${arc.body}` : `- ${arc.title || '(untitled arc)'}`);
         }

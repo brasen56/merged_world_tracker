@@ -1088,7 +1088,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 spBtn.classList.add('mwt-btn--refreshing');
             } else if (spStatus) {
                 spBtn.classList.add('mwt-btn--active');
-            } else if (StoryPlanner.getPlanTextForMacro?.()) {
+            } else if (StoryPlanner.hasPlanRecords?.()) {
                 spBtn.classList.add('mwt-btn--inactive');
             } else {
                 spBtn.classList.add('mwt-btn--empty');

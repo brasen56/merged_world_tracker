@@ -31,9 +31,9 @@ import {
     SECTION_KEYS,
     MAX_ARC_TITLE,
     MAX_ARC_BODY,
-    MAX_BEAT_LENGTH,
-    clampBeatIndex,
     newArcId,
+    newBeatId,
+    sanitizeBeat,
     parsePlanTextToArcs,
     sanitizeArc,
     sanitizeArcs,
@@ -41,7 +41,7 @@ import {
     storyPlannerSchema,
 } from './schema.js';
 
-export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel };
+export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, newBeatId, sanitizeBeat, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -53,9 +53,9 @@ export const EXTENSION_PROMPT_KEY = 'mwt_story_plan_injection';
 
 /** Injection modes — mirrors chronicle's injectMode switch. */
 export const INJECT_MODES = [
-    { key: 'all', label: 'All', blurb: 'Inject every active arc; resolved and dropped arcs are excluded' },
-    { key: 'pinned', label: 'Pinned', blurb: 'Inject only arcs you have pinned' },
-    { key: 'active', label: 'Active', blurb: 'Inject only arcs still marked active' },
+    { key: 'all', label: 'All active', blurb: 'Inject every active arc' },
+    { key: 'pinned', label: 'Pinned only', blurb: 'Inject only active arcs you have pinned' },
+    { key: 'focused', label: 'Focused only', blurb: 'Inject only active arcs you have focused' },
 ];
 
 /**
@@ -258,32 +258,55 @@ export function makeArc(partial = {}) {
 /** An arc whose beats are all planted — setup is done, it can now happen. */
 export function isArcReady(arc) {
     const total = arc?.beats?.length || 0;
-    return total > 0 && (arc.beatIndex || 0) >= total;
+    return total > 0 && !arc.beats.some(beat => beat?.state === 'pending');
+}
+
+/** The canonical beat record currently awaiting confirmation. */
+export function getCurrentBeatRecord(arc) {
+    return (arc?.beats || []).find(beat => beat?.state === 'pending') || null;
 }
 
 /** The single beat the narrator should be working on. '' when none/ready. */
 export function getCurrentBeat(arc) {
+    return getCurrentBeatRecord(arc)?.text || '';
+}
+
+/** Derived display progress; never persisted as positional authority. */
+export function getBeatProgress(arc) {
     const beats = arc?.beats || [];
-    if (!beats.length) return '';
-    const idx = arc.beatIndex || 0;
-    return idx < beats.length ? beats[idx] : '';
+    return {
+        done: beats.filter(beat => beat?.state === 'planted').length,
+        total: beats.length,
+    };
 }
 
 /** Mark the current beat planted and move to the next (or to READY). */
 export function advanceBeat(id) {
     const arc = getArcs().find(a => a.id === id);
     if (!arc) return null;
-    const total = arc.beats?.length || 0;
-    if (total === 0 || (arc.beatIndex || 0) >= total) return arc;
-    return updateArc(id, { beatIndex: (arc.beatIndex || 0) + 1, turnsSinceAdvance: 0 });
+    const current = getCurrentBeatRecord(arc);
+    if (!current) return arc;
+    const now = Date.now();
+    return updateArc(id, {
+        beats: arc.beats.map(beat => beat.id === current.id
+            ? { ...beat, state: 'planted', stateReason: '', updatedAt: now }
+            : beat),
+        turnsSinceAdvance: 0,
+    });
 }
 
 /** Step back a beat — for when a beat was marked planted by mistake. */
 export function retreatBeat(id) {
     const arc = getArcs().find(a => a.id === id);
     if (!arc) return null;
-    if ((arc.beatIndex || 0) <= 0) return arc;
-    return updateArc(id, { beatIndex: (arc.beatIndex || 0) - 1, turnsSinceAdvance: 0 });
+    const history = [...(arc.beats || [])].reverse().find(beat => beat?.state === 'planted');
+    if (!history) return arc;
+    return updateArc(id, {
+        beats: arc.beats.map(beat => beat.id === history.id
+            ? { ...beat, state: 'pending', stateReason: '', updatedAt: Date.now() }
+            : beat),
+        turnsSinceAdvance: 0,
+    });
 }
 
 /**
@@ -354,7 +377,8 @@ export function buildClosedMemoryProjection(arcs = getArcs()) {
     const lines = [];
     let chars = 0;
     for (const arc of closed) {
-        const reason = arc.body ? ` — ${String(arc.body).trim()}` : '';
+        const reasonText = arc.closeReason || arc.body;
+        const reason = reasonText ? ` — ${String(reasonText).trim()}` : '';
         const line = `- [${arc.status}] ${arc.title || '(untitled arc)'}${reason}`;
         if (lines.length >= MAX_CLOSED_MEMORY_ARCS || chars + line.length + 1 > MAX_CLOSED_MEMORY_CHARS) break;
         lines.push(line);
@@ -387,7 +411,7 @@ export function getSectionMeta(key) {
  * @param {boolean} [opts.annotateStatus] mark non-active arcs (for the model)
  */
 export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all', handles } = {}) {
-    const list = Array.isArray(arcs) ? arcs : [];
+    const list = sanitizeArcs(Array.isArray(arcs) ? arcs : []);
     const out = [];
     for (const sec of SECTIONS) {
         const inSection = list.filter(a => a.section === sec.key);
@@ -406,14 +430,16 @@ export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all
 
             if (beats === 'all' && arc.beats?.length) {
                 arc.beats.forEach((beat, i) => {
+                    const record = typeof beat === 'string' ? { id: '', text: beat, state: 'pending' } : beat;
                     // Progress markers matter on regeneration: without them the
                     // model happily re-proposes setup the story already planted.
                     let mark = '';
                     if (annotateStatus) {
-                        if (i < (arc.beatIndex || 0)) mark = ' [PLANTED]';
-                        else if (i === (arc.beatIndex || 0)) mark = ' [CURRENT]';
+                        if (record.state === 'planted') mark = ' [PLANTED]';
+                        else if (record.state === 'skipped') mark = ' [SKIPPED]';
+                        else if (record.id && record.id === getCurrentBeatRecord(arc)?.id) mark = ' [CURRENT]';
                     }
-                    out.push(`  ${i + 1}. ${beat}${mark}`);
+                    out.push(`  ${i + 1}. ${record.text}${mark}`);
                 });
             }
         }
@@ -457,7 +483,9 @@ function titleKey(title) {
  *  - Incoming arc already carrying an existing arc's id (the parser resolved a
  *    request handle or an unambiguous title) → that arc. Otherwise the same
  *    (normalised) title as an existing arc no incoming id has claimed → that
- *    arc. Either way keep its id, beatIndex, pinned, status and age; take the
+ *    arc. Closed arcs are excluded from both identity paths so a recurring
+ *    suggestion cannot rewrite durable resolved/dropped memory. Otherwise keep
+ *    its id, beatIndex, pinned, status and age; take the
  *    model's refreshed body/section and pending beats. The stored planted
  *    prefix is never model-authored data.
  *  - Existing arc the model dropped → discarded, UNLESS it is pinned or has
@@ -473,17 +501,27 @@ function titleKey(title) {
  * @returns {{arcs: object[], carried: number, matched: number, added: number}}
  */
 export function mergeRegeneratedArcs(previous, incoming, options = {}) {
-    const prev = Array.isArray(previous) ? previous : [];
-    const next = Array.isArray(incoming) ? incoming : [];
+    // Public/import callers may still provide v1 string-beat records. Treat this
+    // merge boundary like every storage boundary so positional data is converted
+    // before any progress decision is made.
+    const prev = sanitizeArcs(Array.isArray(previous) ? previous : []);
+    const next = sanitizeArcs(Array.isArray(incoming) ? incoming : []);
     const protectedIds = options.protectedIds || new Set();
     const deletedIds = options.deletedIds || new Set();
     const deletedTitles = options.deletedTitles || new Set();
 
-    const byId = new Map(prev.map(arc => [arc.id, arc]));
+    const existingIds = new Set(prev.map(arc => arc.id));
+    // Parked records were not sent to the model and must not be title-fallback
+    // candidates for a new suggestion.
+    const mergeable = prev.filter(arc => arc.status === 'active');
+    const byId = new Map(mergeable.map(arc => [arc.id, arc]));
     const byTitle = new Map();
-    for (const arc of prev) {
+    for (const arc of mergeable) {
         const key = titleKey(arc.title);
-        if (key && !byTitle.has(key)) byTitle.set(key, arc);
+        if (!key) continue;
+        const matches = byTitle.get(key) || [];
+        matches.push(arc);
+        byTitle.set(key, matches);
     }
     // Reserve every arc an incoming id already names before any title match
     // runs, so a marker-less duplicate earlier in the response cannot take the
@@ -494,7 +532,9 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     let matched = 0;
     const merged = next.map(fresh => {
         const key = titleKey(fresh.title);
-        const titled = key ? byTitle.get(key) : null;
+        const titleMatches = key ? (byTitle.get(key) || []) : [];
+        // Title fallback is safe only when it identifies one active arc.
+        const titled = titleMatches.length === 1 ? titleMatches[0] : null;
         const old = byId.get(fresh.id)
             || (titled && !claimedById.has(titled.id) ? titled : null);
         // A response must not recreate an arc removed after generation began,
@@ -509,10 +549,15 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         if (deletedIds.has(fresh.id)) return null;
         if (old && deletedIds.has(old.id)) return null;
         if (!old && deletedTitles.has(key)) return null;
-        if (!old) return fresh;
+        // Closed ids are not valid merge identities. A malformed/stale caller
+        // may still send one explicitly, so mint a distinct id before carrying
+        // the durable closed record alongside this newly proposed active arc.
+        if (!old) return existingIds.has(fresh.id) ? { ...fresh, id: newArcId() } : fresh;
         // Two incoming arcs naming one id: the first carries it forward and
-        // the repeat is added as new rather than aliasing the same id.
-        if (consumed.has(old.id)) return fresh.id === old.id ? { ...fresh, id: newArcId() } : fresh;
+        // the repeat is added as new rather than aliasing a stored record.
+        // Its stale id can belong to a carried parked/closed arc, even when it
+        // does not equal the active arc matched through title fallback.
+        if (consumed.has(old.id)) return existingIds.has(fresh.id) ? { ...fresh, id: newArcId() } : fresh;
         consumed.add(old.id);
         matched++;
         // User edits are authoritative. Do not let a stale response replace an
@@ -520,21 +565,21 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         if (protectedIds.has(old.id)) return { ...old };
 
         const oldBeats = Array.isArray(old.beats) ? old.beats : [];
-        const oldIndex = Math.max(0, Math.min(old.beatIndex || 0, oldBeats.length));
-        if (oldIndex >= oldBeats.length && oldBeats.length > 0) {
+        if (isArcReady(old)) {
             return { ...fresh, id: old.id, pinned: old.pinned, status: old.status,
-                createdAt: old.createdAt, beats: oldBeats, beatIndex: oldIndex,
+                focused: old.focused, closeReason: old.closeReason, closedAt: old.closedAt,
+                createdAt: old.createdAt, beats: oldBeats,
                 turnsSinceAdvance: old.turnsSinceAdvance || 0, updatedAt: Date.now() };
         }
-        const planted = oldBeats.slice(0, oldIndex);
-        const oldPending = oldBeats.slice(oldIndex);
+        const historical = oldBeats.filter(beat => beat.state !== 'pending');
+        const oldPending = oldBeats.filter(beat => beat.state === 'pending');
         const incomingBeats = Array.isArray(fresh.beats) ? fresh.beats : [];
 
         // The model sees planted beats in the previous-plan block and commonly
         // echoes them. Remove one normalized copy of each before replacing the
         // pending route, while retaining the exact stored strings in the prefix.
         const remaining = [...incomingBeats];
-        for (const plantedBeat of planted) {
+        for (const plantedBeat of historical) {
             const wanted = normaliseBeatForMerge(plantedBeat);
             const copy = remaining.findIndex(beat => normaliseBeatForMerge(beat) === wanted);
             if (copy !== -1) remaining.splice(copy, 1);
@@ -542,21 +587,21 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         // A model response containing only the planted prefix is not a usable
         // route. Keep the stored pending suffix so regeneration cannot make an
         // arc Ready merely by omitting setup beats.
-        const pending = remaining.length ? remaining : oldPending;
-        const beats = [...planted, ...pending];
-        const oldCurrent = oldIndex < oldBeats.length ? oldBeats[oldIndex] : '';
-        const newCurrent = planted.length < beats.length ? beats[planted.length] : '';
-        const currentChanged = normaliseBeatForMerge(oldCurrent) !== normaliseBeatForMerge(newCurrent);
+        const pending = remaining.length ? preservePendingBeatIds(oldPending, remaining) : oldPending;
+        const beats = [...historical, ...pending];
+        const oldCurrent = getCurrentBeatRecord(old);
+        const newCurrent = beats.find(beat => beat.state === 'pending');
+        const currentChanged = oldCurrent?.id !== newCurrent?.id;
         return {
             ...fresh,
             id: old.id,
             pinned: old.pinned,
             status: old.status,
+            focused: old.focused,
+            closeReason: old.closeReason,
+            closedAt: old.closedAt,
             createdAt: old.createdAt,
             beats,
-            // The stored prefix determines progress. A Ready arc keeps its
-            // entire route and remains Ready regardless of model beat output.
-            beatIndex: oldIndex >= oldBeats.length ? oldIndex : planted.length,
             turnsSinceAdvance: currentChanged ? 0 : (old.turnsSinceAdvance || 0),
             updatedAt: Date.now(),
         };
@@ -567,10 +612,18 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     // previous-plan block and represented only in bounded closed memory, so an
     // omission can never mean "delete this record." Explicit removeArc() remains
     // the deliberate forget path.
+    // A title fallback with multiple stored candidates is deliberately not an
+    // identity match. Retain every candidate rather than churning their IDs
+    // merely because the model returned one ambiguous title.
+    const ambiguousTitleIds = new Set(
+        [...byTitle.values()].filter(matches => matches.length > 1).flat().map(arc => arc.id),
+    );
     const carried = prev.filter(a =>
         !consumed.has(a.id)
         && (a.status === 'resolved' || a.status === 'dropped'
-            || protectedIds.has(a.id) || a.pinned || (a.beatIndex || 0) > 0),
+            || a.status === 'parked' || protectedIds.has(a.id) || a.pinned
+            || ambiguousTitleIds.has(a.id)
+            || (a.beats || []).some(beat => beat.state !== 'pending')),
     );
 
     return {
@@ -585,7 +638,26 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
  * planted-copy removal. The value returned to storage is always the original
  * stored beat, never this normalized representation. */
 function normaliseBeatForMerge(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+    return String(value?.text ?? value ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+function preservePendingBeatIds(oldPending, incoming) {
+    const oldCounts = new Map();
+    const incomingCounts = new Map();
+    for (const beat of oldPending) {
+        const key = normaliseBeatForMerge(beat);
+        oldCounts.set(key, (oldCounts.get(key) || 0) + 1);
+    }
+    for (const beat of incoming) {
+        const key = normaliseBeatForMerge(beat);
+        incomingCounts.set(key, (incomingCounts.get(key) || 0) + 1);
+    }
+    return incoming.map(beat => {
+        const key = normaliseBeatForMerge(beat);
+        if (oldCounts.get(key) !== 1 || incomingCounts.get(key) !== 1) return beat;
+        const old = oldPending.find(candidate => normaliseBeatForMerge(candidate) === key);
+        return old ? { ...old } : beat;
+    });
 }
 
 // ─── Arc access + migration ──────────────────────────────────────────────────
@@ -641,13 +713,14 @@ export function updateArc(id, patch = {}) {
     // full sanitizer as the final safety net.
     const base = arcs[idx];
     const merged = { ...base, ...patch, id: base.id, updatedAt: Date.now() };
-    // Clamp/clean the mutable fields a patch may set.
+    // Clamp/clean the mutable fields a patch may set. A text-only beat patch is
+    // an editor-friendly representation, not permission to discard the stable
+    // records that hold planted/skipped progress.
     merged.title = String(merged.title ?? '').trim().slice(0, MAX_ARC_TITLE);
     merged.body = String(merged.body ?? '').trim().slice(0, MAX_ARC_BODY);
     merged.beats = Array.isArray(merged.beats)
-        ? merged.beats.map(b => String(b ?? '').trim().slice(0, MAX_BEAT_LENGTH)).filter(Boolean)
+        ? reconcilePatchedBeats(base.beats, merged.beats)
         : base.beats;
-    merged.beatIndex = clampBeatIndex(merged.beatIndex, merged.beats.length);
     merged.pinned = merged.pinned === true;
     merged.turnsSinceAdvance = Number.isFinite(Number(merged.turnsSinceAdvance))
         ? Math.max(0, Math.floor(Number(merged.turnsSinceAdvance)))
@@ -660,10 +733,49 @@ export function updateArc(id, patch = {}) {
     return merged;
 }
 
+/**
+ * Reconcile a beat patch against the records it is replacing.
+ *
+ * A text-only patch is an editor-friendly representation, not permission to
+ * discard the stable records that carry planted/skipped progress. Each text
+ * entry claims the first stored beat with the same normalized text no earlier
+ * entry has taken, so duplicating a row adds a new pending beat instead of
+ * un-planting the original. The text still has to match exactly: progress is
+ * preserved in place and never transferred to different wording.
+ *
+ * Blank entries are dropped, the same rule the pre-v2 clamp applied and what
+ * setArcs() would do regardless. Dropping them here keeps the arc updateArc()
+ * RETURNS identical to the one it stores — callers read progress back off that
+ * return value (index.js markBeatPlanted derives its message from it).
+ *
+ * Historical beats then float ahead of pending ones, keeping relative order
+ * within each group. Planted and skipped beats record what the story already
+ * did with this arc, so a pending beat cannot be moved in front of one without
+ * the user changing that beat's state first (design §5.1). This is the same
+ * normalization mergeRegeneratedArcs() applies, and a no-op on an ordered list.
+ */
+function reconcilePatchedBeats(baseBeats, patchedBeats) {
+    const old = Array.isArray(baseBeats) ? baseBeats : [];
+    const used = new Set();
+    const reconciled = patchedBeats.map(beat => {
+        if (beat && typeof beat === 'object' && !Array.isArray(beat)) return sanitizeBeat(beat);
+        const key = normaliseBeatForMerge(beat);
+        const match = old.find(candidate => !used.has(candidate.id) && normaliseBeatForMerge(candidate) === key);
+        if (!match) return sanitizeBeat(beat);
+        used.add(match.id);
+        return sanitizeBeat({ ...match, text: beat });
+    }).filter(beat => beat.text);
+    return [
+        ...reconciled.filter(beat => beat.state !== 'pending'),
+        ...reconciled.filter(beat => beat.state === 'pending'),
+    ];
+}
+
 export function removeArc(id) {
     const arcs = getArcs();
     const remaining = arcs.filter(a => a.id !== id);
     if (remaining.length === arcs.length) return false;
+    pushPlanToHistory(arcs);
     setArcs(remaining);
     // STORY-PLANNER-08: clear this arc's nudge marks immediately rather than
     // waiting for takeDueNudges() to reconcile them lazily on its next call.
@@ -671,7 +783,7 @@ export function removeArc(id) {
     return true;
 }
 
-export function setArcStatus(id, status) {
+export function setArcStatus(id, status, closeReason = '') {
     const next = ARC_STATUSES.includes(status) ? status : 'active';
     const arc = getArcs().find(a => a.id === id);
     if (!arc) return null;
@@ -681,7 +793,16 @@ export function setArcStatus(id, status) {
     // mis-time the next reminder. Clearing marks on resolve/drop too means a
     // stale high-water mark never lingers in metadata.
     const patch = { status: next };
-    if (next === 'active' && arc.status !== 'active') patch.turnsSinceAdvance = 0;
+    const wasClosed = arc.status === 'resolved' || arc.status === 'dropped';
+    const willClose = next === 'resolved' || next === 'dropped';
+    if (next === 'active' && arc.status !== 'active') {
+        patch.turnsSinceAdvance = 0;
+        patch.closedAt = null;
+        patch.closeReason = '';
+    } else if (willClose && !wasClosed) {
+        patch.closedAt = Date.now();
+        patch.closeReason = String(closeReason || '').trim().slice(0, MAX_ARC_BODY);
+    }
     const updated = updateArc(id, patch);
     if (arc.status !== next) cleanNudgeMarksForArc(id);
     return updated;
@@ -693,10 +814,17 @@ export function toggleArcPinned(id) {
     return updateArc(id, { pinned: !arc.pinned });
 }
 
+export function toggleArcFocused(id) {
+    const arc = getArcs().find(a => a.id === id);
+    if (!arc) return null;
+    return updateArc(id, { focused: !arc.focused });
+}
+
 // ─── Injection mode / steering settings (global defaults or chat override) ────
 
 export function getInjectMode() {
     const mode = getEffectivePlanSetting('injectMode', 'all');
+    if (mode === 'active') return 'all';
     return INJECT_MODES.some(m => m.key === mode) ? mode : 'all';
 }
 
@@ -779,7 +907,7 @@ export function takeDueNudges() {
     // beat's high-water mark, and the new beat stays silent until it is twice as
     // stale as the threshold. That is a silent stall, which is the failure this
     // whole feature exists to catch.
-    const keyFor = arc => `${arc.id}#${arc.beatIndex || 0}`;
+    const keyFor = arc => `${arc.id}#${getCurrentBeatRecord(arc)?.id || 'none'}`;
     const awaiting = getArcsAwaitingBeat();
     const ready = getArcs().filter(a => a.status === 'active' && isArcReady(a));
 
@@ -841,8 +969,15 @@ export function historyEntryToText(entry) {
 /** Restore a history entry to arcs, parsing legacy text snapshots as needed. */
 export function historyEntryToArcs(entry) {
     if (!entry) return [];
-    if (Array.isArray(entry.arcs)) return entry.arcs;
+    if (Array.isArray(entry.arcs)) return sanitizeArcs(entry.arcs);
     return parsePlanTextToArcs(entry.text || '');
+}
+
+function historyEntrySignature(entry) {
+    if (Array.isArray(entry?.arcs)) {
+        return `arcs:${serializeArcsToText(entry.arcs, { annotateStatus: true, beats: 'all' })}`;
+    }
+    return `text:${historyEntryToText(entry)}`;
 }
 
 /**
@@ -855,10 +990,15 @@ export function pushPlanToHistory(arcs) {
     const history = getPlanHistory();
     const serialized = serializeArcsToText(list);
     if (!serialized.trim()) return;
-    if (history.length && historyEntryToText(history[history.length - 1]) === serialized) return;
-    history.push({ arcs: list.map(a => ({ ...a })), timestamp: Date.now() });
+    const candidate = { arcs: structuredCloneSafe(list) };
+    if (history.length && historyEntrySignature(history[history.length - 1]) === historyEntrySignature(candidate)) return;
+    history.push({ ...candidate, timestamp: Date.now() });
     if (history.length > MAX_PLAN_HISTORY) history.splice(0, history.length - MAX_PLAN_HISTORY);
     setPlanData({ history });
+}
+
+function structuredCloneSafe(value) {
+    return JSON.parse(JSON.stringify(value));
 }
 
 export function isInjectionEnabled() {

@@ -26,7 +26,7 @@ import {
     getArcs, serializeArcsToText, incrementArcTurns,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
-    getArcsAwaitingBeat, getOverdueReadyArcs, takeDueNudges, advanceBeat, getCurrentBeat, getNudgeTurns,
+    getArcsAwaitingBeat, getOverdueReadyArcs, takeDueNudges, advanceBeat, getCurrentBeat, getBeatProgress, isArcReady, getNudgeTurns,
     setArcStatus,
 } from './data.js';
 import { applyPlanInjection, getInjectedTokenCount } from './injection.js';
@@ -301,20 +301,21 @@ export function getBeatStatus() {
  * both derive from getArcsAwaitingBeat() for exactly that reason.
  */
 export function listBeats() {
-    return getArcsAwaitingBeat().map((arc, i) => ({
-        n: i + 1,
-        id: arc.id,
-        title: arc.title || '(untitled arc)',
-        beat: getCurrentBeat(arc),
-        waited: arc.turnsSinceAdvance || 0,
-        step: `${(arc.beatIndex || 0) + 1}/${arc.beats?.length || 0}`,
-    }));
+    return getArcsAwaitingBeat().map((arc, i) => {
+        const progress = getBeatProgress(arc);
+        return {
+            n: i + 1,
+            id: arc.id,
+            title: arc.title || '(untitled arc)',
+            beat: getCurrentBeat(arc),
+            waited: arc.turnsSinceAdvance || 0,
+            step: `${progress.done + 1}/${progress.total}`,
+        };
+    });
 }
 
 function isReadyArc(arc) {
-    return arc?.status === 'active'
-        && (arc?.beats?.length || 0) > 0
-        && (arc.beatIndex || 0) >= arc.beats.length;
+    return arc?.status === 'active' && isArcReady(arc);
 }
 
 /** Ready arcs use a separate namespace so numeric waiting-beat references stay stable. */
@@ -380,7 +381,7 @@ export function markBeatPlanted(n) {
     applyPlanInjection();
     if (state.modal) refreshDisplay();
 
-    const done = (updated.beatIndex || 0) >= (updated.beats?.length || 0);
+    const done = isArcReady(updated);
     return {
         ok: true,
         message: done
@@ -428,10 +429,16 @@ export function setInjectionEnabled(enabled) {
  * Deliberately NOT filtered by the injection mode: that selector governs the
  * automatic injection, whereas the macro is the user placing the plan by hand.
  * Dropped arcs are excluded regardless — dropping one means "stop showing me
- * this". core/ui.js also uses this as the "does a plan exist" check that drives
+ * this". Resolved and parked records are likewise excluded because closed or
+ * inactive records must never enter narrator injection. core/ui.js also uses this as the "does a plan exist" check that drives
  * the floating button's state.
  */
 export function getPlanTextForMacro() {
     if (!isInjectionEnabled()) return '';
-    return serializeArcsToText(getArcs().filter(a => a.status !== 'dropped'));
+    return serializeArcsToText(getArcs().filter(a => a.status === 'active'));
+}
+
+/** Whether this chat retains any planner records, including deliberately parked ones. */
+export function hasPlanRecords() {
+    return getArcs().length > 0;
 }

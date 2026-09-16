@@ -132,7 +132,7 @@ describe('Story Planner /wt-beat refuses while the store is paused', () => {
         expect(result.ok).toBe(false);
         expect(result.message).toMatch(/paused for this chat/);
         // And the store kept its previous value — the beat never advanced.
-        expect(getArcs()[0].beatIndex).toBe(0);
+        expect(getArcs()[0].beats.every(beat => beat.state === 'pending')).toBe(true);
         expect(apiCalls).toHaveLength(0);
     });
 

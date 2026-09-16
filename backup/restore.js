@@ -373,6 +373,28 @@ function mergeStoryPlanner(current, incoming) {
         : { data: cloneBackupData(current?.arcs || []), summary: emptySummary() };
     if (Object.prototype.hasOwnProperty.call(incoming || {}, 'arcs') || current?.arcs !== undefined) {
         result.arcs = arcs.data;
+        // Arc ids are the top-level merge boundary, but beat ids are globally
+        // durable too. A hand-edited backup can reuse one across distinct arcs;
+        // remint later claims so every retained beat remains independently
+        // addressable without overwriting either arc.
+        const seenBeatIds = new Set();
+        for (let arcIndex = 0; arcIndex < result.arcs.length; arcIndex++) {
+            const arc = result.arcs[arcIndex];
+            const beats = Array.isArray(arc?.beats) ? arc.beats : [];
+            for (let beatIndex = 0; beatIndex < beats.length; beatIndex++) {
+                const beat = beats[beatIndex];
+                if (!beat?.id) continue;
+                if (seenBeatIds.has(beat.id)) {
+                    const stem = `beat-${String(arc.id || arcIndex).replace(/[^a-zA-Z0-9_-]/g, '_')}-${beatIndex + 1}`;
+                    let id = stem;
+                    let suffix = 2;
+                    while (seenBeatIds.has(id)) id = `${stem}-${suffix++}`;
+                    beat.id = id;
+                    summary.updated++;
+                }
+                seenBeatIds.add(beat.id);
+            }
+        }
     }
     summary.added += arcs.summary.added;
     summary.updated += arcs.summary.updated;

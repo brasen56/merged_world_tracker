@@ -57,10 +57,9 @@ export const MAX_BEAT_LENGTH = 1000;
  * {
  *   id: string, title: string, body: string,
  *   section: 'immediate'|'emerging'|'horizon'|'character'|'unresolved',
- *   status: 'active'|'resolved'|'dropped',   // user-controlled, never LLM-authored
- *   pinned: boolean,
- *   beats: string[],          // ordered setup beats; [] for Immediate Hooks
- *   beatIndex: number,        // current beat; >= beats.length means READY
+ *   status: 'active'|'parked'|'resolved'|'dropped',
+ *   pinned: boolean, focused: boolean, closeReason: string, closedAt: number|null,
+ *   beats: Array<{id,text,state,stateReason,updatedAt}>,
  *   turnsSinceAdvance: number,// turns since this beat became current
  *   createdAt: number, updatedAt: number,
  * }
@@ -80,22 +79,62 @@ export const MAX_BEAT_LENGTH = 1000;
  * @param {boolean} [preserveId=true] — keep the incoming id (used by updateArc)
  * @returns {object} a canonical arc object
  */
+export const BEAT_STATES = ['pending', 'planted', 'skipped'];
+
+let _beatIdSeq = 0;
+export function newBeatId() {
+    _beatIdSeq = (_beatIdSeq + 1) % 1e6;
+    return `beat-${Date.now()}-${_beatIdSeq.toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** Convert legacy text or an existing record to the canonical v2 beat shape. */
+export function sanitizeBeat(raw, { preserveId = true, state = 'pending', updatedAt = 0, fallbackId = '' } = {}) {
+    const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { text: raw };
+    return {
+        id: preserveId && isNonEmptyString(src.id) ? String(src.id) : (fallbackId || newBeatId()),
+        text: String(src.text ?? '').trim().slice(0, MAX_BEAT_LENGTH),
+        state: BEAT_STATES.includes(src.state) ? src.state : (BEAT_STATES.includes(state) ? state : 'pending'),
+        stateReason: String(src.stateReason ?? '').trim().slice(0, MAX_BEAT_LENGTH),
+        updatedAt: Number.isFinite(Number(src.updatedAt)) ? Number(src.updatedAt) : updatedAt,
+    };
+}
+
 export function sanitizeArc(raw, { preserveId = true } = {}) {
     const src = (raw && typeof raw === 'object') ? raw : {};
     const now = Date.now();
-    const beats = (Array.isArray(src.beats) ? src.beats : [])
-        .map(b => String(b ?? '').trim().slice(0, MAX_BEAT_LENGTH))
-        .filter(Boolean);
-    const beatCount = beats.length;
+    const arcId = preserveId && src.id ? String(src.id) : newArcId();
+    const rawBeats = Array.isArray(src.beats) ? src.beats : [];
+    // v1 applied beatIndex after blank beats had been removed.
+    const filteredBeats = rawBeats.filter(beat => {
+        const text = typeof beat === 'string' ? beat : beat?.text;
+        return String(text ?? '').trim() !== '';
+    });
+    const legacyIndex = clampBeatIndex(src.beatIndex, filteredBeats.length);
+    const seenBeatIds = new Set();
+    const beats = filteredBeats.map((beat, index) => {
+        const canonical = sanitizeBeat(beat, {
+            preserveId: true,
+            state: typeof beat === 'string' && index < legacyIndex ? 'planted' : 'pending',
+            updatedAt: 0,
+            fallbackId: `beat-${arcId.replace(/[^a-zA-Z0-9_-]/g, '_')}-${index + 1}`,
+        });
+        if (seenBeatIds.has(canonical.id)) canonical.id = uniqueBeatId(arcId, index, seenBeatIds);
+        seenBeatIds.add(canonical.id);
+        return canonical;
+    }).filter(beat => beat.text);
     return {
-        id: preserveId && src.id ? String(src.id) : newArcId(),
+        id: arcId,
         title: String(src.title ?? '').trim().slice(0, MAX_ARC_TITLE),
         body: String(src.body ?? '').trim().slice(0, MAX_ARC_BODY),
         section: SECTION_KEYS.has(src.section) ? src.section : DEFAULT_SECTION,
         status: ARC_STATUSES.includes(src.status) ? src.status : 'active',
         pinned: src.pinned === true,
+        focused: src.focused === true,
+        closeReason: String(src.closeReason ?? '').trim().slice(0, MAX_ARC_BODY),
+        closedAt: src.closedAt !== null && src.closedAt !== undefined && Number.isFinite(Number(src.closedAt))
+            ? Number(src.closedAt)
+            : null,
         beats,
-        beatIndex: clampBeatIndex(src.beatIndex, beatCount),
         turnsSinceAdvance: Number.isFinite(Number(src.turnsSinceAdvance))
             ? Math.max(0, Math.floor(Number(src.turnsSinceAdvance)))
             : 0,
@@ -117,12 +156,26 @@ export function sanitizeArcs(arcs) {
     // fresh id for any repeat so every arc is independently addressable,
     // without silently dropping data.
     const seen = new Set();
-    return arcs.map(a => {
+    const seenBeatIds = new Set();
+    return arcs.map((a, arcIndex) => {
         const arc = sanitizeArc(a, { preserveId: true });
         if (seen.has(arc.id)) arc.id = newArcId();
         seen.add(arc.id);
+        for (let beatIndex = 0; beatIndex < arc.beats.length; beatIndex++) {
+            const beat = arc.beats[beatIndex];
+            if (seenBeatIds.has(beat.id)) beat.id = uniqueBeatId(`${arc.id}-${arcIndex + 1}`, beatIndex, seenBeatIds);
+            seenBeatIds.add(beat.id);
+        }
         return arc;
     });
+}
+
+function uniqueBeatId(arcId, beatIndex, seen) {
+    const stem = `beat-${String(arcId).replace(/[^a-zA-Z0-9_-]/g, '_')}-${beatIndex + 1}`;
+    let id = stem;
+    let suffix = 2;
+    while (seen.has(id)) id = `${stem}-${suffix++}`;
+    return id;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -175,7 +228,7 @@ export const SECTIONS = [
 /** Section assigned to bullets with no recognisable heading above them. */
 export const DEFAULT_SECTION = 'emerging';
 
-export const ARC_STATUSES = ['active', 'resolved', 'dropped'];
+export const ARC_STATUSES = ['active', 'parked', 'resolved', 'dropped'];
 
 /** The set of valid `section` values, derived from SECTIONS (one owner). */
 export const SECTION_KEYS = new Set(SECTIONS.map(s => s.key));
@@ -195,7 +248,7 @@ export const SECTION_KEYS = new Set(SECTIONS.map(s => s.key));
 let _arcIdSeq = 0;
 export function newArcId() {
     _arcIdSeq = (_arcIdSeq + 1) % 1e6;
-    return `${Date.now()}-${_arcIdSeq.toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    return `arc-${Date.now()}-${_arcIdSeq.toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 /** Beat index is allowed to equal beats.length — that is the READY state. */
@@ -305,7 +358,7 @@ function cleanBeatContent(raw) {
         .replace(/^\s*\[[^\]]{1,32}\]\s*/, '')  // our own "[beat 2 of 3 · 6 turns]" marker
         // Trailing progress markers we emit ourselves — stripped so a
         // serialize → parse round-trip does not bake them into the beat text.
-        .replace(/\s*\[(?:PLANTED|CURRENT|READY|SETUP COMPLETE)\]\s*$/i, '')
+        .replace(/\s*\[(?:PLANTED|SKIPPED|CURRENT|READY|SETUP COMPLETE)\]\s*$/i, '')
         .trim();
 }
 
@@ -374,7 +427,7 @@ export function parsePlanTextToArcs(text, options = {}) {
         const beatMatch = numbered || indentedBullet;
         if (beatMatch && last) {
             const beat = cleanBeatContent(beatMatch[1]);
-            if (beat) last.beats.push(beat);
+            if (beat) last.beats.push(sanitizeBeat(beat));
             continue;
         }
         // A numbered line with no arc above it is malformed — skip rather than
@@ -482,11 +535,16 @@ export function checkArc(record) {
     if (record.body !== undefined && typeof record.body !== 'string') return { code: 'arc-body-not-string', message: 'Arc body must be a string.' };
     if (!SECTION_KEYS.has(record.section)) return { code: 'arc-invalid-section', message: 'Arc section is invalid.' };
     if (!ARC_STATUSES.includes(record.status)) return { code: 'arc-invalid-status', message: 'Arc status is invalid.' };
-    if (!Array.isArray(record.beats) || record.beats.some(beat => typeof beat !== 'string')) {
-        return { code: 'arc-invalid-beats', message: 'Arc beats must be an array of strings.' };
+    if (!Array.isArray(record.beats)) {
+        return { code: 'arc-invalid-beats', message: 'Arc beats must be an array.' };
     }
-    if (!Number.isInteger(record.beatIndex) || record.beatIndex < 0) {
-        return { code: 'arc-invalid-beat-index', message: 'Arc beatIndex must be a non-negative integer.' };
+    for (const beat of record.beats) {
+        if (!isObject(beat) || typeof beat.text !== 'string' || !beat.text.trim()
+            || !BEAT_STATES.includes(beat.state)
+            || (beat.stateReason !== undefined && typeof beat.stateReason !== 'string')
+            || (beat.updatedAt !== undefined && !isFiniteNumber(beat.updatedAt))) {
+            return { code: 'arc-invalid-beat-record', message: 'Arc beat records must have text, a valid state, reason, and timestamp.' };
+        }
     }
     if (!isFiniteNumber(record.turnsSinceAdvance) || record.turnsSinceAdvance < 0) {
         return { code: 'arc-invalid-turns', message: 'Arc turnsSinceAdvance is invalid.' };
@@ -521,6 +579,7 @@ export function validateStoryPlannerData(data) {
         // checkRecordList — the deduplicating twin.
         const arcs = checkPlainRecordList(data.arcs, 'arcs', checkArc, { path: ['arcs'] });
         accepted.arcs = sanitizeArcs(arcs.records);
+        collectBeatIdIssues(arcs.records, ['arcs'], issues);
         // Same counting the backup summary always did: the check counts the
         // arcs it accepted; canonicalization never removes one.
         stats.added += arcs.stats.added;
@@ -531,8 +590,47 @@ export function validateStoryPlannerData(data) {
     if (data.history !== undefined && !Array.isArray(data.history)) {
         delete accepted.history;
         issues.push(quarantineIssue('history-not-array', ['history'], 'Story Planner history must be an array.', data.history, 'history'));
+    } else if (Array.isArray(data.history)) {
+        accepted.history = [];
+        for (let index = 0; index < data.history.length; index++) {
+            const entry = data.history[index];
+            if (!isObject(entry)) {
+                issues.push(quarantineIssue('history-entry-invalid', ['history', index], 'Story Planner history entries must be objects.', entry, index));
+                continue;
+            }
+            if (entry.arcs !== undefined && !Array.isArray(entry.arcs)) {
+                issues.push(quarantineIssue('history-arcs-invalid', ['history', index, 'arcs'], 'Story Planner history arcs must be an array.', entry, index));
+                continue;
+            }
+            if (Array.isArray(entry.arcs)) {
+                const checked = checkPlainRecordList(entry.arcs, 'history arcs', checkArc, { path: ['history', index, 'arcs'] });
+                issues.push(...checked.issues);
+                collectBeatIdIssues(checked.records, ['history', index, 'arcs'], issues);
+                accepted.history.push({ ...entry, arcs: sanitizeArcs(checked.records) });
+            } else {
+                accepted.history.push({ ...entry });
+            }
+        }
     }
     return { data: accepted, issues, stats };
+}
+
+function collectBeatIdIssues(arcs, path, issues) {
+    const seen = new Set();
+    for (let arcIndex = 0; arcIndex < arcs.length; arcIndex++) {
+        const rawBeats = arcs[arcIndex]?.beats;
+        if (!Array.isArray(rawBeats)) continue;
+        for (let beatIndex = 0; beatIndex < rawBeats.length; beatIndex++) {
+            const id = rawBeats[beatIndex]?.id;
+            const issuePath = [...path, arcIndex, 'beats', beatIndex, 'id'];
+            if (!isNonEmptyString(id)) {
+                issues.push(repairIssue('beat-id-minted', issuePath, 'A missing beat id was replaced with a stable id.', rawBeats[beatIndex]));
+            } else if (seen.has(String(id))) {
+                issues.push(repairIssue('beat-id-duplicate', issuePath, 'A duplicate beat id was replaced so both beats remain independently addressable.', rawBeats[beatIndex]));
+            }
+            if (isNonEmptyString(id)) seen.add(String(id));
+        }
+    }
 }
 
 // ─── Migration (design §4.2 / §6.5, Part 2) ──────────────────────────────────
@@ -585,16 +683,46 @@ export function migrateStoryPlannerV0ToV1(data) {
     return { data: next, issues };
 }
 
+/** v1 -> v2: make beat progress and lifecycle decisions explicit and durable. */
+export function migrateStoryPlannerV1ToV2(data) {
+    if (!isObject(data)) return { data, issues: [] };
+    const migrateArc = raw => {
+        const arc = sanitizeArc(raw, { preserveId: true });
+        // Migration can run more than once before a confirmation commits. IDs
+        // derived from durable arc identity + position make the same v1 input
+        // produce the same preview while becoming ordinary stable v2 IDs once
+        // stored. Existing nested ids, if present, are never replaced here.
+        arc.beats = arc.beats.map((beat, index) => ({
+            ...beat,
+            id: isObject(raw?.beats?.[index]) && isNonEmptyString(raw.beats[index].id)
+                ? String(raw.beats[index].id)
+                : `beat-${String(arc.id).replace(/[^a-zA-Z0-9_-]/g, '_')}-${index + 1}`,
+        }));
+        return arc;
+    };
+    const next = { ...data, arcs: Array.isArray(data.arcs) ? data.arcs.map(migrateArc) : [] };
+    if (Array.isArray(data.history)) {
+        next.history = data.history.map(entry => isObject(entry) && Array.isArray(entry.arcs)
+            ? { ...entry, arcs: entry.arcs.map(migrateArc) }
+            : entry);
+    }
+    if (next.injectMode === 'active') next.injectMode = 'all';
+    if (isObject(next.settingsOverride) && next.settingsOverride.injectMode === 'active') {
+        next.settingsOverride = { ...next.settingsOverride, injectMode: 'all' };
+    }
+    return { data: next, issues: [] };
+}
+
 /** Story Planner store schema — arcs under their own key since v1. */
 export const storyPlannerSchema = defineStoreSchema({
     id: 'storyPlanner',
     metadataKey: 'story_planner_data',
-    currentVersion: 1,
+    currentVersion: 2,
     createDefault: () => ({ arcs: [] }),
-    migrations: { 0: migrateStoryPlannerV0ToV1 },
+    migrations: { 0: migrateStoryPlannerV0ToV1, 1: migrateStoryPlannerV1ToV2 },
     validate: validateStoryPlannerData,
     policy: defineIssuePolicy({
-        repair: ['plan-text-migrated'],
+        repair: ['plan-text-migrated', 'beat-id-minted', 'beat-id-duplicate'],
         fatal: ['root-not-object'],
         record: [
             'not-an-array',
@@ -605,10 +733,12 @@ export const storyPlannerSchema = defineStoreSchema({
             'arc-invalid-section',
             'arc-invalid-status',
             'arc-invalid-beats',
-            'arc-invalid-beat-index',
+            'arc-invalid-beat-record',
             'arc-invalid-turns',
             'arc-invalid-timestamps',
             'history-not-array',
+            'history-entry-invalid',
+            'history-arcs-invalid',
         ],
     }),
 });

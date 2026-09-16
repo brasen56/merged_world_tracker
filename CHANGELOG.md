@@ -12,6 +12,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.14]
+
+### Changed
+
+- Story Planner store upgraded to v2. Beats are now durable records
+  `{ id, text, state, stateReason, updatedAt }` rather than a positional
+  string array plus a `beatIndex` counter. Progress is carried by the beat
+  object itself (`state: 'pending' | 'planted' | 'skipped'`), so no model
+  output can transfer planted or skipped state solely by list position. The
+  v1 → v2 migration converts every legacy beat string to a canonical object
+  with a stable id, marks beats before the old `beatIndex` planted and the
+  remainder pending (clamped exactly as the v1 reader did), and drops
+  `beatIndex` from the stored shape. Existing v1 plans, history snapshots,
+  imports, and backups migrate without losing an arc or its planted progress.
+  Closes `docs/STORY_PLANNER_ROADMAP.md` Phase 1.
+  - `isArcReady` is now "at least one beat and none pending" rather than
+    `beatIndex >= beats.length`; `getCurrentBeat` derives from the first
+    pending beat record; `advanceBeat`/`retreatBeat` flip the target beat's
+    `state` in place; and `getBeatProgress` returns a derived `{ done, total }`
+    for display only.
+  - The regeneration merge preserves stored planted/skipped beat objects
+    exactly and replaces only pending beats. A pending beat whose text matches
+    a stored pending beat keeps its id; a rewritten pending beat receives a
+    new id. A Ready arc keeps its entire stored route regardless of model
+    output. Closed (resolved/dropped) arcs are excluded from both id and title
+    merge identity so a recurring suggestion can never rewrite durable closed
+    memory; an incoming arc that reuses a closed id is minted a distinct id
+    and carried alongside the original.
+  - `takeDueNudges` keys its high-water mark by beat id instead of positional
+    index, so advancing to a new beat still resets the nudge multiplier.
+  - `removeArc` is now a deliberate forget action: it snapshots the complete
+    pre-delete arc list to history before removing, so the pre-delete state
+    remains recoverable through Revert.
+  - History snapshots use a deep clone (`structuredCloneSafe`) so nested beat
+    objects are not shared by reference with the live store; `historyEntryToArcs`
+    re-sanitizes restored arcs so a legacy or hand-edited snapshot cannot
+    bypass canonicalization.
+
+### Added
+
+- Parked arc status, focus flag, and close metadata. Arcs now carry
+  `status: 'active' | 'parked' | 'resolved' | 'dropped'`, a `focused` boolean,
+  a `closeReason` string, and a `closedAt` timestamp. Parked arcs neither age
+  nor inject; resolving or dropping stamps `closedAt` and stores the reason;
+  reactivating clears both. The data model and carry rules are in place for
+  the Phase 3 Park/Resume and Focus UI.
+- Bounded closed-memory generation projection. Resolved and dropped arcs
+  survive any number of full-plan generations (carried when omitted) and are
+  presented to the model only in a capped `<closed_story_ideas>` block built
+  from close reasons — never their full beat routes — so closed memory reaches
+  generation only and never narrator injection, beat reminders, cards, macros,
+  or previews.
+- Injection-mode cleanup. The legacy `active` inject mode resolves to `all`
+  (and is normalized during migration); the radio group is now All active /
+  Pinned only / Focused only. Focused arcs sort before non-focused arcs in
+  All-active injection and in the full-plan generation prompt.
+- Cross-arc beat-id deduplication in backup merge. A hand-edited backup that
+  reuses one beat id across distinct arcs now has the later claim reminted so
+  every retained beat stays independently addressable. Central validation
+  repairs missing and duplicate nested beat ids (`beat-id-minted`,
+  `beat-id-duplicate`) according to the existing schema policy and remains
+  recoverable.
+- Phase 1 regression coverage (`test/story_planner_phase1.test.js`) pinning
+  the v2 invariants: migration preserves progress without `beatIndex`;
+  duplicate nested ids are repaired centrally; historical beat objects are
+  preserved exactly and never transfer state by position; exact pending text
+  keeps its id while rewritten text gets a new one; resolved and dropped arcs
+  cannot be rewritten by a recurring suggestion; skipped beat markers survive
+  serialize/parse/merge without duplicating; Parked arcs neither age nor
+  inject while closed memory uses close reasons only; deletion snapshots the
+  pre-delete record; and prompt markers never enter portable markdown or
+  narrator injection.
+
 ## [2.8.13]
 
 ### Fixed

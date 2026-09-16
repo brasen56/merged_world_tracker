@@ -26,8 +26,8 @@ import { getSettings, saveSettings } from './settings.js';
 import {
     state, SECTIONS, ARC_STATUSES, INJECT_MODES, ENFORCEMENT_MODES,
     setPlanData, getPlanText,
-    getArcs, setArcs, addArc, updateArc, setArcStatus, removeArc, toggleArcPinned,
-    isArcReady, getCurrentBeat, advanceBeat, retreatBeat,
+    getArcs, setArcs, addArc, updateArc, setArcStatus, removeArc, toggleArcPinned, toggleArcFocused,
+    isArcReady, getCurrentBeat, getBeatProgress, advanceBeat, retreatBeat,
     getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
     getPlanHistory, pushPlanToHistory, historyEntryToText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
@@ -46,7 +46,7 @@ const SP_API_FIELD_IDS = {
     topPId: 'sp-top-p', freqId: 'sp-freq-pen', presId: 'sp-pres-pen', headersId: 'sp-headers',
 };
 
-const STATUS_ICONS = { active: '◆', resolved: '✓', dropped: '✕' };
+const STATUS_ICONS = { active: '◆', parked: '⏸', resolved: '✓', dropped: '✕' };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -171,7 +171,7 @@ function renderBeatStrip(arc) {
     const total = arc.beats?.length || 0;
     if (total === 0) return '';
     const id = escapeHtml(arc.id);
-    const done = Math.min(arc.beatIndex || 0, total);
+    const { done } = getBeatProgress(arc);
     const waited = arc.turnsSinceAdvance || 0;
 
     if (isArcReady(arc)) {
@@ -179,11 +179,11 @@ function renderBeatStrip(arc) {
             <div class="sp-beats sp-beats--ready">
                 <div class="sp-beat-line">
                     <span class="sp-beat-badge sp-beat-badge--ready">READY</span>
-                    <span class="sp-beat-text">All ${total} setup beats planted — this can happen now.</span>
+                    <span class="sp-beat-text">${done === total ? `All ${total} setup beats planted` : 'No setup beats are pending'} — this can happen now.</span>
                 </div>
-                <div class="sp-beat-actions">
+                ${done > 0 ? `<div class="sp-beat-actions">
                     <button class="mwt-btn sp-beat-back" data-action="beat-back" data-id="${id}" title="Undo the last '✓ planted'"><span aria-hidden="true">↺</span> back</button>
-                </div>
+                </div>` : ''}
             </div>`;
     }
 
@@ -212,6 +212,8 @@ function renderArcCard(arc) {
             <div class="sp-arc-head">
                 <button class="sp-pin" data-action="pin" data-id="${escapeHtml(arc.id)}"
                         title="${arc.pinned ? 'Unpin' : 'Pin — keeps this arc through regeneration'}" aria-label="${arc.pinned ? `Unpin arc ${escapeHtml(arc.title || 'untitled')}` : `Pin arc ${escapeHtml(arc.title || 'untitled')}`}">${arc.pinned ? '📌' : '📍'}</button>
+                <button class="sp-focus" data-action="focus" data-id="${escapeHtml(arc.id)}"
+                        title="${arc.focused ? 'Remove focus' : 'Focus this arc for focused-only injection'}" aria-label="${arc.focused ? `Unfocus arc ${escapeHtml(arc.title || 'untitled')}` : `Focus arc ${escapeHtml(arc.title || 'untitled')}`}">${arc.focused ? '🎯' : '○'}</button>
                 <input type="text" class="sp-arc-title" data-action="title" data-id="${escapeHtml(arc.id)}"
                        value="${escapeHtml(arc.title)}" placeholder="Arc name" aria-label="Arc name">
                 <button class="sp-arc-del" data-action="delete" data-id="${escapeHtml(arc.id)}" title="Delete arc" aria-label="Delete arc">🗑</button>
@@ -324,7 +326,7 @@ export function render() {
             </select>
             <span id="sp-enforcement-blurb" class="mwt-text-dim mwt-text-sm">${escapeHtml(ENFORCEMENT_MODES.find(m => m.key === enforcement)?.blurb || '')}</span>
         </div>
-        <p id="sp-inject-mode-help" class="mwt-text-dim mwt-text-sm" style="margin:0 0 8px">${INJECT_MODES.map(m => `<strong>${escapeHtml(m.label)}:</strong> ${escapeHtml(m.blurb)}`).join(' · ')}</p>
+        <p id="sp-inject-mode-help" class="mwt-text-dim mwt-text-sm" style="margin:0 0 8px">${INJECT_MODES.map(m => `<strong>${escapeHtml(m.label)}:</strong> ${escapeHtml(m.blurb)}`).join(' · ')}${mode === 'focused' && getArcsForInjection().length === 0 ? ' <strong>Nothing is focused, so nothing will be injected.</strong>' : ''}</p>
 
         <div id="sp-arcs" class="sp-arcs">${renderArcsInner()}</div>
 
@@ -408,8 +410,9 @@ export function render() {
             🗺️ floating button shows how many are waiting (amber once any is overdue).
             <br><br>
             Edit any arc directly; changes save automatically. <strong>Pin</strong> an arc to keep it through regeneration
-            (arcs with planted beats are kept automatically). Mark one <strong>Resolved</strong> or <strong>Dropped</strong>
-            to stop it being suggested again. <strong>Auto-generate</strong> refreshes the plan on a timer;
+            (arcs with planted beats are kept automatically). <strong>Focus</strong> an arc to prioritize it and include it in Focused-only injection.
+            <strong>Park</strong> an arc to keep it without injecting or aging it. Mark one <strong>Resolved</strong> or <strong>Dropped</strong>
+            to close it. <strong>Auto-generate</strong> refreshes the plan on a timer;
             <strong>injection</strong> controls whether it reaches the AI.
         </p>
     `;
@@ -549,7 +552,7 @@ function showInjectionPreview() {
 
 // ─── Arc interaction (delegated) ─────────────────────────────────────────────
 
-/** Structural card actions: pin, delete, add. */
+/** Structural card actions: pin, focus, delete, add. */
 function handleArcsClick(e) {
     const btn = e.target.closest('[data-action]');
     if (!btn || btn.tagName === 'INPUT' || btn.tagName === 'TEXTAREA' || btn.tagName === 'SELECT') return;
@@ -580,10 +583,14 @@ function handleArcsClick(e) {
         toggleArcPinned(id);
         applyPlanInjection();
         renderArcs();
+    } else if (action === 'focus') {
+        toggleArcFocused(id);
+        applyPlanInjection();
+        renderArcs();
     } else if (action === 'delete') {
         const arc = getArcs().find(a => a.id === id);
         const name = arc?.title ? `"${arc.title}"` : 'this arc';
-        if (!confirm(`Delete ${name}? This cannot be undone (use Resolved or Dropped to keep it out of the prompt without deleting).`)) return;
+        if (!confirm(`Delete ${name}? You can restore it with Revert (use Resolved, Dropped, or Parked to retain it without injecting).`)) return;
         removeArc(id);
         applyPlanInjection();
         renderArcs();

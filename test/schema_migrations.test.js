@@ -110,28 +110,27 @@ function dryRun(id, input) {
 }
 
 describe('Phase 0 — Story Planner v1 compatibility fixtures', () => {
-    test('current v1 string beats and structured history are a validation fixed point', () => {
+    test('v1 string beats and structured history migrate to v2 without losing progress', () => {
         const fixture = makeV1PlannerStore();
         const result = prepareStore(STORE_SCHEMAS.storyPlanner, fixture, { version: 1 });
 
-        expect(result.status).toBe('valid');
-        expect(result.changed).toBe(false);
+        expect(result.status).toBe('migrated');
+        expect(result.changed).toBe(true);
         expect(result.issues).toEqual([]);
-        expect(result.data).toEqual(fixture);
-        expect(result.data.arcs[0].beats).toEqual(cloneV1(V1_PROGRESS_ARC.beats));
-        expect(result.data.history[0].arcs[0].beatIndex).toBe(V1_PROGRESS_ARC.beatIndex);
+        expect(result.data.arcs[0].beats.map(beat => beat.text)).toEqual(cloneV1(V1_PROGRESS_ARC.beats));
+        expect(result.data.arcs[0].beats.map(beat => beat.state)).toEqual(['planted', 'pending', 'pending']);
+        expect(result.data.history[0].arcs[0].beats[0].state).toBe('planted');
     });
 
     test('both v1 structured snapshots and legacy text snapshots remain restorable', () => {
         const [structured, legacyText] = makeV1PlannerStore().history;
 
-        expect(historyEntryToArcs(structured)[0]).toEqual(cloneV1(V1_PROGRESS_ARC));
+        expect(historyEntryToArcs(structured)[0].beats.map(beat => beat.text)).toEqual(V1_PROGRESS_ARC.beats);
         expect(historyEntryToText(structured)).toContain('Mara notices the duplicate seal.');
         expect(historyEntryToArcs(legacyText)).toEqual([
             expect.objectContaining({
                 title: 'Legacy text snapshot',
-                beats: ['A string beat survives'],
-                beatIndex: 0,
+                beats: [expect.objectContaining({ text: 'A string beat survives', state: 'pending' })],
             }),
         ]);
     });
@@ -501,13 +500,15 @@ describe('Part 2 migrations — every legacy fixture migrates without touching l
             body: 'A coin opens the harbor gate',
             section: 'immediate',
             status: 'active',
-            beats: ['Find a coin', 'Return at dusk'],
-            beatIndex: 0,
+            beats: [
+                expect.objectContaining({ text: 'Find a coin', state: 'pending' }),
+                expect.objectContaining({ text: 'Return at dusk', state: 'pending' }),
+            ],
         });
         expect(result.issues.some(issue => issue.code === 'plan-text-migrated')).toBe(true);
 
         // Already-migrated data passes through untouched.
-        const current = prepareStore(STORE_SCHEMAS.storyPlanner, result.data, { version: 1 });
+        const current = prepareStore(STORE_SCHEMAS.storyPlanner, result.data, { version: 2 });
         expect(current.status).toBe('valid');
         expect(current.changed).toBe(false);
     });

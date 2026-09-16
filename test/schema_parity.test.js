@@ -166,8 +166,10 @@ describe('validator parity — story planner', () => {
         section: 'emerging',
         status: 'active',
         pinned: false,
-        beats: ['x'],
-        beatIndex: 0,
+        focused: false,
+        closeReason: '',
+        closedAt: null,
+        beats: [{ id: `${id}-beat`, text: 'x', state: 'pending', stateReason: '', updatedAt: 0 }],
         turnsSinceAdvance: 0,
         createdAt: 1,
         updatedAt: 1,
@@ -176,7 +178,7 @@ describe('validator parity — story planner', () => {
 
     test('canonicalizes accepted arcs through sanitizeArcs and skips non-objects', () => {
         const result = validateStoryPlanner({
-            arcs: [arc('a'), arc('a', { beatIndex: 9 }), 'junk'],
+            arcs: [arc('a'), arc('a'), 'junk'],
             history: 'nope',
             settingsOverride: { keep: 1 },
         });
@@ -184,11 +186,9 @@ describe('validator parity — story planner', () => {
         expect(result.conflicts).toBe(0);
         expect(result.data.arcs).toHaveLength(2);
         expect(result.data.arcs[0].id).toBe('a');
-        // The duplicate arc keeps both records but gets a fresh id, and the
-        // out-of-range beatIndex is clamped to beats.length — the same silent
-        // canonicalization sanitizeArcs always performed.
+        // The duplicate arc keeps both records but gets fresh arc and beat ids.
         expect(result.data.arcs[1].id).not.toBe('a');
-        expect(result.data.arcs[1].beatIndex).toBe(1);
+        expect(result.data.arcs[1].beats[0].id).not.toBe(result.data.arcs[0].beats[0].id);
         expect(result.data.settingsOverride).toEqual({ keep: 1 });
         expect(result.skipped).toEqual([
             { record: 'junk', reason: 'Arc must be an object.' },

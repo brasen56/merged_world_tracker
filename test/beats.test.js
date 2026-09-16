@@ -12,6 +12,7 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { resetCoreStubs, getFakeMeta, getFakeNotifications } from './stubs/core.js';
 import {
     state, makeArc, setArcs, getArcs, advanceBeat, buildClosedMemoryProjection,
+    getCurrentBeatRecord,
     incrementArcTurns, getArcsAwaitingBeat, getOverdueArcs,
     takeDueNudges, getNudgeTurns, OVERDUE_TURNS,
     setArcStatus,
@@ -33,7 +34,7 @@ describe('getArcsAwaitingBeat', () => {
     test('counts only arcs with a beat the user could actually act on', () => {
         const waiting = makeArc({ title: 'Waiting', beats: ['a', 'b'] });
         const hook = makeArc({ title: 'Immediate Hook', beats: [] });
-        const ready = { ...makeArc({ title: 'Ready', beats: ['a'] }), beatIndex: 1 };
+        const ready = makeArc({ title: 'Ready', beats: ['a'], beatIndex: 1 });
         const resolved = { ...makeArc({ title: 'Done', beats: ['a'] }), status: 'resolved' };
         setArcs([waiting, hook, ready, resolved]);
 
@@ -97,7 +98,7 @@ describe('takeDueNudges', () => {
 
         advanceBeat(arc.id);
         expect(getArcs()[0].turnsSinceAdvance).toBe(0);
-        expect(getArcs()[0].beatIndex).toBe(1);
+        expect(getArcs()[0].beats.map(beat => beat.state)).toEqual(['planted', 'pending']);
 
         setArcs([{ ...getArcs()[0], turnsSinceAdvance: threshold }]);
         expect(takeDueNudges(), 'second beat must be able to nudge').toHaveLength(1);
@@ -107,7 +108,7 @@ describe('takeDueNudges', () => {
         const threshold = getNudgeTurns();
         const arc = seedArc({ beats: ['only step'], turns: threshold });
         takeDueNudges();
-        expect(Object.keys(getFakeMeta().story_planner_data.nudgeMarks)).toEqual([`${arc.id}#0`]);
+        expect(Object.keys(getFakeMeta().story_planner_data.nudgeMarks)).toEqual([`${arc.id}#${getCurrentBeatRecord(arc).id}`]);
 
         // Planting the last beat makes the arc READY — nothing left to remind about.
         advanceBeat(arc.id);
@@ -245,7 +246,8 @@ describe('Phase 0 — overdue Ready lifecycle', () => {
 
         await expect(beatCommand('')).resolves.toContain(`R1. [Ready, ${getNudgeTurns()} turns] ${ready.title}`);
         await expect(beatCommand('resolve R1')).resolves.toBe(`"${ready.title}" — resolved.`);
-        expect(getArcs()[0]).toMatchObject({ status: 'resolved', beatIndex: ready.beatIndex });
+        expect(getArcs()[0].status).toBe('resolved');
+        expect(getArcs()[0].beats.every(beat => beat.state === 'planted')).toBe(true);
     });
 
     test('the card status dropdown reopens after a long wait through the shared transition', async () => {

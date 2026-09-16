@@ -60,8 +60,8 @@ describe('Phase 0 — Story Planner v1 Markdown import/export behavior', () => {
         expect(imported.map(arc => arc.title)).toEqual([
             'The Harbour Ledger', 'The Customs Bribe', 'The Northern Detour', 'The Bell at Low Tide',
         ]);
-        expect(imported[0].beats).toEqual(source[0].beats);
-        expect(imported.every(arc => arc.beatIndex === 0)).toBe(true);
+        expect(imported[0].beats.map(beat => beat.text)).toEqual(source[0].beats);
+        expect(imported.every(arc => arc.beats.every(beat => beat.state === 'pending'))).toBe(true);
         expect(imported.every(arc => arc.status === 'active' && arc.pinned === false)).toBe(true);
     });
 
@@ -71,8 +71,8 @@ describe('Phase 0 — Story Planner v1 Markdown import/export behavior', () => {
         const [imported] = parsePlanTextToArcs(exported);
 
         expect(exported).toContain('[PLANTED]');
-        expect(imported.beats).toEqual(source.beats);
-        expect(imported.beatIndex).toBe(0);
+        expect(imported.beats.map(beat => beat.text)).toEqual(source.beats);
+        expect(imported.beats.every(beat => beat.state === 'pending')).toBe(true);
         expect(imported.pinned).toBe(false);
     });
 });
