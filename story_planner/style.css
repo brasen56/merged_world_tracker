@@ -435,6 +435,58 @@
     padding: 7px 8px 8px;
 }
 
+/* ─── Targeted development / proposal review ─────────────────────────────── */
+
+.sp-target-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.sp-target-actions .mwt-btn {
+    font-size: 11px;
+    padding: 3px 7px;
+}
+
+.sp-proposal-diff {
+    margin: 4px 0 10px;
+    padding-left: 20px;
+}
+
+.sp-proposal-diff > li { margin-bottom: 8px; }
+
+.sp-proposal-change {
+    display: grid;
+    gap: 3px;
+    margin-top: 3px;
+}
+
+.sp-proposal-change del,
+.sp-proposal-change ins {
+    border-radius: 3px;
+    padding: 4px 6px;
+    text-decoration: none;
+    white-space: pre-wrap;
+}
+
+.sp-proposal-change del { background: rgba(239, 83, 80, 0.14); }
+.sp-proposal-change ins { background: rgba(76, 175, 80, 0.14); }
+
+/* A moved beat only changes position, not content — neutral styling so it
+   doesn't read as an add/remove. */
+.sp-proposal-move {
+    color: var(--mwt-text-dim);
+    padding: 4px 6px;
+}
+
+.sp-proposal-stale {
+    border: 1px solid var(--mwt-warning);
+    border-radius: var(--mwt-radius);
+    color: var(--mwt-warning);
+    padding: 8px;
+}
+
 /* A ready arc is the payoff of the whole mechanism — make it findable. */
 .sp-arc--ready { border-left-color: var(--mwt-success); }
 
@@ -536,4 +588,7 @@
     .sp-beat-state { padding-top: 0; }
     .sp-beat-row-actions { justify-content: flex-start; }
     .sp-beat-row-actions .mwt-btn { min-height: 36px; }
+    .sp-target-actions { flex-direction: column; }
+    .sp-target-actions .mwt-btn,
+    .sp-proposal-actions .mwt-btn { min-height: 40px; width: 100%; }
 }

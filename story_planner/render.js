@@ -37,6 +37,11 @@ import {
 } from './data.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { generatePlan } from './generation.js';
+import {
+    applyTargetedProposal,
+    generateTargetedProposal,
+    targetedOperationLabel,
+} from './targeted.js';
 
 // ─── API field IDs ───────────────────────────────────────────────────────────
 // One shared map for BOTH renderApiSettingsFields and readApiSettingsValues so
@@ -267,9 +272,9 @@ function renderBeatEditor(arc) {
             ${rows ? `<ol class="sp-beat-list">${rows}</ol>` : '<p class="sp-beat-empty">No setup beats yet.</p>'}
             <div class="sp-beat-editor-actions">
                 <button class="mwt-btn" data-action="beat-add" data-id="${arcId}">+ Add setup beat</button>
-                ${canGenerate ? `<button class="mwt-btn" disabled aria-describedby="sp-generate-beats-help-${arcId}">Generate setup beats</button>` : ''}
+                ${canGenerate ? `<button class="mwt-btn" data-action="target-setup" data-id="${arcId}" aria-describedby="sp-generate-beats-help-${arcId}">Generate setup beats</button>` : ''}
             </div>
-            ${canGenerate ? `<p id="sp-generate-beats-help-${arcId}" class="sp-beat-editor-help">Targeted setup generation will be available with the Phase 4 proposal flow.</p>` : ''}
+            ${canGenerate ? `<p id="sp-generate-beats-help-${arcId}" class="sp-beat-editor-help">Generates a reviewable route without changing this arc until you apply it.</p>` : ''}
         </details>`;
 }
 
@@ -303,6 +308,11 @@ function renderArcCard(arc) {
             </div>` : ''}
             ${renderBeatStrip(arc)}
             ${renderBeatEditor(arc)}
+            ${arc.status === 'active' ? `<div class="sp-target-actions" role="group" aria-label="Targeted development for ${escapeHtml(arc.title || 'this arc')}">
+                <button class="mwt-btn" data-action="target-rework" data-id="${escapeHtml(arc.id)}">Rework remaining setup</button>
+                <button class="mwt-btn" data-action="target-develop" data-id="${escapeHtml(arc.id)}">Develop this arc</button>
+                <button class="mwt-btn" data-action="target-alternate" data-id="${escapeHtml(arc.id)}">Suggest an alternate route</button>
+            </div>` : ''}
             <div class="sp-arc-foot">
                 <select class="sp-arc-section" data-action="section" data-id="${escapeHtml(arc.id)}" title="Move to another section">
                     ${SECTIONS.map(s => `<option value="${s.key}" ${s.key === arc.section ? 'selected' : ''}>${escapeHtml(s.label)}</option>`).join('')}
@@ -767,6 +777,120 @@ function mutateWithProjectionCheck(mutate) {
     return result;
 }
 
+function renderTargetedDiff(proposal) {
+    const fieldRows = proposal.diff.fields.map(change => `
+        <li><strong>${escapeHtml(change.field)}</strong><div class="sp-proposal-change">
+            <del>${escapeHtml(change.before || '(empty)')}</del>
+            <ins>${escapeHtml(change.after || '(empty)')}</ins>
+        </div></li>`).join('');
+    const beatRows = proposal.diff.beats.map(change => {
+        // A "moved" beat only changes position, not content — strike-through
+        // styling (<del>/<ins>) implies removal, so render it as a plain
+        // "Position N → M" line instead. Other kinds (added/removed/changed)
+        // are genuine content edits and keep the del/ins treatment.
+        if (change.kind === 'moved') {
+            return `
+        <li><strong>${escapeHtml(change.kind)}</strong><div class="sp-proposal-change">
+            <span class="sp-proposal-move">Position ${escapeHtml(change.before)} → ${escapeHtml(change.after)}</span>
+        </div></li>`;
+        }
+        return `
+        <li><strong>${escapeHtml(change.kind)}</strong><div class="sp-proposal-change">
+            ${change.before ? `<del>${escapeHtml(change.before)}</del>` : ''}
+            ${change.after ? `<ins>${escapeHtml(change.after)}</ins>` : ''}
+        </div></li>`;
+    }).join('');
+    const noChanges = !fieldRows && !beatRows
+        ? '<p class="mwt-text-dim">The proposal is identical to the current arc.</p>' : '';
+    return `${noChanges}
+        ${fieldRows ? `<h4>Fields</h4><ul class="sp-proposal-diff">${fieldRows}</ul>` : ''}
+        ${beatRows ? `<h4>Pending beats</h4><ul class="sp-proposal-diff">${beatRows}</ul>` : ''}`;
+}
+
+function showTargetedProposal(proposal) {
+    const stale = proposal.stale;
+    const finishReview = () => {
+        if (!state.targetedReviewOpen && !state.isGenerating) return;
+        state.isGenerating = false;
+        state.targetedReviewOpen = false;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+    };
+    const modal = createModal({
+        id: 'mwt-sp-targeted-modal',
+        title: `${targetedOperationLabel(proposal.operation)} — Review`,
+        destroyOnClose: true,
+        onClose: finishReview,
+        content: `
+            <p class="mwt-text-dim mwt-text-sm">Review this proposal. Nothing changes until you choose Apply.</p>
+            ${stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason)} Generate again to apply changes.</p>` : ''}
+            ${renderTargetedDiff(proposal)}
+            <div class="mwt-flex mwt-gap-8 mwt-mt-8 sp-proposal-actions">
+                <button id="mwt-sp-targeted-apply" class="mwt-btn mwt-btn-primary" ${stale ? 'disabled' : ''}>Apply</button>
+                <button id="mwt-sp-targeted-discard" class="mwt-btn">Discard</button>
+            </div>`,
+    });
+    modal.querySelector('#mwt-sp-targeted-apply')?.addEventListener('click', () => {
+        const result = mutateWithProjectionCheck(() => applyTargetedProposal(proposal));
+        if (!result.ok) {
+            const apply = modal.querySelector('#mwt-sp-targeted-apply');
+            if (apply) apply.disabled = true;
+            const message = result.reason === 'source-deleted' ? 'The source arc was deleted.'
+                : result.reason === 'source-changed' ? 'The source arc changed after this review opened.'
+                    : result.reason === 'scope-changed' ? 'The chat changed after this review opened.'
+                        : result.reason === 'no-changes' ? 'There is nothing to apply; the arc is already up to date.'
+                            : result.reason === 'store-paused' ? 'Story Planner is paused for this chat. No changes were applied.'
+                        : 'This proposal can no longer be applied.';
+            modal.querySelector('.mwt-modal-body')?.insertAdjacentHTML('afterbegin', `<p class="sp-proposal-stale" role="alert">${escapeHtml(message)} Generate again.</p>`);
+            return;
+        }
+        finishReview();
+        hideModal('mwt-sp-targeted-modal');
+        renderArcs();
+        notify('Story Planner', `${targetedOperationLabel(proposal.operation)} applied.`, 'success');
+    });
+    modal.querySelector('#mwt-sp-targeted-discard')?.addEventListener('click', () => {
+        finishReview();
+        hideModal('mwt-sp-targeted-modal');
+    });
+    if (!showModal('mwt-sp-targeted-modal')) {
+        // createModal() leaves the proposal hidden when another dialog owns
+        // focus. Do not leave the generation/review guards set in that case.
+        finishReview();
+        hideModal('mwt-sp-targeted-modal');
+    }
+}
+
+async function runTargetedAction(button, arcId, operation) {
+    if (state.isGenerating || state.targetedReviewOpen) return;
+    const oldHtml = button.innerHTML;
+    state.isGenerating = true;
+    state.targetedActionInFlight = true;
+    state.targetedReviewOpen = false;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+    try {
+        setControlBusy(button, true);
+        button.innerHTML = '<span aria-hidden="true">⏳</span> Generating…';
+        const proposal = await generateTargetedProposal(arcId, operation);
+        if (proposal) {
+            state.targetedActionInFlight = false;
+            state.targetedReviewOpen = true;
+            showTargetedProposal(proposal);
+        } else {
+            state.targetedActionInFlight = false;
+            state.isGenerating = false;
+            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        }
+    } catch (err) {
+        state.targetedActionInFlight = false;
+        state.isGenerating = false;
+        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        notify('Story Planner', `${targetedOperationLabel(operation)} failed: ${err.message}`, 'error');
+    } finally {
+        setControlBusy(button, false);
+        button.innerHTML = oldHtml;
+    }
+}
+
 /** Structural card actions: pin, focus, delete, add. */
 function handleArcsClick(e) {
     const btn = e.target.closest('[data-action]');
@@ -786,7 +910,9 @@ function handleArcsClick(e) {
     if (!id) return;
     const beatId = btn.dataset.beatId;
 
-    if (action === 'beat-done') {
+    if (action.startsWith('target-')) {
+        runTargetedAction(btn, id, action.slice('target-'.length));
+    } else if (action === 'beat-done') {
         mutateWithProjectionCheck(() => advanceBeat(id));
         renderArcs();
     } else if (action === 'beat-back') {
@@ -1056,3 +1182,7 @@ export function wireEvents() {
 
 // Re-exported so index.js can refresh the list after an auto-generate.
 export { renderArcs };
+
+// Exported for jsdom / embedding callers so the targeted-diff markup can be
+// tested without standing up the full proposal modal.
+export { renderTargetedDiff };

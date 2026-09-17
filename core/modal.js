@@ -100,16 +100,18 @@ export function createModal({ id, title, content, cssClass = '', onClose = null,
 
 /**
  * Show a modal by id.
+ *
+ * @returns {boolean} whether the modal was opened
  */
 export function showModal(id) {
     const el = document.getElementById(id);
-    if (!el) return;
+    if (!el) return false;
     if (foreignDialogOwnsFocus()) {
         console.warn('[MWT:Modal] Modal open refused — focus is inside a foreign dialog.');
         // The refusal is deliberate, but to the user it is still a click that
         // did nothing — say so, not only in the console.
         notify('Merged World Tracker', 'Modal not opened — another dialog has focus. Close it first.', 'info');
-        return;
+        return false;
     }
     if (document.activeElement && document.activeElement !== el) el._mwtOpener = document.activeElement;
     // closeModalElement removes the document handler for reusable modals;
@@ -119,6 +121,7 @@ export function showModal(id) {
     el._mwtShowSequence = ++modalShowSequence;
     updateModalStack();
     focusIntoModal(el);
+    return true;
 }
 
 /**

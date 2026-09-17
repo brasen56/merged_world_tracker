@@ -118,7 +118,7 @@ describe('Story Planner Phase 2 — editor markup contract', () => {
         expect(html).toContain('data-action="beat-up"');
         expect(html).toContain('data-action="beat-delete"');
         expect(html).toContain('Generate setup beats</button>');
-        expect(html).toContain('Targeted setup generation will be available with the Phase 4 proposal flow.');
+        expect(html).toContain('Generates a reviewable route without changing this arc until you apply it.');
     });
 
     test('gives every beatless arc its own generation-help id wired to its button', async () => {

@@ -90,6 +90,10 @@ export const state = {
     contentEl: null,
     /** True while a generation is in flight */
     isGenerating: false,
+    /** True while a targeted proposal is awaiting review. */
+    targetedReviewOpen: false,
+    /** True while the targeted action that owns isGenerating is in flight. */
+    targetedActionInFlight: false,
     /** Auto-trigger countdown (messages since last plan generation) */
     autoCounter: 0,
     /** Last persisted chat length, used by onMessageDeleted */
@@ -1199,6 +1203,32 @@ export function pushPlanToHistory(arcs) {
     history.push({ ...candidate, timestamp: Date.now() });
     if (history.length > MAX_PLAN_HISTORY) history.splice(0, history.length - MAX_PLAN_HISTORY);
     setPlanData({ history });
+}
+
+/**
+ * Commit a reviewed replacement and its pre-operation history snapshot in one
+ * checked metadata write. Targeted proposals use this seam so a refused write
+ * cannot consume a history slot without also applying the reviewed plan.
+ */
+export function setArcsWithHistory(arcs, before = getArcs()) {
+    const storeBefore = getPlanData();
+    const nextArcs = sanitizeArcs(Array.isArray(arcs) ? arcs : []);
+    const prior = Array.isArray(before) ? before : [];
+    // Work on a detached history snapshot. setPlanData can refuse the complete
+    // proposed store; a refusal must leave the live metadata object untouched.
+    const history = structuredCloneSafe(getPlanHistory());
+    if (prior.length && serializeArcsToText(prior).trim()) {
+        const candidate = { arcs: structuredCloneSafe(prior) };
+        if (!history.length || historyEntrySignature(history[history.length - 1]) !== historyEntrySignature(candidate)) {
+            history.push({ ...candidate, timestamp: Date.now() });
+            if (history.length > MAX_PLAN_HISTORY) history.splice(0, history.length - MAX_PLAN_HISTORY);
+        }
+    }
+    const committed = setPlanData({ arcs: nextArcs, history });
+    return {
+        ok: !!committed && committed !== storeBefore,
+        arcs: Array.isArray(committed?.arcs) ? committed.arcs : getArcs(),
+    };
 }
 
 function structuredCloneSafe(value) {

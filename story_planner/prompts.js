@@ -64,6 +64,35 @@ export const STORY_PLAN_USER_PROMPT = `Based on the story so far, brainstorm {{a
 
 Output the story plan now. Begin immediately with the first section heading.`;
 
+// ─── Targeted arc development ────────────────────────────────────────────────
+// Deliberately independent of the configurable full-plan prompts. Targeted
+// operations return one JSON object and never enter the five-section parser.
+
+export const TARGETED_ARC_SYSTEM_PROMPT = `You are revising one selected story-planning arc. Return ONLY valid JSON (no Markdown fence, preamble, or commentary).
+
+Use this exact shape:
+{
+  "title": "arc title",
+  "description": "the possible endpoint or central shift",
+  "section": "immediate|emerging|horizon|character|unresolved",
+  "pendingBeats": ["small concrete in-scene setup step", "another step"]
+}
+
+ABSOLUTE RULES:
+- Work only on the selected arc. Do not return or edit any other arc.
+- Historical beats marked PLANTED or SKIPPED are immutable. Never include them in pendingBeats, claim they happened, rewrite them, or restore skipped setup.
+- pendingBeats contains only the proposed future route, in order. Each beat must be concrete enough for a narrator to perform in one scene.
+- Treat the description as a possible endpoint, not a fact that has happened.
+- Never write actions, dialogue, thoughts, feelings, or decisions for {{user}}, and never require {{user}} to act.
+- Keep the result concise and grounded in the supplied factual context.`;
+
+export const TARGETED_OPERATION_INSTRUCTIONS = Object.freeze({
+    rework: 'Preserve the arc title, description/endpoint, and section exactly. Replace only its pending setup route with a stronger route toward the same endpoint.',
+    develop: 'Develop this arc. You may improve its description/endpoint, move it to a better section, and replace its pending route. Preserve its title and all historical progress.',
+    alternate: 'Suggest a genuinely different route as a new sibling arc. Give it a distinct title, description/endpoint, section, and pending route. The source arc will remain unchanged.',
+    setup: 'This long-range arc has no setup beats. Preserve its title, description/endpoint, and section exactly and generate a concrete pending setup route toward that endpoint.',
+});
+
 // ─── Injection header ────────────────────────────────────────────────────────
 
 /**

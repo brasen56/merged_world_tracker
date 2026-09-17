@@ -12,6 +12,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.17]
+
+### Added
+
+- Story Planner Phase 4 — targeted arc development
+  (`docs/STORY_PLANNER_ROADMAP.md`). Each arc card now offers Rework remaining
+  setup, Develop this arc, and Suggest an alternate route, so one weak
+  route can be improved without regenerating or churning the whole plan.
+  Rework preserves the title, endpoint, section, and historical beats; Develop
+  may revise the endpoint and section while retaining historical progress; an
+  alternate route is inserted as a new sibling and leaves its source unchanged.
+- A dedicated JSON-only targeted-generation contract, independent of custom
+  full-plan prompts and the five-section parser. Requests are grounded with the
+  selected arc's planted/skipped and pending beats, recent stable messages,
+  factual World State, latest Chronicle entry, direction hint, story palette,
+  and bounded closed-story memory, then submit through the foreground manual
+  Story Planner API path.
+- A field-level and pending-beat-level review dialog with explicit Apply and
+  Discard controls. Nothing persists until Apply. The dialog reports stale
+  proposals and disables Apply when the chat changes, the source arc is edited
+  or deleted, or the Store is unavailable.
+- Generate setup beats now uses the targeted review flow for active,
+  beatless non-immediate arcs, producing a reviewable route rather than editing
+  the arc immediately.
+- Phase 4 regression coverage in `test/story_planner_phase4.test.js` for prompt
+  isolation and grounding, immutable planted/skipped history, permitted
+  operation changes, alternate identity minting, diff output, scope/revision
+  races, cancellation/failure/refusal behavior, atomic history writes, and
+  final apply-boundary hardening.
+
+### Changed
+
+- Applying a targeted proposal atomically stores the resulting plan and its
+  pre-apply history snapshot. The final candidate is reconstructed from the
+  revision-checked live source, so a transient proposal cannot alter lifecycle,
+  pin/focus state, timestamps, historical beats, or persistent identifiers.
+
+### Fixed
+
+- The targeted action group now announces itself to assistive tech
+  (`story_planner/render.js`). The Rework / Develop / Alternate button row
+  carried `aria-label="Develop …"` on a plain `<div>` with no `role`, which
+  screen readers ignore entirely, and the label described only one of the three
+  actions it contains. The wrapper now uses the same `role="group"` +
+  `aria-label` pattern as the beat-row actions, labeled "Targeted development
+  for …" to cover all three buttons.
+- Reordered beats in a targeted proposal no longer render as
+  strike-through numbers** (`story_planner/render.js`). A "moved" diff row
+  printed `<del>2</del><ins>1</ins>`, whose red/green strike-through styling
+  reads as content removal when only the position changed. Moved rows now
+  render a plain "Position 2 → 1" line (`.sp-proposal-move` in
+  `story_planner/style.css`); added/removed/changed rows keep the
+  `<del>`/`<ins>` treatment. Tests: `test/story_planner_phase4.test.js`.
+
 ## [2.8.16]
 
 ### Added
