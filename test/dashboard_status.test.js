@@ -24,7 +24,7 @@ function stubDeps(overrides = {}) {
         getDocumentStatus: vi.fn(() => ({ kind: 'stale', msgsSinceRefresh: 7 })),
         getStagingCount: vi.fn(() => 3),
         getGrowthEvidenceCount: vi.fn(() => 2),
-        getBeatStatus: vi.fn(() => ({ awaiting: 4, overdue: 1 })),
+        getBeatStatus: vi.fn(() => ({ active: 6, injected: 3, focused: 2, ready: 1, parked: 2, awaiting: 4, overdue: 1 })),
         getActiveLedger: vi.fn(() => [{ id: 'active-1' }]),
         getDormantLedger: vi.fn(() => [{ id: 'dormant-1' }]),
         collectBudgetSnapshot: vi.fn(() => ({ injectedTokens: 120, enforce: false })),
@@ -46,7 +46,7 @@ describe('collectOverviewSnapshot', () => {
             worldState: { ok: true, value: { kind: 'stale', msgsSinceRefresh: 7 } },
             staging: { ok: true, value: 3 },
             growthEvidence: { ok: true, value: 2 },
-            beats: { ok: true, value: { awaiting: 4, overdue: 1 } },
+            beats: { ok: true, value: { active: 6, injected: 3, focused: 2, ready: 1, parked: 2, awaiting: 4, overdue: 1 } },
             intentions: {
                 ok: true,
                 value: {

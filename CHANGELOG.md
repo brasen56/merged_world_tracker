@@ -12,6 +12,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.16]
+
+### Added
+
+- Story Planner Phase 3 — parked arcs, focus, and injection-mode cleanup
+  (`docs/STORY_PLANNER_ROADMAP.md`). Arcs can now be Parked and later Resumed
+  without losing their pin, focus, setup beats, or optional “activate when”
+  note. Parked arcs are retained through regeneration but never age, trigger
+  reminders, or enter narrator injection; resuming resets their reminder age
+  and nudge marks.
+- A Focus toggle independent of Pin. The active plan and injection preview now
+  make it possible to give one or more arcs priority without changing their
+  lifecycle. Ready and active cards are presented first, while Parked and
+  Archive groups are collapsed below.
+- Focused-only injection mode, replacing the ambiguous legacy Active mode; All
+  is now labeled All active. Legacy `injectMode: "active"` values normalize to
+  `all` for global settings, per-chat overrides, and legacy chat settings while
+  preserving settings provenance.
+- Optional `activateWhen` notes on parked cards, plus shared Story Planner
+  status counts for active, injected, focused, Ready, parked, awaiting, and
+  overdue arcs across the Overview and floating badge surfaces.
+- Regeneration prompts now include a bounded title-only shelved-ideas block for
+  parked arcs. Plan history diffs use readable plan text (including lifecycle,
+  notes, and beat states) instead of raw internal JSON, and the beat editor's
+  Add action opens a transient draft row that is saved only once it is nonblank.
+- Phase 3 regression coverage in `test/story_planner_phase3.test.js` for
+  Park/Resume lifecycle preservation and reset behavior, focus and pin
+  neutrality for parked/closed arcs, injection-mode migration, status counts,
+  history retention, lifecycle presentation, focused-only empty states, and
+  parked-note autosave.
+
+### Changed
+
+- All-active full-plan context and narrator injection place focused arcs before
+  other selected active arcs. Assertive push language now explicitly prefers a
+  focused injected arc when one is available.
+
+### Fixed
+
+- Focus-first ordering is now applied without splitting section headings in
+  narrator injection and regeneration context; sections containing focused arcs
+  move first while each section remains a single contiguous block. Ready arcs
+  remain in their dedicated Ready Now group.
+- Committing a new beat draft updates only that row, so the next click or Tab is
+  no longer swallowed by a full list rebuild. Re-renders restore unsaved text
+  only to the exact same arc/beat control, preventing it from spilling into a
+  neighboring beat after concurrent regeneration.
+- Lifecycle redraws no longer remember the closed state of an empty section.
+  Park and Resume open their destination group and move focus to the moved
+  card's inverse action, so cards do not land focused inside a closed section.
+- Regeneration now rejects a new arc whose normalized title duplicates a parked
+  arc even if the model ignores the shelved-ideas instruction, and the shelved
+  prompt projection is capped at 20 records / 3000 characters.
+- Overview and floating Story Planner status surfaces report zero injected arcs
+  while injection is off, rather than counting arcs selected by the mode.
+
 ## [2.8.15]
 
 ### Added

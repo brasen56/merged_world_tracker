@@ -944,12 +944,14 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
             const spCountdownEl = document.getElementById('mwt-float-story-planner-countdown');
             if (spCountdownEl) {
                 const spStatus = StoryPlanner.getAutoPlanStatus?.();
-                const beats = StoryPlanner.getBeatStatus?.() || { awaiting: 0, overdue: 0 };
+                const beats = StoryPlanner.getBeatStatus?.() || { awaiting: 0, overdue: 0, ready: 0 };
                 const countdownText = spStatus
                     ? `Auto-plan in ${spStatus.interval - spStatus.counter} message${(spStatus.interval - spStatus.counter) !== 1 ? 's' : ''} (${spStatus.counter}/${spStatus.interval})`
                     : '';
-                const beatText = beats.awaiting
-                    ? `${beats.awaiting} setup beat${beats.awaiting !== 1 ? 's' : ''} waiting`
+                const actionable = beats.awaiting + (beats.ready || 0);
+                const beatText = actionable
+                    ? (beats.awaiting ? `${beats.awaiting} setup beat${beats.awaiting !== 1 ? 's' : ''} waiting` : '')
+                      + (beats.ready ? `${beats.awaiting ? ', ' : ''}${beats.ready} Ready` : '')
                       + (beats.overdue ? `, ${beats.overdue} overdue — /wt-beat to review` : '')
                     : '';
 
@@ -959,8 +961,8 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     spCountdownEl.textContent = `${beats.overdue}`;
                 } else if (spStatus) {
                     spCountdownEl.textContent = `${spStatus.interval - spStatus.counter}`;
-                } else if (beats.awaiting > 0) {
-                    spCountdownEl.textContent = `${beats.awaiting}`;
+                } else if (actionable > 0) {
+                    spCountdownEl.textContent = `${actionable}`;
                 } else {
                     spCountdownEl.textContent = '';
                 }

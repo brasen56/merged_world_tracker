@@ -26,7 +26,7 @@ import { getSettings, saveSettings } from './settings.js';
 import {
     state, SECTIONS, ARC_STATUSES, INJECT_MODES, ENFORCEMENT_MODES,
     setPlanData,
-    getArcs, setArcs, addArc, updateArc, setArcStatus, removeArc, toggleArcPinned, toggleArcFocused,
+    getArcs, setArcs, addArc, updateArc, setArcStatus, parkArc, resumeArc, removeArc, toggleArcPinned, toggleArcFocused,
     isArcReady, getCurrentBeat, getCurrentBeatNumber, getBeatProgress, advanceBeat, retreatBeat,
     addArcBeat, updateArcBeat, setArcBeatState, removeArcBeat, moveArcBeat,
     getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
@@ -35,7 +35,7 @@ import {
     getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta,
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
 } from './data.js';
-import { applyPlanInjection, getArcsForInjection, buildInjectionBody } from './injection.js';
+import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { generatePlan } from './generation.js';
 
 // ─── API field IDs ───────────────────────────────────────────────────────────
@@ -48,6 +48,13 @@ const SP_API_FIELD_IDS = {
 };
 
 const STATUS_ICONS = { active: '◆', parked: '⏸', resolved: '✓', dropped: '✕' };
+
+/** Escape a value for use inside a quoted CSS attribute selector. */
+function selectorEscape(value) {
+    return globalThis.CSS?.escape
+        ? globalThis.CSS.escape(String(value))
+        : String(value).replace(/["\\]/g, '\\$&');
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -70,9 +77,9 @@ function getContentEl() {
  */
 function toolbarStatsText() {
     const arcs = getArcs();
-    const injected = getArcsForInjection().length;
+    const injected = isInjectionEnabled() ? getArcsForInjection().length : 0;
     const ready = arcs.filter(a => a.status === 'active' && isArcReady(a)).length;
-    const tokens = estimateTokens(buildInjectionBody());
+    const tokens = getInjectedTokenCount();
     const auto = isAutoEnabled() ? ` · Auto: ${state.autoCounter}/${getAutoInterval()} msgs` : '';
     return `${arcs.length} arcs · ${injected} injected${ready ? ` · ${ready} ready` : ''} · ~${tokens} tokens${auto}`;
 }
@@ -140,6 +147,15 @@ function refreshScopedControls() {
     if (interval) interval.value = String(getAutoInterval());
     const scope = state.modal.querySelector('#sp-use-global-defaults');
     if (scope) scope.checked = usesGlobalDefaults();
+    const help = state.modal.querySelector('#sp-inject-mode-help');
+    if (help) help.innerHTML = injectionModeHelpHtml();
+}
+
+function injectionModeHelpHtml() {
+    const base = INJECT_MODES.map(m => `<strong>${escapeHtml(m.label)}:</strong> ${escapeHtml(m.blurb)}`).join(' · ');
+    return `${base}${getInjectMode() === 'focused' && getArcsForInjection().length === 0
+        ? ' <strong>No active arcs are focused, so nothing will be injected. Resume a focused parked arc, focus an active arc, or choose another mode.</strong>'
+        : ''}`;
 }
 
 /** Enable/disable the Revert button based on whether history exists. */
@@ -170,7 +186,7 @@ export function refreshDisplay() {
  */
 function renderBeatStrip(arc) {
     const total = arc.beats?.length || 0;
-    if (total === 0) return '';
+    if (total === 0 || arc.status !== 'active') return '';
     const id = escapeHtml(arc.id);
     const { done } = getBeatProgress(arc);
     const waited = arc.turnsSinceAdvance || 0;
@@ -204,42 +220,45 @@ function renderBeatStrip(arc) {
         </div>`;
 }
 
+function renderBeatEditorRow(arc, beat, index) {
+    const arcId = escapeHtml(arc.id);
+    const currentId = arc.beats.find(candidate => candidate.state === 'pending')?.id;
+    const beatId = escapeHtml(beat.id);
+    const label = beat.state === 'planted' ? 'Planted'
+        : beat.state === 'skipped' ? 'Skipped'
+            : beat.id === currentId ? 'Current' : 'Upcoming';
+    const isHistorical = beat.state !== 'pending';
+    const canMoveUp = index > 0
+        && (beat.state !== 'pending') === (arc.beats[index - 1].state !== 'pending');
+    const canMoveDown = index < arc.beats.length - 1
+        && (beat.state !== 'pending') === (arc.beats[index + 1].state !== 'pending');
+    const target = escapeHtml(beat.text || `beat ${index + 1}`);
+    return `
+        <li class="sp-beat-row sp-beat-row--${beat.state}${beat.id === currentId ? ' sp-beat-row--current' : ''}" data-beat-id="${beatId}">
+            <span class="sp-beat-state">${label}</span>
+            <div class="sp-beat-edit-fields">
+                <label class="mwt-sr-only" for="sp-beat-${beatId}">Setup beat ${index + 1} for ${escapeHtml(arc.title || 'untitled arc')}</label>
+                <textarea id="sp-beat-${beatId}" class="sp-beat-input" rows="2" data-action="beat-text" data-id="${arcId}" data-beat-id="${beatId}">${escapeHtml(beat.text)}</textarea>
+                ${beat.state === 'skipped' ? `
+                    <label class="mwt-sr-only" for="sp-beat-reason-${beatId}">Optional skip reason for ${target}</label>
+                    <input id="sp-beat-reason-${beatId}" class="sp-beat-reason" type="text" data-action="beat-reason" data-id="${arcId}" data-beat-id="${beatId}" value="${escapeHtml(beat.stateReason)}" placeholder="Optional skip reason">` : ''}
+            </div>
+            <div class="sp-beat-row-actions" role="group" aria-label="Actions for ${target}">
+                <button class="mwt-btn sp-beat-icon" data-action="beat-up" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Move ${target} up" ${canMoveUp ? '' : 'disabled'}>↑</button>
+                <button class="mwt-btn sp-beat-icon" data-action="beat-down" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Move ${target} down" ${canMoveDown ? '' : 'disabled'}>↓</button>
+                ${beat.state === 'pending' ? `
+                    <button class="mwt-btn" data-action="beat-plant" data-id="${arcId}" data-beat-id="${beatId}"><span aria-hidden="true">✓</span> Planted</button>
+                    <button class="mwt-btn" data-action="beat-skip" data-id="${arcId}" data-beat-id="${beatId}">Skip</button>` : `
+                    <button class="mwt-btn" data-action="beat-pending" data-id="${arcId}" data-beat-id="${beatId}">${isHistorical && beat.state === 'planted' ? 'Undo' : 'Restore to pending'}</button>`}
+                <button class="mwt-btn mwt-btn-danger" data-action="beat-delete" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Delete setup beat ${target}">Delete</button>
+            </div>
+        </li>`;
+}
+
 /** Expanded, maintainable sequence. State text is explicit, never color-only. */
 function renderBeatEditor(arc) {
     const arcId = escapeHtml(arc.id);
-    const currentId = arc.beats.find(beat => beat.state === 'pending')?.id;
-    const rows = arc.beats.map((beat, index) => {
-        const beatId = escapeHtml(beat.id);
-        const label = beat.state === 'planted' ? 'Planted'
-            : beat.state === 'skipped' ? 'Skipped'
-                : beat.id === currentId ? 'Current' : 'Upcoming';
-        const isHistorical = beat.state !== 'pending';
-        const canMoveUp = index > 0
-            && (beat.state !== 'pending') === (arc.beats[index - 1].state !== 'pending');
-        const canMoveDown = index < arc.beats.length - 1
-            && (beat.state !== 'pending') === (arc.beats[index + 1].state !== 'pending');
-        const target = escapeHtml(beat.text || `beat ${index + 1}`);
-        return `
-            <li class="sp-beat-row sp-beat-row--${beat.state}${beat.id === currentId ? ' sp-beat-row--current' : ''}" data-beat-id="${beatId}">
-                <span class="sp-beat-state">${label}</span>
-                <div class="sp-beat-edit-fields">
-                    <label class="mwt-sr-only" for="sp-beat-${beatId}">Setup beat ${index + 1} for ${escapeHtml(arc.title || 'untitled arc')}</label>
-                    <textarea id="sp-beat-${beatId}" class="sp-beat-input" rows="2" data-action="beat-text" data-id="${arcId}" data-beat-id="${beatId}">${escapeHtml(beat.text)}</textarea>
-                    ${beat.state === 'skipped' ? `
-                        <label class="mwt-sr-only" for="sp-beat-reason-${beatId}">Optional skip reason for ${target}</label>
-                        <input id="sp-beat-reason-${beatId}" class="sp-beat-reason" type="text" data-action="beat-reason" data-id="${arcId}" data-beat-id="${beatId}" value="${escapeHtml(beat.stateReason)}" placeholder="Optional skip reason">` : ''}
-                </div>
-                <div class="sp-beat-row-actions" role="group" aria-label="Actions for ${target}">
-                    <button class="mwt-btn sp-beat-icon" data-action="beat-up" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Move ${target} up" ${canMoveUp ? '' : 'disabled'}>↑</button>
-                    <button class="mwt-btn sp-beat-icon" data-action="beat-down" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Move ${target} down" ${canMoveDown ? '' : 'disabled'}>↓</button>
-                    ${beat.state === 'pending' ? `
-                        <button class="mwt-btn" data-action="beat-plant" data-id="${arcId}" data-beat-id="${beatId}"><span aria-hidden="true">✓</span> Planted</button>
-                        <button class="mwt-btn" data-action="beat-skip" data-id="${arcId}" data-beat-id="${beatId}">Skip</button>` : `
-                        <button class="mwt-btn" data-action="beat-pending" data-id="${arcId}" data-beat-id="${beatId}">${isHistorical && beat.state === 'planted' ? 'Undo' : 'Restore to pending'}</button>`}
-                    <button class="mwt-btn mwt-btn-danger" data-action="beat-delete" data-id="${arcId}" data-beat-id="${beatId}" aria-label="Delete setup beat ${target}">Delete</button>
-                </div>
-            </li>`;
-    }).join('');
+    const rows = arc.beats.map((beat, index) => renderBeatEditorRow(arc, beat, index)).join('');
     const canGenerate = arc.status === 'active' && arc.section !== 'immediate' && arc.beats.length === 0;
     return `
         <details class="sp-beat-editor" data-beat-editor-id="${arcId}">
@@ -259,7 +278,7 @@ function renderArcCard(arc) {
     const pinnedCls = arc.pinned ? ' sp-arc--pinned' : '';
     const readyCls = isArcReady(arc) && arc.status === 'active' ? ' sp-arc--ready' : '';
     return `
-        <div class="sp-arc${dimmed}${pinnedCls}${readyCls}" data-id="${escapeHtml(arc.id)}">
+        <div class="sp-arc sp-arc--${escapeHtml(arc.status)}${dimmed}${pinnedCls}${readyCls}" data-id="${escapeHtml(arc.id)}">
             <div class="sp-arc-head">
                 <button class="sp-pin" data-action="pin" data-id="${escapeHtml(arc.id)}"
                         title="${arc.pinned ? 'Unpin' : 'Pin — keeps this arc through regeneration'}" aria-label="${arc.pinned ? `Unpin arc ${escapeHtml(arc.title || 'untitled')}` : `Pin arc ${escapeHtml(arc.title || 'untitled')}`}">${arc.pinned ? '📌' : '📍'}</button>
@@ -267,10 +286,21 @@ function renderArcCard(arc) {
                         title="${arc.focused ? 'Remove focus' : 'Focus this arc for focused-only injection'}" aria-label="${arc.focused ? `Unfocus arc ${escapeHtml(arc.title || 'untitled')}` : `Focus arc ${escapeHtml(arc.title || 'untitled')}`}">${arc.focused ? '🎯' : '○'}</button>
                 <input type="text" class="sp-arc-title" data-action="title" data-id="${escapeHtml(arc.id)}"
                        value="${escapeHtml(arc.title)}" placeholder="Arc name" aria-label="Arc name">
+                ${arc.status === 'active'
+                    ? `<button class="mwt-btn sp-lifecycle" data-action="park" data-id="${escapeHtml(arc.id)}" title="Park this arc without deleting it">Park</button>`
+                    : arc.status === 'parked'
+                        ? `<button class="mwt-btn sp-lifecycle" data-action="resume" data-id="${escapeHtml(arc.id)}" title="Resume this parked arc">Resume</button>`
+                        : ''}
                 <button class="sp-arc-del" data-action="delete" data-id="${escapeHtml(arc.id)}" title="Delete arc" aria-label="Delete arc">🗑</button>
             </div>
             <textarea class="sp-arc-body" data-action="body" data-id="${escapeHtml(arc.id)}" rows="2"
                       placeholder="What shift does this arc introduce?" aria-label="Arc description for ${escapeHtml(arc.title || 'untitled arc')}">${escapeHtml(arc.body)}</textarea>
+            ${arc.status === 'parked' ? `<div class="sp-activate-when">
+                <label for="sp-activate-when-${escapeHtml(arc.id)}">Resume when</label>
+                <input id="sp-activate-when-${escapeHtml(arc.id)}" type="text" class="mwt-input" data-action="activateWhen" data-id="${escapeHtml(arc.id)}"
+                       value="${escapeHtml(arc.activateWhen || '')}" placeholder="Optional note for your future self"
+                       aria-label="Resume when note for ${escapeHtml(arc.title || 'untitled arc')}">
+            </div>` : ''}
             ${renderBeatStrip(arc)}
             ${renderBeatEditor(arc)}
             <div class="sp-arc-foot">
@@ -311,8 +341,31 @@ function renderArcsInner() {
 
     const injectedIds = new Set(getArcsForInjection().map(a => a.id));
 
-    return SECTIONS.map(sec => {
-        const inSection = arcs.filter(a => a.section === sec.key);
+    const active = arcs.filter(arc => arc.status === 'active');
+    const ready = active.filter(isArcReady);
+    const pending = active.filter(arc => !isArcReady(arc));
+    const parked = arcs.filter(arc => arc.status === 'parked');
+    const archived = arcs.filter(arc => arc.status === 'resolved' || arc.status === 'dropped');
+    const focusedFirst = list => [...list].sort((a, b) => (b.focused === true) - (a.focused === true));
+    const group = ({ key, title, blurb, list, open = false }) => {
+        const injectedHere = list.filter(a => injectedIds.has(a.id)).length;
+        return `<details class="sp-section sp-section--lifecycle" data-section="${key}" ${open ? 'open' : ''}>
+            <summary class="sp-section-head">
+                <span class="sp-section-title">${escapeHtml(title)}</span>
+                <span class="sp-section-count">${sectionCountLabel(list.length, injectedHere)}</span>
+            </summary>
+            <p class="sp-section-blurb">${escapeHtml(blurb)}</p>
+            <div class="sp-section-arcs">${focusedFirst(list).map(renderArcCard).join('')}</div>
+        </details>`;
+    };
+
+    const readyGroup = ready.length ? group({
+        key: 'ready', title: 'Ready Now',
+        blurb: 'Setup is complete; these arcs can pay off when the scene allows.',
+        list: ready, open: true,
+    }) : '';
+    const activeSections = SECTIONS.map(sec => {
+        const inSection = pending.filter(a => a.section === sec.key);
         const injectedHere = inSection.filter(a => injectedIds.has(a.id)).length;
         return `
         <details class="sp-section" data-section="${sec.key}" ${inSection.length ? 'open' : ''}>
@@ -325,19 +378,33 @@ function renderArcsInner() {
             <button class="mwt-btn sp-add" data-action="add" data-section="${sec.key}">+ Add Arc</button>
         </details>`;
     }).join('');
+    const parkedGroup = parked.length ? group({
+        key: 'parked', title: 'Parked',
+        blurb: 'Saved for later. Parked arcs do not age, remind, regenerate, or inject.',
+        list: parked,
+    }) : '';
+    const archiveGroup = archived.length ? group({
+        key: 'archive', title: 'Archive',
+        blurb: 'Resolved and dropped arcs are retained as planning memory but never injected.',
+        list: archived,
+    }) : '';
+    return readyGroup + activeSections + parkedGroup + archiveGroup;
 }
 
 /**
  * Re-render just the arc list. The `#sp-arcs` container element itself is
  * preserved, so the delegated listeners bound to it in wireEvents() survive.
  */
-function renderArcs() {
+function renderArcs({ openSection = '', focusArcId = '', focusAction = 'resume' } = {}) {
     if (!state.modal) return;
     const host = state.modal.querySelector('#sp-arcs');
     if (!host) return;
-    // Preserve which sections the user had collapsed across the re-render.
-    const collapsed = new Set(
-        [...host.querySelectorAll('.sp-section')].filter(d => !d.open).map(d => d.dataset.section),
+    // Preserve disclosure state only for populated groups. An empty section's
+    // stale closed state must not hide the first card later moved into it.
+    const sectionState = new Map(
+        [...host.querySelectorAll('.sp-section')]
+            .filter(d => d.querySelector('.sp-arc'))
+            .map(d => [d.dataset.section, d.open]),
     );
     const openEditors = new Set(
         [...host.querySelectorAll('.sp-beat-editor[open]')].map(d => d.dataset.beatEditorId),
@@ -347,7 +414,10 @@ function renderArcs() {
             action: document.activeElement.dataset?.action,
             id: document.activeElement.dataset?.id,
             beatId: document.activeElement.dataset?.beatId,
-            value: 'value' in document.activeElement ? document.activeElement.value : undefined,
+            value: ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)
+                ? document.activeElement.value : undefined,
+            valueAction: ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)
+                ? document.activeElement.dataset?.action : undefined,
             selectionStart: typeof document.activeElement.selectionStart === 'number' ? document.activeElement.selectionStart : null,
             selectionEnd: typeof document.activeElement.selectionEnd === 'number' ? document.activeElement.selectionEnd : null,
         }
@@ -356,28 +426,29 @@ function renderArcs() {
     // removes it: a deleted beat has no row left to restore, so focus should
     // move to the surviving row that takes its place (or the last one).
     const activeRow = active?.beatId
-        ? host.querySelector(`.sp-beat-row[data-beat-id="${CSS.escape(active.beatId)}"]`)
+        ? host.querySelector(`.sp-beat-row[data-beat-id="${selectorEscape(active.beatId)}"]`)
         : null;
     const activeRowIndex = activeRow
         ? [...activeRow.parentElement.children].filter(el => el.classList.contains('sp-beat-row')).indexOf(activeRow)
         : -1;
     host.innerHTML = renderArcsInner();
     host.querySelectorAll('.sp-section').forEach(d => {
-        if (collapsed.has(d.dataset.section)) d.open = false;
+        if (sectionState.has(d.dataset.section)) d.open = sectionState.get(d.dataset.section);
+        if (d.dataset.section === openSection) d.open = true;
     });
     host.querySelectorAll('.sp-beat-editor').forEach(d => {
         if (openEditors.has(d.dataset.beatEditorId)) d.open = true;
     });
     if (active?.action && active.id) {
-        const arcSel = `[data-id="${CSS.escape(active.id)}"]`;
-        const exact = host.querySelector(`[data-action="${active.action}"]${arcSel}${active.beatId ? `[data-beat-id="${CSS.escape(active.beatId)}"]` : ''}`);
+        const arcSel = `[data-id="${selectorEscape(active.id)}"]`;
+        const exact = host.querySelector(`[data-action="${active.action}"]${arcSel}${active.beatId ? `[data-beat-id="${selectorEscape(active.beatId)}"]` : ''}`);
         const beatText = active.beatId
-            ? host.querySelector(`[data-action="beat-text"]${arcSel}[data-beat-id="${CSS.escape(active.beatId)}"]`)
+            ? host.querySelector(`[data-action="beat-text"]${arcSel}[data-beat-id="${selectorEscape(active.beatId)}"]`)
             : null;
         // The beat row itself is gone (delete): hand focus to the surviving
         // neighbor that now occupies its slot, preferring the same action so
         // repeated deletes stay on one key.
-        const rows = host.querySelectorAll(`.sp-beat-editor[data-beat-editor-id="${CSS.escape(active.id)}"] .sp-beat-row`);
+        const rows = host.querySelectorAll(`.sp-beat-editor[data-beat-editor-id="${selectorEscape(active.id)}"] .sp-beat-row`);
         const neighborRow = activeRowIndex >= 0 ? rows[Math.min(activeRowIndex, rows.length - 1)] : null;
         const neighbor = neighborRow
             ? (neighborRow.querySelector(`[data-action="${active.action}"]${arcSel}:not([disabled])`) || neighborRow.querySelector('[data-action="beat-text"]'))
@@ -385,15 +456,19 @@ function renderArcs() {
         // Last landmark: the arc's Setup-beats summary, which survives every
         // beat mutation — e.g. ✓ planted on the final pending beat from the
         // compact strip removes its own initiating control.
-        const summary = host.querySelector(`.sp-beat-editor[data-beat-editor-id="${CSS.escape(active.id)}"] > summary`);
+        const summary = host.querySelector(`.sp-beat-editor[data-beat-editor-id="${selectorEscape(active.id)}"] > summary`);
         const focusTarget = exact && !exact.disabled ? exact : beatText || neighbor || summary;
         focusTarget?.focus();
-        if (focusTarget && active.value !== undefined && 'value' in focusTarget) {
+        if (focusTarget === exact && active.value !== undefined && active.action === active.valueAction
+            && focusTarget.dataset?.action === active.valueAction && 'value' in focusTarget) {
             focusTarget.value = active.value;
             if (active.selectionStart !== null && typeof focusTarget.setSelectionRange === 'function') {
                 focusTarget.setSelectionRange(active.selectionStart, active.selectionEnd);
             }
         }
+    }
+    if (focusArcId) {
+        host.querySelector(`[data-action="${focusAction}"][data-id="${selectorEscape(focusArcId)}"]`)?.focus();
     }
     refreshDisplay();
 }
@@ -401,7 +476,7 @@ function renderArcs() {
 /** Update the compact beat strip without replacing the editor DOM. */
 function refreshBeatStrip(arc) {
     if (!state.modal || !arc) return;
-    const card = state.modal.querySelector(`.sp-arc[data-id="${CSS.escape(arc.id)}"]`);
+    const card = state.modal.querySelector(`.sp-arc[data-id="${selectorEscape(arc.id)}"]`);
     const strip = card?.querySelector('.sp-beats');
     const beat = getCurrentBeat(arc);
     if (!strip || !beat || isArcReady(arc)) return;
@@ -450,7 +525,7 @@ export function render() {
             </select>
             <span id="sp-enforcement-blurb" class="mwt-text-dim mwt-text-sm">${escapeHtml(ENFORCEMENT_MODES.find(m => m.key === enforcement)?.blurb || '')}</span>
         </div>
-        <p id="sp-inject-mode-help" class="mwt-text-dim mwt-text-sm" style="margin:0 0 8px">${INJECT_MODES.map(m => `<strong>${escapeHtml(m.label)}:</strong> ${escapeHtml(m.blurb)}`).join(' · ')}${mode === 'focused' && getArcsForInjection().length === 0 ? ' <strong>Nothing is focused, so nothing will be injected.</strong>' : ''}</p>
+        <p id="sp-inject-mode-help" class="mwt-text-dim mwt-text-sm" style="margin:0 0 8px">${injectionModeHelpHtml()}</p>
 
         <div id="sp-arcs" class="sp-arcs">${renderArcsInner()}</div>
 
@@ -649,20 +724,28 @@ function showPlanHistory() {
 }
 
 /** Show exactly what the current settings would inject. */
+export function injectionPreviewEmptyText() {
+    return getInjectMode() === 'focused'
+        ? 'Nothing would be injected because no active arcs are focused.'
+        : 'Nothing would be injected.';
+}
+
 function showInjectionPreview() {
     const body = buildInjectionBody();
     const enabled = isInjectionEnabled();
+    const modeLabel = INJECT_MODES.find(mode => mode.key === getInjectMode())?.label || getInjectMode();
+    const tokens = enabled && body ? estimateTokens(`${getInjectionHeader()}\n\n${body}`) : 0;
     const previewModal = createModal({
         id: 'mwt-sp-preview-modal',
         title: 'Story Plan — Injection Preview',
         content: `
             <p class="mwt-text-dim mwt-text-sm mwt-mb-8">
-                Mode: <strong>${escapeHtml(getInjectMode())}</strong> ·
-                ${getArcsForInjection().length} arcs ·
-                ~${estimateTokens(body)} tokens ·
+                Mode: <strong>${escapeHtml(modeLabel)}</strong> ·
+                ${enabled ? getArcsForInjection().length : 0} arcs ·
+                ~${tokens} tokens ·
                 Injection is <strong>${enabled ? 'ON' : 'OFF'}</strong>
             </p>
-            <pre class="mwt-textarea" style="white-space:pre-wrap;max-height:50vh;overflow:auto">${escapeHtml(body || '(nothing would be injected)')}</pre>
+            <pre class="mwt-textarea" style="white-space:pre-wrap;max-height:50vh;overflow:auto">${escapeHtml(body || injectionPreviewEmptyText())}</pre>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8">
                 <button id="mwt-sp-preview-close" class="mwt-btn">Close</button>
             </div>
@@ -676,11 +759,11 @@ function showInjectionPreview() {
 
 // ─── Arc interaction (delegated) ─────────────────────────────────────────────
 
-/** Persist a UI mutation and re-register the prompt only if its body changed. */
+/** Persist a UI mutation and re-register when any narrator-facing text changes. */
 function mutateWithProjectionCheck(mutate) {
-    const before = buildInjectionBody();
+    const before = `${getInjectionHeader()}\n\n${buildInjectionBody()}`;
     const result = mutate();
-    if (buildInjectionBody() !== before) applyPlanInjection();
+    if (`${getInjectionHeader()}\n\n${buildInjectionBody()}` !== before) applyPlanInjection();
     return result;
 }
 
@@ -694,7 +777,7 @@ function handleArcsClick(e) {
         const arc = mutateWithProjectionCheck(() => addArc({ section: btn.dataset.section || 'emerging' }));
         renderArcs();
         // Focus the new card so the user can type straight away.
-        const input = state.modal?.querySelector(`.sp-arc[data-id="${CSS.escape(arc.id)}"] .sp-arc-title`);
+        const input = state.modal?.querySelector(`.sp-arc[data-id="${selectorEscape(arc.id)}"] .sp-arc-title`);
         input?.focus();
         return;
     }
@@ -710,11 +793,23 @@ function handleArcsClick(e) {
         mutateWithProjectionCheck(() => retreatBeat(id));
         renderArcs();
     } else if (action === 'beat-add') {
-        const beforeIds = new Set(getArcs().find(arc => arc.id === id)?.beats.map(beat => beat.id) || []);
-        const updated = mutateWithProjectionCheck(() => addArcBeat(id));
-        const added = updated?.beats.find(beat => !beforeIds.has(beat.id));
-        renderArcs();
-        if (added) state.modal?.querySelector(`[data-action="beat-text"][data-beat-id="${CSS.escape(added.id)}"]`)?.focus();
+        const editor = btn.closest('.sp-beat-editor');
+        const list = editor?.querySelector('.sp-beat-list')
+            || (() => {
+                const created = document.createElement('ol');
+                created.className = 'sp-beat-list';
+                editor?.querySelector('.sp-beat-empty')?.replaceWith(created);
+                return created;
+            })();
+        if (!editor || !list || editor.querySelector('[data-action="beat-new"]')) return;
+        const row = document.createElement('li');
+        const draftId = `sp-beat-new-${id}`;
+        row.className = 'sp-beat-row sp-beat-row--pending sp-beat-row--current';
+        row.innerHTML = `<span class="sp-beat-state">New</span><div class="sp-beat-edit-fields"><label class="mwt-sr-only" for="${escapeHtml(draftId)}">New setup beat</label><textarea id="${escapeHtml(draftId)}" class="sp-beat-input" rows="2" data-action="beat-new" data-id="${escapeHtml(id)}" placeholder="Describe the setup beat"></textarea></div>`;
+        list.appendChild(row);
+        editor.open = true;
+        btn.disabled = true;
+        row.querySelector('textarea')?.focus();
     } else if (action === 'beat-up' || action === 'beat-down') {
         mutateWithProjectionCheck(() => moveArcBeat(id, beatId, action === 'beat-up' ? 'up' : 'down'));
         renderArcs();
@@ -740,6 +835,16 @@ function handleArcsClick(e) {
     } else if (action === 'focus') {
         mutateWithProjectionCheck(() => toggleArcFocused(id));
         renderArcs();
+    } else if (action === 'park') {
+        mutateWithProjectionCheck(() => parkArc(id));
+        renderArcs({ openSection: 'parked', focusArcId: id });
+    } else if (action === 'resume') {
+        const resumed = mutateWithProjectionCheck(() => resumeArc(id));
+        renderArcs({
+            openSection: resumed && isArcReady(resumed) ? 'ready' : resumed?.section,
+            focusArcId: id,
+            focusAction: 'park',
+        });
     } else if (action === 'delete') {
         const arc = getArcs().find(a => a.id === id);
         const name = arc?.title ? `"${arc.title}"` : 'this arc';
@@ -775,11 +880,30 @@ function handleArcsBlur(e) {
     if (!el) return;
     const { action, id } = el.dataset;
     const beatId = el.dataset.beatId;
-    if (!id || !['title', 'body', 'beat-text', 'beat-reason'].includes(action)) return;
+    if (!id || !['title', 'body', 'activateWhen', 'beat-new', 'beat-text', 'beat-reason'].includes(action)) return;
 
     const arc = getArcs().find(a => a.id === id);
     if (!arc) return;
     const value = el.value.trim();
+    if (action === 'beat-new') {
+        if (!value) {
+            const editor = el.closest('.sp-beat-editor');
+            el.closest('.sp-beat-row')?.remove();
+            editor?.querySelector('[data-action="beat-add"]')?.removeAttribute('disabled');
+            if (!editor?.querySelector('.sp-beat-row')) {
+                editor?.querySelector('.sp-beat-list')?.remove();
+                editor?.querySelector('.sp-beat-editor-help')?.insertAdjacentHTML('afterend', '<p class="sp-beat-empty">No setup beats yet.</p>');
+            }
+            return;
+        }
+        const updated = mutateWithProjectionCheck(() => addArcBeat(id, value));
+        if (!updated) return;
+        // Adding a beat can change the arc's Ready state and therefore its
+        // lifecycle group, compact strip, and generate-beats controls. A row-
+        // only update leaves those card-level projections stale.
+        renderArcs({ openSection: isArcReady(updated) ? 'ready' : updated.section });
+        return;
+    }
     if (action === 'beat-text' || action === 'beat-reason') {
         const beat = arc.beats.find(candidate => candidate.id === beatId);
         if (!beat) return;

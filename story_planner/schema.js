@@ -58,7 +58,8 @@ export const MAX_BEAT_LENGTH = 1000;
  *   id: string, title: string, body: string,
  *   section: 'immediate'|'emerging'|'horizon'|'character'|'unresolved',
  *   status: 'active'|'parked'|'resolved'|'dropped',
- *   pinned: boolean, focused: boolean, closeReason: string, closedAt: number|null,
+ *   pinned: boolean, focused: boolean, activateWhen?: string,
+ *   closeReason: string, closedAt: number|null,
  *   beats: Array<{id,text,state,stateReason,updatedAt}>,
  *   turnsSinceAdvance: number,// turns since this beat became current
  *   createdAt: number, updatedAt: number,
@@ -130,6 +131,9 @@ export function sanitizeArc(raw, { preserveId = true } = {}) {
         status: ARC_STATUSES.includes(src.status) ? src.status : 'active',
         pinned: src.pinned === true,
         focused: src.focused === true,
+        ...(Object.hasOwn(src, 'activateWhen')
+            ? { activateWhen: String(src.activateWhen ?? '').trim().slice(0, MAX_ARC_BODY) }
+            : {}),
         closeReason: String(src.closeReason ?? '').trim().slice(0, MAX_ARC_BODY),
         closedAt: src.closedAt !== null && src.closedAt !== undefined && Number.isFinite(Number(src.closedAt))
             ? Number(src.closedAt)

@@ -29,7 +29,7 @@ import {
     getArcsAwaitingBeat, getOverdueReadyArcs, takeDueNudges, advanceBeat, getCurrentBeat, getCurrentBeatNumber, getBeatProgress, isArcReady, getNudgeTurns,
     setArcStatus,
 } from './data.js';
-import { applyPlanInjection, getInjectedTokenCount } from './injection.js';
+import { applyPlanInjection, getArcsForInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
 import { renderContent, wireEvents, renderArcs, refreshDisplay } from './render.js';
 
@@ -283,12 +283,21 @@ function notifyDueBeats() {
 
 /**
  * Beat progress summary for the floating button badge.
- * @returns {{awaiting: number, overdue: number}}
+ * Shared Story Planner status projection for Overview and floating UI.
+ * @returns {{active: number, injected: number, focused: number, ready: number,
+ *   parked: number, awaiting: number, overdue: number}}
  */
 export function getBeatStatus() {
+    const arcs = getArcs();
+    const activeArcs = arcs.filter(arc => arc.status === 'active');
     const awaiting = getArcsAwaitingBeat();
     const threshold = getNudgeTurns();
     return {
+        active: activeArcs.length,
+        injected: isInjectionEnabled() ? getArcsForInjection().length : 0,
+        focused: activeArcs.filter(arc => arc.focused).length,
+        ready: activeArcs.filter(isArcReady).length,
+        parked: arcs.filter(arc => arc.status === 'parked').length,
         awaiting: awaiting.length,
         overdue: awaiting.filter(a => (a.turnsSinceAdvance || 0) >= threshold).length
             + getOverdueReadyArcs(threshold).length,
@@ -322,6 +331,7 @@ function isReadyArc(arc) {
 export function listReadyArcs() {
     return getArcs()
         .filter(isReadyArc)
+        .sort((a, b) => Number(b.focused) - Number(a.focused))
         .map((arc, i) => ({
             n: i + 1,
             ref: `R${i + 1}`,

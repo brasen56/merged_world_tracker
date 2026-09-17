@@ -23,7 +23,7 @@ import { storyPlannerSchema } from './schema.js';
 import {
     state, getArcs, setArcs, pushPlanToHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
-    getDirectionHint, getArcCount, buildClosedMemoryProjection,
+    getDirectionHint, getArcCount, buildClosedMemoryProjection, buildParkedMemoryProjection,
 } from './data.js';
 import { applyPlanInjection } from './injection.js';
 
@@ -73,20 +73,23 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     const kept = Array.isArray(requestContext.capturedArcs)
         ? [...requestContext.capturedArcs]
         : allArcs.filter(a => a.status === 'active');
-    kept.sort((a, b) => (b.focused === true) - (a.focused === true));
     // Handles are deliberately request-local: they are useful to the model for
     // identity, but are never persisted and never expose v1 arc/beat IDs.
     const requestHandles = requestContext.handles instanceof Map
         ? requestContext.handles
         : mintRequestHandles(kept);
     const prevPlan = serializeArcsToText(kept, {
-        annotateStatus: true, beats: 'all', handles: requestHandles,
+        annotateStatus: true, beats: 'all', handles: requestHandles, prioritizeFocused: true,
     }).trim();
     const closedMemory = buildClosedMemoryProjection(allArcs);
     const closedBlock = closedMemory
         ? `<closed_story_ideas>\n[These ideas are closed. Do not propose a resolved payoff again or rephrase a dropped direction.]\n${escapePromptText(closedMemory)}\n</closed_story_ideas>`
         : '';
-    const prevBlock = [closedBlock, prevPlan
+    const parkedTitles = buildParkedMemoryProjection(allArcs);
+    const parkedBlock = parkedTitles
+        ? `<shelved_story_ideas>\n[These ideas are parked for later. Do not propose, rename, or reactivate them.]\n${escapePromptText(parkedTitles)}\n</shelved_story_ideas>`
+        : '';
+    const prevBlock = [closedBlock, parkedBlock, prevPlan
         ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine this against what has since happened — do not simply repeat it.\n\n`
           + `NAMES ARE IDENTIFIERS. An arc's name is how its progress is tracked between generations. If you carry an arc forward, reproduce its name EXACTLY, character for character — do not rename, reword, shorten or otherwise improve it. A renamed arc is read as a brand-new one: its progress is lost and the original is left behind beside it as a duplicate. Only give a name you have not been shown to an arc that is genuinely new.\n\n`
           + `The [BRACKETED] tags are annotations from the tracker, not part of any name — never copy one into a name you write:\n`
@@ -233,9 +236,7 @@ export async function generatePlan(isAuto = false) {
     // The parser must use the same request snapshot that was shown to the
     // model. Closed arcs are intentionally absent from the prompt and therefore
     // cannot be addressed by a returned handle or fallback.
-    const capturedArcs = arcsBeforeCall
-        .filter(a => a.status === 'active')
-        .sort((a, b) => (b.focused === true) - (a.focused === true));
+    const capturedArcs = arcsBeforeCall.filter(a => a.status === 'active');
     const requestHandles = mintRequestHandles(capturedArcs);
     const arcsByHandle = new Map(capturedArcs.map(arc => [requestHandles.get(arc.id), arc]));
 

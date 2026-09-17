@@ -189,7 +189,7 @@ export function setUsesGlobalDefaults(useGlobal) {
     const globalSettings = getSettings();
     const overrides = {};
     for (const key of GLOBAL_SETTING_KEYS) {
-        overrides[key] = globalSettings[key] ?? LEGACY_LOCAL_DEFAULTS[key];
+        overrides[key] = normalizePlanSetting(key, globalSettings[key] ?? LEGACY_LOCAL_DEFAULTS[key]);
     }
     setPlanData({ useGlobalDefaults: false, settingsOverride: overrides });
 }
@@ -209,26 +209,35 @@ export function setUsesGlobalDefaults(useGlobal) {
  * @returns {*|{ value: *, source: string }}
  */
 export function getEffectivePlanSetting(key, fallback, { provenance = false } = {}) {
+    const resolved = (value, source) => {
+        const normalized = normalizePlanSetting(key, value);
+        return provenance ? { value: normalized, source } : normalized;
+    };
     const data = getPlanData();
     if (!usesGlobalDefaults()) {
         const override = data.settingsOverride?.[key];
         if (override !== undefined) {
-            return provenance ? { value: override, source: 'per-chat-override' } : override;
+            return resolved(override, 'per-chat-override');
         }
         if (data[key] !== undefined) {
-            return provenance ? { value: data[key], source: 'per-chat-legacy' } : data[key];
+            return resolved(data[key], 'per-chat-legacy');
         }
         const builtin = LEGACY_LOCAL_DEFAULTS[key];
         if (builtin != null) {
-            return provenance ? { value: builtin, source: 'builtin-default' } : builtin;
+            return resolved(builtin, 'builtin-default');
         }
-        return provenance ? { value: fallback, source: 'fallback' } : fallback;
+        return resolved(fallback, 'fallback');
     }
     const global = getSettings()[key];
     if (global != null) {
-        return provenance ? { value: global, source: 'global' } : global;
+        return resolved(global, 'global');
     }
-    return provenance ? { value: fallback, source: 'fallback' } : fallback;
+    return resolved(fallback, 'fallback');
+}
+
+/** Preserve the legacy Active mode's behavior while exposing only current vocabulary. */
+function normalizePlanSetting(key, value) {
+    return key === 'injectMode' && value === 'active' ? 'all' : value;
 }
 
 export function setPlanSetting(key, value) {
@@ -363,6 +372,8 @@ export function getOverdueReadyArcs(threshold = getNudgeTurns()) {
  */
 export const MAX_CLOSED_MEMORY_ARCS = 20;
 export const MAX_CLOSED_MEMORY_CHARS = 6000;
+export const MAX_PARKED_MEMORY_ARCS = 20;
+export const MAX_PARKED_MEMORY_CHARS = 3000;
 
 export function buildClosedMemoryProjection(arcs = getArcs()) {
     const closed = (Array.isArray(arcs) ? arcs : [])
@@ -376,6 +387,22 @@ export function buildClosedMemoryProjection(arcs = getArcs()) {
         const reason = reasonText ? ` — ${String(reasonText).trim()}` : '';
         const line = `- [${arc.status}] ${arc.title || '(untitled arc)'}${reason}`;
         if (lines.length >= MAX_CLOSED_MEMORY_ARCS || chars + line.length + 1 > MAX_CLOSED_MEMORY_CHARS) break;
+        lines.push(line);
+        chars += line.length + 1;
+    }
+    return lines.join('\n');
+}
+
+/** Bounded title-only memory for arcs deliberately shelved by the user. */
+export function buildParkedMemoryProjection(arcs = getArcs()) {
+    const parked = (Array.isArray(arcs) ? arcs : [])
+        .filter(arc => arc.status === 'parked' && arc.title)
+        .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+    const lines = [];
+    let chars = 0;
+    for (const arc of parked) {
+        const line = `- ${arc.title}`;
+        if (lines.length >= MAX_PARKED_MEMORY_ARCS || chars + line.length + 1 > MAX_PARKED_MEMORY_CHARS) break;
         lines.push(line);
         chars += line.length + 1;
     }
@@ -405,11 +432,20 @@ export function getSectionMeta(key) {
  * @param {object}  [opts]
  * @param {boolean} [opts.annotateStatus] mark non-active arcs (for the model)
  */
-export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all', handles } = {}) {
+export function serializeArcsToText(arcs, { annotateStatus = false, beats = 'all', handles, prioritizeFocused = false } = {}) {
     const list = sanitizeArcs(Array.isArray(arcs) ? arcs : []);
     const out = [];
-    for (const sec of SECTIONS) {
-        const inSection = list.filter(a => a.section === sec.key);
+    const sections = prioritizeFocused
+        ? [...SECTIONS].sort((a, b) => {
+            const aFocused = list.some(arc => arc.section === a.key && arc.focused);
+            const bFocused = list.some(arc => arc.section === b.key && arc.focused);
+            return Number(bFocused) - Number(aFocused);
+        })
+        : SECTIONS;
+    for (const sec of sections) {
+        const inSection = list
+            .filter(a => a.section === sec.key)
+            .sort((a, b) => prioritizeFocused ? Number(b.focused) - Number(a.focused) : 0);
         if (inSection.length === 0) continue;
         out.push(`## ${sec.label}`);
         for (const arc of inSection) {
@@ -506,6 +542,10 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     const deletedTitles = options.deletedTitles || new Set();
 
     const existingIds = new Set(prev.map(arc => arc.id));
+    const parkedTitles = new Set(prev
+        .filter(arc => arc.status === 'parked')
+        .map(arc => titleKey(arc.title))
+        .filter(Boolean));
     // Parked records were not sent to the model and must not be title-fallback
     // candidates for a new suggestion.
     const mergeable = prev.filter(arc => arc.status === 'active');
@@ -544,6 +584,10 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         if (deletedIds.has(fresh.id)) return null;
         if (old && deletedIds.has(old.id)) return null;
         if (!old && deletedTitles.has(key)) return null;
+        // The model is explicitly told not to re-propose shelved ideas, but the
+        // merge boundary enforces that user decision even when it ignores the
+        // prompt. The durable parked record is carried below.
+        if (!old && parkedTitles.has(key)) return null;
         // Closed ids are not valid merge identities. A malformed/stale caller
         // may still send one explicitly, so mint a distinct id before carrying
         // the durable closed record alongside this newly proposed active arc.
@@ -562,7 +606,8 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         const oldBeats = Array.isArray(old.beats) ? old.beats : [];
         if (isArcReady(old)) {
             return { ...fresh, id: old.id, pinned: old.pinned, status: old.status,
-                focused: old.focused, closeReason: old.closeReason, closedAt: old.closedAt,
+                focused: old.focused, activateWhen: old.activateWhen,
+                closeReason: old.closeReason, closedAt: old.closedAt,
                 createdAt: old.createdAt, beats: oldBeats,
                 turnsSinceAdvance: old.turnsSinceAdvance || 0, updatedAt: Date.now() };
         }
@@ -593,6 +638,7 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
             pinned: old.pinned,
             status: old.status,
             focused: old.focused,
+            activateWhen: old.activateWhen,
             closeReason: old.closeReason,
             closedAt: old.closedAt,
             createdAt: old.createdAt,
@@ -717,6 +763,8 @@ export function updateArc(id, patch = {}) {
         ? reconcilePatchedBeats(base.beats, merged.beats)
         : base.beats;
     merged.pinned = merged.pinned === true;
+    merged.focused = merged.focused === true;
+    merged.activateWhen = String(merged.activateWhen ?? '').trim().slice(0, MAX_ARC_BODY);
     merged.turnsSinceAdvance = Number.isFinite(Number(merged.turnsSinceAdvance))
         ? Math.max(0, Math.floor(Number(merged.turnsSinceAdvance)))
         : (base.turnsSinceAdvance || 0);
@@ -810,8 +858,8 @@ function commitBeatEdit(id, proposedBeats) {
     return updated;
 }
 
-/** Add one pending setup beat and return the updated arc. */
-export function addArcBeat(id, text = 'New setup beat') {
+/** Add one non-blank pending setup beat and return the updated arc. */
+export function addArcBeat(id, text = '') {
     const arc = getArcs().find(candidate => candidate.id === id);
     if (!arc) return null;
     const beat = sanitizeBeat({ text, state: 'pending', updatedAt: Date.now() });
@@ -909,6 +957,20 @@ export function setArcStatus(id, status, closeReason = '') {
     return updated;
 }
 
+/** Pause an arc without changing its pin/focus or confirmed beat history. */
+export function parkArc(id) {
+    const arc = getArcs().find(a => a.id === id);
+    if (!arc || arc.status !== 'active') return arc || null;
+    return setArcStatus(id, 'parked');
+}
+
+/** Return a parked arc to active life with a fresh reminder age. */
+export function resumeArc(id) {
+    const arc = getArcs().find(a => a.id === id);
+    if (!arc || arc.status !== 'parked') return arc || null;
+    return setArcStatus(id, 'active');
+}
+
 export function toggleArcPinned(id) {
     const arc = getArcs().find(a => a.id === id);
     if (!arc) return null;
@@ -925,7 +987,6 @@ export function toggleArcFocused(id) {
 
 export function getInjectMode() {
     const mode = getEffectivePlanSetting('injectMode', 'all');
-    if (mode === 'active') return 'all';
     return INJECT_MODES.some(m => m.key === mode) ? mode : 'all';
 }
 
@@ -1067,18 +1128,29 @@ export function historyEntryToText(entry) {
     return entry.text || '';
 }
 
-/** History-only projection that makes state and skip-reason changes visible. */
+/** Human-readable history projection that makes beat state/reason changes visible. */
 export function historyEntryToDiffText(entry) {
     if (!entry) return '';
     if (!Array.isArray(entry.arcs)) return entry.text || '';
-    return JSON.stringify(sanitizeArcs(entry.arcs).map(arc => ({
-        id: arc.id, title: arc.title, body: arc.body, section: arc.section,
-        status: arc.status, pinned: arc.pinned, focused: arc.focused,
-        closeReason: arc.closeReason,
-        beats: arc.beats.map(({ id, text, state: beatState, stateReason }) => ({
-            id, text, state: beatState, stateReason,
-        })),
-    })), null, 2);
+    const arcs = sanitizeArcs(entry.arcs);
+    const lines = [];
+    for (const section of SECTIONS) {
+        const inSection = arcs.filter(arc => arc.section === section.key);
+        if (!inSection.length) continue;
+        lines.push(`## ${section.label}`);
+        for (const arc of inSection) {
+            const flags = [arc.status !== 'active' ? arc.status : '', arc.pinned ? 'pinned' : '', arc.focused ? 'focused' : ''].filter(Boolean);
+            lines.push(`- ${arc.title || '(untitled arc)'}${flags.length ? ` [${flags.join(', ')}]` : ''}${arc.body ? ` — ${arc.body}` : ''}`);
+            if (arc.activateWhen) lines.push(`  Resume when: ${arc.activateWhen}`);
+            if (arc.closeReason) lines.push(`  Close reason: ${arc.closeReason}`);
+            arc.beats.forEach((beat, index) => {
+                const label = beat.state === 'planted' ? 'Planted' : beat.state === 'skipped' ? 'Skipped' : 'Pending';
+                lines.push(`  ${index + 1}. [${label}] ${beat.text}${beat.stateReason ? ` — ${beat.stateReason}` : ''}`);
+            });
+        }
+        lines.push('');
+    }
+    return lines.join('\n').trim();
 }
 
 /** Restore a history entry to arcs, parsing legacy text snapshots as needed. */
@@ -1101,6 +1173,7 @@ function historyEntrySignature(entry) {
             status: arc.status,
             pinned: arc.pinned,
             focused: arc.focused,
+            activateWhen: arc.activateWhen,
             closeReason: arc.closeReason,
             closedAt: arc.closedAt,
             createdAt: arc.createdAt,

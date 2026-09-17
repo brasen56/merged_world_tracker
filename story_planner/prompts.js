@@ -124,8 +124,14 @@ export const ENFORCEMENT_KEYS = Object.keys(ENFORCEMENT_BLOCKS);
  *
  * @param {'passive'|'proactive'|'assertive'} mode
  */
-export function buildStoryPlanHeader(mode) {
-    const push = ENFORCEMENT_BLOCKS[mode] || ENFORCEMENT_BLOCKS.proactive;
+export function buildStoryPlanHeader(mode, { hasFocused = false } = {}) {
+    let push = ENFORCEMENT_BLOCKS[mode] || ENFORCEMENT_BLOCKS.proactive;
+    if (mode === 'assertive' && hasFocused) {
+        push = push.replace(
+            'Advance at least one arc in this response',
+            'Advance at least one arc in this response, preferring a focused arc',
+        );
+    }
     return `[Story Plan — planned directions for this story.
 
 READY NOW and IMMEDIATE HOOKS are usable in this scene. When a scene needs somewhere to go, take one and let it play out.

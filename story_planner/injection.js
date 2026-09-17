@@ -23,8 +23,9 @@ import { getSettings } from './settings.js';
 export { STORY_PLAN_INJECTION_HEADER };
 
 /** The header actually injected, per the chat's enforcement setting. */
-function currentHeader() {
-    return buildStoryPlanHeader(getEnforcement());
+export function getInjectionHeader() {
+    const arcs = getArcsForInjection();
+    return buildStoryPlanHeader(getEnforcement(), { hasFocused: arcs.some(arc => arc.focused) });
 }
 
 // ─── Arc selection ───────────────────────────────────────────────────────────
@@ -77,15 +78,25 @@ export function buildInjectionBody() {
         out.push('');
     }
 
-    for (const sec of SECTIONS) {
-        const inSection = pending.filter(a => a.section === sec.key);
+    // Keep every section contiguous while still prioritizing focus across the
+    // full plan: sections containing a focused arc come first, then canonical
+    // section order; focused arcs lead within their section.
+    const sections = [...SECTIONS].sort((a, b) => {
+        const aFocused = pending.some(arc => arc.section === a.key && arc.focused);
+        const bFocused = pending.some(arc => arc.section === b.key && arc.focused);
+        return Number(bFocused) - Number(aFocused);
+    });
+    for (const section of sections) {
+        const inSection = pending
+            .filter(arc => arc.section === section.key)
+            .sort((a, b) => Number(b.focused) - Number(a.focused));
         if (!inSection.length) continue;
-        out.push(`## ${sec.label}`);
+        if (out.length && out[out.length - 1] !== '') out.push('');
+        out.push(`## ${section.label}`);
         for (const arc of inSection) {
             const title = arc.title || '(untitled arc)';
             const beat = getCurrentBeat(arc);
             if (!beat) {
-                // Immediate Hooks, or a long-range arc the model gave no beats.
                 out.push(arc.body ? `- ${title} — ${arc.body}` : `- ${title}`);
                 continue;
             }
@@ -95,7 +106,6 @@ export function buildInjectionBody() {
             out.push(`  NOW: ${beat}`);
             if (arc.body) out.push(`  (building toward: ${arc.body})`);
         }
-        out.push('');
     }
 
     return out.join('\n').trim();
@@ -154,7 +164,7 @@ export function applyPlanInjection() {
 
     applyExtensionPromptInjection({
         key: EXTENSION_PROMPT_KEY,
-        header: currentHeader(),
+        header: getInjectionHeader(),
         body,
         enabled,
         fallbackDepth: placement.depth.value,
@@ -177,5 +187,5 @@ export function getInjectedTokenCount() {
     if (!body) return 0;
     // Must use the same header applyPlanInjection() sends — the assertive
     // block is markedly longer than the passive one.
-    return estimateTokens(`${currentHeader()}\n\n${body}`);
+    return estimateTokens(`${getInjectionHeader()}\n\n${body}`);
 }

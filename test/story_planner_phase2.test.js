@@ -158,6 +158,79 @@ describe('Story Planner Phase 2 — editor markup contract', () => {
         expect(document.querySelector('.sp-beat-editor').open).toBe(true);
         expect(document.activeElement.dataset.action).toBe('beat-text');
         expect(document.activeElement.dataset.beatId).toBe(arc.beats[0].id);
+        expect(document.activeElement.value).toBe('one');
+        state.modal = null;
+        state.contentEl = null;
+        vi.unstubAllGlobals();
+    });
+
+    test('committing a transient setup beat replaces only its row and preserves the next control', async () => {
+        document.body.innerHTML = '<div class="mwt-tab-content" data-tab="story-planner"></div>';
+        const { state } = await import('../story_planner/data.js');
+        const arc = makeArc({ title: 'Blank route', section: 'horizon' });
+        setArcs([arc]);
+        state.modal = document.body;
+        state.contentEl = document.querySelector('[data-tab="story-planner"]');
+        const { renderContent, wireEvents } = await import('../story_planner/render.js');
+        renderContent();
+        wireEvents();
+
+        document.querySelector('[data-action="beat-add"]').click();
+        const draft = document.querySelector('[data-action="beat-new"]');
+        expect(draft).not.toBeNull();
+        expect(getArcs()[0].beats).toEqual([]);
+        expect(buildInjectionBody()).not.toContain('New setup beat');
+
+        draft.value = 'A real setup event';
+        draft.dispatchEvent(new FocusEvent('blur'));
+        expect(getArcs()[0].beats.map(beat => beat.text)).toEqual(['A real setup event']);
+        expect(document.querySelector('[data-action="beat-new"]')).toBeNull();
+        expect(document.querySelector('[data-action="beat-text"]').value).toBe('A real setup event');
+        expect(document.querySelector('[data-action="beat-add"]').disabled).toBe(false);
+
+        state.modal = null;
+        state.contentEl = null;
+    });
+
+    test('committing a beat fully refreshes Ready grouping and first-beat controls', async () => {
+        document.body.innerHTML = '<div class="mwt-tab-content" data-tab="story-planner"></div>';
+        const { state } = await import('../story_planner/data.js');
+        const ready = makeArc({ title: 'Ready arc', beats: ['planted'], beatIndex: 1 });
+        const empty = makeArc({ title: 'Empty arc', section: 'horizon' });
+        setArcs([ready, empty]);
+        state.modal = document.body;
+        state.contentEl = document.querySelector('[data-tab="story-planner"]');
+        const { renderContent, wireEvents } = await import('../story_planner/render.js');
+        renderContent();
+        wireEvents();
+
+        const readyEditor = document.querySelector(`[data-beat-editor-id="${ready.id}"]`);
+        readyEditor.open = true;
+        const readyAdd = readyEditor.querySelector('[data-action="beat-add"]');
+        readyAdd.click();
+        const readyDraft = readyEditor.querySelector('[data-action="beat-new"]');
+        readyDraft.value = 'One more setup step';
+        readyDraft.dispatchEvent(new FocusEvent('blur'));
+
+        expect(document.querySelector(`[data-section="ready"] [data-id="${ready.id}"]`)).toBeNull();
+        expect(document.querySelector(`[data-section="${ready.section}"] [data-id="${ready.id}"]`)).not.toBeNull();
+        expect(document.querySelector(`[data-id="${ready.id}"] .sp-beats--ready`)).toBeNull();
+
+        const emptyEditor = document.querySelector(`[data-beat-editor-id="${empty.id}"]`);
+        emptyEditor.open = true;
+        emptyEditor.querySelector('[data-action="beat-add"]').click();
+        const emptyDraft = emptyEditor.querySelector('[data-action="beat-new"]');
+        emptyDraft.value = 'First setup step';
+        // The fallback helper is part of the regression: jsdom does not need a
+        // CSS.escape implementation for this path to complete.
+        vi.stubGlobal('CSS', undefined);
+        emptyDraft.dispatchEvent(new FocusEvent('blur'));
+
+        const emptyCard = document.querySelector(`[data-id="${empty.id}"]`);
+        expect(emptyCard.querySelector('.sp-beats')).not.toBeNull();
+        expect(emptyCard.querySelector('[data-action="beat-add"]')).not.toBeNull();
+        expect(emptyCard.querySelector('[aria-describedby^="sp-generate-beats-help-"]')).toBeNull();
+
         state.modal = null;
         state.contentEl = null;
         vi.unstubAllGlobals();
@@ -226,6 +299,22 @@ describe('Story Planner Phase 2 — focus survives destructive beat actions', ()
         expect(document.querySelector('[data-action="beat-done"]')).toBeNull();
         expect(document.activeElement.matches('.sp-beat-editor > summary')).toBe(true);
 
+        unmount(state);
+    });
+
+    test('a removed beat never copies its typed text into the fallback neighbor', async () => {
+        const arc = makeArc({ title: 'No spill', beats: ['first', 'second'] });
+        const state = await mount(arc);
+        const first = document.querySelector(`[data-action="beat-text"][data-beat-id="${arc.beats[0].id}"]`);
+        first.focus();
+        first.value = 'unsaved typing';
+
+        removeArcBeat(arc.id, arc.beats[0].id);
+        document.querySelector('[data-action="pin"]').click();
+
+        expect(document.activeElement.dataset.beatId).toBe(arc.beats[1].id);
+        expect(document.activeElement.value).toBe('second');
+        expect(getArcs()[0].beats[0].text).toBe('second');
         unmount(state);
     });
 });

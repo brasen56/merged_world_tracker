@@ -133,12 +133,31 @@
    from the prompt, so they should not read as part of the live plan. */
 .sp-arc--muted { opacity: 0.55; }
 .sp-arc--muted:hover { opacity: 0.85; }
+.sp-arc--parked { border-left-color: var(--mwt-text-dim); }
 
 .sp-arc-head {
     display: flex;
     align-items: center;
     gap: 6px;
 }
+
+.sp-lifecycle {
+    flex: 0 0 auto;
+    font-size: 11px;
+    padding: 3px 7px;
+}
+
+.sp-activate-when {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+    margin: 5px 5px 0;
+    color: var(--mwt-text-dim);
+    font-size: 11px;
+}
+
+.sp-activate-when .mwt-input { font-size: 11px; padding: 3px 5px; }
 
 /* NOTE: background AND color are set explicitly on every field below, even
    where "transparent"/inherited would look right in isolation. SillyTavern
