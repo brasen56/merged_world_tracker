@@ -86,6 +86,7 @@ export { downloadBlob, downloadJson, pickTextFile } from './file.js';
 export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from './strip.js';
 export { getOrCreateReceiptIdentity } from './message_identity.js';
+export { findQuoteMatch, quoteMatchesMessage, normalizeForMatch } from './quote_match.js';
 export { MWT_VERSION } from './version.js';
 export {
     WORLD_STATE_SECTIONS,

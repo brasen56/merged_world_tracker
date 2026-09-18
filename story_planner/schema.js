@@ -51,6 +51,9 @@ import {
 export const MAX_ARC_TITLE = 200;
 export const MAX_ARC_BODY = 2000;
 export const MAX_BEAT_LENGTH = 1000;
+export const MAX_PROGRESS_METADATA_ENTRIES = 500;
+export const MAX_PROGRESS_IDENTITY_LENGTH = 500;
+export const MAX_IGNORED_PROGRESS_EVIDENCE_LENGTH = 2000;
 
 /**
  * ARC SHAPE
@@ -616,7 +619,64 @@ export function validateStoryPlannerData(data) {
             }
         }
     }
+    canonicalizeProgressMetadata(data, accepted, issues);
     return { data: accepted, issues, stats };
+}
+
+function liveProgressItemKeys(arcs) {
+    const keys = new Set();
+    for (const arc of arcs || []) {
+        keys.add(`arc:${arc.id}`);
+        for (const beat of arc.beats || []) keys.add(`beat:${arc.id}:${beat.id}`);
+    }
+    return keys;
+}
+
+/** Canonicalize bounded Phase 5 scan cursors and ignored-evidence fingerprints. */
+function canonicalizeProgressMetadata(raw, accepted, issues) {
+    const itemKeys = liveProgressItemKeys(accepted.arcs);
+    if (raw.progressWatermarks !== undefined) {
+        accepted.progressWatermarks = {};
+        if (!isObject(raw.progressWatermarks)) {
+            issues.push(repairIssue('progress-watermarks-invalid', ['progressWatermarks'], 'Progress watermarks must be an object map and were reset.', raw.progressWatermarks));
+        } else {
+            const valid = [];
+            for (const [key, value] of Object.entries(raw.progressWatermarks)) {
+                if (!itemKeys.has(key)) continue;
+                const identity = typeof value === 'string' ? value : value?.identity;
+                const index = typeof value === 'string' ? undefined : value?.index;
+                if (!isNonEmptyString(identity) || String(identity).length > MAX_PROGRESS_IDENTITY_LENGTH
+                    || (index !== undefined && (!Number.isSafeInteger(index) || index < 0))) continue;
+                valid.push([key, index === undefined
+                    ? String(identity)
+                    : { identity: String(identity), index }]);
+            }
+            for (const [key, value] of valid.slice(-MAX_PROGRESS_METADATA_ENTRIES)) {
+                accepted.progressWatermarks[key] = value;
+            }
+            if (Object.keys(accepted.progressWatermarks).length !== Object.keys(raw.progressWatermarks).length) {
+                issues.push(repairIssue('progress-watermarks-pruned', ['progressWatermarks'], 'Invalid, excess, or orphaned progress watermarks were removed.', raw.progressWatermarks));
+            }
+        }
+    }
+    if (raw.ignoredProgressEvidence !== undefined) {
+        if (!Array.isArray(raw.ignoredProgressEvidence)) {
+            accepted.ignoredProgressEvidence = [];
+            issues.push(repairIssue('ignored-progress-evidence-invalid', ['ignoredProgressEvidence'], 'Ignored progress evidence must be an array and was reset.', raw.ignoredProgressEvidence));
+        } else {
+            const valid = raw.ignoredProgressEvidence.filter(value => {
+                if (typeof value !== 'string' || value.length > MAX_IGNORED_PROGRESS_EVIDENCE_LENGTH) return false;
+                const parts = value.split('\u0000');
+                return parts.length === 3 && itemKeys.has(parts[0])
+                    && isNonEmptyString(parts[1]) && parts[1].length <= MAX_PROGRESS_IDENTITY_LENGTH
+                    && isNonEmptyString(parts[2]);
+            });
+            accepted.ignoredProgressEvidence = [...new Set(valid)].slice(-MAX_PROGRESS_METADATA_ENTRIES);
+            if (accepted.ignoredProgressEvidence.length !== raw.ignoredProgressEvidence.length) {
+                issues.push(repairIssue('ignored-progress-evidence-pruned', ['ignoredProgressEvidence'], 'Invalid, duplicate, excess, or orphaned ignored progress evidence was removed.', raw.ignoredProgressEvidence));
+            }
+        }
+    }
 }
 
 function collectBeatIdIssues(arcs, path, issues) {
@@ -726,7 +786,11 @@ export const storyPlannerSchema = defineStoreSchema({
     migrations: { 0: migrateStoryPlannerV0ToV1, 1: migrateStoryPlannerV1ToV2 },
     validate: validateStoryPlannerData,
     policy: defineIssuePolicy({
-        repair: ['plan-text-migrated', 'beat-id-minted', 'beat-id-duplicate'],
+        repair: [
+            'plan-text-migrated', 'beat-id-minted', 'beat-id-duplicate',
+            'progress-watermarks-invalid', 'progress-watermarks-pruned',
+            'ignored-progress-evidence-invalid', 'ignored-progress-evidence-pruned',
+        ],
         fatal: ['root-not-object'],
         record: [
             'not-an-array',

@@ -12,6 +12,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.18]
+
+### Added
+
+- Story Planner Phase 5 — evidence-backed progress suggestions
+  (`docs/STORY_PLANNER_ROADMAP.md`). A manual **Check progress** action
+  reviews every active arc's current beat and every Ready arc's payoff
+  against settled messages newer than that item's last check watermark, and
+  returns only reviewable proposals: **Beat appears planted**, **Arc may be
+  resolved**, or **No clear evidence**. The model never mutates beat or arc
+  status — every positive verdict must cite a short excerpt copied verbatim
+  from one of that item's eligible messages, which is re-verified against the
+  live chat and pinned to a stable message identity before a suggestion is
+  even shown. Automatic checks remain behind the roadmap's later decision
+  gate; the manual action adds no background API cost.
+- A shared quote-verification seam. `findQuoteMatch`, `quoteMatchesMessage`,
+  and `normalizeForMatch` moved from `knowledge/growth.js` into the tested
+  `core/quote_match.js` module (the roadmap's Phase 5 prerequisite), so Story
+  Planner consumes a core seam instead of Knowledge's private helpers.
+  Knowledge keeps its established interposition-tolerant matching; the new
+  `allowInterposition` option lets strict consumers disable the bigram
+  fallback. Covered by `test/quote_match.test.js`.
+- One review panel for all suggestions from a check
+  (`story_planner/render.js`) with Accept, Ignore, and Open source per row.
+  Accepting a beat performs the normal user-authored planted mutation with a
+  history snapshot; accepting a resolution goes through the normal Resolve
+  flow and lets the user enter or edit the reason; Open source re-verifies
+  the excerpt and shows the cited message. Accept and Ignore re-check chat
+  scope, arc revision, item state, and evidence at the click boundary and
+  fail closed with a visible reason when anything changed.
+- Durable, bounded progress metadata in the chat's plan data. Per-item scan
+  watermarks and ignored-evidence fingerprints are canonicalized by
+  `story_planner/schema.js` (orphaned, malformed, duplicate, or over-cap
+  entries are pruned as repairs; 500-entry caps), ride through
+  backup/restore, and let the next check resume from each item's watermark —
+  including when the watermark's message has since been deleted or swiped —
+  instead of rescanning the whole chat. Ignoring records that exact
+  item/evidence combination, so an ignored suggestion is not re-proposed
+  while genuinely new evidence still can be.
+- Story Planner now receives MESSAGE_SWIPED and MESSAGE_EDITED through the
+  core event router. Swipes and edits invalidate exactly the suggestions
+  that cited the affected slot, deletions invalidate shifted later sources,
+  chat switches close and destroy the review modal, and an open panel
+  updates in place with the reason and a disabled Accept. A message change
+  during an in-flight check discards the whole result without settling any
+  watermark.
+- Phase 5 regression coverage in `test/story_planner_phase5.test.js`
+  (verified-only proposals, fail-closed acceptance across chat switch,
+  concurrent arc edit, and evidence edit; watermark durability and resume;
+  ignore suppression; malformed persisted metadata; in-flight invalidation;
+  review-modal staleness), plus router coverage for the new swipe/edit hooks
+  in `test/event_router.test.js` and metadata canonicalization in
+  `test/story_planner_phase1.test.js` and
+  `test/backup_schema_roundtrip.test.js`.
+
+### Changed
+
+- `knowledge/growth.js` now imports the shared `findQuoteMatch` from
+  `core/quote_match.js`; its verification behavior is unchanged.
+
+### Fixed
+
+- A progress check invalidated while its API call was in flight no longer
+  reports "**No clear evidence**" (`story_planner/render.js`). A chat switch
+  or message edit/swipe/delete during the call now explains that the check
+  was invalidated and should be run again — matching the targeted-proposal
+  dialog's stale handling — instead of implying the evidence was reviewed and
+  found absent (which could also pop a misleading panel on a newly opened
+  chat). Tests: `test/story_planner_phase5.test.js`.
+
 ## [2.8.17]
 
 ### Added

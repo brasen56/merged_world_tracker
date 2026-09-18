@@ -31,7 +31,8 @@ import {
 } from './data.js';
 import { applyPlanInjection, getArcsForInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
-import { renderContent, wireEvents, renderArcs, refreshDisplay } from './render.js';
+import { closeProgressReviewModal, refreshProgressReviewModal, renderContent, wireEvents, renderArcs, refreshDisplay } from './render.js';
+import { clearProgressSuggestions, staleProgressSuggestionsAt, staleProgressSuggestionsFrom } from './progress.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -159,6 +160,8 @@ export async function onMessageReceived({ countMessage = true } = {}) {
 }
 
 export function onChatChanged() {
+    closeProgressReviewModal();
+    clearProgressSuggestions();
     // NOTE: do NOT unconditionally clear state.isGenerating here. A generation
     // in flight for the *previous* chat self-clears in its own finally; forcing
     // the flag false here lets a second generation start concurrently against
@@ -193,6 +196,8 @@ export function onChatChanged() {
  * persistAutoCounter(); the write seam would refuse anyway).
  */
 export function onChatChangedWhilePaused() {
+    closeProgressReviewModal();
+    clearProgressSuggestions();
     if (state.autoTimer) { clearTimeout(state.autoTimer); state.autoTimer = null; }
     applyPlanInjection();
     console.log('[MWT:StoryPlanner] Chat changed while paused — injection cleared, auto timer cancelled (store hydration skipped).');
@@ -209,6 +214,8 @@ export function onChatChangedWhilePaused() {
  *   the counter decrement is skipped but bookkeeping still runs.
  */
 export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
+    staleProgressSuggestionsFrom(Number.isInteger(deletedIndex) ? deletedIndex : null, 'The cited message was deleted.');
+    refreshProgressReviewModal();
     if (typeof deletedIndex !== 'number') return;
 
     // SillyTavern fires a single MESSAGE_DELETED event for bulk deletes
@@ -238,6 +245,16 @@ export function onMessageDeleted(deletedIndex, { adjustCounters = true } = {}) {
     }
     else if (provenanceChanged) persistAutoCounter();
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+export function onMessageSwiped(messageIndex) {
+    staleProgressSuggestionsAt(messageIndex, 'The cited message was swiped.');
+    refreshProgressReviewModal();
+}
+
+export function onMessageEdited(messageIndex) {
+    staleProgressSuggestionsAt(messageIndex, 'The cited message was edited.');
+    refreshProgressReviewModal();
 }
 
 function getReceiptIdentity(message) {

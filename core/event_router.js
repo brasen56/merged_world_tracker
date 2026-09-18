@@ -206,6 +206,10 @@ export function routeMessageSwiped(modules, settings, swipedIndex, decline = nul
         if (declined('Chronicle')) logDecline('MESSAGE_SWIPED', 'Chronicle');
         else modules.Chronicle.onMessageSwiped(swipedIndex);
     }
+    if (settings.enableStoryPlanner !== false) {
+        if (declined('StoryPlanner')) logDecline('MESSAGE_SWIPED', 'StoryPlanner');
+        else modules.StoryPlanner.onMessageSwiped?.(swipedIndex);
+    }
     if (settings.enableInteriority !== false) {
         if (declined('Interiority')) logDecline('MESSAGE_SWIPED', 'Interiority');
         else modules.Interiority.onMessageSwiped(swipedIndex);
@@ -236,6 +240,10 @@ export function routeMessageEdited(modules, settings, editedIndex, decline = nul
     if (settings.enableChronicle  !== false) {
         if (declined('Chronicle')) logDecline('MESSAGE_EDITED', 'Chronicle');
         else modules.Chronicle.onMessageEdited(editedIndex);
+    }
+    if (settings.enableStoryPlanner !== false) {
+        if (declined('StoryPlanner')) logDecline('MESSAGE_EDITED', 'StoryPlanner');
+        else modules.StoryPlanner.onMessageEdited?.(editedIndex);
     }
     if (settings.enableInteriority !== false) {
         if (declined('Interiority')) logDecline('MESSAGE_EDITED', 'Interiority');

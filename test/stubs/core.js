@@ -419,6 +419,7 @@ export {
     createRevisionClock,
     decideCommit,
 } from '../../core/revision.js';
+export { findQuoteMatch, quoteMatchesMessage, normalizeForMatch } from '../../core/quote_match.js';
 export {
     escapePromptText,
     escapePromptAttr,

@@ -13,9 +13,13 @@
 import {
     escapeHtml, estimateTokens, notify,
     renderApiSettingsFields, readApiSettingsValues,
-    createModal, showModal, hideModal,
     computeLcsDiff, renderDiffHtml,
 } from '../core/index.js';
+// Modal helpers come from the module directly (not the barrel) so the real
+// DOM implementation runs under the test barrel→stub alias — the
+// dashboard/render.js and wireTablist precedents. The stub's modal helpers
+// throw by design, and Phase 5's review modal is exercised in jsdom tests.
+import { createModal, showModal, hideModal } from '../core/modal.js';
 // Direct import (not the barrel) so the real helper runs under the test
 // barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
 // setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
@@ -42,6 +46,10 @@ import {
     generateTargetedProposal,
     targetedOperationLabel,
 } from './targeted.js';
+import {
+    acceptProgressSuggestion, checkProgress, findProgressSource,
+    ignoreProgressSuggestion,
+} from './progress.js';
 
 // ─── API field IDs ───────────────────────────────────────────────────────────
 // One shared map for BOTH renderApiSettingsFields and readApiSettingsValues so
@@ -515,6 +523,7 @@ export function render() {
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
             <button id="sp-generate" class="mwt-btn mwt-btn-primary"><span aria-hidden="true">🎲</span> Generate Plan</button>
+            <button id="sp-check-progress" class="mwt-btn"><span aria-hidden="true">🔎</span> Check progress</button>
             <button id="sp-revert" class="mwt-btn" ${getPlanHistory().length === 0 ? 'disabled' : ''}><span aria-hidden="true">⏪</span> Revert</button>
             <button id="sp-history" class="mwt-btn"><span aria-hidden="true">📋</span> History</button>
             <button id="sp-preview" class="mwt-btn"><span aria-hidden="true">👁</span> Preview Injection</button>
@@ -625,6 +634,119 @@ export function render() {
             <strong>injection</strong> controls whether it reaches the AI.
         </p>
     `;
+}
+
+function progressFailureMessage(reason) {
+    return ({
+        stale: 'This suggestion is stale.',
+        'scope-changed': 'The chat changed after this review opened.',
+        'source-deleted': 'The source arc was deleted.',
+        'source-changed': 'The arc or beat changed after this review opened.',
+        'evidence-changed': 'The cited source message was edited, swiped, or deleted.',
+        'store-paused': 'Story Planner is paused for this chat.',
+    })[reason] || 'This suggestion can no longer be accepted.';
+}
+
+/** One review panel for all evidence-backed suggestions. */
+export function showProgressSuggestions(result) {
+    const suggestions = result?.suggestions || [];
+    const suggestionById = new Map(suggestions.map(suggestion => [suggestion.id, suggestion]));
+    const rows = suggestions.map((suggestion, index) => `
+        <article class="sp-progress-suggestion" data-progress-id="${escapeHtml(suggestion.id)}">
+            <h4>${suggestion.kind === 'beat' ? 'Beat appears planted' : 'Arc may be resolved'} — ${escapeHtml(suggestion.arcTitle || '(untitled arc)')}</h4>
+            <p>${escapeHtml(suggestion.itemText || '')}</p>
+            <blockquote>“${escapeHtml(suggestion.excerpt)}”</blockquote>
+            ${suggestion.reason ? `<p class="mwt-text-dim mwt-text-sm">${escapeHtml(suggestion.reason)}</p>` : ''}
+            ${suggestion.stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(suggestion.staleReason)}</p>` : ''}
+            ${suggestion.kind === 'arc' ? `<label class="mwt-label" for="sp-progress-reason-${index}">Resolution reason (optional)</label><textarea id="sp-progress-reason-${index}" class="mwt-input" rows="2"></textarea>` : ''}
+            <div class="mwt-flex mwt-gap-8 sp-proposal-actions">
+                <button class="mwt-btn mwt-btn-primary" data-progress-action="accept" ${suggestion.stale ? 'disabled' : ''}>Accept</button>
+                <button class="mwt-btn" data-progress-action="ignore">Ignore</button>
+                <button class="mwt-btn" data-progress-action="source">Open source</button>
+            </div>
+        </article>`).join('');
+    // A stale check was invalidated (chat switch, or an edit/swipe/delete
+    // mid-call) — explain that instead of implying the evidence was reviewed
+    // and found absent. Same pattern as the targeted-proposal dialog.
+    const content = rows || (result?.stale
+        ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(result.staleReason || 'The chat or a message changed while progress was checked.')} Run Check progress again.</p>`
+        : `<p><strong>No clear evidence.</strong> No beat or resolution change was proposed.</p>`);
+    const modal = createModal({
+        id: 'mwt-sp-progress-modal', title: 'Check progress — Review', destroyOnClose: true,
+        content: `<p class="mwt-text-dim mwt-text-sm">Suggestions are not facts. Verify each excerpt before accepting.</p>${content}<div class="mwt-flex mwt-mt-8"><button id="mwt-sp-progress-close" class="mwt-btn">Close</button></div>`,
+    });
+    modal.addEventListener('click', event => {
+        const button = event.target.closest('[data-progress-action]');
+        if (!button) return;
+        const article = button.closest('[data-progress-id]');
+        const suggestion = suggestionById.get(article?.dataset.progressId || '');
+        if (!suggestion) return;
+        if (button.dataset.progressAction === 'source') {
+            const source = findProgressSource(suggestion);
+            if (!source) {
+                button.disabled = true;
+                article.insertAdjacentHTML('afterbegin', '<p class="sp-proposal-stale" role="alert">The cited source is no longer verifiable.</p>');
+                return;
+            }
+            const name = source.message.name || (source.message.is_user ? 'User' : 'Assistant');
+            alert(`Message ${source.index + 1} — ${name}\n\n${source.message.mes}`);
+        } else if (button.dataset.progressAction === 'ignore') {
+            const ignored = ignoreProgressSuggestion(suggestion);
+            if (!ignored.ok) {
+                button.disabled = true;
+                article.insertAdjacentHTML('afterbegin', `<p class="sp-proposal-stale" role="alert">${escapeHtml(progressFailureMessage(ignored.reason))}</p>`);
+                return;
+            }
+            article.remove();
+        } else {
+            const reason = article.querySelector('textarea')?.value || '';
+            const accepted = mutateWithProjectionCheck(() => acceptProgressSuggestion(suggestion, reason));
+            if (!accepted.ok) {
+                button.disabled = true;
+                article.insertAdjacentHTML('afterbegin', `<p class="sp-proposal-stale" role="alert">${escapeHtml(progressFailureMessage(accepted.reason))}</p>`);
+                return;
+            }
+            article.remove();
+            renderArcs();
+            notify('Story Planner', suggestion.kind === 'beat' ? 'Beat marked planted.' : 'Arc resolved.', 'success');
+        }
+    });
+    modal.querySelector('#mwt-sp-progress-close')?.addEventListener('click', () => hideModal('mwt-sp-progress-modal'));
+    showModal('mwt-sp-progress-modal');
+}
+
+/** Close the outgoing chat's disposable progress-review shell. */
+export function closeProgressReviewModal() {
+    const modal = typeof document !== 'undefined' && typeof document.getElementById === 'function'
+        ? document.getElementById('mwt-sp-progress-modal')
+        : null;
+    if (!modal) return;
+    if (typeof modal._closeModal === 'function') modal._closeModal();
+    else hideModal('mwt-sp-progress-modal');
+}
+
+/** Reflect chat-mutation staleness in an already-open review immediately. */
+export function refreshProgressReviewModal() {
+    const modal = typeof document !== 'undefined'
+        ? document.getElementById('mwt-sp-progress-modal')
+        : null;
+    if (!modal) return;
+    for (const suggestion of state.progressSuggestions || []) {
+        if (!suggestion.stale) continue;
+        const article = [...modal.querySelectorAll('[data-progress-id]')]
+            .find(candidate => candidate.dataset.progressId === suggestion.id);
+        if (!article) continue;
+        let alert = article.querySelector('.sp-proposal-stale');
+        if (!alert) {
+            alert = document.createElement('p');
+            alert.className = 'sp-proposal-stale';
+            alert.setAttribute('role', 'alert');
+            article.querySelector('.sp-proposal-actions')?.before(alert);
+        }
+        alert.textContent = suggestion.staleReason || 'The source message changed.';
+        const accept = article.querySelector('[data-progress-action="accept"]');
+        if (accept) accept.disabled = true;
+    }
 }
 
 // ─── Re-render helper ────────────────────────────────────────────────────────
@@ -1103,6 +1225,22 @@ export function wireEvents() {
             // survives the busy cycle (Slice 4 item 2; matches the toolbar
             // markup above).
             setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🎲</span> Generate Plan';
+        }
+    });
+
+    state.modal.querySelector('#sp-check-progress')?.addEventListener('click', async () => {
+        const button = state.modal.querySelector('#sp-check-progress');
+        const oldHtml = button.innerHTML;
+        try {
+            setControlBusy(button, true);
+            button.innerHTML = '<span aria-hidden="true">⏳</span> Checking…';
+            const result = await checkProgress();
+            if (result) showProgressSuggestions(result);
+        } catch (error) {
+            notify('Story Planner', `Progress check failed: ${error.message}`, 'error');
+        } finally {
+            setControlBusy(button, false);
+            button.innerHTML = oldHtml;
         }
     });
 

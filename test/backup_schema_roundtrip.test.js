@@ -65,7 +65,11 @@ function canonicalMetadata() {
             Mara: { npc: 'Mara', raw: [{ id: 'r2', claim: 'restored', quote: 'quote' }], consolidated: [], archivedRaw: [] },
         },
         knowledgeCounters: { messageCounter: 3, countedReceiptEvents: [] },
-        storyPlanner: { arcs: [arc('a2', 'Restored arc')] },
+        storyPlanner: {
+            arcs: [arc('a2', 'Restored arc')],
+            progressWatermarks: { 'arc:a2': { identity: 'id:watermark', index: 4 } },
+            ignoredProgressEvidence: ['arc:a2\u0000id:evidence\u0000quoted evidence'],
+        },
         interiority: {
             enabled: true,
             ledger: [{ id: 'i2', npc: 'Mara', action: 'wait', trigger: 'dawn' }],
@@ -418,6 +422,10 @@ describe('Part 3 — restore commits data, manifest, and quarantine in one trans
 
         const second = await exportBackup({ download: false, includeKnowledgeStore: false });
         expect(second.sections).toEqual(first.sections);
+        expect(second.sections.storyPlanner.data).toMatchObject({
+            progressWatermarks: { 'arc:a2': { identity: 'id:watermark', index: 4 } },
+            ignoredProgressEvidence: ['arc:a2\u0000id:evidence\u0000quoted evidence'],
+        });
         // The manifest stamped by the restore is still there after the second
         // export — collection never disturbs it.
         expect(getFakeMeta()[MANIFEST_METADATA_KEY].sections.worldState).toBe(STORE_SCHEMAS.worldState.currentVersion);

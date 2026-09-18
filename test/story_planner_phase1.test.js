@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 
 import { prepareStore } from '../core/schema.js';
-import { storyPlannerSchema, validateStoryPlannerData } from '../story_planner/schema.js';
+import {
+    MAX_PROGRESS_METADATA_ENTRIES, storyPlannerSchema, validateStoryPlannerData,
+} from '../story_planner/schema.js';
 import {
     buildClosedMemoryProjection,
     getArcs,
@@ -50,6 +52,37 @@ describe('Story Planner Phase 1 — store v2', () => {
         expect(validation.data.arcs[0].beats).toHaveLength(2);
         expect(new Set(validation.data.arcs[0].beats.map(beat => beat.id)).size).toBe(2);
         expect(validation.issues.map(issue => issue.code)).toContain('beat-id-duplicate');
+    });
+
+    test('canonicalizes bounded progress metadata and removes malformed or orphaned entries', () => {
+        const arc = makeArc({ title: 'Tracked', beats: ['Current beat'] });
+        const beatKey = `beat:${arc.id}:${arc.beats[0].id}`;
+        const ignoredKey = `${beatKey}\u0000id:evidence\u0000exact quote`;
+        const extraIgnored = Array.from({ length: MAX_PROGRESS_METADATA_ENTRIES + 2 }, (_, index) =>
+            `${beatKey}\u0000id:${index}\u0000quote ${index}`);
+        const validation = validateStoryPlannerData({
+            arcs: [arc],
+            progressWatermarks: {
+                [beatKey]: { identity: 'id:evidence', index: 3 },
+                [`arc:deleted`]: { identity: 'id:old', index: 1 },
+                [`arc:${arc.id}`]: { identity: '', index: -1 },
+            },
+            ignoredProgressEvidence: [ignoredKey, ignoredKey, 'arc:deleted\u0000id:old\u0000old', ...extraIgnored],
+        });
+
+        expect(validation.data.progressWatermarks).toEqual({
+            [beatKey]: { identity: 'id:evidence', index: 3 },
+        });
+        expect(validation.data.ignoredProgressEvidence).toHaveLength(MAX_PROGRESS_METADATA_ENTRIES);
+        expect(validation.data.ignoredProgressEvidence.at(-1)).toContain(`id:${MAX_PROGRESS_METADATA_ENTRIES + 1}`);
+        expect(validation.issues.map(issue => issue.code)).toEqual(expect.arrayContaining([
+            'progress-watermarks-pruned', 'ignored-progress-evidence-pruned',
+        ]));
+
+        const malformed = validateStoryPlannerData({
+            arcs: [arc], progressWatermarks: [], ignoredProgressEvidence: 42,
+        });
+        expect(malformed.data).toMatchObject({ progressWatermarks: {}, ignoredProgressEvidence: [] });
     });
 });
 

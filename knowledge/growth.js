@@ -33,6 +33,7 @@ import {
     getChat, getChatMeta, stripNonNarrative, getWorldStateFactual,
     getLatestChronicleEntry, normaliseOutput, parseJsonLenient,
     getStableHistoryEnd, captureScope, isCancellation,
+    findQuoteMatch,
 } from '../core/index.js';
 // scopeStillCurrent (not the barrel's strict assertSameScope): the capture
 // guards must not false-fire on hosts with an UNKNOWN chat identity —
@@ -130,114 +131,6 @@ export function looksTruncated(text) {
     const core = trimmed.replace(/[)\]}"'”’»*`_\s]+$/u, '');
     if (!core) return false; // was nothing but closers — treat as inconclusive
     return !/[.!?…]$/u.test(core);
-}
-
-// ─── Quote verification ──────────────────────────────────────────────────────
-
-/**
- * Normalize text for lenient verbatim matching: lowercase, drop punctuation and
- * markdown, collapse whitespace. This lets a faithfully-copied quote match its
- * source across trivial reformatting (capitalization, wrapping quotes,
- * `*emphasis*`) while still rejecting a genuine paraphrase, which won't appear
- * as a substring.
- *
- * @param {string} s
- * @returns {string}
- */
-function normalizeForMatch(s) {
-    return String(s || '')
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-/** How far from the model's cited msgIdx to search. Its index is approximate —
- *  it miscounts across long or sparse windows (hidden/summary messages create
- *  index gaps), so a real quote can be cited one or two messages off. */
-const VERIFY_WINDOW = 5;
-
-/** Fraction of a quote's word-bigrams that must appear in a candidate message
- *  for a non-contiguous match. Tolerates an interposed dialogue tag
- *  (`"…," he said, "…"`), which only breaks bigrams locally, while still
- *  rejecting a paraphrase, whose different word choices break most bigrams. */
-const BIGRAM_MATCH_THRESHOLD = 0.7;
-
-function bigrams(tokens) {
-    const out = [];
-    for (let i = 0; i + 1 < tokens.length; i++) out.push(`${tokens[i]} ${tokens[i + 1]}`);
-    return out;
-}
-
-/**
- * Does `quote` appear in a single message — either as an exact contiguous span
- * or, failing that, with enough bigram overlap to be the same words split by an
- * interposed tag/action? `needle`/`needleBigrams` are precomputed by the caller.
- */
-function quoteMatchesMessage(needle, needleBigrams, msg) {
-    if (!msg || !msg.mes) return false;
-    // preserveOffScreen:false — must match the SAME text the evidence prompt
-    // was shown (getIndexedMessages and friends strip the sealed block for
-    // Knowledge), so a quote drawn from an off-screen log line never verifies.
-    const haystack = normalizeForMatch(stripNonNarrative(msg.mes, { preserveOffScreen: false }));
-    if (!haystack) return false;
-    if (haystack.includes(needle)) return true; // exact contiguous span (fast path)
-    if (needleBigrams.length === 0) return false;
-    const haySet = new Set(bigrams(haystack.split(' ')));
-    let hit = 0;
-    for (const bg of needleBigrams) if (haySet.has(bg)) hit++;
-    return hit / needleBigrams.length >= BIGRAM_MATCH_THRESHOLD;
-}
-
-/**
- * Find the chat message that actually contains an observation's quote and return
- * its index — or -1 if the quote can't be verified. The model is told to copy
- * dialogue OR action-narration word-for-word; this enforces it. A paraphrase
- * (what the model tends to do for actions) shares few words with the source and
- * returns -1.
- *
- * Two tolerances keep it from false-flagging *real* quotes:
- *   1. **Windowed** — the model's cited msgIdx is approximate, so we search a
- *      small neighborhood, expanding OUTWARD so the first hit is the NEAREST one.
- *   2. **Interposition-tolerant** — a quote split by a dialogue tag
- *      (`"…," he murmured, "…"`) isn't a contiguous substring, so we fall back to
- *      bigram overlap, which survives a local break but not a whole paraphrase.
- *
- * Returning the matched index (not just a boolean) lets the caller SNAP the
- * observation's msgIdx to the real source — fixing both the displayed `[msg N]`
- * and the evidence store's `ts` anchor (extractMsgTs reads chat[msgIdx].send_date).
- *
- * Matches against the SAME stripped text the evidence prompt was shown
- * (stripNonNarrative). Very short quotes are rejected as too spurious to trust.
- *
- * @param {string} quote
- * @param {number|null} msgIdx — cited chat-array index (approximate)
- * @param {Array} chat — the chat array
- * @returns {number} matched chat index, or -1 if unverifiable
- */
-function findQuoteMatch(quote, msgIdx, chat) {
-    const needle = normalizeForMatch(quote);
-    if (needle.length < 8) return -1; // too short to be a meaningful, non-spurious receipt
-    const needleTokens = needle.split(' ');
-    if (needleTokens.length < 3) return -1;
-    const needleBigrams = bigrams(needleTokens);
-
-    if (msgIdx != null && msgIdx >= 0 && msgIdx < chat.length) {
-        // Expand outward from the cited index so the first hit is the nearest one.
-        if (quoteMatchesMessage(needle, needleBigrams, chat[msgIdx])) return msgIdx;
-        for (let d = 1; d <= VERIFY_WINDOW; d++) {
-            const lo = msgIdx - d;
-            const hi = msgIdx + d;
-            if (lo >= 0 && quoteMatchesMessage(needle, needleBigrams, chat[lo])) return lo;
-            if (hi < chat.length && quoteMatchesMessage(needle, needleBigrams, chat[hi])) return hi;
-        }
-        return -1;
-    }
-    // No usable cited index — scan the whole chat, return the first match.
-    for (let i = 0; i < chat.length; i++) {
-        if (quoteMatchesMessage(needle, needleBigrams, chat[i])) return i;
-    }
-    return -1;
 }
 
 // ─── Message formatting ──────────────────────────────────────────────────────

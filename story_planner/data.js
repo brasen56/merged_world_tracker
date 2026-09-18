@@ -94,6 +94,8 @@ export const state = {
     targetedReviewOpen: false,
     /** True while the targeted action that owns isGenerating is in flight. */
     targetedActionInFlight: false,
+    /** Transient Phase 5 evidence proposals; never persisted as inferred fact. */
+    progressSuggestions: [],
     /** Auto-trigger countdown (messages since last plan generation) */
     autoCounter: 0,
     /** Last persisted chat length, used by onMessageDeleted */

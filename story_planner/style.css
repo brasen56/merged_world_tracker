@@ -487,6 +487,18 @@
     padding: 8px;
 }
 
+.sp-progress-suggestion {
+    border-bottom: 1px solid var(--mwt-border);
+    padding: 8px 0 12px;
+}
+
+.sp-progress-suggestion blockquote {
+    border-left: 3px solid var(--mwt-accent);
+    color: var(--mwt-text);
+    margin: 8px 0;
+    padding: 6px 10px;
+}
+
 /* A ready arc is the payoff of the whole mechanism — make it findable. */
 .sp-arc--ready { border-left-color: var(--mwt-success); }
 

@@ -57,6 +57,8 @@ function makeStubModules() {
             StoryPlanner: {
                 onMessageReceived: spy('sp.recv'),
                 onMessageDeleted: spy('sp.del'),
+                onMessageSwiped: spy('sp.swipe'),
+                onMessageEdited: spy('sp.edit'),
             },
             Interiority: {
                 onMessageReceived: spy('in.recv'),
@@ -195,6 +197,7 @@ describe('swipe/edit are never gated by the panic switch', () => {
         routeMessageSwiped(modules, { injectionMasterOff: true }, 2);
         expect(called('ws.swipe')).toBe(1);
         expect(called('ch.swipe')).toBe(1);
+        expect(called('sp.swipe')).toBe(1);
         expect(called('in.swipe')).toBe(1);
     });
 
@@ -203,6 +206,7 @@ describe('swipe/edit are never gated by the panic switch', () => {
         routeMessageEdited(modules, { injectionMasterOff: true }, 2);
         expect(called('ws.edit')).toBe(1);
         expect(called('ch.edit')).toBe(1);
+        expect(called('sp.edit')).toBe(1);
         expect(called('in.edit')).toBe(1);
     });
 });
