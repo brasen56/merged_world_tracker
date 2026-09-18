@@ -11,6 +11,11 @@ import { stripNonNarrative } from './strip.js';
 export const QUOTE_VERIFY_WINDOW = 5;
 export const BIGRAM_MATCH_THRESHOLD = 0.7;
 
+/** ILS summaries are paraphrases, not verbatim evidence sources. */
+export function isIlsSummary(message) {
+    return !!message?.extra?.ILS_Data;
+}
+
 export function normalizeForMatch(value) {
     return String(value || '')
         .toLowerCase()
@@ -36,7 +41,7 @@ function bigrams(tokens) {
 export function quoteMatchesMessage(needle, needleBigrams, message, { allowInterposition = true } = {}) {
     const normalizedNeedle = normalizeForMatch(needle);
     const tokens = normalizedNeedle.split(' ').filter(Boolean);
-    if (!message?.mes || normalizedNeedle.length < 8 || tokens.length < 3) return false;
+    if (!message?.mes || isIlsSummary(message) || normalizedNeedle.length < 8 || tokens.length < 3) return false;
     const haystack = normalizeForMatch(stripNonNarrative(message.mes, { preserveOffScreen: false }));
     if (!haystack) return false;
     if (haystack.includes(normalizedNeedle)) return true;

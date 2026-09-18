@@ -38,21 +38,12 @@
  */
 
 import { getChatMeta, sendDateToMs } from '../core/index.js';
+import { isIlsSummary } from '../core/quote_match.js';
+
+export { isIlsSummary };
 
 /** Chat-metadata key where ILS stores original message arrays, keyed by UUID. */
 export const ILS_ORIGINALS_KEY = 'ILS_Originals';
-
-// ─── Detection ─────────────────────────────────────────────────────────────
-
-/**
- * Is this message an ILS summary? (Does it carry ILS_Data?)
- *
- * @param {object} msg — a chat message object
- * @returns {boolean}
- */
-export function isIlsSummary(msg) {
-    return !!(msg && msg.extra && msg.extra.ILS_Data);
-}
 
 // ─── Resolution ────────────────────────────────────────────────────────────
 

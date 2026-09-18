@@ -658,7 +658,7 @@ export function showProgressSuggestions(result) {
             <blockquote>“${escapeHtml(suggestion.excerpt)}”</blockquote>
             ${suggestion.reason ? `<p class="mwt-text-dim mwt-text-sm">${escapeHtml(suggestion.reason)}</p>` : ''}
             ${suggestion.stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(suggestion.staleReason)}</p>` : ''}
-            ${suggestion.kind === 'arc' ? `<label class="mwt-label" for="sp-progress-reason-${index}">Resolution reason (optional)</label><textarea id="sp-progress-reason-${index}" class="mwt-input" rows="2"></textarea>` : ''}
+            ${suggestion.kind === 'arc' ? `<label class="mwt-label" for="sp-progress-reason-${index}">Resolution reason (optional)</label><textarea id="sp-progress-reason-${index}" class="mwt-input" rows="2">${escapeHtml(suggestion.reason || '')}</textarea>` : ''}
             <div class="mwt-flex mwt-gap-8 sp-proposal-actions">
                 <button class="mwt-btn mwt-btn-primary" data-progress-action="accept" ${suggestion.stale ? 'disabled' : ''}>Accept</button>
                 <button class="mwt-btn" data-progress-action="ignore">Ignore</button>
@@ -670,7 +670,9 @@ export function showProgressSuggestions(result) {
     // and found absent. Same pattern as the targeted-proposal dialog.
     const content = rows || (result?.stale
         ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(result.staleReason || 'The chat or a message changed while progress was checked.')} Run Check progress again.</p>`
-        : `<p><strong>No clear evidence.</strong> No beat or resolution change was proposed.</p>`);
+        : result?.upToDate
+            ? '<p><strong>Already up to date.</strong> No new settled messages are available since the last check.</p>'
+            : `<p><strong>No clear evidence.</strong> No beat or resolution change was proposed.</p>`);
     const modal = createModal({
         id: 'mwt-sp-progress-modal', title: 'Check progress — Review', destroyOnClose: true,
         content: `<p class="mwt-text-dim mwt-text-sm">Suggestions are not facts. Verify each excerpt before accepting.</p>${content}<div class="mwt-flex mwt-mt-8"><button id="mwt-sp-progress-close" class="mwt-btn">Close</button></div>`,
@@ -688,8 +690,12 @@ export function showProgressSuggestions(result) {
                 article.insertAdjacentHTML('afterbegin', '<p class="sp-proposal-stale" role="alert">The cited source is no longer verifiable.</p>');
                 return;
             }
-            const name = source.message.name || (source.message.is_user ? 'User' : 'Assistant');
-            alert(`Message ${source.index + 1} — ${name}\n\n${source.message.mes}`);
+            const messageElement = document.getElementById('chat')?.querySelector(`.mes[mesid="${source.index}"]`);
+            if (!messageElement) {
+                notify('Story Planner', `Source message ${source.index + 1} is not currently rendered in the chat.`, 'info');
+                return;
+            }
+            messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else if (button.dataset.progressAction === 'ignore') {
             const ignored = ignoreProgressSuggestion(suggestion);
             if (!ignored.ok) {
@@ -929,19 +935,29 @@ function renderTargetedDiff(proposal) {
         ${beatRows ? `<h4>Pending beats</h4><ul class="sp-proposal-diff">${beatRows}</ul>` : ''}`;
 }
 
+function finishTargetedReview() {
+    if (!state.targetedReviewOpen) return;
+    state.targetedReviewOpen = false;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+export function closeTargetedReviewModal() {
+    const modal = typeof document !== 'undefined' && typeof document.getElementById === 'function'
+        ? document.getElementById('mwt-sp-targeted-modal')
+        : null;
+    finishTargetedReview();
+    if (!modal) return;
+    if (typeof modal._closeModal === 'function') modal._closeModal();
+    else hideModal('mwt-sp-targeted-modal');
+}
+
 function showTargetedProposal(proposal) {
     const stale = proposal.stale;
-    const finishReview = () => {
-        if (!state.targetedReviewOpen && !state.isGenerating) return;
-        state.isGenerating = false;
-        state.targetedReviewOpen = false;
-        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
-    };
     const modal = createModal({
         id: 'mwt-sp-targeted-modal',
         title: `${targetedOperationLabel(proposal.operation)} — Review`,
         destroyOnClose: true,
-        onClose: finishReview,
+        onClose: finishTargetedReview,
         content: `
             <p class="mwt-text-dim mwt-text-sm">Review this proposal. Nothing changes until you choose Apply.</p>
             ${stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason)} Generate again to apply changes.</p>` : ''}
@@ -965,25 +981,32 @@ function showTargetedProposal(proposal) {
             modal.querySelector('.mwt-modal-body')?.insertAdjacentHTML('afterbegin', `<p class="sp-proposal-stale" role="alert">${escapeHtml(message)} Generate again.</p>`);
             return;
         }
-        finishReview();
+        finishTargetedReview();
         hideModal('mwt-sp-targeted-modal');
         renderArcs();
         notify('Story Planner', `${targetedOperationLabel(proposal.operation)} applied.`, 'success');
     });
     modal.querySelector('#mwt-sp-targeted-discard')?.addEventListener('click', () => {
-        finishReview();
+        finishTargetedReview();
         hideModal('mwt-sp-targeted-modal');
     });
     if (!showModal('mwt-sp-targeted-modal')) {
         // createModal() leaves the proposal hidden when another dialog owns
         // focus. Do not leave the generation/review guards set in that case.
-        finishReview();
+        finishTargetedReview();
         hideModal('mwt-sp-targeted-modal');
     }
 }
 
 async function runTargetedAction(button, arcId, operation) {
-    if (state.isGenerating || state.targetedReviewOpen) return;
+    if (state.isGenerating) {
+        notify('Story Planner', 'Story Planner is already generating.', 'info');
+        return;
+    }
+    if (state.targetedReviewOpen) {
+        notify('Story Planner', 'Review or discard the open targeted proposal first.', 'info');
+        return;
+    }
     const oldHtml = button.innerHTML;
     state.isGenerating = true;
     state.targetedActionInFlight = true;
@@ -995,7 +1018,9 @@ async function runTargetedAction(button, arcId, operation) {
         const proposal = await generateTargetedProposal(arcId, operation);
         if (proposal) {
             state.targetedActionInFlight = false;
+            state.isGenerating = false;
             state.targetedReviewOpen = true;
+            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
             showTargetedProposal(proposal);
         } else {
             state.targetedActionInFlight = false;

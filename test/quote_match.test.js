@@ -31,4 +31,13 @@ describe('shared quote matching seam', () => {
         expect(findQuoteMatch(quote, 0, [split])).toBe(0);
         expect(findQuoteMatch(quote, 0, [split], { allowInterposition: false })).toBe(-1);
     });
+
+    test('never treats an ILS summary paraphrase as a quotable source', () => {
+        const summary = {
+            mes: 'The clerk found that the second seal was broken.',
+            extra: { ILS_Data: { Ref: 'stored-originals' } },
+        };
+        expect(quoteMatchesMessage('the second seal was broken', null, summary)).toBe(false);
+        expect(findQuoteMatch('the second seal was broken', 0, [summary])).toBe(-1);
+    });
 });

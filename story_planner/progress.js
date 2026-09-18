@@ -7,7 +7,7 @@
  */
 import {
     assertSameScope, captureRevision, captureScope, findQuoteMatch, getChat,
-    getOrCreateReceiptIdentity, getStableHistoryEnd, isCancellation,
+    getOrCreateReceiptIdentity, getStableHistoryEnd, isCancellation, isIlsSummary,
     normaliseOutput, normalizeForMatch, parseJsonLenient, resolveApiCall,
     sameRevision, stripNonNarrative, wrapTag,
 } from '../core/index.js';
@@ -50,6 +50,8 @@ const materialArc = arc => {
 };
 const itemKey = item => item.kind === 'beat' ? `beat:${item.arcId}:${item.beatId}` : `arc:${item.arcId}`;
 const evidenceKey = suggestion => `${suggestion.itemKey}\u0000${suggestion.messageIdentity}\u0000${normalizeForMatch(suggestion.excerpt)}`;
+export const PROGRESS_MESSAGE_WINDOW = 80;
+export const PROGRESS_MAX_MESSAGE_CHARS = 30000;
 let chatMutationGeneration = 0;
 
 function checkedItems(arcs = getArcs()) {
@@ -89,25 +91,39 @@ function buildRequest(capturedItems, chat, stableEnd, watermarks) {
     const handleMessages = new Map();
     const itemHandles = new Map();
     const itemLines = [];
-    let messageNumber = 0;
+    const starts = new Map(capturedItems.map(item => [item.key,
+        Math.max(watermarkStartIndex(chat, watermarks[item.key]), stableEnd - PROGRESS_MESSAGE_WINDOW)]));
+    const earliestStart = Math.min(...starts.values());
+    const available = [];
+    for (let messageIndex = earliestStart; messageIndex < stableEnd; messageIndex++) {
+        const message = chat[messageIndex];
+        if (!message || message.is_system || isIlsSummary(message)) continue;
+        const text = stripNonNarrative(message.mes, { preserveOffScreen: false }).trim();
+        if (!text) continue;
+        available.push({ identity: getOrCreateReceiptIdentity(message), index: messageIndex, message, text });
+    }
+    const selected = [];
+    let selectedChars = 0;
+    for (let index = available.length - 1; index >= 0; index--) {
+        const entry = available[index];
+        const name = entry.message.name || (entry.message.is_user ? 'User' : 'Assistant');
+        const cost = name.length + entry.text.length + 8;
+        if (selectedChars + cost > PROGRESS_MAX_MESSAGE_CHARS) break;
+        selected.push(entry);
+        selectedChars += cost;
+    }
+    selected.reverse().forEach((entry, index) => {
+        const handle = `m${index + 1}`;
+        messageHandles.set(entry.identity, handle);
+        handleMessages.set(handle, entry);
+    });
     capturedItems.forEach((item, index) => {
         const handle = `i${index + 1}`;
         itemHandles.set(handle, item);
         const candidates = [];
-        const startIndex = watermarkStartIndex(chat, watermarks[item.key]);
-        for (let messageIndex = startIndex; messageIndex < stableEnd; messageIndex++) {
-            const message = chat[messageIndex];
-            if (!message || message.is_system) continue;
-            const text = stripNonNarrative(message.mes, { preserveOffScreen: false }).trim();
-            if (!text) continue;
-            const identity = getOrCreateReceiptIdentity(message);
-            let messageHandle = messageHandles.get(identity);
-            if (!messageHandle) {
-                messageHandle = `m${++messageNumber}`;
-                messageHandles.set(identity, messageHandle);
-                handleMessages.set(messageHandle, { identity, index: messageIndex, message, text });
-            }
-            candidates.push(messageHandle);
+        const startIndex = starts.get(item.key);
+        for (const [messageHandle, entry] of handleMessages) {
+            if (entry.index >= startIndex) candidates.push(messageHandle);
         }
         item.eligibleHandles = new Set(candidates);
         const label = item.kind === 'beat' ? 'CURRENT BEAT' : 'READY ARC PAYOFF';
@@ -120,6 +136,7 @@ function buildRequest(capturedItems, chat, stableEnd, watermarks) {
     return {
         itemHandles,
         handleMessages,
+        hasCandidates: handleMessages.size > 0 && capturedItems.some(item => item.eligibleHandles.size > 0),
         userContent: [wrapTag('items', itemLines.join('\n\n')), wrapTag('eligible_messages', messages || '(none)'), 'Return the JSON object now.'].join('\n\n'),
     };
 }
@@ -169,6 +186,10 @@ export async function checkProgress() {
         return { ...item, key: itemKey(item), revision: captureRevision(materialArc(arc)) };
     });
     const request = buildRequest(capturedItems, chat, stableEnd, watermarks);
+    if (!request.hasCandidates) {
+        state.progressSuggestions = [];
+        return { suggestions: [], noEvidence: 0, stale: false, upToDate: true };
+    }
     let finalIndex = stableEnd - 1;
     while (finalIndex >= 0 && (!chat[finalIndex] || chat[finalIndex].is_system)) finalIndex--;
     const finalMessage = chat[finalIndex];
@@ -270,15 +291,20 @@ export function acceptProgressSuggestion(suggestion, closeReason = '') {
         ? setArcBeatState(suggestion.arcId, suggestion.beatId, 'planted')
         : setArcStatus(suggestion.arcId, 'resolved', clean(closeReason, 2000));
     if (!updated) return { ok: false, reason: 'store-refused' };
-    commitSuggestionWatermark(suggestion);
+    commitSuggestionWatermark(suggestion, updated);
     state.progressSuggestions = (state.progressSuggestions || []).filter(candidate => candidate !== suggestion);
     return { ok: true, arc: updated };
 }
 
 export function ignoreProgressSuggestion(suggestion) {
     if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return { ok: false, reason: 'store-paused' };
-    const verified = verifySuggestion(suggestion);
-    if (!verified.ok) return verified;
+    if (!suggestion) return { ok: false, reason: 'stale' };
+    if (suggestion.stale) {
+        if (!assertSameScope(suggestion.scope).ok) return { ok: false, reason: 'scope-changed' };
+    } else {
+        const verified = verifySuggestion(suggestion);
+        if (!verified.ok) return verified;
+    }
     const storedIgnored = getPlanData().ignoredProgressEvidence;
     const storedWatermarks = getPlanData().progressWatermarks;
     const ignored = [...new Set([...(Array.isArray(storedIgnored) ? storedIgnored : []), evidenceKey(suggestion)])]
@@ -286,20 +312,27 @@ export function ignoreProgressSuggestion(suggestion) {
     const progressWatermarks = storedWatermarks && typeof storedWatermarks === 'object' && !Array.isArray(storedWatermarks)
         ? { ...storedWatermarks }
         : {};
-    if (suggestion.pendingWatermark) progressWatermarks[suggestion.itemKey] = suggestion.pendingWatermark;
+    if (!suggestion.stale && suggestion.pendingWatermark) progressWatermarks[suggestion.itemKey] = suggestion.pendingWatermark;
     setPlanData({ ignoredProgressEvidence: ignored, progressWatermarks });
     state.progressSuggestions = (state.progressSuggestions || []).filter(candidate => candidate !== suggestion);
     return { ok: true };
 }
 
-function commitSuggestionWatermark(suggestion) {
+function commitSuggestionWatermark(suggestion, updatedArc = null) {
     if (!suggestion?.pendingWatermark) return;
     const stored = getPlanData().progressWatermarks;
+    const progressWatermarks = {
+        ...(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}),
+        [suggestion.itemKey]: suggestion.pendingWatermark,
+    };
+    if (updatedArc?.status === 'active') {
+        const nextBeat = getCurrentBeatRecord(updatedArc);
+        const nextKey = nextBeat ? `beat:${updatedArc.id}:${nextBeat.id}`
+            : isArcReady(updatedArc) ? `arc:${updatedArc.id}` : '';
+        if (nextKey) progressWatermarks[nextKey] = suggestion.pendingWatermark;
+    }
     setPlanData({
-        progressWatermarks: {
-            ...(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}),
-            [suggestion.itemKey]: suggestion.pendingWatermark,
-        },
+        progressWatermarks,
     });
 }
 
@@ -320,6 +353,26 @@ function staleProgressSuggestions(messageIndex, reason, { exact }) {
             || (exact ? suggestion.sourceIndex === messageIndex : suggestion.sourceIndex >= messageIndex);
         if (affected) Object.assign(suggestion, { stale: true, staleReason: reason });
     }
+    rewindProgressWatermarks(messageIndex);
+}
+
+function rewindProgressWatermarks(messageIndex) {
+    if (!Number.isInteger(messageIndex) || messageIndex < 0) return;
+    const stored = getPlanData().progressWatermarks;
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return;
+    const chat = getChat();
+    let previousIndex = Math.min(messageIndex - 1, chat.length - 1);
+    while (previousIndex >= 0 && !chat[previousIndex]) previousIndex--;
+    const previousIdentity = previousIndex >= 0 ? getOrCreateReceiptIdentity(chat[previousIndex]) : '';
+    const progressWatermarks = { ...stored };
+    let changed = false;
+    for (const [key, watermark] of Object.entries(progressWatermarks)) {
+        if (!Number.isInteger(watermark?.index) || watermark.index < messageIndex) continue;
+        if (previousIdentity) progressWatermarks[key] = { identity: previousIdentity, index: previousIndex };
+        else delete progressWatermarks[key];
+        changed = true;
+    }
+    if (changed) setPlanData({ progressWatermarks });
 }
 
 export function clearProgressSuggestions() {

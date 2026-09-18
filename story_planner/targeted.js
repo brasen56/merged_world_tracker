@@ -189,11 +189,12 @@ function buildDiff(source, proposed, operation) {
                 : { kind: 'added', id: beat.id, before: '', after: beat.text };
         }).filter(Boolean),
     ];
-    const beforeOrder = before.map(beat => beat.id);
-    const afterOrder = after.map(beat => beat.id);
-    if (beforeOrder.some((id, index) => id !== afterOrder[index])) {
-        const beforePositions = new Map(beforeOrder.map((id, index) => [id, index + 1]));
-        afterOrder.forEach((id, index) => {
+    const commonBefore = before.filter(beat => afterById.has(beat.id)).map(beat => beat.id);
+    const commonAfter = after.filter(beat => beforeById.has(beat.id)).map(beat => beat.id);
+    if (commonBefore.some((id, index) => id !== commonAfter[index])) {
+        const beforePositions = new Map(before.map((beat, index) => [beat.id, index + 1]));
+        after.forEach((beat, index) => {
+            const id = beat.id;
             if (beforePositions.has(id)) {
                 beats.push({ kind: 'moved', id, before: beforePositions.get(id), after: index + 1 });
             }

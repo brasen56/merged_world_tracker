@@ -168,6 +168,10 @@ export function getOrCreateReceiptIdentity(message) {
     return `uuid:${message.extra.mwt_uuid}`;
 }
 
+export function isIlsSummary(message) {
+    return !!message?.extra?.ILS_Data;
+}
+
 export function getChatMeta(key) {
     if (key !== undefined) return _meta[key];
     return _meta;

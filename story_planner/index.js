@@ -31,7 +31,7 @@ import {
 } from './data.js';
 import { applyPlanInjection, getArcsForInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
-import { closeProgressReviewModal, refreshProgressReviewModal, renderContent, wireEvents, renderArcs, refreshDisplay } from './render.js';
+import { closeProgressReviewModal, closeTargetedReviewModal, refreshProgressReviewModal, renderContent, wireEvents, renderArcs, refreshDisplay } from './render.js';
 import { clearProgressSuggestions, staleProgressSuggestionsAt, staleProgressSuggestionsFrom } from './progress.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -160,6 +160,7 @@ export async function onMessageReceived({ countMessage = true } = {}) {
 }
 
 export function onChatChanged() {
+    closeTargetedReviewModal();
     closeProgressReviewModal();
     clearProgressSuggestions();
     // NOTE: do NOT unconditionally clear state.isGenerating here. A generation
@@ -196,6 +197,7 @@ export function onChatChanged() {
  * persistAutoCounter(); the write seam would refuse anyway).
  */
 export function onChatChangedWhilePaused() {
+    closeTargetedReviewModal();
     closeProgressReviewModal();
     clearProgressSuggestions();
     if (state.autoTimer) { clearTimeout(state.autoTimer); state.autoTimer = null; }

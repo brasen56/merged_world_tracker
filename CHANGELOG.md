@@ -12,6 +12,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.20]
+
+### Fixed
+
+- Story Planner's manual **Check progress** now considers at most the latest 80
+  settled messages and 30,000 characters per request. It no longer rescans an
+  entire mature chat when an item has no watermark, and accepting a beat carries
+  that reviewed watermark forward to the next current beat (or Ready arc) so
+  advancing progress does not immediately restart the scan from the beginning.
+  A check with no newly eligible evidence now returns **Already up to date**
+  without making an API call.
+- Evidence-backed progress suggestions no longer accept InlineSummary (ILS)
+  paraphrases as quotes. `isIlsSummary()` is now a shared core quote-matching
+  guard, preserving Knowledge's compatibility helper while ensuring Story
+  Planner only verifies excerpts against verbatim chat messages.
+- Editing, swiping, or deleting chat messages now rewinds affected Story
+  Planner progress watermarks to the preceding message. New or replacement
+  content at and after the changed position is therefore eligible for the next
+  check instead of being permanently skipped.
+- Switching chats while a Phase 4 targeted-arc review is open now closes and
+  destroys the outgoing review, clears its review-only state, and releases the
+  busy state in both normal and paused chat-change paths.
+- Progress-review cards now allow stale suggestions to be ignored, prefill an
+  arc-resolution reason from the model's rationale, and scroll **Open source**
+  to the cited rendered chat message. Targeted review diffs also suppress
+  misleading moved-beat rows for a simple beat deletion.
+
 ## [2.8.19]
 
 ### Fixed

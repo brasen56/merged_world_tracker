@@ -13,6 +13,8 @@ import {
 import { TARGETED_ARC_SYSTEM_PROMPT } from '../story_planner/prompts.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { _resetPausedStores, pauseStore } from '../core/schema_status.js';
+import { createModal, showModal } from '../core/modal.js';
+import { onChatChangedWhilePaused } from '../story_planner/index.js';
 import {
     getFakeMeta, resetCoreStubs, setFakeApi, setFakeChat,
 } from './stubs/core.js';
@@ -275,6 +277,22 @@ describe('Story Planner Phase 4 — targeted proposal model', () => {
         expect(getArcs()[0].beats.map(beat => beat.text)).toEqual(['Second step.', 'First step.']);
     });
 
+    test('a simple deletion does not report every surviving beat as moved', async () => {
+        const source = makeArc({ title: 'Trimmed route', beats: ['First step.', 'Remove me.', 'Third step.'] });
+        setArcs([source]);
+        setFakeApi(() => response({
+            title: source.title,
+            description: source.body,
+            section: source.section,
+            pendingBeats: ['First step.', 'Third step.'],
+        }));
+
+        const proposal = await generateTargetedProposal(source.id, 'rework');
+
+        expect(proposal.diff.beats.filter(change => change.kind === 'removed')).toHaveLength(1);
+        expect(proposal.diff.beats.filter(change => change.kind === 'moved')).toEqual([]);
+    });
+
     test('a refused targeted write leaves arcs and history unchanged', async () => {
         const source = sourceArc();
         setArcs([source]);
@@ -420,5 +438,29 @@ describe('Story Planner Phase 4 — targeted proposal diff rendering', () => {
         const changedRow = html.split('</li>').find(part => part.includes('Old text.'));
         expect(changedRow).toContain('<del>Old text.</del>');
         expect(changedRow).toContain('<ins>New text.</ins>');
+    });
+});
+
+describe('Story Planner Phase 4 — targeted review lifecycle', () => {
+    test('chat change closes an open review and clears review-only state without a busy spinner', () => {
+        const host = document.createElement('div');
+        document.body.append(host);
+        state.isGenerating = false;
+        state.targetedActionInFlight = false;
+        state.targetedReviewOpen = true;
+        const modal = createModal({
+            id: 'mwt-sp-targeted-modal',
+            title: 'Targeted review',
+            content: '<button>Discard</button>',
+            destroyOnClose: true,
+        });
+        showModal(modal.id);
+
+        onChatChangedWhilePaused();
+
+        expect(document.getElementById('mwt-sp-targeted-modal')).toBeNull();
+        expect(state.targetedReviewOpen).toBe(false);
+        expect(state.isGenerating).toBe(false);
+        expect(host.inert).toBeFalsy();
     });
 });

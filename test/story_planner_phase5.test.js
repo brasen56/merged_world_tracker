@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getArcs, getPlanData, makeArc, setArcs, state, updateArc } from '../story_planner/data.js';
 import { saveSettings } from '../story_planner/settings.js';
 import {
@@ -7,7 +7,7 @@ import {
 } from '../story_planner/index.js';
 import {
     acceptProgressSuggestion, checkProgress, ignoreProgressSuggestion,
-    staleProgressSuggestionsFrom,
+    PROGRESS_MAX_MESSAGE_CHARS, PROGRESS_MESSAGE_WINDOW, staleProgressSuggestionsFrom,
 } from '../story_planner/progress.js';
 import { createModal, releaseManagedInert, showModal } from '../core/modal.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
@@ -70,6 +70,19 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         expect(acceptProgressSuggestion(suggestion).ok).toBe(false);
     });
 
+    test('accepting a beat seeds the next item watermark instead of reopening recent history', async () => {
+        const arc = makeArc({ title: 'Two-stage route', beats: ['The seal breaks.', 'The ledger is opened.'] });
+        setArcs([arc]);
+        setFakeApi(() => modelResult());
+        const suggestion = (await checkProgress()).suggestions[0];
+
+        expect(acceptProgressSuggestion(suggestion).ok).toBe(true);
+
+        const updated = getArcs()[0];
+        const nextKey = `beat:${updated.id}:${updated.beats[1].id}`;
+        expect(getPlanData().progressWatermarks[nextKey]).toEqual({ identity: 'id:evidence', index: 1 });
+    });
+
     test('resolution acceptance uses the normal Resolve flow and keeps the edited reason', async () => {
         const ready = makeArc({ title: 'Manifest exposed', body: 'The forged manifest is publicly exposed.', beats: ['done'] });
         ready.beats[0] = { ...ready.beats[0], state: 'planted' };
@@ -88,6 +101,72 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         // ignored evidence remains suppressed independently.
         getPlanData().progressWatermarks = {};
         expect((await checkProgress()).suggestions).toEqual([]);
+    });
+
+    test('a stale suggestion can be ignored without advancing its watermark', async () => {
+        setFakeApi(() => modelResult());
+        const suggestion = (await checkProgress()).suggestions[0];
+        suggestion.stale = true;
+        suggestion.staleReason = 'The source changed.';
+
+        expect(ignoreProgressSuggestion(suggestion).ok).toBe(true);
+        expect(getPlanData().progressWatermarks?.[suggestion.itemKey]).toBeUndefined();
+        expect(getPlanData().ignoredProgressEvidence).toHaveLength(1);
+    });
+
+    test('ILS summaries are excluded from both the request and evidence verification', async () => {
+        setFakeChat([
+            { id: 'summary', name: 'Summary', mes: 'The clerk says the second seal is broken.', extra: { ILS_Data: { Ref: 'originals' } } },
+            { id: 'tail-user', is_user: true, mes: 'Continue.' },
+            { id: 'tail-ai', mes: 'Unsettled.' },
+        ]);
+        setFakeApi(({ userContent }) => {
+            expect(userContent).not.toContain('second seal is broken');
+            return JSON.stringify({ results: [{ item: 'i1', verdict: 'no_evidence', source: '', excerpt: '', reason: '' }] });
+        });
+
+        await expect(checkProgress()).resolves.toMatchObject({ upToDate: true });
+    });
+
+    test('caps the evidence prompt by recent message count and character budget', async () => {
+        const settled = Array.from({ length: PROGRESS_MESSAGE_WINDOW + 25 }, (_, index) => ({
+            id: `m-${index}`,
+            name: 'Narrator',
+            mes: `${index === 0 ? 'ANCIENT-MARKER ' : ''}${'x'.repeat(700)}`,
+        }));
+        setFakeChat([...settled, { id: 'tail-user', is_user: true, mes: 'Continue.' }, { id: 'tail-ai', mes: 'Unsettled.' }]);
+        setFakeApi(({ userContent }) => {
+            expect(userContent).not.toContain('ANCIENT-MARKER');
+            const eligible = userContent.match(/<eligible_messages>([\s\S]*?)<\/eligible_messages>/)?.[1] || '';
+            expect(eligible.length).toBeLessThanOrEqual(PROGRESS_MAX_MESSAGE_CHARS + 2000);
+            return JSON.stringify({ results: [{ item: 'i1', verdict: 'no_evidence', source: '', excerpt: '', reason: '' }] });
+        });
+
+        await checkProgress();
+    });
+
+    test('does not call the API when every item is already at the settled tip', async () => {
+        const arc = getArcs()[0];
+        getPlanData().progressWatermarks = {
+            [`beat:${arc.id}:${arc.beats[0].id}`]: { identity: 'id:evidence', index: 1 },
+        };
+        const api = vi.fn(() => modelResult());
+        setFakeApi(api);
+
+        await expect(checkProgress()).resolves.toMatchObject({ upToDate: true, suggestions: [] });
+        expect(api).not.toHaveBeenCalled();
+    });
+
+    test.each(['edited', 'swiped', 'deleted'])('%s content rewinds a covering watermark', async mutation => {
+        const arc = getArcs()[0];
+        const key = `beat:${arc.id}:${arc.beats[0].id}`;
+        getPlanData().progressWatermarks = { [key]: { identity: 'id:evidence', index: 1 } };
+
+        if (mutation === 'edited') onMessageEdited(1);
+        else if (mutation === 'swiped') onMessageSwiped(1);
+        else onMessageDeleted(1, { adjustCounters: false });
+
+        expect(getPlanData().progressWatermarks[key]).toEqual({ identity: 'id:old', index: 0 });
     });
 
     test('malformed persisted progress metadata cannot make Check progress throw', async () => {
@@ -208,6 +287,24 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         expect(modal).not.toBeNull();
         expect(modal.querySelector('.sp-proposal-stale').textContent).toContain('A message changed while progress was checked.');
         expect(modal.textContent).not.toContain('No clear evidence');
+    });
+
+    test('resolution review prefills the model reason and Open source scrolls to the chat message', async () => {
+        const ready = makeArc({ title: 'Manifest exposed', body: 'The forged manifest is publicly exposed.', beats: ['done'] });
+        ready.beats[0] = { ...ready.beats[0], state: 'planted' };
+        setArcs([ready]);
+        setFakeApi(() => JSON.stringify({ results: [{ item: 'i1', verdict: 'arc_resolved', source: 'm2', excerpt: 'The second seal is broken', reason: 'The forgery is exposed.' }] }));
+        const result = await checkProgress();
+        document.body.innerHTML = '<div id="chat"><div class="mes" mesid="1"></div></div>';
+        const target = document.querySelector('.mes');
+        target.scrollIntoView = vi.fn();
+        const { showProgressSuggestions } = await import('../story_planner/render.js');
+
+        showProgressSuggestions(result);
+        const modal = document.getElementById('mwt-sp-progress-modal');
+        expect(modal.querySelector('textarea').value).toBe('The forgery is exposed.');
+        modal.querySelector('[data-progress-action="source"]').click();
+        expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
     });
 
     test.each([
