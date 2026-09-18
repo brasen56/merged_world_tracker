@@ -70,3 +70,18 @@ export function getPinnedEntities(settings) {
     const raw = settings?.pinnedEntities || '';
     return raw.split(',').map(s => s.trim()).filter(Boolean);
 }
+
+/**
+ * Does generated output owe the built-in prompt's Plot Seeds line contract?
+ *
+ * Only when the built-in prompt actually produced it. A custom prompt replaces
+ * that contract wholesale, and Hook Mode Off removes Plot Seeds at the
+ * persistence boundary, so neither may have its output rewritten to it. Shared
+ * by all three generation paths — full refresh, delta patch, and section regen
+ * (refresh.js, sections.js) — so they cannot drift into three near-identical
+ * guards that disagree at the edges.
+ */
+export function usesBuiltInPlotSeedContract() {
+    const settings = getSettings();
+    return !settings.customPrompt?.trim() && settings.hookMode !== 'off';
+}

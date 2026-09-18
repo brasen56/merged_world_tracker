@@ -12,6 +12,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.19]
+
+### Fixed
+
+- **Save Settings** sits in a footer below every settings disclosure
+  (`world_state/render.js`) instead of inside the collapsed "⚙️ World State
+  Settings" block. The ⚡ Delta Refresh and 🧹 Stale-Entry Expiry & Grounding
+  disclosures had no Save control of their own, so a change made there looked
+  successful but was silently discarded when the modal closed — the only Save
+  button was hidden inside a different collapsed block you had to open first.
+  The footer button saves every section above it, and the hint beside it says
+  so. Tests: `test/world_state_delta_settings_ui.test.js` (new — pins the save
+  boundary itself: Save outside every disclosure, and each disclosure's
+  checkbox persisting through the one button).
+- Delta refresh no longer lets Plot Seeds ratchet into degradation until the
+  model is filing quoted dialogue as plot seeds. Delta prompts carry the
+  previous stored document as "Previous World State," so one malformed seed
+  line that reached storage — an `[event]` recap quoting Recent Chat, a bullet
+  that had lost its category tag, a `[contact/social]` slash pair — became the
+  exemplar the next delta imitated, degrading the section refresh over
+  refresh. All three generation paths now hold *generated* Plot Seeds bytes
+  to the built-in prompt's `- [category] <seed>` line contract, gated by one
+  shared `usesBuiltInPlotSeedContract()` seam (`world_state/settings.js`) so
+  only output the built-in prompt produced owes it: a custom prompt or
+  hook-mode-off document keeps its own Plot Seeds style, and saved sections a
+  delta patch does not touch are never rewritten:
+  - `normalizeGeneratedDocument(text, { plotSeedContract: true })`
+    (`core/world_state_document.js`) repairs near misses — bold tags,
+    slash-pair tags, numbered bullets, a colon after the tag, stray capitals —
+    to one lowercase category from the new `WORLD_STATE_PLOT_SEED_CATEGORIES`
+    vocabulary (contact, entrance, social, institutional, opportunity,
+    pressure, threat), and drops a line with no recognizable category instead
+    of letting it pass as prose. A section whose every seed was dropped is
+    removed outright: Plot Seeds is the one section the prompt says to omit
+    when nothing is grounded.
+  - `repairDeltaOperations` (`world_state/refresh.js`) applies that repair to
+    the section bodies a delta patch *generated*, before the patched document
+    is committed — the committed document is the next delta's baseline, so
+    this is the boundary that breaks the ratchet. Full-refresh validation
+    applies the same contract.
+  - Plot Seeds section regeneration (`world_state/sections.js`) applies the
+    same repair, and a regen in which every seed was unsalvageable now fails
+    with a visible reason and keeps the previous section instead of
+    committing an empty one.
+  - The built-in prompt (`world_state/prompts.js`) asks for
+    `- [category] <seed>` explicitly and states the vocabulary in the rules —
+    "category is exactly one of: contact, entrance, social, institutional,
+    opportunity, pressure, threat"; "\"[event]\" is not a category"; a seed is
+    a WHAT IF that has not happened yet, never a recap, quote, or paraphrase
+    of Recent Chat — with the vocabulary stated as rules rather than modelled
+    as copyable example seed text. The `[contact/social/institutional]` slash
+    placeholder Potential Entrances used to carry (the shape the model copied
+    into seed tags) is now "pick one: contact, social, institutional".
+  Tests: `test/world_state_document.test.js` (repair/drop contract suite),
+  `test/world_state_phase3_prompt.test.js` (full-refresh drop of the reported
+  `[event]` dialogue recap, delta repair before the baseline, section-regen
+  repair and keep-previous, custom-prompt exemption, prompt vocabulary), and
+  `test/world_state_phase0_baselines.test.js` (built-in prompt token baseline
+  1270 → 1505 for the stated vocabulary, paid on every call, delta included).
+
 ## [2.8.18]
 
 ### Added

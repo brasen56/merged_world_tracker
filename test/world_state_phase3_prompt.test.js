@@ -25,7 +25,7 @@ const FACTUAL_DOCUMENT = [
     '- Derek reported that the manifest is delayed.',
 ].join('\n');
 
-const HOOK_DOCUMENT = `${FACTUAL_DOCUMENT}\n\n## Story Momentum\n- The delay may force a decision.\n\n## Plot Seeds\n- A courier could arrive with a forged manifest.\n\n## Potential Entrances\n- **Mara** [contact]: may call about the delayed shipment.`;
+const HOOK_DOCUMENT = `${FACTUAL_DOCUMENT}\n\n## Story Momentum\n- The delay may force a decision.\n\n## Plot Seeds\n- [contact] A courier could arrive with a forged manifest.\n\n## Potential Entrances\n- **Mara** [contact]: may call about the delayed shipment.`;
 
 describe('Phase 3 built-in prompt', () => {
     test('uses compactness targets, sparse character states, durable retention, and exact unchanged scene fields', () => {
@@ -50,6 +50,22 @@ describe('Phase 3 built-in prompt', () => {
             expect(off).not.toContain(`## ${section}`);
             expect(passive).toContain(`## ${section}`);
         }
+    });
+
+    test('names the Plot Seeds vocabulary without modelling copyable seed text', () => {
+        const prompt = buildDefaultSystemPrompt('passive');
+
+        expect(prompt).toContain('- [category] [a specific NEW event');
+        expect(prompt).toContain('category is exactly one of: contact, entrance, social, institutional, opportunity, pressure, threat.');
+        expect(prompt).toContain('"[event]" is not a category');
+        expect(prompt).toContain('Never a recap, quote, or paraphrase of Recent Chat');
+        // The old template listed one fully-written seed per category, and a
+        // model could emit those sentences verbatim and still validate. The
+        // vocabulary belongs in the rules; the section shows only the shape.
+        expect(prompt).not.toContain('- [contact] A call');
+        // The slash placeholder Potential Entrances used to carry is what
+        // modelled "[contact/social]" tags in Plot Seeds.
+        expect(prompt).not.toContain('[contact/social/institutional]');
     });
 
     test('strips complete hook sections without affecting factual continuity', () => {
@@ -116,6 +132,19 @@ describe('Phase 3 hook-mode write and injection boundaries', () => {
         expect(request.systemPrompt).not.toContain('600–800 words');
     });
 
+    test('does not impose the built-in Plot Seeds tag contract on a custom prompt', async () => {
+        const customPrompt = 'Return my custom World State format with the standard section headings.';
+        const customDocument = `${FACTUAL_DOCUMENT}\n\n## Plot Seeds\n- A custom untagged seed.`;
+        let calls = 0;
+        saveSettings({ customPrompt, hookMode: 'passive' });
+        setFakeApi(() => { calls++; return customDocument; });
+
+        const updated = await refreshWorldState();
+
+        expect(calls).toBe(1);
+        expect(updated).toBe(customDocument);
+    });
+
     test('logs the complete model output for both failed validation attempts', async () => {
         // Two sentences: a one-sentence slip is repaired into a bullet, not rejected.
         const first = `${FACTUAL_DOCUMENT}\nFirst attempt leaked narrative prose. It kept going.`;
@@ -161,6 +190,44 @@ describe('Phase 3 hook-mode write and injection boundaries', () => {
         } finally {
             log.mockRestore();
         }
+    });
+
+    test('full refresh drops the reported [event] dialogue recap without losing the document', async () => {
+        saveSettings({ hookMode: 'passive' });
+        setWorldStateData({ text: FACTUAL_DOCUMENT });
+        const requests = [];
+        setFakeApi(request => {
+            requests.push(request);
+            return [
+                FACTUAL_DOCUMENT,
+                '',
+                '## Plot Seeds',
+                '- [event] "I am the manager now" is said in front of the law book tonight.',
+                '- **[institutional]** The guild auditor could arrive before the delayed manifest is filed.',
+            ].join('\n');
+        });
+
+        const updated = await refreshWorldState();
+
+        // One call, not two: Plot Seeds is the most disposable section, so a
+        // malformed seed must never cost the whole factual document a retry —
+        // or, after a second failure, cost the refresh entirely.
+        expect(requests).toHaveLength(1);
+        expect(updated).toContain('- [institutional] The guild auditor could arrive');
+        expect(updated).not.toContain('[event]');
+        expect(updated).not.toContain('I am the manager now');
+        expect(updated).toContain('Derek reported that the manifest is delayed.');
+    });
+
+    test('full refresh drops the Plot Seeds section when every seed lost its tag', async () => {
+        saveSettings({ hookMode: 'passive' });
+        setWorldStateData({ text: FACTUAL_DOCUMENT });
+        setFakeApi(() => `${FACTUAL_DOCUMENT}\n\n## Plot Seeds\n- The guild auditor could arrive.`);
+
+        const updated = await refreshWorldState();
+
+        expect(updated).not.toContain('## Plot Seeds');
+        expect(updated).toContain('Derek reported that the manifest is delayed.');
     });
 
     test('a rejected attempt tells the retry which line to fix', async () => {
@@ -210,6 +277,28 @@ describe('Phase 3 hook-mode write and injection boundaries', () => {
         } finally {
             log.mockRestore();
         }
+    });
+
+    test('delta repairs a malformed Plot Seeds replacement before it becomes the next baseline', async () => {
+        saveSettings({ hookMode: 'passive' });
+        setWorldStateData({
+            text: FACTUAL_DOCUMENT,
+            deltaStatus: buildRefreshStatusDelta('full', FACTUAL_DOCUMENT, {}, 0),
+        });
+        const requests = [];
+        setFakeApi(request => {
+            requests.push(request);
+            return '### UPDATE: Plot Seeds\n## Plot Seeds\n- [contact/social] A courier could arrive with a forged manifest.';
+        });
+
+        const updated = await refreshWorldStateDelta();
+
+        // The committed document becomes the next delta's "Previous World
+        // State", so repairing the generated bytes here is what stops a single
+        // drifted tag from ratcheting the section into permanent degradation.
+        expect(requests).toHaveLength(1);
+        expect(updated).toContain('## Plot Seeds\n- [contact] A courier could arrive');
+        expect(updated).not.toContain('[contact/social]');
     });
 
     test('removes legacy hook sections from injection when hook mode is off', () => {
@@ -304,12 +393,27 @@ describe('Phase 3 Variety boundary', () => {
 
     test('retains creative instructions and the temperature boost for hook sections', async () => {
         let request;
-        setFakeApi(value => { request = value; return '## Plot Seeds\n- A courier arrives with a forged manifest.'; });
+        setFakeApi(value => { request = value; return '## Plot Seeds\n- [contact] A courier arrives with a forged manifest.'; });
 
         await regenerateSection('Plot Seeds', 5);
 
         expect(request.settings.temperature).toBeCloseTo(1.15);
         expect(request.systemPrompt).toContain('VARIETY MODE');
+    });
+
+    test('Plot Seeds section regeneration repairs a drifted tag', async () => {
+        setFakeApi(() => '## Plot Seeds\n1. [Threat] A rival crew could move on the warehouse.');
+
+        await regenerateSection('Plot Seeds', 5);
+
+        expect(getWorldStateText()).toContain('- [threat] A rival crew could move on the warehouse.');
+    });
+
+    test('Plot Seeds section regeneration keeps the previous section when nothing is salvageable', async () => {
+        setFakeApi(() => '## Plot Seeds\n- A courier arrives with a forged manifest.');
+
+        await expect(regenerateSection('Plot Seeds', 5)).rejects.toThrow('no usable Plot Seeds');
+        expect(getWorldStateText()).toBe(HOOK_DOCUMENT);
     });
 
     test('keeps factual retry prompts free of creative instructions', async () => {

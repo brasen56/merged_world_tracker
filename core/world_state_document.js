@@ -20,6 +20,15 @@ export const WORLD_STATE_SECTIONS = Object.freeze([
 
 export const WORLD_STATE_FACTUAL_SECTIONS = Object.freeze(WORLD_STATE_SECTIONS.slice(0, 8));
 export const WORLD_STATE_HOOK_SECTIONS = Object.freeze(WORLD_STATE_SECTIONS.slice(8));
+export const WORLD_STATE_PLOT_SEED_CATEGORIES = Object.freeze([
+    'contact',
+    'entrance',
+    'social',
+    'institutional',
+    'opportunity',
+    'pressure',
+    'threat',
+]);
 export const CURRENT_SCENE_FIELDS = Object.freeze(['Date', 'Time', 'Location', 'Present', 'Situation']);
 // A scalar field must remain present even when no character is established to
 // be in the scene. This explicit value avoids treating an empty field as a
@@ -544,6 +553,32 @@ function isSingleSentence(line) {
     return true;
 }
 
+// A generated Plot Seeds entry the built-in prompt asks for: "- [category] <seed>".
+// Leading bullet/number markers, **bold** tags, and a "[contact/social]" pair
+// (the shape the Potential Entrances placeholder used to model) are repaired
+// rather than rejected; a line with no recognizable category is DROPPED.
+//
+// Dropping is the proportionate outcome, not rejection of the document: Plot
+// Seeds is the one section the prompt tells the model to omit when it has
+// nothing useful, while a malformed line that reaches storage becomes the
+// exemplar the NEXT delta imitates — delta prompts carry the previous document,
+// so one bad line ratchets the section into permanent degradation.
+const PLOT_SEED_BULLET_RE = /^(?:[-*•]|\d+[.)])\s+/;
+const PLOT_SEED_TAG_RE = /^\*{0,2}\[([^\]\r\n]+)\]\*{0,2}\s*:?\s*(.+)$/;
+
+function repairPlotSeedLine(trimmed) {
+    const tag = trimmed.replace(PLOT_SEED_BULLET_RE, '').match(PLOT_SEED_TAG_RE);
+    if (!tag) return null;
+    const seed = tag[2].trim();
+    if (!seed) return null;
+    const category = tag[1]
+        .split(/[/,|]/)
+        .map(part => part.trim().toLowerCase())
+        .find(part => WORLD_STATE_PLOT_SEED_CATEGORIES.includes(part));
+    if (!category) return null;
+    return `- [${category}] ${seed}`;
+}
+
 /**
  * Repair objective formatting slips in GENERATED output before validation.
  *
@@ -557,9 +592,14 @@ function isSingleSentence(line) {
  *
  * This changes saved bytes, so editor and import writes must never use it.
  *
- * @returns {{ text: string, changes: Array<{ kind: 'bulleted'|'dropped-placeholder'|'dropped-empty-section', section: string, line?: string }> }}
+ * `plotSeedContract` additionally holds Plot Seeds to the built-in prompt's
+ * "- [category] <seed>" line format (see repairPlotSeedLine). It is opt-in
+ * because only output generated from THAT prompt owes that contract — a custom
+ * prompt or a hook-mode-off document must keep its own Plot Seeds style.
+ *
+ * @returns {{ text: string, changes: Array<{ kind: 'bulleted'|'dropped-placeholder'|'dropped-empty-section'|'repaired-plot-seed'|'dropped-plot-seed', section: string, line?: string }> }}
  */
-export function normalizeGeneratedDocument(text) {
+export function normalizeGeneratedDocument(text, { plotSeedContract = false } = {}) {
     const source = asText(text);
     const parsed = parseWorldStateSections(source);
     const otherMarkers = RP_MARKERS.filter(marker => marker.pattern !== UNSTRUCTURED_PROSE_RE);
@@ -572,14 +612,32 @@ export function normalizeGeneratedDocument(text) {
         const sectionChanges = [];
         const parts = section.body.split(/(\r?\n)/);
         const kept = [];
-        let droppedPlaceholder = false;
+        let droppedLine = false;
+        const seedSection = plotSeedContract && section.name === 'Plot Seeds';
         for (let index = 0; index < parts.length; index += 2) {
             const line = parts[index];
             const eol = parts[index + 1] ?? '';
             const trimmed = line.trim();
             if (PLACEHOLDER_LINE_RE.test(trimmed)) {
-                droppedPlaceholder = true;
+                droppedLine = true;
                 sectionChanges.push({ kind: 'dropped-placeholder', section: section.name, line: trimmed });
+                continue;
+            }
+            // Ahead of the prose check: an untagged seed must be dropped, not
+            // bulleted into a line that would pass as a valid Plot Seed.
+            if (seedSection && trimmed) {
+                const repaired = repairPlotSeedLine(trimmed);
+                if (!repaired) {
+                    droppedLine = true;
+                    sectionChanges.push({ kind: 'dropped-plot-seed', section: section.name, line: trimmed });
+                    continue;
+                }
+                if (repaired !== trimmed) {
+                    kept.push(repaired, eol);
+                    sectionChanges.push({ kind: 'repaired-plot-seed', section: section.name, line: trimmed });
+                    continue;
+                }
+                kept.push(line, eol);
                 continue;
             }
             if (UNSTRUCTURED_PROSE_RE.test(line)
@@ -596,7 +654,7 @@ export function normalizeGeneratedDocument(text) {
 
         const body = kept.join('');
         let replacement = source.slice(section.start, section.headerEnd) + body;
-        if (droppedPlaceholder && !body.trim()) {
+        if (droppedLine && !body.trim()) {
             replacement = '';
             sectionChanges.push({ kind: 'dropped-empty-section', section: section.name });
             if (section.end === source.length) droppedFinalSection = true;

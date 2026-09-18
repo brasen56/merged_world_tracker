@@ -683,7 +683,6 @@ export function render() {
 
                 <div></div>
                 <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
-                    <button id="ws-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
                     <button id="ws-test-connection" class="mwt-btn">Test Connection</button>
                     <button id="ws-toggle-inject" class="mwt-btn">${isInjectionEnabled() ? '<span aria-hidden="true">🔌</span> Injection: ON' : '<span aria-hidden="true">🔌</span> Injection: OFF'}</button>
                     <button id="ws-toggle-auto" class="mwt-btn">${isAutoRefreshEnabled() ? '<span aria-hidden="true">🔄</span> Auto: ON (' + getAutoRefreshInterval() + ')' : '<span aria-hidden="true">🔄</span> Auto: OFF'}</button>
@@ -692,6 +691,15 @@ export function render() {
                 </div>
             </div>
         </details>
+
+        <!-- Save Settings persists EVERY disclosure above (Expiry & Grounding and
+             Delta Refresh included), so it must not live inside one of them. Sitting
+             in the collapsed ⚙️ block, it made a click in another block look
+             successful while the value was silently discarded on close. -->
+        <div class="mwt-mt-8 mwt-flex mwt-gap-4" style="flex-wrap:wrap;align-items:center;border-top:1px solid var(--mwt-border);padding-top:8px">
+            <button id="ws-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button>
+            <span class="mwt-text-sm mwt-text-dim">Saves every section above, including Expiry &amp; Grounding and Delta Refresh.</span>
+        </div>
     `;
 }
 

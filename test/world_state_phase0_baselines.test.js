@@ -42,11 +42,14 @@ const CHAT = Array.from({ length: 10 }, (_, i) => ({
 }));
 
 // Approximate values observed with test/stubs/core.js's deterministic fallback
-// estimator on 2026-09-11. Assertions use tolerance bands so harmless prompt
+// estimator on 2026-09-17. Assertions use tolerance bands so harmless prompt
 // wording or estimator refinements do not turn these measurements into brittle
 // snapshots, while material prompt-size changes remain visible.
+// defaultSystemPrompt: 1375 before the Plot Seeds contract, 1505 after it. The
+// contract is worth ~130 tokens on EVERY call, delta calls included — keep it
+// stated in the rules rather than modelled as example seed text.
 const TOKEN_BASELINES = Object.freeze({
-    defaultSystemPrompt: 1270,
+    defaultSystemPrompt: 1505,
     customSystemPrompt: 16,
     hookBearingStored: 124,
     hookOffInjected: 122,

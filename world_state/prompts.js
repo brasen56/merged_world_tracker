@@ -5,7 +5,8 @@
  */
 
 import {
-    WORLD_STATE_HOOK_SECTIONS, isWorldStateHookSection, parseWorldStateSections,
+    WORLD_STATE_HOOK_SECTIONS, WORLD_STATE_PLOT_SEED_CATEGORIES,
+    isWorldStateHookSection, parseWorldStateSections,
 } from '../core/world_state_document.js';
 
 export const HOOK_SECTIONS = WORLD_STATE_HOOK_SECTIONS;
@@ -20,15 +21,22 @@ const HOOK_TEMPLATE = `
 - [one near-term development strongly implied by established facts]
 
 ## Plot Seeds
-- [a specific possible event that could plausibly arrive or escalate next]
+- [category] [a specific NEW event that could plausibly arrive or escalate next]
 
 ## Potential Entrances
-- **NPC Name** [contact/social/institutional]: may reach out or appear because [established reason]
+- **NPC Name** [pick one: contact, social, institutional]: may reach out or appear because [established reason]
 
 Hook rules:
 - Hooks are possibilities, never established facts. Do not place them in factual sections.
 - A hook must be a NEW possible event grounded in an existing pressure, obligation, relationship, or thread; do not restate a pending fact.
-- Keep each hook to one sentence and omit a hook section when there is no grounded, useful entry.`;
+- Keep each hook to one sentence and omit a hook section when there is no grounded, useful entry.
+
+Plot Seeds rules:
+- category is exactly one of: ${WORLD_STATE_PLOT_SEED_CATEGORIES.join(', ')}. Always keep the brackets. "[event]" is not a category.
+- A seed is a WHAT IF — something that has NOT happened yet. Never a recap, quote, or paraphrase of Recent Chat, and never a restatement of a known pending fact.
+- Prefer 2–4 seeds and omit the section entirely when nothing is grounded.
+- BAD:  - [event] "I am the manager now" is said tonight.
+- GOOD: - [institutional] The guild auditor arrives before Alex can file the delayed manifest.`;
 
 /** Build the built-in full-document prompt for the effective hook mode. */
 export function buildDefaultSystemPrompt(hookMode = 'passive') {

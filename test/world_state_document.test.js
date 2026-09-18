@@ -384,6 +384,60 @@ describe('normalizeGeneratedDocument', () => {
     });
 });
 
+describe('normalizeGeneratedDocument — Plot Seeds contract', () => {
+    const seeds = body => `${MINIMAL_SCENE}\n\n## Plot Seeds\n${body}`;
+    const repair = body => normalizeGeneratedDocument(seeds(body), { plotSeedContract: true });
+
+    test('leaves a conforming seed untouched', () => {
+        const text = seeds('- [institutional] The guild auditor could arrive before the delayed manifest is filed.');
+        expect(normalizeGeneratedDocument(text, { plotSeedContract: true })).toEqual({ text, changes: [] });
+    });
+
+    test.each([
+        ['bold tag', '- **[contact]** Mara could call about the shipment.', '- [contact] Mara could call about the shipment.'],
+        ['slash pair', '- [contact/social] Mara could call about the shipment.', '- [contact] Mara could call about the shipment.'],
+        ['numbered list', '1. [threat] A rival crew could move on the warehouse.', '- [threat] A rival crew could move on the warehouse.'],
+        ['colon after the tag', '- [pressure]: The debt could come due early.', '- [pressure] The debt could come due early.'],
+        ['capitalized tag', '- [Entrance] Derek could walk in mid-argument.', '- [entrance] Derek could walk in mid-argument.'],
+    ])('repairs %s rather than rejecting the document', (_label, seed, expected) => {
+        const result = repair(seed);
+        expect(result.text).toBe(seeds(expected));
+        expect(result.changes).toEqual([{ kind: 'repaired-plot-seed', section: 'Plot Seeds', line: seed }]);
+    });
+
+    test.each([
+        ['the reported [event] dialogue recap', '- [event] "I am the manager now" is said in front of the law book tonight.'],
+        ['a tag that is not in the vocabulary', '- [escalation] The guild auditor could arrive.'],
+        ['progressive tag loss down to a bare bullet', '- The guild auditor could arrive.'],
+        ['an unbulleted sentence', 'The guild auditor could arrive.'],
+    ])('drops %s along with the section it empties', (_label, seed) => {
+        const result = repair(seed);
+        // Dropping the only seed drops the section: Plot Seeds is omittable,
+        // and a stored malformed seed is what the next delta would imitate.
+        expect(result.text).toBe(MINIMAL_SCENE);
+        expect(result.changes).toEqual([
+            { kind: 'dropped-plot-seed', section: 'Plot Seeds', line: seed },
+            { kind: 'dropped-empty-section', section: 'Plot Seeds' },
+        ]);
+    });
+
+    test('keeps the salvageable seeds when only some entries are malformed', () => {
+        const result = repair('- [event] "I am the manager now" is said tonight.\n- **[threat]** A rival crew could move on the warehouse.');
+        expect(result.text).toBe(seeds('- [threat] A rival crew could move on the warehouse.'));
+        expect(result.changes.map(change => change.kind)).toEqual(['dropped-plot-seed', 'repaired-plot-seed']);
+    });
+
+    test('leaves Plot Seeds alone unless the contract is opted into', () => {
+        const text = seeds('- A custom untagged seed.');
+        expect(normalizeGeneratedDocument(text)).toEqual({ text, changes: [] });
+    });
+
+    test('does not touch other sections that use bracketed tags', () => {
+        const text = `${MINIMAL_SCENE}\n\n## Active Threads\n- **Manifest** [active]: still delayed.`;
+        expect(normalizeGeneratedDocument(text, { plotSeedContract: true })).toEqual({ text, changes: [] });
+    });
+});
+
 describe('projectWorldState', () => {
     test('separates factual and hook sections and always omits the stale archive', () => {
         const text = `${HOOK_BEARING_SCENE}\n\n## Archive (Stale)\n- Old secret`;
