@@ -55,6 +55,7 @@ export const MAX_PROGRESS_METADATA_ENTRIES = 500;
 export const MAX_PROGRESS_IDENTITY_LENGTH = 500;
 export const MAX_IGNORED_PROGRESS_EVIDENCE_LENGTH = 2000;
 export const MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH = 120;
+export const STORY_PLANNER_METRIC_COUNTER_MAX = 1_000_000_000;
 export const STORY_PALETTE_EMPHASES = Object.freeze(['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation']);
 export const STORY_PALETTE_ESCALATIONS = Object.freeze(['restrained', 'balanced', 'escalating']);
 export const CHARACTER_CONTEXT_MODES = Object.freeze(['off', 'selected', 'active']);
@@ -74,6 +75,46 @@ export function sanitizeCharacterContextSelection(value) {
         mode: CHARACTER_CONTEXT_MODES.includes(raw.mode) ? raw.mode : 'off',
         entityIds: [...new Set(Array.isArray(raw.entityIds) ? raw.entityIds.map(item => String(item).trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)).filter(Boolean).slice(0, 24) : [])],
     };
+}
+
+const METRIC_COUNTER_FIELDS = Object.freeze([
+    'fullGenerations', 'targetedGenerations', 'targetedApplied',
+    'progressChecks', 'progressSuggestions', 'progressNoEvidence',
+    'progressAccepted', 'progressIgnored', 'closedRecurrencesSuppressed',
+    'requestCount', 'requestChars', 'maxRequestChars',
+]);
+
+const METRIC_KINDS = Object.freeze(['full', 'targeted', 'progress']);
+
+/** Canonical, content-free Phase 7 observation counters stored per chat. */
+export function sanitizePhase7Metrics(value) {
+    const raw = isObject(value) ? value : {};
+    const out = {
+        startedAt: isFiniteNumber(raw.startedAt) && raw.startedAt >= 0 ? Math.floor(raw.startedAt) : 0,
+        updatedAt: isFiniteNumber(raw.updatedAt) && raw.updatedAt >= 0 ? Math.floor(raw.updatedAt) : 0,
+    };
+    for (const field of METRIC_COUNTER_FIELDS) {
+        const number = Number(raw[field]);
+        out[field] = Number.isFinite(number)
+            ? Math.min(STORY_PLANNER_METRIC_COUNTER_MAX, Math.max(0, Math.floor(number)))
+            : 0;
+    }
+    out.lastRequestAt = isFiniteNumber(raw.lastRequestAt) && raw.lastRequestAt >= 0 ? Math.floor(raw.lastRequestAt) : 0;
+    out.lastRequestKind = METRIC_KINDS.includes(raw.lastRequestKind) ? raw.lastRequestKind : '';
+    out.lastRequestChars = Number.isFinite(Number(raw.lastRequestChars))
+        ? Math.min(STORY_PLANNER_METRIC_COUNTER_MAX, Math.max(0, Math.floor(Number(raw.lastRequestChars))))
+        : 0;
+    out.lastProgressCheckAt = isFiniteNumber(raw.lastProgressCheckAt) && raw.lastProgressCheckAt >= 0
+        ? Math.floor(raw.lastProgressCheckAt) : 0;
+    out.lastProgressSuggestions = Number.isFinite(Number(raw.lastProgressSuggestions))
+        ? Math.min(STORY_PLANNER_METRIC_COUNTER_MAX, Math.max(0, Math.floor(Number(raw.lastProgressSuggestions))))
+        : 0;
+    out.lastProgressNoEvidence = Number.isFinite(Number(raw.lastProgressNoEvidence))
+        ? Math.min(STORY_PLANNER_METRIC_COUNTER_MAX, Math.max(0, Math.floor(Number(raw.lastProgressNoEvidence))))
+        : 0;
+    out.lastProgressUpToDate = raw.lastProgressUpToDate === true;
+    out.lastProgressStale = raw.lastProgressStale === true;
+    return out;
 }
 
 /**
@@ -653,6 +694,12 @@ export function validateStoryPlannerData(data) {
             issues.push(repairIssue('character-context-canonicalized', ['characterContext'], 'Story Planner character-context selection was canonicalized to bounded values.', data.characterContext));
         }
     }
+    if (data.phase7Metrics !== undefined) {
+        accepted.phase7Metrics = sanitizePhase7Metrics(data.phase7Metrics);
+        if (JSON.stringify(accepted.phase7Metrics) !== JSON.stringify(data.phase7Metrics)) {
+            issues.push(repairIssue('phase7-metrics-canonicalized', ['phase7Metrics'], 'Story Planner observation metrics were canonicalized to bounded content-free values.', data.phase7Metrics));
+        }
+    }
     return { data: accepted, issues, stats };
 }
 
@@ -823,6 +870,7 @@ export const storyPlannerSchema = defineStoreSchema({
             'plan-text-migrated', 'beat-id-minted', 'beat-id-duplicate',
             'progress-watermarks-invalid', 'progress-watermarks-pruned',
             'ignored-progress-evidence-invalid', 'ignored-progress-evidence-pruned',
+            'phase7-metrics-canonicalized',
         ],
         fatal: ['root-not-object'],
         record: [

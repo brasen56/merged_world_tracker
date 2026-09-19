@@ -41,10 +41,12 @@ import {
     storyPlannerSchema,
     sanitizeStoryPalette,
     sanitizeCharacterContextSelection,
+    sanitizePhase7Metrics,
 } from './schema.js';
 
 export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, newBeatId, sanitizeBeat, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel };
 export { sanitizeStoryPalette, sanitizeCharacterContextSelection };
+export { sanitizePhase7Metrics };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -126,6 +128,46 @@ export function getPlanData() {
 
 export function getStoryPalette() { return sanitizeStoryPalette(getPlanData().storyPalette); }
 export function getCharacterContextSelection() { return sanitizeCharacterContextSelection(getPlanData().characterContext); }
+export function getPhase7Metrics() { return sanitizePhase7Metrics(getPlanData().phase7Metrics); }
+
+/** Merge bounded, content-free Phase 7 counters into the current chat store. */
+export function recordPhase7Metrics(patch = {}) {
+    const before = getPhase7Metrics();
+    const now = Date.now();
+    const next = {
+        ...before,
+        ...patch,
+        startedAt: before.startedAt || now,
+        updatedAt: now,
+    };
+    setPlanData({ phase7Metrics: sanitizePhase7Metrics(next) });
+    return getPhase7Metrics();
+}
+
+/** Additive helper for counters; scalar last-* fields may be supplied beside them. */
+export function incrementPhase7Metrics(increments = {}, patch = {}) {
+    const before = getPhase7Metrics();
+    const next = { ...before, ...patch };
+    for (const [field, amount] of Object.entries(increments)) {
+        next[field] = (Number(before[field]) || 0) + (Number(amount) || 0);
+    }
+    return recordPhase7Metrics(next);
+}
+
+/** Record one outbound planner request without retaining any prompt content. */
+export function recordPhase7Request(kind, chars) {
+    const before = getPhase7Metrics();
+    const size = Math.max(0, Math.floor(Number(chars) || 0));
+    return incrementPhase7Metrics({
+        requestCount: 1,
+        requestChars: size,
+    }, {
+        maxRequestChars: Math.max(before.maxRequestChars, size),
+        lastRequestAt: Date.now(),
+        lastRequestKind: kind,
+        lastRequestChars: size,
+    });
+}
 
 /**
  * The Story Planner write seam (design §8, Part 3): the COMPLETE proposed next
@@ -558,6 +600,10 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         .filter(arc => arc.status === 'parked')
         .map(arc => titleKey(arc.title))
         .filter(Boolean));
+    const closedTitles = new Set(prev
+        .filter(arc => arc.status === 'resolved' || arc.status === 'dropped')
+        .map(arc => titleKey(arc.title))
+        .filter(Boolean));
     // Parked records were not sent to the model and must not be title-fallback
     // candidates for a new suggestion.
     const mergeable = prev.filter(arc => arc.status === 'active');
@@ -577,6 +623,7 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
 
     const consumed = new Set();
     let matched = 0;
+    let suppressedClosed = 0;
     const merged = next.map(fresh => {
         const key = titleKey(fresh.title);
         const titleMatches = key ? (byTitle.get(key) || []) : [];
@@ -600,6 +647,12 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         // merge boundary enforces that user decision even when it ignores the
         // prompt. The durable parked record is carried below.
         if (!old && parkedTitles.has(key)) return null;
+        // Exact normalized-title recurrence is the deterministic closed-memory
+        // boundary. Near-miss/fuzzy similarity remains prompt guidance only.
+        if (!old && closedTitles.has(key)) {
+            suppressedClosed++;
+            return null;
+        }
         // Closed ids are not valid merge identities. A malformed/stale caller
         // may still send one explicitly, so mint a distinct id before carrying
         // the durable closed record alongside this newly proposed active arc.
@@ -684,6 +737,7 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         carried: carried.length,
         matched,
         added: merged.length - matched,
+        suppressedClosed,
     };
 }
 

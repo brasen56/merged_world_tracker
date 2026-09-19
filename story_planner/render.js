@@ -638,23 +638,17 @@ export function render() {
             </div>
         </details>
 
-        <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:12px">
-            Long-range arcs carry <strong>setup beats</strong> — small concrete steps toward the arc. Only the
-            <em>current</em> beat is sent to the AI, as a "NOW:" instruction, so it plants one thing at a time instead of
-            being told to vaguely "build toward" something. When you see that setup land in the story, click
-            <strong>✓ planted</strong> to move to the next beat. Once every beat is planted the arc becomes
-            <strong>Ready</strong> and is offered to the AI as usable immediately.
-            <br><br>
-            You do not have to come back here to do that: <code>/wt-beat</code> lists the waiting beats in chat and
-            <code>/wt-beat 2</code> marks one planted. If a beat sits unmarked too long you get a reminder, and the
-            🗺️ floating button shows how many are waiting (amber once any is overdue).
-            <br><br>
-            Edit any arc directly; changes save automatically. <strong>Pin</strong> an arc to keep it through regeneration
-            (arcs with planted beats are kept automatically). <strong>Focus</strong> an arc to prioritize it and include it in Focused-only injection.
-            <strong>Park</strong> an arc to keep it without injecting or aging it. Mark one <strong>Resolved</strong> or <strong>Dropped</strong>
-            to close it. <strong>Auto-generate</strong> refreshes the plan on a timer;
-            <strong>injection</strong> controls whether it reaches the AI.
-        </p>
+        <details class="sp-help" style="margin-top:12px">
+            <summary><strong>How Story Planner states and controls work</strong></summary>
+            <div class="mwt-text-dim mwt-text-sm" style="margin-top:8px">
+                <p><strong>Pin vs Focus vs Park:</strong> Pin protects an arc through full regeneration. Focus is a separate spotlight: focused arcs sort first and are the only arcs sent in Focused-only mode. Park keeps an idea for later but removes it from narrator injection, reminders, and aging until you Resume it.</p>
+                <p><strong>Planted vs Skipped:</strong> Planted means the setup beat actually happened and counts as completed evidence. Skipped records an honest route change; it stays in history but never counts as planted. Only the current pending beat is sent as <code>NOW:</code>.</p>
+                <p><strong>Ready vs Resolved:</strong> Ready is derived automatically when no pending setup beats remain; the payoff is available now, but the arc is still active. Resolved means the payoff happened and closes the arc.</p>
+                <p><strong>Archive vs Delete:</strong> Resolved and Dropped cards remain in the Archive and act as closed planning memory, suppressing exact-title recurrence during regeneration. Delete is the explicit forget action and removes that durable record.</p>
+                <p><strong>Progress review:</strong> Check progress is manual and evidence-backed. It proposes verified excerpts for review and never changes a beat or arc until you accept. No automatic progress API cadence is enabled.</p>
+                <p><code>/wt-beat</code> lists waiting beats and Ready arcs; <code>/wt-beat 2</code> plants item 2; <code>/wt-beat resolve R1</code> resolves Ready item R1.</p>
+            </div>
+        </details>
     `;
 }
 

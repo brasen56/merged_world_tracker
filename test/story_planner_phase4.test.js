@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
-    getArcs, getPlanHistory, incrementArcTurns, makeArc, removeArc, setArcs, setArcsWithHistory, setPlanData, state, updateArc,
+    getArcs, getPhase7Metrics, getPlanHistory, incrementArcTurns, makeArc, removeArc, setArcs, setArcsWithHistory, setPlanData, state, updateArc,
 } from '../story_planner/data.js';
 import { buildUserPrompt } from '../story_planner/generation.js';
 import { saveSettings } from '../story_planner/settings.js';
@@ -92,6 +92,13 @@ describe('Story Planner Phase 4 — targeted proposal model', () => {
         expect(buildUserPrompt('story')).toContain('CUSTOM story');
         expect(proposal.stale).toBe(false);
         expect(getPlanHistory()).toHaveLength(0);
+        expect(getPhase7Metrics()).toMatchObject({
+            targetedGenerations: 1,
+            requestCount: 1,
+            requestChars: request.systemPrompt.length + request.userContent.length,
+            maxRequestChars: request.systemPrompt.length + request.userContent.length,
+            lastRequestKind: 'targeted',
+        });
     });
 
     test('rework preserves identity, endpoint, section, and immutable historical beat records', async () => {
@@ -113,6 +120,7 @@ describe('Story Planner Phase 4 — targeted proposal model', () => {
         expect(getArcs()[0].beats.slice(0, 2)).toEqual(source.beats.slice(0, 2));
         expect(getArcs()[1]).toEqual(unrelated);
         expect(proposal.diff.beats.some(change => change.kind === 'added')).toBe(true);
+        expect(getPhase7Metrics().targetedApplied).toBe(1);
     });
 
     test('develop changes only description, section, and pending beats while preserving history', async () => {

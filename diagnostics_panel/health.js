@@ -239,6 +239,9 @@ export function collectHealthSnapshot({
         const tokens = call('tokens', () => mod.getTotalTokens?.() ?? 0, 0);
         const auto = call('auto', () => normaliseAutoStatus(mod[spec.autoStatus]?.() ?? null), null);
         const lastRun = call('lastRun', () => resolveLastRun(spec.id, diagnostics), null);
+        const observation = spec.id === 'story_planner'
+            ? call('observation', () => mod.getPlannerObservation?.() ?? null, null)
+            : null;
         const gate = call('gate', () => allowed(spec.moduleKey), false);
         const pause = pausedByModule.get(spec.id) ?? null;
 
@@ -261,6 +264,7 @@ export function collectHealthSnapshot({
             tokenKind: spec.tokenKind,
             auto,
             lastRun,
+            ...(observation ? { observation } : {}),
             // §5.4: the store-level pause, with the module banner's exact
             // message — a paused module must never read as ordinary
             // inactivity on this tab.

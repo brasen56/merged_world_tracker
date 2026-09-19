@@ -161,7 +161,7 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 
 ### 🗺️ Story Planner
 
-Acts as a "Story Architect" that brainstorms a menu of future plot possibilities across five timeline sections. Each arc is an independently editable card with its own status, section, and pin toggle. The plan is injected into the prompt as inspiration the AI can draw on — branching possibilities, not a fixed roadmap.
+Acts as a "Story Architect" that brainstorms a menu of future plot possibilities across five timeline sections. Each arc is an independently editable card with stable setup-beat progress, lifecycle controls, and selective injection. The plan is inspiration the narrator can draw on — branching possibilities, not a fixed roadmap.
 
 - **Five Timeline Sections** — Arcs are organized by when the story can use them:
   - **Immediate Hooks** — Usable right now, could surface in the very next scene
@@ -170,24 +170,28 @@ Acts as a "Story Architect" that brainstorms a menu of future plot possibilities
   - **Character Journeys** — Per-character growth, change, or reckoning arcs
   - **Unresolved Threads** — Setup already planted that still owes a payoff
 - **Arc-as-Card UI** — Each arc is an independent card with its own title, body, section dropdown, and status selector — not one flat textarea
-- **Arc Status Lifecycle** — Mark arcs as **Active** (live), **Resolved** (paid off), or **Dropped** (abandoned). Dropped arcs are excluded from injection. Resolved arcs are greyed out and kept for reference but never re-suggested
-- **Arc Pinning** — Pin important arcs to keep them through regeneration (unpinned arcs may be replaced when the plan refreshes)
+- **Setup Beat Workflow** — Long-range arcs carry stable beat records. **Planted** means the event happened and counts toward readiness; **Skipped** records a route change without pretending it happened. The narrator sees only the current pending beat. When no pending beats remain, the arc is **Ready** for payoff
+- **Arc Lifecycle** — **Active** arcs can inject and age. **Parked** arcs are retained but do not inject, age, or remind until resumed. **Resolved** and **Dropped** arcs move to the Archive and remain durable closed memory; exact-title recurrences are suppressed. **Delete** is the explicit forget action
+- **Pin, Focus, and Park are independent** — **Pin** protects an arc through full regeneration; **Focus** spotlights it, sorts it first, and includes it in Focused-only injection; **Park** shelves it without discarding its history
 - **Selective Injection Modes** — Choose which arcs reach the AI:
-  - **All** — Every non-dropped arc
-  - **Pinned** — Only arcs you've pinned
-  - **Active** — Only arcs still marked active (excludes resolved)
+  - **All active** — Every active arc
+  - **Pinned only** — Active arcs you've pinned
+  - **Focused only** — Active arcs you've focused
 - **Direction Hint** — A free-text field to steer the next generation (e.g. "more political intrigue," "slow down on romance," "I want a villain arc"). Saved per chat
 - **Configurable Arc Count** — Set how many arcs to request per generation (3–30), from a tight focus to a sprawling menu
-- **Continuity-Aware Regeneration** — The previous plan is fed back so still-relevant arcs carry forward and evolve rather than being discarded. Pinned arcs survive generation; resolved arcs suppress re-suggestion
+- **Targeted Arc Development** — Rework remaining setup, develop one arc, suggest an alternate route, or generate setup beats through a reviewable proposal that touches only the selected arc after scope/revision checks
+- **Evidence-Backed Progress Review** — **Check progress** scans bounded settled history and proposes only quote-verified beat/resolution changes. Suggestions remain transient until accepted or ignored; no automatic progress-check cadence is enabled
+- **Creative Controls** — Per-chat emphasis chips, restrained/balanced/escalating preference, new-major-character permission, Direction Hint, and opt-in public Knowledge character context shared by full and targeted generation
+- **Continuity-Aware Regeneration** — Active arcs use request-local identity handles and stable beat IDs; planted/skipped history cannot transfer to rewritten beats. Pinned/in-progress arcs survive omission, parked/closed records remain durable, and exact closed-title recurrence is suppressed
 - **Injection Preview** — Preview exactly what will be injected, showing the current injection mode, arc count, and token estimate
 - **Manual Arc Addition** — Add arcs directly to any section via the `+ Add Arc` button, independent of LLM generation
 - **LLM-Generated Plan** — Produces structured arcs across all five sections, parsed back into cards from the markdown output
 - **User-Safe Prompting** — The system prompt strictly forbids the model from writing actions, dialogue, thoughts, or reactions for `{{user}}`
 - **Auto-Generate** — Automatically refresh the plan every N messages (configurable interval, counted on AI replies)
 - **Injection Toggle** — Independently control whether the plan reaches the AI (toggle injection off without deleting the plan)
-- **Custom Prompts** — Override the default system and user prompts; the user prompt supports tokens: `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, `{{previousPlan}}`, `{{directionHint}}`, `{{arcCount}}`
+- **Custom Prompts** — Override the default full-plan system and user prompts; the user prompt supports `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, `{{previousPlan}}`, `{{directionHint}}`, `{{storyPalette}}`, `{{safeCharacterContext}}`, and `{{arcCount}}`. Targeted proposals keep their fixed safety contract
 - **Configurable Injection Depth** — Set how far from the bottom of the prompt the plan is injected
-- **Cross-Module Context** — Generation reads recent chat history, current World State, latest Chronicle entry, and the previous plan to ground its suggestions
+- **Diagnostics and Observation** — Injection diagnostics show focused/pinned/Ready selection, parked/closed/mode omissions, and the exact post-Budget payload. Health/Overview show progress-check and proposal activity; content-free per-chat counters measure request size, targeted-vs-full use, and closed recurrence suppression
 - **Legacy Migration** — Old single-blob plans are automatically parsed into arc cards on first read. The original text is preserved, so migration is recoverable
 - **History & Revert** — Snapshots are taken automatically before each generate/save/clear. Browse history, diff against current, and restore any snapshot
 
@@ -510,25 +514,25 @@ For example, with Auto-Refresh set to `10` and Full Refresh Every set to `5`, MW
 
 1. Open the **🗺️ Story Planner** tab
 2. Click **🎲 Generate Plan** to brainstorm a menu of future plot arcs organized across five timeline sections
-3. Review the generated arcs — each appears as an independent card with its own title, body, section dropdown, and status selector
+3. Review the generated arcs — each appears as an independent card with title, endpoint, section, lifecycle, Pin, Focus, Park/Resume, and a collapsible setup-beat editor
 4. **Manage individual arcs:**
    - Use the **section dropdown** on any card to move an arc between sections (Immediate Hooks → Emerging Arcs → Horizon Arcs → Character Journeys → Unresolved Threads)
-   - Change the **status** of any arc: **Active** (live), **Resolved** (paid off), or **Dropped** (abandoned). Dropped arcs are excluded from injection; resolved arcs are greyed out for reference
-   - Click the **📌 Pin** icon to protect an arc — pinned arcs survive regeneration; unpinned arcs may be replaced
+   - **Pin** protects an arc through full regeneration; **Focus** spotlights it and powers Focused-only injection; **Park** shelves it without injection, aging, or reminders
+   - Mark a beat **Planted** only when it happened. Use **Skip** when the route changed; skipped beats remain historical but do not count as planted
+   - **Ready** means setup is complete but the arc is still active. Mark it **Resolved** only after the payoff happens; use **Dropped** for a rejected direction
+   - Resolved/Dropped arcs remain in **Archive** as closed memory. **Delete** explicitly forgets the record and allows the idea to be proposed again
    - Edit arc titles and bodies inline — changes save automatically
 5. **Add arcs manually** — Click the **+ Add Arc** button at the bottom of any section to create an arc without LLM generation
-6. Choose an **Injection Mode** from the toolbar:
-   - **All** — Every non-dropped arc reaches the AI
-   - **Pinned** — Only arcs you've pinned
-   - **Active** — Only arcs still marked active (excludes resolved)
-7. Use the **💬 Direction Hint** field to steer the next generation (e.g. "more political intrigue," "slow down on romance") — saved per chat
-8. Click **💾 Save** to persist the current plan to chat metadata (arcs also auto-save on change)
-9. Use **📋 History** to browse automatically-taken snapshots, diff against the current plan, and restore any previous version
-10. Toggle **🔌 Injection** to include the plan in the prompt as inspiration
-11. Toggle **🔄 Auto** to automatically regenerate the plan every N messages
-12. Expand **⚙️ Story Planner Settings** to configure arc count (3–30), injection depth, auto-generate interval, injection mode, or replace the system/user prompts
+6. Use a card's development menu to **Rework remaining setup**, **Develop this arc**, **Suggest an alternate route**, or **Generate setup beats**. Review the diff before applying it
+7. Click **🔎 Check progress** for evidence-backed suggestions. Verify each quoted source, then Accept or Ignore; the checker never writes progress automatically
+8. Choose **All active**, **Pinned only**, or **Focused only** injection. Parked, Resolved, and Dropped records never enter narrator injection
+9. Use the Story Palette, escalation choice, new-character toggle, optional safe character context, and **Direction Hint** to steer full and targeted generation
+10. Use **📋 History** to browse snapshots, diff against the current plan, and restore a previous version
+11. Toggle **🔌 Injection** independently from storage. Toggle **🔄 Auto** only for full-plan regeneration every N AI replies; progress checking remains manual
+12. Use <code>/wt-beat</code> to list waiting beats and Ready arcs, <code>/wt-beat 2</code> to plant item 2, or <code>/wt-beat resolve R1</code> to resolve Ready item R1
+13. Expand **⚙️ Story Planner Settings** for arc count (3–30), injection depth, auto interval, custom full-plan prompts, reminders, palette, and safe character context
 
-Regeneration is continuity-aware: the previous plan is fed back so still-relevant arcs carry forward and evolve rather than discarded. Pinned arcs survive generation; resolved arcs are never re-suggested. The user prompt supports the tokens `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, `{{previousPlan}}`, `{{directionHint}}`, and `{{arcCount}}` — each resolves to empty when that data isn't present. Old single-blob plans are automatically migrated to arc cards on first read, with the original text preserved for recovery.
+Regeneration is continuity-aware and identity-safe: active arcs carry request-local handles, beats keep stable IDs, planted/skipped history cannot transfer to rewritten setup, and closed/parked decisions survive omission. Exact normalized-title recurrences of Resolved or Dropped arcs are suppressed; near-miss semantic similarity remains reviewable rather than being applied automatically. Old single-blob plans migrate through the schema gate with the source text preserved for recovery.
 
 ### Interiority
 

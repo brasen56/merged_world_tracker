@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, test, expect, vi } from 'vitest';
 import {
-    state, makeArc, getArcs, setArcs, parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
+    state, makeArc, getArcs, getPhase7Metrics, setArcs, parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
 } from '../story_planner/data.js';
 import {
     getInjectMode, getArcCount, getAutoInterval, isInjectionEnabled, isAutoEnabled,
@@ -547,6 +547,30 @@ describe('generatePlan request identity', () => {
         expect(new Set(handles).size).toBe(3);
         handles.forEach(handle => expect(handle).toMatch(/^[a-z][2-9][a-z]$/));
         for (const arc of [ledger, rival, filler]) expect(requests[0].userContent).not.toContain(arc.id);
+    });
+
+    test('full generation records request characters for both validation attempts', async () => {
+        seed();
+        let attempt = 0;
+        respond = () => {
+            attempt++;
+            return attempt === 1
+                ? 'This response has no required section headings.'
+                : '## Horizon Arcs\n- The Ledger — a\n- The Rival — b\n- Filler — c';
+        };
+
+        await generatePlan();
+
+        expect(requests).toHaveLength(2);
+        const sizes = requests.map(request => request.systemPrompt.length + request.userContent.length);
+        expect(getPhase7Metrics()).toMatchObject({
+            fullGenerations: 1,
+            requestCount: 2,
+            requestChars: sizes[0] + sizes[1],
+            maxRequestChars: Math.max(...sizes),
+            lastRequestChars: sizes[1],
+            lastRequestKind: 'full',
+        });
     });
 
     test('an arc the model renames but keeps the marker on keeps its progress', async () => {

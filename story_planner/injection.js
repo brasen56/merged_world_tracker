@@ -48,6 +48,47 @@ export function getArcsForInjection() {
     return [...arcs].sort((a, b) => (b.focused === true) - (a.focused === true));
 }
 
+/** Content-free selection/omission summary stored beside the exact registration. */
+export function getInjectionDiagnostics() {
+    const arcs = getArcs();
+    const mode = getInjectMode();
+    const selectedIds = new Set(getArcsForInjection().map(arc => arc.id));
+    const omissions = { mode: 0, parked: 0, closed: 0 };
+    let active = 0;
+    let focused = 0;
+    let pinned = 0;
+    let ready = 0;
+    for (const arc of arcs) {
+        if (arc.status === 'parked') {
+            omissions.parked++;
+            continue;
+        }
+        if (arc.status === 'resolved' || arc.status === 'dropped') {
+            omissions.closed++;
+            continue;
+        }
+        if (arc.status !== 'active') continue;
+        active++;
+        if (arc.focused) focused++;
+        if (arc.pinned) pinned++;
+        if (isArcReady(arc)) ready++;
+        if (!selectedIds.has(arc.id)) omissions.mode++;
+    }
+    return {
+        kind: 'story-planner-arcs',
+        mode,
+        totalRecords: arcs.length,
+        activeArcs: active,
+        selectedArcs: selectedIds.size,
+        focusedArcs: focused,
+        pinnedArcs: pinned,
+        readyArcs: ready,
+        omittedByMode: omissions.mode,
+        omittedParked: omissions.parked,
+        omittedClosed: omissions.closed,
+    };
+}
+
 /**
  * The exact markdown body that will be injected (also used for token counts).
  *
@@ -164,19 +205,22 @@ export function applyPlanInjection() {
 
     applyExtensionPromptInjection({
         key: EXTENSION_PROMPT_KEY,
-        header: getInjectionHeader(),
+        header: paused ? STORY_PLAN_INJECTION_HEADER : getInjectionHeader(),
         body,
         enabled,
         fallbackDepth: placement.depth.value,
         globalRole: placement.role.value,
         wrapperTag: 'mwt_story_plan',
         useTags,
+        diagnostics: paused ? { kind: 'story-planner-arcs', paused: true } : getInjectionDiagnostics(),
     });
 
     // When paused, do not even read the arc list for the log — a paused store
     // is never read (§7.4).
     const arcCount = paused ? 0 : getArcsForInjection().length;
-    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${getInjectMode()}", push "${getEnforcement()}", ${arcCount} arcs, ${body.length} chars at depth ${placement.depth.value}`);
+    const mode = paused ? 'paused' : getInjectMode();
+    const enforcement = paused ? 'paused' : getEnforcement();
+    console.log(`[MWT:StoryPlanner] Injection ${enabled && body ? 'applied' : 'cleared'} — mode "${mode}", push "${enforcement}", ${arcCount} arcs, ${body.length} chars at depth ${placement.depth.value}`);
 }
 
 // ─── Token estimate ──────────────────────────────────────────────────────────

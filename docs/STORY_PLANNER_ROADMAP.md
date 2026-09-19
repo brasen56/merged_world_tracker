@@ -630,6 +630,13 @@ Exit criteria:
 
 ### Phase 7 — Documentation, observation, and default decisions
 
+**Implementation status (2026-09-19):** Code instrumentation, diagnostics,
+panel help, README workflow documentation, exact-title closed recurrence
+suppression, and the initial decision record are implemented. The host-runtime
+manual QA matrix remains pending and is tracked in
+`docs/STORY_PLANNER_PHASE7_DECISIONS.md`; it is not represented as completed by
+the automated suite.
+
 **Purpose:** Finish the feature as a coherent user workflow and measure whether
 the optional automation is justified.
 

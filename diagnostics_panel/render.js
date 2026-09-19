@@ -373,6 +373,16 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
         ? `<div class="mwt-diag-panic">⛔ <strong>PANIC SWITCH ON</strong> — injection &amp; scanning are stopped for every module
              (<code>injectionMasterOff</code>). Right-click the ⚙️ floating button to release it.</div>`
         : '';
+    const plannerObservation = rows.find((row) => row.id === 'story_planner')?.observation;
+    const plannerObservationSection = plannerObservation ? `
+        <div class="mwt-diag-health-stats" aria-label="Story Planner observation">
+            <span class="mwt-diag-health-stat">Planner checks: <strong>${Number(plannerObservation.progressChecks) || 0}</strong></span>
+            <span class="mwt-diag-health-stat">last check: <strong>${plannerObservation.lastProgressCheckAt ? escapeHtml(formatTime(plannerObservation.lastProgressCheckAt)) : 'never'}</strong> · ${Number(plannerObservation.lastProgressSuggestions) || 0} proposal(s)</span>
+            <span class="mwt-diag-health-stat">progress decisions: <strong>${Number(plannerObservation.progressAccepted) || 0}</strong> accepted · <strong>${Number(plannerObservation.progressIgnored) || 0}</strong> ignored</span>
+            <span class="mwt-diag-health-stat">generation use: <strong>${Number(plannerObservation.targetedGenerations) || 0}</strong> targeted · <strong>${Number(plannerObservation.fullGenerations) || 0}</strong> full</span>
+            <span class="mwt-diag-health-stat">closed recurrences suppressed: <strong>${Number(plannerObservation.closedRecurrencesSuppressed) || 0}</strong></span>
+            <span class="mwt-diag-health-stat">request size: avg <strong>${(Number(plannerObservation.averageRequestChars) || 0).toLocaleString()}</strong> · max <strong>${(Number(plannerObservation.maxRequestChars) || 0).toLocaleString()}</strong> chars</span>
+        </div>` : '';
 
     return `
         <div class="mwt-diag-health">
@@ -390,6 +400,7 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
                 </thead>
                 <tbody>${rowHtml}</tbody>
             </table>
+            ${plannerObservationSection}
             <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. "Last run" is the module's most recent
                 API call (time · ok/failed · duration; hover for model/status); "never" is normal right after a reload —
                 the capture is in-memory only. The "Gate" column collapses the panic switch and per-module disable into
@@ -1089,6 +1100,19 @@ export function renderInjectionSnapshot(snapshot, { formatTime = (ts) => new Dat
                 <tbody>${sectionRows}</tbody>
             </table>` : '<p class="mwt-diag-dim">No World State sections were measured.</p>'}
             <p class="mwt-diag-note">Per-section projected tokens are measured before the separate outer cross-module Budget; “final payload” is measured from the exact post-Budget registration. Measurement only: Phase 6 priority selection is deferred. Existing factual/hook projection, legacy character caps, and the outer Budget remain unchanged. Entry omissions are reported when a future selector supplies them; none are introduced here.</p>`;
+    }
+    const plannerMeasurement = rows.find(r => r.id === 'story_planner')?.snapshot?.diagnostics;
+    if (plannerMeasurement?.kind === 'story-planner-arcs') {
+        measurementSection += `
+            <p class="mwt-diag-env-subheading">Story Planner selection measurement — omission reasons and exact post-Budget payload</p>
+            <div class="mwt-diag-health-stats">
+                <span class="mwt-diag-health-stat">mode: <strong>${escapeHtml(String(plannerMeasurement.mode || 'all'))}</strong></span>
+                <span class="mwt-diag-health-stat">selected: <strong>${Number(plannerMeasurement.selectedArcs) || 0}</strong> / ${Number(plannerMeasurement.activeArcs) || 0} active</span>
+                <span class="mwt-diag-health-stat">focused: <strong>${Number(plannerMeasurement.focusedArcs) || 0}</strong> · pinned: <strong>${Number(plannerMeasurement.pinnedArcs) || 0}</strong> · ready: <strong>${Number(plannerMeasurement.readyArcs) || 0}</strong></span>
+                <span class="mwt-diag-health-stat">omitted by mode: <strong>${Number(plannerMeasurement.omittedByMode) || 0}</strong></span>
+                <span class="mwt-diag-health-stat">parked omitted: <strong>${Number(plannerMeasurement.omittedParked) || 0}</strong> · closed omitted: <strong>${Number(plannerMeasurement.omittedClosed) || 0}</strong></span>
+                <span class="mwt-diag-health-stat">post-Budget payload: <strong>${Number(plannerMeasurement.registeredPayloadTokens) || 0}</strong> tokens · ${escapeHtml(String(plannerMeasurement.outerBudgetAction || 'unknown'))}</span>
+            </div>`;
     }
 
     const registeredTokens = (Number(s.registeredTokens) || 0).toLocaleString();

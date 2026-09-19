@@ -37,7 +37,8 @@ import {
     resolveInjectionPlacement as chroniclePlacement,
     applyInjection as applyChronicleInjection,
 } from '../chronicle/injection.js';
-import { resolveInjectionPlacement as planPlacement } from '../story_planner/injection.js';
+import { applyPlanInjection, getInjectionDiagnostics, resolveInjectionPlacement as planPlacement } from '../story_planner/injection.js';
+import { makeArc, setArcs, setPlanData } from '../story_planner/data.js';
 import { resolveInjectionPlacement as interiorityPlacement } from '../interiority/injection.js';
 
 import {
@@ -175,6 +176,30 @@ describe('parity — appliers register what their resolver reports', () => {
         expect(snap.depth).toBe(p.depth.value);
         expect(snap.depth).toBe(7);
         expect(snap.role).toBe(0); // system
+    });
+
+    test('Story Planner records exact selection, omission, and post-Budget payload counts', () => {
+        setFakeContextExtras({ setExtensionPrompt: () => {} });
+        const selected = makeArc({ title: 'Focused', focused: true, pinned: true, beats: ['done'] });
+        selected.beats[0] = { ...selected.beats[0], state: 'planted' };
+        const byMode = makeArc({ title: 'Other active' });
+        const parked = makeArc({ title: 'Parked', status: 'parked' });
+        const closed = makeArc({ title: 'Closed', status: 'resolved' });
+        setArcs([selected, byMode, parked, closed]);
+        setPlanData({ useGlobalDefaults: false, settingsOverride: { injectEnabled: true, injectMode: 'focused' } });
+
+        expect(getInjectionDiagnostics()).toMatchObject({
+            mode: 'focused', activeArcs: 2, selectedArcs: 1,
+            focusedArcs: 1, pinnedArcs: 1, readyArcs: 1,
+            omittedByMode: 1, omittedParked: 1, omittedClosed: 1,
+        });
+        applyPlanInjection();
+        const diagnostics = getInjectedSnapshot('mwt_story_plan_injection').diagnostics;
+        expect(diagnostics).toMatchObject({
+            kind: 'story-planner-arcs', selectedArcs: 1, omittedByMode: 1,
+            omittedParked: 1, omittedClosed: 1, outerBudgetAction: 'keep',
+        });
+        expect(diagnostics.registeredPayloadTokens).toBeGreaterThan(0);
     });
 });
 
@@ -529,6 +554,31 @@ describe('renderInjectionSnapshot — banners, provenance, payloads', () => {
         expect(html).toContain('&lt;Plot Seeds&gt;');
         expect(html).not.toContain('<Plot Seeds>');
         expect(html).toContain('priority selection is deferred');
+    });
+
+    test('renders Story Planner selection and exact post-Budget measurement', () => {
+        const diagnostics = {
+            kind: 'story-planner-arcs', mode: 'focused', activeArcs: 4, selectedArcs: 2,
+            focusedArcs: 2, pinnedArcs: 1, readyArcs: 1,
+            omittedByMode: 2, omittedParked: 3, omittedClosed: 5,
+            registeredPayloadTokens: 321, outerBudgetAction: 'truncate',
+        };
+        const snapshot = collectInjectionSnapshot(renderDeps({
+            specs: [
+                spec(),
+                spec({ id: 'story_planner', moduleKey: 'StoryPlanner', key: 'mwt_story_plan_injection' }),
+            ],
+            modules: {
+                world_state: { getTotalTokens: () => 123 },
+                story_planner: { getTotalTokens: () => 321 },
+            },
+            injections: () => ({ 'k-ws': LIVE_SNAP, mwt_story_plan_injection: { ...LIVE_SNAP, diagnostics } }),
+        }));
+        const html = renderInjectionSnapshot(snapshot, { formatTime: T });
+        expect(html).toContain('Story Planner selection measurement');
+        expect(html).toContain('selected: <strong>2</strong> / 4 active');
+        expect(html).toContain('omitted by mode: <strong>2</strong>');
+        expect(html).toContain('post-Budget payload: <strong>321</strong> tokens · truncate');
     });
 
     test('payloads render collapsed + fully DEFERRED: no payload text in the markup at all', () => {

@@ -109,7 +109,7 @@ describe('Story Planner Phase 1 — durable progress and lifecycle', () => {
         expect(changed.beats.find(beat => beat.text === 'Reworded current beat').id).not.toBe(oldCurrent.id);
     });
 
-    test.each(['resolved', 'dropped'])('%s arcs cannot be rewritten by a recurring suggestion', status => {
+    test.each(['resolved', 'dropped'])('%s arcs suppress an exact-title recurring suggestion', status => {
         const closed = makeArc({
             title: 'Rejected Route',
             body: 'Durable closed body',
@@ -125,12 +125,19 @@ describe('Story Planner Phase 1 — durable progress and lifecycle', () => {
 
         const result = mergeRegeneratedArcs([closed], [incoming]);
 
-        expect(result).toMatchObject({ carried: 1, matched: 0, added: 1 });
-        expect(result.arcs).toHaveLength(2);
+        expect(result).toMatchObject({ carried: 1, matched: 0, added: 0, suppressedClosed: 1 });
+        expect(result.arcs).toHaveLength(1);
         expect(result.arcs.find(arc => arc.id === closed.id)).toEqual(closed);
-        expect(result.arcs.find(arc => arc.id === incoming.id)).toMatchObject({
-            status: 'active', body: 'Replacement body', section: 'horizon',
-        });
+    });
+
+    test('near-match closed titles remain available as distinct proposals', () => {
+        const closed = makeArc({ title: 'Rejected Route', status: 'resolved' });
+        const incoming = makeArc({ title: 'Rejected Route Returns', body: 'A distinct continuation.' });
+
+        const result = mergeRegeneratedArcs([closed], [incoming]);
+
+        expect(result).toMatchObject({ carried: 1, matched: 0, added: 1, suppressedClosed: 0 });
+        expect(result.arcs.map(arc => arc.title)).toEqual(['Rejected Route', 'Rejected Route Returns']);
     });
 
     test('remints a duplicate title fallback carrying a durable record id', () => {

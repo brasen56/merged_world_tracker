@@ -25,6 +25,7 @@ import {
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
     getDirectionHint, getArcCount, buildClosedMemoryProjection, buildParkedMemoryProjection,
     getStoryPalette, getCharacterContextSelection,
+    incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
 import { applyPlanInjection } from './injection.js';
 
@@ -306,12 +307,14 @@ export async function generatePlan(isAuto = false) {
             characterContextTokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
             characterContextRecords: Number(characterContext.records) || 0,
         };
+        const firstUserContent = buildUserPrompt(recent, '', {
+            capturedArcs, handles: requestHandles,
+            characterContext,
+        });
+        recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
         let result = await resolved.fetchFn({
             systemPrompt,
-            userContent: buildUserPrompt(recent, '', {
-                capturedArcs, handles: requestHandles,
-                characterContext,
-            }),
+            userContent: firstUserContent,
             settings: resolved.settings,
             // Coordinator classification (TODO §1): scheduled auto-plans are
             // background work; the Generate button is foreground.
@@ -325,12 +328,14 @@ export async function generatePlan(isAuto = false) {
             console.warn(`[MWT:StoryPlanner] First attempt rejected: ${validation.reason} — retrying once`);
             const resolved2 = resolveApiCall({ moduleSettings: getSettings() });
             if (!assertSameScope(scopeBefore).ok) return null;
-            result = await resolved2.fetchFn({
-                systemPrompt,
-            userContent: buildUserPrompt(recent, validation.reason, {
+            const retryUserContent = buildUserPrompt(recent, validation.reason, {
                 capturedArcs, handles: requestHandles,
                 characterContext,
-            }),
+            });
+            recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
+            result = await resolved2.fetchFn({
+                systemPrompt,
+                userContent: retryUserContent,
                 settings: resolved2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
                 requestDiagnostics,
@@ -395,15 +400,19 @@ export async function generatePlan(isAuto = false) {
         // Merge rather than replace: arcs matched by name keep their id and
         // their planted-beat progress, and pinned / part-planted arcs the model
         // dropped are carried forward rather than lost.
-        const { arcs: newArcs, carried, matched, added } = mergeRegeneratedArcs(mergeBase, parsed, {
+        const { arcs: newArcs, carried, matched, added, suppressedClosed } = mergeRegeneratedArcs(mergeBase, parsed, {
             deletedIds,
             deletedTitles,
             protectedIds,
         });
 
         setArcs(newArcs);
+        incrementPhase7Metrics({
+            fullGenerations: 1,
+            closedRecurrencesSuppressed: suppressedClosed,
+        });
         applyPlanInjection();
-        console.log(`[MWT:StoryPlanner] Plan generated — ${matched} arcs kept with progress, ${added} new, ${carried} carried forward (${newArcs.length} total)`);
+        console.log(`[MWT:StoryPlanner] Plan generated — ${matched} arcs kept with progress, ${added} new, ${carried} carried forward, ${suppressedClosed} closed recurrence(s) suppressed (${newArcs.length} total)`);
         return newArcs;
     } catch (err) {
         // Coordinator cancellation (TODO §1): the chat changed mid-generation

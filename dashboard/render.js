@@ -210,6 +210,8 @@ export function renderOverviewSnapshot(snapshot = {}) {
     const plannerFocused = Number(beatsValue.focused) || 0;
     const plannerReady = Number(beatsValue.ready) || 0;
     const plannerParked = Number(beatsValue.parked) || 0;
+    const plannerLastCheck = Number(beatsValue.lastProgressCheckAt) || 0;
+    const plannerLastProposals = Number(beatsValue.lastProgressSuggestions) || 0;
     const active = Array.isArray(intentionsValue.active) ? intentionsValue.active.length : 0;
     const dormant = Array.isArray(intentionsValue.dormant) ? intentionsValue.dormant.length : 0;
     const running = Array.isArray(coordinatorValue.running) ? coordinatorValue.running.length : 0;
@@ -242,7 +244,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
         <div class="mwt-overview-grid">
             ${renderCell('worldState', 'World State', () => worldBody, { icon: '🌍', tab: 'world-state' })}
             ${snapshot.staging?.ok ? renderKnowledge() : errorCard('Knowledge', snapshot.staging)}
-            ${renderCell('beats', 'Story Planner', () => `${countText(plannerActive, 'active arc')} · ${countText(plannerInjected, 'injected arc')} · ${countText(plannerFocused, 'focused arc')} · ${countText(plannerReady, 'ready arc')} · ${countText(plannerParked, 'parked arc')} · ${countText(awaiting, 'beat')} awaiting · ${countText(overdue, 'beat')} overdue`, { icon: '🗺️', tab: 'story-planner', target: 'beats', empty: !plannerActive && !plannerParked })}
+            ${renderCell('beats', 'Story Planner', () => `${countText(plannerActive, 'active arc')} · ${countText(plannerInjected, 'injected arc')} · ${countText(plannerFocused, 'focused arc')} · ${countText(plannerReady, 'ready arc')} · ${countText(plannerParked, 'parked arc')} · ${countText(awaiting, 'beat')} awaiting · ${countText(overdue, 'beat')} overdue · progress check ${plannerLastCheck ? `${countText(plannerLastProposals, 'proposal')} last run` : 'never run'}`, { icon: '🗺️', tab: 'story-planner', target: 'beats', empty: !plannerActive && !plannerParked })}
             ${renderCell('intentions', 'Interiority', () => `${countText(active, 'active intention')} · ${countText(dormant, 'dormant intention')}`, { icon: '💭', tab: 'interiority', target: 'active-intentions', empty: !active && !dormant })}
             ${renderCell('budget', 'Budget', () => `${injected.toLocaleString()} injected${limit ? ` of ${limit.toLocaleString()} tokens` : ' tokens'}${budgetValue.enforce ? ' · enforce on' : ' · observe mode'}`, { icon: '📊', tab: 'budget' })}
             ${renderCell('coordinator', 'Coordinator', () => `${countText(running, 'running job')} · ${countText(queued, 'queued job')}${coordinatorValue.userGeneration?.backgroundPaused ? ' · background HELD' : ''}`, { icon: '🚦', tab: 'settings', target: 'generation-coordinator' })}

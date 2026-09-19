@@ -12,6 +12,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.9.0]
+
+### Added
+
+- Story Planner Phase 7 — documentation, observation, and default decisions
+  (`docs/STORY_PLANNER_ROADMAP.md`). The planner now measures its own real
+  usage so the roadmap's remaining automation decisions can be made from
+  evidence rather than intuition, without retaining any prompt or story
+  content. Closes Phase 7, the final phase of the Story Planner feature
+  update; the host-runtime manual QA matrix remains pending and tracked in
+  `docs/STORY_PLANNER_PHASE7_DECISIONS.md`.
+  - A per-chat, content-free `phase7Metrics` store records full and targeted
+    generation counts, targeted proposals applied, progress checks with
+    verified-suggestion and no-evidence results, accepted and ignored
+    proposal decisions, exact-title closed recurrences suppressed, and every
+    outbound planner request — count, cumulative/max/last characters, and
+    the last request's kind, size, and time — plus the last progress-check
+    time, counts, and up-to-date/stale outcome. Counters are floored,
+    clamped to zero, and capped, unknown fields (like `prompt` or `story`
+    text) are dropped, and the whole shape is canonicalized at the store
+    boundary through `sanitizePhase7Metrics` with a new
+    `phase7-metrics-canonicalized` repair code, so a hand-edited or imported
+    store can smuggle neither content nor unbounded growth past the schema
+    gate.
+  - Every planner API call is measured at its call sites — full-plan
+    generation (including the second attempt after a validation rejection),
+    targeted proposals, and progress checks — from the exact prompt strings
+    that are sent, without retaining them; an up-to-date progress check that
+    makes no API call records no request.
+  - Injection diagnostics now carry the planner's exact selection: mode,
+    active/selected/focused/pinned/Ready counts, arcs omitted by mode, by
+    Park, or by closure, and — attached by the shared injection seam — the
+    final post-Budget payload token count and outer-Budget action. The 💉
+    Injection tab renders this as a "Story Planner selection measurement"
+    block; a store paused by the schema gate reports `paused: true`
+    instead.
+  - The 🩺 Health tab and dashboard Overview report planner activity through
+    a guarded `getPlannerObservation()` seam: planner checks and last check
+    time, last-run proposal count, accepted/ignored decisions, targeted vs
+    full generation use, closed recurrences suppressed, and request size
+    (average/max). The Overview cell says "progress check never run" until
+    one has.
+  - The planner panel's help is now a collapsible "How Story Planner states
+    and controls work" section explaining Pin vs Focus vs Park, Planted vs
+    Skipped, Ready vs Resolved, and Archive vs Delete, the manual
+    evidence-backed progress review, and the `/wt-beat` commands.
+  - `docs/STORY_PLANNER_PHASE7_DECISIONS.md` records the four default
+    decisions with their rationale — progress checking stays manual,
+    `activateWhen` stays a human note, the Story Palette does not silently
+    alter auto-generation defaults, and closed-memory ranking stays pin plus
+    recency — each deferring any change until the new measurements justify
+    it, plus the manual SillyTavern QA matrix (short chat, long campaign,
+    group chat, custom prompt, narrow/mobile, migrated v1 history) that the
+    Node/jsdom suite cannot honestly cover.
+  - Tests: `test/story_planner_phase7.test.js` (new — sanitizer bounds and
+    content-field rejection, store-boundary canonicalization with the repair
+    issue, request accumulation and derived averages, per-chat reset);
+    `test/plan.test.js` (full-generation request sizing across both
+    validation attempts); `test/story_planner_phase1.test.js` (exact-title
+    suppression and near-match pass-through);
+    `test/story_planner_phase4.test.js` / `test/story_planner_phase5.test.js`
+    (targeted and progress counters, applied/accepted/ignored increments,
+    up-to-date no-call result); `test/injection_tab.test.js` (selection,
+    omission, and post-Budget registration plus its rendering);
+    `test/health_tab.test.js` and `test/dashboard_pane.test.js` (guarded
+    observation collection, rendering, and the never-run empty state);
+    `test/story_planner_phase3.test.js` (beat-status snapshot shape).
+
+### Changed
+
+- Full-plan regeneration now suppresses exact-title closed recurrence. An
+  incoming arc whose normalized title exactly matches a Resolved or Dropped
+  record is dropped at the merge boundary and counted (in the merge log and
+  the new metrics) instead of being added as a second active arc beside the
+  durable closed record. Near-miss or renamed titles still arrive as
+  distinct proposals for review; broader fuzzy suppression stays
+  deliberately manual because a false match could hide a legitimately
+  different arc.
+- The README's Story Planner feature and usage sections were rewritten
+  around the finished workflow: setup-beat progress and the Planted/Skip
+  distinction, the Active/Parked/Resolved/Dropped lifecycle with Archive as
+  closed memory, the independent Pin/Focus/Park controls, targeted arc
+  development, the manual evidence-backed progress check,
+  All-active/Pinned-only/Focused-only injection, the Story Palette and safe
+  character context, and `/wt-beat`.
+
+### Fixed
+
+- `applyPlanInjection()` no longer reads a store paused by the schema gate
+  when building its header. The paused path now uses the static
+  `STORY_PLAN_INJECTION_HEADER` constant instead of deriving the header
+  from the arc list, so a paused plan store is never read on that path.
+
 ## [2.8.21]
 
 ### Added

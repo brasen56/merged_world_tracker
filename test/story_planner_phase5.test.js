@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { getArcs, getPlanData, makeArc, setArcs, state, updateArc } from '../story_planner/data.js';
+import { getArcs, getPhase7Metrics, getPlanData, makeArc, setArcs, state, updateArc } from '../story_planner/data.js';
 import { saveSettings } from '../story_planner/settings.js';
 import {
     onChatChangedWhilePaused, onMessageDeleted, onMessageEdited, onMessageSwiped,
@@ -50,6 +50,15 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         expect(result.suggestions[0]).toMatchObject({ kind: 'beat', messageIdentity: 'id:evidence' });
         expect(getArcs()[0].beats[0].state).toBe('pending');
         expect(getPlanData().progressWatermarks).toBeUndefined();
+        expect(getPhase7Metrics()).toMatchObject({
+            progressChecks: 1,
+            progressSuggestions: 1,
+            lastProgressSuggestions: 1,
+            requestCount: 1,
+            lastRequestKind: 'progress',
+            lastProgressStale: false,
+            lastProgressUpToDate: false,
+        });
     });
 
     test('rejects invented excerpts without advancing the item watermark', async () => {
@@ -67,6 +76,7 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         expect(getArcs()[0].beats[0].state).toBe('planted');
         expect(getPlanData().history).toHaveLength(1);
         expect(getPlanData().progressWatermarks[suggestion.itemKey]).toEqual({ identity: 'id:evidence', index: 1 });
+        expect(getPhase7Metrics().progressAccepted).toBe(1);
         expect(acceptProgressSuggestion(suggestion).ok).toBe(false);
     });
 
@@ -97,6 +107,7 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         setFakeApi(() => modelResult());
         const suggestion = (await checkProgress()).suggestions[0];
         ignoreProgressSuggestion(suggestion);
+        expect(getPhase7Metrics().progressIgnored).toBe(1);
         // Clear the watermark to deliberately re-check the same evidence;
         // ignored evidence remains suppressed independently.
         getPlanData().progressWatermarks = {};
@@ -126,6 +137,12 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         });
 
         await expect(checkProgress()).resolves.toMatchObject({ upToDate: true });
+        expect(getPhase7Metrics()).toMatchObject({
+            progressChecks: 1,
+            requestCount: 0,
+            lastProgressUpToDate: true,
+            lastProgressStale: false,
+        });
     });
 
     test('caps the evidence prompt by recent message count and character budget', async () => {

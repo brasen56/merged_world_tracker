@@ -7,7 +7,7 @@ const snapshot = (overrides = {}) => ({
     worldState: { ok: true, value: { kind: 'stale', msgsSinceRefresh: 3 } },
     staging: { ok: true, value: 3 },
     growthEvidence: { ok: true, value: 1 },
-    beats: { ok: true, value: { active: 4, injected: 3, focused: 1, ready: 1, parked: 2, awaiting: 2, overdue: 1 } },
+    beats: { ok: true, value: { active: 4, injected: 3, focused: 1, ready: 1, parked: 2, awaiting: 2, overdue: 1, lastProgressCheckAt: 0, lastProgressSuggestions: 0 } },
     intentions: { ok: true, value: { active: [{ id: 1 }], dormant: [] } },
     budget: { ok: true, value: { injectedTokens: 120, contextLimit: 1000, enforce: false } },
     coordinator: { ok: true, value: { running: [], queued: [] } },
@@ -40,7 +40,15 @@ describe('Overview pane', () => {
         expect(document.body.textContent).toContain('1 beat overdue');
         expect(document.body.textContent).toContain('1 focused arc');
         expect(document.body.textContent).toContain('2 parked arcs');
+        expect(document.body.textContent).toContain('progress check never run');
         expect(document.body.querySelector('.mwt-overview-error')).toBeNull();
+    });
+
+    test('reports the last progress proposal count when a check has run', () => {
+        document.body.innerHTML = renderOverviewSnapshot(snapshot({
+            beats: { ok: true, value: { active: 1, injected: 1, awaiting: 1, overdue: 0, lastProgressCheckAt: 100, lastProgressSuggestions: 2 } },
+        }));
+        expect(document.body.textContent).toContain('2 proposals last run');
     });
 
     test('keeps a broken cell local to its card', () => {

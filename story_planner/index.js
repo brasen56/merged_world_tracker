@@ -22,7 +22,7 @@ import { storyPlannerSchema } from './schema.js';
 
 import { getSettings, saveSettings, hasValidSettings } from './settings.js';
 import {
-    state, getPlanData, setPlanSetting,
+    state, getPlanData, getPhase7Metrics, setPlanSetting,
     getArcs, serializeArcsToText, incrementArcTurns,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     persistAutoCounter, resetAutoCounter,
@@ -311,6 +311,7 @@ export function getBeatStatus() {
     const activeArcs = arcs.filter(arc => arc.status === 'active');
     const awaiting = getArcsAwaitingBeat();
     const threshold = getNudgeTurns();
+    const observation = getPlannerObservation();
     return {
         active: activeArcs.length,
         injected: isInjectionEnabled() ? getArcsForInjection().length : 0,
@@ -320,6 +321,23 @@ export function getBeatStatus() {
         awaiting: awaiting.length,
         overdue: awaiting.filter(a => (a.turnsSinceAdvance || 0) >= threshold).length
             + getOverdueReadyArcs(threshold).length,
+        lastProgressCheckAt: observation.lastProgressCheckAt,
+        lastProgressSuggestions: observation.lastProgressSuggestions,
+        progressChecks: observation.progressChecks,
+        targetedGenerations: observation.targetedGenerations,
+        fullGenerations: observation.fullGenerations,
+    };
+}
+
+/** Content-free Phase 7 observation snapshot for Health, Overview, and QA. */
+export function getPlannerObservation() {
+    const metrics = getPhase7Metrics();
+    return {
+        ...metrics,
+        averageRequestChars: metrics.requestCount
+            ? Math.round(metrics.requestChars / metrics.requestCount)
+            : 0,
+        proposalDecisions: metrics.progressAccepted + metrics.progressIgnored,
     };
 }
 

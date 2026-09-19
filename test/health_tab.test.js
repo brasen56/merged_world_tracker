@@ -254,6 +254,19 @@ describe('collectHealthSnapshot — row details (auto, last run, guards)', () =>
             expect(row.auto).toBeNull();
         }
     });
+
+    test('Story Planner observation is guarded and retained as content-free counters', () => {
+        const observation = {
+            progressChecks: 3, lastProgressCheckAt: 1234, lastProgressSuggestions: 2,
+            progressAccepted: 1, progressIgnored: 1, targetedGenerations: 4,
+            fullGenerations: 2, closedRecurrencesSuppressed: 5,
+            averageRequestChars: 900, maxRequestChars: 1200,
+        };
+        const snap = collectHealthSnapshot(deps({
+            modules: fakeModules({ story_planner: { getPlannerObservation: () => observation } }),
+        }));
+        expect(snap.modules.find(row => row.id === 'story_planner').observation).toEqual(observation);
+    });
 });
 
 // ─── normaliseAutoStatus / resolveLastRun (unit) ─────────────────────────────
@@ -383,6 +396,27 @@ describe('renderHealthSnapshot', () => {
         expect(html).toContain('>blocked<');
         expect(html).toContain('>idle<');
         expect(html).toContain('>busy<');
+    });
+
+    test('renders Story Planner activity and an explicit never-run empty state', () => {
+        const empty = renderHealthSnapshot(collectHealthSnapshot(deps({
+            modules: fakeModules({ story_planner: { getPlannerObservation: () => ({}) } }),
+        })), { formatTime: T });
+        expect(empty).toContain('Planner checks: <strong>0</strong>');
+        expect(empty).toContain('last check: <strong>never</strong>');
+
+        const populated = renderHealthSnapshot(collectHealthSnapshot(deps({
+            modules: fakeModules({ story_planner: { getPlannerObservation: () => ({
+                progressChecks: 3, lastProgressCheckAt: 1234, lastProgressSuggestions: 2,
+                progressAccepted: 1, progressIgnored: 2, targetedGenerations: 4,
+                fullGenerations: 1, closedRecurrencesSuppressed: 5,
+                averageRequestChars: 900, maxRequestChars: 1200,
+            }) } }),
+        })), { formatTime: T });
+        expect(populated).toContain('3</strong>');
+        expect(populated).toContain('2 proposal(s)');
+        expect(populated).toContain('5</strong>');
+        expect(populated).toContain('1,200</strong> chars');
     });
 
     test('auto cells: off, countdown, due-now, and Interiority\'s per-turn wording', () => {

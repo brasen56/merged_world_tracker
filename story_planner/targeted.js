@@ -17,6 +17,7 @@ import { storyPlannerSchema } from './schema.js';
 import {
     SECTIONS, buildClosedMemoryProjection, getArcs, getCharacterContextSelection, getDirectionHint,
     newArcId, newBeatId, sanitizeArc, setArcsWithHistory, state,
+    incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
 import { getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
@@ -218,14 +219,17 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
             characterContextTokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
             characterContextRecords: Number(characterContext.records) || 0,
         };
+        const userContent = buildTargetedUserPrompt(operation, sourceArc, characterContext);
+        recordPhase7Request('targeted', TARGETED_ARC_SYSTEM_PROMPT.length + userContent.length);
         const raw = await resolved.fetchFn({
             systemPrompt: TARGETED_ARC_SYSTEM_PROMPT,
-            userContent: buildTargetedUserPrompt(operation, sourceArc, characterContext),
+            userContent,
             settings: resolved.settings,
             trigger: 'manual',
             requestDiagnostics,
         });
         const proposedArc = proposalArc(operation, sourceArc, parseTargetedOutput(raw));
+        incrementPhase7Metrics({ targetedGenerations: 1 });
         const current = getArcs().find(arc => arc.id === arcId);
         const scopeResult = assertSameScope(scope);
         const staleReason = !scopeResult.ok ? 'The chat changed while this proposal was generated.'
@@ -286,6 +290,7 @@ export function applyTargetedProposal(proposal) {
     }
     const committed = setArcsWithHistory(next, arcs);
     if (!committed.ok) return { ok: false, reason: 'store-refused' };
+    incrementPhase7Metrics({ targetedApplied: 1 });
     return { ok: true, arcs: getArcs() };
 }
 

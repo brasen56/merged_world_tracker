@@ -17,6 +17,7 @@ import { MAX_PROGRESS_METADATA_ENTRIES, storyPlannerSchema } from './schema.js';
 import {
     getArcs, getCurrentBeatRecord, getPlanData, isArcReady, setArcBeatState,
     setArcStatus, setPlanData, state,
+    incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
 
 export const PROGRESS_SYSTEM_PROMPT = `You review settled roleplay messages for explicit evidence that planned story progress already happened.
@@ -188,6 +189,13 @@ export async function checkProgress() {
     const request = buildRequest(capturedItems, chat, stableEnd, watermarks);
     if (!request.hasCandidates) {
         state.progressSuggestions = [];
+        incrementPhase7Metrics({ progressChecks: 1 }, {
+            lastProgressCheckAt: Date.now(),
+            lastProgressSuggestions: 0,
+            lastProgressNoEvidence: 0,
+            lastProgressUpToDate: true,
+            lastProgressStale: false,
+        });
         return { suggestions: [], noEvidence: 0, stale: false, upToDate: true };
     }
     let finalIndex = stableEnd - 1;
@@ -201,14 +209,25 @@ export async function checkProgress() {
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
     try {
         const resolved = resolveApiCall({ moduleSettings: getSettings() });
+        recordPhase7Request('progress', PROGRESS_SYSTEM_PROMPT.length + request.userContent.length);
         const raw = await resolved.fetchFn({
             systemPrompt: PROGRESS_SYSTEM_PROMPT,
             userContent: request.userContent,
             settings: resolved.settings,
             trigger: 'manual',
         });
-        if (!assertSameScope(scope).ok) return { suggestions: [], noEvidence: 0, stale: true, staleReason: 'The chat changed while progress was checked.' };
+        if (!assertSameScope(scope).ok) {
+            incrementPhase7Metrics({ progressChecks: 1 }, {
+                lastProgressCheckAt: Date.now(), lastProgressSuggestions: 0,
+                lastProgressNoEvidence: 0, lastProgressUpToDate: false, lastProgressStale: true,
+            });
+            return { suggestions: [], noEvidence: 0, stale: true, staleReason: 'The chat changed while progress was checked.' };
+        }
         if (chatMutationGeneration !== mutationAtRequest) {
+            incrementPhase7Metrics({ progressChecks: 1 }, {
+                lastProgressCheckAt: Date.now(), lastProgressSuggestions: 0,
+                lastProgressNoEvidence: 0, lastProgressUpToDate: false, lastProgressStale: true,
+            });
             return { suggestions: [], noEvidence: 0, stale: true, staleReason: 'A message changed while progress was checked.' };
         }
         const currentArcs = getArcs();
@@ -256,6 +275,17 @@ export async function checkProgress() {
             setPlanData({ progressWatermarks: watermarks });
         }
         state.progressSuggestions = suggestions;
+        incrementPhase7Metrics({
+            progressChecks: 1,
+            progressSuggestions: suggestions.length,
+            progressNoEvidence: noEvidence,
+        }, {
+            lastProgressCheckAt: Date.now(),
+            lastProgressSuggestions: suggestions.length,
+            lastProgressNoEvidence: noEvidence,
+            lastProgressUpToDate: false,
+            lastProgressStale: false,
+        });
         return { suggestions, noEvidence, stale: false };
     } catch (error) {
         if (isCancellation(error)) return null;
@@ -293,6 +323,7 @@ export function acceptProgressSuggestion(suggestion, closeReason = '') {
     if (!updated) return { ok: false, reason: 'store-refused' };
     commitSuggestionWatermark(suggestion, updated);
     state.progressSuggestions = (state.progressSuggestions || []).filter(candidate => candidate !== suggestion);
+    incrementPhase7Metrics({ progressAccepted: 1 });
     return { ok: true, arc: updated };
 }
 
@@ -315,6 +346,7 @@ export function ignoreProgressSuggestion(suggestion) {
     if (!suggestion.stale && suggestion.pendingWatermark) progressWatermarks[suggestion.itemKey] = suggestion.pendingWatermark;
     setPlanData({ ignoredProgressEvidence: ignored, progressWatermarks });
     state.progressSuggestions = (state.progressSuggestions || []).filter(candidate => candidate !== suggestion);
+    incrementPhase7Metrics({ progressIgnored: 1 });
     return { ok: true };
 }
 

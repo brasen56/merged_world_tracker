@@ -171,6 +171,11 @@ describe('Story Planner Phase 3 — lifecycle and injection', () => {
             parked: 1,
             awaiting: 1,
             overdue: 1,
+            lastProgressCheckAt: 0,
+            lastProgressSuggestions: 0,
+            progressChecks: 0,
+            targetedGenerations: 0,
+            fullGenerations: 0,
         });
     });
 
