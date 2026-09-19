@@ -80,3 +80,42 @@ export function makeV1PlannerStore() {
         ],
     };
 }
+
+/**
+ * Synthetic V3 request-boundary records. These are deliberately generic and
+ * contain no campaign-specific material; they exercise scope, count, subject,
+ * cast-policy, and context-omission contracts before the live-model phases.
+ */
+export const V3_REQUEST_FIXTURES = Object.freeze({
+    sectionOnlyResponse: Object.freeze({
+        text: '## Character Journeys\n- Mara and the ledger — Mara must decide whether to trust the duplicate seal.\n  1. Mara compares the two seals.\n  2. The clerk refuses to explain the discrepancy.',
+        sections: Object.freeze(['character']),
+        arcCount: 1,
+    }),
+    twoArcResponse: Object.freeze({
+        text: '## Horizon Arcs\n- The Quiet Audit — A records review exposes a pressure point.\n  1. A ledger entry is challenged.\n  2. The auditor requests a witness.\n\n- The Missing Seal — A second document contradicts the first.\n  1. The seal is found in an unexpected drawer.\n  2. Its provenance is questioned.',
+        sections: Object.freeze(['horizon']),
+        arcCount: 2,
+    }),
+    selectedSubjects: Object.freeze({
+        subjectEntityIds: Object.freeze(['entity-mara', 'entity-derek']),
+        supportingEntityIds: Object.freeze(['entity-clerk']),
+    }),
+    newcomerFreeResponse: Object.freeze({
+        castPolicy: 'propose',
+        namedParticipants: Object.freeze(['Mara', 'Derek', 'the clerk']),
+        namedNewcomers: Object.freeze([]),
+    }),
+    omittedContext: Object.freeze({
+        mode: 'selected',
+        requestedEntityIds: Object.freeze(['entity-mara', 'entity-missing']),
+        includedEntityIds: Object.freeze(['entity-mara']),
+        omittedEntityIds: Object.freeze(['entity-missing']),
+        omissionReason: 'unavailable',
+    }),
+});
+
+export const V3_FULL_PLAN_TEMPLATE = Object.freeze({
+    system: 'Synthetic full-plan system prompt.',
+    user: 'Use {{chatHistory}} and {{previousPlan}}. Return the complete plan.',
+});

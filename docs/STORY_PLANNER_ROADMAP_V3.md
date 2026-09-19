@@ -1,6 +1,8 @@
 # Story Planner V3: scoped generation, character journeys, and cast policy
 
-**Status:** Proposed implementation roadmap; no V3 phases completed
+**Status:** Phase 0 characterization and projection inventory complete; Phase 0
+request-boundary samples are synthetic and the consented targeted-develop sample
+remains pending
 **Date:** 2026-09-19
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
 sketch pending the Phase 0 projection inventory. Independent arc classification
@@ -381,12 +383,15 @@ Work:
 - Inventory which surfaces consume title, body, beats, history, and closed
   memory. This is the prerequisite for Phase 4 and takes an afternoon.
   **Done 2026-09-19:** [STORY_PLANNER_PROJECTION_INVENTORY.md](./STORY_PLANNER_PROJECTION_INVENTORY.md).
-- Add fixtures for section-only requests, one- and two-arc output, selected
-  subjects, a newcomer-free response under active-proposal policy, and omitted
-  context.
-- Pin current full-plan and custom-template behavior as compatibility fixtures.
-- Add red tests for an out-of-scope response handle or title, omission of
-  unrelated arcs, duplicate subjects, and a user edit between response and Apply.
+- **Done 2026-09-19:** Add synthetic fixtures for section-only requests,
+  one- and two-arc output, selected subjects, a newcomer-free response under
+  active-proposal policy, and omitted context (`test/fixtures/story_planner_phase0.js`).
+- **Done 2026-09-19:** Pin current full-plan and custom-template behavior as
+  compatibility fixtures (`test/story_planner_phase0_v3.test.js`).
+- **Done 2026-09-19:** Add expected-failure red specifications for an out-of-scope
+  response handle or title, omission of unrelated arcs, duplicate subjects, and
+  a user edit between response and Apply. These stay expected failures until the
+  scoped request and ownership contracts land in Phases 1-3.
 - Use consented or synthetic fixtures; no private campaign content in the repo.
 
 **Exit:** The intended scope failures reproduce without a live model, the
