@@ -1203,6 +1203,21 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
         return `<strong>${t}</strong> ${dim('total')} <span class="mwt-diag-dim" title="usage.prompt_tokens / usage.completion_tokens">(in ${p} · out ${o})</span>`;
     };
 
+    /**
+     * Whatever context sizes the calling module attached to this request —
+     * Story Planner reports its safe-character-context projection (records,
+     * characters, estimated tokens) so the cost of that opt-in grounding is
+     * visible per call rather than only in the events ring. Like `trigger`,
+     * most modules attach nothing, and that is not an error.
+     */
+    const requestContextCell = (c) => {
+        const entries = Object.entries(c?.requestDiagnostics ?? {});
+        if (!entries.length) return dim('— (module does not report any)');
+        return entries
+            .map(([k, v]) => `<code>${escapeHtml(k)}</code> ${escapeHtml(typeof v === 'number' ? v.toLocaleString() : String(v))}`)
+            .join(dim(' · '));
+    };
+
     // The banner appears only when the most recent call failed (the
     // collector's one warning today); it reuses the Scope pane's banner list
     // markup, like the Injection pane does.
@@ -1231,6 +1246,7 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
                     ${kv('retries', String(last.retries ?? 0))}
                     ${kv('finish_reason', last.finish_reason ? escapeHtml(last.finish_reason) : dim('—'))}
                     ${kv('token usage', usageCell(last))}
+                    ${kv('request context', requestContextCell(last))}
                 </tbody>
             </table>
         </div>

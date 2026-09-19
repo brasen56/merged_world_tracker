@@ -61,7 +61,19 @@ function errorClass(err) {
     return err ? (err.name || 'Error') : 'Error';
 }
 
-function captureApiCall({ startedAt, panicObserved, trigger, settings, mode, name, attempts, status, finishReason, usage, error }) {
+function boundedRequestDiagnostics(value) {
+    if (!value || typeof value !== 'object') return null;
+    const bounded = {};
+    for (const [key, raw] of Object.entries(value).slice(0, 12)) {
+        if (typeof raw === 'number' && Number.isFinite(raw)) bounded[key] = Math.max(0, Math.min(1_000_000, Math.round(raw)));
+        else if (typeof raw === 'string') bounded[key] = raw.slice(0, 120);
+        else if (typeof raw === 'boolean') bounded[key] = raw;
+    }
+    return bounded;
+}
+
+function captureApiCall({ startedAt, panicObserved, trigger, settings, mode, name, attempts, status, finishReason, usage, error, requestDiagnostics }) {
+    const diagnostics = boundedRequestDiagnostics(requestDiagnostics);
     recordApiCall({
         module: apiModule(settings),
         mode,
@@ -78,6 +90,7 @@ function captureApiCall({ startedAt, panicObserved, trigger, settings, mode, nam
         status,
         finish_reason: finishReason,
         usage: usageSummary(usage),
+        ...(diagnostics ? { requestDiagnostics: diagnostics } : {}),
         ...(error ? { errorClass: errorClass(error) } : {}),
         ok: !error,
         at: Date.now(),
@@ -256,7 +269,7 @@ function classifyTrigger(trigger) {
  * external signal inside the coordinator; the transport just consumes the
  * single signal it receives.
  */
-function coordinatedFetch(perform, { systemPrompt, userContent, settings, retries, trigger, signal }) {
+function coordinatedFetch(perform, { systemPrompt, userContent, settings, retries, trigger, signal, requestDiagnostics }) {
     const { background, priority } = classifyTrigger(trigger);
     const { promise } = submitJob({
         module: apiModule(settings),
@@ -264,7 +277,7 @@ function coordinatedFetch(perform, { systemPrompt, userContent, settings, retrie
         priority,
         background,
         signal,
-        run: ({ signal: jobSignal }) => perform({ systemPrompt, userContent, settings, retries, trigger, signal: jobSignal }),
+        run: ({ signal: jobSignal }) => perform({ systemPrompt, userContent, settings, retries, trigger, signal: jobSignal, requestDiagnostics }),
     });
     return promise;
 }
@@ -298,6 +311,7 @@ async function performFetchFromApi({
     retries = 2,
     trigger = null,
     signal = null,
+    requestDiagnostics = null,
 }) {
     const startedAt = Date.now();
     // Panic latch: sampled at dispatch and again immediately before every
@@ -444,7 +458,7 @@ async function performFetchFromApi({
         return content;
         }, { signal });
         captureApiCall({
-            startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName,
+            startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName, requestDiagnostics,
             attempts, status, finishReason, usage,
             // Cancellation-aware success capture: a response that landed after
             // the job's signal aborted (slow proxy; or the CM transport, whose
@@ -455,7 +469,7 @@ async function performFetchFromApi({
         });
         return apiContent;
     } catch (error) {
-        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage, error });
+        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'custom', name: settings.modelName, attempts, status, finishReason, usage, error, requestDiagnostics });
         throw error;
     }
 }
@@ -491,7 +505,7 @@ export function fetchViaConnectionProfile(opts) {
  * load, before every outbound attempt, and between retries (retryAsync).
  * A cancelled job therefore never LEAVES once the coordinator aborts it.
  */
-async function performFetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2, trigger = null, signal = null }) {
+async function performFetchViaConnectionProfile({ systemPrompt, userContent, settings, retries = 2, trigger = null, signal = null, requestDiagnostics = null }) {
     // Cancellation boundary: the shared.js load itself is awaited work.
     if (signal?.aborted) throw cancellationError('cancelled before shared.js load');
     const startedAt = Date.now();
@@ -627,7 +641,7 @@ async function performFetchViaConnectionProfile({ systemPrompt, userContent, set
         signal,
         });
         captureApiCall({
-            startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId,
+            startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId, requestDiagnostics,
             attempts, status, finishReason, usage,
             // Cancellation-aware success capture — see the custom transport.
             // This is the load-bearing path for it: sendRequest has no signal
@@ -638,7 +652,7 @@ async function performFetchViaConnectionProfile({ systemPrompt, userContent, set
         });
         return cmText;
     } catch (error) {
-        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage, error });
+        captureApiCall({ startedAt, panicObserved: panicSeen, trigger, settings, mode: 'cm', name: profileId, attempts, status, finishReason, usage, error, requestDiagnostics });
         throw error;
     }
 }

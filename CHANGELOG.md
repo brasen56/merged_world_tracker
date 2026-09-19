@@ -12,6 +12,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.8.21]
+
+### Added
+
+- Story Planner Phase 6 — creative palette and safe character grounding
+  (`docs/STORY_PLANNER_ROADMAP.md`). Two opt-in, per-chat controls now steer
+  full-plan **and** targeted-arc generation:
+  - **Story Palette** — emphasis chips (conflict, mystery, discovery,
+    consequences, relationships, character growth, quiet moments,
+    repair/reconciliation), an escalation preference (restrained / balanced /
+    escalating), and an **Allow new major characters** toggle. With nothing
+    selected the prompt is byte-for-byte what it was before: chips are stated
+    to the model as preferences, never quotas, and the balanced default adds
+    no block at all.
+  - **Safe Character Context** — an opt-in Knowledge projection (Off by
+    default; *Active cast from Current Scene* or individually selected
+    characters) that grounds generation in public dossier facts only:
+    identity, public role, personality, background, and public location. It
+    is built from an explicit allowlist, so Secrets, the Knowledge Ledger,
+    Read-on-PC, current agenda, canon lock, and any Interiority material are
+    never read into it, and raw evidence quotes stay out entirely. Selections
+    are tracked by Knowledge `entityId`, so chosen characters survive
+    approved renames and merges (`mergedFrom` ids resolve to the surviving
+    record); the whole projection is capped at 6 whole records of 700
+    characters each and reported per request — records, characters, and
+    estimated tokens — on the Diagnostics panel's Last Request card, through a
+    new bounded `requestDiagnostics` channel attached to every planner API
+    call. Private sections are cut off the entry before the allowlist runs, so
+    a private field whose value contains a newline plus a public-looking
+    `Role:` line cannot be read back out as a public role.
+- The planner consumes character context through a new fail-closed
+  `core/character_context.js` seam: Knowledge registers a provider at
+  startup, the planner never imports Knowledge directly, and a missing,
+  disabled, or throwing provider yields an empty projection so generation
+  continues on its factual World State/Chronicle path — when Knowledge is
+  disabled the lorebook is not read at all. Both blocks are ordinary prompt
+  tokens: the built-in template carries `{{storyPalette}}` and
+  `{{safeCharacterContext}}` beside `{{directionHint}}`, above its closing
+  instruction, and a custom template that omits them simply gets no block —
+  the same contract `{{worldState}}` has always had. Chat-switch scope is
+  re-asserted after every new await the feature adds, in both the full-plan
+  and targeted paths.
+- Palette and character-context selections persist per chat through the
+  validated Story Planner write seam and are canonicalized at the store
+  boundary (`sanitizeStoryPalette` / `sanitizeCharacterContextSelection`):
+  emphases are filtered to the fixed vocabulary, entity ids are trimmed,
+  deduplicated, length-capped (120 chars), and capped at 24, and repairs are
+  reported as schema issues like any other field.
+  A stored selection also survives saving the panel while the character list
+  is empty — Knowledge disabled, or its store not yet hydrated — which would
+  otherwise have written an empty list over it on the next Save; the panel
+  says why the list is empty instead of showing a silently useless picker.
+  Tests: `test/story_planner_phase6.test.js` (new — sanitizer bounds,
+  store-boundary canonicalization, balanced-default prompt baseline, block
+  placement above the closing instruction, custom-template token opt-in,
+  provider error isolation, alias and `mergedFrom` resolution,
+  disabled-Knowledge empty path, secret exclusion from captured prompts,
+  private-section boundary, selection survival across an empty-list save,
+  control accessible names, and per-chat settings persistence);
+  `test/last_request_tab.test.js` (extended — `requestDiagnostics`
+  normalisation, degradation, and rendering).
+
+### Changed
+
+- The built-in full-plan system prompt no longer instructs the model to
+  "Focus on major plot shifts, new character introductions, and escalating
+  conflicts." Arcs are now framed as hypotheses — attempts, pressures,
+  complications, and possible outcomes, never deciding what `{{user}}`
+  chooses or claiming an uncertain outcome succeeds — and the model is asked
+  to develop established threads and cast before adding new rivals, villains,
+  or institutions unless a palette requests expansion. The absolute
+  prohibition on writing actions, dialogue, thoughts, or decisions for
+  `{{user}}` is unchanged.
+
 ## [2.8.20]
 
 ### Fixed

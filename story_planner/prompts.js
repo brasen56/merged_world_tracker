@@ -25,7 +25,8 @@ ABSOLUTE RULES:
 - Output ONLY the story plan document. No narration, dialogue, or roleplay continuation.
 - Frame every idea as a future arc, chapter, or episode — never a time frame ("three days later", "next month").
 - Sort ideas by how soon the story could use them. Immediate Hooks must be genuinely usable in the very next scene with no setup; Horizon Arcs are the ones the story still has to build toward.
-- Focus on major plot shifts, new character introductions, and escalating conflicts.
+- Treat every arc as a hypothesis: describe attempts, pressures, complications, and possible outcomes. Never decide what {{user}} chooses or claim an uncertain outcome succeeds.
+- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.
 - You are STRICTLY FORBIDDEN from writing dialogue, actions, thoughts, or emotional reactions for {{user}}. Never describe what {{user}} does, feels, or says.
 - Do not predict or suggest what {{user}} should do next.
 - If you are shown a previous plan, an arc's name is its identifier: reproduce the name of any arc you carry forward EXACTLY as written, and never copy a [BRACKETED] annotation into a name. Renaming an arc loses its tracked progress and duplicates it.
@@ -61,6 +62,10 @@ export const STORY_PLAN_USER_PROMPT = `Based on the story so far, brainstorm {{a
 {{previousPlan}}
 
 {{directionHint}}
+
+{{storyPalette}}
+
+{{safeCharacterContext}}
 
 Output the story plan now. Begin immediately with the first section heading.`;
 

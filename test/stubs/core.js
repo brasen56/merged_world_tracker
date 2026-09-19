@@ -58,6 +58,11 @@ import { stripNonNarrative } from '../../core/strip.js';
 // payload through. Enforce-mode behavior is pinned against the real modules
 // directly (test/budget.test.js), the injection_diagnostics tier5 pattern.
 import { enforceInjectionBudget } from '../../core/budget.js';
+export {
+    registerSafeCharacterContextProvider,
+    listSafeCharacterContextCandidates,
+    buildSafeCharacterContext,
+} from '../../core/character_context.js';
 
 let _chat = [];
 let _meta = {};

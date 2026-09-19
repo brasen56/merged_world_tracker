@@ -72,6 +72,17 @@ export function normaliseApiCall(raw, now) {
             total_tokens: finiteNonNeg(rawUsage.total_tokens),
         }
         : null;
+    // Optional per-call context sizes the CALLING module attached (Story
+    // Planner reports its safe-character-context projection here). core/api.js
+    // already bounds these at capture; re-filter defensively so a hand-fed
+    // entry degrades its own cell instead of the card, and keep only the scalar
+    // shapes the renderer knows how to print.
+    const rawRequestDiagnostics = raw.requestDiagnostics;
+    const requestDiagnostics = (rawRequestDiagnostics && typeof rawRequestDiagnostics === 'object' && !Array.isArray(rawRequestDiagnostics))
+        ? Object.fromEntries(Object.entries(rawRequestDiagnostics)
+            .filter(([, value]) => typeof value === 'number' ? Number.isFinite(value) : (typeof value === 'string' || typeof value === 'boolean'))
+            .slice(0, 12))
+        : null;
     return {
         module: (typeof raw.module === 'string' && raw.module) ? raw.module : 'api',
         mode: (typeof raw.mode === 'string' && raw.mode) ? raw.mode : null,
@@ -90,6 +101,7 @@ export function normaliseApiCall(raw, now) {
             ? usage
             : null,
         errorClass: (typeof raw.errorClass === 'string' && raw.errorClass) ? raw.errorClass : null,
+        requestDiagnostics: (requestDiagnostics && Object.keys(requestDiagnostics).length) ? requestDiagnostics : null,
         ok: raw.ok === true,
         at,
         ageSec: at != null ? Math.max(0, Math.round((now - at) / 1000)) : null,

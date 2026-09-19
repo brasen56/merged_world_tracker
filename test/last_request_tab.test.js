@@ -96,10 +96,38 @@ describe('normaliseApiCall', () => {
             finish_reason: 'stop',
             usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140 },
             errorClass: null,
+            // Optional per-call context sizes a module may attach. Like
+            // `trigger`, most modules attach nothing and null is the normal
+            // reading, not an error.
+            requestDiagnostics: null,
             ok: true,
             at: NOW - 60_000,
             ageSec: 60,
         });
+    });
+
+    test('requestDiagnostics survives normalisation and drops non-scalar members', () => {
+        const c = normaliseApiCall(call({
+            requestDiagnostics: {
+                characterContextRecords: 3,
+                characterContextChars: 1840,
+                characterContextTokens: 460,
+                nested: { not: 'printable' },
+                broken: NaN,
+            },
+        }), NOW);
+        expect(c.requestDiagnostics).toEqual({
+            characterContextRecords: 3,
+            characterContextChars: 1840,
+            characterContextTokens: 460,
+        });
+    });
+
+    test('an empty or malformed requestDiagnostics degrades to null', () => {
+        expect(normaliseApiCall(call({ requestDiagnostics: {} }), NOW).requestDiagnostics).toBeNull();
+        expect(normaliseApiCall(call({ requestDiagnostics: [1, 2] }), NOW).requestDiagnostics).toBeNull();
+        expect(normaliseApiCall(call({ requestDiagnostics: 'nope' }), NOW).requestDiagnostics).toBeNull();
+        expect(normaliseApiCall(call({ requestDiagnostics: { nested: {} } }), NOW).requestDiagnostics).toBeNull();
     });
 
     test('non-objects are dropped (null), never rendered as a row', () => {
@@ -296,6 +324,24 @@ describe('renderLastRequestSnapshot — header, card, history', () => {
         expect(html).toContain('History — newest first');
     });
 
+    // The plumbing existed but nothing rendered it: normaliseApiCall built a
+    // whitelist object that dropped the field, so the sizes Story Planner
+    // attaches were reachable only from the console.
+    test('the card prints the context sizes a module attached to the request', () => {
+        const snap = collectLastRequestSnapshot(deps({
+            apiCalls: () => [call({
+                module: 'story_planner',
+                requestDiagnostics: { characterContextRecords: 3, characterContextChars: 1840, characterContextTokens: 460 },
+            })],
+        }));
+        const html = renderLastRequestSnapshot(snap, { formatTime: T });
+        expect(html).toContain('request context');
+        expect(html).toContain('<code>characterContextRecords</code> 3');
+        expect(html).toContain('<code>characterContextChars</code> 1,840');
+        expect(html).toContain('<code>characterContextTokens</code> 460');
+        expect(html).not.toContain('module does not report any');
+    });
+
     test('the card carries every captured field, with the mode label explained inline', () => {
         const snap = collectLastRequestSnapshot(deps({
             apiCalls: () => [call({ mode: 'cm', model: 'my-profile' })],
@@ -310,6 +356,9 @@ describe('renderLastRequestSnapshot — header, card, history', () => {
         expect(html).toContain('stop');
         expect(html).toContain('<strong>140</strong>');
         expect(html).toContain('(in 100 · out 40)');
+        // No module attached context sizes to this call — say so, don't hide it.
+        expect(html).toContain('request context');
+        expect(html).toContain('module does not report any');
     });
 
     test('a failed last call: FAILED badge + error class + the warning banner', () => {

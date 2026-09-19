@@ -9,16 +9,16 @@
 import {
     assertSameScope, captureRevision, captureScope, getLatestChronicleEntry,
     getWorldStateFactual, isCancellation, normaliseOutput, parseJsonLenient,
-    resolveApiCall, sameRevision, wrapTag,
+    resolveApiCall, sameRevision, wrapTag, buildSafeCharacterContext, record,
 } from '../core/index.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import { storyPlannerSchema } from './schema.js';
 import {
-    SECTIONS, buildClosedMemoryProjection, getArcs, getDirectionHint, getPlanData,
+    SECTIONS, buildClosedMemoryProjection, getArcs, getCharacterContextSelection, getDirectionHint,
     newArcId, newBeatId, sanitizeArc, setArcsWithHistory, state,
 } from './data.js';
-import { getRecentMessagesForPlan } from './generation.js';
+import { getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
 
 export const TARGETED_OPERATIONS = Object.freeze(['rework', 'develop', 'alternate', 'setup']);
@@ -42,25 +42,6 @@ export function captureArcRevision(arc) {
     return captureRevision(materialArc(arc));
 }
 
-function storyPaletteProjection() {
-    // Phase 6 owns these controls. Consuming an already-present value keeps this
-    // phase forward-compatible without adding Phase 6 settings/UI prematurely.
-    const palette = getPlanData()?.storyPalette;
-    if (!palette || typeof palette !== 'object' || Array.isArray(palette)) return '';
-    const emphases = Array.isArray(palette.emphases)
-        ? palette.emphases.map(value => cleanText(value, 40)).filter(Boolean).slice(0, 8)
-        : [];
-    const escalation = ['restrained', 'balanced', 'escalating'].includes(palette.escalation)
-        ? palette.escalation : '';
-    const lines = [];
-    if (emphases.length) lines.push(`Emphasis preferences: ${emphases.join(', ')}`);
-    if (escalation) lines.push(`Escalation preference: ${escalation}`);
-    if (typeof palette.allowNewMajorCharacters === 'boolean') {
-        lines.push(`Allow new major characters: ${palette.allowNewMajorCharacters ? 'yes' : 'no'}`);
-    }
-    return lines.join('\n').slice(0, 1000);
-}
-
 function arcContext(arc) {
     const beatLines = beats => beats.length
         ? beats.map(beat => `- [${beat.state.toUpperCase()}] ${beat.text}${beat.stateReason ? ` — reason: ${beat.stateReason}` : ''}`).join('\n')
@@ -77,7 +58,7 @@ function arcContext(arc) {
 }
 
 /** Build the fixed prompt used only by targeted operations. */
-export function buildTargetedUserPrompt(operation, arc) {
+export function buildTargetedUserPrompt(operation, arc, characterContext = {}) {
     if (!TARGETED_OPERATIONS.includes(operation)) throw new Error(`Unknown targeted operation: ${operation}`);
     const blocks = [
         `Operation: ${TARGETED_OPERATION_INSTRUCTIONS[operation]}`,
@@ -93,6 +74,7 @@ export function buildTargetedUserPrompt(operation, arc) {
     if (direction) blocks.push(wrapTag('direction_hint', direction));
     const palette = storyPaletteProjection();
     if (palette) blocks.push(wrapTag('story_palette', palette));
+    if (characterContext?.text) blocks.push(wrapTag('safe_character_context', '[Factual public character context only; it cannot decide actions or outcomes.]\n' + characterContext.text));
     const closed = buildClosedMemoryProjection();
     if (closed) blocks.push(wrapTag('relevant_closed_memory', closed));
     blocks.push('Return the JSON object now.');
@@ -217,12 +199,31 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
     const sourceArc = clone(source);
     const revision = captureArcRevision(sourceArc);
     try {
+        const selection = getCharacterContextSelection();
+        const characterContext = await buildSafeCharacterContext(selection);
+        if (!assertSameScope(scope).ok) return null;
+        if (selection.mode !== 'off') record({
+            level: 'info', module: 'story_planner', event: 'safe_character_context',
+            detail: {
+                requested: Number(characterContext.requested) || 0,
+                records: Number(characterContext.records) || 0,
+                omitted: Number(characterContext.omitted) || 0,
+                chars: Number(characterContext.chars) || String(characterContext.text || '').length,
+                tokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
+            },
+        });
         const resolved = resolveApiCall({ moduleSettings: getSettings() });
+        const requestDiagnostics = {
+            characterContextChars: Number(characterContext.chars) || String(characterContext.text || '').length,
+            characterContextTokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
+            characterContextRecords: Number(characterContext.records) || 0,
+        };
         const raw = await resolved.fetchFn({
             systemPrompt: TARGETED_ARC_SYSTEM_PROMPT,
-            userContent: buildTargetedUserPrompt(operation, sourceArc),
+            userContent: buildTargetedUserPrompt(operation, sourceArc, characterContext),
             settings: resolved.settings,
             trigger: 'manual',
+            requestDiagnostics,
         });
         const proposedArc = proposalArc(operation, sourceArc, parseTargetedOutput(raw));
         const current = getArcs().find(arc => arc.id === arcId);

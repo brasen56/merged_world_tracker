@@ -36,9 +36,10 @@ import {
     getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
     getPlanHistory, pushPlanToHistory, historyEntryToDiffText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
-    getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta,
+    getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta, getStoryPalette, getCharacterContextSelection,
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
 } from './data.js';
+import { listSafeCharacterContextCandidates } from '../core/character_context.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { generatePlan } from './generation.js';
 import {
@@ -519,6 +520,9 @@ export function render() {
     const autoInterval = getAutoInterval();
     const mode = getInjectMode();
     const enforcement = getEnforcement();
+    const palette = getStoryPalette();
+    const characterContext = getCharacterContextSelection();
+    const characterCandidates = listSafeCharacterContextCandidates();
 
     return `
         <div class="ws-toolbar mwt-flex mwt-gap-4 mwt-mb-8" style="flex-wrap:wrap">
@@ -567,6 +571,24 @@ export function render() {
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Steers the next generation. Leave blank for none. Saved per chat.</p>
                 </div>
 
+                <div class="mwt-label">Story Palette</div>
+                <div>
+                    <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap" role="group" aria-label="Story palette emphasis">
+                        ${['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation'].map((value, index) => `<label class="sp-mode-label" for="sp-palette-emphasis-${index}"><input id="sp-palette-emphasis-${index}" type="checkbox" name="sp-palette-emphasis" value="${value}" ${palette.emphases.includes(value) ? 'checked' : ''}> ${escapeHtml(value)}</label>`).join('')}
+                    </div>
+                    <label class="mwt-text-sm" for="sp-palette-escalation">Escalation: <select id="sp-palette-escalation" class="sp-enforcement"><option value="restrained" ${palette.escalation === 'restrained' ? 'selected' : ''}>Restrained</option><option value="balanced" ${palette.escalation === 'balanced' ? 'selected' : ''}>Balanced</option><option value="escalating" ${palette.escalation === 'escalating' ? 'selected' : ''}>Escalating</option></select></label>
+                    <label class="sp-mode-label" for="sp-palette-new-major" style="margin-left:8px"><input id="sp-palette-new-major" type="checkbox" ${palette.allowNewMajorCharacters ? 'checked' : ''}> Allow new major characters</label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Optional preferences, not quotas. With no chips selected, planning stays balanced and favors the established cast.</p>
+                </div>
+
+                <label class="mwt-label" for="sp-character-context-mode">Safe Character Context</label>
+                <div>
+                    <select id="sp-character-context-mode" class="sp-enforcement"><option value="off" ${characterContext.mode === 'off' ? 'selected' : ''}>Off</option><option value="active" ${characterContext.mode === 'active' ? 'selected' : ''}>Active cast from Current Scene</option><option value="selected" ${characterContext.mode === 'selected' ? 'selected' : ''}>Selected characters</option></select>
+                    <select id="sp-character-context-ids" class="mwt-input" multiple size="${Math.min(5, Math.max(2, characterCandidates.length))}" aria-label="Selected safe character context" style="display:block;margin-top:4px;max-width:360px">${characterCandidates.map(candidate => `<option value="${escapeHtml(candidate.entityId)}" ${characterContext.entityIds.includes(candidate.entityId) ? 'selected' : ''}>${escapeHtml(candidate.name)}</option>`).join('')}</select>
+                    ${characterCandidates.length ? '' : `<p style="font-size:11px;color:var(--mwt-text-warn, var(--mwt-text-dim));margin:4px 0 0">No Knowledge characters are loaded right now, so the list above is empty. Any saved selection is kept — open the Knowledge tab to see and change it.</p>`}
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Opt-in public dossier projection only: identity, role, traits, background, and public location. It excludes secrets, ledgers, private intentions, and thoughts.</p>
+                </div>
+
                 <label class="mwt-label" for="sp-arc-count">Arcs Per Generation</label>
                 <div>
                     <input id="sp-arc-count" class="mwt-input" type="number" value="${getArcCount()}" min="3" max="30" style="max-width:100px">
@@ -583,7 +605,7 @@ export function render() {
                 <label class="mwt-label" for="sp-custom-user-prompt">Custom User Prompt</label>
                 <div>
                     <textarea id="sp-custom-user-prompt" class="mwt-input" rows="4" placeholder="Leave blank for default prompt">${escapeHtml(s.customUserPrompt || '')}</textarea>
-                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Overrides the user task prompt. Supports tokens: <code>{{chatHistory}}</code>, <code>{{worldState}}</code>, <code>{{lastChronicle}}</code>, <code>{{previousPlan}}</code>, <code>{{directionHint}}</code>, <code>{{arcCount}}</code>. Each resolves to empty if that data isn't available. Leave blank for default.</p>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Overrides the user task prompt. Supports tokens: <code>{{chatHistory}}</code>, <code>{{worldState}}</code>, <code>{{lastChronicle}}</code>, <code>{{previousPlan}}</code>, <code>{{directionHint}}</code>, <code>{{storyPalette}}</code>, <code>{{safeCharacterContext}}</code>, <code>{{arcCount}}</code>. Each resolves to empty if that data isn't available. Leave blank for default.</p>
                 </div>
 
                 <label class="mwt-label" for="sp-auto-interval">Auto-Generate Interval</label>
@@ -1199,6 +1221,27 @@ function handleArcsBlur(e) {
     refreshDisplay();
 }
 
+/**
+ * Read the Safe Character Context controls back out of the settings form.
+ *
+ * The id list is rendered from listSafeCharacterContextCandidates(), which is
+ * empty whenever Knowledge is disabled OR its store has not hydrated yet — and
+ * the Story Planner panel does not wait on that hydration. A plain read of
+ * selectedOptions would then write [] over a real selection the moment the user
+ * saves an unrelated setting on this panel, silently reducing the feature to a
+ * no-op with `mode` still set and nothing on screen to explain it. With no
+ * options rendered there is nothing the user could have chosen, so the stored
+ * ids are carried through untouched (render() says so in that state).
+ */
+function readCharacterContextSelection(modal) {
+    const mode = modal.querySelector('#sp-character-context-mode')?.value || 'off';
+    const select = modal.querySelector('#sp-character-context-ids');
+    if (!select || select.options.length === 0) {
+        return { mode, entityIds: getCharacterContextSelection().entityIds };
+    }
+    return { mode, entityIds: [...select.selectedOptions].map(option => option.value) };
+}
+
 // ─── Event wiring ────────────────────────────────────────────────────────────
 
 export function wireEvents() {
@@ -1309,6 +1352,12 @@ export function wireEvents() {
         setPlanSetting('arcCount', isNaN(arcCount) ? 10 : Math.min(30, Math.max(3, arcCount)));
         setPlanData({
             directionHint: state.modal.querySelector('#sp-direction-hint')?.value || '',
+            storyPalette: {
+                emphases: [...state.modal.querySelectorAll('input[name="sp-palette-emphasis"]:checked')].map(input => input.value),
+                escalation: state.modal.querySelector('#sp-palette-escalation')?.value || 'balanced',
+                allowNewMajorCharacters: state.modal.querySelector('#sp-palette-new-major')?.checked === true,
+            },
+            characterContext: readCharacterContextSelection(state.modal),
             nudgeEnabled: state.modal.querySelector('#sp-nudge-enabled')?.checked !== false,
             nudgeTurns: isNaN(nudgeTurns) ? OVERDUE_TURNS : Math.min(60, Math.max(3, nudgeTurns)),
         });

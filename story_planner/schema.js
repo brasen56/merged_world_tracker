@@ -54,6 +54,27 @@ export const MAX_BEAT_LENGTH = 1000;
 export const MAX_PROGRESS_METADATA_ENTRIES = 500;
 export const MAX_PROGRESS_IDENTITY_LENGTH = 500;
 export const MAX_IGNORED_PROGRESS_EVIDENCE_LENGTH = 2000;
+export const MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH = 120;
+export const STORY_PALETTE_EMPHASES = Object.freeze(['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation']);
+export const STORY_PALETTE_ESCALATIONS = Object.freeze(['restrained', 'balanced', 'escalating']);
+export const CHARACTER_CONTEXT_MODES = Object.freeze(['off', 'selected', 'active']);
+
+export function sanitizeStoryPalette(value) {
+    const raw = isObject(value) ? value : {};
+    return {
+        emphases: [...new Set(Array.isArray(raw.emphases) ? raw.emphases.map(item => String(item).trim()).filter(item => STORY_PALETTE_EMPHASES.includes(item)).slice(0, STORY_PALETTE_EMPHASES.length) : [])],
+        escalation: STORY_PALETTE_ESCALATIONS.includes(raw.escalation) ? raw.escalation : 'balanced',
+        allowNewMajorCharacters: raw.allowNewMajorCharacters === true,
+    };
+}
+
+export function sanitizeCharacterContextSelection(value) {
+    const raw = isObject(value) ? value : {};
+    return {
+        mode: CHARACTER_CONTEXT_MODES.includes(raw.mode) ? raw.mode : 'off',
+        entityIds: [...new Set(Array.isArray(raw.entityIds) ? raw.entityIds.map(item => String(item).trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)).filter(Boolean).slice(0, 24) : [])],
+    };
+}
 
 /**
  * ARC SHAPE
@@ -620,6 +641,18 @@ export function validateStoryPlannerData(data) {
         }
     }
     canonicalizeProgressMetadata(data, accepted, issues);
+    if (data.storyPalette !== undefined) {
+        accepted.storyPalette = sanitizeStoryPalette(data.storyPalette);
+        if (JSON.stringify(accepted.storyPalette) !== JSON.stringify(data.storyPalette)) {
+            issues.push(repairIssue('story-palette-canonicalized', ['storyPalette'], 'Story Planner palette preferences were canonicalized to the supported bounded values.', data.storyPalette));
+        }
+    }
+    if (data.characterContext !== undefined) {
+        accepted.characterContext = sanitizeCharacterContextSelection(data.characterContext);
+        if (JSON.stringify(accepted.characterContext) !== JSON.stringify(data.characterContext)) {
+            issues.push(repairIssue('character-context-canonicalized', ['characterContext'], 'Story Planner character-context selection was canonicalized to bounded values.', data.characterContext));
+        }
+    }
     return { data: accepted, issues, stats };
 }
 

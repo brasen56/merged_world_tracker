@@ -11,7 +11,7 @@ import {
     stripNonNarrative, getStableHistoryEnd,
     captureScope, assertSameScope, isCancellation,
     captureRevision, sameRevision,
-    wrapTag, escapePromptText,
+    wrapTag, escapePromptText, buildSafeCharacterContext, record,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
@@ -24,6 +24,7 @@ import {
     state, getArcs, setArcs, pushPlanToHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
     getDirectionHint, getArcCount, buildClosedMemoryProjection, buildParkedMemoryProjection,
+    getStoryPalette, getCharacterContextSelection,
 } from './data.js';
 import { applyPlanInjection } from './injection.js';
 
@@ -57,6 +58,14 @@ export function getRecentMessagesForPlan() {
 function buildSystemPrompt() {
     const custom = getSettings().customSystemPrompt?.trim();
     return custom || STORY_PLAN_SYSTEM_PROMPT;
+}
+
+export function storyPaletteProjection(palette = getStoryPalette()) {
+    const lines = [];
+    if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
+    if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
+    if (palette.allowNewMajorCharacters) lines.push('The user allows new major characters when expansion genuinely serves the story.');
+    return lines.join('\n');
 }
 
 export function buildUserPrompt(recentText, reminderReason = '', requestContext = {}) {
@@ -121,6 +130,13 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         ? wrapTag('direction',
             '[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n' + hint)
         : '';
+    const palette = storyPaletteProjection();
+    const paletteBlock = palette ? wrapTag('story_palette', palette) : '';
+    const characterContext = requestContext.characterContext || { text: '' };
+    const characterBlock = characterContext.text
+        ? wrapTag('safe_character_context',
+            '[Factual public character context only. It is not private knowledge and does not determine choices or outcomes.]\n' + characterContext.text)
+        : '';
 
     // Use replacement FUNCTIONS (not strings) so that `$` sequences in the
     // replacement text are treated literally. With a replacement string,
@@ -141,6 +157,16 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         .replace(/\{\{worldState\}\}/g, () => wsBlock)
         .replace(/\{\{lastChronicle\}\}/g, () => chronBlock)
         .replace(/\{\{directionHint\}\}/g, () => hintBlock)
+        // The Phase 6 blocks are ordinary context tokens, and they sit with
+        // the other grounding blocks ABOVE the template's closing instruction.
+        // They must never be appended after the rendered template: the
+        // built-in prompt ends with "Begin immediately with the first section
+        // heading", and a tag trailing that line invites exactly the preamble
+        // validateOutput() rejects — turning a palette into a silent second
+        // API call. A custom template that omits the token simply gets no
+        // block, the same contract as {{worldState}}.
+        .replace(/\{\{storyPalette\}\}/g, () => paletteBlock)
+        .replace(/\{\{safeCharacterContext\}\}/g, () => characterBlock)
         .replace(/\{\{arcCount\}\}/g, () => String(getArcCount()));
 
     if (reminderReason) {
@@ -257,14 +283,40 @@ export async function generatePlan(isAuto = false) {
         // "## " heading check when we're using the built-in default prompt.
         const expectHeader = !getSettings().customSystemPrompt?.trim();
 
+        const selection = getCharacterContextSelection();
+        const characterContext = await buildSafeCharacterContext(selection);
+        const contextScope = assertSameScope(scopeBefore);
+        if (!contextScope.ok) {
+            console.warn(`[MWT:StoryPlanner] Chat switched while building character context (${contextScope.reason}) — discarding request.`);
+            return null;
+        }
+        if (selection.mode !== 'off') record({
+            level: 'info', module: 'story_planner', event: 'safe_character_context',
+            detail: {
+                requested: Number(characterContext.requested) || 0,
+                records: Number(characterContext.records) || 0,
+                omitted: Number(characterContext.omitted) || 0,
+                chars: Number(characterContext.chars) || String(characterContext.text || '').length,
+                tokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
+            },
+        });
         const resolved = resolveApiCall({ moduleSettings: getSettings() });
+        const requestDiagnostics = {
+            characterContextChars: Number(characterContext.chars) || String(characterContext.text || '').length,
+            characterContextTokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
+            characterContextRecords: Number(characterContext.records) || 0,
+        };
         let result = await resolved.fetchFn({
             systemPrompt,
-            userContent: buildUserPrompt(recent, '', { capturedArcs, handles: requestHandles }),
+            userContent: buildUserPrompt(recent, '', {
+                capturedArcs, handles: requestHandles,
+                characterContext,
+            }),
             settings: resolved.settings,
             // Coordinator classification (TODO §1): scheduled auto-plans are
             // background work; the Generate button is foreground.
             trigger: isAuto ? 'auto' : 'manual',
+            requestDiagnostics,
         });
         let text = normaliseOutput(result);
         let validation = validateOutput(text, expectHeader);
@@ -272,11 +324,16 @@ export async function generatePlan(isAuto = false) {
         if (!validation.ok) {
             console.warn(`[MWT:StoryPlanner] First attempt rejected: ${validation.reason} — retrying once`);
             const resolved2 = resolveApiCall({ moduleSettings: getSettings() });
+            if (!assertSameScope(scopeBefore).ok) return null;
             result = await resolved2.fetchFn({
                 systemPrompt,
-                userContent: buildUserPrompt(recent, validation.reason, { capturedArcs, handles: requestHandles }),
+            userContent: buildUserPrompt(recent, validation.reason, {
+                capturedArcs, handles: requestHandles,
+                characterContext,
+            }),
                 settings: resolved2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
+                requestDiagnostics,
             });
             text = normaliseOutput(result);
             validation = validateOutput(text, expectHeader);

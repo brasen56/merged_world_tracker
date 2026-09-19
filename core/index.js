@@ -43,6 +43,11 @@ export {
     WORLD_STATE_METADATA_KEY,
 } from './metadata.js';
 export { notify } from './notifications.js';
+export {
+    registerSafeCharacterContextProvider,
+    listSafeCharacterContextCandidates,
+    buildSafeCharacterContext,
+} from './character_context.js';
 // Phase 0 diagnostics — in-memory ring buffer + last-run map
 // (core/diagnostics.js). Pure module; re-exported through the barrel so feature
 // code can import it alongside the other core helpers. Mirrored in

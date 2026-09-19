@@ -39,9 +39,12 @@ import {
     sanitizeArcs,
     sectionKeyFromLabel,
     storyPlannerSchema,
+    sanitizeStoryPalette,
+    sanitizeCharacterContextSelection,
 } from './schema.js';
 
 export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, newBeatId, sanitizeBeat, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel };
+export { sanitizeStoryPalette, sanitizeCharacterContextSelection };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -120,6 +123,9 @@ export function getPlanData() {
     const meta = getChatMeta();
     return meta?.[CHAT_DATA_KEY] || {};
 }
+
+export function getStoryPalette() { return sanitizeStoryPalette(getPlanData().storyPalette); }
+export function getCharacterContextSelection() { return sanitizeCharacterContextSelection(getPlanData().characterContext); }
 
 /**
  * The Story Planner write seam (design §8, Part 3): the COMPLETE proposed next
