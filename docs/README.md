@@ -13,7 +13,9 @@ repo root; live planning documents live here; everything historical lives in
 | [accessibility_plan.md](./accessibility_plan.md) | Active | Project A — the accessibility pass (TODO §4). Implementation slices 1–5 landed across v2.6.x–v2.7.0; the §7 manual QA checklist governs release sign-off. |
 | [settings_workspace_plan.md](./settings_workspace_plan.md) | Parked | Project B — the Settings information-architecture redesign. Starts only after Project A has landed and had real-world use. |
 | [KNOWLEDGE_RELATIONSHIP_CONTEXT_ROADMAP.md](./KNOWLEDGE_RELATIONSHIP_CONTEXT_ROADMAP.md) | Deferred | Trigger-based roadmap for contextual relationship injection. Not scheduled; pick up only if one of its stated triggers fires. |
-| [STORY_PLANNER_IMPROVEMENT_ROADMAP.md](./STORY_PLANNER_IMPROVEMENT_ROADMAP.md) | Proposed | Reliability and creative-control roadmap for stable beat identity, durable closed ideas, full beat editing, parked/focused arcs, targeted regeneration, evidence-backed progress suggestions, and safer planning context. |
+| [STORY_PLANNER_ROADMAP.md](./STORY_PLANNER_ROADMAP.md) | Baseline; host QA pending | Reliability and creative-control roadmap for stable beat identity, durable closed ideas, full beat editing, parked/focused arcs, targeted regeneration, evidence-backed progress suggestions, and public character context. |
+| [STORY_PLANNER_PHASE7_DECISIONS.md](./STORY_PLANNER_PHASE7_DECISIONS.md) | Manual QA pending | Existing Story Planner instrumentation, retained defaults, and host-runtime verification record. |
+| [STORY_PLANNER_ROADMAP_V3.md](./STORY_PLANNER_ROADMAP_V3.md) | Proposed | Next revision, Phases 0-3: scoped Add/Refresh, selected journey subjects, and explicit cast policy. Opt-in author context is a sketch; type/horizon and execution prerequisites are deferred with decision gates in its §7. |
 
 Root-level user guides (tracked): `README.md`, `CHANGELOG.md`,
 `DATA_SAFETY_GUIDE.md`, `DIAGNOSTICS_GUIDE.md`, `DIAGNOSTICS_CONSOLE_GUIDE.md`.

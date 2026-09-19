@@ -5,6 +5,13 @@
 **Sources:** `STORY_PLANNER_IMPROVEMENT_ROADMAP.md` and co-author review, 2026-09-14
 **Area:** Story Planner, Knowledge context projection, backup/restore, schema migrations, Budget, and Injection diagnostics
 
+**Follow-up:** [STORY_PLANNER_ROADMAP_V3.md](./STORY_PLANNER_ROADMAP_V3.md)
+defines the proposed next revision. Its first release (Phases 0-3) covers scoped
+generation, selected journey subjects, and an explicit cast policy; opt-in author
+context is a sketch, and independent arc classification and execution
+prerequisites are deferred behind decision gates. This document remains the
+reliability baseline; the V3 document identifies its deliberate contract changes.
+
 The original improvement roadmap is retained as the historical design source. This
 document incorporates its detailed contracts and phase work together with the
 review findings, corrected sequencing, reproduced regressions, and additional
