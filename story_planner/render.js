@@ -296,6 +296,32 @@ function candidateForEntityId(candidates, entityId) {
         || candidate.mergedEntityIds?.includes(entityId));
 }
 
+/**
+ * Keep persisted choices inside the bounded picker. A plain alphabetical
+ * slice can hide a checked subject beyond row 30, making it appear selected
+ * in the request while giving the user no checkbox with which to clear it.
+ */
+function visibleJourneySubjectCandidates(candidates, savedEntityIds) {
+    const visible = [];
+    const seen = new Set();
+    const add = candidate => {
+        if (!candidate || seen.has(candidate.entityId) || visible.length >= MAX_JOURNEY_SUBJECT_CANDIDATES) return;
+        seen.add(candidate.entityId);
+        visible.push(candidate);
+    };
+    for (const savedEntityId of savedEntityIds || []) {
+        const candidate = candidateForEntityId(candidates, savedEntityId);
+        add(candidate || {
+            entityId: savedEntityId,
+            name: `Unavailable saved subject: ${savedEntityId}`,
+            mergedEntityIds: [],
+            unavailable: true,
+        });
+    }
+    for (const candidate of candidates) add(candidate);
+    return visible;
+}
+
 function renderArcOwnershipEditor(arc) {
     if (arc.section !== 'character') return '';
     const candidates = listSafeCharacterContextCandidates();
@@ -580,8 +606,8 @@ function requestSummary(request) {
 }
 
 const CHARACTER_COVERAGE_LABELS = Object.freeze({
-    complete: 'Complete public context',
-    partial: 'Partial public context',
+    complete: 'Included — every populated supported field fit',
+    partial: 'Partial — some public context was truncated',
     'omitted-for-budget': 'Omitted for context budget',
     'missing-dossier': 'Missing dossier',
     unavailable: 'Dossier unavailable',
@@ -598,11 +624,22 @@ function renderCharacterContextCoverage(mode, coverage = [], contextStatus = '')
     const disabledNotice = mode === 'off' || contextStatus === 'disabled'
         ? '<p class="mwt-text-dim mwt-text-sm" data-coverage-status="disabled">Safe Character Context disabled for this request.</p>'
         : '';
-    return `${disabledNotice}<ul class="sp-context-coverage">${coverage.map(item => {
-        const statusLabel = CHARACTER_COVERAGE_LABELS[item.status] || item.status || 'Unavailable';
+    const coverageExplanation = '<p class="mwt-text-dim mwt-text-sm">Coverage uses only stance, role, personality, background, and public location. “Included” means every populated supported field fit; it does not measure total dossier size. Journey subjects own arcs; Context only entries come from the active Safe Character Context scope, not the subject picker.</p>';
+    return `${disabledNotice}${coverageExplanation}<ul class="sp-context-coverage">${coverage.map(item => {
+        const records = Number(item.records) || 0;
+        const fields = Number(item.fields) || 0;
+        const availableFields = Number.isFinite(Number(item.availableFields)) ? Number(item.availableFields) : fields;
+        const supportedFields = Number(item.supportedFields) || 5;
+        const statusLabel = item.status === 'partial' && records === 0 && availableFields === 0
+            ? 'No supported public fields populated'
+            : CHARACTER_COVERAGE_LABELS[item.status] || item.status || 'Unavailable';
         const name = item.name || item.entityId || 'Unknown character';
-        const counts = `${Number(item.records) || 0} record${Number(item.records) === 1 ? '' : 's'}, ${Number(item.fields) || 0} field${Number(item.fields) === 1 ? '' : 's'}, ${Number(item.tokens) || 0}${item.estimated ? ' estimated' : ''} tokens`;
-        return `<li data-coverage-status="${escapeHtml(item.status || 'unavailable')}"><strong>${escapeHtml(name)}</strong>: ${escapeHtml(statusLabel)} <span class="mwt-text-dim">(${escapeHtml(counts)})</span></li>`;
+        const fieldCounts = availableFields > fields
+            ? `${fields} of ${availableFields} populated public fields included (${supportedFields} supported)`
+            : `${fields} populated public field${fields === 1 ? '' : 's'} included (${supportedFields} supported)`;
+        const counts = `${records} record${records === 1 ? '' : 's'}, ${fieldCounts}, ${Number(item.tokens) || 0}${item.estimated ? ' estimated' : ''} tokens`;
+        const role = item.isPrimarySubject ? 'Journey subject' : 'Context only';
+        return `<li data-coverage-status="${escapeHtml(item.status || 'unavailable')}" data-coverage-role="${item.isPrimarySubject ? 'subject' : 'context-only'}"><strong>${escapeHtml(name)}</strong>: ${escapeHtml(statusLabel)} <span class="mwt-text-dim">(${escapeHtml(counts)}) — ${escapeHtml(role)}</span></li>`;
     }).join('')}</ul>`;
 }
 
@@ -780,8 +817,10 @@ export function openGenerateDialog() {
     const context = getCharacterContextSelection();
     const preferences = getStoryPlanRequestPreferences();
     const allSubjectCandidates = listSafeCharacterContextCandidates();
-    const subjectCandidates = allSubjectCandidates.slice(0, MAX_JOURNEY_SUBJECT_CANDIDATES);
     const savedSubjectIds = new Set(preferences.subjectEntityIds || []);
+    const subjectCandidates = visibleJourneySubjectCandidates(allSubjectCandidates, savedSubjectIds);
+    const visibleCandidateIds = new Set(subjectCandidates.filter(candidate => !candidate.unavailable).map(candidate => candidate.entityId));
+    const hiddenSubjectCandidateCount = allSubjectCandidates.filter(candidate => !visibleCandidateIds.has(candidate.entityId)).length;
     const configuredCustomTemplates = !!(getSettings().customSystemPrompt?.trim() || getSettings().customUserPrompt?.trim());
     const sectionChecks = SECTIONS.map(section => `
         <label class="sp-mode-label" for="sp-generate-section-${section.key}">
@@ -812,7 +851,7 @@ export function openGenerateDialog() {
                 <div id="sp-generate-subject-list" class="mwt-mt-8">${subjectCandidates.map((candidate, index) => `
                     <label for="sp-generate-subject-${index}"><input id="sp-generate-subject-${index}" type="checkbox" name="sp-generate-subject" value="${escapeHtml(candidate.entityId)}" ${savedSubjectIds.has(candidate.entityId) || candidate.mergedEntityIds?.some(id => savedSubjectIds.has(id)) ? 'checked' : ''}> ${escapeHtml(candidate.name)}</label>`).join('')
                     || '<span class="mwt-text-dim mwt-text-sm">No assignable tracked characters are currently available.</span>'}</div>
-                ${allSubjectCandidates.length > subjectCandidates.length ? `<p class="mwt-text-dim mwt-text-sm">Showing the first ${MAX_JOURNEY_SUBJECT_CANDIDATES} tracked characters. Only visible subjects can be sent in this request.</p>` : ''}
+                ${hiddenSubjectCandidateCount ? `<p class="mwt-text-dim mwt-text-sm">Showing up to ${MAX_JOURNEY_SUBJECT_CANDIDATES} tracked characters. Saved selections stay visible at the top so they can always be cleared; ${hiddenSubjectCandidateCount} other character${hiddenSubjectCandidateCount === 1 ? ' is' : 's are'} outside this request.</p>` : ''}
                 <p class="mwt-text-dim mwt-text-sm">Subject selection assigns ownership only. It does not add dossier fields to Safe Character Context.</p>
             </fieldset>
             <details class="mwt-mt-8" open>
@@ -948,17 +987,19 @@ export function openGenerateDialog() {
     });
     refresh();
     if (!showModal(GENERATE_MODAL_ID)) hideModal(GENERATE_MODAL_ID);
+    let coverageRequestRevision = 0;
     const refreshContextCoverage = () => {
+        const revision = ++coverageRequestRevision;
         const request = getRequest();
         const primarySubjectEntityIds = request.sectionKeys.includes('character') && request.subjectMode === 'selected'
             ? request.subjectEntityIds
             : [];
         Promise.resolve(buildSafeCharacterContext({ ...context, primarySubjectEntityIds })).then(result => {
             const host = modal.querySelector('#sp-generate-context-coverage');
-            if (host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, result?.coverage || [], result?.status || '');
+            if (revision === coverageRequestRevision && host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, result?.coverage || [], result?.status || '');
         }).catch(() => {
             const host = modal.querySelector('#sp-generate-context-coverage');
-            if (host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, []);
+            if (revision === coverageRequestRevision && host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, []);
         });
     };
     modal.querySelectorAll('input[name="sp-generate-section"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"]').forEach(input => input.addEventListener('change', refreshContextCoverage));

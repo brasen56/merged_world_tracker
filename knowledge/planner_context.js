@@ -9,6 +9,7 @@ import { USER_STANCES } from './state.js';
 export const SAFE_CHARACTER_CONTEXT_MAX_RECORDS = 6;
 export const SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS = 700;
 export const SAFE_CHARACTER_CONTEXT_MAX_TOTAL_CHARS = SAFE_CHARACTER_CONTEXT_MAX_RECORDS * SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS + (SAFE_CHARACTER_CONTEXT_MAX_RECORDS - 1) * 2;
+export const SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT = 5;
 
 const text = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 const safe = value => text(value).slice(0, 280);
@@ -98,14 +99,22 @@ function primarySubjectCoverage(selection, candidates, status) {
             status,
             records: 0,
             fields: 0,
+            availableFields: 0,
+            supportedFields: SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT,
             chars: 0,
             tokens: 0,
             estimated: true,
+            isPrimarySubject: true,
         };
     });
 }
 
 function globallyDisabledCoverage(selection) {
+    const candidates = listPlannerCharacterCandidates();
+    const primaryEntityIds = new Set((selection?.primarySubjectEntityIds || []).map(String).filter(Boolean).map(entityId => {
+        const candidate = candidates.find(item => item.entityId === entityId || item.mergedEntityIds.includes(entityId));
+        return candidate?.entityId || entityId;
+    }));
     const requestedIds = [
         ...(selection?.mode === 'selected' ? selection?.entityIds || [] : []),
         ...(selection?.primarySubjectEntityIds || []),
@@ -122,9 +131,12 @@ function globallyDisabledCoverage(selection) {
             status: 'disabled',
             records: 0,
             fields: 0,
+            availableFields: 0,
+            supportedFields: SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT,
             chars: 0,
             tokens: 0,
             estimated: true,
+            isPrimarySubject: primaryEntityIds.has(item.entityId),
         });
     }
     for (const entityId of resolution.missing || []) {
@@ -136,9 +148,12 @@ function globallyDisabledCoverage(selection) {
             status: 'disabled',
             records: 0,
             fields: 0,
+            availableFields: 0,
+            supportedFields: SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT,
             chars: 0,
             tokens: 0,
             estimated: true,
+            isPrimarySubject: primaryEntityIds.has(entityId),
         });
     }
     return coverage;
@@ -178,17 +193,23 @@ export async function buildPlannerCharacterContext(selection) {
     const records = [];
     const coverage = [];
     for (const { name, info } of entries) {
+        const coverageIdentity = {
+            entityId: info?.entityId || '',
+            name,
+            supportedFields: SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT,
+            isPrimarySubject: primaryOrder.has(info?.entityId),
+        };
         if (records.length >= SAFE_CHARACTER_CONTEXT_MAX_RECORDS) {
-            coverage.push({ entityId: info?.entityId || '', name, status: 'omitted-for-budget', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            coverage.push({ ...coverageIdentity, status: 'omitted-for-budget', records: 0, fields: 0, availableFields: 0, chars: 0, tokens: 0, estimated: true });
             continue;
         }
         if (!info?.entityId || !Number.isFinite(Number(info.uid))) {
-            coverage.push({ entityId: info?.entityId || '', name, status: 'missing-dossier', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            coverage.push({ ...coverageIdentity, status: 'missing-dossier', records: 0, fields: 0, availableFields: 0, chars: 0, tokens: 0, estimated: true });
             continue;
         }
         const content = await loadEntryContent(info.uid, name);
         if (!content) {
-            coverage.push({ entityId: info.entityId, name, status: 'unavailable', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            coverage.push({ ...coverageIdentity, status: 'unavailable', records: 0, fields: 0, availableFields: 0, chars: 0, tokens: 0, estimated: true });
             continue;
         }
         // Two independent guards, in order: the private sections are cut off
@@ -197,36 +218,54 @@ export async function buildPlannerCharacterContext(selection) {
         // projection; those fields can encode hidden motives or private
         // knowledge even when a dossier is otherwise public.
         const fields = extractDossierFieldValues(publicDossierSection(content));
-        const lines = [];
-        for (const [label, value] of [
+        const publicValues = [
             ['Stance toward the player character', USER_STANCES.includes(stances[name]) && stances[name] !== 'neutral' ? stances[name] : ''],
             ['Public role', fields.role],
             ['Personality', fields.personality],
             ['Background', fields.background],
             ['Public location', fields.where_to_find],
-        ]) {
-            const bounded = safe(value);
-            if (bounded) lines.push(`${label}: ${bounded}`);
+        ].map(([label, value]) => [label, text(value)]).filter(([, value]) => value);
+        const header = `Character: ${safe(name)}`;
+        const lines = [];
+        let truncated = false;
+        for (const [label, value] of publicValues) {
+            const bounded = value.slice(0, 280);
+            if (bounded.length < value.length) truncated = true;
+            const line = `${label}: ${bounded}`;
+            if ([header, ...lines, line].join('\n').length > SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS) {
+                truncated = true;
+                continue;
+            }
+            lines.push(line);
         }
         if (!lines.length) {
-            coverage.push({ entityId: info.entityId, name, status: 'partial', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            coverage.push({ ...coverageIdentity, status: 'partial', records: 0, fields: 0, availableFields: publicValues.length, chars: 0, tokens: 0, estimated: true });
             continue;
         }
-        const record = [`Character: ${safe(name)}`, ...lines].join('\n').slice(0, SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS);
+        const record = [header, ...lines].join('\n');
         records.push(record);
         coverage.push({
-            entityId: info.entityId,
-            name,
-            status: lines.length >= 5 ? 'complete' : 'partial',
+            ...coverageIdentity,
+            // Complete means the bounded projection contains every populated
+            // allowlisted value. It deliberately does not mean that all five
+            // possible fields are populated, or that the whole dossier is
+            // public. Those were the source of misleading 1-field "Partial"
+            // and 5-field "Complete" labels in the generation dialog.
+            status: truncated || lines.length < publicValues.length ? 'partial' : 'complete',
             records: 1,
             fields: lines.length,
+            availableFields: publicValues.length,
             chars: record.length,
             tokens: Math.ceil(record.length / 4),
             estimated: true,
         });
     }
     for (const entityId of resolution.missing || []) {
-        coverage.push({ entityId, name: '', status: 'unavailable', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+        coverage.push({
+            entityId, name: '', status: 'unavailable', records: 0, fields: 0, availableFields: 0,
+            supportedFields: SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT, chars: 0, tokens: 0, estimated: true,
+            isPrimarySubject: primaryOrder.has(entityId),
+        });
     }
     const coveredIds = new Set(coverage.map(item => item.entityId));
     for (const item of primarySubjectCoverage(selection, candidates, 'disabled')) {

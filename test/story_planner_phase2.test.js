@@ -470,7 +470,7 @@ describe('Story Planner scoped review — rendered change description', () => {
         });
 
         const coverage = document.querySelector('.sp-context-coverage-review').textContent;
-        expect(coverage).toContain('Mara: Complete public context');
+        expect(coverage).toContain('Mara: Included — every populated supported field fit');
         expect(coverage).toContain('Ivo: Omitted for context budget');
     });
 
@@ -545,7 +545,8 @@ describe('Story Planner scoped review — rendered change description', () => {
                 characterContextMode: 'selected',
                 characterContextCoverage: [{
                     entityId: 'entity-mara', name: 'Mara', status: 'partial',
-                    records: 1, fields: 3, tokens: 42, estimated: true,
+                    records: 1, fields: 3, availableFields: 4, supportedFields: 5,
+                    tokens: 42, estimated: true, isPrimarySubject: true,
                 }],
             },
         });
@@ -554,7 +555,8 @@ describe('Story Planner scoped review — rendered change description', () => {
         expect(review).toContain('Primary subjectMara');
         expect(review).toContain('Supporting participantsDerek');
         expect(document.querySelector('.sp-context-coverage-review').textContent)
-            .toContain('1 record, 3 fields, 42 estimated tokens');
+            .toContain('1 record, 3 of 4 populated public fields included (5 supported), 42 estimated tokens');
+        expect(document.querySelector('.sp-context-coverage-review [data-coverage-role="subject"]')).not.toBeNull();
     });
 
     test('Apply invalidates the open review when a captured subject is merged', async () => {
@@ -587,8 +589,8 @@ describe('Story Planner scoped generate dialog', () => {
     let alpha;
     let bravo;
 
-    /** @param {{preselectTargets?: boolean, settings?: object}} [options] */
-    async function openDialog({ preselectTargets = false, settings = {} } = {}) {
+    /** @param {{preselectTargets?: boolean, settings?: object, preferences?: object}} [options] */
+    async function openDialog({ preselectTargets = false, settings = {}, preferences = {} } = {}) {
         document.body.innerHTML = '';
         setFakeContextExtras({ getCurrentChatId: () => 'story-planner-dialog' });
         vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-dialog' }) });
@@ -603,6 +605,7 @@ describe('Story Planner scoped generate dialog', () => {
                 sectionKeys: ['horizon'],
                 requestedCount: 2,
                 targetArcIds: preselectTargets ? [alpha.id, bravo.id] : [],
+                ...preferences,
             },
         });
         const { openGenerateDialog } = await import('../story_planner/render.js');
@@ -693,7 +696,34 @@ describe('Story Planner scoped generate dialog', () => {
         expect(document.querySelectorAll('input[name="sp-generate-subject"]')).toHaveLength(30);
         expect(document.querySelector('#sp-generate-subject-list').textContent).toContain('Character 30');
         expect(document.querySelector('#sp-generate-subject-list').textContent).not.toContain('Character 31');
-        expect(document.getElementById('mwt-sp-generate-modal').textContent).toContain('Only visible subjects can be sent');
+        expect(document.getElementById('mwt-sp-generate-modal').textContent).toContain('Saved selections stay visible at the top');
+    });
+
+    test('pins a saved subject beyond row 30 into view so it can be cleared', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => Array.from({ length: 31 }, (_, index) => ({
+                entityId: `entity-${String(index + 1).padStart(2, '0')}`,
+                name: `Character ${String(index + 1).padStart(2, '0')}`,
+                mergedEntityIds: [],
+            })),
+        });
+        await openDialog({
+            preferences: {
+                operation: 'add', sectionKeys: ['character'], requestedCount: 1,
+                subjectMode: 'selected', subjectEntityIds: ['entity-31'],
+            },
+        });
+
+        const inputs = [...document.querySelectorAll('input[name="sp-generate-subject"]')];
+        const saved = inputs.find(input => input.value === 'entity-31');
+        expect(inputs).toHaveLength(30);
+        expect(saved?.checked).toBe(true);
+        expect(document.querySelector('label[for="sp-generate-subject-0"]').textContent).toContain('Character 31');
+        expect(document.querySelector('#sp-generate-subject-list').textContent).not.toContain('Character 30');
+
+        toggle(saved);
+        expect(inputs.filter(input => input.checked)).toHaveLength(0);
+        expect(document.querySelector('#sp-generate-summary').textContent).toContain('Select at least one NPC');
     });
 
     test('excludes unassigned Journeys from Refresh with a visible manual-assignment reason', async () => {
@@ -767,6 +797,39 @@ describe('Story Planner scoped generate dialog', () => {
         expect(document.querySelector('#sp-generate-context-coverage').textContent)
             .toContain('Mara: Missing dossier');
         expect(document.querySelector('#sp-subject-any').checked).toBe(true);
+    });
+
+    test('labels selected owners separately from saved context-only characters', async () => {
+        const candidates = ['Derek', 'Ezra', 'Ranger'].map(name => ({
+            entityId: `entity-${name.toLowerCase()}`, name, mergedEntityIds: [],
+        }));
+        registerSafeCharacterContextProvider({
+            listCandidates: () => candidates,
+            buildContext: async selection => ({
+                text: '', records: 3, requested: 3, omitted: 0,
+                coverage: candidates.map(candidate => ({
+                    ...candidate,
+                    status: 'complete', records: 1, fields: 1, availableFields: 1,
+                    supportedFields: 5, tokens: 17, estimated: true,
+                    isPrimarySubject: selection.primarySubjectEntityIds.includes(candidate.entityId),
+                })),
+            }),
+        });
+        setPlanData({ characterContext: { mode: 'selected', entityIds: ['entity-ranger'] } });
+        await openDialog({
+            preferences: {
+                operation: 'add', sectionKeys: ['character'], requestedCount: 2,
+                subjectMode: 'selected', subjectEntityIds: ['entity-derek', 'entity-ezra'],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const coverage = document.querySelector('#sp-generate-context-coverage');
+        expect(coverage.querySelectorAll('[data-coverage-role="subject"]')).toHaveLength(2);
+        expect(coverage.querySelectorAll('[data-coverage-role="context-only"]')).toHaveLength(1);
+        expect(coverage.textContent).toContain('Ranger: Included — every populated supported field fit');
+        expect(coverage.textContent).toContain('— Context only');
     });
 
     test('shows globally disabled Knowledge as disabled context coverage in the dialog', async () => {

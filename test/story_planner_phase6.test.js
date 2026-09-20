@@ -78,6 +78,51 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         });
     });
 
+    test('coverage completeness measures projection truncation rather than total dossier size or filled field slots', async () => {
+        const { buildPlannerCharacterContext, SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT } = await import('../knowledge/planner_context.js');
+        const { state: knowledgeState } = await import('../knowledge/state.js');
+        const { _setCacheForTests } = await import('../knowledge/store.js');
+        const registry = {
+            Derek: { entityId: 'npc-derek', uid: 1 },
+            Ranger: { entityId: 'npc-ranger', uid: 2 },
+            Verbose: { entityId: 'npc-verbose', uid: 3 },
+        };
+        knowledgeState.wiScript = { loadWorldInfo: async () => ({ entries: {
+            1: {
+                uid: 1, comment: 'Derek',
+                content: `[Dossier] Derek | Human |\nRole: Magistrate\nAppearance: ${'ornate detail '.repeat(80)}\nVoice: ${'measured '.repeat(80)}\nAgenda: private plan`,
+            },
+            2: {
+                uid: 2, comment: 'Ranger',
+                content: '[Dossier] Ranger | Human |\nRole: Scout\nPersonality: Direct\nBackground: Border patrol veteran\nWhere to Find: North gate\nSecrets: private',
+            },
+            3: {
+                uid: 3, comment: 'Verbose',
+                content: `[Dossier] Verbose | Human |\nRole: ${'very long public role '.repeat(30)}\nSecrets: private`,
+            },
+        } }) };
+        _setCacheForTests('Knowledge Tracker', { registry, stances: { Ranger: 'wary' } });
+
+        const result = await buildPlannerCharacterContext({
+            mode: 'selected', entityIds: ['npc-derek', 'npc-ranger', 'npc-verbose'],
+            primarySubjectEntityIds: ['npc-derek'],
+        });
+
+        expect(SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT).toBe(5);
+        expect(result.coverage.find(item => item.entityId === 'npc-derek')).toMatchObject({
+            status: 'complete', fields: 1, availableFields: 1, supportedFields: 5, isPrimarySubject: true,
+        });
+        expect(result.coverage.find(item => item.entityId === 'npc-ranger')).toMatchObject({
+            status: 'complete', fields: 5, availableFields: 5, supportedFields: 5, isPrimarySubject: false,
+        });
+        expect(result.coverage.find(item => item.entityId === 'npc-verbose')).toMatchObject({
+            status: 'partial', fields: 1, availableFields: 1, supportedFields: 5,
+        });
+        expect(result.text).not.toContain('ornate detail');
+        expect(result.text).not.toContain('measured');
+        expect(result.text).not.toContain('private plan');
+    });
+
     test('canonicalizes palette and entity-id selections to bounded safe values', () => {
         expect(sanitizeStoryPalette({ emphases: ['quiet moments', 'quiet moments', 'invalid'], escalation: 'invalid', allowNewMajorCharacters: 'yes' }))
             .toEqual({ emphases: ['quiet moments'], escalation: 'balanced', allowNewMajorCharacters: false });
