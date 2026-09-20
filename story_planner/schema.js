@@ -70,8 +70,7 @@ export const MAX_STORY_PLAN_REQUEST_IDS = 30;
  * The persisted slice of the request envelope: only the choices the manual
  * dialog can actually make today.
  *
- * Phase 2 persists Journey subject targeting. `castPolicy` remains transient
- * until the phase that gives it a first-class control and prompt contract.
+ * Phase 3A persists the manual scoped workflow's independent `castPolicy`.
  */
 export function sanitizeStoryPlanRequestPreferences(value) {
     const raw = isObject(value) ? value : {};
@@ -88,6 +87,7 @@ export function sanitizeStoryPlanRequestPreferences(value) {
         targetArcIds: request.targetArcIds,
         subjectMode: request.subjectMode,
         subjectEntityIds: request.subjectEntityIds,
+        castPolicy: request.castPolicy,
     };
 }
 
@@ -153,7 +153,7 @@ export function sanitizeStoryPalette(value) {
     return {
         emphases: [...new Set(Array.isArray(raw.emphases) ? raw.emphases.map(item => String(item).trim()).filter(item => STORY_PALETTE_EMPHASES.includes(item)).slice(0, STORY_PALETTE_EMPHASES.length) : [])],
         escalation: STORY_PALETTE_ESCALATIONS.includes(raw.escalation) ? raw.escalation : 'balanced',
-        allowNewMajorCharacters: raw.allowNewMajorCharacters === true,
+        castPolicy: STORY_PLAN_CAST_POLICIES.includes(raw.castPolicy) ? raw.castPolicy : 'allowed',
     };
 }
 
@@ -1058,12 +1058,42 @@ export function migrateStoryPlannerV2ToV3(data) {
         data: {
             ...data,
             arcs: Array.isArray(data.arcs) ? data.arcs.map(migrateArc) : [],
-            history: Array.isArray(data.history) ? data.history.map(entry => isObject(entry) && Array.isArray(entry.arcs)
-                ? { ...entry, arcs: entry.arcs.map(migrateArc) }
-                : entry) : data.history,
+            ...(Array.isArray(data.history) ? {
+                history: data.history.map(entry => isObject(entry) && Array.isArray(entry.arcs)
+                    ? { ...entry, arcs: entry.arcs.map(migrateArc) }
+                    : entry),
+            } : {}),
             ...(Object.hasOwn(data, 'storyPlanRequestPreferences')
                 ? { storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(data.storyPlanRequestPreferences) }
                 : {}),
+        },
+        issues: [],
+    };
+}
+
+/**
+ * v3 -> v4: cast policy has one independent persisted owner per workflow.
+ *
+ * The legacy boolean was permissive-only: false never meant a hard ban. Both
+ * values therefore migrate to `allowed`, and a pre-existing scoped preference
+ * receives its own independent `allowed` default. The retired boolean is not
+ * retained in the canonical v4 store.
+ */
+export function migrateStoryPlannerV3ToV4(data) {
+    if (!isObject(data)) return { data, issues: [] };
+    const palette = sanitizeStoryPalette({
+        ...(isObject(data.storyPalette) ? data.storyPalette : {}),
+        castPolicy: 'allowed',
+    });
+    const preferences = sanitizeStoryPlanRequestPreferences({
+        ...(isObject(data.storyPlanRequestPreferences) ? data.storyPlanRequestPreferences : {}),
+        castPolicy: 'allowed',
+    });
+    return {
+        data: {
+            ...data,
+            storyPalette: palette,
+            storyPlanRequestPreferences: preferences,
         },
         issues: [],
     };
@@ -1073,9 +1103,18 @@ export function migrateStoryPlannerV2ToV3(data) {
 export const storyPlannerSchema = defineStoreSchema({
     id: 'storyPlanner',
     metadataKey: 'story_planner_data',
-    currentVersion: 3,
-    createDefault: () => ({ arcs: [] }),
-    migrations: { 0: migrateStoryPlannerV0ToV1, 1: migrateStoryPlannerV1ToV2, 2: migrateStoryPlannerV2ToV3 },
+    currentVersion: 4,
+    createDefault: () => ({
+        arcs: [],
+        storyPalette: sanitizeStoryPalette({}),
+        storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences({}),
+    }),
+    migrations: {
+        0: migrateStoryPlannerV0ToV1,
+        1: migrateStoryPlannerV1ToV2,
+        2: migrateStoryPlannerV2ToV3,
+        3: migrateStoryPlannerV3ToV4,
+    },
     validate: validateStoryPlannerData,
     policy: defineIssuePolicy({
         repair: [

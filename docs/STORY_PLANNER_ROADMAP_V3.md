@@ -1,10 +1,10 @@
 # Story Planner V3: scoped generation, character journeys, and cast policy
 
-**Status:** Phases 0 and 1 complete. Phase 2 **Implemented, not host verified**
-— see the Phase 1 and Phase 2 status blocks in §5. Phase 0 request-boundary
-samples are synthetic and the consented targeted-develop sample remains a
-non-blocking follow-up; the planner-output attribution required to exit Phase 0
-is recorded. Phase 3 not started.
+**Status:** Phases 0 and 1 complete. Phase 2 and Phase 3A **Implemented, not host
+verified** — see the status blocks in §5. Phase 0 request-boundary samples are
+synthetic and the consented targeted-develop sample remains a non-blocking
+follow-up; the planner-output attribution required to exit Phase 0 is recorded.
+Phase 3B-3D are not started.
 **Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated
 2026-09-20; Phase 2 status recorded 2026-09-20)
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
@@ -783,6 +783,28 @@ canonical NPC automatically. Active-proposal mode reports whether a candidate wa
 returned. Existing-only rejects explicit newcomers; human review checks prose for
 undeclared ones. Every generation path names its effective policy source and
 either proves the paired-marker contract or reports that the path is unsupported.
+
+**Phase 3A status (§8 record)**
+
+- **State:** Implemented; not host verified. Phase 3B-3D remain not started.
+- **Change reference:** current working tree (store v4 policy migration, independent
+  scoped/palette controls, prompt-source routing, and focused regression coverage).
+- **Automated checks:** full suite green at 2,975/2,975; lint clean. Phase 3A is
+  pinned in `test/story_planner_cast_policy.test.js` and supplemented by
+  `test/story_planner_phase0_v3.test.js`, `test/story_planner_phase4.test.js`,
+  `test/story_planner_phase6.test.js`, `test/schema_migrations.test.js`,
+  `test/backup.test.js`, `test/backup_schema_roundtrip.test.js`, and
+  `test/accessible_names.test.js`.
+- **Migration result:** Story Planner store v3 migrates to v4. Both legacy boolean
+  values become `storyPalette.castPolicy: allowed`; manual scoped preferences gain
+  an independent `castPolicy: allowed`; the retired boolean is removed.
+- **Known limitations:** This slice owns persistence and workflow separation only.
+  The non-`allowed` policies are selectable and captured from their designated
+  source, but Phase 3B still owns explicit per-path compatibility/envelope clauses,
+  Phase 3C owns newcomer/entrance markers and validation, and Phase 3D owns
+  newcomer continuity/evaluation. No Knowledge record is created.
+- **Manual results:** Pending. Host checks should confirm both controls persist per
+  chat and remain independent before Phase 3B begins.
 
 ### Phase 4 - Opt-in author context (sketch)
 

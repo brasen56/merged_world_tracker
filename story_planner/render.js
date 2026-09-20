@@ -860,6 +860,17 @@ export function openGenerateDialog() {
                 <label class="mwt-label" for="sp-generate-count">Requested count</label>
                 <input id="sp-generate-count" class="mwt-input" type="number" min="1" max="30" value="${preferences.requestedCount || getArcCount()}" style="max-width:100px">
             </div>
+            <div class="mwt-settings-grid mwt-mt-8">
+                <label class="mwt-label" for="sp-generate-cast-policy">Cast policy</label>
+                <div>
+                    <select id="sp-generate-cast-policy" class="mwt-input">
+                        <option value="existing-only" ${preferences.castPolicy === 'existing-only' ? 'selected' : ''}>Established cast only</option>
+                        <option value="allowed" ${preferences.castPolicy === 'allowed' ? 'selected' : ''}>New characters allowed</option>
+                        <option value="propose" ${preferences.castPolicy === 'propose' ? 'selected' : ''}>Actively propose new characters</option>
+                    </select>
+                    <p class="mwt-text-dim mwt-text-sm">Saved for manual scoped Add/Refresh only. Legacy and automatic full-plan generation use the separate Story Palette policy.</p>
+                </div>
+            </div>
             <fieldset id="sp-generate-subjects" style="border:0;padding:0;margin:12px 0 0">
                 <legend class="mwt-label">Character Journey subjects</legend>
                 <label class="sp-mode-label" for="sp-subject-any"><input id="sp-subject-any" type="radio" name="sp-generate-subject-mode" value="any" ${preferences.subjectMode !== 'selected' ? 'checked' : ''}> Any tracked character</label>
@@ -917,7 +928,7 @@ export function openGenerateDialog() {
         const targetArcIds = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')].map(input => input.value);
         const subjectMode = modal.querySelector('input[name="sp-generate-subject-mode"]:checked')?.value || 'any';
         const subjectEntityIds = [...modal.querySelectorAll('input[name="sp-generate-subject"]:checked')].map(input => input.value);
-        return sanitizeStoryPlanRequest({ operation, sectionKeys, subjectMode, subjectEntityIds, requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: 'allowed', targetArcIds });
+        return sanitizeStoryPlanRequest({ operation, sectionKeys, subjectMode, subjectEntityIds, requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: modal.querySelector('#sp-generate-cast-policy')?.value, targetArcIds });
     };
     // Once the user has touched the target list, their selection is
     // authoritative — including an empty one. Falling back to the saved
@@ -999,7 +1010,7 @@ export function openGenerateDialog() {
         syncSummary();
     });
     modal.querySelectorAll('input[name="sp-generate-section"]').forEach(input => input.addEventListener('change', refresh));
-    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"], #sp-generate-count').forEach(input => input.addEventListener('change', refresh));
+    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"], #sp-generate-count, #sp-generate-cast-policy').forEach(input => input.addEventListener('change', refresh));
     modal.querySelector('#sp-generate-cancel')?.addEventListener('click', () => hideModal(GENERATE_MODAL_ID));
     modal.querySelector('#sp-generate-legacy')?.addEventListener('click', async () => {
         hideModal(GENERATE_MODAL_ID);
@@ -1139,8 +1150,8 @@ export function render() {
                         ${['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation'].map((value, index) => `<label class="sp-mode-label" for="sp-palette-emphasis-${index}"><input id="sp-palette-emphasis-${index}" type="checkbox" name="sp-palette-emphasis" value="${value}" ${palette.emphases.includes(value) ? 'checked' : ''}> ${escapeHtml(value)}</label>`).join('')}
                     </div>
                     <label class="mwt-text-sm" for="sp-palette-escalation">Escalation: <select id="sp-palette-escalation" class="sp-enforcement"><option value="restrained" ${palette.escalation === 'restrained' ? 'selected' : ''}>Restrained</option><option value="balanced" ${palette.escalation === 'balanced' ? 'selected' : ''}>Balanced</option><option value="escalating" ${palette.escalation === 'escalating' ? 'selected' : ''}>Escalating</option></select></label>
-                    <label class="sp-mode-label" for="sp-palette-new-major" style="margin-left:8px"><input id="sp-palette-new-major" type="checkbox" ${palette.allowNewMajorCharacters ? 'checked' : ''}> Allow new major characters</label>
-                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Optional preferences, not quotas. With no chips selected, planning stays balanced and favors the established cast.</p>
+                    <label class="mwt-text-sm" for="sp-palette-cast-policy" style="margin-left:8px">Cast policy: <select id="sp-palette-cast-policy" class="sp-enforcement"><option value="existing-only" ${palette.castPolicy === 'existing-only' ? 'selected' : ''}>Established cast only</option><option value="allowed" ${palette.castPolicy === 'allowed' ? 'selected' : ''}>New characters allowed</option><option value="propose" ${palette.castPolicy === 'propose' ? 'selected' : ''}>Actively propose new characters</option></select></label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Optional preferences, not quotas. This cast policy belongs to legacy full-plan, targeted, and automatic generation; manual scoped requests keep their own choice.</p>
                 </div>
 
                 <label class="mwt-label" for="sp-character-context-mode">Safe Character Context</label>
@@ -1933,7 +1944,7 @@ export function wireEvents() {
             storyPalette: {
                 emphases: [...state.modal.querySelectorAll('input[name="sp-palette-emphasis"]:checked')].map(input => input.value),
                 escalation: state.modal.querySelector('#sp-palette-escalation')?.value || 'balanced',
-                allowNewMajorCharacters: state.modal.querySelector('#sp-palette-new-major')?.checked === true,
+                castPolicy: state.modal.querySelector('#sp-palette-cast-policy')?.value || 'allowed',
             },
             characterContext: readCharacterContextSelection(state.modal),
             nudgeEnabled: state.modal.querySelector('#sp-nudge-enabled')?.checked !== false,

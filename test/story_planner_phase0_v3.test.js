@@ -559,11 +559,8 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
             operation: 'refresh', sectionKeys: ['horizon'], requestedCount: 30,
         });
         expect(validation.data.storyPlanRequestPreferences.targetArcIds).toHaveLength(30);
-        // Phase 2 persists Journey subject targeting. Cast policy remains
-        // transient until its own phase provides a control and prompt contract.
-        expect(validation.data.storyPlanRequestPreferences).not.toHaveProperty('castPolicy');
         expect(validation.data.storyPlanRequestPreferences).toMatchObject({
-            subjectMode: 'selected', subjectEntityIds: ['npc-a'],
+            subjectMode: 'selected', subjectEntityIds: ['npc-a'], castPolicy: 'existing-only',
         });
 
         setPlanData({ storyPlanRequestPreferences: validation.data.storyPlanRequestPreferences });

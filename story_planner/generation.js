@@ -129,11 +129,14 @@ function buildReadOnlyContinuityProjection(arcs) {
     }).join('\n');
 }
 
-export function storyPaletteProjection(palette = getStoryPalette()) {
+export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy) {
     const lines = [];
     if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
     if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
-    if (palette.allowNewMajorCharacters) lines.push('The user allows new major characters when expansion genuinely serves the story.');
+    // Phase 3A changes policy ownership only. The full three-policy prompt and
+    // response contract lands in 3B/3C; `allowed` preserves the old permissive
+    // behavior while the other explicit values remain captured for that slice.
+    if (castPolicy === 'allowed') lines.push('The user allows new major characters when expansion genuinely serves the story.');
     return lines.join('\n');
 }
 
@@ -209,7 +212,8 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         ? wrapTag('direction',
             '[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n' + hint)
         : '';
-    const palette = storyPaletteProjection();
+    const savedPalette = getStoryPalette();
+    const palette = storyPaletteProjection(savedPalette, request?.castPolicy ?? savedPalette.castPolicy);
     const paletteBlock = palette ? wrapTag('story_palette', palette) : '';
     const characterContext = requestContext.characterContext || { text: '' };
     const characterBlock = characterContext.text

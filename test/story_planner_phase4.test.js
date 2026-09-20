@@ -65,7 +65,7 @@ describe('Story Planner Phase 4 — targeted proposal model', () => {
         setArcs([source, closed]);
         setPlanData({
             directionHint: 'Keep the conflict political.',
-            storyPalette: { emphases: ['mystery', 'consequences'], escalation: 'restrained', allowNewMajorCharacters: false },
+            storyPalette: { emphases: ['mystery', 'consequences'], escalation: 'restrained', castPolicy: 'existing-only' },
         });
         getFakeMeta().world_state_tracker_metadata = { text: '## Current Scene\nLocation: Harbour office\n\n## Plot Seeds\n- Secret hook' };
         getFakeMeta().session_chronicle_data = { snapshots: [{ createdAt: Date.now(), text: 'The forged manifest reached Mara.' }] };

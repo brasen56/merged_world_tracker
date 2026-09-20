@@ -21,7 +21,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('Story Planner Phase 6 — palette and safe character grounding', () => {
     test('full and targeted prompts share the exact palette projection', () => {
-        setPlanData({ storyPalette: { emphases: ['quiet moments'], escalation: 'restrained', allowNewMajorCharacters: true } });
+        setPlanData({ storyPalette: { emphases: ['quiet moments'], escalation: 'restrained', castPolicy: 'allowed' } });
         const block = prompt => prompt.match(/<story_palette>[\s\S]*?<\/story_palette>/)?.[0];
         const full = block(buildUserPrompt('recent'));
         expect(full).toBeTruthy();
@@ -134,27 +134,27 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
     });
 
     test('canonicalizes palette and entity-id selections to bounded safe values', () => {
-        expect(sanitizeStoryPalette({ emphases: ['quiet moments', 'quiet moments', 'invalid'], escalation: 'invalid', allowNewMajorCharacters: 'yes' }))
-            .toEqual({ emphases: ['quiet moments'], escalation: 'balanced', allowNewMajorCharacters: false });
+        expect(sanitizeStoryPalette({ emphases: ['quiet moments', 'quiet moments', 'invalid'], escalation: 'invalid', castPolicy: 'invalid' }))
+            .toEqual({ emphases: ['quiet moments'], escalation: 'balanced', castPolicy: 'allowed' });
         expect(sanitizeCharacterContextSelection({ mode: 'selected', entityIds: ['npc-a', 'npc-a', '', 'npc-b'] }))
             .toEqual({ mode: 'selected', entityIds: ['npc-a', 'npc-b'] });
     });
 
     test('canonicalizes Phase 6 fields at the store boundary and reports repairs', () => {
         const malformed = validateStoryPlannerData({
-            storyPalette: { emphases: ['invalid'], escalation: 'invalid', allowNewMajorCharacters: 'yes' },
+            storyPalette: { emphases: ['invalid'], escalation: 'invalid', castPolicy: 'invalid' },
             characterContext: { mode: 'selected', entityIds: [`${'x'.repeat(MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH + 20)}`, 'ok'] },
         });
-        expect(malformed.data.storyPalette).toEqual({ emphases: [], escalation: 'balanced', allowNewMajorCharacters: false });
+        expect(malformed.data.storyPalette).toEqual({ emphases: [], escalation: 'balanced', castPolicy: 'allowed' });
         expect(malformed.data.characterContext.entityIds[0]).toHaveLength(MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH);
         expect(malformed.issues.map(issue => issue.code)).toEqual(expect.arrayContaining([
             'story-palette-canonicalized', 'character-context-canonicalized',
         ]));
     });
 
-    test('default palette remains balanced while an explicit quiet/restrained palette reaches full-plan prompts', () => {
-        expect(buildUserPrompt('recent')).not.toContain('<story_palette>');
-        setPlanData({ storyPalette: { emphases: ['quiet moments'], escalation: 'restrained', allowNewMajorCharacters: false } });
+    test('default palette carries allowed cast policy while an explicit quiet/restrained palette reaches full-plan prompts', () => {
+        expect(buildUserPrompt('recent')).toContain('allows new major characters');
+        setPlanData({ storyPalette: { emphases: ['quiet moments'], escalation: 'restrained', castPolicy: 'existing-only' } });
         const prompt = buildUserPrompt('recent');
         expect(prompt).toContain('<story_palette>');
         expect(prompt).toContain('quiet moments');
@@ -168,7 +168,7 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
     // instruction invites the preamble validateOutput() rejects, which costs a
     // silent retry. They belong with the other grounding blocks, above it.
     test('palette and character blocks sit above the closing instruction, not after it', () => {
-        setPlanData({ storyPalette: { emphases: ['quiet moments'], escalation: 'restrained', allowNewMajorCharacters: false } });
+        setPlanData({ storyPalette: { emphases: ['quiet moments'], escalation: 'restrained', castPolicy: 'existing-only' } });
         const prompt = buildUserPrompt('recent', '', {
             characterContext: { text: 'Character: Mara\nPublic role: Harbourmaster' },
         });
@@ -183,7 +183,7 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
     // A custom template gets a block only where it asks for one — the same
     // contract every other token has had.
     test('custom user prompts receive the blocks only through their tokens', () => {
-        setPlanData({ storyPalette: { emphases: ['mystery'], escalation: 'escalating', allowNewMajorCharacters: false } });
+        setPlanData({ storyPalette: { emphases: ['mystery'], escalation: 'escalating', castPolicy: 'existing-only' } });
         const context = { characterContext: { text: 'Character: Mara' } };
 
         saveSettings({ customUserPrompt: 'Plan it.\n{{chatHistory}}' });
