@@ -801,8 +801,13 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         !consumed.has(a.id)
         && (a.status === 'resolved' || a.status === 'dropped'
             || a.status === 'parked' || protectedIds.has(a.id) || a.pinned
-            || (scopedIds && a.status === 'active' && !scopedIds.has(a.id))
-             || (scopedIds && a.status === 'active' && scopedIds.has(a.id))
+            // A scoped request carries EVERY active arc it did not consume,
+            // whether or not it was a selected target. Out-of-scope arcs are
+            // carried because the response was never allowed to address them;
+            // in-scope targets are carried because omission is not permission
+            // to delete (§3.2). Membership in `scopedIds` therefore does not
+            // narrow this — it only records that a scoped request was made.
+            || (scopedIds && a.status === 'active')
             || (scopedSections && a.status === 'active' && !scopedSections.has(a.section))
             || ambiguousTitleIds.has(a.id)
             || (a.beats || []).some(beat => beat.state !== 'pending')),

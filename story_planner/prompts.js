@@ -22,13 +22,30 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null) {
         .map(section => `## ${section.label}\n${section.hint}`)
         .join('\n\n');
     const sectionListInline = sections.map(section => `"## ${section.label}"`).join(', ');
+    // A scoped request must not be told how to handle a section it was never
+    // offered. Naming "Immediate Hooks" in the beat rules of a Character-
+    // Journeys-only request invites the model to emit that heading, which the
+    // strict-heading validator then rejects as out of scope.
+    const has = key => sections.some(section => section.key === key);
+    const sortRule = has('immediate') || has('horizon')
+        ? `- Sort ideas by how soon the story could use them.${has('immediate') ? ' Immediate Hooks must be genuinely usable in the very next scene with no setup;' : ''}${has('horizon') ? ' Horizon Arcs are the ones the story still has to build toward.' : ''}`
+        : '- Sort ideas by how soon the story could use them.';
+    const beatsRule = has('immediate') && sections.length === 1
+        ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
+        : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: the small, concrete, in-scene steps that build toward the arc. A beat must be something a narrator can actually perform in a single scene — a line of dialogue, an object noticed, a character seen somewhere unexpected. Order them so each one only makes sense after the previous. Never write a beat that requires {{user}} to do a specific thing.
+
+- The Rival's Gambit — a competitor who has only been hinted at makes a decisive move that forces a public confrontation.
+  1. A servant mentions in passing that the competitor was seen leaving the east gate before dawn.
+  2. A routine shipment arrives short, and the paperwork points somewhere inconvenient.
+  3. The competitor's agent turns up at a social event, pointedly friendly.
+${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are already usable as-is.' : ''}`;
 
     return `You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.
 
 ABSOLUTE RULES:
 - Output ONLY the story plan document. No narration, dialogue, or roleplay continuation.
 - Frame every idea as a future arc, chapter, or episode — never a time frame ("three days later", "next month").
-- Sort ideas by how soon the story could use them. Immediate Hooks must be genuinely usable in the very next scene with no setup; Horizon Arcs are the ones the story still has to build toward.
+${sortRule}
 - Treat every arc as a hypothesis: describe attempts, pressures, complications, and possible outcomes. Never decide what {{user}} chooses or claim an uncertain outcome succeeds.
 - Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.
 - You are STRICTLY FORBIDDEN from writing dialogue, actions, thoughts, or emotional reactions for {{user}}. Never describe what {{user}} does, feels, or says.
@@ -44,14 +61,7 @@ ${sectionFormatBlock}
 
 Under each heading, use a bullet list. Each bullet is a short arc name, an em-dash, then 1-2 sentences naming the central shift it introduces.
 
-For every arc EXCEPT those under "Immediate Hooks", follow the bullet with a numbered list of 2-4 SETUP BEATS: the small, concrete, in-scene steps that build toward the arc. A beat must be something a narrator can actually perform in a single scene — a line of dialogue, an object noticed, a character seen somewhere unexpected. Order them so each one only makes sense after the previous. Never write a beat that requires {{user}} to do a specific thing.
-
-- The Rival's Gambit — a competitor who has only been hinted at makes a decisive move that forces a public confrontation.
-  1. A servant mentions in passing that the competitor was seen leaving the east gate before dawn.
-  2. A routine shipment arrives short, and the paperwork points somewhere inconvenient.
-  3. The competitor's agent turns up at a social event, pointedly friendly.
-
-Arcs under "Immediate Hooks" need no beats — they are already usable as-is.`;
+${beatsRule}`;
 }
 
 export const STORY_PLAN_SYSTEM_PROMPT = buildStoryPlanSystemPrompt();

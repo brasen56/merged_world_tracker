@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 
 import { getArcCount, getArcs, getPlanHistory, getStoryPlanRequestPreferences, makeArc, mergeRegeneratedArcs, parsePlanTextToArcs, setArcs, setPlanData } from '../story_planner/data.js';
 import { buildSystemPrompt, buildUserPrompt, selectScopedParsedArcs, validateOutput } from '../story_planner/generation.js';
+import { STORY_PLAN_SYSTEM_PROMPT } from '../story_planner/prompts.js';
 import { applyScopedPlanProposal, captureTargetRevisions } from '../story_planner/proposals.js';
 import { sanitizeStoryPlanRequest, validateStoryPlannerData } from '../story_planner/schema.js';
 import { saveSettings } from '../story_planner/settings.js';
@@ -84,21 +85,21 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
             beats: ['Mara compares the seals.'],
         });
 
+        // Asserted through `scope` (the Refresh target set) as the original red
+        // specification did, not through `scopeSections`: an unrelated active
+        // arc must survive a scoped response on the path the dialog actually
+        // uses for Refresh.
         const result = mergeRegeneratedArcs([unrelated, selected], [incoming], {
-            scopeSections: new Set(['character']),
+            scope: new Set([selected.id]),
         });
 
         expect(result.arcs.map(arc => arc.id)).toEqual(expect.arrayContaining([unrelated.id, selected.id]));
     });
 
     test('a returned section outside the captured scope is rejected', () => {
-        const selected = makeArc({ title: 'Selected journey', section: 'character' });
-        const outOfScope = makeArc({ title: 'Unrelated horizon idea', section: 'horizon' });
-
         expect(validateOutput('## Horizon Arcs\n- Unrelated — idea', true, {
             operation: 'add', sectionKeys: ['character'], requestedCount: 1,
-        }).ok).toBe(false);
-        expect(outOfScope.section).not.toBe(selected.section);
+        })).toMatchObject({ ok: false, reason: 'response contains a section outside the requested scope' });
     });
 
     test('scoped prompts do not claim deferred journey ownership or cast-policy guarantees', () => {
@@ -113,11 +114,30 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
         expect(prompt).not.toContain('Cast policy:');
     });
 
-    test('a user edit between response and Apply remains a material revision', () => {
-        const before = makeArc({ title: 'Stable route', body: 'Original endpoint.' });
-        const after = { ...before, body: 'User-edited endpoint.' };
+    // STILL RED: journey subjects are V3 Phase 2. Restored to test.fails after
+    // Phase 1 retired it prematurely — Phase 1 landing did not make this pass,
+    // and it must keep failing until the ownership contract lands.
+    test.fails('duplicate journey subjects are rejected before persistence', () => {
+        const subjects = ['entity-mara', 'entity-mara'];
 
-        expect(after.body).not.toBe(before.body);
+        expect(new Set(subjects).size).toBe(subjects.length);
+    });
+
+    test('a user edit between response and Apply requires renewed review', () => {
+        const before = makeArc({ title: 'Stable route', body: 'Original endpoint.', section: 'horizon' });
+        const proposal = {
+            request: { operation: 'refresh', sectionKeys: ['horizon'], targetArcIds: [before.id] },
+            previousArcs: [before],
+            targetSnapshots: [before],
+            targetRevisions: captureTargetRevisions([before]),
+            arcs: [{ ...before, body: 'Model refresh.' }],
+            reviewArcIds: [before.id],
+        };
+        setArcs([{ ...before, body: 'User-edited endpoint.', updatedAt: before.updatedAt + 1 }]);
+
+        expect(applyScopedPlanProposal(proposal, getArcs()))
+            .toMatchObject({ ok: false, reason: 'targets-changed', changedTargetIds: [before.id] });
+        expect(getArcs()[0].body).toBe('User-edited endpoint.');
     });
 
     test('scoped requests accept one or two arcs and clamp counts to one through thirty', () => {
@@ -311,10 +331,15 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
             },
         });
         expect(validation.data.storyPlanRequestPreferences).toMatchObject({
-            operation: 'refresh', sectionKeys: ['horizon'], subjectMode: 'selected',
-            subjectEntityIds: ['npc-a'], requestedCount: 30, castPolicy: 'existing-only',
+            operation: 'refresh', sectionKeys: ['horizon'], requestedCount: 30,
         });
         expect(validation.data.storyPlanRequestPreferences.targetArcIds).toHaveLength(30);
+        // Phase 2/3 fields are not persisted while nothing sets or reads them:
+        // a stored castPolicy would silently contradict the palette's
+        // allowNewMajorCharacters, which is what actually drives the prompt.
+        expect(validation.data.storyPlanRequestPreferences).not.toHaveProperty('castPolicy');
+        expect(validation.data.storyPlanRequestPreferences).not.toHaveProperty('subjectMode');
+        expect(validation.data.storyPlanRequestPreferences).not.toHaveProperty('subjectEntityIds');
 
         setPlanData({ storyPlanRequestPreferences: validation.data.storyPlanRequestPreferences });
         expect(getStoryPlanRequestPreferences()).toEqual(validation.data.storyPlanRequestPreferences);
@@ -328,5 +353,36 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
             .toMatchObject({ accepted: [one], underfill: 1, overflow: 0 });
         expect(selectScopedParsedArcs([one, two, three], { operation: 'add', sectionKeys: ['character'], requestedCount: 2 }))
             .toMatchObject({ accepted: [one, two], underfill: 0, overflow: 1 });
+    });
+});
+
+// The prompt-shape halves of these contracts run against generatePlan in
+// test/generation_commit_races.test.js, which already has the API harness.
+describe('Story Planner V3 Phase 1 — scoped prompt and validation contracts', () => {
+    test('bullet-formatted beats do not inflate the reviewable arc count', () => {
+        const request = { operation: 'add', sectionKeys: ['character'], requestedCount: 1 };
+        // One arc whose beats came back as dashes rather than the numbered
+        // format. This is one arc, not four, and must not warn as an overflow.
+        const text = '## Character Journeys\n- Mara faces the audit — she must choose.\n  - She stalls.\n  - She confesses.\n  - The board reacts.';
+        expect(validateOutput(text, true, request)).toEqual({ ok: true });
+    });
+
+    test('a scoped request never names a section it did not select', () => {
+        const prompt = buildSystemPrompt({ operation: 'add', sectionKeys: ['character'], requestedCount: 1 });
+        // Not just the "## " heading form: naming Immediate Hooks in the beat
+        // rules invites the model to emit a heading the validator then rejects.
+        expect(prompt).not.toContain('Immediate Hooks');
+        expect(prompt).not.toContain('Horizon Arcs');
+        expect(prompt).toContain('SETUP BEATS');
+        // An Immediate-Hooks-only request is the inverse: no beats are wanted.
+        const hooksOnly = buildSystemPrompt({ operation: 'add', sectionKeys: ['immediate'], requestedCount: 1 });
+        expect(hooksOnly).not.toContain('SETUP BEATS');
+        expect(hooksOnly).toContain('Immediate Hooks');
+    });
+
+    test('the legacy full-plan prompt is unchanged by scoped section selection', () => {
+        expect(buildSystemPrompt(null)).toBe(STORY_PLAN_SYSTEM_PROMPT);
+        expect(STORY_PLAN_SYSTEM_PROMPT).toContain('Immediate Hooks');
+        expect(STORY_PLAN_SYSTEM_PROMPT).toContain('Horizon Arcs');
     });
 });

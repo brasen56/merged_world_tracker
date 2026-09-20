@@ -524,13 +524,12 @@ function eligibleRefreshArcs(request) {
     return getArcs().filter(arc => arc.status === 'active' && sections.has(arc.section));
 }
 
+// No subject clause: journey subjects are V3 Phase 2 and the dialog cannot set
+// them, so naming one here would describe a control the user does not have.
 function requestSummary(request) {
     const labels = request.sectionKeys.map(key => getSectionMeta(key)?.label || key);
-    const subject = request.subjectMode === 'selected'
-        ? `${request.subjectEntityIds.length} selected subject${request.subjectEntityIds.length === 1 ? '' : 's'}`
-        : 'any subject';
     return request.operation === 'add'
-        ? `Add up to ${request.requestedCount} ${labels.join(', ')} for ${subject}; use the selected public context.`
+        ? `Add up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} in ${labels.join(', ')}; use the selected public context.`
         : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}; use the selected public context.`;
 }
 
@@ -655,7 +654,10 @@ export function openGenerateDialog() {
             </div>
             <p class="mwt-text-dim mwt-text-sm">Journey-subject ownership and enforceable cast policies are not available in scoped generation yet. Character Journeys may concern any established subject, and generated ideas are reviewed before saving.</p>
             <fieldset id="sp-generate-targets" style="border:0;padding:0;margin:12px 0 0"><legend class="mwt-label">Eligible arcs (select up to ${MAX_STORY_PLAN_REQUEST_IDS})</legend><div id="sp-generate-target-list"></div></fieldset>
-            ${configuredCustomTemplates ? '<p class="sp-proposal-diagnostics">Scoped generation uses the built-in safe request format; your saved custom templates are not used here. <button id="sp-generate-legacy" class="mwt-btn" type="button">Run legacy full-plan generation with custom templates</button></p>' : ''}
+            <p class="${configuredCustomTemplates ? 'sp-proposal-diagnostics' : 'mwt-text-dim mwt-text-sm'}">${configuredCustomTemplates
+                ? 'Scoped generation uses the built-in safe request format, so your saved custom templates are not used here.'
+                : 'Regenerating the whole plan rewrites every section at once and saves without a review step. It keeps pinned arcs and planted beats.'}
+                <button id="sp-generate-legacy" class="mwt-btn" type="button">Regenerate the whole plan${configuredCustomTemplates ? ' with custom templates' : ''}</button></p>
             <p id="sp-generate-context-summary" class="mwt-text-dim mwt-text-sm">Public context: ${context.mode === 'off' ? 'off' : context.mode === 'active' ? 'active cast' : `${context.entityIds.length} selected character${context.entityIds.length === 1 ? '' : 's'}`}. Existing context settings are unchanged by this dialog.</p>
             <p id="sp-generate-summary" class="sp-proposal-change" role="status"></p>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8"><button id="sp-generate-submit" class="mwt-btn mwt-btn-primary">Generate for review</button><button id="sp-generate-cancel" class="mwt-btn">Cancel</button></div>`,
@@ -666,19 +668,36 @@ export function openGenerateDialog() {
         const targetArcIds = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')].map(input => input.value);
         return sanitizeStoryPlanRequest({ operation, sectionKeys, subjectMode: 'any', subjectEntityIds: [], requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: 'allowed', targetArcIds });
     };
-    const refresh = () => {
-        const rawOperation = modal.querySelector('input[name="sp-generate-operation"]:checked')?.value || 'add';
-        const rawSections = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
-        const eligible = eligibleRefreshArcs({ sectionKeys: rawSections });
+    // Once the user has touched the target list, their selection is
+    // authoritative — including an empty one. Falling back to the saved
+    // preference whenever nothing is checked makes the last checkbox
+    // impossible to clear: unchecking it re-checks the whole stored set.
+    let targetSelectionTouched = false;
+    let renderedTargetIds = null;
+
+    // The eligible set only changes when the selected sections change, so the
+    // list is rebuilt on that signature alone. Rebuilding it on every change
+    // event would replace the checkbox the user just toggled and drop focus to
+    // the body — the same reason arc text edits below never re-render.
+    const rebuildTargetList = () => {
         const list = modal.querySelector('#sp-generate-target-list');
-        if (list) {
-            const selected = new Set([...list.querySelectorAll('input:checked')].map(input => input.value));
-            list.innerHTML = eligible.map(arc => {
-                const inputId = `sp-generate-target-${arc.id}`;
-                return `<label class="sp-generate-target" for="${escapeHtml(inputId)}"><input id="${escapeHtml(inputId)}" type="checkbox" name="sp-generate-target" value="${escapeHtml(arc.id)}" ${(selected.has(arc.id) || (!selected.size && preferences.targetArcIds.includes(arc.id))) ? 'checked' : ''}> <span>${escapeHtml(arc.title || 'Untitled arc')}</span></label>`;
-            }).join('') || '<span class="mwt-text-dim mwt-text-sm">No eligible active arcs in the selected sections.</span>';
-            list.querySelectorAll('input').forEach(input => input.addEventListener('change', refresh));
-        }
+        if (!list) return;
+        const sectionKeys = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
+        const eligible = eligibleRefreshArcs({ sectionKeys });
+        const signature = JSON.stringify(eligible.map(arc => arc.id));
+        if (renderedTargetIds === signature) return;
+        const selected = new Set([...list.querySelectorAll('input:checked')].map(input => input.value));
+        renderedTargetIds = signature;
+        list.innerHTML = eligible.map(arc => {
+            const inputId = `sp-generate-target-${arc.id}`;
+            const checked = targetSelectionTouched
+                ? selected.has(arc.id)
+                : preferences.targetArcIds.includes(arc.id);
+            return `<label class="sp-generate-target" for="${escapeHtml(inputId)}"><input id="${escapeHtml(inputId)}" type="checkbox" name="sp-generate-target" value="${escapeHtml(arc.id)}" ${checked ? 'checked' : ''}> <span>${escapeHtml(arc.title || 'Untitled arc')}</span></label>`;
+        }).join('') || '<span class="mwt-text-dim mwt-text-sm">No eligible active arcs in the selected sections.</span>';
+    };
+
+    const syncSummary = () => {
         const request = getRequest();
         const requestError = getStoryPlanRequestError(request);
         const summary = modal.querySelector('#sp-generate-summary');
@@ -686,25 +705,47 @@ export function openGenerateDialog() {
         const count = modal.querySelector('#sp-generate-count');
         if (count) count.disabled = request.operation !== 'add';
         const targets = modal.querySelector('#sp-generate-targets');
-        if (targets) targets.hidden = rawOperation !== 'refresh';
-        const checkedTargets = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')];
-        modal.querySelectorAll('input[name="sp-generate-target"]').forEach(input => { input.disabled = !input.checked && checkedTargets.length >= MAX_STORY_PLAN_REQUEST_IDS; });
+        if (targets) targets.hidden = request.operation !== 'refresh';
+        const checkedTargets = modal.querySelectorAll('input[name="sp-generate-target"]:checked').length;
+        modal.querySelectorAll('input[name="sp-generate-target"]').forEach(input => {
+            input.disabled = !input.checked && checkedTargets >= MAX_STORY_PLAN_REQUEST_IDS;
+        });
     };
-    modal.querySelectorAll('input, select').forEach(input => input.addEventListener('change', refresh));
+
+    const refresh = () => { rebuildTargetList(); syncSummary(); };
+
+    // Delegated, so a rebuild never has to re-bind and a toggle never rebuilds.
+    modal.querySelector('#sp-generate-target-list')?.addEventListener('change', () => {
+        targetSelectionTouched = true;
+        syncSummary();
+    });
+    modal.querySelectorAll('input[name="sp-generate-section"]').forEach(input => input.addEventListener('change', refresh));
+    modal.querySelectorAll('input[name="sp-generate-operation"], #sp-generate-count').forEach(input => input.addEventListener('change', syncSummary));
     modal.querySelector('#sp-generate-cancel')?.addEventListener('click', () => hideModal(GENERATE_MODAL_ID));
     modal.querySelector('#sp-generate-legacy')?.addEventListener('click', async () => {
         hideModal(GENERATE_MODAL_ID);
-        try { await generatePlan(false); } catch (error) { notify('Story Planner', `Generation failed: ${error.message}`, 'error'); }
+        try {
+            const arcs = await generatePlan(false);
+            // generatePlan commits and re-injects, but nothing re-renders the
+            // open panel: `mwt:busy-changed` only refreshes button states.
+            // Without this the list keeps showing the pre-generation plan.
+            if (arcs) {
+                renderArcs();
+                notify('Story Planner', `Plan regenerated — ${arcs.length} arcs.`, 'success');
+            }
+        } catch (error) { notify('Story Planner', `Generation failed: ${error.message}`, 'error'); }
     });
     modal.querySelector('#sp-generate-submit')?.addEventListener('click', async () => {
         const request = getRequest();
-        setPlanData({ storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(request) });
         const button = modal.querySelector('#sp-generate-submit');
         const requestError = getStoryPlanRequestError(request);
         if (requestError) {
             notify('Story Planner', requestError, 'warning');
             return;
         }
+        // Persisted only once the request is valid: remembering a rejected
+        // request reopens the dialog in the state that could not be submitted.
+        setPlanData({ storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(request) });
         try {
             setControlBusy(button, true);
             const proposal = await generatePlan(false, request, { reviewOnly: true });
@@ -1480,11 +1521,10 @@ export function wireEvents() {
         refreshDisplay();
     });
 
-    // Generate — the manual path is scoped and review-first. Auto-generation
-    // continues to use the legacy direct-commit path in index.js.
-    // Keep the legacy label contract visible for source-level accessibility
-    // checks; the scoped dialog owns the new manual busy label.
-    // btn.innerHTML = '<span aria-hidden="true">🎲</span> Generate Plan';
+    // Generate — the manual path is scoped and review-first, so this button
+    // only opens the dialog and never runs a busy/label cycle of its own; the
+    // dialog's own submit button owns that. Auto-generation continues to use
+    // the legacy direct-commit path in index.js.
     state.modal.querySelector('#sp-generate')?.addEventListener('click', openGenerateDialog);
 
     state.modal.querySelector('#sp-check-progress')?.addEventListener('click', async () => {

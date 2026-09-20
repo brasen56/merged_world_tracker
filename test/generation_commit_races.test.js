@@ -656,5 +656,75 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         expect(proposal.targetSnapshots).toEqual([target]);
         expect(getArcs()).toEqual(change === 'edited' ? [{ ...target, body: 'User edit during generation.' }] : []);
     });
+
+    // V3 §4.2: "Issue edit handles only for eligible targets." Scoped Add is
+    // append-only and has no eligible targets, so it must NOT receive the
+    // editable previous-plan block — which also carries the full-plan "carry
+    // forward / drop resolved" instructions that contradict "propose N new".
+    test('scoped Add issues no edit handles and sees the plan as read-only continuity', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const existing = makeArc({ title: 'Existing thread', section: 'horizon', body: 'In play.', beats: ['Planted setup.'] });
+        setArcs([existing]);
+        CURRENT = '## Character Journeys\n- Mara weighs the ledger — she must choose.\n  1. She stalls.\n  2. She confesses.';
+
+        const proposal = await generatePlan(false, {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 1,
+        }, { reviewOnly: true });
+
+        const sent = requests[0].userContent;
+        expect(sent).not.toContain('<previous_plan>');
+        expect(sent).not.toContain('[ARC:');
+        expect(sent).not.toContain('Carry forward arcs still in play');
+        // The plan is still visible, so the model can avoid re-proposing it.
+        expect(sent).toContain('<read_only_continuity>');
+        expect(sent).toContain('Existing thread');
+        expect(proposal.stats.added).toBe(1);
+        expect(getArcs()).toEqual([existing]);
+    });
+
+    test('scoped Refresh keeps its targets editable and everything else read-only', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const target = makeArc({ title: 'Harbour pact', section: 'horizon' });
+        const other = makeArc({ title: 'Unrelated journey', section: 'character' });
+        setArcs([target, other]);
+        CURRENT = req => {
+            const handle = req.userContent.match(/\[ARC:([^\]…]+)\]/)?.[1];
+            return `## Horizon Arcs\n- [ARC:${handle}] Harbour pact — Refreshed.\n  1. New setup.`;
+        };
+
+        await generatePlan(false, {
+            operation: 'refresh', sectionKeys: ['horizon'], targetArcIds: [target.id],
+        }, { reviewOnly: true });
+
+        const sent = requests[0].userContent;
+        expect(sent).toContain('<previous_plan>');
+        expect(sent).toContain('Harbour pact');
+        expect(sent).toContain('<read_only_continuity>');
+        expect(sent).toContain('Unrelated journey');
+        // Only the captured target is addressable. Matched with a handle
+        // character class so the `[ARC:…]` in the block's own instructions
+        // (which uses an ellipsis) is not counted as an issued handle.
+        expect(sent.match(/\[ARC:[a-z0-9]/g)).toHaveLength(1);
+    });
+
+    // §4.1: "Zero valid arcs is a failed operation." A Refresh whose output
+    // resolves to none of its captured targets has nothing to review, so it
+    // must fail rather than open an empty modal over a live Apply button.
+    test('a Refresh returning none of its targets fails and changes nothing', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        const { getPlanHistory } = await import('../story_planner/data.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const target = makeArc({ title: 'Harbour pact', section: 'horizon' });
+        setArcs([target]);
+        CURRENT = '## Horizon Arcs\n- Brand new route — unrequested.\n  1. Setup.';
+
+        await expect(generatePlan(false, {
+            operation: 'refresh', sectionKeys: ['horizon'], targetArcIds: [target.id],
+        }, { reviewOnly: true })).rejects.toThrow(/did not return any of the selected arcs/);
+        expect(getArcs()).toEqual([target]);
+        expect(getPlanHistory()).toEqual([]);
+    });
 });
 

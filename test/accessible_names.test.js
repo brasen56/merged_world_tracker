@@ -217,7 +217,9 @@ describe('JS-updated labels keep decorative icons hidden (Slice 4 item 2)', () =
         // to a raw emoji the count drops and this fails.
         expect(storyPlannerSource.match(/<span aria-hidden="true">🔌<\/span> Injection: ON/g)?.length).toBe(2);
         expect(storyPlannerSource.match(/<span aria-hidden="true">🔄<\/span> Auto: ON \(/g)?.length).toBe(2);
-        expect(storyPlannerSource).toContain(`btn.innerHTML = '<span aria-hidden="true">🎲</span> Generate Plan';`);
+        // Generate Plan has no label-restore path to pin any more: the button
+        // opens the scoped dialog instead of running a busy cycle in place
+        // (V3 Phase 1). Its markup is still covered by the toolbar test above.
         expect(storyPlannerSource).toContain(`el.innerHTML = \`<span aria-hidden="true">🔄</span> Auto-generate: ON`);
     });
 

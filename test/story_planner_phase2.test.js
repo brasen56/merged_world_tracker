@@ -1,12 +1,13 @@
 /** @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
     addArcBeat,
     getArcs,
     getCurrentBeat,
     getPlanHistory,
+    getStoryPlanRequestPreferences,
     historyEntryToArcs,
     makeArc,
     moveArcBeat,
@@ -367,5 +368,85 @@ describe('Story Planner scoped review — individual acceptance', () => {
         expect(getPlanHistory()).toEqual([]);
         expect(document.getElementById('mwt-sp-scoped-review-modal')).toBeNull();
         vi.unstubAllGlobals();
+    });
+});
+
+describe('Story Planner scoped generate dialog', () => {
+    let alpha;
+    let bravo;
+
+    /** @param {{preselectTargets?: boolean, settings?: object}} [options] */
+    async function openDialog({ preselectTargets = false, settings = {} } = {}) {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-dialog' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-dialog' }) });
+        alpha = makeArc({ title: 'Alpha', section: 'horizon' });
+        bravo = makeArc({ title: 'Bravo', section: 'horizon' });
+        setArcs([alpha, bravo]);
+        const { saveSettings } = await import('../story_planner/settings.js');
+        saveSettings({ customSystemPrompt: '', customUserPrompt: '', ...settings });
+        setPlanData({
+            storyPlanRequestPreferences: {
+                operation: 'refresh',
+                sectionKeys: ['horizon'],
+                requestedCount: 2,
+                targetArcIds: preselectTargets ? [alpha.id, bravo.id] : [],
+            },
+        });
+        const { openGenerateDialog } = await import('../story_planner/render.js');
+        openGenerateDialog();
+    }
+
+    const targets = () => [...document.querySelectorAll('input[name="sp-generate-target"]')];
+    const toggle = input => {
+        input.checked = !input.checked;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    test('toggling a target keeps that checkbox and its focus', async () => {
+        await openDialog({ preselectTargets: true });
+        const first = targets()[0];
+        first.focus();
+        toggle(first);
+        // The list must not be rebuilt by its own change event: replacing the
+        // input drops focus to <body> and makes the list unusable by keyboard.
+        expect(first.isConnected).toBe(true);
+        expect(document.activeElement).toBe(first);
+    });
+
+    test('the last selected target can be cleared', async () => {
+        await openDialog({ preselectTargets: true });
+        expect(targets().filter(input => input.checked)).toHaveLength(2);
+        // Clearing the last box must not fall back to the saved preference set
+        // and silently re-check everything.
+        targets().forEach(toggle);
+        expect(targets().filter(input => input.checked)).toHaveLength(0);
+        expect(document.querySelector('#sp-generate-summary').textContent)
+            .toMatch(/No eligible active arcs are selected for refresh/);
+    });
+
+    test('changing the section set still rebuilds the eligible list', async () => {
+        await openDialog();
+        expect(targets()).toHaveLength(2);
+        toggle(document.querySelector('input[name="sp-generate-section"][value="horizon"]'));
+        expect(targets()).toHaveLength(0);
+    });
+
+    test('a whole-plan regeneration path is offered with or without custom templates', async () => {
+        await openDialog();
+        expect(document.querySelector('#sp-generate-legacy')).not.toBeNull();
+        await openDialog({ settings: { customUserPrompt: 'CUSTOM {{chatHistory}}' } });
+        expect(document.querySelector('#sp-generate-legacy')).not.toBeNull();
+    });
+
+    test('a rejected request is not remembered as the next dialog state', async () => {
+        await openDialog();
+        document.querySelectorAll('input[name="sp-generate-section"]').forEach(input => { input.checked = false; });
+        document.querySelector('#sp-generate-submit').click();
+        await Promise.resolve();
+        expect(document.querySelector('#mwt-sp-generate-modal')).not.toBeNull();
+        expect(getStoryPlanRequestPreferences().sectionKeys.length).toBeGreaterThan(0);
     });
 });

@@ -64,6 +64,18 @@ export const STORY_PLAN_CAST_POLICIES = Object.freeze(['existing-only', 'allowed
 export const MAX_STORY_PLAN_REQUEST_COUNT = 30;
 export const MAX_STORY_PLAN_REQUEST_IDS = 30;
 
+/**
+ * The persisted slice of the request envelope: only the choices the manual
+ * dialog can actually make today.
+ *
+ * `subjectMode`/`subjectEntityIds` (V3 Phase 2) and `castPolicy` (Phase 3) are
+ * deliberately NOT persisted. They exist on the transient request shape because
+ * §4.1 defines them there, but no control sets them and no prompt reads them —
+ * cast expansion is still driven by `storyPalette.allowNewMajorCharacters`. A
+ * stored `castPolicy` would be a second source of truth that is silently
+ * ignored, so each field lands here with the phase that makes it real, together
+ * with its own migration.
+ */
 export function sanitizeStoryPlanRequestPreferences(value) {
     const raw = isObject(value) ? value : {};
     const request = sanitizeStoryPlanRequest({
@@ -73,13 +85,10 @@ export function sanitizeStoryPlanRequestPreferences(value) {
     return {
         operation: request.operation,
         sectionKeys: request.sectionKeys,
-        subjectEntityIds: request.subjectEntityIds,
         requestedCount: Number.isFinite(Number(raw.requestedCount))
             ? Math.min(MAX_STORY_PLAN_REQUEST_COUNT, Math.max(1, Math.floor(Number(raw.requestedCount))))
             : 1,
         targetArcIds: request.targetArcIds,
-        castPolicy: request.castPolicy,
-        subjectMode: request.subjectMode,
     };
 }
 

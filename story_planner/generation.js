@@ -66,9 +66,15 @@ export function buildSystemPrompt(requestSpec = null) {
     return buildStoryPlanSystemPrompt(request.sectionKeys);
 }
 
+// Bounded, but wide enough to cover a legal plan (getArcCount caps at 30). For
+// scoped Add this projection is the model's ONLY view of the existing plan, so
+// a tighter cap would hide arcs it could then re-propose — those come back as
+// excluded title recurrences and underfill the request for no visible reason.
+const MAX_CONTINUITY_ARCS = 30;
+
 function buildReadOnlyContinuityProjection(arcs) {
     if (!Array.isArray(arcs) || !arcs.length) return '';
-    return arcs.slice(0, 12).map(arc => {
+    return arcs.slice(0, MAX_CONTINUITY_ARCS).map(arc => {
         const section = SECTIONS.find(item => item.key === arc.section)?.label || arc.section;
         const summary = String(arc.body || '').replace(/\s+/g, ' ').trim().slice(0, 220);
         return `- [${section}] ${String(arc.title || 'Untitled arc').slice(0, 90)}${summary ? ` — ${summary}` : ''}`;
@@ -262,9 +268,11 @@ export function validateOutput(text, expectHeader = true, requestSpec = null) {
         if (headings.some(key => !selected.has(key))) {
             return { ok: false, reason: 'response contains a section outside the requested scope' };
         }
-        if (request.operation === 'add' && bulletCount > request.requestedCount) {
-            return { ok: true, warning: `response contains ${bulletCount} arcs; only ${request.requestedCount} may be reviewed or applied` };
-        }
+        // Overflow is NOT checked here. `bulletCount` counts every dash bullet,
+        // including the beat bullets a model writes when it ignores the numbered
+        // beat format, so a single arc with three beats reads as four arcs.
+        // selectScopedParsedArcs computes overflow from the parsed arcs and the
+        // review surfaces it as diagnostics.overflow.
     }
     return { ok: true };
 }
@@ -353,13 +361,22 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     // The parser must use the same request snapshot that was shown to the
     // model. Closed arcs are intentionally absent from the prompt and therefore
     // cannot be addressed by a returned handle or fallback.
-    const capturedArcs = request?.operation === 'refresh'
-        ? arcsBeforeCall.filter(a => a.status === 'active'
-            && request.targetArcIds.includes(a.id)
-            && request.sectionKeys.includes(a.section))
-        : arcsBeforeCall.filter(a => a.status === 'active');
-    const continuityArcs = request?.operation === 'refresh'
-        ? arcsBeforeCall.filter(a => a.status === 'active' && !capturedArcs.some(target => target.id === a.id))
+    //
+    // §4.2: edit handles are issued ONLY for eligible targets. Scoped Add has
+    // no edit targets — it is append-only — so it captures nothing and sees the
+    // existing plan as bounded read-only continuity instead. Handing Add the
+    // editable previous-plan block would both mint handles for arcs it may not
+    // touch and contradict its own "propose N new arcs" envelope with the
+    // full-plan "carry forward / drop resolved" instructions.
+    const activeArcs = arcsBeforeCall.filter(a => a.status === 'active');
+    const capturedArcs = !request
+        ? activeArcs
+        : request.operation === 'refresh'
+            ? activeArcs.filter(a => request.targetArcIds.includes(a.id)
+                && request.sectionKeys.includes(a.section))
+            : [];
+    const continuityArcs = request
+        ? activeArcs.filter(a => !capturedArcs.some(target => target.id === a.id))
         : [];
     const targetSnapshots = request?.operation === 'refresh'
         ? capturedArcs.map(arc => JSON.parse(JSON.stringify(arc)))
@@ -466,7 +483,15 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         const scopedSelection = request ? selectScopedParsedArcs(parsed, request, capturedArcs) : null;
         const limitedParsed = scopedSelection ? scopedSelection.accepted : parsed;
         const rejectedSuggestions = scopedSelection?.rejected.map(arc => arc.title) || [];
-        if (request?.operation === 'add' && limitedParsed.length === 0) throw new Error('No valid arcs were returned inside the requested scope.');
+        // §4.1: zero valid arcs is a failed operation, for both operations. A
+        // Refresh whose output resolved to none of the captured targets has
+        // nothing to review, so it must fail rather than open an empty modal
+        // over a live Apply button.
+        if (request && limitedParsed.length === 0) {
+            throw new Error(request.operation === 'add'
+                ? 'No valid arcs were returned inside the requested scope.'
+                : 'The response did not return any of the selected arcs — they remain unchanged.');
+        }
         if (parsed.length === 0) {
             // Validation passed (bullets were present) but nothing survived the
             // parse — bail rather than wiping a good plan with an empty one.
