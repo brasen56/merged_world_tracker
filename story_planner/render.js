@@ -691,7 +691,7 @@ export function openGenerateDialog() {
                 <label class="mwt-label" for="sp-generate-count">Requested count</label>
                 <input id="sp-generate-count" class="mwt-input" type="number" min="1" max="30" value="${preferences.requestedCount || getArcCount()}" style="max-width:100px">
             </div>
-            <p class="mwt-text-dim mwt-text-sm">Journey-subject ownership and enforceable cast policies are not available in scoped generation yet. Character Journeys may concern any established subject, and generated ideas are reviewed before saving.</p>
+            <p class="mwt-text-dim mwt-text-sm">Journey-subject ownership and enforceable cast policies are not available in scoped generation yet. Character Journeys may concern any established subject, and generated ideas are reviewed before saving. This scope applies to this request only — auto-generate still regenerates the whole plan and saves without review.</p>
             <fieldset id="sp-generate-targets" style="border:0;padding:0;margin:12px 0 0"><legend class="mwt-label">Eligible arcs (select up to ${MAX_STORY_PLAN_REQUEST_IDS})</legend><div id="sp-generate-target-list"></div></fieldset>
             <p class="${configuredCustomTemplates ? 'sp-proposal-diagnostics' : 'mwt-text-dim mwt-text-sm'}">${configuredCustomTemplates
                 ? 'Scoped generation uses the built-in safe request format, so your saved custom templates are not used here.'
@@ -901,7 +901,7 @@ export function render() {
                 <label class="mwt-label" for="sp-auto-interval">Auto-Generate Interval</label>
                 <div>
                     <input id="sp-auto-interval" class="mwt-input" type="number" value="${autoInterval}" min="1" max="100" style="max-width:100px">
-                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When auto-generate is ON, a new plan is generated every N messages (counted on AI replies).</p>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">When auto-generate is ON, a new plan is generated every N messages (counted on AI replies). Automatic generation always regenerates the whole plan and saves without review — it does not use the scope you pick in Generate Plan.</p>
                 </div>
 
                 <div class="mwt-label">Beat Reminder</div>

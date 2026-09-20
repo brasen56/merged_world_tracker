@@ -1,9 +1,10 @@
 # Story Planner V3: scoped generation, character journeys, and cast policy
 
-**Status:** Phase 0 characterization and projection inventory complete; Phase 0
-request-boundary samples are synthetic and the consented targeted-develop sample
-remains pending
-**Date:** 2026-09-19
+**Status:** Phase 0 complete. Phase 1 **Implemented, not host verified** — see
+the Phase 1 status block in §5. Phase 0 request-boundary samples are synthetic
+and the consented targeted-develop sample remains pending. Phases 2-3 not
+started.
+**Date:** 2026-09-19 (Phase 1 status recorded 2026-09-20)
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
 sketch pending the Phase 0 projection inventory. Independent arc classification
 and execution prerequisites are deferred in §7.
@@ -404,25 +405,96 @@ to a specific stage.
 
 Work:
 
-- Raise the two count gates together: the `getArcCount()` clamp (`data.js:1070`)
-  and the `validateOutput()` bullet minimum (`generation.js:205`). Validate
-  against the captured requested count, not a fixed minimum.
-- Emit only the selected section headings from the `SECTIONS`-derived prompt block.
-- Add the scope carry condition to `mergeRegeneratedArcs`'s options bag so
-  out-of-scope active arcs are never deleted by omission.
-- Generalise `targeted.js` from one captured arc to a captured set: proposal,
-  diff, staleness, revalidation, and one atomic Apply. Do not duplicate it.
-- Build the dialog and review flow, including rejected output and omitted targets.
-- Add custom-template compatibility feedback and preserve the legacy full path.
-- Persist manual preferences separately from automatic scope. Existing automation
-  stays public and full-plan until the user explicitly changes a supported
-  setting; otherwise label scoped automation unavailable.
+- **Done:** Raise the two count gates together: the `getArcCount()` clamp
+  (`data.js:1070`) and the `validateOutput()` bullet minimum
+  (`generation.js:205`). Validate against the captured requested count, not a
+  fixed minimum. Overflow is measured from the parsed arcs by
+  `selectScopedParsedArcs`, not from a bullet count — a bullet count also counts
+  the beat bullets a model writes when it ignores the numbered beat format.
+- **Done:** Emit only the selected section headings from the `SECTIONS`-derived
+  prompt block. This covers the beat and sort rules too: naming a section in
+  prose invites a heading the strict-heading validator then rejects.
+- **Done:** Add the scope carry condition to `mergeRegeneratedArcs`'s options bag
+  so out-of-scope active arcs are never deleted by omission. Note the resulting
+  contract: `options.scope` does **not** filter. A scoped request carries every
+  active arc it did not consume, in scope or out — out-of-scope arcs because the
+  response was never allowed to address them, in-scope targets because omission
+  is not permission to delete. Do not treat it as a selector in Phase 2/3.
+- **Done, deliberately narrowed:** Generalise `targeted.js` from one captured arc
+  to a captured set: proposal, diff, staleness, revalidation, and one atomic
+  Apply. Do not duplicate it. `proposals.js` now owns the revision helpers,
+  `buildArcDiff`, and `planScopedApply` — the single decision function that both
+  the review preview and the write run, so a shown diff cannot drift from the
+  change performed. The two Apply *entry points* stay separate on purpose:
+  scoped Apply rebases a set against live storage, targeted Apply rebuilds one
+  arc from its revision-checked source. Sharing the revision, diff, and decision
+  layers is what this instruction was protecting; collapsing the two entry
+  points would not have been.
+- **Done:** Build the dialog and review flow, including rejected output and
+  omitted targets. The review renders per-arc rows — a field/beat diff for a
+  refreshed arc, the description and setup beats for a new one — rather than a
+  whole-plan text diff, which made an ordering claim Apply never honours.
+- **Done:** Add custom-template compatibility feedback and preserve the legacy
+  full path. These are two requirements, not one: the whole-plan path is offered
+  unconditionally, and the custom-template notice is what varies. Gating the
+  path on a saved template leaves the default configuration — which is what
+  every tester runs — with no whole-plan entry point at all.
+- **Done:** Persist manual preferences separately from automatic scope. Existing
+  automation stays public and full-plan until the user explicitly changes a
+  supported setting; otherwise label scoped automation unavailable. Only the
+  choices the dialog can make are persisted (`operation`, `sectionKeys`,
+  `requestedCount`, `targetArcIds`); `subjectMode`/`subjectEntityIds` (Phase 2)
+  and `castPolicy` (Phase 3) land with the phase that makes them real, each with
+  its own migration. Until then `storyPalette.allowNewMajorCharacters` remains
+  the only field driving cast expansion, and a second stored copy of that
+  decision would be silently ignored.
 
-**Exit:** A request for one Horizon Arc produces a reviewable one-arc proposal,
-and applying it cannot modify or delete another section. Refresh cannot delete
-omitted targets or add unrequested arcs. Empty, stale, failed, and discarded
-results change no arcs or history. Both built-in and supported custom paths
-demonstrate these properties.
+**Exit — met by automated checks; live behavior unverified.**
+
+- *A request for one Horizon Arc produces a reviewable one-arc proposal, and
+  applying it cannot modify or delete another section* — met. Scoped Add is
+  append-only and mints storage ids only at Apply
+  (`test/story_planner_phase1.test.js`, `test/story_planner_phase0_v3.test.js`).
+- *Refresh cannot delete omitted targets or add unrequested arcs* — met. Omitted
+  targets are carried and unrequested rows are rejected before the merge; a
+  Refresh that resolves to none of its targets is a failed operation rather than
+  an empty review (`test/story_planner_phase0_v3.test.js`,
+  `test/generation_commit_races.test.js`).
+- *Empty, stale, failed, and discarded results change no arcs or history* — met.
+  `reviewOnly` takes no history snapshot, and Apply revalidates chat scope and
+  every captured target revision (`test/generation_commit_races.test.js`,
+  `test/story_planner_phase2.test.js`).
+- *Both built-in and supported custom paths demonstrate these properties* — met
+  as §4.5 defines "supported": scoped generation is built-in only this release,
+  so the custom path is the legacy full-plan path, pinned unchanged by the Phase
+  0 compatibility fixtures. The built-in full-plan system prompt is asserted
+  byte-identical to its pre-Phase-1 text.
+
+**Phase 1 status (§8 record)**
+
+- **State:** Implemented; not host verified.
+- **Change reference:** `74ffa1b` (scoped generation engine, dialog, review),
+  `8b75547` (scope and correctness fixes), `47f65e5` (shared diff/Apply
+  decision).
+- **Automated checks:** full suite green. Phase 1 behavior is pinned in
+  `test/story_planner_phase0_v3.test.js`, `test/story_planner_phase1.test.js`,
+  `test/story_planner_phase2.test.js`, `test/generation_commit_races.test.js`.
+- **Known limitations:** no journey subjects (Phase 2) and no enforceable cast
+  policy (Phase 3) — the dialog states both. Scoped requests are recorded as
+  `full` by `recordPhase7Request`, so Phase 7 metrics do not distinguish them.
+  Auto-generation remains full-plan and commits without review; this is now
+  labeled in the dialog and in the Auto-Generate Interval help text rather than
+  left for a user to infer from the manual path.
+- **Manual results:** pending. The host-runtime checks in §6.2 and
+  `STORY_PLANNER_PHASE7_DECISIONS.md` are unaffected by this phase's status.
+
+**Carried into Phase 2 from the Phase 1 review:** one of the four Phase 0 red
+specifications was flipped by this phase's behavior; the other three were
+rewritten anyway, two into assertions that could not fail and one (duplicate
+journey subjects, a Phase 2 contract) deleted outright. It is now restored to
+`test.fails`. In vitest a `test.fails` that starts passing is reported as a
+failure, so a phase landing will break exactly the specifications it satisfies —
+convert those, and leave the rest red.
 
 ### Phase 2 - Journey subjects and context coverage
 
