@@ -1,10 +1,10 @@
 # Story Planner V3: scoped generation, character journeys, and cast policy
 
-**Status:** Phases 0 and 1 complete. Phase 2 and Phase 3A **Implemented, not host
+**Status:** Phases 0 and 1 complete. Phase 2 and Phase 3A-3B **Implemented, not host
 verified** — see the status blocks in §5. Phase 0 request-boundary samples are
 synthetic and the consented targeted-develop sample remains a non-blocking
 follow-up; the planner-output attribution required to exit Phase 0 is recorded.
-Phase 3B-3D are not started.
+Phase 3C-3D are not started.
 **Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated
 2026-09-20; Phase 2 status recorded 2026-09-20)
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
@@ -784,12 +784,15 @@ returned. Existing-only rejects explicit newcomers; human review checks prose fo
 undeclared ones. Every generation path names its effective policy source and
 either proves the paired-marker contract or reports that the path is unsupported.
 
-**Phase 3A status (§8 record)**
+**Phase 3A-3B status (§8 record)**
 
-- **State:** Implemented; not host verified. Phase 3B-3D remain not started.
+- **State:** Phase 3A and Phase 3B implemented; not host verified. Phase 3C-3D
+  remain not started.
 - **Change reference:** current working tree (store v4 policy migration, independent
-  scoped/palette controls, prompt-source routing, and focused regression coverage).
-- **Automated checks:** full suite green at 2,975/2,975; lint clean. Phase 3A is
+  scoped/palette controls, explicit per-workflow request contracts, custom-template
+  compatibility reporting, automatic incompatibility skip, and focused regression
+  coverage).
+- **Automated checks:** full suite green at 2,982/2,982; lint clean. Phase 3A-3B are
   pinned in `test/story_planner_cast_policy.test.js` and supplemented by
   `test/story_planner_phase0_v3.test.js`, `test/story_planner_phase4.test.js`,
   `test/story_planner_phase6.test.js`, `test/schema_migrations.test.js`,
@@ -798,13 +801,22 @@ either proves the paired-marker contract or reports that the path is unsupported
 - **Migration result:** Story Planner store v3 migrates to v4. Both legacy boolean
   values become `storyPalette.castPolicy: allowed`; manual scoped preferences gain
   an independent `castPolicy: allowed`; the retired boolean is removed.
-- **Known limitations:** This slice owns persistence and workflow separation only.
-  The non-`allowed` policies are selectable and captured from their designated
-  source, but Phase 3B still owns explicit per-path compatibility/envelope clauses,
-  Phase 3C owns newcomer/entrance markers and validation, and Phase 3D owns
-  newcomer continuity/evaluation. No Knowledge record is created.
-- **Manual results:** Pending. Host checks should confirm both controls persist per
-  chat and remain independent before Phase 3B begins.
+- **Request-construction result:** Manual scoped generation captures its dialog
+  policy into the immutable request and always uses the built-in scoped envelope.
+  Legacy full-plan and automatic generation capture Story Palette policy; built-in
+  full prompts receive the application-owned clause, while custom full user prompts
+  receive it only through `{{storyPalette}}`. Targeted operations use their fixed
+  built-in prompt and Story Palette policy. The Generate dialog names the effective
+  whole-plan source and reports an omitted token as unsupported. Automatic
+  generation skips a non-`allowed` unsupported configuration before dispatch and
+  reports why.
+- **Known limitations:** Phase 3B constructs and reports the request contract only.
+  Phase 3C still owns newcomer/entrance markers, deterministic response validation,
+  and active-proposal coverage diagnostics; Phase 3D owns newcomer continuity and
+  evaluation. Until 3C, the policy clauses are prompt instructions rather than a
+  claim that unmarked prose was enforced. No Knowledge record is created.
+- **Manual results:** Pending. Host checks should confirm dialog compatibility text,
+  scoped and targeted review policy/source text, and the automatic skip notice.
 
 ### Phase 4 - Opt-in author context (sketch)
 

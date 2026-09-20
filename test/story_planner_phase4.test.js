@@ -88,9 +88,13 @@ describe('Story Planner Phase 4 — targeted proposal model', () => {
         expect(request.userContent).toContain('<latest_chronicle>');
         expect(request.userContent).toContain('<direction_hint>');
         expect(request.userContent).toContain('<story_palette>');
+        expect(request.userContent).toContain('Cast policy — established cast only');
         expect(request.userContent).toContain('<relevant_closed_memory>');
         expect(buildUserPrompt('story')).toContain('CUSTOM story');
         expect(proposal.stale).toBe(false);
+        expect(proposal.castPolicyContract).toMatchObject({
+            policy: 'existing-only', source: 'story-palette', supported: true, template: 'built-in-targeted',
+        });
         expect(getPlanHistory()).toHaveLength(0);
         expect(getPhase7Metrics()).toMatchObject({
             targetedGenerations: 1,

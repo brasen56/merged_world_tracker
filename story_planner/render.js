@@ -44,7 +44,7 @@ import {
 import { buildSafeCharacterContext, listSafeCharacterContextCandidates } from '../core/character_context.js';
 import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
-import { generatePlan, MAX_JOURNEY_SUBJECT_CANDIDATES } from './generation.js';
+import { describeCastPolicyRequest, generatePlan, MAX_JOURNEY_SUBJECT_CANDIDATES } from './generation.js';
 import { applyScopedPlanProposal, buildArcDiff, previewScopedApply } from './proposals.js';
 import {
     applyTargetedProposal,
@@ -763,6 +763,7 @@ export function showScopedReview(proposal) {
             <p class="mwt-text-dim mwt-text-sm">Review the scoped changes below. Nothing is saved until you choose Apply.</p>
             ${proposal.stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason || 'A selected target changed while this proposal was generated. Generate again to review the current plan.')}</p>` : ''}
             <p><strong>${escapeHtml(requestSummary(proposal.request))}</strong></p>
+            ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
             <p class="mwt-text-dim mwt-text-sm">${proposal.stats.added} new · ${proposal.stats.matched} refreshed · ${proposal.stats.carried} carried forward</p>
             <details class="sp-context-coverage-review"><summary>Safe Character Context coverage</summary>${coverageHtml}</details>
             ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
@@ -837,7 +838,9 @@ export function openGenerateDialog() {
     const excludedContextSourceIds = new Set();
     const visibleCandidateIds = new Set(subjectCandidates.filter(candidate => !candidate.unavailable).map(candidate => candidate.entityId));
     const hiddenSubjectCandidateCount = allSubjectCandidates.filter(candidate => !visibleCandidateIds.has(candidate.entityId)).length;
-    const configuredCustomTemplates = !!(getSettings().customSystemPrompt?.trim() || getSettings().customUserPrompt?.trim());
+    const plannerSettings = getSettings();
+    const configuredCustomTemplates = !!(plannerSettings.customSystemPrompt?.trim() || plannerSettings.customUserPrompt?.trim());
+    const legacyPolicy = describeCastPolicyRequest({ workflow: 'legacy-full', settings: plannerSettings });
     const sectionChecks = SECTIONS.map(section => `
         <label class="sp-mode-label" for="sp-generate-section-${section.key}">
             <input id="sp-generate-section-${section.key}" type="checkbox" name="sp-generate-section" value="${section.key}" ${preferences.sectionKeys.includes(section.key) ? 'checked' : ''}> ${escapeHtml(section.label)}
@@ -893,9 +896,9 @@ export function openGenerateDialog() {
                 <div id="sp-generate-context-coverage" aria-live="polite"><p class="mwt-text-dim mwt-text-sm">Checking public-context coverage…</p></div>
             </details>
             <fieldset id="sp-generate-targets" style="border:0;padding:0;margin:12px 0 0"><legend class="mwt-label">Eligible arcs (select up to ${MAX_STORY_PLAN_REQUEST_IDS})</legend><div id="sp-generate-target-list" class="sp-check-list"></div></fieldset>
-            <p class="${configuredCustomTemplates ? 'sp-proposal-diagnostics' : 'mwt-text-dim mwt-text-sm'}">${configuredCustomTemplates
-                ? 'Scoped generation uses the built-in safe request format, so your saved custom templates are not used here.'
-                : 'Regenerating the whole plan rewrites every section at once and saves without a review step. It keeps pinned arcs and planted beats.'}
+            <p class="${configuredCustomTemplates || !legacyPolicy.supported ? 'sp-proposal-diagnostics' : 'mwt-text-dim mwt-text-sm'}">${configuredCustomTemplates
+                ? `Scoped generation uses the built-in safe request format, so your saved custom templates are not used here. Whole-plan cast policy: ${escapeHtml(legacyPolicy.policyLabel)} from ${escapeHtml(legacyPolicy.sourceLabel)}. ${escapeHtml(legacyPolicy.message)}`
+                : `Regenerating the whole plan rewrites every section at once and saves without a review step. It keeps pinned arcs and planted beats. Cast policy: ${escapeHtml(legacyPolicy.policyLabel)} from ${escapeHtml(legacyPolicy.sourceLabel)}.`}
                 <button id="sp-generate-legacy" class="mwt-btn" type="button">Regenerate the whole plan${configuredCustomTemplates ? ' with custom templates' : ''}</button></p>
             <p id="sp-generate-context-summary" class="mwt-text-dim mwt-text-sm">Public context: ${context.mode === 'off' ? 'off' : context.mode === 'active' ? 'active cast' : `${context.entityIds.length} selected character${context.entityIds.length === 1 ? '' : 's'}`}. Existing context settings are unchanged by this dialog.</p>
             <p id="sp-generate-summary" class="sp-proposal-change" role="status"></p>
@@ -1555,6 +1558,7 @@ function showTargetedProposal(proposal) {
         onClose: finishTargetedReview,
         content: `
             <p class="mwt-text-dim mwt-text-sm">Review this proposal. Nothing changes until you choose Apply.</p>
+            ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
             ${stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason)} Generate again to apply changes.</p>` : ''}
             ${renderTargetedDiff(proposal)}
             <div class="mwt-flex mwt-gap-8 mwt-mt-8 sp-proposal-actions">

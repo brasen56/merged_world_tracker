@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { prepareStore } from '../core/schema.js';
 import { buildBackupEnvelope } from '../backup/data.js';
@@ -11,7 +11,7 @@ import {
     setPlanData,
     state,
 } from '../story_planner/data.js';
-import { buildUserPrompt, storyPaletteProjection } from '../story_planner/generation.js';
+import { buildUserPrompt, describeCastPolicyRequest, generatePlan, storyPaletteProjection } from '../story_planner/generation.js';
 import {
     migrateStoryPlannerV3ToV4,
     sanitizeStoryPalette,
@@ -19,7 +19,11 @@ import {
     storyPlannerSchema,
 } from '../story_planner/schema.js';
 import { openGenerateDialog, renderContent, wireEvents } from '../story_planner/render.js';
-import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
+import { saveSettings } from '../story_planner/settings.js';
+import {
+    getFakeMeta, registerSafeCharacterContextProvider, resetCoreStubs,
+    setFakeApi, setFakeChat,
+} from './stubs/core.js';
 
 beforeEach(() => {
     resetCoreStubs();
@@ -142,5 +146,129 @@ describe('Story Planner V3 Phase 3A — cast policy ownership', () => {
         }).plan.sections.storyPlanner;
         expect(merged.storyPalette.castPolicy).toBe('allowed');
         expect(merged.storyPlanRequestPreferences.castPolicy).toBe('allowed');
+    });
+});
+
+describe('Story Planner V3 Phase 3B — explicit request construction', () => {
+    test.each([
+        ['existing-only', 'established cast only', 'Do not propose a new recurring or major character'],
+        ['allowed', 'new characters allowed', 'there is no newcomer quota'],
+        ['propose', 'actively propose new characters', 'concrete on-screen entrance'],
+    ])('built-in prompts carry the %s application-owned clause', (castPolicy, label, clause) => {
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy } });
+        expect(storyPaletteProjection().toLowerCase()).toContain(label);
+        expect(storyPaletteProjection()).toContain(clause);
+
+        const scoped = buildUserPrompt('recent', '', {
+            requestSpec: { operation: 'add', sectionKeys: ['horizon'], requestedCount: 1, castPolicy },
+        });
+        expect(scoped).toContain('<application_request>');
+        expect(scoped).toContain(clause);
+    });
+
+    test('classifies built-in, compatible custom, incompatible custom, scoped, and targeted paths explicitly', () => {
+        const palette = { emphases: [], escalation: 'balanced', castPolicy: 'existing-only' };
+        expect(describeCastPolicyRequest({ palette, settings: {} })).toMatchObject({
+            policy: 'existing-only', source: 'story-palette', supported: true, template: 'built-in-full',
+        });
+        expect(describeCastPolicyRequest({ palette, settings: { customUserPrompt: 'Plan {{storyPalette}}' } })).toMatchObject({
+            supported: true, template: 'custom-compatible',
+        });
+        expect(describeCastPolicyRequest({ palette, settings: { customUserPrompt: 'Plan {{chatHistory}}' } })).toMatchObject({
+            supported: false, template: 'custom-incompatible',
+        });
+        expect(describeCastPolicyRequest({
+            workflow: 'manual-scoped',
+            requestSpec: { operation: 'add', sectionKeys: ['horizon'], requestedCount: 1, castPolicy: 'propose' },
+            palette,
+        })).toMatchObject({
+            policy: 'propose', source: 'manual-request', supported: true, template: 'built-in-scoped',
+        });
+        expect(describeCastPolicyRequest({ workflow: 'targeted', palette, settings: { customUserPrompt: 'ignored' } })).toMatchObject({
+            policy: 'existing-only', source: 'story-palette', supported: true, template: 'built-in-targeted',
+        });
+    });
+
+    test('custom full templates receive policy only through the storyPalette token', () => {
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'existing-only' } });
+        saveSettings({ customUserPrompt: 'CUSTOM {{chatHistory}}' });
+        expect(buildUserPrompt('recent')).not.toContain('Cast policy');
+
+        saveSettings({ customUserPrompt: 'CUSTOM {{storyPalette}} {{chatHistory}}' });
+        expect(buildUserPrompt('recent')).toContain('Cast policy — established cast only');
+    });
+
+    test('automatic generation skips a non-allowed policy with an incompatible custom template before dispatch', async () => {
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'existing-only' } });
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model', customUserPrompt: 'CUSTOM {{chatHistory}}' });
+        const api = vi.fn(() => 'unused');
+        setFakeApi(api);
+
+        await expect(generatePlan(true)).resolves.toBeNull();
+        expect(api).not.toHaveBeenCalled();
+    });
+
+    test('full-plan generation keeps its compatible template snapshot while character context is pending', async () => {
+        globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'cast-policy-template-race' }) };
+        setPlanData({
+            storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'existing-only' },
+            characterContext: { mode: 'selected', entityIds: ['entity-mara'] },
+        });
+        saveSettings({
+            apiUrl: 'https://example.test', modelName: 'test-model',
+            customSystemPrompt: 'CAPTURED SYSTEM',
+            customUserPrompt: 'CAPTURED {{storyPalette}} {{chatHistory}}',
+        });
+        setFakeChat([
+            { is_user: true, name: 'User', mes: 'We inspect the harbour ledger, compare every signature against the customs archive, and catalogue the counterfeit seals before deciding which established ally can verify the discrepancy.' },
+            { is_user: false, name: 'Mara', mes: 'The seal is counterfeit.' },
+            { is_user: true, name: 'User', mes: 'We compare the signatures.' },
+        ]);
+        let releaseContext;
+        const contextPending = new Promise(resolve => { releaseContext = resolve; });
+        registerSafeCharacterContextProvider({
+            buildContext: () => contextPending,
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+        });
+        const api = vi.fn()
+            .mockReturnValueOnce('')
+            .mockReturnValueOnce([
+                '## Immediate Hooks',
+                '- Ledger proof — Mara identifies the forged signature.',
+                '- Customs witness — an established clerk confirms the archive entry.',
+                '- Sealed warning — a familiar ally finds a matching counterfeit mark.',
+            ].join('\n'));
+        setFakeApi(api);
+
+        const pending = generatePlan(true);
+        await vi.waitFor(() => expect(releaseContext).toBeTypeOf('function'));
+        saveSettings({
+            customSystemPrompt: 'MUTATED SYSTEM',
+            customUserPrompt: 'MUTATED {{chatHistory}}',
+        });
+        releaseContext({ text: 'Character: Mara', records: 1, requested: 1, omitted: 0 });
+
+        await expect(pending).resolves.not.toBeNull();
+        expect(api).toHaveBeenCalledTimes(2);
+        for (const [call] of api.mock.calls) {
+            expect(call).toMatchObject({ systemPrompt: 'CAPTURED SYSTEM' });
+            expect(call.userContent).toContain('CAPTURED');
+            expect(call.userContent).toContain('Cast policy — established cast only');
+            expect(call.userContent).not.toContain('MUTATED');
+        }
+    });
+
+    test('Generate dialog visibly reports an incompatible whole-plan template and offers the built-in scoped path', () => {
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'propose' } });
+        saveSettings({ customUserPrompt: 'CUSTOM {{chatHistory}}' });
+
+        openGenerateDialog();
+        const text = document.getElementById('mwt-sp-generate-modal').textContent;
+        expect(text).toContain('Scoped generation uses the built-in safe request format');
+        expect(text).toContain('Actively propose new characters from Story Palette');
+        expect(text).toContain('cast policy is unsupported for this call');
+        expect(document.querySelector('#sp-generate-submit')).not.toBeNull();
+        expect(document.querySelector('#sp-generate-legacy')).not.toBeNull();
+        document.querySelector('#sp-generate-cancel').click();
     });
 });

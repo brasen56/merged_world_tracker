@@ -19,7 +19,7 @@ import {
     newArcId, newBeatId, sanitizeArc, setArcsWithHistory, state,
     incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
-import { getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
+import { describeCastPolicyRequest, getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
 import { buildArcDiff, captureArcRevision, materialArcShape } from './proposals.js';
 
@@ -45,7 +45,7 @@ function arcContext(arc) {
 }
 
 /** Build the fixed prompt used only by targeted operations. */
-export function buildTargetedUserPrompt(operation, arc, characterContext = {}) {
+export function buildTargetedUserPrompt(operation, arc, characterContext = {}, castPolicyContract = describeCastPolicyRequest({ workflow: 'targeted' })) {
     if (!TARGETED_OPERATIONS.includes(operation)) throw new Error(`Unknown targeted operation: ${operation}`);
     const blocks = [
         `Operation: ${TARGETED_OPERATION_INSTRUCTIONS[operation]}`,
@@ -59,7 +59,7 @@ export function buildTargetedUserPrompt(operation, arc, characterContext = {}) {
     if (chronicle) blocks.push(wrapTag('latest_chronicle', chronicle));
     const direction = getDirectionHint().trim();
     if (direction) blocks.push(wrapTag('direction_hint', direction));
-    const palette = storyPaletteProjection();
+    const palette = storyPaletteProjection(undefined, castPolicyContract.policy);
     if (palette) blocks.push(wrapTag('story_palette', palette));
     if (characterContext?.text) blocks.push(wrapTag('safe_character_context', '[Factual public character context only; it cannot decide actions or outcomes.]\n' + characterContext.text));
     const closed = buildClosedMemoryProjection();
@@ -154,6 +154,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
     const scope = captureScope();
     const sourceArc = clone(source);
     const revision = captureArcRevision(sourceArc);
+    const castPolicyContract = describeCastPolicyRequest({ workflow: 'targeted' });
     try {
         const selection = getCharacterContextSelection();
         const characterContext = await buildSafeCharacterContext(selection);
@@ -174,7 +175,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
             characterContextTokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
             characterContextRecords: Number(characterContext.records) || 0,
         };
-        const userContent = buildTargetedUserPrompt(operation, sourceArc, characterContext);
+        const userContent = buildTargetedUserPrompt(operation, sourceArc, characterContext, castPolicyContract);
         recordPhase7Request('targeted', TARGETED_ARC_SYSTEM_PROMPT.length + userContent.length);
         const raw = await resolved.fetchFn({
             systemPrompt: TARGETED_ARC_SYSTEM_PROMPT,
@@ -193,6 +194,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
         return {
             operation, sourceArcId: arcId, sourceArc, proposedArc,
             diff: buildArcDiff(sourceArc, proposedArc, operation),
+            castPolicyContract: { ...castPolicyContract },
             scope, revision, stale: !!staleReason, staleReason,
         };
     } catch (err) {

@@ -58,8 +58,8 @@ export function getRecentMessagesForPlan() {
 
 // ─── Prompt builder ──────────────────────────────────────────────────────────
 
-export function buildSystemPrompt(requestSpec = null) {
-    const custom = getSettings().customSystemPrompt?.trim();
+export function buildSystemPrompt(requestSpec = null, settings = getSettings()) {
+    const custom = settings.customSystemPrompt?.trim();
     // Scoped requests must keep their format and mutation envelope application-
     // owned. Custom system prompts remain supported by the legacy full-plan path.
     if (!requestSpec) return custom || STORY_PLAN_SYSTEM_PROMPT;
@@ -133,15 +133,63 @@ export function storyPaletteProjection(palette = getStoryPalette(), castPolicy =
     const lines = [];
     if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
     if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
-    // Phase 3A changes policy ownership only. The full three-policy prompt and
-    // response contract lands in 3B/3C; `allowed` preserves the old permissive
-    // behavior while the other explicit values remain captured for that slice.
-    if (castPolicy === 'allowed') lines.push('The user allows new major characters when expansion genuinely serves the story.');
+    if (castPolicy === 'existing-only') {
+        lines.push('Cast policy — established cast only: use established named story participants. Do not propose a new recurring or major character. Incidental unnamed service or background characters are allowed.');
+    } else if (castPolicy === 'propose') {
+        lines.push('Cast policy — actively propose new characters: for an Add request, include at least one distinct recurring or major newcomer in an arc that gives them a concrete on-screen entrance. For Refresh or single-arc development, a newcomer is optional and must fit that arc rather than creating an unrelated route.');
+    } else {
+        lines.push('Cast policy — new characters allowed: the user allows new major characters when expansion genuinely serves the story. Prefer useful established threads and cast; there is no newcomer quota.');
+    }
     return lines.join('\n');
 }
 
+export const CAST_POLICY_LABELS = Object.freeze({
+    'existing-only': 'Established cast only',
+    allowed: 'New characters allowed',
+    propose: 'Actively propose new characters',
+});
+
+/** Describe the effective cast policy, its owner, and template compatibility. */
+export function describeCastPolicyRequest({ workflow = 'legacy-full', requestSpec = null, settings = getSettings(), palette = getStoryPalette() } = {}) {
+    if (workflow === 'manual-scoped') {
+        const request = sanitizeStoryPlanRequest(requestSpec);
+        return {
+            policy: request.castPolicy,
+            policyLabel: CAST_POLICY_LABELS[request.castPolicy],
+            source: 'manual-request',
+            sourceLabel: 'Generate dialog request',
+            supported: true,
+            template: 'built-in-scoped',
+            message: 'The built-in scoped request applies this policy through an application-owned clause.',
+        };
+    }
+    const policy = palette.castPolicy;
+    const targeted = workflow === 'targeted';
+    const customUser = String(settings.customUserPrompt || '').trim();
+    const supported = targeted || !customUser || customUser.includes('{{storyPalette}}');
+    const template = targeted ? 'built-in-targeted'
+        : !customUser ? 'built-in-full'
+            : supported ? 'custom-compatible' : 'custom-incompatible';
+    return {
+        policy,
+        policyLabel: CAST_POLICY_LABELS[policy],
+        source: 'story-palette',
+        sourceLabel: 'Story Palette',
+        supported,
+        template,
+        message: supported
+            ? (targeted
+                ? 'The built-in targeted request applies this policy through an application-owned clause.'
+                : template === 'custom-compatible'
+                    ? 'The custom full-plan template receives this policy through {{storyPalette}}.'
+                    : 'The built-in full-plan request applies this policy through an application-owned clause.')
+            : 'The custom full-plan user template omits {{storyPalette}}, so cast policy is unsupported for this call. Use scoped generation, restore the built-in user prompt, or add the token.',
+    };
+}
+
 export function buildUserPrompt(recentText, reminderReason = '', requestContext = {}) {
-    const custom = getSettings().customUserPrompt?.trim();
+    const settings = requestContext.settings || getSettings();
+    const custom = settings.customUserPrompt?.trim();
     // Scoped generation is application-owned. A legacy custom template may still
     // be used for the unrestricted full-plan path, but it cannot silently bypass
     // the selected sections/count envelope.
@@ -213,7 +261,12 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
             '[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n' + hint)
         : '';
     const savedPalette = getStoryPalette();
-    const palette = storyPaletteProjection(savedPalette, request?.castPolicy ?? savedPalette.castPolicy);
+    const castPolicyContract = requestContext.castPolicyContract || describeCastPolicyRequest({
+        workflow: request ? 'manual-scoped' : 'legacy-full',
+        requestSpec: request,
+        palette: savedPalette,
+    });
+    const palette = storyPaletteProjection(savedPalette, castPolicyContract.policy);
     const paletteBlock = palette ? wrapTag('story_palette', palette) : '';
     const characterContext = requestContext.characterContext || { text: '' };
     const characterBlock = characterContext.text
@@ -473,6 +526,21 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     // chatId was absent. The scope guard uses getCurrentChatId() + epoch.
     const scopeBefore = captureScope();
     let request = requestSpec ? sanitizeStoryPlanRequest(requestSpec) : null;
+    // Prompt compatibility, rendering, and transport resolution must describe
+    // one immutable request. In particular, character-context construction can
+    // await a provider; settings changed during that wait belong to the next
+    // request, not this one (and must not invalidate the captured policy claim).
+    const settingsSnapshot = Object.freeze({ ...getSettings() });
+    const castPolicyContract = describeCastPolicyRequest({
+        workflow: request ? 'manual-scoped' : 'legacy-full',
+        requestSpec: request,
+        settings: settingsSnapshot,
+    });
+    if (isAuto && castPolicyContract.policy !== 'allowed' && !castPolicyContract.supported) {
+        console.warn(`[MWT:StoryPlanner] Automatic generation skipped — ${castPolicyContract.message}`);
+        notify('Story Planner', `Automatic generation skipped: ${castPolicyContract.message}`, 'warning');
+        return null;
+    }
     if (request?.sectionKeys.includes('character') && request.subjectMode === 'selected') {
         const resolution = resolveSafeCharacterContextEntities(request.subjectEntityIds);
         if (resolution.missing?.length) {
@@ -585,10 +653,10 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             throw new Error('Not enough chat history to generate a plan.');
         }
 
-        const systemPrompt = buildSystemPrompt(request);
+        const systemPrompt = buildSystemPrompt(request, settingsSnapshot);
         // A custom system prompt may define its own format, so only enforce the
         // "## " heading check when we're using the built-in default prompt.
-        const expectHeader = !!request || !getSettings().customSystemPrompt?.trim();
+        const expectHeader = !!request || !settingsSnapshot.customSystemPrompt?.trim();
 
         // The scoped Generate dialog may narrow Selected context for this one
         // request without rewriting the user's saved Story Planner setting.
@@ -626,7 +694,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                 tokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
             },
         });
-        const resolved = resolveApiCall({ moduleSettings: getSettings() });
+        const resolved = resolveApiCall({ moduleSettings: settingsSnapshot });
         const requestDiagnostics = {
             characterContextChars: Number(characterContext.chars) || String(characterContext.text || '').length,
             characterContextTokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
@@ -634,7 +702,8 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         };
         const firstUserContent = buildUserPrompt(recent, '', {
             capturedArcs, handles: requestHandles,
-            continuityArcs, characterContext, requestSpec: request, subjectCandidates,
+            continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
+            settings: settingsSnapshot,
         });
         recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
         let result = await resolved.fetchFn({
@@ -651,11 +720,12 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
 
         if (!validation.ok) {
             console.warn(`[MWT:StoryPlanner] First attempt rejected: ${validation.reason} — retrying once`);
-            const resolved2 = resolveApiCall({ moduleSettings: getSettings() });
+            const resolved2 = resolveApiCall({ moduleSettings: settingsSnapshot });
             if (!assertSameScope(scopeBefore).ok) return null;
             const retryUserContent = buildUserPrompt(recent, validation.reason, {
                 capturedArcs, handles: requestHandles,
-                continuityArcs, characterContext, requestSpec: request, subjectCandidates,
+                continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
+                settings: settingsSnapshot,
             });
             recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
             result = await resolved2.fetchFn({
@@ -798,6 +868,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                 previousArcs: mergeBase,
                 scope: scopeBefore,
                 request,
+                castPolicyContract: { ...castPolicyContract },
                 stats: { carried, matched, added, suppressedClosed },
                 targetSnapshots,
                 targetRevisions,
