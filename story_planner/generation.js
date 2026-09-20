@@ -14,12 +14,12 @@ import {
     wrapTag, escapePromptText, buildSafeCharacterContext, record,
 } from '../core/index.js';
 
-import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT } from './prompts.js';
+import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT, buildStoryPlanSystemPrompt } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 // Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
-import { storyPlannerSchema } from './schema.js';
+import { SECTIONS, storyPlannerSchema, sanitizeStoryPlanRequest, getStoryPlanRequestError, strictSectionKeyFromLabel } from './schema.js';
 import {
     state, getArcs, setArcs, pushPlanToHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
@@ -28,6 +28,7 @@ import {
     incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
 import { applyPlanInjection } from './injection.js';
+import { captureTargetRevisions, findChangedProposalTargets } from './proposals.js';
 
 // ─── Message scan helper ─────────────────────────────────────────────────────
 
@@ -56,9 +57,22 @@ export function getRecentMessagesForPlan() {
 
 // ─── Prompt builder ──────────────────────────────────────────────────────────
 
-function buildSystemPrompt() {
+export function buildSystemPrompt(requestSpec = null) {
     const custom = getSettings().customSystemPrompt?.trim();
-    return custom || STORY_PLAN_SYSTEM_PROMPT;
+    // Scoped requests must keep their format and mutation envelope application-
+    // owned. Custom system prompts remain supported by the legacy full-plan path.
+    if (!requestSpec) return custom || STORY_PLAN_SYSTEM_PROMPT;
+    const request = sanitizeStoryPlanRequest(requestSpec);
+    return buildStoryPlanSystemPrompt(request.sectionKeys);
+}
+
+function buildReadOnlyContinuityProjection(arcs) {
+    if (!Array.isArray(arcs) || !arcs.length) return '';
+    return arcs.slice(0, 12).map(arc => {
+        const section = SECTIONS.find(item => item.key === arc.section)?.label || arc.section;
+        const summary = String(arc.body || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+        return `- [${section}] ${String(arc.title || 'Untitled arc').slice(0, 90)}${summary ? ` — ${summary}` : ''}`;
+    }).join('\n');
 }
 
 export function storyPaletteProjection(palette = getStoryPalette()) {
@@ -71,7 +85,13 @@ export function storyPaletteProjection(palette = getStoryPalette()) {
 
 export function buildUserPrompt(recentText, reminderReason = '', requestContext = {}) {
     const custom = getSettings().customUserPrompt?.trim();
-    const template = custom || STORY_PLAN_USER_PROMPT;
+    // Scoped generation is application-owned. A legacy custom template may still
+    // be used for the unrestricted full-plan path, but it cannot silently bypass
+    // the selected sections/count envelope.
+    const request = requestContext.requestSpec
+        ? sanitizeStoryPlanRequest(requestContext.requestSpec)
+        : null;
+    const template = request ? STORY_PLAN_USER_PROMPT : (custom || STORY_PLAN_USER_PROMPT);
 
     // Continuity: feed the existing plan back so regeneration refines it instead
     // of starting from a blank menu. Templates that omit {{previousPlan}} simply
@@ -91,6 +111,10 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     const prevPlan = serializeArcsToText(kept, {
         annotateStatus: true, beats: 'all', handles: requestHandles, prioritizeFocused: true,
     }).trim();
+    const continuity = buildReadOnlyContinuityProjection(requestContext.continuityArcs);
+    const continuityBlock = continuity
+        ? `<read_only_continuity>\n[These unrelated active arcs are continuity context only. Do not return, rename, refresh, or otherwise edit them. Avoid duplicate or contradictory proposals.]\n${escapePromptText(continuity)}\n</read_only_continuity>`
+        : '';
     const closedMemory = buildClosedMemoryProjection(allArcs);
     const closedBlock = closedMemory
         ? `<closed_story_ideas>\n[These ideas are closed. Do not propose a resolved payoff again or rephrase a dropped direction.]\n${escapePromptText(closedMemory)}\n</closed_story_ideas>`
@@ -99,7 +123,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     const parkedBlock = parkedTitles
         ? `<shelved_story_ideas>\n[These ideas are parked for later. Do not propose, rename, or reactivate them.]\n${escapePromptText(parkedTitles)}\n</shelved_story_ideas>`
         : '';
-    const prevBlock = [closedBlock, parkedBlock, prevPlan
+    const prevBlock = [closedBlock, parkedBlock, continuityBlock, prevPlan
         ? `<previous_plan>\n[The plan below was generated earlier. Carry forward arcs still in play, evolve those the story is now moving toward, and drop any it has already resolved or contradicted. Refine this against what has since happened — do not simply repeat it.\n\n`
           + `NAMES ARE IDENTIFIERS. An arc's name is how its progress is tracked between generations. If you carry an arc forward, reproduce its name EXACTLY, character for character — do not rename, reword, shorten or otherwise improve it. A renamed arc is read as a brand-new one: its progress is lost and the original is left behind beside it as a duplicate. Only give a name you have not been shown to an arc that is genuinely new.\n\n`
           + `The [BRACKETED] tags are annotations from the tracker, not part of any name — never copy one into a name you write:\n`
@@ -168,7 +192,23 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         // block, the same contract as {{worldState}}.
         .replace(/\{\{storyPalette\}\}/g, () => paletteBlock)
         .replace(/\{\{safeCharacterContext\}\}/g, () => characterBlock)
-        .replace(/\{\{arcCount\}\}/g, () => String(getArcCount()));
+        .replace(/\{\{arcCount\}\}/g, () => String(request?.requestedCount ?? getArcCount()));
+
+    if (request) {
+        const labels = request.sectionKeys.map(key => SECTIONS.find(section => section.key === key)?.label || key);
+        const operationText = request.operation === 'add'
+            ? `Propose exactly up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} across the selected sections.`
+            : `Refresh only the captured existing arcs. Do not add new arcs; omitted targets remain unchanged.`;
+        const scopeBlock = [
+            '<application_request>',
+            `Operation: ${request.operation === 'add' ? 'Add ideas' : 'Refresh selected arcs'}.`,
+            `Selected sections: ${labels.join(', ')}.`,
+            operationText,
+            'Return only arcs in the selected sections. Never use another section as a fallback.',
+            '</application_request>',
+        ].join('\n');
+        out = `${scopeBlock}\n\n${out}`;
+    }
 
     if (reminderReason) {
         out += `\n\n[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;
@@ -186,7 +226,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
  * @param {boolean} expectHeader — require a Markdown "## " heading (default true;
  *   relaxed when a custom system prompt may define a different format)
  */
-function validateOutput(text, expectHeader = true) {
+export function validateOutput(text, expectHeader = true, requestSpec = null) {
     if (!text || !text.trim()) return { ok: false, reason: 'empty response' };
     const trimmed = text.trim();
 
@@ -202,7 +242,9 @@ function validateOutput(text, expectHeader = true) {
 
     // A plan is a list of arcs — require a few bullets so prose replies are caught.
     const bulletCount = (trimmed.match(/^[ \t]*[-*][ \t]+/gm) || []).length;
-    if (bulletCount < 3) {
+    const request = requestSpec ? sanitizeStoryPlanRequest(requestSpec) : null;
+    const minimum = request ? 1 : 3;
+    if (bulletCount < minimum) {
         return { ok: false, reason: `only ${bulletCount} bulleted arc(s) found — expected a list of plot developments` };
     }
 
@@ -210,7 +252,52 @@ function validateOutput(text, expectHeader = true) {
         return { ok: false, reason: 'no Markdown "## " section heading found' };
     }
 
+    if (request) {
+        const selected = new Set(request.sectionKeys);
+        const headings = [...trimmed.matchAll(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/gm)]
+            .map(match => strictSectionKeyFromLabel(match[1]));
+        if (headings.some(key => !key)) {
+            return { ok: false, reason: 'response contains an unrecognized section heading' };
+        }
+        if (headings.some(key => !selected.has(key))) {
+            return { ok: false, reason: 'response contains a section outside the requested scope' };
+        }
+        if (request.operation === 'add' && bulletCount > request.requestedCount) {
+            return { ok: true, warning: `response contains ${bulletCount} arcs; only ${request.requestedCount} may be reviewed or applied` };
+        }
+    }
     return { ok: true };
+}
+
+/** Enforce the immutable scoped request after parsing. Refresh accepts only
+ * identities resolved inside the captured target set; Add accepts only selected
+ * sections and caps the reviewable suggestions to the requested count. */
+export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = []) {
+    const request = sanitizeStoryPlanRequest(requestSpec);
+    const selectedSections = new Set(request.sectionKeys);
+    const inSections = parsed.filter(arc => selectedSections.has(arc.section));
+    const rejectedOutsideScope = parsed.filter(arc => !selectedSections.has(arc.section));
+    if (request.operation === 'refresh') {
+        const targetIds = new Set(capturedArcs.map(arc => arc.id));
+        const accepted = [];
+        const rejected = [...rejectedOutsideScope];
+        const acceptedIds = new Set();
+        for (const arc of inSections) {
+            if (!targetIds.has(arc.id) || acceptedIds.has(arc.id)) {
+                rejected.push(arc);
+                continue;
+            }
+            acceptedIds.add(arc.id);
+            accepted.push(arc);
+        }
+        return { accepted, rejected, overflow: 0, underfill: 0 };
+    }
+    return {
+        accepted: inSections.slice(0, request.requestedCount),
+        rejected: rejectedOutsideScope,
+        overflow: Math.max(0, inSections.length - request.requestedCount),
+        underfill: Math.max(0, request.requestedCount - inSections.length),
+    };
 }
 
 // ─── Generate ────────────────────────────────────────────────────────────────
@@ -221,7 +308,7 @@ function validateOutput(text, expectHeader = true) {
  * @param {boolean} [isAuto=false] — true when triggered automatically
  * @returns {Promise<object[]|null>} the new arc list, or null if skipped/failed
  */
-export async function generatePlan(isAuto = false) {
+export async function generatePlan(isAuto = false, requestSpec = null, { reviewOnly = false } = {}) {
     // Part 6 (§7.4): the pause gate is a data-integrity stop — generation
     // would read the unprepared store, spend an API call, and have its
     // refused write (setArcs under the paused seam) mask the loss. Manual
@@ -252,6 +339,9 @@ export async function generatePlan(isAuto = false) {
     // weak key collapsed two different chats on the same character when
     // chatId was absent. The scope guard uses getCurrentChatId() + epoch.
     const scopeBefore = captureScope();
+    const request = requestSpec ? sanitizeStoryPlanRequest(requestSpec) : null;
+    const requestError = request ? getStoryPlanRequestError(request) : '';
+    if (requestError) throw new Error(requestError);
 
     // STORY-PLANNER-02: Capture the arc revision at START so we can detect
     // user edits/pins/deletes made during the API call. The old code read
@@ -263,7 +353,18 @@ export async function generatePlan(isAuto = false) {
     // The parser must use the same request snapshot that was shown to the
     // model. Closed arcs are intentionally absent from the prompt and therefore
     // cannot be addressed by a returned handle or fallback.
-    const capturedArcs = arcsBeforeCall.filter(a => a.status === 'active');
+    const capturedArcs = request?.operation === 'refresh'
+        ? arcsBeforeCall.filter(a => a.status === 'active'
+            && request.targetArcIds.includes(a.id)
+            && request.sectionKeys.includes(a.section))
+        : arcsBeforeCall.filter(a => a.status === 'active');
+    const continuityArcs = request?.operation === 'refresh'
+        ? arcsBeforeCall.filter(a => a.status === 'active' && !capturedArcs.some(target => target.id === a.id))
+        : [];
+    const targetSnapshots = request?.operation === 'refresh'
+        ? capturedArcs.map(arc => JSON.parse(JSON.stringify(arc)))
+        : [];
+    const targetRevisions = captureTargetRevisions(targetSnapshots);
     const requestHandles = mintRequestHandles(capturedArcs);
     const arcsByHandle = new Map(capturedArcs.map(arc => [requestHandles.get(arc.id), arc]));
 
@@ -279,10 +380,10 @@ export async function generatePlan(isAuto = false) {
             throw new Error('Not enough chat history to generate a plan.');
         }
 
-        const systemPrompt = buildSystemPrompt();
+        const systemPrompt = buildSystemPrompt(request);
         // A custom system prompt may define its own format, so only enforce the
         // "## " heading check when we're using the built-in default prompt.
-        const expectHeader = !getSettings().customSystemPrompt?.trim();
+        const expectHeader = !!request || !getSettings().customSystemPrompt?.trim();
 
         const selection = getCharacterContextSelection();
         const characterContext = await buildSafeCharacterContext(selection);
@@ -309,7 +410,7 @@ export async function generatePlan(isAuto = false) {
         };
         const firstUserContent = buildUserPrompt(recent, '', {
             capturedArcs, handles: requestHandles,
-            characterContext,
+            continuityArcs, characterContext, requestSpec: request,
         });
         recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
         let result = await resolved.fetchFn({
@@ -322,7 +423,7 @@ export async function generatePlan(isAuto = false) {
             requestDiagnostics,
         });
         let text = normaliseOutput(result);
-        let validation = validateOutput(text, expectHeader);
+        let validation = validateOutput(text, expectHeader, request);
 
         if (!validation.ok) {
             console.warn(`[MWT:StoryPlanner] First attempt rejected: ${validation.reason} — retrying once`);
@@ -330,7 +431,7 @@ export async function generatePlan(isAuto = false) {
             if (!assertSameScope(scopeBefore).ok) return null;
             const retryUserContent = buildUserPrompt(recent, validation.reason, {
                 capturedArcs, handles: requestHandles,
-                characterContext,
+                continuityArcs, characterContext, requestSpec: request,
             });
             recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
             result = await resolved2.fetchFn({
@@ -341,7 +442,7 @@ export async function generatePlan(isAuto = false) {
                 requestDiagnostics,
             });
             text = normaliseOutput(result);
-            validation = validateOutput(text, expectHeader);
+            validation = validateOutput(text, expectHeader, request);
             if (!validation.ok) {
                 throw new Error(`Model output rejected after retry: ${validation.reason}`);
             }
@@ -357,7 +458,15 @@ export async function generatePlan(isAuto = false) {
             return null;
         }
 
-        const parsed = parsePlanTextToArcs(text, { handles: arcsByHandle, capturedArcs });
+        const parsed = parsePlanTextToArcs(text, {
+            handles: arcsByHandle,
+            capturedArcs,
+            strictHeadings: !!request,
+        });
+        const scopedSelection = request ? selectScopedParsedArcs(parsed, request, capturedArcs) : null;
+        const limitedParsed = scopedSelection ? scopedSelection.accepted : parsed;
+        const rejectedSuggestions = scopedSelection?.rejected.map(arc => arc.title) || [];
+        if (request?.operation === 'add' && limitedParsed.length === 0) throw new Error('No valid arcs were returned inside the requested scope.');
         if (parsed.length === 0) {
             // Validation passed (bullets were present) but nothing survived the
             // parse — bail rather than wiping a good plan with an empty one.
@@ -367,7 +476,7 @@ export async function generatePlan(isAuto = false) {
         // STORY-PLANNER-02: Snapshot the PRE-OPERATION arcs for history, not
         // whatever is current after the API returned. This is what makes
         // Revert restore the pre-generation plan.
-        if (arcsBeforeCall.length) pushPlanToHistory(arcsBeforeCall);
+        if (arcsBeforeCall.length && !reviewOnly) pushPlanToHistory(arcsBeforeCall);
 
         // STORY-PLANNER-02: Detect same-chat edits. If the user changed the
         // plan during the API call, the current arcs differ from the revision
@@ -375,6 +484,9 @@ export async function generatePlan(isAuto = false) {
         // user changes) rather than the stale snapshot, so pins/edits/deletes
         // made during the call survive.
         const currentArcs = getArcs();
+        const changedTargetIds = request?.operation === 'refresh'
+            ? findChangedProposalTargets(request.targetArcIds, targetRevisions, currentArcs)
+            : [];
         const arcsUnchanged = sameRevision(arcRevision, currentArcs);
         const mergeBase = arcsUnchanged ? arcsBeforeCall : currentArcs;
         const currentById = new Map(currentArcs.map(arc => [arc.id, arc]));
@@ -400,11 +512,47 @@ export async function generatePlan(isAuto = false) {
         // Merge rather than replace: arcs matched by name keep their id and
         // their planted-beat progress, and pinned / part-planted arcs the model
         // dropped are carried forward rather than lost.
-        const { arcs: newArcs, carried, matched, added, suppressedClosed } = mergeRegeneratedArcs(mergeBase, parsed, {
+        const { arcs: newArcs, carried, matched, added, suppressedClosed, excludedRecurrences = [], matchedIds = [], addedIds = [] } = mergeRegeneratedArcs(mergeBase, limitedParsed, {
             deletedIds,
             deletedTitles,
             protectedIds,
+            scope: request ? new Set(request.operation === 'refresh' ? request.targetArcIds : []) : null,
+            scopeSections: request?.operation === 'add' ? new Set(request.sectionKeys) : null,
+            addOnly: request?.operation === 'add',
         });
+
+        if (reviewOnly && request) {
+            const omittedTargetIds = request.operation === 'refresh'
+                ? request.targetArcIds.filter(id => !matchedIds.includes(id))
+                : [];
+            return {
+                arcs: newArcs,
+                previousArcs: mergeBase,
+                scope: scopeBefore,
+                request,
+                stats: { carried, matched, added, suppressedClosed },
+                targetSnapshots,
+                targetRevisions,
+                stale: changedTargetIds.length > 0,
+                staleReason: changedTargetIds.length
+                    ? 'A selected target changed or was deleted while this proposal was generated.'
+                    : '',
+                changedTargetIds,
+                addedArcIds: addedIds,
+                matchedArcIds: matchedIds,
+                reviewArcIds: request.operation === 'add' ? addedIds : matchedIds,
+                diagnostics: {
+                    overflow: scopedSelection?.overflow || 0,
+                    underfill: request.operation === 'add'
+                        ? Math.max(scopedSelection?.underfill || 0, request.requestedCount - added)
+                        : 0,
+                    omittedTargetIds,
+                    rejectedSuggestions,
+                    excludedRecurrences,
+                    validationWarning: validation.warning || '',
+                },
+            };
+        }
 
         setArcs(newArcs);
         incrementPhase7Metrics({

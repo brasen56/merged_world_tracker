@@ -31,7 +31,7 @@ import {
 } from './data.js';
 import { applyPlanInjection, getArcsForInjection, getInjectedTokenCount } from './injection.js';
 import { generatePlan } from './generation.js';
-import { closeProgressReviewModal, closeTargetedReviewModal, refreshProgressReviewModal, renderContent, wireEvents, renderArcs, refreshDisplay } from './render.js';
+import { closeProgressReviewModal, closeTargetedReviewModal, closeScopedReviewModal, refreshProgressReviewModal, renderContent, wireEvents, renderArcs, refreshDisplay, openGenerateDialog } from './render.js';
 import { clearProgressSuggestions, staleProgressSuggestionsAt, staleProgressSuggestionsFrom } from './progress.js';
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -161,6 +161,7 @@ export async function onMessageReceived({ countMessage = true } = {}) {
 
 export function onChatChanged() {
     closeTargetedReviewModal();
+    closeScopedReviewModal();
     closeProgressReviewModal();
     clearProgressSuggestions();
     // NOTE: do NOT unconditionally clear state.isGenerating here. A generation
@@ -198,6 +199,7 @@ export function onChatChanged() {
  */
 export function onChatChangedWhilePaused() {
     closeTargetedReviewModal();
+    closeScopedReviewModal();
     closeProgressReviewModal();
     clearProgressSuggestions();
     if (state.autoTimer) { clearTimeout(state.autoTimer); state.autoTimer = null; }
@@ -462,7 +464,8 @@ export function syncGlobalSettings(patch) {
 // ─── Slash commands / macros ─────────────────────────────────────────────────
 
 export async function triggerGenerate() {
-    return generatePlan(false);
+    openGenerateDialog();
+    return { reviewOpened: true };
 }
 
 export function setInjectionEnabled(enabled) {

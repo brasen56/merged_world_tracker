@@ -17,7 +17,7 @@ import {
     updateArcBeat,
 } from '../story_planner/data.js';
 import { buildInjectionBody } from '../story_planner/injection.js';
-import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
+import { captureScope, getFakeMeta, resetCoreStubs, setFakeContextExtras } from './stubs/core.js';
 
 beforeEach(() => resetCoreStubs());
 
@@ -316,5 +316,56 @@ describe('Story Planner Phase 2 — focus survives destructive beat actions', ()
         expect(document.activeElement.value).toBe('second');
         expect(getArcs()[0].beats[0].text).toBe('second');
         unmount(state);
+    });
+});
+
+describe('Story Planner scoped review — individual acceptance', () => {
+    test('a stale proposal explains the race and cannot be applied', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review' }) });
+        const target = makeArc({ title: 'Changed target', section: 'horizon' });
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'refresh', sectionKeys: ['horizon'], targetArcIds: [target.id] },
+            scope: captureScope(), previousArcs: [target], arcs: [target], reviewArcIds: [target.id],
+            stats: { added: 0, matched: 1, carried: 0, suppressedClosed: 0 }, diagnostics: {},
+            stale: true, staleReason: 'A selected target changed or was deleted while this proposal was generated.',
+        });
+
+        expect(document.querySelector('.sp-proposal-stale').textContent).toMatch(/changed or was deleted/);
+        expect(document.querySelector('#mwt-sp-scoped-apply').disabled).toBe(true);
+        vi.unstubAllGlobals();
+    });
+
+    test('unchecking one valid proposal applies only the accepted item', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review' }) });
+        const first = makeArc({ title: 'First proposal', section: 'horizon' });
+        const second = makeArc({ title: 'Second proposal', section: 'horizon' });
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['horizon'], requestedCount: 2 },
+            scope: captureScope(),
+            previousArcs: [],
+            arcs: [first, second],
+            addedArcIds: [first.id, second.id],
+            reviewArcIds: [first.id, second.id],
+            stats: { added: 2, matched: 0, carried: 0, suppressedClosed: 0 },
+            diagnostics: {},
+        });
+
+        const choices = [...document.querySelectorAll('input[name="mwt-sp-proposal"]')];
+        expect(choices).toHaveLength(2);
+        choices[0].checked = false;
+        document.querySelector('#mwt-sp-scoped-apply').click();
+
+        expect(getArcs().map(arc => arc.title)).toEqual(['Second proposal']);
+        expect(getPlanHistory()).toEqual([]);
+        expect(document.getElementById('mwt-sp-scoped-review-modal')).toBeNull();
+        vi.unstubAllGlobals();
     });
 });

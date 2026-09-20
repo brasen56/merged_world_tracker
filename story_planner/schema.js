@@ -59,6 +59,80 @@ export const STORY_PLANNER_METRIC_COUNTER_MAX = 1_000_000_000;
 export const STORY_PALETTE_EMPHASES = Object.freeze(['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation']);
 export const STORY_PALETTE_ESCALATIONS = Object.freeze(['restrained', 'balanced', 'escalating']);
 export const CHARACTER_CONTEXT_MODES = Object.freeze(['off', 'selected', 'active']);
+export const STORY_PLAN_OPERATIONS = Object.freeze(['add', 'refresh']);
+export const STORY_PLAN_CAST_POLICIES = Object.freeze(['existing-only', 'allowed', 'propose']);
+export const MAX_STORY_PLAN_REQUEST_COUNT = 30;
+export const MAX_STORY_PLAN_REQUEST_IDS = 30;
+
+export function sanitizeStoryPlanRequestPreferences(value) {
+    const raw = isObject(value) ? value : {};
+    const request = sanitizeStoryPlanRequest({
+        ...raw,
+        sectionKeys: Array.isArray(raw.sectionKeys) ? raw.sectionKeys : [...SECTION_KEYS],
+    });
+    return {
+        operation: request.operation,
+        sectionKeys: request.sectionKeys,
+        subjectEntityIds: request.subjectEntityIds,
+        requestedCount: Number.isFinite(Number(raw.requestedCount))
+            ? Math.min(MAX_STORY_PLAN_REQUEST_COUNT, Math.max(1, Math.floor(Number(raw.requestedCount))))
+            : 1,
+        targetArcIds: request.targetArcIds,
+        castPolicy: request.castPolicy,
+        subjectMode: request.subjectMode,
+    };
+}
+
+/**
+ * Canonicalize the transient request envelope used by scoped generation.
+ * This is deliberately not persisted: model output can never provide or widen it.
+ */
+export function sanitizeStoryPlanRequest(value, { sectionKeys = SECTION_KEYS } = {}) {
+    const raw = isObject(value) ? value : {};
+    const allowedSections = sectionKeys instanceof Set ? sectionKeys : new Set(sectionKeys || []);
+    const sections = [...new Set(Array.isArray(raw.sectionKeys)
+        ? raw.sectionKeys.map(item => String(item).trim()).filter(key => allowedSections.has(key))
+        : [])].slice(0, 5);
+    const subjectEntityIds = [...new Set(Array.isArray(raw.subjectEntityIds)
+        ? raw.subjectEntityIds.map(item => String(item).trim()).filter(Boolean)
+        : [])].slice(0, MAX_STORY_PLAN_REQUEST_IDS);
+    const targetArcIds = [...new Set(Array.isArray(raw.targetArcIds)
+        ? raw.targetArcIds.map(item => String(item).trim()).filter(Boolean)
+        : [])].slice(0, MAX_STORY_PLAN_REQUEST_IDS);
+    const operation = STORY_PLAN_OPERATIONS.includes(raw.operation) ? raw.operation : 'add';
+    const castPolicy = STORY_PLAN_CAST_POLICIES.includes(raw.castPolicy) ? raw.castPolicy : 'allowed';
+    const subjectMode = raw.subjectMode === 'selected' || (raw.subjectMode == null && subjectEntityIds.length)
+        ? 'selected'
+        : 'any';
+    const count = Number(raw.requestedCount);
+    return {
+        operation,
+        sectionKeys: sections,
+        subjectMode,
+        subjectEntityIds,
+        requestedCount: operation === 'add'
+            ? (Number.isFinite(count) ? Math.min(MAX_STORY_PLAN_REQUEST_COUNT, Math.max(1, Math.floor(count))) : 1)
+            : null,
+        targetArcIds,
+        castPolicy,
+    };
+}
+
+/** Return the user-facing validation failure for a canonical scoped request. */
+export function getStoryPlanRequestError(value) {
+    const request = sanitizeStoryPlanRequest(value);
+    if (!request.sectionKeys.length) return 'Select at least one story section.';
+    if (request.operation === 'refresh' && !request.targetArcIds.length) {
+        return 'No eligible active arcs are selected for refresh.';
+    }
+    if (request.operation === 'add'
+        && request.sectionKeys.includes('character')
+        && request.subjectMode === 'selected'
+        && !request.subjectEntityIds.length) {
+        return 'Select at least one NPC, or change Journey subjects to Any subject.';
+    }
+    return '';
+}
 
 export function sanitizeStoryPalette(value) {
     const raw = isObject(value) ? value : {};
@@ -350,6 +424,11 @@ export function sectionKeyFromLabel(label) {
     return LABEL_TO_KEY.get(normaliseLabel(label)) || DEFAULT_SECTION;
 }
 
+/** Resolve only canonical section headings; unlike sectionKeyFromLabel, never falls back. */
+export function strictSectionKeyFromLabel(label) {
+    return LABEL_TO_KEY.get(normaliseLabel(label)) || null;
+}
+
 /** Strip markdown emphasis and a leading legacy `[Tag]` from bullet content. */
 function cleanBulletContent(raw) {
     return String(raw)
@@ -470,7 +549,7 @@ function splitTitleBody(content) {
 export function parsePlanTextToArcs(text, options = {}) {
     if (!text || !String(text).trim()) return [];
     const arcs = [];
-    let section = DEFAULT_SECTION;
+    let section = options.strictHeadings === true ? null : DEFAULT_SECTION;
     let last = null;
     const identities = [];
 
@@ -482,7 +561,9 @@ export function parsePlanTextToArcs(text, options = {}) {
 
         const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
         if (heading) {
-            section = sectionKeyFromLabel(heading[1]);
+            section = options.strictHeadings === true
+                ? strictSectionKeyFromLabel(heading[1])
+                : sectionKeyFromLabel(heading[1]);
             last = null;
             continue;
         }
@@ -506,6 +587,7 @@ export function parsePlanTextToArcs(text, options = {}) {
         // ── Arc bullet ──
         const bullet = line.match(/^[ \t]{0,3}[-*+][ \t]+(.+)$/);
         if (bullet) {
+            if (!section) { last = null; continue; }
             const extracted = extractArcHandle(bullet[1]);
             const content = cleanBulletContent(extracted.content);
             if (!content) { last = null; continue; }
@@ -692,6 +774,12 @@ export function validateStoryPlannerData(data) {
         accepted.characterContext = sanitizeCharacterContextSelection(data.characterContext);
         if (JSON.stringify(accepted.characterContext) !== JSON.stringify(data.characterContext)) {
             issues.push(repairIssue('character-context-canonicalized', ['characterContext'], 'Story Planner character-context selection was canonicalized to bounded values.', data.characterContext));
+        }
+    }
+    if (data.storyPlanRequestPreferences !== undefined) {
+        accepted.storyPlanRequestPreferences = sanitizeStoryPlanRequestPreferences(data.storyPlanRequestPreferences);
+        if (JSON.stringify(accepted.storyPlanRequestPreferences) !== JSON.stringify(data.storyPlanRequestPreferences)) {
+            issues.push(repairIssue('story-plan-request-preferences-canonicalized', ['storyPlanRequestPreferences'], 'Story Planner manual request preferences were canonicalized to supported bounded values.', data.storyPlanRequestPreferences));
         }
     }
     if (data.phase7Metrics !== undefined) {

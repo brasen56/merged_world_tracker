@@ -38,15 +38,32 @@ import {
     sanitizeArc,
     sanitizeArcs,
     sectionKeyFromLabel,
+    strictSectionKeyFromLabel,
     storyPlannerSchema,
     sanitizeStoryPalette,
     sanitizeCharacterContextSelection,
     sanitizePhase7Metrics,
+    sanitizeStoryPlanRequest,
+    sanitizeStoryPlanRequestPreferences,
 } from './schema.js';
 
-export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, newBeatId, sanitizeBeat, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel };
+export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, newBeatId, sanitizeBeat, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel, strictSectionKeyFromLabel };
 export { sanitizeStoryPalette, sanitizeCharacterContextSelection };
 export { sanitizePhase7Metrics };
+export { sanitizeStoryPlanRequest };
+export { sanitizeStoryPlanRequestPreferences };
+
+let _proposalArcIdSeq = 0;
+
+function newProposalArcId(used = new Set()) {
+    let id;
+    do {
+        _proposalArcIdSeq++;
+        id = `proposal-${Date.now()}-${_proposalArcIdSeq.toString(36)}`;
+    } while (used.has(id));
+    used.add(id);
+    return id;
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -99,6 +116,8 @@ export const state = {
     targetedReviewOpen: false,
     /** True while the targeted action that owns isGenerating is in flight. */
     targetedActionInFlight: false,
+    /** True while a scoped Generate proposal is awaiting review. */
+    scopedReviewOpen: false,
     /** Transient Phase 5 evidence proposals; never persisted as inferred fact. */
     progressSuggestions: [],
     /** Auto-trigger countdown (messages since last plan generation) */
@@ -129,6 +148,11 @@ export function getPlanData() {
 export function getStoryPalette() { return sanitizeStoryPalette(getPlanData().storyPalette); }
 export function getCharacterContextSelection() { return sanitizeCharacterContextSelection(getPlanData().characterContext); }
 export function getPhase7Metrics() { return sanitizePhase7Metrics(getPlanData().phase7Metrics); }
+export function getStoryPlanRequestPreferences() {
+    const stored = getPlanData().storyPlanRequestPreferences;
+    const preferences = sanitizeStoryPlanRequestPreferences(stored);
+    return stored === undefined ? { ...preferences, requestedCount: getArcCount() } : preferences;
+}
 
 /** Merge bounded, content-free Phase 7 counters into the current chat store. */
 export function recordPhase7Metrics(patch = {}) {
@@ -594,6 +618,55 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     const protectedIds = options.protectedIds || new Set();
     const deletedIds = options.deletedIds || new Set();
     const deletedTitles = options.deletedTitles || new Set();
+    const scopedIds = options.scope instanceof Set ? options.scope : null;
+    const scopedSections = options.scopeSections instanceof Set ? options.scopeSections : null;
+    const addOnly = options.addOnly === true;
+
+    // Scoped Add is append-only by contract. Existing records are not merge
+    // candidates and are carried byte-for-byte (after the normal storage-boundary
+    // canonicalization above). Suggestions receive review-local ids here; final
+    // collision-checked storage ids are minted only if the user accepts them.
+    if (addOnly) {
+        const existingTitles = new Map();
+        for (const arc of prev) {
+            const key = titleKey(arc.title);
+            if (key && !existingTitles.has(key)) existingTitles.set(key, arc);
+        }
+        const acceptedTitles = new Set();
+        const proposalIds = new Set();
+        const excludedRecurrences = [];
+        const additions = [];
+        for (const fresh of next) {
+            const key = titleKey(fresh.title);
+            if (deletedIds.has(fresh.id) || deletedTitles.has(key)) continue;
+            const existing = key ? existingTitles.get(key) : null;
+            if (existing || (key && acceptedTitles.has(key))) {
+                excludedRecurrences.push({
+                    title: fresh.title,
+                    status: existing?.status || 'proposal',
+                    existingArcId: existing?.id || '',
+                });
+                continue;
+            }
+            if (key) acceptedTitles.add(key);
+            additions.push(sanitizeArc({
+                ...fresh,
+                id: newProposalArcId(proposalIds),
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+            }));
+        }
+        return {
+            arcs: [...prev, ...additions],
+            carried: prev.length,
+            matched: 0,
+            added: additions.length,
+            suppressedClosed: excludedRecurrences.filter(item => item.status === 'resolved' || item.status === 'dropped').length,
+            excludedRecurrences,
+            matchedIds: [],
+            addedIds: additions.map(arc => arc.id),
+        };
+    }
 
     const existingIds = new Set(prev.map(arc => arc.id));
     const parkedTitles = new Set(prev
@@ -629,8 +702,8 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         const titleMatches = key ? (byTitle.get(key) || []) : [];
         // Title fallback is safe only when it identifies one active arc.
         const titled = titleMatches.length === 1 ? titleMatches[0] : null;
-        const old = byId.get(fresh.id)
-            || (titled && !claimedById.has(titled.id) ? titled : null);
+        const old = addOnly ? null : (byId.get(fresh.id)
+            || (titled && !claimedById.has(titled.id) ? titled : null));
         // A response must not recreate an arc removed after generation began,
         // even when the model repeats its title. This is an in-flight tombstone,
         // not a permanent ban on creating the idea again later. A title the user
@@ -728,6 +801,9 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         !consumed.has(a.id)
         && (a.status === 'resolved' || a.status === 'dropped'
             || a.status === 'parked' || protectedIds.has(a.id) || a.pinned
+            || (scopedIds && a.status === 'active' && !scopedIds.has(a.id))
+             || (scopedIds && a.status === 'active' && scopedIds.has(a.id))
+            || (scopedSections && a.status === 'active' && !scopedSections.has(a.section))
             || ambiguousTitleIds.has(a.id)
             || (a.beats || []).some(beat => beat.state !== 'pending')),
     );
@@ -738,6 +814,8 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         matched,
         added: merged.length - matched,
         suppressedClosed,
+        matchedIds: [...consumed],
+        addedIds: merged.filter(arc => !consumed.has(arc.id)).map(arc => arc.id),
     };
 }
 
@@ -1067,7 +1145,7 @@ export function getDirectionHint() {
 
 export function getArcCount() {
     const v = Number(getEffectivePlanSetting('arcCount', 10));
-    return Number.isFinite(v) ? Math.min(30, Math.max(3, v)) : 10;
+    return Number.isFinite(v) ? Math.min(30, Math.max(1, v)) : 10;
 }
 
 // ─── Beat reminders (zero-API progress tracking) ─────────────────────────────

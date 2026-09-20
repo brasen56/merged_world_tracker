@@ -8,7 +8,7 @@
  * so this file pins their behaviour.
  */
 
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { resetCoreStubs, getFakeMeta, getFakeNotifications } from './stubs/core.js';
 import {
     state, makeArc, setArcs, getArcs, advanceBeat, buildClosedMemoryProjection,
@@ -221,6 +221,26 @@ describe('story planner render', () => {
 });
 
 describe('Phase 0 — overdue Ready lifecycle', () => {
+    test('/wt-plan opens the review-first scoped flow instead of reporting an immediate commit', async () => {
+        let planCommand;
+        let description = '';
+        const triggerGenerate = vi.fn(async () => ({ reviewOpened: true }));
+        createCommands({
+            registerSlashCommand: (name, handler, _aliases, help) => {
+                if (name === 'wt-plan') {
+                    planCommand = handler;
+                    description = help;
+                }
+            },
+            macroRegistry: null,
+            modules: { WorldState: {}, Chronicle: {}, Knowledge: {}, StoryPlanner: { triggerGenerate }, Interiority: {} },
+        }).setupSlashCommands();
+
+        await expect(planCommand('')).resolves.toContain('review before applying');
+        expect(triggerGenerate).toHaveBeenCalledTimes(1);
+        expect(description).toContain('for review');
+    });
+
     test('an overdue Ready arc is remindable and /wt-beat resolves its Ready reference', async () => {
         const ready = cloneV1(V1_READY_ARC);
         ready.turnsSinceAdvance = getNudgeTurns() - 1;

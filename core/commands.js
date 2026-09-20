@@ -66,18 +66,18 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                 }
             }, ['mwt-scan'], 'Run an NPC scan via Knowledge Tracker');
 
-            // /wt-plan — Generate a story plan
+            // /wt-plan — Open review-first scoped Story Planner generation
             registerSlashCommand('wt-plan', async (_args, _command) => {
                 try {
                     if (typeof StoryPlanner.triggerGenerate === 'function') {
                         await StoryPlanner.triggerGenerate();
-                        return 'Story plan generated.';
+                        return 'Story Planner generation opened. Choose a scoped request, then review before applying.';
                     }
                     return 'Story plan not available.';
                 } catch (err) {
                     return `Error: ${err.message}`;
                 }
-            }, ['mwt-plan'], 'Generate a Story Planner plan');
+            }, ['mwt-plan'], 'Open scoped Story Planner generation for review');
 
             // /wt-beat [n] — Review or advance Story Planner setup beats.
             //

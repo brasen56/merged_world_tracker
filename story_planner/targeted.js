@@ -7,7 +7,7 @@
  */
 
 import {
-    assertSameScope, captureRevision, captureScope, getLatestChronicleEntry,
+    assertSameScope, captureScope, getLatestChronicleEntry,
     getWorldStateFactual, isCancellation, normaliseOutput, parseJsonLenient,
     resolveApiCall, sameRevision, wrapTag, buildSafeCharacterContext, record,
 } from '../core/index.js';
@@ -21,27 +21,13 @@ import {
 } from './data.js';
 import { getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
+import { captureArcRevision, materialArcShape } from './proposals.js';
 
 export const TARGETED_OPERATIONS = Object.freeze(['rework', 'develop', 'alternate', 'setup']);
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const cleanText = (value, max = 2000) => String(value ?? '').trim().slice(0, max);
-const materialArc = arc => {
-    if (!arc) return null;
-    const copy = clone(arc);
-    delete copy.updatedAt;
-    delete copy.turnsSinceAdvance;
-    copy.beats = (copy.beats || []).map(beat => {
-        const next = { ...beat };
-        delete next.updatedAt;
-        return next;
-    });
-    return copy;
-};
-
-export function captureArcRevision(arc) {
-    return captureRevision(materialArc(arc));
-}
+export { captureArcRevision } from './proposals.js';
 
 function arcContext(arc) {
     const beatLines = beats => beats.length
@@ -234,7 +220,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
         const scopeResult = assertSameScope(scope);
         const staleReason = !scopeResult.ok ? 'The chat changed while this proposal was generated.'
             : !current ? 'The source arc was deleted.'
-                : !sameRevision(revision, materialArc(current)) ? 'The source arc changed while this proposal was generated.' : '';
+                : !sameRevision(revision, materialArcShape(current)) ? 'The source arc changed while this proposal was generated.' : '';
         return {
             operation, sourceArcId: arcId, sourceArc, proposedArc,
             diff: buildDiff(sourceArc, proposedArc, operation),
@@ -254,7 +240,7 @@ export function applyTargetedProposal(proposal) {
     const arcs = getArcs();
     const index = arcs.findIndex(arc => arc.id === proposal.sourceArcId);
     if (index < 0) return { ok: false, reason: 'source-deleted' };
-    if (!sameRevision(proposal.revision, materialArc(arcs[index]))) return { ok: false, reason: 'source-changed' };
+    if (!sameRevision(proposal.revision, materialArcShape(arcs[index]))) return { ok: false, reason: 'source-changed' };
     // Rebuild at the final trust boundary from the revision-checked live source.
     // A preview object is intentionally transient and must not be able to alter
     // lifecycle, pin/focus, timestamps, historical beats, or model-owned ids.
@@ -278,7 +264,7 @@ export function applyTargetedProposal(proposal) {
         return { ok: false, reason: 'invalid-proposal' };
     }
     if (proposal.operation !== 'alternate'
-        && sameRevision(captureArcRevision(reviewedArc), materialArc(arcs[index]))) {
+        && sameRevision(captureArcRevision(reviewedArc), materialArcShape(arcs[index]))) {
         return { ok: false, reason: 'no-changes' };
     }
     const next = [...arcs];

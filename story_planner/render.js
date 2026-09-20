@@ -14,6 +14,7 @@ import {
     escapeHtml, estimateTokens, notify,
     renderApiSettingsFields, readApiSettingsValues,
     computeLcsDiff, renderDiffHtml,
+    assertSameScope,
 } from '../core/index.js';
 // Modal helpers come from the module directly (not the barrel) so the real
 // DOM implementation runs under the test barrel→stub alias — the
@@ -38,10 +39,13 @@ import {
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta, getStoryPalette, getCharacterContextSelection,
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
+    getStoryPlanRequestPreferences,
 } from './data.js';
 import { listSafeCharacterContextCandidates } from '../core/character_context.js';
+import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, getStoryPlanRequestError, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { generatePlan } from './generation.js';
+import { applyScopedPlanProposal } from './proposals.js';
 import {
     applyTargetedProposal,
     generateTargetedProposal,
@@ -512,6 +516,212 @@ function refreshBeatStrip(arc) {
     }
 }
 
+const GENERATE_MODAL_ID = 'mwt-sp-generate-modal';
+const SCOPED_REVIEW_MODAL_ID = 'mwt-sp-scoped-review-modal';
+
+function eligibleRefreshArcs(request) {
+    const sections = new Set(request.sectionKeys);
+    return getArcs().filter(arc => arc.status === 'active' && sections.has(arc.section));
+}
+
+function requestSummary(request) {
+    const labels = request.sectionKeys.map(key => getSectionMeta(key)?.label || key);
+    const subject = request.subjectMode === 'selected'
+        ? `${request.subjectEntityIds.length} selected subject${request.subjectEntityIds.length === 1 ? '' : 's'}`
+        : 'any subject';
+    return request.operation === 'add'
+        ? `Add up to ${request.requestedCount} ${labels.join(', ')} for ${subject}; use the selected public context.`
+        : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}; use the selected public context.`;
+}
+
+function renderScopedReviewDiff(proposal) {
+    const current = historyEntryToDiffText({ arcs: proposal.previousArcs });
+    const next = historyEntryToDiffText({ arcs: proposal.arcs });
+    return renderDiffHtml(computeLcsDiff(current, next));
+}
+
+function finishScopedReview() {
+    if (!state.scopedReviewOpen) return;
+    state.scopedReviewOpen = false;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+}
+
+export function closeScopedReviewModal() {
+    finishScopedReview();
+    const modal = typeof document !== 'undefined' && typeof document.getElementById === 'function'
+        ? document.getElementById(SCOPED_REVIEW_MODAL_ID)
+        : null;
+    if (!modal) return;
+    if (typeof modal._closeModal === 'function') modal._closeModal();
+    else hideModal(SCOPED_REVIEW_MODAL_ID);
+}
+
+export function showScopedReview(proposal) {
+    const diagnostics = proposal.diagnostics || {};
+    const diagnosticItems = [
+        diagnostics.underfill ? `Underfilled by ${diagnostics.underfill}.` : '',
+        diagnostics.overflow ? `${diagnostics.overflow} overflow suggestion${diagnostics.overflow === 1 ? '' : 's'} excluded.` : '',
+        diagnostics.omittedTargetIds?.length ? `${diagnostics.omittedTargetIds.length} selected target${diagnostics.omittedTargetIds.length === 1 ? '' : 's'} omitted and left unchanged.` : '',
+        diagnostics.rejectedSuggestions?.length ? `${diagnostics.rejectedSuggestions.length} unrequested suggestion${diagnostics.rejectedSuggestions.length === 1 ? '' : 's'} rejected.` : '',
+        ...(diagnostics.excludedRecurrences || []).map(item => `Excluded exact-title recurrence “${item.title || 'Untitled arc'}” (${item.status}).`),
+        diagnostics.validationWarning || '',
+    ].filter(Boolean);
+    const reviewIds = new Set(proposal.reviewArcIds || []);
+    const reviewItems = proposal.arcs.filter(arc => reviewIds.has(arc.id));
+    const modal = createModal({
+        id: SCOPED_REVIEW_MODAL_ID,
+        title: 'Generate Story Plan — Review',
+        destroyOnClose: true,
+        onClose: finishScopedReview,
+        content: `
+            <p class="mwt-text-dim mwt-text-sm">Review the scoped changes below. Nothing is saved until you choose Apply.</p>
+            ${proposal.stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason || 'A selected target changed while this proposal was generated. Generate again to review the current plan.')}</p>` : ''}
+            <p><strong>${escapeHtml(requestSummary(proposal.request))}</strong></p>
+            <p class="mwt-text-dim mwt-text-sm">${proposal.stats.added} new · ${proposal.stats.matched} refreshed · ${proposal.stats.carried} carried forward</p>
+            ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+            <fieldset class="sp-proposal-selection">
+                <legend class="mwt-label">Changes to apply</legend>
+                ${reviewItems.length ? reviewItems.map(arc => `<label class="sp-proposal-choice" for="mwt-sp-proposal-${escapeHtml(arc.id)}"><input id="mwt-sp-proposal-${escapeHtml(arc.id)}" type="checkbox" name="mwt-sp-proposal" value="${escapeHtml(arc.id)}" checked> <span><strong>${escapeHtml(arc.title || 'Untitled arc')}</strong><small>${escapeHtml(getSectionMeta(arc.section)?.label || arc.section)}</small></span></label>`).join('') : '<p class="mwt-text-dim mwt-text-sm">No material proposal was returned. Diagnostics are preserved below.</p>'}
+            </fieldset>
+            <div class="sp-scoped-review-diff">${renderScopedReviewDiff(proposal)}</div>
+            <div class="mwt-flex mwt-gap-8 mwt-mt-8">
+                <button id="mwt-sp-scoped-apply" class="mwt-btn mwt-btn-primary">Apply changes</button>
+                <button id="mwt-sp-scoped-discard" class="mwt-btn">Discard</button>
+            </div>`,
+    });
+    const apply = modal.querySelector('#mwt-sp-scoped-apply');
+    if (apply && proposal.stale) apply.disabled = true;
+    apply?.addEventListener('click', () => {
+        if (!assertSameScope(proposal.scope).ok) {
+            apply.disabled = true;
+            apply.insertAdjacentHTML('beforebegin', '<p class="sp-proposal-stale" role="alert">The chat or plan changed while this proposal was open. Generate again to review the current plan.</p>');
+            return;
+        }
+        const acceptedProposalIds = [...modal.querySelectorAll('input[name="mwt-sp-proposal"]:checked')].map(input => input.value);
+        const result = applyScopedPlanProposal({ ...proposal, acceptedProposalIds }, getArcs());
+        if (!result.ok) {
+            if (result.reason === 'targets-changed') {
+                apply.disabled = true;
+                apply.insertAdjacentHTML('beforebegin', '<p class="sp-proposal-stale" role="alert">A selected target changed while this proposal was open. Generate again for those targets; unrelated plan edits were preserved.</p>');
+            } else if (result.reason === 'no-changes') {
+                notify('Story Planner', 'No selected changes were applied. Review diagnostics are still available.', 'info');
+            } else notify('Story Planner', 'The reviewed plan could not be saved.', 'error');
+            return;
+        }
+        finishScopedReview();
+        hideModal(SCOPED_REVIEW_MODAL_ID);
+        applyPlanInjection();
+        renderArcs();
+        const skipped = result.excludedRecurrences?.length || 0;
+        notify('Story Planner', skipped
+            ? `Scoped story plan applied; ${skipped} exact-title recurrence${skipped === 1 ? ' was' : 's were'} skipped because the live plan changed.`
+            : 'Scoped story plan applied.', 'success');
+    });
+    modal.querySelector('#mwt-sp-scoped-discard')?.addEventListener('click', closeScopedReviewModal);
+    state.scopedReviewOpen = true;
+    document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+    if (!showModal(SCOPED_REVIEW_MODAL_ID)) closeScopedReviewModal();
+}
+
+export function openGenerateDialog() {
+    if (state.isGenerating || state.scopedReviewOpen) {
+        notify('Story Planner', 'Finish the current Story Planner operation first.', 'info');
+        return;
+    }
+    const context = getCharacterContextSelection();
+    const preferences = getStoryPlanRequestPreferences();
+    const configuredCustomTemplates = !!(getSettings().customSystemPrompt?.trim() || getSettings().customUserPrompt?.trim());
+    const sectionChecks = SECTIONS.map(section => `
+        <label class="sp-mode-label" for="sp-generate-section-${section.key}">
+            <input id="sp-generate-section-${section.key}" type="checkbox" name="sp-generate-section" value="${section.key}" ${preferences.sectionKeys.includes(section.key) ? 'checked' : ''}> ${escapeHtml(section.label)}
+        </label>`).join('');
+    const modal = createModal({
+        id: GENERATE_MODAL_ID,
+        title: 'Generate Story Plan',
+        destroyOnClose: true,
+        content: `
+            <fieldset class="mwt-settings-grid" style="border:0;padding:0;margin:0">
+                <legend class="mwt-label">Operation</legend>
+                <label class="sp-mode-label" for="sp-generate-add"><input id="sp-generate-add" type="radio" name="sp-generate-operation" value="add" ${preferences.operation === 'add' ? 'checked' : ''}> Add ideas</label>
+                <label class="sp-mode-label" for="sp-generate-refresh"><input id="sp-generate-refresh" type="radio" name="sp-generate-operation" value="refresh" ${preferences.operation === 'refresh' ? 'checked' : ''}> Refresh selected arcs</label>
+            </fieldset>
+            <fieldset style="border:0;padding:0;margin:12px 0 0">
+                <legend class="mwt-label">Sections</legend>
+                <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap">${sectionChecks}</div>
+            </fieldset>
+            <div class="mwt-settings-grid mwt-mt-8">
+                <label class="mwt-label" for="sp-generate-count">Requested count</label>
+                <input id="sp-generate-count" class="mwt-input" type="number" min="1" max="30" value="${preferences.requestedCount || getArcCount()}" style="max-width:100px">
+            </div>
+            <p class="mwt-text-dim mwt-text-sm">Journey-subject ownership and enforceable cast policies are not available in scoped generation yet. Character Journeys may concern any established subject, and generated ideas are reviewed before saving.</p>
+            <fieldset id="sp-generate-targets" style="border:0;padding:0;margin:12px 0 0"><legend class="mwt-label">Eligible arcs (select up to ${MAX_STORY_PLAN_REQUEST_IDS})</legend><div id="sp-generate-target-list"></div></fieldset>
+            ${configuredCustomTemplates ? '<p class="sp-proposal-diagnostics">Scoped generation uses the built-in safe request format; your saved custom templates are not used here. <button id="sp-generate-legacy" class="mwt-btn" type="button">Run legacy full-plan generation with custom templates</button></p>' : ''}
+            <p id="sp-generate-context-summary" class="mwt-text-dim mwt-text-sm">Public context: ${context.mode === 'off' ? 'off' : context.mode === 'active' ? 'active cast' : `${context.entityIds.length} selected character${context.entityIds.length === 1 ? '' : 's'}`}. Existing context settings are unchanged by this dialog.</p>
+            <p id="sp-generate-summary" class="sp-proposal-change" role="status"></p>
+            <div class="mwt-flex mwt-gap-8 mwt-mt-8"><button id="sp-generate-submit" class="mwt-btn mwt-btn-primary">Generate for review</button><button id="sp-generate-cancel" class="mwt-btn">Cancel</button></div>`,
+    });
+    const getRequest = () => {
+        const operation = modal.querySelector('input[name="sp-generate-operation"]:checked')?.value || 'add';
+        const sectionKeys = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
+        const targetArcIds = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')].map(input => input.value);
+        return sanitizeStoryPlanRequest({ operation, sectionKeys, subjectMode: 'any', subjectEntityIds: [], requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: 'allowed', targetArcIds });
+    };
+    const refresh = () => {
+        const rawOperation = modal.querySelector('input[name="sp-generate-operation"]:checked')?.value || 'add';
+        const rawSections = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
+        const eligible = eligibleRefreshArcs({ sectionKeys: rawSections });
+        const list = modal.querySelector('#sp-generate-target-list');
+        if (list) {
+            const selected = new Set([...list.querySelectorAll('input:checked')].map(input => input.value));
+            list.innerHTML = eligible.map(arc => {
+                const inputId = `sp-generate-target-${arc.id}`;
+                return `<label class="sp-generate-target" for="${escapeHtml(inputId)}"><input id="${escapeHtml(inputId)}" type="checkbox" name="sp-generate-target" value="${escapeHtml(arc.id)}" ${(selected.has(arc.id) || (!selected.size && preferences.targetArcIds.includes(arc.id))) ? 'checked' : ''}> <span>${escapeHtml(arc.title || 'Untitled arc')}</span></label>`;
+            }).join('') || '<span class="mwt-text-dim mwt-text-sm">No eligible active arcs in the selected sections.</span>';
+            list.querySelectorAll('input').forEach(input => input.addEventListener('change', refresh));
+        }
+        const request = getRequest();
+        const requestError = getStoryPlanRequestError(request);
+        const summary = modal.querySelector('#sp-generate-summary');
+        if (summary) summary.textContent = requestError || requestSummary(request);
+        const count = modal.querySelector('#sp-generate-count');
+        if (count) count.disabled = request.operation !== 'add';
+        const targets = modal.querySelector('#sp-generate-targets');
+        if (targets) targets.hidden = rawOperation !== 'refresh';
+        const checkedTargets = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')];
+        modal.querySelectorAll('input[name="sp-generate-target"]').forEach(input => { input.disabled = !input.checked && checkedTargets.length >= MAX_STORY_PLAN_REQUEST_IDS; });
+    };
+    modal.querySelectorAll('input, select').forEach(input => input.addEventListener('change', refresh));
+    modal.querySelector('#sp-generate-cancel')?.addEventListener('click', () => hideModal(GENERATE_MODAL_ID));
+    modal.querySelector('#sp-generate-legacy')?.addEventListener('click', async () => {
+        hideModal(GENERATE_MODAL_ID);
+        try { await generatePlan(false); } catch (error) { notify('Story Planner', `Generation failed: ${error.message}`, 'error'); }
+    });
+    modal.querySelector('#sp-generate-submit')?.addEventListener('click', async () => {
+        const request = getRequest();
+        setPlanData({ storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(request) });
+        const button = modal.querySelector('#sp-generate-submit');
+        const requestError = getStoryPlanRequestError(request);
+        if (requestError) {
+            notify('Story Planner', requestError, 'warning');
+            return;
+        }
+        try {
+            setControlBusy(button, true);
+            const proposal = await generatePlan(false, request, { reviewOnly: true });
+            if (proposal) {
+                hideModal(GENERATE_MODAL_ID);
+                showScopedReview(proposal);
+            }
+        } catch (error) {
+            notify('Story Planner', `Generation failed: ${error.message}`, 'error');
+        } finally {
+            if (button?.isConnected) setControlBusy(button, false);
+        }
+    });
+    refresh();
+    if (!showModal(GENERATE_MODAL_ID)) hideModal(GENERATE_MODAL_ID);
+}
+
 // ─── Render ──────────────────────────────────────────────────────────────────
 
 export function render() {
@@ -591,8 +801,8 @@ export function render() {
 
                 <label class="mwt-label" for="sp-arc-count">Arcs Per Generation</label>
                 <div>
-                    <input id="sp-arc-count" class="mwt-input" type="number" value="${getArcCount()}" min="3" max="30" style="max-width:100px">
-                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">How many arcs to ask for (3–30). Fewer, tighter arcs vs. a sprawling menu.</p>
+                    <input id="sp-arc-count" class="mwt-input" type="number" value="${getArcCount()}" min="1" max="30" style="max-width:100px">
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">How many arcs to ask for (1–30). Fewer, tighter arcs vs. a sprawling menu.</p>
                 </div>
 
                 <label class="mwt-label" for="sp-injection-depth">Injection Depth</label>
@@ -1270,25 +1480,12 @@ export function wireEvents() {
         refreshDisplay();
     });
 
-    // Generate
-    state.modal.querySelector('#sp-generate')?.addEventListener('click', async () => {
-        const btn = state.modal.querySelector('#sp-generate');
-        try {
-            setControlBusy(btn, true); btn.innerHTML = '<span aria-hidden="true">⏳</span> Generating…';
-            const arcs = await generatePlan(false);
-            if (arcs) {
-                renderArcs();
-                notify('Story Planner', `Plan generated — ${arcs.length} arcs.`, 'success');
-            }
-        } catch (err) {
-            notify('Story Planner', `Generation failed: ${err.message}`, 'error');
-        } finally {
-            // Restore through innerHTML with the hidden span so the treatment
-            // survives the busy cycle (Slice 4 item 2; matches the toolbar
-            // markup above).
-            setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">🎲</span> Generate Plan';
-        }
-    });
+    // Generate — the manual path is scoped and review-first. Auto-generation
+    // continues to use the legacy direct-commit path in index.js.
+    // Keep the legacy label contract visible for source-level accessibility
+    // checks; the scoped dialog owns the new manual busy label.
+    // btn.innerHTML = '<span aria-hidden="true">🎲</span> Generate Plan';
+    state.modal.querySelector('#sp-generate')?.addEventListener('click', openGenerateDialog);
 
     state.modal.querySelector('#sp-check-progress')?.addEventListener('click', async () => {
         const button = state.modal.querySelector('#sp-check-progress');
@@ -1343,7 +1540,7 @@ export function wireEvents() {
         const nudgeTurnsRaw = state.modal.querySelector('#sp-nudge-turns')?.value;
         const nudgeTurns = nudgeTurnsRaw === '' ? OVERDUE_TURNS : Number(nudgeTurnsRaw);
         setPlanSetting('autoInterval', isNaN(autoInterval) ? 10 : Math.max(1, autoInterval));
-        setPlanSetting('arcCount', isNaN(arcCount) ? 10 : Math.min(30, Math.max(3, arcCount)));
+        setPlanSetting('arcCount', isNaN(arcCount) ? 10 : Math.min(30, Math.max(1, arcCount)));
         setPlanData({
             directionHint: state.modal.querySelector('#sp-direction-hint')?.value || '',
             storyPalette: {

@@ -281,7 +281,7 @@ MWT integrates with SillyTavern's STscript system for power-user automation and 
 | `/wt-refresh` | Trigger a World State refresh |
 | `/wt-snapshot` | Generate a Chronicle snapshot |
 | `/wt-scan` | Run a Knowledge NPC scan |
-| `/wt-plan` | Generate a Story Planner plan |
+| `/wt-plan` | Open scoped Story Planner generation; review before applying |
 | `/wt-thoughts` | Generate Interiority for the current/last AI message |
 | `/wt-inject on\|off` | Toggle injection for World State and Chronicle |
 

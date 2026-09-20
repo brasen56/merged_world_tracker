@@ -20,6 +20,37 @@
     accent-color: var(--mwt-accent);
 }
 
+.sp-generate-target {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    padding: 4px 0;
+    font-size: 12px;
+}
+
+.sp-proposal-diagnostics {
+    color: var(--mwt-warning);
+    font-size: 12px;
+}
+
+.sp-proposal-selection {
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    margin: 10px 0;
+    padding: 8px 10px;
+}
+
+.sp-proposal-choice {
+    align-items: flex-start;
+    display: flex;
+    gap: 8px;
+    padding: 5px 0;
+}
+
+.sp-proposal-choice input { margin-top: 3px; }
+.sp-proposal-choice span { display: flex; flex-direction: column; }
+.sp-proposal-choice small { color: var(--mwt-text-dim); }
+
 .sp-enforcement {
     background-color: var(--mwt-bg-light);
     border: 1px solid var(--mwt-border);

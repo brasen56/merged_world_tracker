@@ -140,6 +140,27 @@ describe('Story Planner Phase 1 — durable progress and lifecycle', () => {
         expect(result.arcs.map(arc => arc.title)).toEqual(['Rejected Route', 'Rejected Route Returns']);
     });
 
+    test.each(['active', 'parked', 'resolved', 'dropped'])('scoped Add excludes an exact-title %s recurrence before review', status => {
+        const existing = makeArc({ title: 'Existing route', status });
+        const incoming = makeArc({ title: 'Existing route', body: 'Duplicate proposal' });
+
+        const result = mergeRegeneratedArcs([existing], [incoming], { addOnly: true });
+
+        expect(result.arcs).toEqual([existing]);
+        expect(result.added).toBe(0);
+        expect(result.excludedRecurrences).toEqual([
+            expect.objectContaining({ title: 'Existing route', status, existingArcId: existing.id }),
+        ]);
+    });
+
+    test('scoped Add keeps proposal-local ids until Apply', () => {
+        const incoming = makeArc({ title: 'Review-only route' });
+        const result = mergeRegeneratedArcs([], [incoming], { addOnly: true });
+
+        expect(result.addedIds[0]).toMatch(/^proposal-/);
+        expect(result.addedIds[0]).not.toBe(incoming.id);
+    });
+
     test('remints a duplicate title fallback carrying a durable record id', () => {
         const active = makeArc({ title: 'Shared Route', beats: ['Active setup'] });
         const parked = makeArc({ title: 'Later Route', status: 'parked', beats: ['Parked setup'] });

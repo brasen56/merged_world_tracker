@@ -635,5 +635,26 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         expect(kept.body).toBe('User-edited endpoint while generation was in flight.');
         expect(getArcs().find(arc => arc.id === seeded.id).body).toBe(kept.body);
     });
+
+    test.each(['edited', 'deleted'])('scoped Refresh is stale when a selected target is %s during generation', async change => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const target = makeArc({ title: 'Harbour pact', body: 'Original.', section: 'horizon' });
+        setArcs([target]);
+        CURRENT = request => {
+            const handle = request.userContent.match(/\[ARC:([^\]…]+)\]/)?.[1];
+            if (change === 'edited') setArcs([{ ...target, body: 'User edit during generation.' }]);
+            else setArcs([]);
+            return `## Horizon Arcs\n- [ARC:${handle}] Harbour pact — Refreshed by the model.\n  - New setup.`;
+        };
+
+        const proposal = await generatePlan(false, {
+            operation: 'refresh', sectionKeys: ['horizon'], targetArcIds: [target.id],
+        }, { reviewOnly: true });
+
+        expect(proposal).toMatchObject({ stale: true, changedTargetIds: [target.id] });
+        expect(proposal.targetSnapshots).toEqual([target]);
+        expect(getArcs()).toEqual(change === 'edited' ? [{ ...target, body: 'User edit during generation.' }] : []);
+    });
 });
 

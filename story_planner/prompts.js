@@ -13,13 +13,17 @@ import { SECTIONS } from './data.js';
 
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
-const SECTION_FORMAT_BLOCK = SECTIONS
-    .map(s => `## ${s.label}\n${s.hint}`)
-    .join('\n\n');
+export function buildStoryPlanSystemPrompt(sectionKeys = null) {
+    const selected = Array.isArray(sectionKeys)
+        ? SECTIONS.filter(section => sectionKeys.includes(section.key))
+        : SECTIONS;
+    const sections = selected.length ? selected : SECTIONS;
+    const sectionFormatBlock = sections
+        .map(section => `## ${section.label}\n${section.hint}`)
+        .join('\n\n');
+    const sectionListInline = sections.map(section => `"## ${section.label}"`).join(', ');
 
-const SECTION_LIST_INLINE = SECTIONS.map(s => `"## ${s.label}"`).join(', ');
-
-export const STORY_PLAN_SYSTEM_PROMPT = `You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.
+    return `You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.
 
 ABSOLUTE RULES:
 - Output ONLY the story plan document. No narration, dialogue, or roleplay continuation.
@@ -34,9 +38,9 @@ ABSOLUTE RULES:
 - Be punchy and plot-focused.
 
 FORMAT:
-Output these headings in this exact order, even if a section has only one idea: ${SECTION_LIST_INLINE}. Omit a heading entirely only if you genuinely have nothing for it.
+Output only these headings, in this exact order, even if a section has only one idea: ${sectionListInline}. Omit a heading entirely only if you genuinely have nothing for it. Never invent, rename, or substitute another heading.
 
-${SECTION_FORMAT_BLOCK}
+${sectionFormatBlock}
 
 Under each heading, use a bullet list. Each bullet is a short arc name, an em-dash, then 1-2 sentences naming the central shift it introduces.
 
@@ -48,6 +52,9 @@ For every arc EXCEPT those under "Immediate Hooks", follow the bullet with a num
   3. The competitor's agent turns up at a social event, pointedly friendly.
 
 Arcs under "Immediate Hooks" need no beats — they are already usable as-is.`;
+}
+
+export const STORY_PLAN_SYSTEM_PROMPT = buildStoryPlanSystemPrompt();
 
 export const STORY_PLAN_USER_PROMPT = `Based on the story so far, brainstorm {{arcCount}} theoretical plot developments, sorted into the sections defined in your instructions.
 
