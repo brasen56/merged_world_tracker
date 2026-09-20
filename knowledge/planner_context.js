@@ -13,6 +13,10 @@ export const SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT = 5;
 
 const text = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 const safe = value => text(value).slice(0, 280);
+const meaningful = value => {
+    const valueText = text(value);
+    return valueText && valueText.toLowerCase() !== 'unknown' ? valueText : '';
+};
 
 // Where a dossier stops being public. extractDossierFieldValues matches one
 // LINE at a time (^Label: value$), so a PRIVATE field whose own value contains
@@ -105,8 +109,33 @@ function primarySubjectCoverage(selection, candidates, status) {
             tokens: 0,
             estimated: true,
             isPrimarySubject: true,
+            isContextSource: false,
         };
     });
+}
+
+/**
+ * Public fallbacks shared by compact Knowledge entries and dossiers.
+ *
+ * Pre-dossier major NPCs store useful public identity in the pipe-delimited
+ * header plus Tone / Perceived as / First seen lines. Their Knowledge Ledger
+ * can make the entry look much larger than a dossier while the dossier-only
+ * extractor returns no fields at all. Parse only single lines above the same
+ * private boundary; never read ledger content as a fallback.
+ */
+function extractCompactPublicValues(publicContent) {
+    const lines = String(publicContent || '').split('\n');
+    const header = meaningful(lines.find(line => line.trim()) || '').replace(/^\[Dossier\]\s*/i, '');
+    const headerParts = header.split('|').map(meaningful);
+    const lineValue = label => {
+        const prefix = `${label.toLowerCase()}:`;
+        const line = lines.find(candidate => candidate.trimStart().toLowerCase().startsWith(prefix));
+        return line ? meaningful(line.trimStart().slice(prefix.length)) : '';
+    };
+    const descriptor = headerParts.length >= 3 ? headerParts.slice(2).filter(Boolean).join(' | ') : '';
+    const identity = descriptor ? [headerParts[1], descriptor].filter(Boolean).join('; ') : '';
+    const traits = [lineValue('Tone'), lineValue('Perceived as')].filter(Boolean).join('; ');
+    return { identity, traits, firstSeen: lineValue('First seen') };
 }
 
 function globallyDisabledCoverage(selection) {
@@ -137,6 +166,7 @@ function globallyDisabledCoverage(selection) {
             tokens: 0,
             estimated: true,
             isPrimarySubject: primaryEntityIds.has(item.entityId),
+            isContextSource: selection?.mode === 'selected',
         });
     }
     for (const entityId of resolution.missing || []) {
@@ -154,6 +184,7 @@ function globallyDisabledCoverage(selection) {
             tokens: 0,
             estimated: true,
             isPrimarySubject: primaryEntityIds.has(entityId),
+            isContextSource: selection?.mode === 'selected',
         });
     }
     return coverage;
@@ -175,14 +206,21 @@ export async function buildPlannerCharacterContext(selection) {
         const candidate = candidates.find(item => item.entityId === entityId || item.mergedEntityIds.includes(entityId));
         return [candidate?.entityId || entityId, index];
     }));
-    const entries = selectedEntries(selection, registry).sort((a, b) => {
+    const excludedEntityIds = new Set((selection?.excludedEntityIds || []).map(String).filter(Boolean).map(entityId => {
+        const candidate = candidates.find(item => item.entityId === entityId || item.mergedEntityIds.includes(entityId));
+        return candidate?.entityId || entityId;
+    }));
+    const entries = selectedEntries(selection, registry).filter(item => !excludedEntityIds.has(item.info?.entityId)).sort((a, b) => {
         const aOrder = primaryOrder.get(a.info?.entityId);
         const bOrder = primaryOrder.get(b.info?.entityId);
         if (aOrder !== undefined || bOrder !== undefined) return (aOrder ?? Number.MAX_SAFE_INTEGER) - (bOrder ?? Number.MAX_SAFE_INTEGER);
         return a.name.localeCompare(b.name);
     });
     const requestedIds = selection?.mode === 'selected'
-        ? [...new Set((selection?.entityIds || []).map(String).filter(Boolean))]
+        ? [...new Set((selection?.entityIds || []).map(String).filter(Boolean))].filter(entityId => {
+            const candidate = candidates.find(item => item.entityId === entityId || item.mergedEntityIds.includes(entityId));
+            return !excludedEntityIds.has(candidate?.entityId || entityId);
+        })
         : [];
     const resolution = selection?.mode === 'selected'
         ? resolvePlannerCharacterEntities(requestedIds)
@@ -198,6 +236,7 @@ export async function buildPlannerCharacterContext(selection) {
             name,
             supportedFields: SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT,
             isPrimarySubject: primaryOrder.has(info?.entityId),
+            isContextSource: true,
         };
         if (records.length >= SAFE_CHARACTER_CONTEXT_MAX_RECORDS) {
             coverage.push({ ...coverageIdentity, status: 'omitted-for-budget', records: 0, fields: 0, availableFields: 0, chars: 0, tokens: 0, estimated: true });
@@ -217,16 +256,19 @@ export async function buildPlannerCharacterContext(selection) {
         // left. Secrets, ledger, agenda, and read_on_pc are never read into the
         // projection; those fields can encode hidden motives or private
         // knowledge even when a dossier is otherwise public.
-        const fields = extractDossierFieldValues(publicDossierSection(content));
+        const publicContent = publicDossierSection(content);
+        const fields = extractDossierFieldValues(publicContent);
+        const compact = extractCompactPublicValues(publicContent);
         const publicValues = [
             ['Stance toward the player character', USER_STANCES.includes(stances[name]) && stances[name] !== 'neutral' ? stances[name] : ''],
-            ['Public role', fields.role],
-            ['Personality', fields.personality],
+            [fields.role ? 'Public role' : 'Public identity', fields.role || compact.identity],
+            [fields.personality ? 'Personality' : 'Public traits', fields.personality || compact.traits],
             ['Background', fields.background],
-            ['Public location', fields.where_to_find],
+            [fields.where_to_find ? 'Public location' : 'First seen', fields.where_to_find || compact.firstSeen],
         ].map(([label, value]) => [label, text(value)]).filter(([, value]) => value);
         const header = `Character: ${safe(name)}`;
         const lines = [];
+        const fieldLabels = [];
         let truncated = false;
         for (const [label, value] of publicValues) {
             const bounded = value.slice(0, 280);
@@ -237,6 +279,7 @@ export async function buildPlannerCharacterContext(selection) {
                 continue;
             }
             lines.push(line);
+            fieldLabels.push(label);
         }
         if (!lines.length) {
             coverage.push({ ...coverageIdentity, status: 'partial', records: 0, fields: 0, availableFields: publicValues.length, chars: 0, tokens: 0, estimated: true });
@@ -255,6 +298,7 @@ export async function buildPlannerCharacterContext(selection) {
             records: 1,
             fields: lines.length,
             availableFields: publicValues.length,
+            fieldLabels,
             chars: record.length,
             tokens: Math.ceil(record.length / 4),
             estimated: true,
@@ -265,6 +309,7 @@ export async function buildPlannerCharacterContext(selection) {
             entityId, name: '', status: 'unavailable', records: 0, fields: 0, availableFields: 0,
             supportedFields: SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT, chars: 0, tokens: 0, estimated: true,
             isPrimarySubject: primaryOrder.has(entityId),
+            isContextSource: !excludedEntityIds.has(entityId),
         });
     }
     const coveredIds = new Set(coverage.map(item => item.entityId));

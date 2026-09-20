@@ -42,7 +42,7 @@ import {
     getStoryPlanRequestPreferences,
 } from './data.js';
 import { buildSafeCharacterContext, listSafeCharacterContextCandidates } from '../core/character_context.js';
-import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, getStoryPlanRequestError, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
+import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { generatePlan, MAX_JOURNEY_SUBJECT_CANDIDATES } from './generation.js';
 import { applyScopedPlanProposal, buildArcDiff, previewScopedApply } from './proposals.js';
@@ -616,15 +616,15 @@ const CHARACTER_COVERAGE_LABELS = Object.freeze({
 
 function renderCharacterContextCoverage(mode, coverage = [], contextStatus = '') {
     if ((mode === 'off' || contextStatus === 'disabled') && !coverage.length) {
-        return '<p class="mwt-text-dim mwt-text-sm" data-coverage-status="disabled">Safe Character Context disabled for this request.</p>';
+        return '<p class="mwt-text-dim mwt-text-sm" data-coverage-status="disabled">Safe Character Context disabled for this request. No Knowledge data is requested or changed.</p>';
     }
     if (!coverage.length) {
         return '<p class="mwt-text-dim mwt-text-sm">No public character-context records were requested or available.</p>';
     }
     const disabledNotice = mode === 'off' || contextStatus === 'disabled'
-        ? '<p class="mwt-text-dim mwt-text-sm" data-coverage-status="disabled">Safe Character Context disabled for this request.</p>'
+        ? '<p class="mwt-text-dim mwt-text-sm" data-coverage-status="disabled">Safe Character Context disabled for this request. Journey subjects remain selected only as arc owners; no Knowledge data is requested or changed.</p>'
         : '';
-    const coverageExplanation = '<p class="mwt-text-dim mwt-text-sm">Coverage uses only stance, role, personality, background, and public location. “Included” means every populated supported field fit; it does not measure total dossier size. Journey subjects own arcs; Context only entries come from the active Safe Character Context scope, not the subject picker.</p>';
+    const coverageExplanation = '<p class="mwt-text-dim mwt-text-sm">Coverage uses stance, role, personality, background, and public location. Compact Knowledge entries fall back to their public identity, Tone/Perceived as, and First seen lines. Appearance, voice, agenda, secrets, and the Knowledge Ledger are excluded. “Included” means every populated supported field fit; it does not measure total entry size. Journey subjects own arcs; Context only entries come from Safe Character Context, not the subject picker.</p>';
     return `${disabledNotice}${coverageExplanation}<ul class="sp-context-coverage">${coverage.map(item => {
         const records = Number(item.records) || 0;
         const fields = Number(item.fields) || 0;
@@ -637,7 +637,11 @@ function renderCharacterContextCoverage(mode, coverage = [], contextStatus = '')
         const fieldCounts = availableFields > fields
             ? `${fields} of ${availableFields} populated public fields included (${supportedFields} supported)`
             : `${fields} populated public field${fields === 1 ? '' : 's'} included (${supportedFields} supported)`;
-        const counts = `${records} record${records === 1 ? '' : 's'}, ${fieldCounts}, ${Number(item.tokens) || 0}${item.estimated ? ' estimated' : ''} tokens`;
+        const fieldLabels = Array.isArray(item.fieldLabels) ? item.fieldLabels.filter(Boolean) : [];
+        const fieldDetail = fieldLabels.length ? `: ${fieldLabels.join(', ')}` : '';
+        const counts = item.status === 'disabled'
+            ? 'no public context requested; stored data unchanged'
+            : `${records} record${records === 1 ? '' : 's'}, ${fieldCounts}${fieldDetail}, ${Number(item.tokens) || 0}${item.estimated ? ' estimated' : ''} tokens`;
         const role = item.isPrimarySubject ? 'Journey subject' : 'Context only';
         return `<li data-coverage-status="${escapeHtml(item.status || 'unavailable')}" data-coverage-role="${item.isPrimarySubject ? 'subject' : 'context-only'}"><strong>${escapeHtml(name)}</strong>: ${escapeHtml(statusLabel)} <span class="mwt-text-dim">(${escapeHtml(counts)}) — ${escapeHtml(role)}</span></li>`;
     }).join('')}</ul>`;
@@ -819,6 +823,12 @@ export function openGenerateDialog() {
     const allSubjectCandidates = listSafeCharacterContextCandidates();
     const savedSubjectIds = new Set(preferences.subjectEntityIds || []);
     const subjectCandidates = visibleJourneySubjectCandidates(allSubjectCandidates, savedSubjectIds);
+    const savedContextIds = new Set(context.entityIds || []);
+    const selectedContextSources = context.mode === 'selected'
+        ? visibleJourneySubjectCandidates(allSubjectCandidates, [...savedContextIds, ...savedSubjectIds])
+        : [];
+    const activeContextSources = new Map();
+    const excludedContextSourceIds = new Set();
     const visibleCandidateIds = new Set(subjectCandidates.filter(candidate => !candidate.unavailable).map(candidate => candidate.entityId));
     const hiddenSubjectCandidateCount = allSubjectCandidates.filter(candidate => !visibleCandidateIds.has(candidate.entityId)).length;
     const configuredCustomTemplates = !!(getSettings().customSystemPrompt?.trim() || getSettings().customUserPrompt?.trim());
@@ -854,6 +864,13 @@ export function openGenerateDialog() {
                 ${hiddenSubjectCandidateCount ? `<p class="mwt-text-dim mwt-text-sm">Showing up to ${MAX_JOURNEY_SUBJECT_CANDIDATES} tracked characters. Saved selections stay visible at the top so they can always be cleared; ${hiddenSubjectCandidateCount} other character${hiddenSubjectCandidateCount === 1 ? ' is' : 's are'} outside this request.</p>` : ''}
                 <p class="mwt-text-dim mwt-text-sm">Subject selection assigns ownership only. It does not add dossier fields to Safe Character Context.</p>
             </fieldset>
+            ${context.mode !== 'off' ? `<fieldset id="sp-generate-context-sources" style="border:0;padding:0;margin:12px 0 0">
+                <legend class="mwt-label">Safe Character Context sources for this request${context.mode === 'selected' ? ` (select up to ${MAX_CHARACTER_CONTEXT_IDS})` : ''}</legend>
+                <div id="sp-generate-context-source-list">${context.mode === 'selected'
+                    ? selectedContextSources.map((source, index) => `<label for="sp-generate-context-source-${index}"><input id="sp-generate-context-source-${index}" type="checkbox" name="sp-generate-context-source" value="${escapeHtml(source.entityId)}" ${savedContextIds.has(source.entityId) || source.mergedEntityIds?.some(id => savedContextIds.has(id)) ? 'checked' : ''}> ${escapeHtml(source.name)}</label>`).join('') || '<span class="mwt-text-dim mwt-text-sm">No tracked characters are available as context sources.</span>'
+                    : '<span class="mwt-text-dim mwt-text-sm">Checking the active cast…</span>'}</div>
+                <p class="mwt-text-dim mwt-text-sm">Journey ownership and public context are separate. Check the characters whose public context should be sent, or clear a source to omit it. Your saved Story Planner context mode and selection are unchanged.</p>
+            </fieldset>` : ''}
             <details class="mwt-mt-8" open>
                 <summary>Safe Character Context coverage</summary>
                 <div id="sp-generate-context-coverage" aria-live="polite"><p class="mwt-text-dim mwt-text-sm">Checking public-context coverage…</p></div>
@@ -867,6 +884,27 @@ export function openGenerateDialog() {
             <p id="sp-generate-summary" class="sp-proposal-change" role="status"></p>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8"><button id="sp-generate-submit" class="mwt-btn mwt-btn-primary">Generate for review</button><button id="sp-generate-cancel" class="mwt-btn">Cancel</button></div>`,
     });
+    const syncActiveContextSourceControls = coverage => {
+        if (context.mode !== 'active') return;
+        for (const item of coverage || []) {
+            if (item?.isContextSource && item.entityId) {
+                activeContextSources.set(item.entityId, item.name || item.entityId);
+            }
+        }
+        const host = modal.querySelector('#sp-generate-context-source-list');
+        if (!host) return;
+        host.innerHTML = activeContextSources.size
+            ? [...activeContextSources].map(([entityId, name], index) => `<label for="sp-generate-context-source-${index}"><input id="sp-generate-context-source-${index}" type="checkbox" name="sp-generate-context-source" value="${escapeHtml(entityId)}" ${excludedContextSourceIds.has(entityId) ? '' : 'checked'}> ${escapeHtml(name)}</label>`).join('')
+            : '<span class="mwt-text-dim mwt-text-sm">No active-cast context sources are available.</span>';
+    };
+    const getRequestContextSelection = () => context.mode === 'selected'
+        ? {
+            ...context,
+            entityIds: [...modal.querySelectorAll('input[name="sp-generate-context-source"]:checked')].map(input => input.value),
+        }
+        : context.mode === 'active'
+            ? { ...context, excludedEntityIds: [...excludedContextSourceIds] }
+            : context;
     const getRequest = () => {
         const operation = modal.querySelector('input[name="sp-generate-operation"]:checked')?.value || 'add';
         const sectionKeys = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
@@ -923,6 +961,9 @@ export function openGenerateDialog() {
         const requestError = getStoryPlanRequestError(request);
         const summary = modal.querySelector('#sp-generate-summary');
         if (summary) summary.textContent = requestError || requestSummary(request);
+        const requestContext = getRequestContextSelection();
+        const contextSummary = modal.querySelector('#sp-generate-context-summary');
+        if (contextSummary) contextSummary.textContent = `Public context: ${requestContext.mode === 'off' ? 'off' : requestContext.mode === 'active' ? `active cast${requestContext.excludedEntityIds.length ? `, ${requestContext.excludedEntityIds.length} omitted for this request` : ''}` : `${requestContext.entityIds.length} selected character${requestContext.entityIds.length === 1 ? '' : 's'} for this request`}. Existing context settings are unchanged by this dialog.`;
         const count = modal.querySelector('#sp-generate-count');
         if (count) count.disabled = request.operation !== 'add';
         const targets = modal.querySelector('#sp-generate-targets');
@@ -932,6 +973,12 @@ export function openGenerateDialog() {
         modal.querySelectorAll('input[name="sp-generate-subject"]').forEach(input => {
             input.disabled = request.subjectMode !== 'selected';
         });
+        if (requestContext.mode === 'selected') {
+            const checkedContextSources = modal.querySelectorAll('input[name="sp-generate-context-source"]:checked').length;
+            modal.querySelectorAll('input[name="sp-generate-context-source"]').forEach(input => {
+                input.disabled = !input.checked && checkedContextSources >= MAX_CHARACTER_CONTEXT_IDS;
+            });
+        }
         const checkedTargets = modal.querySelectorAll('input[name="sp-generate-target"]:checked').length;
         modal.querySelectorAll('input[name="sp-generate-target"]').forEach(input => {
             input.disabled = !input.checked && checkedTargets >= MAX_STORY_PLAN_REQUEST_IDS;
@@ -946,7 +993,7 @@ export function openGenerateDialog() {
         syncSummary();
     });
     modal.querySelectorAll('input[name="sp-generate-section"]').forEach(input => input.addEventListener('change', refresh));
-    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], #sp-generate-count').forEach(input => input.addEventListener('change', refresh));
+    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"], #sp-generate-count').forEach(input => input.addEventListener('change', refresh));
     modal.querySelector('#sp-generate-cancel')?.addEventListener('click', () => hideModal(GENERATE_MODAL_ID));
     modal.querySelector('#sp-generate-legacy')?.addEventListener('click', async () => {
         hideModal(GENERATE_MODAL_ID);
@@ -974,7 +1021,10 @@ export function openGenerateDialog() {
         setPlanData({ storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(request) });
         try {
             setControlBusy(button, true);
-            const proposal = await generatePlan(false, request, { reviewOnly: true });
+            const proposal = await generatePlan(false, request, {
+                reviewOnly: true,
+                characterContextSelection: getRequestContextSelection(),
+            });
             if (proposal) {
                 hideModal(GENERATE_MODAL_ID);
                 showScopedReview(proposal);
@@ -991,18 +1041,30 @@ export function openGenerateDialog() {
     const refreshContextCoverage = () => {
         const revision = ++coverageRequestRevision;
         const request = getRequest();
+        const requestContext = getRequestContextSelection();
         const primarySubjectEntityIds = request.sectionKeys.includes('character') && request.subjectMode === 'selected'
             ? request.subjectEntityIds
             : [];
-        Promise.resolve(buildSafeCharacterContext({ ...context, primarySubjectEntityIds })).then(result => {
+        Promise.resolve(buildSafeCharacterContext({ ...requestContext, primarySubjectEntityIds })).then(result => {
             const host = modal.querySelector('#sp-generate-context-coverage');
-            if (revision === coverageRequestRevision && host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, result?.coverage || [], result?.status || '');
+            if (revision === coverageRequestRevision && host?.isConnected) {
+                syncActiveContextSourceControls(result?.coverage || []);
+                host.innerHTML = renderCharacterContextCoverage(requestContext.mode, result?.coverage || [], result?.status || '');
+            }
         }).catch(() => {
             const host = modal.querySelector('#sp-generate-context-coverage');
-            if (revision === coverageRequestRevision && host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, []);
+            if (revision === coverageRequestRevision && host?.isConnected) host.innerHTML = renderCharacterContextCoverage(requestContext.mode, []);
         });
     };
-    modal.querySelectorAll('input[name="sp-generate-section"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"]').forEach(input => input.addEventListener('change', refreshContextCoverage));
+    modal.querySelectorAll('input[name="sp-generate-section"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"]').forEach(input => input.addEventListener('change', refreshContextCoverage));
+    modal.querySelector('#sp-generate-context-source-list')?.addEventListener('change', event => {
+        const input = event.target.closest('input[name="sp-generate-context-source"]');
+        if (!input || context.mode !== 'active') return;
+        if (input.checked) excludedContextSourceIds.delete(input.value);
+        else excludedContextSourceIds.add(input.value);
+        syncSummary();
+        refreshContextCoverage();
+    });
     refreshContextCoverage();
 }
 
@@ -1078,9 +1140,10 @@ export function render() {
                 <label class="mwt-label" for="sp-character-context-mode">Safe Character Context</label>
                 <div>
                     <select id="sp-character-context-mode" class="sp-enforcement"><option value="off" ${characterContext.mode === 'off' ? 'selected' : ''}>Off</option><option value="active" ${characterContext.mode === 'active' ? 'selected' : ''}>Active cast from Current Scene</option><option value="selected" ${characterContext.mode === 'selected' ? 'selected' : ''}>Selected characters</option></select>
-                    <select id="sp-character-context-ids" class="mwt-input" multiple size="${Math.min(5, Math.max(2, characterCandidates.length))}" aria-label="Selected safe character context" style="display:block;margin-top:4px;max-width:360px">${characterCandidates.map(candidate => `<option value="${escapeHtml(candidate.entityId)}" ${characterContext.entityIds.includes(candidate.entityId) ? 'selected' : ''}>${escapeHtml(candidate.name)}</option>`).join('')}</select>
+                    <div id="sp-character-context-selected" class="mwt-flex mwt-gap-4 mwt-mt-8" style="flex-wrap:wrap" role="group" aria-label="Currently selected safe character context"></div>
+                    <select id="sp-character-context-ids" class="mwt-input" multiple size="${Math.min(5, Math.max(2, characterCandidates.length))}" aria-label="Available safe character context" style="display:block;margin-top:4px;max-width:360px">${characterCandidates.map(candidate => `<option value="${escapeHtml(candidate.entityId)}" ${characterContext.entityIds.includes(candidate.entityId) || candidate.mergedEntityIds?.some(id => characterContext.entityIds.includes(id)) ? 'selected' : ''}>${escapeHtml(candidate.name)}</option>`).join('')}</select>
                     ${characterCandidates.length ? '' : `<p style="font-size:11px;color:var(--mwt-text-warn, var(--mwt-text-dim));margin:4px 0 0">No Knowledge characters are loaded right now, so the list above is empty. Any saved selection is kept — open the Knowledge tab to see and change it.</p>`}
-                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Opt-in public dossier projection only: identity, role, traits, background, and public location. It excludes secrets, ledgers, private intentions, and thoughts.</p>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Use the selected chips above to remove distant entries without scrolling. The list adds characters. Opt-in public projection only: identity, role, traits, background, and public location. It excludes appearance, voice, agenda, secrets, ledgers, private intentions, and thoughts.</p>
                 </div>
 
                 <label class="mwt-label" for="sp-arc-count">Arcs Per Generation</label>
@@ -1757,6 +1820,28 @@ export function wireEvents() {
         // 'blur' does not bubble — capture phase is required for delegation.
         arcsHost.addEventListener('blur', handleArcsBlur, true);
     }
+
+    // A native multi-select makes deselecting an off-screen item depend on
+    // scrolling plus a platform-specific modifier key. Mirror its selected
+    // options as explicit remove buttons so a large cast remains manageable.
+    const contextSelect = state.modal.querySelector('#sp-character-context-ids');
+    const contextSelected = state.modal.querySelector('#sp-character-context-selected');
+    const syncSelectedContextShortcuts = () => {
+        if (!contextSelect || !contextSelected) return;
+        const selected = [...contextSelect.selectedOptions];
+        contextSelected.innerHTML = selected.length
+            ? selected.map(option => `<button type="button" class="mwt-btn" data-remove-context-id="${escapeHtml(option.value)}" aria-label="Remove ${escapeHtml(option.textContent)} from Safe Character Context">${escapeHtml(option.textContent)} ×</button>`).join('')
+            : '<span class="mwt-text-dim mwt-text-sm">No characters selected.</span>';
+    };
+    contextSelect?.addEventListener('change', syncSelectedContextShortcuts);
+    contextSelected?.addEventListener('click', event => {
+        const button = event.target.closest('[data-remove-context-id]');
+        if (!button || !contextSelect) return;
+        const option = [...contextSelect.options].find(item => item.value === button.dataset.removeContextId);
+        if (option) option.selected = false;
+        syncSelectedContextShortcuts();
+    });
+    syncSelectedContextShortcuts();
 
     // Injection mode — applies immediately, no separate Apply step.
     state.modal.querySelectorAll('input[name="sp-inject-mode"]').forEach(radio => {

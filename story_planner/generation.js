@@ -20,7 +20,7 @@ import { getSettings, hasValidSettings } from './settings.js';
 // Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
-import { SECTIONS, storyPlannerSchema, sanitizeStoryPlanRequest, getStoryPlanRequestError, strictSectionKeyFromLabel } from './schema.js';
+import { SECTIONS, storyPlannerSchema, sanitizeStoryPlanRequest, sanitizeCharacterContextSelection, getStoryPlanRequestError, strictSectionKeyFromLabel } from './schema.js';
 import {
     state, getArcs, setArcs, pushPlanToHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
@@ -428,9 +428,10 @@ export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = [], s
  * Generate a fresh story plan via the LLM and store it in chat metadata.
  *
  * @param {boolean} [isAuto=false] — true when triggered automatically
+ * @param {{reviewOnly?: boolean, characterContextSelection?: object|null}} [options]
  * @returns {Promise<object[]|null>} the new arc list, or null if skipped/failed
  */
-export async function generatePlan(isAuto = false, requestSpec = null, { reviewOnly = false } = {}) {
+export async function generatePlan(isAuto = false, requestSpec = null, { reviewOnly = false, characterContextSelection = null } = {}) {
     // Part 6 (§7.4): the pause gate is a data-integrity stop — generation
     // would read the unprepared store, spend an API call, and have its
     // refused write (setArcs under the paused seam) mask the loss. Manual
@@ -554,7 +555,18 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         // "## " heading check when we're using the built-in default prompt.
         const expectHeader = !!request || !getSettings().customSystemPrompt?.trim();
 
-        const selection = getCharacterContextSelection();
+        // The scoped Generate dialog may narrow Selected context for this one
+        // request without rewriting the user's saved Story Planner setting.
+        // Legacy/full-plan and automatic calls continue to read the saved
+        // selection exactly as before.
+        const selection = request && characterContextSelection
+            ? {
+                ...sanitizeCharacterContextSelection(characterContextSelection),
+                excludedEntityIds: sanitizeCharacterContextSelection({
+                    mode: 'selected', entityIds: characterContextSelection.excludedEntityIds,
+                }).entityIds,
+            }
+            : getCharacterContextSelection();
         const requestedPrimarySubjectIds = request?.sectionKeys.includes('character')
             ? request.subjectMode === 'selected'
                 ? request.subjectEntityIds

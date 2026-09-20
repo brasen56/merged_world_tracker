@@ -6,6 +6,7 @@ import {
     addArcBeat,
     getArcs,
     getCurrentBeat,
+    getCharacterContextSelection,
     getPlanHistory,
     getStoryPlanRequestPreferences,
     historyEntryToArcs,
@@ -803,17 +804,19 @@ describe('Story Planner scoped generate dialog', () => {
         const candidates = ['Derek', 'Ezra', 'Ranger'].map(name => ({
             entityId: `entity-${name.toLowerCase()}`, name, mergedEntityIds: [],
         }));
+        const buildContext = vi.fn(async selection => ({
+            text: '', records: selection.entityIds.length, requested: selection.entityIds.length, omitted: 0,
+            coverage: candidates.filter(candidate => selection.entityIds.includes(candidate.entityId)
+                || selection.primarySubjectEntityIds.includes(candidate.entityId)).map(candidate => ({
+                ...candidate,
+                status: 'complete', records: 1, fields: 1, availableFields: 1,
+                supportedFields: 5, tokens: 17, estimated: true,
+                isPrimarySubject: selection.primarySubjectEntityIds.includes(candidate.entityId),
+            })),
+        }));
         registerSafeCharacterContextProvider({
             listCandidates: () => candidates,
-            buildContext: async selection => ({
-                text: '', records: 3, requested: 3, omitted: 0,
-                coverage: candidates.map(candidate => ({
-                    ...candidate,
-                    status: 'complete', records: 1, fields: 1, availableFields: 1,
-                    supportedFields: 5, tokens: 17, estimated: true,
-                    isPrimarySubject: selection.primarySubjectEntityIds.includes(candidate.entityId),
-                })),
-            }),
+            buildContext,
         });
         setPlanData({ characterContext: { mode: 'selected', entityIds: ['entity-ranger'] } });
         await openDialog({
@@ -830,6 +833,75 @@ describe('Story Planner scoped generate dialog', () => {
         expect(coverage.querySelectorAll('[data-coverage-role="context-only"]')).toHaveLength(1);
         expect(coverage.textContent).toContain('Ranger: Included — every populated supported field fit');
         expect(coverage.textContent).toContain('— Context only');
+
+        const contextSources = [...document.querySelectorAll('input[name="sp-generate-context-source"]')];
+        expect(contextSources.find(input => input.value === 'entity-derek')?.checked).toBe(false);
+        expect(contextSources.find(input => input.value === 'entity-ezra')?.checked).toBe(false);
+        expect(contextSources.find(input => input.value === 'entity-ranger')?.checked).toBe(true);
+
+        toggle(contextSources.find(input => input.value === 'entity-derek'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(buildContext).toHaveBeenLastCalledWith(expect.objectContaining({
+            entityIds: expect.arrayContaining(['entity-derek', 'entity-ranger']),
+            primarySubjectEntityIds: ['entity-derek', 'entity-ezra'],
+        }));
+        expect(buildContext.mock.lastCall[0].entityIds).toHaveLength(2);
+    });
+
+    test('shows every saved context source separately so an off-screen NPC can be omitted for this request', async () => {
+        const candidates = Array.from({ length: 40 }, (_, index) => ({
+            entityId: `entity-${String(index + 1).padStart(2, '0')}`,
+            name: index === 39 ? 'Ranger' : `Character ${String(index + 1).padStart(2, '0')}`,
+            mergedEntityIds: [],
+        }));
+        const buildContext = vi.fn(async () => ({ text: '', records: 0, requested: 0, omitted: 0, coverage: [] }));
+        registerSafeCharacterContextProvider({ listCandidates: () => candidates, buildContext });
+        setPlanData({ characterContext: { mode: 'selected', entityIds: ['entity-40'] } });
+        await openDialog();
+        await Promise.resolve();
+
+        const source = document.querySelector('input[name="sp-generate-context-source"][value="entity-40"]');
+        expect(source?.checked).toBe(true);
+        expect(source.closest('label').textContent).toContain('Ranger');
+
+        toggle(source);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(buildContext).toHaveBeenLastCalledWith(expect.objectContaining({ entityIds: [] }));
+        expect(document.querySelector('#sp-generate-context-summary').textContent)
+            .toContain('0 selected characters for this request');
+    });
+
+    test('lets an active-cast context source be omitted without changing the saved mode', async () => {
+        const buildContext = vi.fn(async selection => ({
+            text: '', records: 0, requested: 1, omitted: 1,
+            coverage: selection.excludedEntityIds?.includes('entity-ranger') ? [] : [{
+                entityId: 'entity-ranger', name: 'Ranger', status: 'missing-dossier',
+                records: 0, fields: 0, isContextSource: true,
+            }],
+        }));
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-ranger', name: 'Ranger', mergedEntityIds: [] }],
+            buildContext,
+        });
+        setPlanData({ characterContext: { mode: 'active', entityIds: [] } });
+        await openDialog();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const ranger = document.querySelector('input[name="sp-generate-context-source"][value="entity-ranger"]');
+        expect(ranger?.checked).toBe(true);
+        toggle(ranger);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(buildContext).toHaveBeenLastCalledWith(expect.objectContaining({
+            mode: 'active', excludedEntityIds: ['entity-ranger'],
+        }));
+        expect(document.querySelector('#sp-generate-context-summary').textContent)
+            .toContain('active cast, 1 omitted for this request');
+        expect(getCharacterContextSelection().mode).toBe('active');
     });
 
     test('shows globally disabled Knowledge as disabled context coverage in the dialog', async () => {

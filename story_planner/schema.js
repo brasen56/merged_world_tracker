@@ -55,6 +55,7 @@ export const MAX_PROGRESS_METADATA_ENTRIES = 500;
 export const MAX_PROGRESS_IDENTITY_LENGTH = 500;
 export const MAX_IGNORED_PROGRESS_EVIDENCE_LENGTH = 2000;
 export const MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH = 120;
+export const MAX_CHARACTER_CONTEXT_IDS = 24;
 export const MAX_ARC_PARTICIPANT_IDS = 24;
 export const STORY_PLANNER_METRIC_COUNTER_MAX = 1_000_000_000;
 export const STORY_PALETTE_EMPHASES = Object.freeze(['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation']);
@@ -160,7 +161,7 @@ export function sanitizeCharacterContextSelection(value) {
     const raw = isObject(value) ? value : {};
     return {
         mode: CHARACTER_CONTEXT_MODES.includes(raw.mode) ? raw.mode : 'off',
-        entityIds: [...new Set(Array.isArray(raw.entityIds) ? raw.entityIds.map(item => String(item).trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)).filter(Boolean).slice(0, 24) : [])],
+        entityIds: [...new Set(Array.isArray(raw.entityIds) ? raw.entityIds.map(item => String(item).trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)).filter(Boolean).slice(0, MAX_CHARACTER_CONTEXT_IDS) : [])],
     };
 }
 

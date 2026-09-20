@@ -5,7 +5,7 @@ import { buildSafeCharacterContext, registerSafeCharacterContextProvider } from 
 import { sanitizeCharacterContextSelection, sanitizeStoryPalette, validateStoryPlannerData, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH } from '../story_planner/schema.js';
 import { buildUserPrompt, generatePlan } from '../story_planner/generation.js';
 import { buildTargetedUserPrompt, generateTargetedProposal } from '../story_planner/targeted.js';
-import { makeArc, setArcs, setPlanData, state } from '../story_planner/data.js';
+import { getCharacterContextSelection, makeArc, setArcs, setPlanData, state } from '../story_planner/data.js';
 import { saveSettings } from '../story_planner/settings.js';
 import { renderContent, wireEvents } from '../story_planner/render.js';
 import { getEvents, getFakeMeta, resetCoreStubs, setFakeApi, setFakeChat, setFakeContextExtras } from './stubs/core.js';
@@ -84,6 +84,7 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         const { _setCacheForTests } = await import('../knowledge/store.js');
         const registry = {
             Derek: { entityId: 'npc-derek', uid: 1 },
+            Ezra: { entityId: 'npc-ezra', uid: 4 },
             Ranger: { entityId: 'npc-ranger', uid: 2 },
             Verbose: { entityId: 'npc-verbose', uid: 3 },
         };
@@ -100,11 +101,15 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
                 uid: 3, comment: 'Verbose',
                 content: `[Dossier] Verbose | Human |\nRole: ${'very long public role '.repeat(30)}\nSecrets: private`,
             },
+            4: {
+                uid: 4, comment: 'Ezra',
+                content: `Ezra | Human | APEX administrator\nTone: measured and precise\nPerceived as: formal but fair\nFirst seen: APEX front office\n\nKnowledge Ledger:\n- ${'private accumulated history '.repeat(80)}`,
+            },
         } }) };
         _setCacheForTests('Knowledge Tracker', { registry, stances: { Ranger: 'wary' } });
 
         const result = await buildPlannerCharacterContext({
-            mode: 'selected', entityIds: ['npc-derek', 'npc-ranger', 'npc-verbose'],
+            mode: 'selected', entityIds: ['npc-derek', 'npc-ezra', 'npc-ranger', 'npc-verbose'],
             primarySubjectEntityIds: ['npc-derek'],
         });
 
@@ -115,12 +120,17 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         expect(result.coverage.find(item => item.entityId === 'npc-ranger')).toMatchObject({
             status: 'complete', fields: 5, availableFields: 5, supportedFields: 5, isPrimarySubject: false,
         });
+        expect(result.coverage.find(item => item.entityId === 'npc-ezra')).toMatchObject({
+            status: 'complete', fields: 3, availableFields: 3, supportedFields: 5,
+            fieldLabels: ['Public identity', 'Public traits', 'First seen'],
+        });
         expect(result.coverage.find(item => item.entityId === 'npc-verbose')).toMatchObject({
             status: 'partial', fields: 1, availableFields: 1, supportedFields: 5,
         });
         expect(result.text).not.toContain('ornate detail');
-        expect(result.text).not.toContain('measured');
+        expect(result.text).not.toContain('measured measured');
         expect(result.text).not.toContain('private plan');
+        expect(result.text).not.toContain('private accumulated history');
     });
 
     test('canonicalizes palette and entity-id selections to bounded safe values', () => {
@@ -234,6 +244,9 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         const result = await buildPlannerCharacterContext({ mode: 'active' });
         expect(result.text).toContain('Character: Mara Vance');
         expect(result.text).not.toContain('Never share this');
+        expect(result.coverage[0]).toMatchObject({ entityId: 'npc-a', isContextSource: true });
+        await expect(buildPlannerCharacterContext({ mode: 'active', excludedEntityIds: ['npc-a'] }))
+            .resolves.toMatchObject({ text: '', records: 0, requested: 0, coverage: [] });
     });
 
     test('selected context resolves an absorbed entity id through mergedFrom', async () => {
@@ -374,6 +387,26 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         document.querySelector('#sp-save-settings').click();
         expect(getFakeMeta().story_planner_data.storyPalette).toMatchObject({ emphases: ['quiet moments'], escalation: 'restrained' });
         expect(getFakeMeta().story_planner_data.characterContext).toEqual({ mode: 'selected', entityIds: ['npc-a'] });
+    });
+
+    test('settings exposes selected context as removable shortcuts above a long candidate list', () => {
+        const candidates = Array.from({ length: 40 }, (_, index) => ({
+            entityId: `npc-${String(index + 1).padStart(2, '0')}`,
+            name: index === 39 ? 'Ranger' : `Character ${String(index + 1).padStart(2, '0')}`,
+            mergedEntityIds: [],
+        }));
+        setPlanData({ characterContext: { mode: 'selected', entityIds: ['npc-40'] } });
+        registerSafeCharacterContextProvider({ listCandidates: () => candidates });
+        state.modal = document.body;
+        renderContent();
+        wireEvents();
+
+        const remove = document.querySelector('[data-remove-context-id="npc-40"]');
+        expect(remove?.textContent).toContain('Ranger');
+        remove.click();
+        expect(document.querySelector('#sp-character-context-ids').selectedOptions).toHaveLength(0);
+        document.querySelector('#sp-save-settings').click();
+        expect(getCharacterContextSelection()).toEqual({ mode: 'selected', entityIds: [] });
     });
 
     // Regression: the id list is empty whenever Knowledge is disabled or its

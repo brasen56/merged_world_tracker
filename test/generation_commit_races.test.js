@@ -722,7 +722,10 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
             coverage: [{ entityId: selection.primarySubjectEntityIds[0], name: 'Mara', status: 'disabled', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true }],
         }));
         registerSafeCharacterContextProvider({
-            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+            listCandidates: () => [
+                { entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] },
+                { entityId: 'entity-ranger', name: 'Ranger', mergedEntityIds: [] },
+            ],
             buildContext,
         });
         setPlanData({ characterContext: { mode: 'selected', entityIds: [] } });
@@ -731,9 +734,14 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         await generatePlan(false, {
             operation: 'add', sectionKeys: ['character'], requestedCount: 1,
             subjectMode: 'selected', subjectEntityIds: ['entity-mara'],
-        }, { reviewOnly: true });
+        }, {
+            reviewOnly: true,
+            characterContextSelection: { mode: 'selected', entityIds: ['entity-ranger'] },
+        });
 
         expect(buildContext).toHaveBeenCalledWith(expect.objectContaining({
+            mode: 'selected',
+            entityIds: ['entity-ranger'],
             primarySubjectEntityIds: ['entity-mara'],
         }));
     });
