@@ -52,6 +52,7 @@ function arc(id, title = id) {
     return {
         id, title, body: 'body', section: 'emerging', status: 'active', pinned: false,
         focused: false, closeReason: '', closedAt: null,
+        primarySubjectEntityId: '', supportingParticipantEntityIds: [],
         beats: [], turnsSinceAdvance: 0, createdAt: 1, updatedAt: 1,
     };
 }

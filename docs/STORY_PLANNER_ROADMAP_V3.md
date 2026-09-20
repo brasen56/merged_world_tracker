@@ -1,10 +1,11 @@
 # Story Planner V3: scoped generation, character journeys, and cast policy
 
-**Status:** Phase 0 complete. Phase 1 **Implemented, not host verified** — see
+**Status:** Phase 0=1 complete. Phase 2 **Inprogress** — see
 the Phase 1 status block in §5. Phase 0 request-boundary samples are synthetic
-and the consented targeted-develop sample remains pending. Phases 2-3 not
-started.
-**Date:** 2026-09-19 (Phase 1 status recorded 2026-09-20)
+and the consented targeted-develop sample remains a non-blocking follow-up; the
+planner-output attribution required to exit Phase 0 is recorded. Phases 2-3
+not started.
+**Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated 2026-09-20)
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
 sketch pending the Phase 0 projection inventory. Independent arc classification
 and execution prerequisites are deferred in §7.
@@ -148,16 +149,37 @@ no new automatic model calls by default; telemetry stays content-free.
 
 ## 4. Product and data contracts
 
+**Staging rule:** this section describes the finished V3 product after Phases
+1-3. It is not permission to implement every field in the first phase that
+touches the surrounding object or UI. Section 5 owns delivery order. Before a
+field's owning phase, it may be accepted by a transient forward-compatible
+canonicalizer, but it must remain behaviorally inert: do not persist it, render
+a control for it, put it in a prompt, validate output against it, migrate it, or
+claim its guarantee in review text.
+
+| Request field or behavior | First live phase | Before that phase |
+| --- | --- | --- |
+| `operation`, `sectionKeys`, `requestedCount`, `targetArcIds`; scoped review/Apply | 1 | Not applicable; these are the Phase 1 slice |
+| `subjectMode`, `subjectEntityIds`; ownership and context coverage | 2 | No stored preference, subject control, prompt clause, ownership validation, or coverage claim |
+| `castPolicy`; newcomer and entrance-beat checks | 3 | `storyPalette.allowNewMajorCharacters` remains the only effective cast input; no second stored copy or policy claim |
+
+The same rule applies to tests: a later-phase fixture may exist early as an
+expected failure, but its production behavior does not move into an earlier
+phase merely because an adjacent request object already has a placeholder for
+it.
+
 ### 4.1 Generate dialog and request specification
 
-The primary Generate action opens a compact dialog containing:
+At the end of Phase 3, the primary Generate action opens a compact dialog
+containing:
 
-- operation: **Add ideas** or **Refresh selected arcs**;
-- section checkboxes, initially all five;
-- requested count, from 1 to 30, for Add;
-- Journey subjects when Character Journeys is selected: Any subject or Selected NPCs;
-- cast policy and the existing palette/direction controls;
-- context mode and coverage summary;
+- **Phase 1:** operation (**Add ideas** or **Refresh selected arcs**), section
+  checkboxes initially all five, and requested count from 1 to 30 for Add;
+- **Phase 2:** Journey subjects when Character Journeys is selected — Any
+  subject or Selected NPCs — plus public-context coverage;
+- **Phase 3:** cast policy; the existing palette and direction controls retain
+  their existing ownership until explicitly migrated;
+- existing context mode, without silently changing its saved selection; and
 - a summary such as "Add 2 Character Journeys for Mara; use public context".
 
 Remember ordinary manual choices per chat. Auto-generation keeps its own saved
@@ -167,15 +189,26 @@ behavior is not silently redefined by the scoped implementation. New dialogs
 default to Add and Any subject, and preserve existing public-context selections
 on upgrade.
 
-Capture one immutable request specification at dispatch:
+The request specification grows by phase. Capture the applicable shape
+immutably at dispatch; do not persist fields from a later shape early:
 
 ```js
+// Phase 1
 {
   operation: 'add',            // add | refresh
   sectionKeys: ['character'],
-  subjectEntityIds: [],        // empty = Any subject
   requestedCount: 2,           // Add only
   targetArcIds: [],            // exact captured Refresh set
+}
+
+// Phase 2 adds
+{
+  subjectMode: 'selected',     // any | selected
+  subjectEntityIds: ['entity-mara'], // canonical ids here; opaque handles on wire
+}
+
+// Phase 3 adds
+{
   castPolicy: 'allowed',       // existing-only | allowed | propose
 }
 ```
@@ -259,6 +292,16 @@ NPC for a missing selected one. If Knowledge is unavailable, retain saved
 selections; a manual request may continue with clearly marked limited context or
 reduce its selection. No automatic extra calls to fill missing context.
 
+Subject selection and context selection remain independent. A selected subject's
+request-local handle and display label are always sent so the model can identify
+the requested owner, but that selection does not opt the dossier into Safe
+Character Context. With context Off, send no dossier fields. With Selected
+context, a subject omitted from the saved context selection remains omitted and
+is reported as disabled; it is not silently added. "Priority" means ordering
+records that are already eligible under the saved context mode when the budget
+cannot fit them all. Coverage is proposal diagnostics captured for review, not a
+new durable fact on the arc.
+
 Journey prompts describe a pressure on a value, relationship, fear, habit, or
 obligation, an observable opportunity for response, and possible consequences.
 Growth may include resistance, relapse, deterioration, repair, or no resolution;
@@ -298,6 +341,39 @@ Both values of the old `allowNewMajorCharacters` flag migrate to **allowed**,
 which preserves conditional expansion with an established-cast preference; the
 old false was not a hard ban. Retire the legacy field after migration. Only a new
 explicit user selection enables existing-only or active-proposal behavior.
+
+Cast policy has one authoritative source for each workflow; do not create two
+stored fields that both purport to control the same call:
+
+| Workflow | Authoritative input in Phase 3 |
+| --- | --- |
+| Manual scoped Add/Refresh | `storyPlanRequestPreferences.castPolicy`, captured into the immutable request |
+| Legacy full-plan, targeted develop/alternate, and automatic full-plan | `storyPalette.castPolicy`, replacing `allowNewMajorCharacters` |
+| Custom full-plan template containing `{{storyPalette}}` | `storyPalette.castPolicy` through that token, with the effective policy shown before dispatch |
+| Custom full-plan template without `{{storyPalette}}` | Policy unsupported: say so and offer the built-in path; do not claim enforcement or silently rewrite the template |
+
+Both new stored policy locations migrate/default to `allowed`. Changing the
+manual scoped choice does not alter legacy or automatic behavior, and changing
+the palette does not rewrite the manual choice. Every call captures exactly one
+effective policy and review displays which source supplied it.
+
+Newcomer validation uses transient response markers rather than a new durable
+candidate collection. A newcomer arc uses a bounded proposal-local handle on the
+arc and on one concrete entrance beat, for example:
+
+```md
+- [NEWCOMER:n1] The Outside Auditor — Ilyra is an independent auditor whose mandate conflicts with the established team.
+  1. [ENTRANCE:n1] Ilyra arrives during the records handoff and freezes the transfer.
+```
+
+The parser strips both markers before review or persistence and retains their
+association only in proposal diagnostics. Handles must be unique, bounded, and
+paired within the same arc. `propose` on Add requires at least one valid pair;
+`propose` on Refresh or targeted development may return none but must display
+"no suitable newcomer proposed." `existing-only` rejects a marked newcomer and
+`allowed` accepts a valid pair without imposing a quota. An invented person
+hidden in unmarked prose remains a documented human-review limitation; do not
+pretend a name heuristic enforces the policy.
 
 Newcomers stay hypothetical. Applying an arc does not create a Knowledge dossier
 or assert that the NPC exists on-screen. In this release a newcomer lives in its
@@ -347,6 +423,50 @@ right eventual design and the wrong first slice.
 
 ## 5. Delivery plan
 
+### Phase authority and test discipline
+
+The active phase's Work, Non-goals, and Exit blocks are the implementation
+authority. The finished-product contracts in §4 explain where the design is
+going; they do not pull later fields, controls, migrations, prompt clauses, or
+validation into an earlier phase. If adjacent code exposes a future-shaped
+transient object, leave the future fields inert as §4 requires.
+
+Expected-failure tests are executable future contracts, not expendable scaffolding:
+
+1. At phase start, run the focused file and record which `test.fails` cases fail
+   as intended. If the owned case is only a placeholder that does not call
+   production code, replace its body with the intended public-boundary assertion
+   **while keeping `test.fails`**, and prove it still fails for the intended reason
+   before implementation. It may not become a tautology that merely describes
+   its fixture.
+2. In Vitest, a `test.fails` case that starts passing is reported as a suite
+   failure; that is the signal that its owning behavior has landed. At that point
+   remove `fails` without weakening or inverting the semantic assertion.
+3. Convert only a specification owned by the active phase. Leave later-phase red
+   specifications red and present. Do not delete, invert,
+   weaken, or opportunistically rewrite them while making the current suite green.
+4. When an intentional production change invalidates a source-grep assertion,
+   update the assertion to the new real contract. Never retain an unreachable or
+   commented-out production string solely so a source scan continues to find it.
+5. In the phase status, list every pre-existing red specification or cross-cutting
+   source assertion changed, why its owning behavior changed, and which focused
+   test now proves the replacement contract.
+
+The Phase 0 red-spec ownership is:
+
+| Original contract | Owning phase | Current state |
+| --- | --- | --- |
+| Omitted unrelated active arc survives scoped response | 1 | Converted to a passing behavior test |
+| Returned section/identity outside captured scope is rejected | 1 | Converted to a passing behavior test |
+| User edit between response and Apply requires renewed review | 1 | Converted to a passing public Apply-boundary test |
+| Duplicate journey-subject selection cannot reach persistence | 2 | Still `test.fails`; Phase 2 alone owns its conversion |
+
+The existing files named `test/story_planner_phase1.test.js` through
+`story_planner_phase7.test.js` belong to the earlier Story Planner roadmap; their
+numbers are not V3 delivery ownership. New V3 work uses feature-named suites from
+§6.1 or an explicit `V3 Phase N` describe label. Do not infer that V3 Phase 2 has
+shipped because a legacy file is named `story_planner_phase2.test.js`.
+
 ### Phase 0 - Diagnosis, fixtures, and request boundaries
 
 **Purpose:** Confirm what testers actually hit, and pin invariants before adding
@@ -380,7 +500,8 @@ Work:
     included a newcomer, but the original full plan was not retained. Available
     on request to verify: a fresh clean-chat regeneration (preserving the
     current generation), a targeted-develop sample, and an alternate-model
-    sample.
+    sample. These are useful follow-up evidence, not Phase 0 exit blockers: the
+    required stage attribution is already answered above.
 - Inventory which surfaces consume title, body, beats, history, and closed
   memory. This is the prerequisite for Phase 4 and takes an afternoon.
   **Done 2026-09-19:** [STORY_PLANNER_PROJECTION_INVENTORY.md](./STORY_PLANNER_PROJECTION_INVENTORY.md).
@@ -494,49 +615,133 @@ rewritten anyway, two into assertions that could not fail and one (duplicate
 journey subjects, a Phase 2 contract) deleted outright. It is now restored to
 `test.fails`. In vitest a `test.fails` that starts passing is reported as a
 failure, so a phase landing will break exactly the specifications it satisfies —
-convert those, and leave the rest red.
+convert those, and leave the rest red. The standing rules above govern that
+conversion; this paragraph records why they were added.
 
 ### Phase 2 - Journey subjects and context coverage
 
 **Depends on:** Phase 1.
 
-Work:
+**Purpose:** make journey ownership explicit and make public-context coverage
+honest, without beginning cast-policy or private-author-context work.
 
-- Add the bounded ownership and participant fields with their migration,
-  canonicalization, backup/import, history signature, and restore support.
-- Add subject handles, primary-owner validation, manual assignment for legacy
-  arcs, and per-character filtering and Refresh.
-- Resolve selection through the shared entity/alias/merge services and explain
-  missing or unavailable records. Candidate listing already spans off-screen NPCs.
-- Prioritize subject context and show complete, partial, and omitted coverage in
-  the dialog and proposal review. Preserve existing public-context exclusions.
-- Revise character-journey prompts to support resistance, setbacks,
-  deterioration, repair, and uncertain outcomes while protecting player agency.
+Order within the phase is mandatory:
+
+1. **2A — pin the real red boundary before code.** Replace the raw-array body of
+   `duplicate journey subjects are rejected before persistence` in
+   `test/story_planner_phase0_v3.test.js` with an assertion through the planned
+   request/store canonicalization boundary, but keep `test.fails`. Run it once to
+   prove the expected unique persisted-subject contract is not yet met for the
+   reason Phase 2 intends to fix. Do not touch Phase 3 fixtures.
+2. **2B — durable ownership.** Add bounded `primarySubjectEntityId` and
+   `supportingParticipantEntityIds` fields with one versioned migration,
+   canonicalization, validation, history signature, revert, backup/import
+   merge-and-replace remapping, recovery, and manual editor support. Existing
+   arcs migrate unassigned. Repeated raw participant IDs are deduplicated with a
+   validation issue and never reach persisted preferences or arcs. Rename and
+   merge use the shared identity service; deletion leaves a visibly unresolved
+   reference. No prose or title inference fills a missing owner.
+3. **2C — define and test the wire contract.** Issue bounded opaque handles for
+   the captured registry candidates. A Character Journey response line carries
+   exactly one primary marker and may carry supporting markers:
+
+   ```md
+   - [SUBJECT:s1] [SUPPORT:s2,s3] The Borrowed Seal — Mara's confidence is tested by Derek and the clerk.
+   ```
+
+   Resolve markers only through the captured handle map, strip them before title
+   and body reach review, and persist only canonical entity IDs at Apply. A
+   missing, unknown, duplicate, or non-captured primary handle rejects that row;
+   duplicate supporting handles are collapsed and a primary repeated as support
+   is removed with a visible diagnostic. Non-character sections may not carry
+   these markers. In Selected mode a primary must be one of the selected IDs; in
+   Any mode it may be any candidate in the bounded captured table. If that table
+   is empty, explain that no assignable journey subject is available and do not
+   make a Character Journey call.
+4. **2D — selection and Refresh.** Keep Add count semantics global across the
+   selected sections. When Selected mode contains N subjects, an Add request that
+   promises one for each requires `requestedCount >= N`; every selected subject
+   must appear at least once before extra valid proposals may repeat a subject.
+   Missing coverage is an underfill diagnostic, not permission to substitute a
+   different owner. Refresh eligibility matches the stored primary owner. A
+   returned Refresh marker must match that captured owner; generation cannot
+   reassign it. Manual assignment is the only way to set or change a legacy
+   arc's primary owner. Supporting participants may change through a reviewed
+   proposal when every returned handle resolves against the captured map.
+5. **2E — context and prompt behavior.** Resolve selection through the shared
+   entity/alias/merge services and explain missing or unavailable records;
+   candidate listing already spans off-screen NPCs. Apply the subject/context
+   independence rule in §4.3, prioritize only eligible public records, and show
+   complete, partial, omitted-for-budget, missing-dossier, unavailable, and
+   disabled coverage in both dialog and review. Preserve every existing
+   public-context exclusion. Revise Character Journey prompts to support
+   resistance, setbacks, deterioration, repair, and uncertain outcomes while
+   restating the `{{user}}` agency prohibition.
+6. **2F — close the owned red contract.** When the public-boundary assertion from
+   2A begins passing and Vitest flags the unexpected pass, remove `test.fails`
+   without changing its claim. Run the focused subject, schema, backup, identity,
+   proposal, UI, and accessibility suites before the full suite and lint.
+
+**Non-goals:** do not migrate `allowNewMajorCharacters`, persist or read
+`castPolicy`, add newcomer/entrance markers, send private dossier fields, create
+Knowledge records, redesign automatic generation, infer owners from prose, or
+change an owner's canonical identity through model output.
 
 **Exit:** Users can request one journey each for two named NPCs, and a third NPC
 may appear as supporting cast without replacing either subject. Rename, merge,
 removal, unavailable Knowledge, and an over-budget selection are handled visibly.
-No title-based guess transfers ownership or progress.
+No title-based guess transfers ownership or progress. The Phase 2 red
+specification is now a passing public-boundary test, while Phase 3 behavior
+remains absent and unclaimed.
 
 ### Phase 3 - Cast policy and newcomer proposals
 
 **Depends on:** Phases 1-2 and the Phase 0 attribution result.
 
-Work:
+**Purpose:** make cast expansion an explicit, observable request contract without
+turning a proposed person into a canonical character or claiming prose-level
+enforcement the application cannot perform.
 
-- Migrate the boolean to the explicit policy and make its effective behavior
-  clear for full, scoped, targeted, custom, and automatic paths.
-- Require and validate a concrete entrance beat on an actively-proposed newcomer.
-- Check active-proposal coverage; show a missing-newcomer result rather than
-  claiming success or silently re-calling the model.
-- Include newcomers already present in the plan in bounded continuity context, so
-  a refresh develops one rather than inventing another equivalent person.
-- Keep additions genre-sensitive and distinguish novelty from escalation.
+Order within the phase is mandatory:
+
+1. **3A — migrate policy ownership.** Replace `allowNewMajorCharacters` with the
+   two deliberately workflow-scoped sources in §4.4. Both old boolean values
+   migrate to `allowed` in `storyPalette.castPolicy`; existing manual scoped
+   preferences also default to `allowed`. Remove the legacy boolean only after
+   every built-in, targeted, custom-token, automatic, import, backup, and settings
+   consumer uses its designated source. Tests must prove that changing the manual
+   preference does not alter legacy/automatic behavior and vice versa.
+2. **3B — construct each request explicitly.** Pin the effective behavior for
+   manual scoped, legacy full, targeted, custom, and automatic paths. Built-in
+   calls receive an application-owned policy clause. A custom full template gets
+   it only through `{{storyPalette}}`; without that token, show incompatibility
+   and do not claim the policy ran. Automatic generation with a non-`allowed`
+   policy requires the built-in prompt or a compatible custom template; otherwise
+   skip the call and explain the unsupported configuration.
+3. **3C — parse and validate proposal-local evidence.** Implement the paired
+   `[NEWCOMER:*]`/`[ENTRANCE:*]` contract from §4.4, including bounded handles,
+   same-arc pairing, marker stripping, and review diagnostics. For reviewed paths,
+   missing active-proposal coverage remains reviewable with an unmet-requirement
+   warning. For direct-commit legacy or automatic paths, a required but missing
+   pair, a malformed pair, or an `existing-only` marked newcomer fails before any
+   arc/history write; report it once and make no repair call.
+4. **3D — continuity and evaluation.** Include the ordinary title/body/beats of
+   accepted newcomer arcs in bounded continuity so later refreshes see the person
+   already proposed. Do not reconstruct stripped markers, invent a durable
+   candidate ID, or claim exact deduplication from prose. Keep additions
+   genre-sensitive, distinguish novelty from escalation, and exercise the
+   established-but-unregistered and unmarked-prose limitations in human review.
+
+**Non-goals:** do not create or update a Knowledge dossier, mark a newcomer as
+introduced on-screen, add the deferred proposed-cast collection, infer novelty by
+registry absence or name matching, enable private author context, add repair
+calls, or change Phase 2 ownership semantics.
 
 **Exit:** An accepted newcomer arc has a concrete entrance and creates no
 canonical NPC automatically. Active-proposal mode reports whether a candidate was
 returned. Existing-only rejects explicit newcomers; human review checks prose for
-undeclared ones.
+undeclared ones. Every generation path names its effective policy source and
+either proves the paired-marker contract or reports that the path is unsupported.
 
 ### Phase 4 - Opt-in author context (sketch)
 

@@ -18,7 +18,7 @@ import {
     updateArcBeat,
 } from '../story_planner/data.js';
 import { buildInjectionBody } from '../story_planner/injection.js';
-import { captureScope, getFakeMeta, resetCoreStubs, setFakeContextExtras } from './stubs/core.js';
+import { captureScope, getFakeMeta, registerSafeCharacterContextProvider, resetCoreStubs, setFakeContextExtras } from './stubs/core.js';
 
 beforeEach(() => resetCoreStubs());
 
@@ -447,6 +447,140 @@ describe('Story Planner scoped review — rendered change description', () => {
         expect(body).toContain('new arc');
         expect(document.querySelector('.sp-proposal-change')).toBeNull();
     });
+
+    test('a review shows the captured Safe Character Context coverage states', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review-coverage' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review-coverage' }) });
+        const proposed = makeArc({ title: 'Covered journey', section: 'character' });
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            scope: captureScope(), previousArcs: [], arcs: [proposed],
+            addedArcIds: [proposed.id], reviewArcIds: [proposed.id],
+            stats: { added: 1, matched: 0, carried: 0, suppressedClosed: 0 },
+            diagnostics: {
+                characterContextMode: 'selected',
+                characterContextCoverage: [
+                    { entityId: 'entity-mara', name: 'Mara', status: 'complete' },
+                    { entityId: 'entity-ivo', name: 'Ivo', status: 'omitted-for-budget' },
+                ],
+            },
+        });
+
+        const coverage = document.querySelector('.sp-context-coverage-review').textContent;
+        expect(coverage).toContain('Mara: Complete public context');
+        expect(coverage).toContain('Ivo: Omitted for context budget');
+    });
+
+    test('a review explicitly reports globally disabled Knowledge coverage', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review-disabled-coverage' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review-disabled-coverage' }) });
+        const proposed = makeArc({ title: 'Ungrounded journey', section: 'character' });
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            scope: captureScope(), previousArcs: [], arcs: [proposed],
+            addedArcIds: [proposed.id], reviewArcIds: [proposed.id],
+            stats: { added: 1, matched: 0, carried: 0, suppressedClosed: 0 },
+            diagnostics: {
+                characterContextMode: 'selected',
+                characterContextStatus: 'disabled',
+                characterContextCoverage: [
+                    { entityId: 'entity-mara', name: 'Mara', status: 'disabled' },
+                    { entityId: 'entity-ivo', name: 'Ivo', status: 'disabled' },
+                ],
+            },
+        });
+
+        const coverage = document.querySelector('.sp-context-coverage-review').textContent;
+        expect(coverage).toContain('Safe Character Context disabled for this request.');
+        expect(coverage).toContain('Mara: Safe Character Context disabled');
+        expect(coverage).toContain('Ivo: Safe Character Context disabled');
+        expect(document.querySelector('.sp-context-coverage-review [data-coverage-status="disabled"]')).not.toBeNull();
+    });
+
+    test('a review visibly reports supporting-participant cleanup', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review-participants' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review-participants' }) });
+        const proposed = makeArc({ title: 'Shared burden', section: 'character', primarySubjectEntityId: 'entity-mara' });
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            scope: captureScope(), previousArcs: [], arcs: [proposed],
+            addedArcIds: [proposed.id], reviewArcIds: [proposed.id],
+            stats: { added: 1, matched: 0, carried: 0, suppressedClosed: 0 },
+            diagnostics: { participantDiagnostics: ['Shared burden: duplicate supporting handles were collapsed.'] },
+        });
+
+        expect(document.querySelector('.sp-proposal-diagnostics').textContent)
+            .toContain('Shared burden: duplicate supporting handles were collapsed.');
+    });
+
+    test('new Journey review shows captured owner/support labels and quantitative coverage', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review-labels' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review-labels' }) });
+        const proposed = makeArc({
+            title: 'Shared burden', section: 'character', primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek'],
+        });
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            scope: captureScope(), previousArcs: [], arcs: [proposed],
+            addedArcIds: [proposed.id], reviewArcIds: [proposed.id],
+            subjectCandidates: [
+                { entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] },
+                { entityId: 'entity-derek', name: 'Derek', mergedEntityIds: [] },
+            ],
+            stats: { added: 1, matched: 0, carried: 0, suppressedClosed: 0 },
+            diagnostics: {
+                characterContextMode: 'selected',
+                characterContextCoverage: [{
+                    entityId: 'entity-mara', name: 'Mara', status: 'partial',
+                    records: 1, fields: 3, tokens: 42, estimated: true,
+                }],
+            },
+        });
+
+        const review = document.querySelector('.sp-proposal-item').textContent;
+        expect(review).toContain('Primary subjectMara');
+        expect(review).toContain('Supporting participantsDerek');
+        expect(document.querySelector('.sp-context-coverage-review').textContent)
+            .toContain('1 record, 3 fields, 42 estimated tokens');
+    });
+
+    test('Apply invalidates the open review when a captured subject is merged', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review-remap' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review-remap' }) });
+        let candidates = [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }];
+        registerSafeCharacterContextProvider({ listCandidates: () => candidates });
+        const proposed = makeArc({ title: 'Mapped journey', section: 'character', primarySubjectEntityId: 'entity-mara' });
+        const { showScopedReview } = await import('../story_planner/render.js');
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            scope: captureScope(), previousArcs: [], arcs: [proposed],
+            addedArcIds: [proposed.id], reviewArcIds: [proposed.id],
+            subjectCandidates: candidates,
+            subjectIdentitySnapshot: [{ entityId: 'entity-mara' }],
+            stats: { added: 1, matched: 0, carried: 0, suppressedClosed: 0 }, diagnostics: {},
+        });
+        candidates = [{ entityId: 'entity-survivor', name: 'Mara', mergedEntityIds: ['entity-mara'] }];
+
+        document.querySelector('#mwt-sp-scoped-apply').click();
+
+        expect(document.querySelector('.sp-proposal-stale').textContent).toMatch(/merged or removed/);
+        expect(document.querySelector('#mwt-sp-scoped-apply').disabled).toBe(true);
+        expect(getArcs()).toEqual([]);
+    });
 });
 
 describe('Story Planner scoped generate dialog', () => {
@@ -526,5 +660,176 @@ describe('Story Planner scoped generate dialog', () => {
         await Promise.resolve();
         expect(document.querySelector('#mwt-sp-generate-modal')).not.toBeNull();
         expect(getStoryPlanRequestPreferences().sectionKeys.length).toBeGreaterThan(0);
+    });
+
+    test('offers labeled Any/Selected subject controls and disables candidates in Any mode', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+        });
+        await openDialog();
+        toggle(document.querySelector('input[name="sp-generate-section"][value="character"]'));
+
+        expect(document.querySelector('label[for="sp-subject-any"]').textContent).toContain('Any tracked character');
+        expect(document.querySelector('label[for="sp-subject-selected"]').textContent).toContain('Selected characters');
+        const candidate = document.querySelector('input[name="sp-generate-subject"]');
+        expect(candidate.disabled).toBe(true);
+
+        toggle(document.querySelector('#sp-subject-selected'));
+        expect(candidate.disabled).toBe(false);
+        expect(document.querySelector('label[for="sp-generate-subject-0"]').textContent).toContain('Mara');
+    });
+
+    test('bounds Journey subjects to the same 30-character table sent to the model', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => Array.from({ length: 31 }, (_, index) => ({
+                entityId: `entity-${String(index + 1).padStart(2, '0')}`,
+                name: `Character ${String(index + 1).padStart(2, '0')}`,
+                mergedEntityIds: [],
+            })),
+        });
+        await openDialog();
+        toggle(document.querySelector('input[name="sp-generate-section"][value="character"]'));
+
+        expect(document.querySelectorAll('input[name="sp-generate-subject"]')).toHaveLength(30);
+        expect(document.querySelector('#sp-generate-subject-list').textContent).toContain('Character 30');
+        expect(document.querySelector('#sp-generate-subject-list').textContent).not.toContain('Character 31');
+        expect(document.getElementById('mwt-sp-generate-modal').textContent).toContain('Only visible subjects can be sent');
+    });
+
+    test('excludes unassigned Journeys from Refresh with a visible manual-assignment reason', async () => {
+        const unassigned = makeArc({ title: 'Legacy journey', section: 'character' });
+        await openDialog();
+        setArcs([unassigned]);
+        const horizon = document.querySelector('input[name="sp-generate-section"][value="horizon"]');
+        const character = document.querySelector('input[name="sp-generate-section"][value="character"]');
+        horizon.checked = false;
+        character.checked = true;
+        character.dispatchEvent(new Event('change', { bubbles: true }));
+
+        expect(document.querySelector(`input[name="sp-generate-target"][value="${unassigned.id}"]`)).toBeNull();
+        expect(document.querySelector('#sp-generate-target-list').textContent)
+            .toContain('Legacy journey — assign a primary subject first.');
+    });
+
+    test('excludes Journeys whose stored owner is unavailable with a visible reason', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+        });
+        const unavailable = makeArc({
+            title: 'Missing owner journey', section: 'character',
+            primarySubjectEntityId: 'entity-gone',
+        });
+        await openDialog();
+        setArcs([unavailable]);
+        const horizon = document.querySelector('input[name="sp-generate-section"][value="horizon"]');
+        const character = document.querySelector('input[name="sp-generate-section"][value="character"]');
+        horizon.checked = false;
+        character.checked = true;
+        character.dispatchEvent(new Event('change', { bubbles: true }));
+
+        expect(document.querySelector(`input[name="sp-generate-target"][value="${unavailable.id}"]`)).toBeNull();
+        expect(document.querySelector('#sp-generate-target-list').textContent)
+            .toContain('primary subject is unavailable in Knowledge');
+    });
+
+    test('keeps a merged legacy owner eligible for Selected Refresh', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: ['entity-mara-old'] }],
+        });
+        const journey = makeArc({ title: 'Renamed owner', section: 'character', primarySubjectEntityId: 'entity-mara-old' });
+        setArcs([journey]);
+        setPlanData({
+            storyPlanRequestPreferences: {
+                operation: 'refresh', sectionKeys: ['character'], requestedCount: 1,
+                targetArcIds: [], subjectMode: 'selected', subjectEntityIds: ['entity-mara-old'],
+            },
+        });
+        const { openGenerateDialog } = await import('../story_planner/render.js');
+        openGenerateDialog();
+
+        expect(document.querySelector('input[name="sp-generate-subject"]').checked).toBe(true);
+        expect(document.querySelector(`input[name="sp-generate-target"][value="${journey.id}"]`)).not.toBeNull();
+    });
+
+    test('shows Safe Character Context coverage without coupling it to subject selection', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+            buildContext: async () => ({
+                text: '', records: 0, requested: 1, omitted: 1, chars: 0, tokens: 0,
+                coverage: [{ entityId: 'entity-mara', name: 'Mara', status: 'missing-dossier' }],
+            }),
+        });
+        setPlanData({ characterContext: { mode: 'selected', entityIds: ['entity-mara'] } });
+        await openDialog();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(document.querySelector('#sp-generate-context-coverage').textContent)
+            .toContain('Mara: Missing dossier');
+        expect(document.querySelector('#sp-subject-any').checked).toBe(true);
+    });
+
+    test('shows globally disabled Knowledge as disabled context coverage in the dialog', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [
+                { entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] },
+                { entityId: 'entity-ivo', name: 'Ivo', mergedEntityIds: [] },
+            ],
+            buildContext: async () => ({
+                text: '', records: 0, requested: 2, omitted: 2, chars: 0, tokens: 0,
+                status: 'disabled', coverage: [
+                    { entityId: 'entity-mara', name: 'Mara', status: 'disabled' },
+                    { entityId: 'entity-ivo', name: 'Ivo', status: 'disabled' },
+                ],
+            }),
+        });
+        setPlanData({ characterContext: { mode: 'selected', entityIds: ['entity-mara', 'entity-ivo'] } });
+        await openDialog();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const coverage = document.querySelector('#sp-generate-context-coverage').textContent;
+        expect(coverage).toContain('Safe Character Context disabled for this request.');
+        expect(coverage).toContain('Mara: Safe Character Context disabled');
+        expect(coverage).toContain('Ivo: Safe Character Context disabled');
+        expect(document.querySelector('#sp-generate-context-coverage [data-coverage-status="disabled"]')).not.toBeNull();
+    });
+});
+
+describe('Story Planner Journey ownership editor', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    test('assigns primary/supporting identities and visibly retains unresolved ids', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [
+                { entityId: 'entity-mara', name: 'Mara', mergedEntityIds: ['entity-mara-old'] },
+                { entityId: 'entity-derek', name: 'Derek', mergedEntityIds: [] },
+            ],
+        });
+        const arc = makeArc({
+            title: 'Owned journey', section: 'character', primarySubjectEntityId: 'entity-mara-old',
+            supportingParticipantEntityIds: ['entity-gone'],
+        });
+        setArcs([arc]);
+        document.body.innerHTML = '<div class="mwt-tab-content" data-tab="story-planner"></div>';
+        const { state } = await import('../story_planner/data.js');
+        state.modal = document.body;
+        state.contentEl = document.querySelector('[data-tab="story-planner"]');
+        const { renderContent, wireEvents } = await import('../story_planner/render.js');
+        renderContent();
+        wireEvents();
+
+        const primary = document.querySelector('[data-action="primary-subject"]');
+        expect(primary.value).toBe('entity-mara');
+        const unresolved = document.querySelector('[data-action="supporting-participants"] option[value="entity-gone"]');
+        expect(unresolved.textContent).toContain('Unresolved identity');
+
+        primary.value = 'entity-derek';
+        primary.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(getArcs()[0].primarySubjectEntityId).toBe('entity-derek');
+        expect(getArcs()[0].supportingParticipantEntityIds).toEqual(['entity-gone']);
+
+        state.modal = null;
+        state.contentEl = null;
     });
 });

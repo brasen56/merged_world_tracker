@@ -12,7 +12,7 @@
  * of the plan, while Apply replaces arcs in place.
  */
 
-import { captureRevision, sameRevision } from '../core/index.js';
+import { captureRevision, resolveSafeCharacterContextEntities, sameRevision } from '../core/index.js';
 import { sanitizeStoryPlanRequest } from './schema.js';
 import {
     getArcs, newArcId, sanitizeArc, sanitizeArcs, setArcsWithHistory,
@@ -57,9 +57,17 @@ export function findChangedProposalTargets(targetIds, revisions, current = getAr
  */
 export function buildArcDiff(source, proposed, operation = '') {
     const before = source || { title: '', body: '', section: '', beats: [] };
-    const fields = ['title', 'body', 'section']
+    const fields = ['title', 'body', 'section', 'primarySubjectEntityId', 'supportingParticipantEntityIds']
         .filter(field => before[field] !== proposed[field])
-        .map(field => ({ field: field === 'body' ? 'description' : field, before: before[field], after: proposed[field] }));
+        .filter(field => field !== 'supportingParticipantEntityIds'
+            || JSON.stringify(before[field] || []) !== JSON.stringify(proposed[field] || []))
+        .map(field => ({
+            field: field === 'body' ? 'description'
+                : field === 'primarySubjectEntityId' ? 'primary subject'
+                    : field === 'supportingParticipantEntityIds' ? 'supporting participants' : field,
+            before: Array.isArray(before[field]) ? before[field].join(', ') : before[field],
+            after: Array.isArray(proposed[field]) ? proposed[field].join(', ') : proposed[field],
+        }));
     const beforeBeats = (before.beats || []).filter(beat => beat.state === 'pending');
     const afterBeats = (proposed.beats || []).filter(beat => beat.state === 'pending');
     const beforeById = new Map(beforeBeats.map(beat => [beat.id, beat]));
@@ -156,6 +164,31 @@ export function previewScopedApply(proposal, current = getArcs()) {
 
 /** Apply a reviewed scoped proposal without clobbering unrelated live edits. */
 export function applyScopedPlanProposal(proposal, current = getArcs()) {
+    if (Array.isArray(proposal?.subjectIdentitySnapshot) && proposal.subjectIdentitySnapshot.length) {
+        const captured = proposal.subjectIdentitySnapshot
+            .map(item => ({
+                requestedEntityId: item?.requestedEntityId || item?.entityId || '',
+                entityId: item?.entityId || '',
+                // Snapshots created before the explicit state field represented
+                // only resolved identities, so a non-empty entityId is the safe
+                // compatibility interpretation for those review objects.
+                resolved: typeof item?.resolved === 'boolean' ? item.resolved : !!item?.entityId,
+            }))
+            .filter(item => item.requestedEntityId);
+        const resolution = resolveSafeCharacterContextEntities(captured.map(item => item.requestedEntityId));
+        const liveByRequestedId = new Map((resolution.resolved || []).map(item => [item.requestedEntityId, item.entityId]));
+        const changedEntityIds = captured
+            .filter(item => {
+                const liveEntityId = liveByRequestedId.get(item.requestedEntityId) || '';
+                const liveResolved = !!liveEntityId;
+                return liveResolved !== item.resolved
+                    || (item.resolved && liveEntityId !== item.entityId);
+            })
+            .map(item => item.requestedEntityId);
+        if (changedEntityIds.length) {
+            return { ok: false, reason: 'entity-mappings-changed', changedEntityIds };
+        }
+    }
     const plan = planScopedApply(proposal, current, { mintId: newArcId });
     if (!plan.ok) return plan;
     const { live, next, excludedRecurrences } = plan;

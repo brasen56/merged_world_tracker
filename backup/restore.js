@@ -359,6 +359,59 @@ function replaceSection(current, incoming, mode, name) {
     return { data: cloneBackupData(incoming || {}), summary };
 }
 
+/**
+ * Resolve imported Story Planner identity references against the destination's
+ * safe identity provider. Unknown/deleted ids are deliberately retained so the
+ * editor can show them as unresolved; only confirmed alias/merge resolutions
+ * are rewritten to the destination canonical id.
+ */
+function remapStoryPlannerIdentities(data, resolveEntities) {
+    const result = cloneBackupData(objectOrEmpty(data));
+    if (typeof resolveEntities !== 'function') return result;
+    const ids = new Set();
+    const collectArc = arc => {
+        if (arc?.primarySubjectEntityId) ids.add(String(arc.primarySubjectEntityId));
+        for (const entityId of arc?.supportingParticipantEntityIds || []) {
+            if (entityId) ids.add(String(entityId));
+        }
+    };
+    for (const arc of result.arcs || []) collectArc(arc);
+    for (const entry of result.history || []) {
+        for (const arc of entry?.arcs || []) collectArc(arc);
+    }
+    for (const entityId of result.storyPlanRequestPreferences?.subjectEntityIds || []) {
+        if (entityId) ids.add(String(entityId));
+    }
+    if (ids.size === 0) return result;
+
+    let resolution;
+    try { resolution = resolveEntities([...ids]); } catch { return result; }
+    const remapped = new Map((resolution?.resolved || [])
+        .filter(item => item?.requestedEntityId && item?.entityId)
+        .map(item => [String(item.requestedEntityId), String(item.entityId)]));
+    const resolveId = entityId => remapped.get(String(entityId)) || String(entityId || '');
+    const remapArc = arc => {
+        if (!arc || typeof arc !== 'object') return;
+        const primary = resolveId(arc.primarySubjectEntityId);
+        const seen = new Set();
+        arc.primarySubjectEntityId = primary;
+        arc.supportingParticipantEntityIds = (arc.supportingParticipantEntityIds || [])
+            .map(resolveId)
+            .filter(entityId => entityId && entityId !== primary && !seen.has(entityId) && seen.add(entityId));
+    };
+    for (const arc of result.arcs || []) remapArc(arc);
+    for (const entry of result.history || []) {
+        for (const arc of entry?.arcs || []) remapArc(arc);
+    }
+    if (result.storyPlanRequestPreferences?.subjectEntityIds) {
+        const seen = new Set();
+        result.storyPlanRequestPreferences.subjectEntityIds = result.storyPlanRequestPreferences.subjectEntityIds
+            .map(resolveId)
+            .filter(entityId => entityId && !seen.has(entityId) && seen.add(entityId));
+    }
+    return result;
+}
+
 function mergeStoryPlanner(current, incoming) {
     const summary = emptySummary();
     if (isEmptyObject(incoming)) {
@@ -473,6 +526,7 @@ export function planRestore(envelope, current = {}, {
     maxFormatVersion,
     exact = false,
     currentVersions = null,
+    resolveStoryPlannerEntities = null,
 } = {}) {
     const validation = validateBackupEnvelope(envelope, maxFormatVersion === undefined ? {} : { maxFormatVersion });
     if (!validation.ok) return { ok: false, validation, summary: {}, plan: null };
@@ -494,6 +548,9 @@ export function planRestore(envelope, current = {}, {
     // instead of reintroducing the section from the import.
     const blockedSections = [];
     const imported = validation.sections;
+    if (imported.storyPlanner) {
+        imported.storyPlanner = remapStoryPlannerIdentities(imported.storyPlanner, resolveStoryPlannerEntities);
+    }
 
     // ── Recovery ownership (design §5.1, Part 3) ───────────────────────────
     //

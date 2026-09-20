@@ -18,7 +18,7 @@ import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js
 import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg, saveRegistry, resolveRegistryKey } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
 import { registerSafeCharacterContextProvider } from '../core/index.js';
-import { buildPlannerCharacterContext, listPlannerCharacterCandidates } from './planner_context.js';
+import { buildPlannerCharacterContext, listPlannerCharacterCandidates, resolvePlannerCharacterEntities } from './planner_context.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
 import { resetStoreCache, hydrateCurrentBooks } from './store.js';
 // The §5.4 Retry seam: Knowledge's Retry action re-runs hydration (the one
@@ -100,6 +100,7 @@ export function persistCounters() {
 export function init(parentModal) {
     registerSafeCharacterContextProvider({
         listCandidates: listPlannerCharacterCandidates,
+        resolveEntities: resolvePlannerCharacterEntities,
         buildContext: buildPlannerCharacterContext,
     });
     if (parentModal) {

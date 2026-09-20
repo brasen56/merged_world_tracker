@@ -60,7 +60,7 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         const registry = { Mara: { entityId: 'internal-mara', uid: 7 }, Ivo: { entityId: 'internal-ivo', uid: 8 } };
         const selection = { mode: 'selected', entityIds: ['internal-mara', 'internal-ivo'] };
         _setCacheForTests('Knowledge Tracker', { registry });
-        expect(await buildPlannerCharacterContext(selection)).toEqual({ text: '', records: 0, requested: 2, omitted: 2, chars: 0, tokens: 0 });
+        expect(await buildPlannerCharacterContext(selection)).toMatchObject({ text: '', records: 0, requested: 2, omitted: 2, chars: 0, tokens: 0 });
         _setCacheForTests('Knowledge Tracker', {
             registry, stances: { Mara: 'wary', Ivo: 'hostile because of a SECRET' },
             relationships: { Mara: [{ target: 'Ivo', type: 'rival', notes: 'SECRET relationship note' }] },
@@ -73,7 +73,7 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         expect(result.tokens).toBe(Math.ceil(result.text.length / 4));
 
         _setCacheForTests('Knowledge Tracker', { registry, stances: { Mara: 'neutral' } });
-        expect(await buildPlannerCharacterContext(selection)).toEqual({
+        expect(await buildPlannerCharacterContext(selection)).toMatchObject({
             text: '', records: 0, requested: 2, omitted: 2, chars: 0, tokens: 0,
         });
     });
@@ -156,6 +156,25 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         expect(prompt).not.toContain('Secrets:');
     });
 
+    test('context Off reports selected Journey subjects as disabled without projecting dossier text', async () => {
+        const buildContext = vi.fn(async selection => ({
+            text: 'PRIVATE DOSSIER TEXT', records: 4, requested: 1, omitted: 1, chars: 20, tokens: 5, status: 'disabled',
+            coverage: [{ entityId: selection.primarySubjectEntityIds[0], name: 'Mara', status: 'disabled', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true }],
+        }));
+        registerSafeCharacterContextProvider({ buildContext });
+
+        const result = await buildSafeCharacterContext({
+            mode: 'off', entityIds: [], primarySubjectEntityIds: ['npc-a'],
+        });
+
+        expect(buildContext).toHaveBeenCalledOnce();
+        expect(result).toMatchObject({
+            text: '', records: 0, chars: 0, tokens: 0,
+            status: 'disabled', requested: 1, omitted: 1,
+        });
+        expect(result.coverage).toEqual([expect.objectContaining({ entityId: 'npc-a', status: 'disabled' })]);
+    });
+
     test('active-cast context resolves aliases to canonical registry names', async () => {
         const { buildPlannerCharacterContext } = await import('../knowledge/planner_context.js');
         const { state: knowledgeState } = await import('../knowledge/state.js');
@@ -183,6 +202,19 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         const result = await buildPlannerCharacterContext({ mode: 'selected', entityIds: ['absorbed'] });
         expect(result.records).toBe(1);
         expect(result.text).toContain('Character: Mara');
+    });
+
+    test('stale selected entity ids receive per-entity unavailable coverage', async () => {
+        const { buildPlannerCharacterContext } = await import('../knowledge/planner_context.js');
+        const { _setCacheForTests } = await import('../knowledge/store.js');
+        _setCacheForTests('Knowledge Tracker', { registry: {} });
+
+        const result = await buildPlannerCharacterContext({ mode: 'selected', entityIds: ['entity-removed'] });
+
+        expect(result).toMatchObject({ requested: 1, records: 0, omitted: 1 });
+        expect(result.coverage).toEqual([expect.objectContaining({
+            entityId: 'entity-removed', status: 'unavailable', records: 0,
+        })]);
     });
 
     // Regression: extractDossierFieldValues matches one LINE at a time, so a
@@ -220,14 +252,66 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
     });
 
     test('disabled Knowledge provider returns an empty grounding projection', async () => {
-        const { buildPlannerCharacterContext } = await import('../knowledge/planner_context.js');
+        const { buildPlannerCharacterContext, listPlannerCharacterCandidates, resolvePlannerCharacterEntities } = await import('../knowledge/planner_context.js');
         const { state: knowledgeState } = await import('../knowledge/state.js');
         const { _setCacheForTests } = await import('../knowledge/store.js');
         setFakeContextExtras({ globalSettings: { enableKnowledge: false } });
         knowledgeState.wiScript = { loadWorldInfo: async () => { throw new Error('should not read lorebook'); } };
-        _setCacheForTests('Knowledge Tracker', { registry: { Mara: { entityId: 'npc-a', uid: 7 } } });
-        await expect(buildPlannerCharacterContext({ mode: 'selected', entityIds: ['npc-a'] }))
-            .resolves.toMatchObject({ text: '', records: 0, chars: 0, tokens: 0 });
+        _setCacheForTests('Knowledge Tracker', { registry: {
+            Mara: { entityId: 'npc-a', uid: 7, mergedFrom: [{ entityId: 'npc-a-old', name: 'Old Mara', at: 1 }] },
+            Ivo: { entityId: 'npc-b', uid: 8 },
+        } });
+        await expect(buildPlannerCharacterContext({
+            mode: 'selected', entityIds: ['npc-a-old', 'npc-a', 'npc-b'], primarySubjectEntityIds: ['npc-a'],
+        })).resolves.toMatchObject({
+            text: '', records: 0, requested: 2, omitted: 2, chars: 0, tokens: 0,
+            status: 'disabled',
+            coverage: [
+                expect.objectContaining({ entityId: 'npc-a', name: 'Mara', status: 'disabled' }),
+                expect.objectContaining({ entityId: 'npc-b', name: 'Ivo', status: 'disabled' }),
+            ],
+        });
+        expect(listPlannerCharacterCandidates()).toEqual([
+            expect.objectContaining({ entityId: 'npc-b', name: 'Ivo' }),
+            expect.objectContaining({ entityId: 'npc-a', name: 'Mara' }),
+        ]);
+        expect(resolvePlannerCharacterEntities(['npc-a'])).toMatchObject({
+            resolved: [expect.objectContaining({ requestedEntityId: 'npc-a', entityId: 'npc-a' })],
+            missing: [], available: true,
+        });
+    });
+
+    test('selected primary subjects are prioritized within eligible context and disabled omissions are explicit', async () => {
+        const { buildPlannerCharacterContext } = await import('../knowledge/planner_context.js');
+        const { state: knowledgeState } = await import('../knowledge/state.js');
+        const { _setCacheForTests } = await import('../knowledge/store.js');
+        const registry = Object.fromEntries(Array.from({ length: 7 }, (_, index) => {
+            const name = `NPC ${index + 1}`;
+            return [name, { entityId: `npc-${index + 1}`, uid: index + 1 }];
+        }));
+        knowledgeState.wiScript = {
+            loadWorldInfo: async () => ({
+                entries: Object.fromEntries(Array.from({ length: 7 }, (_, index) => [index + 1, {
+                    uid: index + 1, comment: `NPC ${index + 1}`, content: `NPC ${index + 1} | Human |\nRole: Role ${index + 1}`,
+                }])),
+            }),
+        };
+        _setCacheForTests('Knowledge Tracker', { registry });
+
+        const selected = await buildPlannerCharacterContext({
+            mode: 'selected', entityIds: Object.values(registry).map(item => item.entityId),
+            primarySubjectEntityIds: ['npc-7'],
+        });
+        expect(selected.text.split('\n')[0]).toBe('Character: NPC 7');
+        expect(selected.coverage.find(item => item.entityId === 'npc-7')?.records).toBe(1);
+
+        const omitted = await buildPlannerCharacterContext({
+            mode: 'selected', entityIds: ['npc-1'], primarySubjectEntityIds: ['npc-7'],
+        });
+        expect(omitted).toMatchObject({ requested: 2, records: 1, omitted: 1 });
+        expect(omitted.coverage).toContainEqual(expect.objectContaining({
+            entityId: 'npc-7', name: 'NPC 7', status: 'disabled', records: 0, fields: 0, tokens: 0, estimated: true,
+        }));
     });
 
     test('settings UI persists palette and entity-id selection per chat', () => {

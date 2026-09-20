@@ -46,6 +46,7 @@ export { notify } from './notifications.js';
 export {
     registerSafeCharacterContextProvider,
     listSafeCharacterContextCandidates,
+    resolveSafeCharacterContextEntities,
     buildSafeCharacterContext,
 } from './character_context.js';
 // Phase 0 diagnostics — in-memory ring buffer + last-run map

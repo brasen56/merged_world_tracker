@@ -450,6 +450,21 @@ describe('regeneration progress safety', () => {
         expect(arcs[0].turnsSinceAdvance).toBe(8);
     });
 
+    test('legacy full-plan regeneration preserves supporting participants without subject markers', () => {
+        const previous = makeArc({
+            title: 'Shared burden', section: 'character',
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek'],
+            beats: ['Old setup'],
+        });
+        const incoming = makeArc({ title: previous.title, section: 'character', beats: ['New setup'] });
+
+        const { arcs } = mergeRegeneratedArcs([previous], [incoming], { preserveSupportingParticipants: true });
+
+        expect(arcs[0].primarySubjectEntityId).toBe('entity-mara');
+        expect(arcs[0].supportingParticipantEntityIds).toEqual(['entity-derek']);
+    });
+
     test('deleted and materially edited arcs are not resurrected or overwritten', () => {
         const deleted = makeArc({ title: 'Deleted Arc' });
         const edited = makeArc({ title: 'Edited Arc', body: 'User version' });

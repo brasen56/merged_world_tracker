@@ -508,7 +508,7 @@ describe('Part 2 migrations — every legacy fixture migrates without touching l
         expect(result.issues.some(issue => issue.code === 'plan-text-migrated')).toBe(true);
 
         // Already-migrated data passes through untouched.
-        const current = prepareStore(STORE_SCHEMAS.storyPlanner, result.data, { version: 2 });
+        const current = prepareStore(STORE_SCHEMAS.storyPlanner, result.data, { version: 3 });
         expect(current.status).toBe('valid');
         expect(current.changed).toBe(false);
     });

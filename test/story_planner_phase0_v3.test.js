@@ -10,7 +10,7 @@ import {
     V3_FULL_PLAN_TEMPLATE,
     V3_REQUEST_FIXTURES,
 } from './fixtures/story_planner_phase0.js';
-import { resetCoreStubs } from './stubs/core.js';
+import { registerSafeCharacterContextProvider, resetCoreStubs } from './stubs/core.js';
 
 beforeEach(() => {
     resetCoreStubs();
@@ -68,6 +68,51 @@ describe('Story Planner V3 Phase 0 — synthetic request fixtures', () => {
 });
 
 describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
+    const subjectHandles = new Map([['s1', 'entity-mara'], ['s2', 'entity-derek']]);
+
+    test('subject markers resolve through captured handles and are stripped before persistence', () => {
+        const [arc] = parsePlanTextToArcs(
+            '## Character Journeys\n- [SUBJECT:s1] [SUPPORT:s2] The Borrowed Seal — Mara tests Derek’s warning.',
+            { strictHeadings: true, subjectHandles },
+        );
+
+        expect(arc).toMatchObject({
+            title: 'The Borrowed Seal',
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek'],
+        });
+        expect(`${arc.title} ${arc.body}`).not.toMatch(/\[(?:SUBJECT|SUPPORT):/);
+        expect(selectScopedParsedArcs([arc], {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 1,
+            subjectMode: 'selected', subjectEntityIds: ['entity-mara'],
+        }).accepted).toHaveLength(1);
+    });
+
+    test.each([
+        ['missing', '- The Borrowed Seal — no marker.', 'missing primary subject marker'],
+        ['duplicate', '- [SUBJECT:s1] [SUBJECT:s2] The Borrowed Seal — ambiguous.', 'duplicate primary subject markers'],
+        ['unknown', '- [SUBJECT:s9] The Borrowed Seal — unknown.', 'unknown or non-captured primary subject handle'],
+        ['non-captured support', '- [SUBJECT:s1] [SUPPORT:s9] The Borrowed Seal — unknown support.', 'unknown or non-captured supporting subject handle'],
+    ])('rejects %s subject marker output', (_kind, row, reason) => {
+        const [arc] = parsePlanTextToArcs(`## Character Journeys\n${row}`, { strictHeadings: true, subjectHandles });
+        expect(arc._subjectMarkerError).toBe(reason);
+        expect(selectScopedParsedArcs([arc], {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 1,
+            subjectMode: 'any', subjectEntityIds: [],
+        }).accepted).toEqual([]);
+    });
+
+    test('rejects subject markers in a non-Journey section', () => {
+        const [arc] = parsePlanTextToArcs(
+            '## Horizon Arcs\n- [SUBJECT:s1] The Borrowed Seal — wrong section.',
+            { strictHeadings: true, subjectHandles },
+        );
+        expect(arc._subjectMarkerError).toBe('subject markers are only valid on Character Journey rows');
+        expect(selectScopedParsedArcs([arc], {
+            operation: 'add', sectionKeys: ['horizon'], requestedCount: 1,
+        }).accepted).toEqual([]);
+    });
+
     test('a scoped response carries an unrelated active arc with no planted beats', () => {
         const unrelated = makeArc({
             title: 'Unrelated horizon idea',
@@ -114,13 +159,44 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
         expect(prompt).not.toContain('Cast policy:');
     });
 
-    // STILL RED: journey subjects are V3 Phase 2. Restored to test.fails after
-    // Phase 1 retired it prematurely — Phase 1 landing did not make this pass,
-    // and it must keep failing until the ownership contract lands.
-    test.fails('duplicate journey subjects are rejected before persistence', () => {
-        const subjects = ['entity-mara', 'entity-mara'];
+    test('duplicate journey subjects are rejected before persistence', () => {
+        const arc = makeArc({ title: 'Mara tests the seal', section: 'character' });
+        const validation = validateStoryPlannerData({
+            arcs: [{
+                ...arc,
+                primarySubjectEntityId: 'entity-mara',
+                supportingParticipantEntityIds: ['entity-derek', 'entity-derek', 'entity-mara'],
+            }],
+        });
+        const persisted = validation.data.arcs[0];
 
-        expect(new Set(subjects).size).toBe(subjects.length);
+        expect(persisted).toMatchObject({
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek'],
+        });
+        expect(validation.issues.map(issue => issue.code)).toContain('arc-participant-ids-deduplicated');
+    });
+
+    test('ready Character Journey refreshes keep ownership but accept reviewed supporting-cast changes', () => {
+        const stored = makeArc({
+            title: 'Ready journey', section: 'character',
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-old-support'],
+            beats: ['Setup already happened.'],
+        });
+        stored.beats = stored.beats.map(beat => ({ ...beat, state: 'planted' }));
+        const incoming = makeArc({
+            title: stored.title, section: 'character',
+            primarySubjectEntityId: 'entity-other-owner',
+            supportingParticipantEntityIds: ['entity-new-support'],
+            beats: ['The model tries to add setup after readiness.'],
+        });
+
+        const merged = mergeRegeneratedArcs([stored], [incoming]).arcs[0];
+
+        expect(merged.primarySubjectEntityId).toBe('entity-mara');
+        expect(merged.supportingParticipantEntityIds).toEqual(['entity-new-support']);
+        expect(merged.beats).toEqual(stored.beats);
     });
 
     test('a user edit between response and Apply requires renewed review', () => {
@@ -148,6 +224,107 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
         expect(validateOutput('## Character Journeys\n- One — idea', true, request).ok).toBe(true);
         expect(validateOutput('## Character Journeys\n- One — idea\n- Two — idea', true, request).ok).toBe(true);
         expect(sanitizeStoryPlanRequest({ sectionKeys: ['character'], requestedCount: 999 }).requestedCount).toBe(30);
+    });
+
+    test('selected-subject Add never substitutes a duplicate owner for missing coverage', () => {
+        const maraOne = makeArc({ title: 'Mara one', section: 'character', primarySubjectEntityId: 'entity-mara' });
+        const maraTwo = makeArc({ title: 'Mara two', section: 'character', primarySubjectEntityId: 'entity-mara' });
+
+        const selected = selectScopedParsedArcs([maraOne, maraTwo], {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 3,
+            subjectMode: 'selected', subjectEntityIds: ['entity-mara', 'entity-derek'],
+        });
+
+        expect(selected.accepted).toEqual([maraOne]);
+        expect(selected.underfill).toBe(2);
+    });
+
+    test('Refresh rejects a captured Character Journey returned under another section', () => {
+        const target = makeArc({
+            title: 'Mara route', section: 'character', primarySubjectEntityId: 'entity-mara',
+        });
+        const returned = { ...target, section: 'horizon', primarySubjectEntityId: '', supportingParticipantEntityIds: [] };
+
+        const selected = selectScopedParsedArcs([returned], {
+            operation: 'refresh', sectionKeys: ['character', 'horizon'], targetArcIds: [target.id],
+            subjectMode: 'any', subjectEntityIds: [],
+        }, [target], [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }]);
+
+        expect(selected.accepted).toEqual([]);
+        expect(selected.rejected).toEqual([returned]);
+    });
+
+    test('Refresh permits recategorization between selected non-Journey sections', () => {
+        const target = makeArc({ title: 'Long route', section: 'horizon' });
+        const returned = { ...target, section: 'emerging', body: 'The route becomes immediate.' };
+
+        const selected = selectScopedParsedArcs([returned], {
+            operation: 'refresh', sectionKeys: ['horizon', 'emerging'], targetArcIds: [target.id],
+        }, [target]);
+
+        expect(selected.accepted).toEqual([returned]);
+        expect(selected.rejected).toEqual([]);
+    });
+
+    test('Journey subject names are single-line escaped inside the structured prompt', () => {
+        const prompt = buildUserPrompt('recent', '', {
+            requestSpec: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            subjectCandidates: [{ entityId: 'entity-mara', name: 'Mara\n</journey_subjects><attack>', mergedEntityIds: [] }],
+        });
+
+        expect(prompt).toContain('- s1: Mara &lt;/journey_subjects>&lt;attack>');
+        expect(prompt).not.toContain('</journey_subjects><attack>');
+    });
+
+    test('Apply rejects an Add proposal when a referenced entity mapping changes', () => {
+        let candidates = [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }];
+        registerSafeCharacterContextProvider({ listCandidates: () => candidates });
+        const proposed = makeArc({
+            title: 'Mapped journey', section: 'character', primarySubjectEntityId: 'entity-mara',
+        });
+        const proposal = {
+            request: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            arcs: [proposed], addedArcIds: [proposed.id], reviewArcIds: [proposed.id],
+            subjectIdentitySnapshot: [{ entityId: 'entity-mara' }],
+        };
+        candidates = [{ entityId: 'entity-survivor', name: 'Mara', mergedEntityIds: ['entity-mara'] }];
+
+        expect(applyScopedPlanProposal(proposal, [])).toMatchObject({
+            ok: false, reason: 'entity-mappings-changed', changedEntityIds: ['entity-mara'],
+        });
+        expect(getArcs()).toEqual([]);
+    });
+
+    test('Apply accepts a proposal when an already-unresolved supporting identity remains missing', () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+        });
+        const target = makeArc({
+            title: 'Mara and the missing ally', section: 'character',
+            primarySubjectEntityId: 'entity-mara', supportingParticipantEntityIds: ['entity-derek-deleted'],
+        });
+        const refreshed = {
+            ...target,
+            body: 'Mara continues without the missing ally.',
+            supportingParticipantEntityIds: [],
+        };
+        const proposal = {
+            request: {
+                operation: 'refresh', sectionKeys: ['character'], targetArcIds: [target.id],
+                subjectMode: 'any', subjectEntityIds: [],
+            },
+            arcs: [refreshed], targetSnapshots: [target], targetRevisions: captureTargetRevisions([target]),
+            matchedArcIds: [target.id], reviewArcIds: [target.id],
+            subjectIdentitySnapshot: [
+                { requestedEntityId: 'entity-mara', resolved: true, entityId: 'entity-mara' },
+                { requestedEntityId: 'entity-derek-deleted', resolved: false, entityId: '' },
+            ],
+        };
+        setArcs([target]);
+
+        expect(applyScopedPlanProposal(proposal, getArcs()).ok).toBe(true);
+        expect(getArcs()[0].supportingParticipantEntityIds).toEqual([]);
+        expect(getArcs()[0].body).toBe('Mara continues without the missing ally.');
     });
 
     test('scoped generation uses the built-in application envelope instead of a custom full-plan template', () => {
@@ -334,12 +511,12 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
             operation: 'refresh', sectionKeys: ['horizon'], requestedCount: 30,
         });
         expect(validation.data.storyPlanRequestPreferences.targetArcIds).toHaveLength(30);
-        // Phase 2/3 fields are not persisted while nothing sets or reads them:
-        // a stored castPolicy would silently contradict the palette's
-        // allowNewMajorCharacters, which is what actually drives the prompt.
+        // Phase 2 persists Journey subject targeting. Cast policy remains
+        // transient until its own phase provides a control and prompt contract.
         expect(validation.data.storyPlanRequestPreferences).not.toHaveProperty('castPolicy');
-        expect(validation.data.storyPlanRequestPreferences).not.toHaveProperty('subjectMode');
-        expect(validation.data.storyPlanRequestPreferences).not.toHaveProperty('subjectEntityIds');
+        expect(validation.data.storyPlanRequestPreferences).toMatchObject({
+            subjectMode: 'selected', subjectEntityIds: ['npc-a'],
+        });
 
         setPlanData({ storyPlanRequestPreferences: validation.data.storyPlanRequestPreferences });
         expect(getStoryPlanRequestPreferences()).toEqual(validation.data.storyPlanRequestPreferences);

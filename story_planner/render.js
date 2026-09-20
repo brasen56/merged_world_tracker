@@ -41,10 +41,10 @@ import {
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
     getStoryPlanRequestPreferences,
 } from './data.js';
-import { listSafeCharacterContextCandidates } from '../core/character_context.js';
+import { buildSafeCharacterContext, listSafeCharacterContextCandidates } from '../core/character_context.js';
 import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, getStoryPlanRequestError, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
-import { generatePlan } from './generation.js';
+import { generatePlan, MAX_JOURNEY_SUBJECT_CANDIDATES } from './generation.js';
 import { applyScopedPlanProposal, buildArcDiff, previewScopedApply } from './proposals.js';
 import {
     applyTargetedProposal,
@@ -291,6 +291,43 @@ function renderBeatEditor(arc) {
         </details>`;
 }
 
+function candidateForEntityId(candidates, entityId) {
+    return candidates.find(candidate => candidate.entityId === entityId
+        || candidate.mergedEntityIds?.includes(entityId));
+}
+
+function renderArcOwnershipEditor(arc) {
+    if (arc.section !== 'character') return '';
+    const candidates = listSafeCharacterContextCandidates();
+    const primaryCandidate = candidateForEntityId(candidates, arc.primarySubjectEntityId);
+    const primaryValue = primaryCandidate?.entityId || arc.primarySubjectEntityId || '';
+    const primaryOptions = [
+        '<option value="">Unassigned</option>',
+        ...candidates.map(candidate => `<option value="${escapeHtml(candidate.entityId)}" ${candidate.entityId === primaryValue ? 'selected' : ''}>${escapeHtml(candidate.name)}</option>`),
+        ...(primaryValue && !primaryCandidate
+            ? [`<option value="${escapeHtml(primaryValue)}" selected>Unresolved identity: ${escapeHtml(primaryValue)}</option>`]
+            : []),
+    ].join('');
+    const supportingValues = new Set((arc.supportingParticipantEntityIds || []).map(entityId => {
+        const candidate = candidateForEntityId(candidates, entityId);
+        return candidate?.entityId || entityId;
+    }));
+    const unresolvedSupporting = [...supportingValues].filter(entityId => !candidateForEntityId(candidates, entityId));
+    const supportingOptions = [
+        ...candidates.filter(candidate => candidate.entityId !== primaryValue).map(candidate =>
+            `<option value="${escapeHtml(candidate.entityId)}" ${supportingValues.has(candidate.entityId) ? 'selected' : ''}>${escapeHtml(candidate.name)}</option>`),
+        ...unresolvedSupporting.map(entityId => `<option value="${escapeHtml(entityId)}" selected>Unresolved identity: ${escapeHtml(entityId)}</option>`),
+    ].join('');
+    return `<fieldset class="sp-ownership" style="margin:8px 0">
+        <legend class="mwt-label">Journey ownership</legend>
+        <label for="sp-primary-${escapeHtml(arc.id)}">Primary subject</label>
+        <select id="sp-primary-${escapeHtml(arc.id)}" class="mwt-input" data-action="primary-subject" data-id="${escapeHtml(arc.id)}">${primaryOptions}</select>
+        <label for="sp-support-${escapeHtml(arc.id)}">Supporting participants</label>
+        <select id="sp-support-${escapeHtml(arc.id)}" class="mwt-input" data-action="supporting-participants" data-id="${escapeHtml(arc.id)}" multiple size="${Math.min(5, Math.max(2, candidates.length || unresolvedSupporting.length || 2))}">${supportingOptions}</select>
+        ${candidates.length ? '<p class="mwt-text-dim mwt-text-sm">Hold Ctrl/Cmd to select multiple supporting participants.</p>' : '<p class="mwt-text-dim mwt-text-sm">Knowledge is unavailable or has no tracked characters. Saved unresolved identities are retained.</p>'}
+    </fieldset>`;
+}
+
 function renderArcCard(arc) {
     const dimmed = arc.status !== 'active' ? ' sp-arc--muted' : '';
     const pinnedCls = arc.pinned ? ' sp-arc--pinned' : '';
@@ -313,6 +350,7 @@ function renderArcCard(arc) {
             </div>
             <textarea class="sp-arc-body" data-action="body" data-id="${escapeHtml(arc.id)}" rows="2"
                       placeholder="What shift does this arc introduce?" aria-label="Arc description for ${escapeHtml(arc.title || 'untitled arc')}">${escapeHtml(arc.body)}</textarea>
+            ${renderArcOwnershipEditor(arc)}
             ${arc.status === 'parked' ? `<div class="sp-activate-when">
                 <label for="sp-activate-when-${escapeHtml(arc.id)}">Resume when</label>
                 <input id="sp-activate-when-${escapeHtml(arc.id)}" type="text" class="mwt-input" data-action="activateWhen" data-id="${escapeHtml(arc.id)}"
@@ -521,16 +559,75 @@ const SCOPED_REVIEW_MODAL_ID = 'mwt-sp-scoped-review-modal';
 
 function eligibleRefreshArcs(request) {
     const sections = new Set(request.sectionKeys);
-    return getArcs().filter(arc => arc.status === 'active' && sections.has(arc.section));
+    const subjects = new Set(request.subjectEntityIds || []);
+    const candidates = listSafeCharacterContextCandidates();
+    return getArcs().filter(arc => arc.status === 'active' && sections.has(arc.section)
+        && (arc.section !== 'character' || !!candidateForEntityId(candidates, arc.primarySubjectEntityId))
+        && (request.subjectMode !== 'selected' || arc.section !== 'character'
+            || subjects.has(candidateForEntityId(candidates, arc.primarySubjectEntityId)?.entityId)));
 }
 
-// No subject clause: journey subjects are V3 Phase 2 and the dialog cannot set
-// them, so naming one here would describe a control the user does not have.
 function requestSummary(request) {
     const labels = request.sectionKeys.map(key => getSectionMeta(key)?.label || key);
+    const subjects = request.sectionKeys.includes('character')
+        ? request.subjectMode === 'selected'
+            ? ` Selected Journey subjects: ${request.subjectEntityIds.length}.`
+            : ' Journey subjects: any tracked character.'
+        : '';
     return request.operation === 'add'
-        ? `Add up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} in ${labels.join(', ')}; use the selected public context.`
-        : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}; use the selected public context.`;
+        ? `Add up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects} Use the selected public context.`
+        : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects} Use the selected public context.`;
+}
+
+const CHARACTER_COVERAGE_LABELS = Object.freeze({
+    complete: 'Complete public context',
+    partial: 'Partial public context',
+    'omitted-for-budget': 'Omitted for context budget',
+    'missing-dossier': 'Missing dossier',
+    unavailable: 'Dossier unavailable',
+    disabled: 'Safe Character Context disabled',
+});
+
+function renderCharacterContextCoverage(mode, coverage = [], contextStatus = '') {
+    if ((mode === 'off' || contextStatus === 'disabled') && !coverage.length) {
+        return '<p class="mwt-text-dim mwt-text-sm" data-coverage-status="disabled">Safe Character Context disabled for this request.</p>';
+    }
+    if (!coverage.length) {
+        return '<p class="mwt-text-dim mwt-text-sm">No public character-context records were requested or available.</p>';
+    }
+    const disabledNotice = mode === 'off' || contextStatus === 'disabled'
+        ? '<p class="mwt-text-dim mwt-text-sm" data-coverage-status="disabled">Safe Character Context disabled for this request.</p>'
+        : '';
+    return `${disabledNotice}<ul class="sp-context-coverage">${coverage.map(item => {
+        const statusLabel = CHARACTER_COVERAGE_LABELS[item.status] || item.status || 'Unavailable';
+        const name = item.name || item.entityId || 'Unknown character';
+        const counts = `${Number(item.records) || 0} record${Number(item.records) === 1 ? '' : 's'}, ${Number(item.fields) || 0} field${Number(item.fields) === 1 ? '' : 's'}, ${Number(item.tokens) || 0}${item.estimated ? ' estimated' : ''} tokens`;
+        return `<li data-coverage-status="${escapeHtml(item.status || 'unavailable')}"><strong>${escapeHtml(name)}</strong>: ${escapeHtml(statusLabel)} <span class="mwt-text-dim">(${escapeHtml(counts)})</span></li>`;
+    }).join('')}</ul>`;
+}
+
+function proposalIdentityLabel(proposal, entityId) {
+    if (!entityId) return '(none)';
+    const candidate = (proposal.subjectCandidates || []).find(item => item.entityId === entityId
+        || item.mergedEntityIds?.includes(entityId));
+    return candidate?.name || `Unresolved identity: ${entityId}`;
+}
+
+function labelProposalDiffIdentities(proposal, diff) {
+    return {
+        ...diff,
+        fields: diff.fields.map(change => {
+            if (change.field === 'primary subject') {
+                return { ...change, before: proposalIdentityLabel(proposal, change.before), after: proposalIdentityLabel(proposal, change.after) };
+            }
+            if (change.field === 'supporting participants') {
+                const labels = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean)
+                    .map(entityId => proposalIdentityLabel(proposal, entityId)).join(', ') || '(none)';
+                return { ...change, before: labels(change.before), after: labels(change.after) };
+            }
+            return change;
+        }),
+    };
 }
 
 /**
@@ -553,16 +650,20 @@ function scopedReviewRows(proposal, live = getArcs()) {
             title: update.after.title || update.before.title,
             section: update.after.section,
             arc: update.after,
-            diff: buildArcDiff(update.before, update.after),
+            diff: labelProposalDiffIdentities(proposal, buildArcDiff(update.before, update.after)),
         })),
     ];
     return { ok: true, rows, excludedRecurrences: preview.excludedRecurrences };
 }
 
 /** A new arc has nothing to diff against, so show what would be stored. */
-function renderScopedAddition(arc) {
+function renderScopedAddition(arc, proposal) {
     const beats = (arc.beats || []).filter(beat => beat.state === 'pending');
+    const ownership = arc.section === 'character'
+        ? `<dl class="sp-proposal-ownership"><dt>Primary subject</dt><dd>${escapeHtml(proposalIdentityLabel(proposal, arc.primarySubjectEntityId))}</dd><dt>Supporting participants</dt><dd>${escapeHtml((arc.supportingParticipantEntityIds || []).map(entityId => proposalIdentityLabel(proposal, entityId)).join(', ') || '(none)')}</dd></dl>`
+        : '';
     return `
+        ${ownership}
         ${arc.body ? `<p class="mwt-text-sm">${escapeHtml(arc.body)}</p>` : ''}
         ${beats.length ? `<h4>Setup beats</h4><ol class="sp-proposal-diff">${beats.map(beat => `<li>${escapeHtml(beat.text)}</li>`).join('')}</ol>` : '<p class="mwt-text-dim mwt-text-sm">No setup beats proposed.</p>'}`;
 }
@@ -590,8 +691,14 @@ export function showScopedReview(proposal) {
         diagnostics.overflow ? `${diagnostics.overflow} overflow suggestion${diagnostics.overflow === 1 ? '' : 's'} excluded.` : '',
         diagnostics.omittedTargetIds?.length ? `${diagnostics.omittedTargetIds.length} selected target${diagnostics.omittedTargetIds.length === 1 ? '' : 's'} omitted and left unchanged.` : '',
         diagnostics.rejectedSuggestions?.length ? `${diagnostics.rejectedSuggestions.length} unrequested suggestion${diagnostics.rejectedSuggestions.length === 1 ? '' : 's'} rejected.` : '',
+        ...(diagnostics.participantDiagnostics || []),
         diagnostics.validationWarning || '',
     ].filter(Boolean);
+    const coverageHtml = renderCharacterContextCoverage(
+        diagnostics.characterContextMode,
+        diagnostics.characterContextCoverage,
+        diagnostics.characterContextStatus,
+    );
     // Recurrences are reported from the Apply preview rather than from the
     // merge, so the exclusions shown are the ones Apply will actually make
     // against live storage — which may differ from the merge-time set if the
@@ -610,6 +717,7 @@ export function showScopedReview(proposal) {
             ${proposal.stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason || 'A selected target changed while this proposal was generated. Generate again to review the current plan.')}</p>` : ''}
             <p><strong>${escapeHtml(requestSummary(proposal.request))}</strong></p>
             <p class="mwt-text-dim mwt-text-sm">${proposal.stats.added} new · ${proposal.stats.matched} refreshed · ${proposal.stats.carried} carried forward</p>
+            <details class="sp-context-coverage-review"><summary>Safe Character Context coverage</summary>${coverageHtml}</details>
             ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
             <fieldset class="sp-proposal-selection">
                 <legend class="mwt-label">Changes to apply</legend>
@@ -619,7 +727,7 @@ export function showScopedReview(proposal) {
                         <input id="mwt-sp-proposal-${escapeHtml(row.id)}" type="checkbox" name="mwt-sp-proposal" value="${escapeHtml(row.id)}" checked>
                         <span><strong>${escapeHtml(row.title || 'Untitled arc')}</strong><small>${escapeHtml(getSectionMeta(row.section)?.label || row.section)} · ${row.kind === 'added' ? 'new arc' : 'refreshed'}</small></span>
                     </label>
-                    ${row.kind === 'added' ? renderScopedAddition(row.arc) : renderArcDiff(row.diff)}
+                    ${row.kind === 'added' ? renderScopedAddition(row.arc, proposal) : renderArcDiff(row.diff)}
                 </div>`).join('') : '<p class="mwt-text-dim mwt-text-sm">No material proposal was returned. Diagnostics are preserved below.</p>'}
             </fieldset>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8">
@@ -641,6 +749,9 @@ export function showScopedReview(proposal) {
             if (result.reason === 'targets-changed') {
                 apply.disabled = true;
                 apply.insertAdjacentHTML('beforebegin', '<p class="sp-proposal-stale" role="alert">A selected target changed while this proposal was open. Generate again for those targets; unrelated plan edits were preserved.</p>');
+            } else if (result.reason === 'entity-mappings-changed') {
+                apply.disabled = true;
+                apply.insertAdjacentHTML('beforebegin', '<p class="sp-proposal-stale" role="alert">A Journey subject was merged or removed while this proposal was open. Generate again to review the current identity mapping.</p>');
             } else if (result.reason === 'no-changes') {
                 notify('Story Planner', 'No selected changes were applied. Review diagnostics are still available.', 'info');
             } else notify('Story Planner', 'The reviewed plan could not be saved.', 'error');
@@ -668,6 +779,9 @@ export function openGenerateDialog() {
     }
     const context = getCharacterContextSelection();
     const preferences = getStoryPlanRequestPreferences();
+    const allSubjectCandidates = listSafeCharacterContextCandidates();
+    const subjectCandidates = allSubjectCandidates.slice(0, MAX_JOURNEY_SUBJECT_CANDIDATES);
+    const savedSubjectIds = new Set(preferences.subjectEntityIds || []);
     const configuredCustomTemplates = !!(getSettings().customSystemPrompt?.trim() || getSettings().customUserPrompt?.trim());
     const sectionChecks = SECTIONS.map(section => `
         <label class="sp-mode-label" for="sp-generate-section-${section.key}">
@@ -691,7 +805,20 @@ export function openGenerateDialog() {
                 <label class="mwt-label" for="sp-generate-count">Requested count</label>
                 <input id="sp-generate-count" class="mwt-input" type="number" min="1" max="30" value="${preferences.requestedCount || getArcCount()}" style="max-width:100px">
             </div>
-            <p class="mwt-text-dim mwt-text-sm">Journey-subject ownership and enforceable cast policies are not available in scoped generation yet. Character Journeys may concern any established subject, and generated ideas are reviewed before saving. This scope applies to this request only — auto-generate still regenerates the whole plan and saves without review.</p>
+            <fieldset id="sp-generate-subjects" style="border:0;padding:0;margin:12px 0 0">
+                <legend class="mwt-label">Character Journey subjects</legend>
+                <label class="sp-mode-label" for="sp-subject-any"><input id="sp-subject-any" type="radio" name="sp-generate-subject-mode" value="any" ${preferences.subjectMode !== 'selected' ? 'checked' : ''}> Any tracked character</label>
+                <label class="sp-mode-label" for="sp-subject-selected"><input id="sp-subject-selected" type="radio" name="sp-generate-subject-mode" value="selected" ${preferences.subjectMode === 'selected' ? 'checked' : ''}> Selected characters</label>
+                <div id="sp-generate-subject-list" class="mwt-mt-8">${subjectCandidates.map((candidate, index) => `
+                    <label for="sp-generate-subject-${index}"><input id="sp-generate-subject-${index}" type="checkbox" name="sp-generate-subject" value="${escapeHtml(candidate.entityId)}" ${savedSubjectIds.has(candidate.entityId) || candidate.mergedEntityIds?.some(id => savedSubjectIds.has(id)) ? 'checked' : ''}> ${escapeHtml(candidate.name)}</label>`).join('')
+                    || '<span class="mwt-text-dim mwt-text-sm">No assignable tracked characters are currently available.</span>'}</div>
+                ${allSubjectCandidates.length > subjectCandidates.length ? `<p class="mwt-text-dim mwt-text-sm">Showing the first ${MAX_JOURNEY_SUBJECT_CANDIDATES} tracked characters. Only visible subjects can be sent in this request.</p>` : ''}
+                <p class="mwt-text-dim mwt-text-sm">Subject selection assigns ownership only. It does not add dossier fields to Safe Character Context.</p>
+            </fieldset>
+            <details class="mwt-mt-8" open>
+                <summary>Safe Character Context coverage</summary>
+                <div id="sp-generate-context-coverage" aria-live="polite"><p class="mwt-text-dim mwt-text-sm">Checking public-context coverage…</p></div>
+            </details>
             <fieldset id="sp-generate-targets" style="border:0;padding:0;margin:12px 0 0"><legend class="mwt-label">Eligible arcs (select up to ${MAX_STORY_PLAN_REQUEST_IDS})</legend><div id="sp-generate-target-list"></div></fieldset>
             <p class="${configuredCustomTemplates ? 'sp-proposal-diagnostics' : 'mwt-text-dim mwt-text-sm'}">${configuredCustomTemplates
                 ? 'Scoped generation uses the built-in safe request format, so your saved custom templates are not used here.'
@@ -705,7 +832,9 @@ export function openGenerateDialog() {
         const operation = modal.querySelector('input[name="sp-generate-operation"]:checked')?.value || 'add';
         const sectionKeys = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
         const targetArcIds = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')].map(input => input.value);
-        return sanitizeStoryPlanRequest({ operation, sectionKeys, subjectMode: 'any', subjectEntityIds: [], requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: 'allowed', targetArcIds });
+        const subjectMode = modal.querySelector('input[name="sp-generate-subject-mode"]:checked')?.value || 'any';
+        const subjectEntityIds = [...modal.querySelectorAll('input[name="sp-generate-subject"]:checked')].map(input => input.value);
+        return sanitizeStoryPlanRequest({ operation, sectionKeys, subjectMode, subjectEntityIds, requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: 'allowed', targetArcIds });
     };
     // Once the user has touched the target list, their selection is
     // authoritative — including an empty one. Falling back to the saved
@@ -722,18 +851,32 @@ export function openGenerateDialog() {
         const list = modal.querySelector('#sp-generate-target-list');
         if (!list) return;
         const sectionKeys = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
-        const eligible = eligibleRefreshArcs({ sectionKeys });
-        const signature = JSON.stringify(eligible.map(arc => arc.id));
+        const request = getRequest();
+        const eligible = eligibleRefreshArcs(request);
+        const unassigned = getArcs().filter(arc => arc.status === 'active' && sectionKeys.includes(arc.section)
+            && arc.section === 'character' && !arc.primarySubjectEntityId);
+        const unavailableOwners = getArcs().filter(arc => arc.status === 'active' && sectionKeys.includes(arc.section)
+            && arc.section === 'character' && arc.primarySubjectEntityId
+            && !candidateForEntityId(allSubjectCandidates, arc.primarySubjectEntityId));
+        const signature = JSON.stringify([
+            ...eligible.map(arc => arc.id),
+            ...unassigned.map(arc => `unassigned:${arc.id}`),
+            ...unavailableOwners.map(arc => `unavailable-owner:${arc.id}`),
+        ]);
         if (renderedTargetIds === signature) return;
         const selected = new Set([...list.querySelectorAll('input:checked')].map(input => input.value));
         renderedTargetIds = signature;
-        list.innerHTML = eligible.map(arc => {
-            const inputId = `sp-generate-target-${arc.id}`;
-            const checked = targetSelectionTouched
-                ? selected.has(arc.id)
-                : preferences.targetArcIds.includes(arc.id);
-            return `<label class="sp-generate-target" for="${escapeHtml(inputId)}"><input id="${escapeHtml(inputId)}" type="checkbox" name="sp-generate-target" value="${escapeHtml(arc.id)}" ${checked ? 'checked' : ''}> <span>${escapeHtml(arc.title || 'Untitled arc')}</span></label>`;
-        }).join('') || '<span class="mwt-text-dim mwt-text-sm">No eligible active arcs in the selected sections.</span>';
+        list.innerHTML = [
+            ...eligible.map(arc => {
+                const inputId = `sp-generate-target-${arc.id}`;
+                const checked = targetSelectionTouched
+                    ? selected.has(arc.id)
+                    : preferences.targetArcIds.includes(arc.id);
+                return `<label class="sp-generate-target" for="${escapeHtml(inputId)}"><input id="${escapeHtml(inputId)}" type="checkbox" name="sp-generate-target" value="${escapeHtml(arc.id)}" ${checked ? 'checked' : ''}> <span>${escapeHtml(arc.title || 'Untitled arc')}</span></label>`;
+            }),
+            ...unassigned.map(arc => `<div class="sp-generate-target mwt-text-dim mwt-text-sm"><span>${escapeHtml(arc.title || 'Untitled arc')} — assign a primary subject first.</span></div>`),
+            ...unavailableOwners.map(arc => `<div class="sp-generate-target mwt-text-dim mwt-text-sm"><span>${escapeHtml(arc.title || 'Untitled arc')} — primary subject is unavailable in Knowledge; assign an available subject before refreshing.</span></div>`),
+        ].join('') || '<span class="mwt-text-dim mwt-text-sm">No eligible active arcs in the selected sections.</span>';
     };
 
     const syncSummary = () => {
@@ -745,6 +888,11 @@ export function openGenerateDialog() {
         if (count) count.disabled = request.operation !== 'add';
         const targets = modal.querySelector('#sp-generate-targets');
         if (targets) targets.hidden = request.operation !== 'refresh';
+        const subjects = modal.querySelector('#sp-generate-subjects');
+        if (subjects) subjects.hidden = !request.sectionKeys.includes('character');
+        modal.querySelectorAll('input[name="sp-generate-subject"]').forEach(input => {
+            input.disabled = request.subjectMode !== 'selected';
+        });
         const checkedTargets = modal.querySelectorAll('input[name="sp-generate-target"]:checked').length;
         modal.querySelectorAll('input[name="sp-generate-target"]').forEach(input => {
             input.disabled = !input.checked && checkedTargets >= MAX_STORY_PLAN_REQUEST_IDS;
@@ -759,7 +907,7 @@ export function openGenerateDialog() {
         syncSummary();
     });
     modal.querySelectorAll('input[name="sp-generate-section"]').forEach(input => input.addEventListener('change', refresh));
-    modal.querySelectorAll('input[name="sp-generate-operation"], #sp-generate-count').forEach(input => input.addEventListener('change', syncSummary));
+    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], #sp-generate-count').forEach(input => input.addEventListener('change', refresh));
     modal.querySelector('#sp-generate-cancel')?.addEventListener('click', () => hideModal(GENERATE_MODAL_ID));
     modal.querySelector('#sp-generate-legacy')?.addEventListener('click', async () => {
         hideModal(GENERATE_MODAL_ID);
@@ -800,6 +948,21 @@ export function openGenerateDialog() {
     });
     refresh();
     if (!showModal(GENERATE_MODAL_ID)) hideModal(GENERATE_MODAL_ID);
+    const refreshContextCoverage = () => {
+        const request = getRequest();
+        const primarySubjectEntityIds = request.sectionKeys.includes('character') && request.subjectMode === 'selected'
+            ? request.subjectEntityIds
+            : [];
+        Promise.resolve(buildSafeCharacterContext({ ...context, primarySubjectEntityIds })).then(result => {
+            const host = modal.querySelector('#sp-generate-context-coverage');
+            if (host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, result?.coverage || [], result?.status || '');
+        }).catch(() => {
+            const host = modal.querySelector('#sp-generate-context-coverage');
+            if (host?.isConnected) host.innerHTML = renderCharacterContextCoverage(context.mode, []);
+        });
+    };
+    modal.querySelectorAll('input[name="sp-generate-section"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"]').forEach(input => input.addEventListener('change', refreshContextCoverage));
+    refreshContextCoverage();
 }
 
 // ─── Render ──────────────────────────────────────────────────────────────────
@@ -1446,9 +1609,17 @@ function handleArcsChange(e) {
     if (!id) return;
 
     if (action === 'section') {
-        mutateWithProjectionCheck(() => updateArc(id, { section: el.value }));
+        mutateWithProjectionCheck(() => updateArc(id, el.value === 'character'
+            ? { section: el.value }
+            : { section: el.value, primarySubjectEntityId: '', supportingParticipantEntityIds: [] }));
     } else if (action === 'status') {
         mutateWithProjectionCheck(() => setArcStatus(id, el.value));
+    } else if (action === 'primary-subject') {
+        const supporting = (getArcs().find(arc => arc.id === id)?.supportingParticipantEntityIds || [])
+            .filter(entityId => entityId !== el.value);
+        mutateWithProjectionCheck(() => updateArc(id, { primarySubjectEntityId: el.value, supportingParticipantEntityIds: supporting }));
+    } else if (action === 'supporting-participants') {
+        mutateWithProjectionCheck(() => updateArc(id, { supportingParticipantEntityIds: [...el.selectedOptions].map(option => option.value) }));
     } else {
         return;
     }

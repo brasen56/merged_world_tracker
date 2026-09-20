@@ -58,9 +58,11 @@ import { stripNonNarrative } from '../../core/strip.js';
 // payload through. Enforce-mode behavior is pinned against the real modules
 // directly (test/budget.test.js), the injection_diagnostics tier5 pattern.
 import { enforceInjectionBudget } from '../../core/budget.js';
+import { _resetSafeCharacterContextProvider } from '../../core/character_context.js';
 export {
     registerSafeCharacterContextProvider,
     listSafeCharacterContextCandidates,
+    resolveSafeCharacterContextEntities,
     buildSafeCharacterContext,
 } from '../../core/character_context.js';
 
@@ -98,6 +100,7 @@ export function resetCoreStubs() {
     _resetDiagnostics();
     // Same isolation for the generation coordinator's singleton queue.
     _resetCoordinator();
+    _resetSafeCharacterContextProvider();
 }
 
 /**

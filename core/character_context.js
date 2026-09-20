@@ -22,16 +22,50 @@ export function listSafeCharacterContextCandidates() {
     }
 }
 
+export function resolveSafeCharacterContextEntities(entityIds) {
+    const requested = [...new Set((entityIds || []).map(String).filter(Boolean))];
+    try {
+        const values = provider?.resolveEntities?.(requested);
+        if (values && typeof values === 'object') return values;
+        // Keep the shared identity seam useful for lightweight providers (and
+        // older adapters) that expose candidates but not a dedicated resolver.
+        // Consumers still resolve aliases/merges through this service rather
+        // than reimplementing identity matching in each feature module.
+        const candidates = provider?.listCandidates?.();
+        if (!Array.isArray(candidates)) return { resolved: [], missing: requested, available: false };
+        const resolved = [];
+        const missing = [];
+        for (const entityId of requested) {
+            const candidate = candidates.find(item => item?.entityId === entityId
+                || (Array.isArray(item?.mergedEntityIds) && item.mergedEntityIds.includes(entityId)));
+            if (candidate) resolved.push({ requestedEntityId: entityId, ...candidate });
+            else missing.push(entityId);
+        }
+        return { resolved, missing, available: true };
+    } catch (err) {
+        console.warn('[MWT] Could not resolve safe character-context entities:', err);
+        return { resolved: [], missing: requested, available: false };
+    }
+}
+
 export async function buildSafeCharacterContext(selection) {
-    if (selection?.mode === 'off') return { text: '', records: 0, requested: 0, omitted: 0, chars: 0, tokens: 0 };
+    if (selection?.mode === 'off' && !(selection?.primarySubjectEntityIds || []).length) {
+        return { text: '', records: 0, requested: 0, omitted: 0, chars: 0, tokens: 0, coverage: [] };
+    }
     try {
         const result = await provider?.buildContext?.(selection);
-        return result && typeof result === 'object'
+        const projection = result && typeof result === 'object'
             ? result
-            : { text: '', records: 0, requested: 0, omitted: 0 };
+            : { text: '', records: 0, requested: 0, omitted: 0, chars: 0, tokens: 0, coverage: [] };
+        // Off may still consult the provider so selected Journey subjects receive
+        // visible disabled coverage. The shared boundary must nevertheless make
+        // the projection empty even if an adapter accidentally returns content.
+        return selection?.mode === 'off'
+            ? { ...projection, text: '', records: 0, chars: 0, tokens: 0 }
+            : projection;
     } catch (err) {
         console.warn('[MWT] Could not build safe character context:', err);
-        return { text: '', records: 0, requested: 0, omitted: 0 };
+        return { text: '', records: 0, requested: 0, omitted: 0, chars: 0, tokens: 0, coverage: [] };
     }
 }
 

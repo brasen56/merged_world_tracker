@@ -55,6 +55,7 @@ export const MAX_PROGRESS_METADATA_ENTRIES = 500;
 export const MAX_PROGRESS_IDENTITY_LENGTH = 500;
 export const MAX_IGNORED_PROGRESS_EVIDENCE_LENGTH = 2000;
 export const MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH = 120;
+export const MAX_ARC_PARTICIPANT_IDS = 24;
 export const STORY_PLANNER_METRIC_COUNTER_MAX = 1_000_000_000;
 export const STORY_PALETTE_EMPHASES = Object.freeze(['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation']);
 export const STORY_PALETTE_ESCALATIONS = Object.freeze(['restrained', 'balanced', 'escalating']);
@@ -68,13 +69,8 @@ export const MAX_STORY_PLAN_REQUEST_IDS = 30;
  * The persisted slice of the request envelope: only the choices the manual
  * dialog can actually make today.
  *
- * `subjectMode`/`subjectEntityIds` (V3 Phase 2) and `castPolicy` (Phase 3) are
- * deliberately NOT persisted. They exist on the transient request shape because
- * §4.1 defines them there, but no control sets them and no prompt reads them —
- * cast expansion is still driven by `storyPalette.allowNewMajorCharacters`. A
- * stored `castPolicy` would be a second source of truth that is silently
- * ignored, so each field lands here with the phase that makes it real, together
- * with its own migration.
+ * Phase 2 persists Journey subject targeting. `castPolicy` remains transient
+ * until the phase that gives it a first-class control and prompt contract.
  */
 export function sanitizeStoryPlanRequestPreferences(value) {
     const raw = isObject(value) ? value : {};
@@ -89,6 +85,8 @@ export function sanitizeStoryPlanRequestPreferences(value) {
             ? Math.min(MAX_STORY_PLAN_REQUEST_COUNT, Math.max(1, Math.floor(Number(raw.requestedCount))))
             : 1,
         targetArcIds: request.targetArcIds,
+        subjectMode: request.subjectMode,
+        subjectEntityIds: request.subjectEntityIds,
     };
 }
 
@@ -103,7 +101,7 @@ export function sanitizeStoryPlanRequest(value, { sectionKeys = SECTION_KEYS } =
         ? raw.sectionKeys.map(item => String(item).trim()).filter(key => allowedSections.has(key))
         : [])].slice(0, 5);
     const subjectEntityIds = [...new Set(Array.isArray(raw.subjectEntityIds)
-        ? raw.subjectEntityIds.map(item => String(item).trim()).filter(Boolean)
+        ? raw.subjectEntityIds.map(item => String(item).trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)).filter(Boolean)
         : [])].slice(0, MAX_STORY_PLAN_REQUEST_IDS);
     const targetArcIds = [...new Set(Array.isArray(raw.targetArcIds)
         ? raw.targetArcIds.map(item => String(item).trim()).filter(Boolean)
@@ -139,6 +137,12 @@ export function getStoryPlanRequestError(value) {
         && request.subjectMode === 'selected'
         && !request.subjectEntityIds.length) {
         return 'Select at least one NPC, or change Journey subjects to Any subject.';
+    }
+    if (request.operation === 'add'
+        && request.sectionKeys.includes('character')
+        && request.subjectMode === 'selected'
+        && request.requestedCount < request.subjectEntityIds.length) {
+        return `Request at least ${request.subjectEntityIds.length} arc${request.subjectEntityIds.length === 1 ? '' : 's'} to cover every selected Journey subject.`;
     }
     return '';
 }
@@ -271,6 +275,12 @@ export function sanitizeArc(raw, { preserveId = true } = {}) {
         seenBeatIds.add(canonical.id);
         return canonical;
     }).filter(beat => beat.text);
+    const primarySubjectEntityId = String(src.primarySubjectEntityId ?? '').trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH);
+    const supportingParticipantEntityIds = [...new Set(Array.isArray(src.supportingParticipantEntityIds)
+        ? src.supportingParticipantEntityIds
+            .map(value => String(value ?? '').trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH))
+            .filter(value => value && value !== primarySubjectEntityId)
+        : [])].slice(0, MAX_ARC_PARTICIPANT_IDS);
     return {
         id: arcId,
         title: String(src.title ?? '').trim().slice(0, MAX_ARC_TITLE),
@@ -279,6 +289,8 @@ export function sanitizeArc(raw, { preserveId = true } = {}) {
         status: ARC_STATUSES.includes(src.status) ? src.status : 'active',
         pinned: src.pinned === true,
         focused: src.focused === true,
+        primarySubjectEntityId,
+        supportingParticipantEntityIds,
         ...(Object.hasOwn(src, 'activateWhen')
             ? { activateWhen: String(src.activateWhen ?? '').trim().slice(0, MAX_ARC_BODY) }
             : {}),
@@ -450,6 +462,9 @@ function cleanBulletContent(raw) {
 /** A request-local arc handle, wherever the model put it on the line. */
 const ARC_HANDLE_RE = /\[\s*ARC\s*:\s*([^\]]*?)\s*\]/gi;
 const ARC_HANDLE_STRIP_RE = /\s*\[\s*ARC\s*:[^\]]*\]\s*/gi;
+const SUBJECT_HANDLE_RE = /\[\s*SUBJECT\s*:\s*([^\]]*?)\s*\]/gi;
+const SUPPORT_HANDLE_RE = /\[\s*SUPPORT\s*:\s*([^\]]*?)\s*\]/gi;
+const SUBJECT_MARKER_STRIP_RE = /\s*\[\s*(?:SUBJECT|SUPPORT)\s*:[^\]]*\]\s*/gi;
 
 /**
  * Remove every request-local arc handle from a bullet and return the handle
@@ -470,6 +485,50 @@ function extractArcHandle(raw) {
     return {
         handle: found.size === 1 ? [...found][0] : '',
         content: text.replace(ARC_HANDLE_STRIP_RE, ' '),
+    };
+}
+
+function extractSubjectMarkers(raw, subjectHandles, section) {
+    const text = String(raw);
+    const primaryMarkers = [...text.matchAll(SUBJECT_HANDLE_RE)].map(match => match[1].trim().toLowerCase());
+    const supportMarkers = [...text.matchAll(SUPPORT_HANDLE_RE)]
+        .flatMap(match => match[1].split(','))
+        .map(handle => handle.trim().toLowerCase())
+        .filter(Boolean);
+    const hasMarkers = primaryMarkers.length > 0 || supportMarkers.length > 0;
+    const contractActive = subjectHandles instanceof Map;
+    let error = '';
+    let primarySubjectEntityId = '';
+    const supportingParticipantEntityIds = [];
+    let participantDiagnostic = '';
+
+    if (hasMarkers && section !== 'character') error = 'subject markers are only valid on Character Journey rows';
+    if (contractActive && section === 'character' && primaryMarkers.length !== 1) {
+        error = primaryMarkers.length ? 'duplicate primary subject markers' : 'missing primary subject marker';
+    }
+    if (!error && primaryMarkers.length === 1) {
+        primarySubjectEntityId = String(subjectHandles?.get(primaryMarkers[0]) || '');
+        if (!primarySubjectEntityId) error = 'unknown or non-captured primary subject handle';
+    }
+    if (!error && supportMarkers.length) {
+        const seen = new Set();
+        for (const handle of supportMarkers) {
+            const entityId = String(subjectHandles?.get(handle) || '');
+            if (!entityId) { error = 'unknown or non-captured supporting subject handle'; break; }
+            if (entityId === primarySubjectEntityId || seen.has(entityId)) {
+                participantDiagnostic = 'duplicate supporting handles were collapsed';
+                continue;
+            }
+            seen.add(entityId);
+            supportingParticipantEntityIds.push(entityId);
+        }
+    }
+    return {
+        content: text.replace(SUBJECT_MARKER_STRIP_RE, ' '),
+        primarySubjectEntityId,
+        supportingParticipantEntityIds,
+        error,
+        participantDiagnostic,
     };
 }
 
@@ -598,13 +657,19 @@ export function parsePlanTextToArcs(text, options = {}) {
         if (bullet) {
             if (!section) { last = null; continue; }
             const extracted = extractArcHandle(bullet[1]);
-            const content = cleanBulletContent(extracted.content);
+            const subjects = extractSubjectMarkers(extracted.content, options.subjectHandles, section);
+            const content = cleanBulletContent(subjects.content);
             if (!content) { last = null; continue; }
             const { title, body } = splitTitleBody(content);
             // preserveId:false mints a fresh id — identical to data.js's
             // makeArc(), which is just sanitizeArc with this option. A captured
             // identity, if any, replaces it once the whole response is read.
             last = sanitizeArc({ title: stripArcFlags(title), body, section }, { preserveId: false });
+            last.primarySubjectEntityId = subjects.primarySubjectEntityId;
+            last.supportingParticipantEntityIds = subjects.supportingParticipantEntityIds;
+            if (options.subjectHandles instanceof Map) last._subjectContractActive = true;
+            if (subjects.error) last._subjectMarkerError = subjects.error;
+            if (subjects.participantDiagnostic) last._participantDiagnostic = subjects.participantDiagnostic;
             arcs.push(last);
             identities.push({ arc: last, handle: extracted.handle });
             continue;
@@ -695,6 +760,13 @@ export function checkArc(record) {
     if (record.body !== undefined && typeof record.body !== 'string') return { code: 'arc-body-not-string', message: 'Arc body must be a string.' };
     if (!SECTION_KEYS.has(record.section)) return { code: 'arc-invalid-section', message: 'Arc section is invalid.' };
     if (!ARC_STATUSES.includes(record.status)) return { code: 'arc-invalid-status', message: 'Arc status is invalid.' };
+    if (record.primarySubjectEntityId !== undefined
+        && (typeof record.primarySubjectEntityId !== 'string' || record.primarySubjectEntityId.length > MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)) {
+        return { code: 'arc-invalid-primary-subject', message: 'Arc primary subject identity is invalid.' };
+    }
+    if (record.supportingParticipantEntityIds !== undefined && !Array.isArray(record.supportingParticipantEntityIds)) {
+        return { code: 'arc-invalid-participants', message: 'Arc supporting participant identities must be an array.' };
+    }
     if (!Array.isArray(record.beats)) {
         return { code: 'arc-invalid-beats', message: 'Arc beats must be an array.' };
     }
@@ -740,6 +812,7 @@ export function validateStoryPlannerData(data) {
         const arcs = checkPlainRecordList(data.arcs, 'arcs', checkArc, { path: ['arcs'] });
         accepted.arcs = sanitizeArcs(arcs.records);
         collectBeatIdIssues(arcs.records, ['arcs'], issues);
+        collectParticipantIdIssues(arcs.records, ['arcs'], issues);
         // Same counting the backup summary always did: the check counts the
         // arcs it accepted; canonicalization never removes one.
         stats.added += arcs.stats.added;
@@ -766,6 +839,7 @@ export function validateStoryPlannerData(data) {
                 const checked = checkPlainRecordList(entry.arcs, 'history arcs', checkArc, { path: ['history', index, 'arcs'] });
                 issues.push(...checked.issues);
                 collectBeatIdIssues(checked.records, ['history', index, 'arcs'], issues);
+                collectParticipantIdIssues(checked.records, ['history', index, 'arcs'], issues);
                 accepted.history.push({ ...entry, arcs: sanitizeArcs(checked.records) });
             } else {
                 accepted.history.push({ ...entry });
@@ -874,6 +948,23 @@ function collectBeatIdIssues(arcs, path, issues) {
     }
 }
 
+function collectParticipantIdIssues(arcs, path, issues) {
+    for (let arcIndex = 0; arcIndex < arcs.length; arcIndex++) {
+        const raw = arcs[arcIndex];
+        if (!isObject(raw) || !Array.isArray(raw.supportingParticipantEntityIds)) continue;
+        const primary = typeof raw.primarySubjectEntityId === 'string' ? raw.primarySubjectEntityId.trim() : '';
+        const values = raw.supportingParticipantEntityIds.map(value => String(value ?? '').trim()).filter(Boolean);
+        if (new Set(values).size !== values.length || (primary && values.includes(primary))) {
+            issues.push(repairIssue(
+                'arc-participant-ids-deduplicated',
+                [...path, arcIndex, 'supportingParticipantEntityIds'],
+                'Duplicate supporting identities and the primary subject repeated as support were removed.',
+                raw.supportingParticipantEntityIds,
+            ));
+        }
+    }
+}
+
 // ─── Migration (design §4.2 / §6.5, Part 2) ──────────────────────────────────
 
 /**
@@ -954,13 +1045,36 @@ export function migrateStoryPlannerV1ToV2(data) {
     return { data: next, issues: [] };
 }
 
+/** v2 -> v3: journey ownership is explicit; legacy arcs remain unassigned. */
+export function migrateStoryPlannerV2ToV3(data) {
+    if (!isObject(data)) return { data, issues: [] };
+    const migrateArc = raw => sanitizeArc({
+        ...raw,
+        primarySubjectEntityId: raw?.primarySubjectEntityId ?? '',
+        supportingParticipantEntityIds: raw?.supportingParticipantEntityIds ?? [],
+    }, { preserveId: true });
+    return {
+        data: {
+            ...data,
+            arcs: Array.isArray(data.arcs) ? data.arcs.map(migrateArc) : [],
+            history: Array.isArray(data.history) ? data.history.map(entry => isObject(entry) && Array.isArray(entry.arcs)
+                ? { ...entry, arcs: entry.arcs.map(migrateArc) }
+                : entry) : data.history,
+            ...(Object.hasOwn(data, 'storyPlanRequestPreferences')
+                ? { storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(data.storyPlanRequestPreferences) }
+                : {}),
+        },
+        issues: [],
+    };
+}
+
 /** Story Planner store schema — arcs under their own key since v1. */
 export const storyPlannerSchema = defineStoreSchema({
     id: 'storyPlanner',
     metadataKey: 'story_planner_data',
-    currentVersion: 2,
+    currentVersion: 3,
     createDefault: () => ({ arcs: [] }),
-    migrations: { 0: migrateStoryPlannerV0ToV1, 1: migrateStoryPlannerV1ToV2 },
+    migrations: { 0: migrateStoryPlannerV0ToV1, 1: migrateStoryPlannerV1ToV2, 2: migrateStoryPlannerV2ToV3 },
     validate: validateStoryPlannerData,
     policy: defineIssuePolicy({
         repair: [
@@ -968,6 +1082,7 @@ export const storyPlannerSchema = defineStoreSchema({
             'progress-watermarks-invalid', 'progress-watermarks-pruned',
             'ignored-progress-evidence-invalid', 'ignored-progress-evidence-pruned',
             'phase7-metrics-canonicalized',
+            'arc-participant-ids-deduplicated',
         ],
         fatal: ['root-not-object'],
         record: [
@@ -978,6 +1093,8 @@ export const storyPlannerSchema = defineStoreSchema({
             'arc-body-not-string',
             'arc-invalid-section',
             'arc-invalid-status',
+            'arc-invalid-primary-subject',
+            'arc-invalid-participants',
             'arc-invalid-beats',
             'arc-invalid-beat-record',
             'arc-invalid-turns',

@@ -17,6 +17,7 @@ import {
     getChatMeta,
     getEpoch,
     persistChatMetaNow,
+    resolveSafeCharacterContextEntities,
 } from '../core/index.js';
 import { collectBackup } from './collect.js';
 import { backupDataEqual, cloneBackupData, METADATA_KEYS } from './data.js';
@@ -614,6 +615,7 @@ export async function previewRestore(envelope, { modes = {}, exact = false, scop
         currentIdentity: getChatIdentity(),
         currentMessageIds: collectCurrentMessageIds(),
         currentVersions: collectCurrentVersions(),
+        resolveStoryPlannerEntities: resolveSafeCharacterContextEntities,
         exact,
     });
     // Attach the resolved modes so fingerprintPreview can bind the token to the

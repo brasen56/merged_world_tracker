@@ -47,44 +47,150 @@ export function publicDossierSection(content) {
 }
 
 export function listPlannerCharacterCandidates() {
-    if (getGlobalSettings().enableKnowledge === false) return [];
     const registry = getRegistry();
     return Object.entries(registry)
         .filter(([, info]) => info && typeof info.entityId === 'string' && info.entityId)
-        .map(([name, info]) => ({ entityId: info.entityId, name }))
+        .map(([name, info]) => ({
+            entityId: info.entityId,
+            name,
+            mergedEntityIds: Array.isArray(info.mergedFrom) ? info.mergedFrom.map(item => item?.entityId).filter(Boolean) : [],
+            dossierAvailable: Number.isFinite(Number(info.uid)),
+        }))
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function selectedNames(selection, registry) {
+export function resolvePlannerCharacterEntities(entityIds) {
+    const requested = [...new Set((entityIds || []).map(String).filter(Boolean))];
+    const candidates = listPlannerCharacterCandidates();
+    const resolved = [];
+    const missing = [];
+    for (const entityId of requested) {
+        const candidate = candidates.find(item => item.entityId === entityId || item.mergedEntityIds.includes(entityId));
+        if (candidate) resolved.push({ requestedEntityId: entityId, ...candidate });
+        else missing.push(entityId);
+    }
+    return { resolved, missing, available: true };
+}
+
+function selectedEntries(selection, registry) {
     const mode = selection?.mode;
     if (mode === 'active') {
         const present = getCurrentWorldStateScene()?.present || [];
-        return [...new Set(present.map(name => resolveRegistryKey(registry, name)).filter(Boolean))];
+        return [...new Set(present.map(name => resolveRegistryKey(registry, name)).filter(Boolean))]
+            .map(name => ({ name, info: registry[name] }));
     }
     if (mode !== 'selected') return [];
-    const ids = new Set(Array.isArray(selection?.entityIds) ? selection.entityIds : []);
-    return Object.entries(registry)
-        .filter(([, info]) => ids.has(info?.entityId)
-            || (Array.isArray(info?.mergedFrom) && info.mergedFrom.some(previous => ids.has(previous?.entityId))))
-        .map(([name]) => name);
+    const resolution = resolvePlannerCharacterEntities(selection?.entityIds || []);
+    const seen = new Set();
+    return resolution.resolved.flatMap(item => {
+        if (seen.has(item.entityId)) return [];
+        seen.add(item.entityId);
+        return [{ name: item.name, info: registry[item.name], requestedEntityId: item.requestedEntityId }];
+    });
+}
+
+function primarySubjectCoverage(selection, candidates, status) {
+    return [...new Set((selection?.primarySubjectEntityIds || []).map(String).filter(Boolean))].map(entityId => {
+        const candidate = candidates.find(item => item.entityId === entityId || item.mergedEntityIds.includes(entityId));
+        return {
+            entityId: candidate?.entityId || entityId,
+            name: candidate?.name || '',
+            status,
+            records: 0,
+            fields: 0,
+            chars: 0,
+            tokens: 0,
+            estimated: true,
+        };
+    });
+}
+
+function globallyDisabledCoverage(selection) {
+    const requestedIds = [
+        ...(selection?.mode === 'selected' ? selection?.entityIds || [] : []),
+        ...(selection?.primarySubjectEntityIds || []),
+    ];
+    const resolution = resolvePlannerCharacterEntities(requestedIds);
+    const coverage = [];
+    const seen = new Set();
+    for (const item of resolution.resolved || []) {
+        if (seen.has(item.entityId)) continue;
+        seen.add(item.entityId);
+        coverage.push({
+            entityId: item.entityId,
+            name: item.name || '',
+            status: 'disabled',
+            records: 0,
+            fields: 0,
+            chars: 0,
+            tokens: 0,
+            estimated: true,
+        });
+    }
+    for (const entityId of resolution.missing || []) {
+        if (seen.has(entityId)) continue;
+        seen.add(entityId);
+        coverage.push({
+            entityId,
+            name: '',
+            status: 'disabled',
+            records: 0,
+            fields: 0,
+            chars: 0,
+            tokens: 0,
+            estimated: true,
+        });
+    }
+    return coverage;
 }
 
 export async function buildPlannerCharacterContext(selection) {
-    if (selection?.mode === 'off' || getGlobalSettings().enableKnowledge === false) {
-        return { text: '', records: 0, requested: 0, omitted: 0, chars: 0, tokens: 0 };
+    const candidates = listPlannerCharacterCandidates();
+    if (selection?.mode === 'off') {
+        const coverage = primarySubjectCoverage(selection, candidates, 'disabled');
+        return { text: '', records: 0, requested: coverage.length, omitted: coverage.length, chars: 0, tokens: 0, status: 'disabled', coverage };
+    }
+    if (getGlobalSettings().enableKnowledge === false) {
+        const coverage = globallyDisabledCoverage(selection);
+        return { text: '', records: 0, requested: coverage.length, omitted: coverage.length, chars: 0, tokens: 0, status: 'disabled', coverage };
     }
     const registry = getRegistry();
-    const names = selectedNames(selection, registry);
+    const primaryIds = [...new Set((selection?.primarySubjectEntityIds || []).map(String).filter(Boolean))];
+    const primaryOrder = new Map(primaryIds.map((entityId, index) => {
+        const candidate = candidates.find(item => item.entityId === entityId || item.mergedEntityIds.includes(entityId));
+        return [candidate?.entityId || entityId, index];
+    }));
+    const entries = selectedEntries(selection, registry).sort((a, b) => {
+        const aOrder = primaryOrder.get(a.info?.entityId);
+        const bOrder = primaryOrder.get(b.info?.entityId);
+        if (aOrder !== undefined || bOrder !== undefined) return (aOrder ?? Number.MAX_SAFE_INTEGER) - (bOrder ?? Number.MAX_SAFE_INTEGER);
+        return a.name.localeCompare(b.name);
+    });
+    const requestedIds = selection?.mode === 'selected'
+        ? [...new Set((selection?.entityIds || []).map(String).filter(Boolean))]
+        : [];
+    const resolution = selection?.mode === 'selected'
+        ? resolvePlannerCharacterEntities(requestedIds)
+        : { missing: [] };
     // Snapshot structured dispositions only; never project free-form notes or
     // private dossier reads on the player character.
     const stances = getStances();
     const records = [];
-    for (const name of names) {
-        if (records.length >= SAFE_CHARACTER_CONTEXT_MAX_RECORDS) break;
-        const info = registry[name];
-        if (!info?.entityId || !Number.isFinite(Number(info.uid))) continue;
+    const coverage = [];
+    for (const { name, info } of entries) {
+        if (records.length >= SAFE_CHARACTER_CONTEXT_MAX_RECORDS) {
+            coverage.push({ entityId: info?.entityId || '', name, status: 'omitted-for-budget', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            continue;
+        }
+        if (!info?.entityId || !Number.isFinite(Number(info.uid))) {
+            coverage.push({ entityId: info?.entityId || '', name, status: 'missing-dossier', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            continue;
+        }
         const content = await loadEntryContent(info.uid, name);
-        if (!content) continue;
+        if (!content) {
+            coverage.push({ entityId: info.entityId, name, status: 'unavailable', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            continue;
+        }
         // Two independent guards, in order: the private sections are cut off
         // the content first, then an explicit allowlist picks from what is
         // left. Secrets, ledger, agenda, and read_on_pc are never read into the
@@ -102,14 +208,43 @@ export async function buildPlannerCharacterContext(selection) {
             const bounded = safe(value);
             if (bounded) lines.push(`${label}: ${bounded}`);
         }
-        if (!lines.length) continue;
-        records.push([`Character: ${safe(name)}`, ...lines].join('\n').slice(0, SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS));
+        if (!lines.length) {
+            coverage.push({ entityId: info.entityId, name, status: 'partial', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+            continue;
+        }
+        const record = [`Character: ${safe(name)}`, ...lines].join('\n').slice(0, SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS);
+        records.push(record);
+        coverage.push({
+            entityId: info.entityId,
+            name,
+            status: lines.length >= 5 ? 'complete' : 'partial',
+            records: 1,
+            fields: lines.length,
+            chars: record.length,
+            tokens: Math.ceil(record.length / 4),
+            estimated: true,
+        });
+    }
+    for (const entityId of resolution.missing || []) {
+        coverage.push({ entityId, name: '', status: 'unavailable', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true });
+    }
+    const coveredIds = new Set(coverage.map(item => item.entityId));
+    for (const item of primarySubjectCoverage(selection, candidates, 'disabled')) {
+        if (!coveredIds.has(item.entityId)) coverage.push(item);
     }
     const projection = records.join('\n\n').slice(0, SAFE_CHARACTER_CONTEXT_MAX_TOTAL_CHARS);
+    const requestedCoverageIds = new Set([
+        ...entries.map(item => item.info?.entityId).filter(Boolean),
+        ...primaryIds.map(entityId => candidates.find(item => item.entityId === entityId
+            || item.mergedEntityIds.includes(entityId))?.entityId || entityId),
+        ...(selection?.mode === 'selected' ? requestedIds : []),
+    ]);
+    const requested = requestedCoverageIds.size;
     return {
-        text: projection, records: records.length, requested: names.length,
-        omitted: Math.max(0, names.length - records.length),
+        text: projection, records: records.length, requested,
+        omitted: Math.max(0, requested - records.length),
         chars: projection.length,
         tokens: Math.ceil(projection.length / 4),
+        coverage,
     };
 }

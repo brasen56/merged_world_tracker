@@ -26,7 +26,7 @@
 
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { resetCoreStubs, setFakeChat, setFakeApi } from './stubs/core.js';
+import { registerSafeCharacterContextProvider, resetCoreStubs, setFakeChat, setFakeApi } from './stubs/core.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { _resetPausedStores } from '../core/schema_status.js';
 import { buildRefreshStatusDelta } from '../world_state/delta.js';
@@ -518,7 +518,7 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         '- Derek hides a debt from the office',
     ].join('\n');
 
-    let state, getArcs, setArcs, makeArc, saveSettings;
+    let state, getArcs, setArcs, setPlanData, makeArc, saveSettings;
     let requests;
     let CURRENT;
 
@@ -529,7 +529,7 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'chat-plan' }) };
         globalThis.document = { dispatchEvent: vi.fn() };
         setFakeChat(makeChat(8));
-        ({ state, getArcs, setArcs, makeArc } = await import('../story_planner/data.js'));
+        ({ state, getArcs, setArcs, setPlanData, makeArc } = await import('../story_planner/data.js'));
         ({ saveSettings } = await import('../story_planner/settings.js'));
         state.isGenerating = false;
         requests = [];
@@ -666,7 +666,10 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
         const existing = makeArc({ title: 'Existing thread', section: 'horizon', body: 'In play.', beats: ['Planted setup.'] });
         setArcs([existing]);
-        CURRENT = '## Character Journeys\n- Mara weighs the ledger — she must choose.\n  1. She stalls.\n  2. She confesses.';
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+        });
+        CURRENT = '## Character Journeys\n- [SUBJECT:s1] Mara weighs the ledger — she must choose.\n  1. She stalls.\n  2. She confesses.';
 
         const proposal = await generatePlan(false, {
             operation: 'add', sectionKeys: ['character'], requestedCount: 1,
@@ -680,7 +683,156 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         expect(sent).toContain('<read_only_continuity>');
         expect(sent).toContain('Existing thread');
         expect(proposal.stats.added).toBe(1);
+        expect(proposal.arcs.find(arc => arc.title === 'Mara weighs the ledger')?.primarySubjectEntityId).toBe('entity-mara');
         expect(getArcs()).toEqual([existing]);
+    });
+
+    test('full-plan generation preserves stored supporting participants when no subject contract is active', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const existing = makeArc({
+            title: 'Shared burden', section: 'character',
+            primarySubjectEntityId: 'entity-mara', supportingParticipantEntityIds: ['entity-derek'],
+            beats: ['Old setup'],
+        });
+        setArcs([existing]);
+        CURRENT = [
+            '## Character Journeys',
+            '- Shared burden — Refreshed without Phase 2 subject markers.',
+            '  1. New setup.',
+            '## Horizon Arcs',
+            '- Distant storm — Pressure gathers.',
+            '## Immediate Hooks',
+            '- A bell rings — Someone arrives.',
+        ].join('\n');
+
+        const arcs = await generatePlan();
+
+        expect(arcs.find(arc => arc.id === existing.id)).toMatchObject({
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek'],
+        });
+    });
+
+    test('generation passes requested primary subjects to Safe Character Context independently', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const buildContext = vi.fn(async selection => ({
+            text: '', records: 0, requested: 1, omitted: 1, chars: 0, tokens: 0,
+            coverage: [{ entityId: selection.primarySubjectEntityIds[0], name: 'Mara', status: 'disabled', records: 0, fields: 0, chars: 0, tokens: 0, estimated: true }],
+        }));
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+            buildContext,
+        });
+        setPlanData({ characterContext: { mode: 'selected', entityIds: [] } });
+        CURRENT = '## Character Journeys\n- [SUBJECT:s1] Mara route — pressure.\n  1. Setup.';
+
+        await generatePlan(false, {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 1,
+            subjectMode: 'selected', subjectEntityIds: ['entity-mara'],
+        }, { reviewOnly: true });
+
+        expect(buildContext).toHaveBeenCalledWith(expect.objectContaining({
+            primarySubjectEntityIds: ['entity-mara'],
+        }));
+    });
+
+    test('selected Journey subjects resolve an in-place merge before prompt and validation', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const target = makeArc({
+            title: 'The repaired name', section: 'character', body: 'Old pressure.',
+            primarySubjectEntityId: 'entity-mara-old',
+        });
+        setArcs([target]);
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: ['entity-mara-old'] }],
+        });
+        CURRENT = request => {
+            const handle = request.userContent.match(/\[ARC:([^\]…]+)\]/)?.[1];
+            return `## Character Journeys\n- [ARC:${handle}] [SUBJECT:s1] The repaired name — Mara tests the new trust.\n  1. Mara hesitates.`;
+        };
+
+        const proposal = await generatePlan(false, {
+            operation: 'refresh', sectionKeys: ['character'], targetArcIds: [target.id],
+            subjectMode: 'selected', subjectEntityIds: ['entity-mara-old'],
+        }, { reviewOnly: true });
+
+        expect(requests[0].userContent).toContain('- s1: Mara [SELECTED]');
+        expect(proposal.request.subjectEntityIds).toEqual(['entity-mara']);
+        expect(proposal.matchedArcIds).toEqual([target.id]);
+        expect(proposal.arcs.find(arc => arc.id === target.id)?.primarySubjectEntityId).toBe('entity-mara');
+        expect(proposal.diagnostics.omittedTargetIds).toEqual([]);
+    });
+
+    test('support marker cleanup is retained as a review diagnostic', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [
+                { entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] },
+                { entityId: 'entity-derek', name: 'Derek', mergedEntityIds: [] },
+            ],
+        });
+        CURRENT = '## Character Journeys\n- [SUBJECT:s1] [SUPPORT:s1,s2,s2] Shared burden — Mara asks Derek for help.\n  1. Derek listens.';
+
+        const proposal = await generatePlan(false, {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 1,
+        }, { reviewOnly: true });
+
+        expect(proposal.diagnostics.participantDiagnostics)
+            .toEqual(['Shared burden: duplicate supporting handles were collapsed.']);
+        const arc = proposal.arcs.find(item => item.title === 'Shared burden');
+        expect(arc.supportingParticipantEntityIds).toEqual(['entity-derek']);
+    });
+
+    test('Any-subject Refresh reserves an owner beyond the first 30 candidates', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const candidates = Array.from({ length: 31 }, (_, index) => ({
+            entityId: `entity-${String(index + 1).padStart(2, '0')}`,
+            name: `Character ${String(index + 1).padStart(2, '0')}`,
+            mergedEntityIds: [],
+        }));
+        registerSafeCharacterContextProvider({ listCandidates: () => candidates });
+        const target = makeArc({
+            title: 'Last owner journey', section: 'character',
+            primarySubjectEntityId: 'entity-31',
+        });
+        setArcs([target]);
+        CURRENT = request => {
+            const arcHandle = request.userContent.match(/\[ARC:([^\]…]+)\]/)?.[1];
+            expect(request.userContent).toContain('- s1: Character 31');
+            return `## Character Journeys\n- [ARC:${arcHandle}] [SUBJECT:s1] Last owner journey — Refreshed for the captured owner.\n  1. The owner faces a setback.`;
+        };
+
+        const proposal = await generatePlan(false, {
+            operation: 'refresh', sectionKeys: ['character'], targetArcIds: [target.id],
+            subjectMode: 'any', subjectEntityIds: [],
+        }, { reviewOnly: true });
+
+        expect(proposal.matchedArcIds).toEqual([target.id]);
+        expect(proposal.arcs.find(arc => arc.id === target.id)?.primarySubjectEntityId).toBe('entity-31');
+    });
+
+    test('Refresh rejects an unavailable Journey owner before making an API call', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ entityId: 'entity-mara', name: 'Mara', mergedEntityIds: [] }],
+        });
+        const target = makeArc({
+            title: 'Unavailable owner', section: 'character',
+            primarySubjectEntityId: 'entity-gone',
+        });
+        setArcs([target]);
+
+        await expect(generatePlan(false, {
+            operation: 'refresh', sectionKeys: ['character'], targetArcIds: [target.id],
+            subjectMode: 'any', subjectEntityIds: [],
+        }, { reviewOnly: true })).rejects.toThrow(/owner is unavailable in Knowledge/);
+        expect(requests).toHaveLength(0);
     });
 
     test('scoped Refresh keeps its targets editable and everything else read-only', async () => {

@@ -308,6 +308,50 @@ describe('unified backup Phase 1 pure core', () => {
         expect(result.summary.storyPlanner.added).toBe(1);
     });
 
+    test('remaps imported Story Planner ownership through destination merges and retains unresolved ids', () => {
+        const importedArc = {
+            ...arc('a2', 'Imported Journey'), section: 'character',
+            primarySubjectEntityId: 'entity-mara-old',
+            supportingParticipantEntityIds: ['entity-derek-old', 'entity-gone', 'entity-mara'],
+        };
+        const file = backup({
+            metadata: {
+                storyPlanner: {
+                    arcs: [importedArc],
+                    history: [{ timestamp: 1, arcs: [structuredClone(importedArc)] }],
+                    storyPlanRequestPreferences: {
+                        operation: 'add', sectionKeys: ['character'], requestedCount: 2,
+                        subjectMode: 'selected', subjectEntityIds: ['entity-mara-old', 'entity-mara', 'entity-gone'],
+                        targetArcIds: [],
+                    },
+                },
+            },
+        });
+        const resolveStoryPlannerEntities = ids => ({
+            available: true,
+            missing: ids.filter(id => id === 'entity-gone'),
+            resolved: ids.filter(id => id !== 'entity-gone').map(id => ({
+                requestedEntityId: id,
+                entityId: id.includes('mara') ? 'entity-mara' : 'entity-derek',
+            })),
+        });
+
+        const result = planRestore(file, {}, { resolveStoryPlannerEntities });
+        const restored = result.plan.sections.storyPlanner;
+        expect(restored.arcs[0]).toMatchObject({
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek', 'entity-gone'],
+        });
+        expect(restored.history[0].arcs[0]).toMatchObject({
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek', 'entity-gone'],
+        });
+        expect(restored.storyPlanRequestPreferences.subjectEntityIds).toEqual(['entity-mara', 'entity-gone']);
+        // Exact restore rebuilds from validation.sections, so the same remapped
+        // value is its source of truth rather than the source-local ids.
+        expect(result.validation.sections.storyPlanner).toEqual(restored);
+    });
+
     test('skips perMessage on identity mismatch and reports resolution count', () => {
         const result = planRestore(backup(), { interiority: { perMessage: {} } }, {
             currentIdentity: { chatId: 'chat-b', isUnknown: false },

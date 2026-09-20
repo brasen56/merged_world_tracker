@@ -11,7 +11,8 @@ import {
     stripNonNarrative, getStableHistoryEnd,
     captureScope, assertSameScope, isCancellation,
     captureRevision, sameRevision,
-    wrapTag, escapePromptText, buildSafeCharacterContext, record,
+    wrapTag, escapePromptText, buildSafeCharacterContext, listSafeCharacterContextCandidates,
+    resolveSafeCharacterContextEntities, record,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT, buildStoryPlanSystemPrompt } from './prompts.js';
@@ -71,6 +72,53 @@ export function buildSystemPrompt(requestSpec = null) {
 // a tighter cap would hide arcs it could then re-propose — those come back as
 // excluded title recurrences and underfill the request for no visible reason.
 const MAX_CONTINUITY_ARCS = 30;
+export const MAX_JOURNEY_SUBJECT_CANDIDATES = 30;
+
+function subjectCandidateForEntityId(candidates, entityId) {
+    return candidates.find(candidate => candidate.entityId === entityId
+        || candidate.mergedEntityIds?.includes(entityId));
+}
+
+/**
+ * Capture the bounded subject table while reserving identities that the request
+ * must be able to address. Refresh owners come first because a returned row is
+ * invalid unless its subject handle resolves to the target's canonical owner;
+ * selected Add subjects follow so registry growth/reordering cannot strand a
+ * choice made in the dialog before generation starts.
+ */
+export function captureJourneySubjectCandidates(candidates, request, capturedArcs = []) {
+    const available = Array.isArray(candidates) ? candidates : [];
+    const priorityIds = [
+        ...(request?.operation === 'refresh'
+            ? capturedArcs.filter(arc => arc.section === 'character')
+                .flatMap(arc => [arc.primarySubjectEntityId, ...(arc.supportingParticipantEntityIds || [])])
+            : []),
+        ...(request?.subjectMode === 'selected' ? request.subjectEntityIds || [] : []),
+    ].filter(Boolean);
+    const reserved = [];
+    const reservedIds = new Set();
+    const missingOwnerIds = [];
+    const refreshOwnerIds = new Set(request?.operation === 'refresh'
+        ? capturedArcs.filter(arc => arc.section === 'character').map(arc => arc.primarySubjectEntityId).filter(Boolean)
+        : []);
+
+    for (const entityId of priorityIds) {
+        const candidate = subjectCandidateForEntityId(available, entityId);
+        if (!candidate) {
+            if (refreshOwnerIds.has(entityId) && !missingOwnerIds.includes(entityId)) missingOwnerIds.push(entityId);
+            continue;
+        }
+        if (!reservedIds.has(candidate.entityId)) {
+            reservedIds.add(candidate.entityId);
+            reserved.push(candidate);
+        }
+    }
+    const remaining = available.filter(candidate => !reservedIds.has(candidate.entityId));
+    return {
+        candidates: [...reserved, ...remaining].slice(0, MAX_JOURNEY_SUBJECT_CANDIDATES),
+        missingOwnerIds,
+    };
+}
 
 function buildReadOnlyContinuityProjection(arcs) {
     if (!Array.isArray(arcs) || !arcs.length) return '';
@@ -168,6 +216,34 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         ? wrapTag('safe_character_context',
             '[Factual public character context only. It is not private knowledge and does not determine choices or outcomes.]\n' + characterContext.text)
         : '';
+    const subjectCandidates = Array.isArray(requestContext.subjectCandidates) ? requestContext.subjectCandidates : [];
+    const selectedSubjectIds = new Set(request?.subjectEntityIds || []);
+    const subjectRows = subjectCandidates.map((candidate, index) => {
+        const handle = `s${index + 1}`;
+        const selected = selectedSubjectIds.has(candidate.entityId) ? ' [SELECTED]' : '';
+        const name = String(candidate.name || 'Unnamed character').replace(/\s+/g, ' ').trim().slice(0, 120);
+        return `- ${handle}: ${escapePromptText(name)}${selected}`;
+    });
+    const targetOwnership = request?.operation === 'refresh'
+        ? kept.filter(arc => arc.section === 'character').map(arc => {
+            const arcHandle = requestHandles.get(arc.id);
+            const subjectIndex = subjectCandidates.findIndex(candidate => candidate.entityId === arc.primarySubjectEntityId
+                || candidate.mergedEntityIds?.includes(arc.primarySubjectEntityId));
+            return arcHandle && subjectIndex >= 0 ? `- ARC:${arcHandle} must keep SUBJECT:s${subjectIndex + 1}.` : '';
+        }).filter(Boolean)
+        : [];
+    const subjectBlock = request?.sectionKeys.includes('character') ? [
+        '<journey_subjects>',
+        '[Opaque request-local handles. Use these handles in markers; never invent a handle or return an entity id.]',
+        ...subjectRows,
+        request.subjectMode === 'selected'
+            ? 'Selected mode: every Character Journey primary must use a [SELECTED] handle, and each selected handle must be primary at least once before any repeat.'
+            : 'Any mode: every Character Journey primary may use any captured handle.',
+        'Every Character Journey bullet must begin with exactly one [SUBJECT:sN] marker and may add one [SUPPORT:sN,sN] marker. Do not put these markers on other sections.',
+        'A Journey should pressure a value, relationship, fear, habit, or obligation; provide an observable opportunity to respond and possible consequences. Resistance, relapse, deterioration, repair, or no resolution are all valid. Never decide what {{user}} thinks, chooses, or does.',
+        ...targetOwnership,
+        '</journey_subjects>',
+    ].join('\n') : '';
 
     // Use replacement FUNCTIONS (not strings) so that `$` sequences in the
     // replacement text are treated literally. With a replacement string,
@@ -213,7 +289,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
             'Return only arcs in the selected sections. Never use another section as a fallback.',
             '</application_request>',
         ].join('\n');
-        out = `${scopeBlock}\n\n${out}`;
+        out = `${scopeBlock}${subjectBlock ? `\n\n${subjectBlock}` : ''}\n\n${out}`;
     }
 
     if (reminderReason) {
@@ -280,18 +356,33 @@ export function validateOutput(text, expectHeader = true, requestSpec = null) {
 /** Enforce the immutable scoped request after parsing. Refresh accepts only
  * identities resolved inside the captured target set; Add accepts only selected
  * sections and caps the reviewable suggestions to the requested count. */
-export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = []) {
+export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = [], subjectCandidates = []) {
     const request = sanitizeStoryPlanRequest(requestSpec);
     const selectedSections = new Set(request.sectionKeys);
-    const inSections = parsed.filter(arc => selectedSections.has(arc.section));
-    const rejectedOutsideScope = parsed.filter(arc => !selectedSections.has(arc.section));
+    const selectedSubjects = new Set(request.subjectEntityIds);
+    const canonicalSubjectId = entityId => subjectCandidates.find(candidate => candidate.entityId === entityId
+        || candidate.mergedEntityIds?.includes(entityId))?.entityId || entityId;
+    const validOwnership = arc => {
+        if (arc._subjectMarkerError) return false;
+        if (arc.section !== 'character') return !arc.primarySubjectEntityId && !arc.supportingParticipantEntityIds?.length;
+        if (!arc._subjectContractActive) return true;
+        if (!arc.primarySubjectEntityId) return false;
+        return request.subjectMode !== 'selected' || selectedSubjects.has(arc.primarySubjectEntityId);
+    };
+    const inSections = parsed.filter(arc => selectedSections.has(arc.section) && validOwnership(arc));
+    const rejectedOutsideScope = parsed.filter(arc => !selectedSections.has(arc.section) || !validOwnership(arc));
     if (request.operation === 'refresh') {
         const targetIds = new Set(capturedArcs.map(arc => arc.id));
         const accepted = [];
         const rejected = [...rejectedOutsideScope];
         const acceptedIds = new Set();
         for (const arc of inSections) {
-            if (!targetIds.has(arc.id) || acceptedIds.has(arc.id)) {
+            const target = capturedArcs.find(item => item.id === arc.id);
+            const crossesCharacterBoundary = !!target
+                && (arc.section === 'character') !== (target.section === 'character');
+            if (!targetIds.has(arc.id) || acceptedIds.has(arc.id) || crossesCharacterBoundary
+                || (target?.section === 'character'
+                    && canonicalSubjectId(target?.primarySubjectEntityId) !== canonicalSubjectId(arc.primarySubjectEntityId))) {
                 rejected.push(arc);
                 continue;
             }
@@ -300,11 +391,34 @@ export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = []) {
         }
         return { accepted, rejected, overflow: 0, underfill: 0 };
     }
+    const accepted = (() => {
+        if (request.subjectMode !== 'selected' || !request.sectionKeys.includes('character')) {
+            return inSections.slice(0, request.requestedCount);
+        }
+        const selected = [];
+        const used = new Set();
+        for (const entityId of request.subjectEntityIds) {
+            const match = inSections.find(arc => arc.primarySubjectEntityId === entityId && !used.has(arc));
+            if (match) { selected.push(match); used.add(match); }
+        }
+        if (selected.length < request.subjectEntityIds.length) return selected;
+        for (const arc of inSections) {
+            if (selected.length >= request.requestedCount) break;
+            if (!used.has(arc)) selected.push(arc);
+        }
+        return selected;
+    })();
     return {
-        accepted: inSections.slice(0, request.requestedCount),
+        accepted,
         rejected: rejectedOutsideScope,
         overflow: Math.max(0, inSections.length - request.requestedCount),
-        underfill: Math.max(0, request.requestedCount - inSections.length),
+        underfill: Math.max(
+            0,
+            request.requestedCount - accepted.length,
+            request.subjectMode === 'selected' && request.sectionKeys.includes('character')
+                ? request.subjectEntityIds.filter(id => !inSections.some(arc => arc.primarySubjectEntityId === id)).length
+                : 0,
+        ),
     };
 }
 
@@ -347,7 +461,17 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     // weak key collapsed two different chats on the same character when
     // chatId was absent. The scope guard uses getCurrentChatId() + epoch.
     const scopeBefore = captureScope();
-    const request = requestSpec ? sanitizeStoryPlanRequest(requestSpec) : null;
+    let request = requestSpec ? sanitizeStoryPlanRequest(requestSpec) : null;
+    if (request?.sectionKeys.includes('character') && request.subjectMode === 'selected') {
+        const resolution = resolveSafeCharacterContextEntities(request.subjectEntityIds);
+        if (resolution.missing?.length) {
+            throw new Error(`${resolution.missing.length} selected Journey subject${resolution.missing.length === 1 ? ' is' : 's are'} no longer available. Reopen Generate and choose tracked characters again.`);
+        }
+        request = sanitizeStoryPlanRequest({
+            ...request,
+            subjectEntityIds: resolution.resolved.map(item => item.entityId),
+        });
+    }
     const requestError = request ? getStoryPlanRequestError(request) : '';
     if (requestError) throw new Error(requestError);
 
@@ -357,6 +481,13 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     // the call were silently overwritten and the history snapshot recorded
     // the already-modified state as "previous."
     const arcsBeforeCall = getArcs();
+    if (request?.operation === 'refresh') {
+        const unassignedTargets = arcsBeforeCall.filter(arc => request.targetArcIds.includes(arc.id)
+            && arc.section === 'character' && !arc.primarySubjectEntityId);
+        if (unassignedTargets.length) {
+            throw new Error('Assign a primary subject to every selected Character Journey before refreshing it. Journey ownership can only be changed manually.');
+        }
+    }
     const arcRevision = captureRevision(arcsBeforeCall);
     // The parser must use the same request snapshot that was shown to the
     // model. Closed arcs are intentionally absent from the prompt and therefore
@@ -384,6 +515,27 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     const targetRevisions = captureTargetRevisions(targetSnapshots);
     const requestHandles = mintRequestHandles(capturedArcs);
     const arcsByHandle = new Map(capturedArcs.map(arc => [requestHandles.get(arc.id), arc]));
+    const allSubjectCandidates = request?.sectionKeys.includes('character')
+        ? listSafeCharacterContextCandidates()
+        : [];
+    const subjectCapture = request?.sectionKeys.includes('character')
+        ? captureJourneySubjectCandidates(allSubjectCandidates, request, capturedArcs)
+        : { candidates: [], missingOwnerIds: [] };
+    const subjectCandidates = subjectCapture.candidates;
+    if (subjectCapture.missingOwnerIds.length) {
+        throw new Error(`${subjectCapture.missingOwnerIds.length} selected Character Journey owner${subjectCapture.missingOwnerIds.length === 1 ? ' is' : 's are'} unavailable in Knowledge. Reopen Generate or manually assign an available primary subject before refreshing.`);
+    }
+    if (request?.sectionKeys.includes('character') && subjectCandidates.length === 0) {
+        throw new Error('No assignable Journey subject is available. Enable Knowledge and add at least one tracked character, or remove Character Journeys from this request.');
+    }
+    if (request?.subjectMode === 'selected') {
+        const capturedSubjectIds = new Set(subjectCandidates.map(candidate => candidate.entityId));
+        const omittedSelections = request.subjectEntityIds.filter(entityId => !capturedSubjectIds.has(entityId));
+        if (omittedSelections.length) {
+            throw new Error(`${omittedSelections.length} selected Journey subject${omittedSelections.length === 1 ? ' is' : 's are'} outside the ${MAX_JOURNEY_SUBJECT_CANDIDATES}-character request limit. Reopen Generate and choose from the visible subject list.`);
+        }
+    }
+    const subjectHandles = new Map(subjectCandidates.map((candidate, index) => [`s${index + 1}`, candidate.entityId]));
 
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -403,7 +555,15 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         const expectHeader = !!request || !getSettings().customSystemPrompt?.trim();
 
         const selection = getCharacterContextSelection();
-        const characterContext = await buildSafeCharacterContext(selection);
+        const requestedPrimarySubjectIds = request?.sectionKeys.includes('character')
+            ? request.subjectMode === 'selected'
+                ? request.subjectEntityIds
+                : capturedArcs.filter(arc => arc.section === 'character').map(arc => arc.primarySubjectEntityId).filter(Boolean)
+            : [];
+        const characterContext = await buildSafeCharacterContext({
+            ...selection,
+            primarySubjectEntityIds: requestedPrimarySubjectIds,
+        });
         const contextScope = assertSameScope(scopeBefore);
         if (!contextScope.ok) {
             console.warn(`[MWT:StoryPlanner] Chat switched while building character context (${contextScope.reason}) — discarding request.`);
@@ -427,7 +587,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         };
         const firstUserContent = buildUserPrompt(recent, '', {
             capturedArcs, handles: requestHandles,
-            continuityArcs, characterContext, requestSpec: request,
+            continuityArcs, characterContext, requestSpec: request, subjectCandidates,
         });
         recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
         let result = await resolved.fetchFn({
@@ -448,7 +608,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             if (!assertSameScope(scopeBefore).ok) return null;
             const retryUserContent = buildUserPrompt(recent, validation.reason, {
                 capturedArcs, handles: requestHandles,
-                continuityArcs, characterContext, requestSpec: request,
+                continuityArcs, characterContext, requestSpec: request, subjectCandidates,
             });
             recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
             result = await resolved2.fetchFn({
@@ -479,10 +639,14 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             handles: arcsByHandle,
             capturedArcs,
             strictHeadings: !!request,
+            subjectHandles: request?.sectionKeys.includes('character') ? subjectHandles : undefined,
         });
-        const scopedSelection = request ? selectScopedParsedArcs(parsed, request, capturedArcs) : null;
+        const scopedSelection = request ? selectScopedParsedArcs(parsed, request, capturedArcs, subjectCandidates) : null;
         const limitedParsed = scopedSelection ? scopedSelection.accepted : parsed;
         const rejectedSuggestions = scopedSelection?.rejected.map(arc => arc.title) || [];
+        const participantDiagnostics = limitedParsed
+            .filter(arc => arc._participantDiagnostic)
+            .map(arc => `${arc.title || 'Untitled Character Journey'}: ${arc._participantDiagnostic}.`);
         // §4.1: zero valid arcs is a failed operation, for both operations. A
         // Refresh whose output resolved to none of the captured targets has
         // nothing to review, so it must fail rather than open an empty modal
@@ -537,19 +701,51 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         // Merge rather than replace: arcs matched by name keep their id and
         // their planted-beat progress, and pinned / part-planted arcs the model
         // dropped are carried forward rather than lost.
-        const { arcs: newArcs, carried, matched, added, suppressedClosed, excludedRecurrences = [], matchedIds = [], addedIds = [] } = mergeRegeneratedArcs(mergeBase, limitedParsed, {
+        const { arcs: mergedArcs, carried, matched, added, suppressedClosed, excludedRecurrences = [], matchedIds = [], addedIds = [] } = mergeRegeneratedArcs(mergeBase, limitedParsed, {
             deletedIds,
             deletedTitles,
             protectedIds,
             scope: request ? new Set(request.operation === 'refresh' ? request.targetArcIds : []) : null,
             scopeSections: request?.operation === 'add' ? new Set(request.sectionKeys) : null,
             addOnly: request?.operation === 'add',
+            preserveSupportingParticipants: !request,
         });
+        // mergeRegeneratedArcs preserves an existing primary owner verbatim so
+        // ordinary regeneration cannot reassign it. Scoped Refresh has already
+        // verified the returned owner is the same identity through the captured
+        // alias/merge table, so upgrade only those accepted targets to the
+        // canonical id carried by the opaque subject handle.
+        const canonicalRefreshOwners = request?.operation === 'refresh'
+            ? new Map(limitedParsed
+                .filter(arc => arc.section === 'character' && arc.primarySubjectEntityId)
+                .map(arc => [arc.id, arc.primarySubjectEntityId]))
+            : new Map();
+        const newArcs = canonicalRefreshOwners.size
+            ? mergedArcs.map(arc => canonicalRefreshOwners.has(arc.id)
+                ? { ...arc, primarySubjectEntityId: canonicalRefreshOwners.get(arc.id) }
+                : arc)
+            : mergedArcs;
 
         if (reviewOnly && request) {
             const omittedTargetIds = request.operation === 'refresh'
                 ? request.targetArcIds.filter(id => !matchedIds.includes(id))
                 : [];
+            const reviewedArcIds = new Set(request.operation === 'add' ? addedIds : matchedIds);
+            const referencedSubjectIds = new Set([
+                ...(request.subjectMode === 'selected' ? request.subjectEntityIds : []),
+                ...targetSnapshots.flatMap(arc => [arc.primarySubjectEntityId, ...(arc.supportingParticipantEntityIds || [])]),
+                ...newArcs.filter(arc => reviewedArcIds.has(arc.id))
+                    .flatMap(arc => [arc.primarySubjectEntityId, ...(arc.supportingParticipantEntityIds || [])]),
+            ].filter(Boolean));
+            const reviewSubjectCandidates = [...subjectCandidates];
+            const reviewCandidateIds = new Set(reviewSubjectCandidates.map(candidate => candidate.entityId));
+            for (const entityId of referencedSubjectIds) {
+                const candidate = subjectCandidateForEntityId(allSubjectCandidates, entityId);
+                if (candidate && !reviewCandidateIds.has(candidate.entityId)) {
+                    reviewCandidateIds.add(candidate.entityId);
+                    reviewSubjectCandidates.push(candidate);
+                }
+            }
             return {
                 arcs: newArcs,
                 previousArcs: mergeBase,
@@ -566,6 +762,19 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                 addedArcIds: addedIds,
                 matchedArcIds: matchedIds,
                 reviewArcIds: request.operation === 'add' ? addedIds : matchedIds,
+                subjectCandidates: reviewSubjectCandidates.map(candidate => ({
+                    entityId: candidate.entityId,
+                    name: candidate.name,
+                    mergedEntityIds: [...(candidate.mergedEntityIds || [])],
+                })),
+                subjectIdentitySnapshot: [...referencedSubjectIds].map(requestedEntityId => {
+                    const candidate = subjectCandidateForEntityId(allSubjectCandidates, requestedEntityId);
+                    return {
+                        requestedEntityId,
+                        resolved: !!candidate,
+                        entityId: candidate?.entityId || '',
+                    };
+                }),
                 diagnostics: {
                     overflow: scopedSelection?.overflow || 0,
                     underfill: request.operation === 'add'
@@ -573,8 +782,14 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                         : 0,
                     omittedTargetIds,
                     rejectedSuggestions,
+                    participantDiagnostics,
                     excludedRecurrences,
                     validationWarning: validation.warning || '',
+                    characterContextMode: selection.mode,
+                    characterContextStatus: characterContext.status || '',
+                    characterContextCoverage: Array.isArray(characterContext.coverage)
+                        ? characterContext.coverage.map(item => ({ ...item }))
+                        : [],
                 },
             };
         }

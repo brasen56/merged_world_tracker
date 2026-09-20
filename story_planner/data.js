@@ -621,6 +621,7 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     const scopedIds = options.scope instanceof Set ? options.scope : null;
     const scopedSections = options.scopeSections instanceof Set ? options.scopeSections : null;
     const addOnly = options.addOnly === true;
+    const preserveSupportingParticipants = options.preserveSupportingParticipants === true;
 
     // Scoped Add is append-only by contract. Existing records are not merge
     // candidates and are carried byte-for-byte (after the normal storage-boundary
@@ -745,6 +746,10 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
         if (isArcReady(old)) {
             return { ...fresh, id: old.id, pinned: old.pinned, status: old.status,
                 focused: old.focused, activateWhen: old.activateWhen,
+                primarySubjectEntityId: old.primarySubjectEntityId,
+                supportingParticipantEntityIds: fresh.section === 'character' && !preserveSupportingParticipants
+                    ? fresh.supportingParticipantEntityIds
+                    : old.supportingParticipantEntityIds,
                 closeReason: old.closeReason, closedAt: old.closedAt,
                 createdAt: old.createdAt, beats: oldBeats,
                 turnsSinceAdvance: old.turnsSinceAdvance || 0, updatedAt: Date.now() };
@@ -777,6 +782,10 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
             status: old.status,
             focused: old.focused,
             activateWhen: old.activateWhen,
+            primarySubjectEntityId: old.primarySubjectEntityId,
+            supportingParticipantEntityIds: fresh.section === 'character' && !preserveSupportingParticipants
+                ? fresh.supportingParticipantEntityIds
+                : old.supportingParticipantEntityIds,
             closeReason: old.closeReason,
             closedAt: old.closedAt,
             createdAt: old.createdAt,
@@ -913,6 +922,10 @@ export function updateArc(id, patch = {}) {
         : base.beats;
     merged.pinned = merged.pinned === true;
     merged.focused = merged.focused === true;
+    merged.primarySubjectEntityId = String(merged.primarySubjectEntityId ?? '').trim();
+    merged.supportingParticipantEntityIds = Array.isArray(merged.supportingParticipantEntityIds)
+        ? merged.supportingParticipantEntityIds
+        : base.supportingParticipantEntityIds;
     merged.activateWhen = String(merged.activateWhen ?? '').trim().slice(0, MAX_ARC_BODY);
     merged.turnsSinceAdvance = Number.isFinite(Number(merged.turnsSinceAdvance))
         ? Math.max(0, Math.floor(Number(merged.turnsSinceAdvance)))
@@ -1322,6 +1335,8 @@ function historyEntrySignature(entry) {
             status: arc.status,
             pinned: arc.pinned,
             focused: arc.focused,
+            primarySubjectEntityId: arc.primarySubjectEntityId,
+            supportingParticipantEntityIds: arc.supportingParticipantEntityIds,
             activateWhen: arc.activateWhen,
             closeReason: arc.closeReason,
             closedAt: arc.closedAt,
