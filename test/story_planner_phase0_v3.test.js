@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import { getArcCount, getArcs, getPlanHistory, getStoryPlanRequestPreferences, makeArc, mergeRegeneratedArcs, parsePlanTextToArcs, setArcs, setPlanData } from '../story_planner/data.js';
 import { buildSystemPrompt, buildUserPrompt, selectScopedParsedArcs, validateOutput } from '../story_planner/generation.js';
 import { STORY_PLAN_SYSTEM_PROMPT } from '../story_planner/prompts.js';
-import { applyScopedPlanProposal, captureTargetRevisions } from '../story_planner/proposals.js';
+import { applyScopedPlanProposal, buildArcDiff, captureTargetRevisions, previewScopedApply } from '../story_planner/proposals.js';
 import { sanitizeStoryPlanRequest, validateStoryPlannerData } from '../story_planner/schema.js';
 import { saveSettings } from '../story_planner/settings.js';
 import {
@@ -378,6 +378,58 @@ describe('Story Planner V3 Phase 1 — scoped prompt and validation contracts', 
         const hooksOnly = buildSystemPrompt({ operation: 'add', sectionKeys: ['immediate'], requestedCount: 1 });
         expect(hooksOnly).not.toContain('SETUP BEATS');
         expect(hooksOnly).toContain('Immediate Hooks');
+    });
+
+    // mergeRegeneratedArcs returns [...carried, ...merged], so a refreshed arc
+    // lands at the end of its output. Diffing that against the previous plan
+    // reported a reordering Apply never performs, because Apply replaces arcs
+    // in place. The review now renders planScopedApply's own decision.
+    test('a Refresh review describes only its target and Apply preserves plan order', () => {
+        const alpha = makeArc({ title: 'Alpha', section: 'horizon' });
+        const bravo = makeArc({ title: 'Bravo', section: 'horizon', body: 'Before' });
+        const charlie = makeArc({ title: 'Charlie', section: 'horizon' });
+        setArcs([alpha, bravo, charlie]);
+        const refreshed = { ...bravo, body: 'After' };
+        const proposal = {
+            request: { operation: 'refresh', sectionKeys: ['horizon'], targetArcIds: [bravo.id] },
+            previousArcs: [alpha, bravo, charlie],
+            arcs: [alpha, charlie, refreshed], // the merge's carried-then-merged order
+            targetSnapshots: [bravo],
+            targetRevisions: captureTargetRevisions([bravo]),
+            reviewArcIds: [bravo.id],
+            matchedArcIds: [bravo.id],
+        };
+
+        const preview = previewScopedApply(proposal, getArcs());
+        expect(preview.ok).toBe(true);
+        expect(preview.updates).toHaveLength(1);
+        expect(preview.updates[0]).toMatchObject({ id: bravo.id });
+        expect(preview.additions).toEqual([]);
+        expect(preview.next.map(arc => arc.title)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+        expect(buildArcDiff(preview.updates[0].before, preview.updates[0].after).fields)
+            .toEqual([{ field: 'description', before: 'Before', after: 'After' }]);
+
+        // The preview is what Apply commits, order included.
+        expect(applyScopedPlanProposal(proposal, getArcs()).ok).toBe(true);
+        expect(getArcs().map(arc => arc.title)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+        expect(getArcs()[1].body).toBe('After');
+    });
+
+    test('the shared arc differ reports added, changed, removed, and moved beats', () => {
+        const before = makeArc({ title: 'Route', section: 'horizon', beats: ['one', 'two', 'three'] });
+        const after = {
+            ...before,
+            beats: [
+                { ...before.beats[1] },
+                { ...before.beats[0], text: 'one revised' },
+                { id: 'beat-new', text: 'four', state: 'pending', stateReason: '' },
+            ],
+        };
+        const diff = buildArcDiff(before, after);
+        expect(diff.beats.map(change => change.kind).sort())
+            .toEqual(['added', 'changed', 'moved', 'moved', 'removed']);
+        expect(diff.beats.find(change => change.kind === 'removed').before).toBe('three');
+        expect(diff.beats.find(change => change.kind === 'added').after).toBe('four');
     });
 
     test('the legacy full-plan prompt is unchanged by scoped section selection', () => {

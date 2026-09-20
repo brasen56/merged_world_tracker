@@ -45,7 +45,7 @@ import { listSafeCharacterContextCandidates } from '../core/character_context.js
 import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, getStoryPlanRequestError, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { generatePlan } from './generation.js';
-import { applyScopedPlanProposal } from './proposals.js';
+import { applyScopedPlanProposal, buildArcDiff, previewScopedApply } from './proposals.js';
 import {
     applyTargetedProposal,
     generateTargetedProposal,
@@ -533,10 +533,38 @@ function requestSummary(request) {
         : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}; use the selected public context.`;
 }
 
-function renderScopedReviewDiff(proposal) {
-    const current = historyEntryToDiffText({ arcs: proposal.previousArcs });
-    const next = historyEntryToDiffText({ arcs: proposal.arcs });
-    return renderDiffHtml(computeLcsDiff(current, next));
+/**
+ * Per-arc rows describing exactly what Apply will do, built from
+ * previewScopedApply so the shown change and the performed change cannot
+ * disagree. The previous whole-plan text diff compared the merge result, which
+ * appends refreshed arcs at the end of the plan — so it reported a reordering
+ * that Apply, replacing in place, never performs.
+ */
+function scopedReviewRows(proposal, live = getArcs()) {
+    const preview = previewScopedApply({ ...proposal, acceptedProposalIds: undefined }, live);
+    if (!preview.ok) return { ok: false, reason: preview.reason, rows: [], excludedRecurrences: [] };
+    const rows = [
+        ...preview.additions.map(arc => ({
+            id: arc.id, kind: 'added', title: arc.title, section: arc.section, arc, diff: null,
+        })),
+        ...preview.updates.map(update => ({
+            id: update.id,
+            kind: 'updated',
+            title: update.after.title || update.before.title,
+            section: update.after.section,
+            arc: update.after,
+            diff: buildArcDiff(update.before, update.after),
+        })),
+    ];
+    return { ok: true, rows, excludedRecurrences: preview.excludedRecurrences };
+}
+
+/** A new arc has nothing to diff against, so show what would be stored. */
+function renderScopedAddition(arc) {
+    const beats = (arc.beats || []).filter(beat => beat.state === 'pending');
+    return `
+        ${arc.body ? `<p class="mwt-text-sm">${escapeHtml(arc.body)}</p>` : ''}
+        ${beats.length ? `<h4>Setup beats</h4><ol class="sp-proposal-diff">${beats.map(beat => `<li>${escapeHtml(beat.text)}</li>`).join('')}</ol>` : '<p class="mwt-text-dim mwt-text-sm">No setup beats proposed.</p>'}`;
 }
 
 function finishScopedReview() {
@@ -562,11 +590,16 @@ export function showScopedReview(proposal) {
         diagnostics.overflow ? `${diagnostics.overflow} overflow suggestion${diagnostics.overflow === 1 ? '' : 's'} excluded.` : '',
         diagnostics.omittedTargetIds?.length ? `${diagnostics.omittedTargetIds.length} selected target${diagnostics.omittedTargetIds.length === 1 ? '' : 's'} omitted and left unchanged.` : '',
         diagnostics.rejectedSuggestions?.length ? `${diagnostics.rejectedSuggestions.length} unrequested suggestion${diagnostics.rejectedSuggestions.length === 1 ? '' : 's'} rejected.` : '',
-        ...(diagnostics.excludedRecurrences || []).map(item => `Excluded exact-title recurrence “${item.title || 'Untitled arc'}” (${item.status}).`),
         diagnostics.validationWarning || '',
     ].filter(Boolean);
-    const reviewIds = new Set(proposal.reviewArcIds || []);
-    const reviewItems = proposal.arcs.filter(arc => reviewIds.has(arc.id));
+    // Recurrences are reported from the Apply preview rather than from the
+    // merge, so the exclusions shown are the ones Apply will actually make
+    // against live storage — which may differ from the merge-time set if the
+    // plan changed while the proposal was open.
+    const preview = scopedReviewRows(proposal);
+    for (const item of preview.excludedRecurrences) {
+        diagnosticItems.push(`Excluded exact-title recurrence “${item.title || 'Untitled arc'}” (${item.status}).`);
+    }
     const modal = createModal({
         id: SCOPED_REVIEW_MODAL_ID,
         title: 'Generate Story Plan — Review',
@@ -580,9 +613,15 @@ export function showScopedReview(proposal) {
             ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
             <fieldset class="sp-proposal-selection">
                 <legend class="mwt-label">Changes to apply</legend>
-                ${reviewItems.length ? reviewItems.map(arc => `<label class="sp-proposal-choice" for="mwt-sp-proposal-${escapeHtml(arc.id)}"><input id="mwt-sp-proposal-${escapeHtml(arc.id)}" type="checkbox" name="mwt-sp-proposal" value="${escapeHtml(arc.id)}" checked> <span><strong>${escapeHtml(arc.title || 'Untitled arc')}</strong><small>${escapeHtml(getSectionMeta(arc.section)?.label || arc.section)}</small></span></label>`).join('') : '<p class="mwt-text-dim mwt-text-sm">No material proposal was returned. Diagnostics are preserved below.</p>'}
+                ${preview.rows.length ? preview.rows.map(row => `
+                <div class="sp-proposal-item">
+                    <label class="sp-proposal-choice" for="mwt-sp-proposal-${escapeHtml(row.id)}">
+                        <input id="mwt-sp-proposal-${escapeHtml(row.id)}" type="checkbox" name="mwt-sp-proposal" value="${escapeHtml(row.id)}" checked>
+                        <span><strong>${escapeHtml(row.title || 'Untitled arc')}</strong><small>${escapeHtml(getSectionMeta(row.section)?.label || row.section)} · ${row.kind === 'added' ? 'new arc' : 'refreshed'}</small></span>
+                    </label>
+                    ${row.kind === 'added' ? renderScopedAddition(row.arc) : renderArcDiff(row.diff)}
+                </div>`).join('') : '<p class="mwt-text-dim mwt-text-sm">No material proposal was returned. Diagnostics are preserved below.</p>'}
             </fieldset>
-            <div class="sp-scoped-review-diff">${renderScopedReviewDiff(proposal)}</div>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8">
                 <button id="mwt-sp-scoped-apply" class="mwt-btn mwt-btn-primary">Apply changes</button>
                 <button id="mwt-sp-scoped-discard" class="mwt-btn">Discard</button>
@@ -1173,12 +1212,17 @@ function mutateWithProjectionCheck(mutate) {
 }
 
 function renderTargetedDiff(proposal) {
-    const fieldRows = proposal.diff.fields.map(change => `
+    return renderArcDiff(proposal.diff);
+}
+
+/** Render one buildArcDiff result. Shared by the targeted and scoped reviews. */
+function renderArcDiff(diff) {
+    const fieldRows = diff.fields.map(change => `
         <li><strong>${escapeHtml(change.field)}</strong><div class="sp-proposal-change">
             <del>${escapeHtml(change.before || '(empty)')}</del>
             <ins>${escapeHtml(change.after || '(empty)')}</ins>
         </div></li>`).join('');
-    const beatRows = proposal.diff.beats.map(change => {
+    const beatRows = diff.beats.map(change => {
         // A "moved" beat only changes position, not content — strike-through
         // styling (<del>/<ins>) implies removal, so render it as a plain
         // "Position N → M" line instead. Other kinds (added/removed/changed)

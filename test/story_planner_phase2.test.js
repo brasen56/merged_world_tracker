@@ -371,6 +371,84 @@ describe('Story Planner scoped review — individual acceptance', () => {
     });
 });
 
+describe('Story Planner scoped review — rendered change description', () => {
+    // An open review blocks the Generate dialog by design, so each test closes
+    // its modal through the real API rather than leaving state.scopedReviewOpen
+    // set for whatever runs next.
+    afterEach(async () => {
+        const { closeScopedReviewModal } = await import('../story_planner/render.js');
+        closeScopedReviewModal();
+        vi.unstubAllGlobals();
+    });
+
+    test('a Refresh review shows its target field diff and claims no reordering', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review-diff' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review-diff' }) });
+        const alpha = makeArc({ title: 'Alpha', section: 'horizon' });
+        const bravo = makeArc({ title: 'Bravo', section: 'horizon', body: 'Before' });
+        const charlie = makeArc({ title: 'Charlie', section: 'horizon' });
+        setArcs([alpha, bravo, charlie]);
+        const { captureTargetRevisions } = await import('../story_planner/proposals.js');
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'refresh', sectionKeys: ['horizon'], targetArcIds: [bravo.id] },
+            scope: captureScope(),
+            previousArcs: [alpha, bravo, charlie],
+            // The merge returns [...carried, ...merged], so Bravo arrives last.
+            arcs: [alpha, charlie, { ...bravo, body: 'After' }],
+            targetSnapshots: [bravo],
+            targetRevisions: captureTargetRevisions([bravo]),
+            reviewArcIds: [bravo.id],
+            matchedArcIds: [bravo.id],
+            stats: { added: 0, matched: 1, carried: 2, suppressedClosed: 0 },
+            diagnostics: {},
+        });
+
+        const body = document.getElementById('mwt-sp-scoped-review-modal').textContent;
+        // One reviewable item, and it is the target.
+        expect([...document.querySelectorAll('input[name="mwt-sp-proposal"]')].map(input => input.value)).toEqual([bravo.id]);
+        expect(document.querySelector('.sp-proposal-change del').textContent).toBe('Before');
+        expect(document.querySelector('.sp-proposal-change ins').textContent).toBe('After');
+        // The untouched arcs are not described as changes at all.
+        expect(body).not.toContain('Charlie');
+        expect(body).not.toContain('Alpha');
+
+        document.querySelector('#mwt-sp-scoped-apply').click();
+        expect(getArcs().map(arc => arc.title)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+        expect(getArcs()[1].body).toBe('After');
+    });
+
+    test('an Add review shows the proposed arc rather than a diff against nothing', async () => {
+        document.body.innerHTML = '';
+        setFakeContextExtras({ getCurrentChatId: () => 'story-planner-review-add' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'story-planner-review-add' }) });
+        const existing = makeArc({ title: 'Alpha', section: 'horizon' });
+        const proposed = makeArc({ title: 'Mara weighs the ledger', section: 'character', body: 'She must choose.', beats: ['She stalls.', 'She confesses.'] });
+        setArcs([existing]);
+        const { showScopedReview } = await import('../story_planner/render.js');
+
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['character'], requestedCount: 1 },
+            scope: captureScope(),
+            previousArcs: [existing],
+            arcs: [existing, proposed],
+            addedArcIds: [proposed.id],
+            reviewArcIds: [proposed.id],
+            stats: { added: 1, matched: 0, carried: 1, suppressedClosed: 0 },
+            diagnostics: {},
+        });
+
+        const body = document.getElementById('mwt-sp-scoped-review-modal').textContent;
+        expect(body).toContain('Mara weighs the ledger');
+        expect(body).toContain('She must choose.');
+        expect(body).toContain('She confesses.');
+        expect(body).toContain('new arc');
+        expect(document.querySelector('.sp-proposal-change')).toBeNull();
+    });
+});
+
 describe('Story Planner scoped generate dialog', () => {
     let alpha;
     let bravo;

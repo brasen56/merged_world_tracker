@@ -635,3 +635,15 @@
     .sp-target-actions .mwt-btn,
     .sp-proposal-actions .mwt-btn { min-height: 40px; width: 100%; }
 }
+
+.sp-proposal-item {
+    border-top: 1px solid var(--mwt-border);
+    margin-top: 6px;
+    padding-top: 6px;
+}
+
+.sp-proposal-item:first-of-type {
+    border-top: 0;
+    margin-top: 0;
+    padding-top: 0;
+}

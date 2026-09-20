@@ -21,7 +21,7 @@ import {
 } from './data.js';
 import { getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
-import { captureArcRevision, materialArcShape } from './proposals.js';
+import { buildArcDiff, captureArcRevision, materialArcShape } from './proposals.js';
 
 export const TARGETED_OPERATIONS = Object.freeze(['rework', 'develop', 'alternate', 'setup']);
 
@@ -142,37 +142,6 @@ function proposalArc(operation, source, model) {
     });
 }
 
-function buildDiff(source, proposed, operation) {
-    const fields = ['title', 'body', 'section']
-        .filter(field => source[field] !== proposed[field])
-        .map(field => ({ field: field === 'body' ? 'description' : field, before: source[field], after: proposed[field] }));
-    const before = source.beats.filter(beat => beat.state === 'pending');
-    const after = proposed.beats.filter(beat => beat.state === 'pending');
-    const beforeById = new Map(before.map(beat => [beat.id, beat]));
-    const afterById = new Map(after.map(beat => [beat.id, beat]));
-    const beats = [
-        ...before.filter(beat => !afterById.has(beat.id)).map(beat => ({ kind: 'removed', id: beat.id, before: beat.text, after: '' })),
-        ...after.map(beat => {
-            const old = beforeById.get(beat.id);
-            return old ? (old.text === beat.text ? null : { kind: 'changed', id: beat.id, before: old.text, after: beat.text })
-                : { kind: 'added', id: beat.id, before: '', after: beat.text };
-        }).filter(Boolean),
-    ];
-    const commonBefore = before.filter(beat => afterById.has(beat.id)).map(beat => beat.id);
-    const commonAfter = after.filter(beat => beforeById.has(beat.id)).map(beat => beat.id);
-    if (commonBefore.some((id, index) => id !== commonAfter[index])) {
-        const beforePositions = new Map(before.map((beat, index) => [beat.id, index + 1]));
-        after.forEach((beat, index) => {
-            const id = beat.id;
-            if (beforePositions.has(id)) {
-                beats.push({ kind: 'moved', id, before: beforePositions.get(id), after: index + 1 });
-            }
-        });
-    }
-    if (operation === 'alternate') fields.unshift({ field: 'arc', before: '(source remains unchanged)', after: proposed.title });
-    return { fields, beats };
-}
-
 /** Generate a review-only proposal. This function never writes metadata/history. */
 export async function generateTargetedProposal(arcId, operation = 'develop') {
     if (!TARGETED_OPERATIONS.includes(operation)) throw new Error('Unknown targeted arc action.');
@@ -223,7 +192,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
                 : !sameRevision(revision, materialArcShape(current)) ? 'The source arc changed while this proposal was generated.' : '';
         return {
             operation, sourceArcId: arcId, sourceArc, proposedArc,
-            diff: buildDiff(sourceArc, proposedArc, operation),
+            diff: buildArcDiff(sourceArc, proposedArc, operation),
             scope, revision, stale: !!staleReason, staleReason,
         };
     } catch (err) {
