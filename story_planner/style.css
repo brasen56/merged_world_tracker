@@ -20,13 +20,86 @@
     accent-color: var(--mwt-accent);
 }
 
-.sp-generate-target {
+/* Every checkbox list in the Generate dialog. A bare <label> is display:inline,
+   so without this the subject and context-source rows run together as one
+   wrapped paragraph of text instead of a scannable column. */
+.sp-generate-target,
+.sp-check-row {
     display: flex;
     gap: 6px;
     align-items: flex-start;
     padding: 4px 0;
     font-size: 12px;
+    cursor: pointer;
 }
+
+.sp-check-row input {
+    accent-color: var(--mwt-accent);
+    cursor: pointer;
+    flex: none;
+    margin: 2px 0 0;
+}
+
+.sp-check-row input:disabled,
+.sp-check-row input:disabled + span { cursor: default; opacity: 0.55; }
+
+/* Bounded so a large cast scrolls inside the dialog rather than pushing the
+   Generate button off the bottom. */
+.sp-check-list {
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    display: flex;
+    flex-direction: column;
+    max-height: 190px;
+    overflow-y: auto;
+    padding: 4px 8px;
+}
+
+.sp-ownership {
+    border: 1px solid var(--mwt-border);
+    border-radius: var(--mwt-radius);
+    display: grid;
+    gap: 4px 8px;
+    grid-template-columns: max-content 1fr;
+    align-items: center;
+    padding: 6px 8px;
+}
+
+.sp-ownership legend { grid-column: 1 / -1; padding: 0 4px; }
+.sp-ownership label { font-size: 12px; }
+.sp-ownership p { grid-column: 1 / -1; margin: 2px 0 0; }
+
+.sp-context-coverage {
+    list-style: none;
+    margin: 6px 0 0;
+    max-height: 190px;
+    overflow-y: auto;
+    padding: 0;
+}
+
+.sp-context-coverage li {
+    border-top: 1px solid var(--mwt-border);
+    font-size: 12px;
+    padding: 4px 0;
+}
+
+.sp-context-coverage li:first-child { border-top: 0; }
+.sp-context-coverage li[data-coverage-status="unavailable"] strong,
+.sp-context-coverage li[data-coverage-status="missing-dossier"] strong { color: var(--mwt-warning); }
+
+.sp-context-coverage-review summary,
+.sp-proposal-item summary { cursor: pointer; }
+
+.sp-proposal-ownership {
+    display: grid;
+    gap: 2px 8px;
+    grid-template-columns: max-content 1fr;
+    font-size: 12px;
+    margin: 4px 0;
+}
+
+.sp-proposal-ownership dt { color: var(--mwt-text-dim); }
+.sp-proposal-ownership dd { margin: 0; }
 
 .sp-proposal-diagnostics {
     color: var(--mwt-warning);

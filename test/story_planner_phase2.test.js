@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import {
     addArcBeat,
@@ -655,6 +656,28 @@ describe('Story Planner scoped generate dialog', () => {
         expect(document.querySelector('#sp-generate-legacy')).not.toBeNull();
         await openDialog({ settings: { customUserPrompt: 'CUSTOM {{chatHistory}}' } });
         expect(document.querySelector('#sp-generate-legacy')).not.toBeNull();
+    });
+
+    // A bare <label> is display:inline, so an unclassed checkbox list renders as
+    // one wrapped paragraph of names instead of a column. Every list in the
+    // dialog must opt into the shared row/list styling.
+    test('every checkbox list in the dialog carries the shared row styling', async () => {
+        await openDialog({ preselectTargets: true });
+        const styledLists = ['#sp-generate-subject-list', '#sp-generate-target-list'];
+        for (const selector of styledLists) {
+            const list = document.querySelector(selector);
+            expect(list, selector).not.toBeNull();
+            expect([...list.classList], selector).toContain('sp-check-list');
+            for (const label of list.querySelectorAll('label')) {
+                expect([...label.classList], `${selector} label`)
+                    .toEqual(expect.arrayContaining([expect.stringMatching(/^sp-(check-row|generate-target)$/)]));
+            }
+        }
+        // Each styled class must actually exist in the stylesheet.
+        const css = readFileSync(`${process.cwd()}/story_planner/style.css`, 'utf8');
+        for (const rule of ['.sp-check-row', '.sp-check-list', '.sp-ownership', '.sp-context-coverage', '.sp-proposal-ownership']) {
+            expect(css, rule).toContain(`${rule} `);
+        }
     });
 
     test('a rejected request is not remembered as the next dialog state', async () => {

@@ -1,11 +1,12 @@
 # Story Planner V3: scoped generation, character journeys, and cast policy
 
-**Status:** Phase 0=1 complete. Phase 2 **Inprogress** — see
-the Phase 1 status block in §5. Phase 0 request-boundary samples are synthetic
-and the consented targeted-develop sample remains a non-blocking follow-up; the
-planner-output attribution required to exit Phase 0 is recorded. Phases 2-3
-not started.
-**Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated 2026-09-20)
+**Status:** Phases 0 and 1 complete. Phase 2 **Implemented, not host verified**
+— see the Phase 1 and Phase 2 status blocks in §5. Phase 0 request-boundary
+samples are synthetic and the consented targeted-develop sample remains a
+non-blocking follow-up; the planner-output attribution required to exit Phase 0
+is recorded. Phase 3 not started.
+**Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated
+2026-09-20; Phase 2 status recorded 2026-09-20)
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
 sketch pending the Phase 0 projection inventory. Independent arc classification
 and execution prerequisites are deferred in §7.
@@ -693,6 +694,46 @@ removal, unavailable Knowledge, and an over-budget selection are handled visibly
 No title-based guess transfers ownership or progress. The Phase 2 red
 specification is now a passing public-boundary test, while Phase 3 behavior
 remains absent and unclaimed.
+
+**Phase 2 status (§8 record)**
+
+- **State:** Implemented; not host verified.
+- **Change reference:** `a7ddd1f` (ownership fields, migration, wire contract,
+  coverage), `1df9442` and `3471778` (coverage visibility and per-request
+  context sources, from live testing), `HEAD` (review fixes below).
+- **Automated checks:** full suite green; lint clean. Phase 2 behavior is pinned
+  in `test/story_planner_phase0_v3.test.js`, `test/story_planner_phase2.test.js`,
+  `test/story_planner_phase6.test.js`, `test/generation_commit_races.test.js`,
+  `test/backup.test.js`, `test/schema_migrations.test.js`, and `test/plan.test.js`.
+- **Red specifications and source assertions changed:** exactly one —
+  `duplicate journey subjects are rejected before persistence`, which Phase 2
+  owns. Its placeholder array body was replaced with an assertion through
+  `validateStoryPlannerData`, checking both the deduplicated persisted arc and
+  the `arc-participant-ids-deduplicated` repair issue; `fails` was removed only
+  once that boundary passed. No Phase 3 fixture was touched, and no
+  cross-cutting source assertion was changed.
+- **Known limitations:**
+  - An omitted `[SUPPORT:…]` marker means "unchanged", because the prompt states
+    the marker is optional. Clearing an arc's supporting cast is a manual edit.
+    A model cannot remove a supporting participant through a refresh.
+  - With no tracked characters, Character Journeys is dropped from a
+    multi-section request and reported in review; only a Journeys-only request
+    fails. §5 2C's "do not make a Character Journey call" is read as dropping
+    that call, not the whole request.
+  - `listPlannerCharacterCandidates` no longer returns `[]` when Knowledge is
+    globally disabled, so the subject picker and ownership editor list registry
+    names in that state. Dossier content stays blocked in
+    `buildPlannerCharacterContext`, and coverage reports every row as
+    `disabled`. This is required to name a disabled row and is deliberate.
+  - `renderArcOwnershipEditor` re-lists registry candidates once per Character
+    Journey card per render, and the dialog's coverage panel rebuilds without a
+    debounce — one `loadEntryContent` per selected character per toggle. Both
+    are correctness-neutral and unmeasured; neither is a Phase 3 prerequisite.
+  - Scoped requests are still recorded as `full` by `recordPhase7Request`
+    (carried from Phase 1).
+- **Manual results:** live testing found the coverage-visibility and
+  per-request-context gaps fixed in `1df9442`/`3471778`. Host-runtime checks in
+  §6.2 remain pending.
 
 ### Phase 3 - Cast policy and newcomer proposals
 

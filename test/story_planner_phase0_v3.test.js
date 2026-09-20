@@ -199,6 +199,54 @@ describe('Story Planner V3 Phase 0 — red boundary specifications', () => {
         expect(merged.beats).toEqual(stored.beats);
     });
 
+    test('an omitted [SUPPORT:…] marker leaves the stored supporting cast alone', () => {
+        const stored = makeArc({
+            title: 'Shared burden', section: 'character',
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: ['entity-derek', 'entity-clerk'],
+            beats: ['Old setup'],
+        });
+        // The prompt states the SUPPORT marker is optional, so a row without one
+        // is the common case and must not read as "delete the supporting cast".
+        const incoming = {
+            ...makeArc({ title: stored.title, section: 'character', beats: ['New setup'] }),
+            id: stored.id,
+            primarySubjectEntityId: 'entity-mara',
+            supportingParticipantEntityIds: [],
+        };
+
+        const merged = mergeRegeneratedArcs([stored], [incoming], { scope: new Set([stored.id]) }).arcs
+            .find(arc => arc.id === stored.id);
+
+        expect(merged.supportingParticipantEntityIds).toEqual(['entity-derek', 'entity-clerk']);
+        expect(merged.primarySubjectEntityId).toBe('entity-mara');
+    });
+
+    test('valid arcs held back by the subject-coverage rule are counted, not dropped in silence', () => {
+        const request = {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 2,
+            subjectMode: 'selected', subjectEntityIds: ['entity-mara', 'entity-derek'],
+        };
+        const character = (title, subject) => ({
+            ...makeArc({ title, section: 'character' }),
+            primarySubjectEntityId: subject,
+            _subjectContractActive: true,
+        });
+        // Two good arcs came back, both for Mara. Only one may be accepted while
+        // Derek has none — but the other must still be accounted for.
+        const selection = selectScopedParsedArcs(
+            [character('Mara one', 'entity-mara'), character('Mara two', 'entity-mara')],
+            request,
+            [],
+        );
+
+        expect(selection.accepted.map(arc => arc.title)).toEqual(['Mara one']);
+        expect(selection.deferredForCoverage).toBe(1);
+        expect(selection.underfill).toBe(1);
+        // Every in-scope arc is either accepted, overflow, or deferred.
+        expect(selection.accepted.length + selection.overflow + selection.deferredForCoverage).toBe(2);
+    });
+
     test('a user edit between response and Apply requires renewed review', () => {
         const before = makeArc({ title: 'Stable route', body: 'Original endpoint.', section: 'horizon' });
         const proposal = {

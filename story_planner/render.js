@@ -728,8 +728,14 @@ export function closeScopedReviewModal() {
 export function showScopedReview(proposal) {
     const diagnostics = proposal.diagnostics || {};
     const diagnosticItems = [
+        diagnostics.droppedSections?.length
+            ? `${diagnostics.droppedSections.map(key => getSectionMeta(key)?.label || key).join(', ')} was not requested: no assignable Journey subject is available. Add a tracked character in Knowledge to include it.`
+            : '',
         diagnostics.underfill ? `Underfilled by ${diagnostics.underfill}.` : '',
         diagnostics.overflow ? `${diagnostics.overflow} overflow suggestion${diagnostics.overflow === 1 ? '' : 's'} excluded.` : '',
+        diagnostics.deferredForCoverage
+            ? `${diagnostics.deferredForCoverage} valid suggestion${diagnostics.deferredForCoverage === 1 ? '' : 's'} set aside: every selected subject needs a Journey before one may receive a second.`
+            : '',
         diagnostics.omittedTargetIds?.length ? `${diagnostics.omittedTargetIds.length} selected target${diagnostics.omittedTargetIds.length === 1 ? '' : 's'} omitted and left unchanged.` : '',
         diagnostics.rejectedSuggestions?.length ? `${diagnostics.rejectedSuggestions.length} unrequested suggestion${diagnostics.rejectedSuggestions.length === 1 ? '' : 's'} rejected.` : '',
         ...(diagnostics.participantDiagnostics || []),
@@ -858,16 +864,16 @@ export function openGenerateDialog() {
                 <legend class="mwt-label">Character Journey subjects</legend>
                 <label class="sp-mode-label" for="sp-subject-any"><input id="sp-subject-any" type="radio" name="sp-generate-subject-mode" value="any" ${preferences.subjectMode !== 'selected' ? 'checked' : ''}> Any tracked character</label>
                 <label class="sp-mode-label" for="sp-subject-selected"><input id="sp-subject-selected" type="radio" name="sp-generate-subject-mode" value="selected" ${preferences.subjectMode === 'selected' ? 'checked' : ''}> Selected characters</label>
-                <div id="sp-generate-subject-list" class="mwt-mt-8">${subjectCandidates.map((candidate, index) => `
-                    <label for="sp-generate-subject-${index}"><input id="sp-generate-subject-${index}" type="checkbox" name="sp-generate-subject" value="${escapeHtml(candidate.entityId)}" ${savedSubjectIds.has(candidate.entityId) || candidate.mergedEntityIds?.some(id => savedSubjectIds.has(id)) ? 'checked' : ''}> ${escapeHtml(candidate.name)}</label>`).join('')
+                <div id="sp-generate-subject-list" class="sp-check-list mwt-mt-8">${subjectCandidates.map((candidate, index) => `
+                    <label class="sp-check-row" for="sp-generate-subject-${index}"><input id="sp-generate-subject-${index}" type="checkbox" name="sp-generate-subject" value="${escapeHtml(candidate.entityId)}" ${savedSubjectIds.has(candidate.entityId) || candidate.mergedEntityIds?.some(id => savedSubjectIds.has(id)) ? 'checked' : ''}> <span>${escapeHtml(candidate.name)}</span></label>`).join('')
                     || '<span class="mwt-text-dim mwt-text-sm">No assignable tracked characters are currently available.</span>'}</div>
                 ${hiddenSubjectCandidateCount ? `<p class="mwt-text-dim mwt-text-sm">Showing up to ${MAX_JOURNEY_SUBJECT_CANDIDATES} tracked characters. Saved selections stay visible at the top so they can always be cleared; ${hiddenSubjectCandidateCount} other character${hiddenSubjectCandidateCount === 1 ? ' is' : 's are'} outside this request.</p>` : ''}
                 <p class="mwt-text-dim mwt-text-sm">Subject selection assigns ownership only. It does not add dossier fields to Safe Character Context.</p>
             </fieldset>
             ${context.mode !== 'off' ? `<fieldset id="sp-generate-context-sources" style="border:0;padding:0;margin:12px 0 0">
                 <legend class="mwt-label">Safe Character Context sources for this request${context.mode === 'selected' ? ` (select up to ${MAX_CHARACTER_CONTEXT_IDS})` : ''}</legend>
-                <div id="sp-generate-context-source-list">${context.mode === 'selected'
-                    ? selectedContextSources.map((source, index) => `<label for="sp-generate-context-source-${index}"><input id="sp-generate-context-source-${index}" type="checkbox" name="sp-generate-context-source" value="${escapeHtml(source.entityId)}" ${savedContextIds.has(source.entityId) || source.mergedEntityIds?.some(id => savedContextIds.has(id)) ? 'checked' : ''}> ${escapeHtml(source.name)}</label>`).join('') || '<span class="mwt-text-dim mwt-text-sm">No tracked characters are available as context sources.</span>'
+                <div id="sp-generate-context-source-list" class="sp-check-list">${context.mode === 'selected'
+                    ? selectedContextSources.map((source, index) => `<label class="sp-check-row" for="sp-generate-context-source-${index}"><input id="sp-generate-context-source-${index}" type="checkbox" name="sp-generate-context-source" value="${escapeHtml(source.entityId)}" ${savedContextIds.has(source.entityId) || source.mergedEntityIds?.some(id => savedContextIds.has(id)) ? 'checked' : ''}> <span>${escapeHtml(source.name)}</span></label>`).join('') || '<span class="mwt-text-dim mwt-text-sm">No tracked characters are available as context sources.</span>'
                     : '<span class="mwt-text-dim mwt-text-sm">Checking the active cast…</span>'}</div>
                 <p class="mwt-text-dim mwt-text-sm">Journey ownership and public context are separate. Check the characters whose public context should be sent, or clear a source to omit it. Your saved Story Planner context mode and selection are unchanged.</p>
             </fieldset>` : ''}
@@ -875,7 +881,7 @@ export function openGenerateDialog() {
                 <summary>Safe Character Context coverage</summary>
                 <div id="sp-generate-context-coverage" aria-live="polite"><p class="mwt-text-dim mwt-text-sm">Checking public-context coverage…</p></div>
             </details>
-            <fieldset id="sp-generate-targets" style="border:0;padding:0;margin:12px 0 0"><legend class="mwt-label">Eligible arcs (select up to ${MAX_STORY_PLAN_REQUEST_IDS})</legend><div id="sp-generate-target-list"></div></fieldset>
+            <fieldset id="sp-generate-targets" style="border:0;padding:0;margin:12px 0 0"><legend class="mwt-label">Eligible arcs (select up to ${MAX_STORY_PLAN_REQUEST_IDS})</legend><div id="sp-generate-target-list" class="sp-check-list"></div></fieldset>
             <p class="${configuredCustomTemplates ? 'sp-proposal-diagnostics' : 'mwt-text-dim mwt-text-sm'}">${configuredCustomTemplates
                 ? 'Scoped generation uses the built-in safe request format, so your saved custom templates are not used here.'
                 : 'Regenerating the whole plan rewrites every section at once and saves without a review step. It keeps pinned arcs and planted beats.'}
@@ -894,7 +900,7 @@ export function openGenerateDialog() {
         const host = modal.querySelector('#sp-generate-context-source-list');
         if (!host) return;
         host.innerHTML = activeContextSources.size
-            ? [...activeContextSources].map(([entityId, name], index) => `<label for="sp-generate-context-source-${index}"><input id="sp-generate-context-source-${index}" type="checkbox" name="sp-generate-context-source" value="${escapeHtml(entityId)}" ${excludedContextSourceIds.has(entityId) ? '' : 'checked'}> ${escapeHtml(name)}</label>`).join('')
+            ? [...activeContextSources].map(([entityId, name], index) => `<label class="sp-check-row" for="sp-generate-context-source-${index}"><input id="sp-generate-context-source-${index}" type="checkbox" name="sp-generate-context-source" value="${escapeHtml(entityId)}" ${excludedContextSourceIds.has(entityId) ? '' : 'checked'}> <span>${escapeHtml(name)}</span></label>`).join('')
             : '<span class="mwt-text-dim mwt-text-sm">No active-cast context sources are available.</span>';
     };
     const getRequestContextSelection = () => context.mode === 'selected'

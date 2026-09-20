@@ -622,6 +622,18 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
     const scopedSections = options.scopeSections instanceof Set ? options.scopeSections : null;
     const addOnly = options.addOnly === true;
     const preserveSupportingParticipants = options.preserveSupportingParticipants === true;
+    // A returned Character Journey row carries [SUPPORT:…] only when the model
+    // chooses to — the prompt states the marker is optional. Silence therefore
+    // means "unchanged", not "remove this arc's supporting cast": a refresh
+    // that simply did not mention Derek must not delete him. Clearing the list
+    // stays a manual edit in the arc's Journey ownership editor.
+    const mergeSupporting = (fresh, old) => (
+        !preserveSupportingParticipants
+        && fresh.section === 'character'
+        && fresh.supportingParticipantEntityIds?.length
+            ? fresh.supportingParticipantEntityIds
+            : old.supportingParticipantEntityIds
+    );
 
     // Scoped Add is append-only by contract. Existing records are not merge
     // candidates and are carried byte-for-byte (after the normal storage-boundary
@@ -747,9 +759,7 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
             return { ...fresh, id: old.id, pinned: old.pinned, status: old.status,
                 focused: old.focused, activateWhen: old.activateWhen,
                 primarySubjectEntityId: old.primarySubjectEntityId,
-                supportingParticipantEntityIds: fresh.section === 'character' && !preserveSupportingParticipants
-                    ? fresh.supportingParticipantEntityIds
-                    : old.supportingParticipantEntityIds,
+                supportingParticipantEntityIds: mergeSupporting(fresh, old),
                 closeReason: old.closeReason, closedAt: old.closedAt,
                 createdAt: old.createdAt, beats: oldBeats,
                 turnsSinceAdvance: old.turnsSinceAdvance || 0, updatedAt: Date.now() };
@@ -783,9 +793,7 @@ export function mergeRegeneratedArcs(previous, incoming, options = {}) {
             focused: old.focused,
             activateWhen: old.activateWhen,
             primarySubjectEntityId: old.primarySubjectEntityId,
-            supportingParticipantEntityIds: fresh.section === 'character' && !preserveSupportingParticipants
-                ? fresh.supportingParticipantEntityIds
-                : old.supportingParticipantEntityIds,
+            supportingParticipantEntityIds: mergeSupporting(fresh, old),
             closeReason: old.closeReason,
             closedAt: old.closedAt,
             createdAt: old.createdAt,

@@ -389,7 +389,7 @@ export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = [], s
             acceptedIds.add(arc.id);
             accepted.push(arc);
         }
-        return { accepted, rejected, overflow: 0, underfill: 0 };
+        return { accepted, rejected, overflow: 0, underfill: 0, deferredForCoverage: 0 };
     }
     const accepted = (() => {
         if (request.subjectMode !== 'selected' || !request.sectionKeys.includes('character')) {
@@ -408,10 +408,16 @@ export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = [], s
         }
         return selected;
     })();
+    const overflow = Math.max(0, inSections.length - request.requestedCount);
     return {
         accepted,
         rejected: rejectedOutsideScope,
-        overflow: Math.max(0, inSections.length - request.requestedCount),
+        overflow,
+        // Valid, in-scope arcs held back purely by the coverage rule — a second
+        // arc for an already-covered subject while another selected subject has
+        // none. They are neither overflow nor rejected output, so without their
+        // own count they would disappear from review with no explanation.
+        deferredForCoverage: Math.max(0, inSections.length - accepted.length - overflow),
         underfill: Math.max(
             0,
             request.requestedCount - accepted.length,
@@ -482,6 +488,37 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     // the call were silently overwritten and the history snapshot recorded
     // the already-modified state as "previous."
     const arcsBeforeCall = getArcs();
+
+    // §5 2C: with no assignable subject there is no valid Character Journey
+    // call to make. Drop that one section and answer the rest — failing a
+    // five-section request because Knowledge has no tracked characters yet
+    // makes the planner unusable on a fresh chat. Only a request that has
+    // nothing left to ask for is an error.
+    const allSubjectCandidates = request?.sectionKeys.includes('character')
+        ? listSafeCharacterContextCandidates()
+        : [];
+    const droppedSections = [];
+    if (request?.sectionKeys.includes('character') && allSubjectCandidates.length === 0) {
+        if (request.sectionKeys.length === 1) {
+            throw new Error('No assignable Journey subject is available. Enable Knowledge and add at least one tracked character, or choose a different section.');
+        }
+        droppedSections.push('character');
+        request = sanitizeStoryPlanRequest({
+            ...request,
+            sectionKeys: request.sectionKeys.filter(key => key !== 'character'),
+            subjectMode: 'any',
+            subjectEntityIds: [],
+            // A Character Journey target cannot be refreshed without its owner,
+            // so it leaves the captured set with the section rather than being
+            // silently reported as omitted by the model.
+            targetArcIds: request.targetArcIds.filter(id =>
+                arcsBeforeCall.find(arc => arc.id === id)?.section !== 'character'),
+        });
+        if (request.operation === 'refresh' && !request.targetArcIds.length) {
+            throw new Error('Every selected arc is a Character Journey, and no assignable Journey subject is available. Enable Knowledge and add at least one tracked character.');
+        }
+    }
+
     if (request?.operation === 'refresh') {
         const unassignedTargets = arcsBeforeCall.filter(arc => request.targetArcIds.includes(arc.id)
             && arc.section === 'character' && !arc.primarySubjectEntityId);
@@ -516,18 +553,12 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     const targetRevisions = captureTargetRevisions(targetSnapshots);
     const requestHandles = mintRequestHandles(capturedArcs);
     const arcsByHandle = new Map(capturedArcs.map(arc => [requestHandles.get(arc.id), arc]));
-    const allSubjectCandidates = request?.sectionKeys.includes('character')
-        ? listSafeCharacterContextCandidates()
-        : [];
     const subjectCapture = request?.sectionKeys.includes('character')
         ? captureJourneySubjectCandidates(allSubjectCandidates, request, capturedArcs)
         : { candidates: [], missingOwnerIds: [] };
     const subjectCandidates = subjectCapture.candidates;
     if (subjectCapture.missingOwnerIds.length) {
         throw new Error(`${subjectCapture.missingOwnerIds.length} selected Character Journey owner${subjectCapture.missingOwnerIds.length === 1 ? ' is' : 's are'} unavailable in Knowledge. Reopen Generate or manually assign an available primary subject before refreshing.`);
-    }
-    if (request?.sectionKeys.includes('character') && subjectCandidates.length === 0) {
-        throw new Error('No assignable Journey subject is available. Enable Knowledge and add at least one tracked character, or remove Character Journeys from this request.');
     }
     if (request?.subjectMode === 'selected') {
         const capturedSubjectIds = new Set(subjectCandidates.map(candidate => candidate.entityId));
@@ -788,6 +819,8 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                     };
                 }),
                 diagnostics: {
+                    droppedSections,
+                    deferredForCoverage: scopedSelection?.deferredForCoverage || 0,
                     overflow: scopedSelection?.overflow || 0,
                     underfill: request.operation === 'add'
                         ? Math.max(scopedSelection?.underfill || 0, request.requestedCount - added)

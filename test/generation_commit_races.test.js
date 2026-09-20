@@ -869,6 +869,49 @@ describe('Story Planner generatePlan — commit races (STORY-PLANNER-01/02)', ()
         expect(sent.match(/\[ARC:[a-z0-9]/g)).toHaveLength(1);
     });
 
+    // §5 2C: with no assignable subject there is no valid Character Journey
+    // call. The section is dropped and the rest of the request is answered —
+    // failing all five sections because Knowledge has no tracked characters
+    // makes the planner unusable on a fresh chat.
+    test('no tracked characters drops Character Journeys and answers the other sections', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        setArcs([]);
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [],
+            resolveEntities: () => ({ resolved: [], missing: [], available: true }),
+            buildContext: async () => ({ text: '', records: 0, requested: 0, omitted: 0, coverage: [] }),
+        });
+        CURRENT = '## Immediate Hooks\n- A knock — someone arrives.\n## Horizon Arcs\n- The audit — it lands.\n  1. Setup.';
+
+        const proposal = await generatePlan(false, {
+            operation: 'add', sectionKeys: ['immediate', 'horizon', 'character'], requestedCount: 3,
+        }, { reviewOnly: true });
+
+        expect(proposal.request.sectionKeys).toEqual(['immediate', 'horizon']);
+        expect(proposal.diagnostics.droppedSections).toEqual(['character']);
+        expect(proposal.stats.added).toBe(2);
+        // The dropped section is never offered to the model.
+        expect(requests[0].userContent).not.toContain('Character Journeys');
+        expect(requests[0].userContent).not.toContain('<journey_subjects>');
+    });
+
+    test('a Character-Journeys-only request with no tracked characters still fails', async () => {
+        const { generatePlan } = await import('../story_planner/generation.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        setArcs([]);
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [],
+            resolveEntities: () => ({ resolved: [], missing: [], available: true }),
+            buildContext: async () => ({ text: '', records: 0, requested: 0, omitted: 0, coverage: [] }),
+        });
+
+        await expect(generatePlan(false, {
+            operation: 'add', sectionKeys: ['character'], requestedCount: 1,
+        }, { reviewOnly: true })).rejects.toThrow(/No assignable Journey subject is available/);
+        expect(requests).toHaveLength(0);
+    });
+
     // §4.1: "Zero valid arcs is a failed operation." A Refresh whose output
     // resolves to none of its captured targets has nothing to review, so it
     // must fail rather than open an empty modal over a live Apply button.
