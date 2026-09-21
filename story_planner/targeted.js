@@ -13,13 +13,13 @@ import {
 } from '../core/index.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { getSettings, hasValidSettings } from './settings.js';
-import { storyPlannerSchema } from './schema.js';
+import { extractEntranceBeatMarker, extractNewcomerArcMarker, storyPlannerSchema } from './schema.js';
 import {
     SECTIONS, buildClosedMemoryProjection, getArcs, getCharacterContextSelection, getDirectionHint,
     newArcId, newBeatId, sanitizeArc, setArcsWithHistory, state,
     incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
-import { describeCastPolicyRequest, getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
+import { assessNewcomerEvidence, describeCastPolicyRequest, getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
 import { buildArcDiff, captureArcRevision, materialArcShape } from './proposals.js';
 
@@ -73,22 +73,46 @@ function parseTargetedOutput(raw) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error('Targeted response was not a JSON object.');
     }
-    const pending = Array.isArray(parsed.pendingBeats)
-        ? [...new Set(parsed.pendingBeats
-            .map(value => cleanText(typeof value === 'object' ? value?.text : value, 1000))
-            .filter(Boolean)
-            .map(text => ({ text, key: text.replace(/\s+/g, ' ').trim().toLowerCase() }))
-            .filter((entry, index, entries) => entries.findIndex(candidate => candidate.key === entry.key) === index)
-            .map(entry => entry.text)
-            .slice(0, 20))]
-        : [];
+    const newcomerExplicit = cleanText(parsed.newcomerHandle, 100);
+    const newcomer = newcomerExplicit
+        ? extractNewcomerArcMarker(`[NEWCOMER:${newcomerExplicit}]`)
+        : { handle: '', error: '' };
+    const pendingEntries = Array.isArray(parsed.pendingBeats)
+        ? parsed.pendingBeats.map(value => {
+            const rawText = cleanText(typeof value === 'object' ? value?.text : value, 1000);
+            const inline = extractEntranceBeatMarker(rawText);
+            const explicitHandle = cleanText(typeof value === 'object' ? value?.entranceHandle : '', 100);
+            const explicit = explicitHandle ? extractEntranceBeatMarker(`[ENTRANCE:${explicitHandle}]`) : null;
+            return {
+                text: cleanText(inline.content, 1000),
+                handle: explicit?.handle || inline.handle,
+                error: explicit?.error || inline.error || (explicitHandle && inline.handle ? 'duplicate entrance evidence on one beat' : ''),
+            };
+        }) : [];
+    const pending = pendingEntries
+        .filter(entry => entry.text)
+        .filter((entry, index, entries) => entries.findIndex(candidate => candidate.text.replace(/\s+/g, ' ').trim().toLowerCase() === entry.text.replace(/\s+/g, ' ').trim().toLowerCase()) === index)
+        .slice(0, 20);
     if (!pending.length) throw new Error('Targeted response did not include any pending setup beats.');
-    return {
+    const model = {
         title: cleanText(parsed.title, 200),
         body: cleanText(parsed.description ?? parsed.body, 2000),
         section: SECTIONS.some(section => section.key === parsed.section) ? parsed.section : '',
-        pending,
+        pending: pending.map(entry => entry.text),
     };
+    if (newcomerExplicit) model._newcomerHandle = newcomer.handle;
+    if (newcomer.error) model._newcomerMarkerError = newcomer.error;
+    const entranceHandles = pending.filter(entry => entry.handle).map(entry => entry.handle);
+    if (entranceHandles.length) model._entranceHandles = entranceHandles;
+    const entranceError = pending.find(entry => entry.error)?.error;
+    if (entranceError && !model._newcomerMarkerError) model._newcomerMarkerError = entranceError;
+    if (!model._newcomerMarkerError) {
+        if (!model._newcomerHandle && entranceHandles.length) model._newcomerMarkerError = 'entrance marker has no newcomer marker on the same arc';
+        else if (model._newcomerHandle && entranceHandles.length !== 1) model._newcomerMarkerError = entranceHandles.length ? 'newcomer arc must contain exactly one entrance beat' : 'newcomer arc is missing its entrance beat';
+        else if (model._newcomerHandle && entranceHandles[0] !== model._newcomerHandle) model._newcomerMarkerError = 'newcomer and entrance handles do not match within the same arc';
+        else if (model._newcomerHandle) model._newcomerEvidence = { handle: model._newcomerHandle };
+    }
+    return model;
 }
 
 function preservePendingIds(source, texts) {
@@ -184,7 +208,10 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
             trigger: 'manual',
             requestDiagnostics,
         });
-        const proposedArc = proposalArc(operation, sourceArc, parseTargetedOutput(raw));
+        const model = parseTargetedOutput(raw);
+        const newcomerEvidence = assessNewcomerEvidence([model], castPolicyContract, { reviewed: true, operation, targeted: true });
+        if (!newcomerEvidence.ok) throw new Error(newcomerEvidence.reason);
+        const proposedArc = proposalArc(operation, sourceArc, model);
         incrementPhase7Metrics({ targetedGenerations: 1 });
         const current = getArcs().find(arc => arc.id === arcId);
         const scopeResult = assertSameScope(scope);
@@ -195,6 +222,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
             operation, sourceArcId: arcId, sourceArc, proposedArc,
             diff: buildArcDiff(sourceArc, proposedArc, operation),
             castPolicyContract: { ...castPolicyContract },
+            newcomerEvidence,
             scope, revision, stale: !!staleReason, staleReason,
         };
     } catch (err) {

@@ -466,6 +466,12 @@ const ARC_HANDLE_STRIP_RE = /\s*\[\s*ARC\s*:[^\]]*\]\s*/gi;
 const SUBJECT_HANDLE_RE = /\[\s*SUBJECT\s*:\s*([^\]]*?)\s*\]/gi;
 const SUPPORT_HANDLE_RE = /\[\s*SUPPORT\s*:\s*([^\]]*?)\s*\]/gi;
 const SUBJECT_MARKER_STRIP_RE = /\s*\[\s*(?:SUBJECT|SUPPORT)\s*:[^\]]*\]\s*/gi;
+const NEWCOMER_HANDLE_RE = /\[\s*NEWCOMER\s*:\s*([^\]]*?)\s*\]/gi;
+const ENTRANCE_HANDLE_RE = /\[\s*ENTRANCE\s*:\s*([^\]]*?)\s*\]/gi;
+const NEWCOMER_MARKER_STRIP_RE = /\s*\[\s*NEWCOMER\s*:[^\]]*\]\s*/gi;
+const ENTRANCE_MARKER_STRIP_RE = /\s*\[\s*ENTRANCE\s*:[^\]]*\]\s*/gi;
+export const MAX_NEWCOMER_HANDLE_LENGTH = 24;
+const VALID_NEWCOMER_HANDLE_RE = /^[a-z][a-z0-9_-]{0,23}$/;
 
 /**
  * Remove every request-local arc handle from a bullet and return the handle
@@ -531,6 +537,87 @@ function extractSubjectMarkers(raw, subjectHandles, section) {
         error,
         participantDiagnostic,
     };
+}
+
+function normalizeNewcomerHandle(value) {
+    const handle = String(value || '').trim().toLowerCase();
+    return handle.length <= MAX_NEWCOMER_HANDLE_LENGTH && VALID_NEWCOMER_HANDLE_RE.test(handle)
+        ? handle : '';
+}
+
+/** Strip proposal-local newcomer evidence from an arc line. */
+export function extractNewcomerArcMarker(raw) {
+    const text = String(raw);
+    const rawHandles = [...text.matchAll(NEWCOMER_HANDLE_RE)].map(match => match[1]);
+    const misplacedEntrances = [...text.matchAll(ENTRANCE_HANDLE_RE)];
+    const handles = rawHandles.map(normalizeNewcomerHandle).filter(Boolean);
+    let error = '';
+    if (misplacedEntrances.length) error = 'entrance markers are only valid on setup beats';
+    else if (rawHandles.length > 1) error = 'duplicate newcomer markers on one arc';
+    else if (rawHandles.length === 1 && handles.length !== 1) error = 'invalid or oversized newcomer handle';
+    return {
+        content: text.replace(NEWCOMER_MARKER_STRIP_RE, ' ').replace(ENTRANCE_MARKER_STRIP_RE, ' '),
+        handle: handles.length === 1 ? handles[0] : '',
+        marked: rawHandles.length > 0,
+        error,
+    };
+}
+
+/** Strip proposal-local entrance evidence from one beat. */
+export function extractEntranceBeatMarker(raw) {
+    const text = String(raw);
+    const rawHandles = [...text.matchAll(ENTRANCE_HANDLE_RE)].map(match => match[1]);
+    const misplacedNewcomers = [...text.matchAll(NEWCOMER_HANDLE_RE)];
+    const handles = rawHandles.map(normalizeNewcomerHandle).filter(Boolean);
+    let error = '';
+    if (misplacedNewcomers.length) error = 'newcomer markers are only valid on arc rows';
+    else if (rawHandles.length > 1) error = 'duplicate entrance markers on one beat';
+    else if (rawHandles.length === 1 && handles.length !== 1) error = 'invalid or oversized entrance handle';
+    return {
+        content: text.replace(ENTRANCE_MARKER_STRIP_RE, ' ').replace(NEWCOMER_MARKER_STRIP_RE, ' '),
+        handle: handles.length === 1 ? handles[0] : '',
+        marked: rawHandles.length > 0,
+        error,
+    };
+}
+
+/** Strip proposal-local markers from wrapped prose, where neither is valid. */
+function extractNewcomerContinuationMarkers(raw) {
+    const text = String(raw);
+    const hasNewcomer = [...text.matchAll(NEWCOMER_HANDLE_RE)].length > 0;
+    const hasEntrance = [...text.matchAll(ENTRANCE_HANDLE_RE)].length > 0;
+    let error = '';
+    if (hasNewcomer && hasEntrance) error = 'newcomer and entrance markers are not valid on wrapped arc-body lines';
+    else if (hasNewcomer) error = 'newcomer markers are only valid on arc rows';
+    else if (hasEntrance) error = 'entrance markers are only valid on setup beats';
+    return {
+        content: text.replace(NEWCOMER_MARKER_STRIP_RE, ' ').replace(ENTRANCE_MARKER_STRIP_RE, ' '),
+        error,
+    };
+}
+
+function finalizeNewcomerEvidence(arcs) {
+    const owners = new Map();
+    for (const arc of arcs) {
+        const handle = arc._newcomerHandle || '';
+        const entrances = Array.isArray(arc._entranceHandles) ? arc._entranceHandles : [];
+        if (!arc._newcomerMarkerError) {
+            if (!handle && entrances.length) arc._newcomerMarkerError = 'entrance marker has no newcomer marker on the same arc';
+            else if (handle && entrances.length !== 1) {
+                arc._newcomerMarkerError = entrances.length
+                    ? 'newcomer arc must contain exactly one entrance beat'
+                    : 'newcomer arc is missing its entrance beat';
+            } else if (handle && entrances[0] !== handle) {
+                arc._newcomerMarkerError = 'newcomer and entrance handles do not match within the same arc';
+            }
+        }
+        if (!handle) continue;
+        if (owners.has(handle)) {
+            arc._newcomerMarkerError = 'newcomer handle is reused by multiple arcs';
+            owners.get(handle)._newcomerMarkerError = 'newcomer handle is reused by multiple arcs';
+        } else owners.set(handle, arc);
+        if (!arc._newcomerMarkerError) arc._newcomerEvidence = { handle, entranceBeatIndex: arc._entranceBeatIndex };
+    }
 }
 
 /** Normalize titles for the request-local, unambiguous identity fallback. */
@@ -645,7 +732,13 @@ export function parsePlanTextToArcs(text, options = {}) {
         const indentedBullet = line.match(/^(?:[ \t]{2,}|\t)[-*+][ \t]+(.+)$/);
         const beatMatch = numbered || indentedBullet;
         if (beatMatch && last) {
-            const beat = cleanBeatContent(beatMatch[1]);
+            const entrance = extractEntranceBeatMarker(beatMatch[1]);
+            const beat = cleanBeatContent(entrance.content);
+            if (entrance.error && !last._newcomerMarkerError) last._newcomerMarkerError = entrance.error;
+            if (entrance.marked) {
+                last._entranceHandles = [...(last._entranceHandles || []), entrance.handle];
+                if (last._entranceBeatIndex === undefined) last._entranceBeatIndex = last.beats.length;
+            }
             if (beat) last.beats.push(sanitizeBeat(beat));
             continue;
         }
@@ -658,7 +751,8 @@ export function parsePlanTextToArcs(text, options = {}) {
         if (bullet) {
             if (!section) { last = null; continue; }
             const extracted = extractArcHandle(bullet[1]);
-            const subjects = extractSubjectMarkers(extracted.content, options.subjectHandles, section);
+            const newcomer = extractNewcomerArcMarker(extracted.content);
+            const subjects = extractSubjectMarkers(newcomer.content, options.subjectHandles, section);
             const content = cleanBulletContent(subjects.content);
             if (!content) { last = null; continue; }
             const { title, body } = splitTitleBody(content);
@@ -671,6 +765,8 @@ export function parsePlanTextToArcs(text, options = {}) {
             if (options.subjectHandles instanceof Map) last._subjectContractActive = true;
             if (subjects.error) last._subjectMarkerError = subjects.error;
             if (subjects.participantDiagnostic) last._participantDiagnostic = subjects.participantDiagnostic;
+            if (newcomer.handle) last._newcomerHandle = newcomer.handle;
+            if (newcomer.error) last._newcomerMarkerError = newcomer.error;
             arcs.push(last);
             identities.push({ arc: last, handle: extracted.handle });
             continue;
@@ -682,13 +778,18 @@ export function parsePlanTextToArcs(text, options = {}) {
         // wrapped prose that appeared AFTER a beat list, silently losing the
         // continuation. Fold into the body regardless of whether beats exist.
         if (last && /^[ \t]+\S/.test(rawLine)) {
-            const continuation = line.trim();
+            const continuation = extractNewcomerContinuationMarkers(line.trim());
             // Don't fold beat-like lines (numbered or already handled above).
             if (!numbered && !indentedBullet) {
-                last.body = last.body ? `${last.body} ${continuation}` : continuation;
+                if (continuation.error && !last._newcomerMarkerError) {
+                    last._newcomerMarkerError = continuation.error;
+                }
+                const content = continuation.content.trim();
+                if (content) last.body = last.body ? `${last.body} ${content}` : content;
             }
         }
     }
+    finalizeNewcomerEvidence(arcs);
     resolveCapturedIdentities(identities, options);
     return arcs;
 }

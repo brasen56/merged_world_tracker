@@ -135,10 +135,13 @@ export function storyPaletteProjection(palette = getStoryPalette(), castPolicy =
     if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
     if (castPolicy === 'existing-only') {
         lines.push('Cast policy — established cast only: use established named story participants. Do not propose a new recurring or major character. Incidental unnamed service or background characters are allowed.');
+        lines.push('Do not emit [NEWCOMER:*] or [ENTRANCE:*] proposal markers.');
     } else if (castPolicy === 'propose') {
         lines.push('Cast policy — actively propose new characters: for an Add request, include at least one distinct recurring or major newcomer in an arc that gives them a concrete on-screen entrance. For Refresh or single-arc development, a newcomer is optional and must fit that arc rather than creating an unrelated route.');
+        lines.push('Mark each proposed newcomer arc with one bounded proposal-local handle, for example [NEWCOMER:n1], and mark exactly one concrete setup beat in that same arc [ENTRANCE:n1]. Reuse neither handle on another arc.');
     } else {
         lines.push('Cast policy — new characters allowed: the user allows new major characters when expansion genuinely serves the story. Prefer useful established threads and cast; there is no newcomer quota.');
+        lines.push('If you propose a recurring or major newcomer, mark its arc [NEWCOMER:n1] and exactly one concrete entrance beat in that same arc [ENTRANCE:n1]. Do not mark established characters.');
     }
     return lines.join('\n');
 }
@@ -408,6 +411,45 @@ export function validateOutput(text, expectHeader = true, requestSpec = null) {
         // review surfaces it as diagnostics.overflow.
     }
     return { ok: true };
+}
+
+/** Evaluate transient newcomer/entrance evidence before merge sanitization drops it. */
+export function assessNewcomerEvidence(arcs, castPolicyContract, { reviewed = false, operation = 'add', targeted = false } = {}) {
+    const policy = castPolicyContract?.policy || 'allowed';
+    const rows = (arcs || []).map(arc => ({
+        title: arc.title || 'Untitled arc',
+        marked: !!(arc._newcomerHandle || arc._newcomerMarkerError || arc._entranceHandles?.length),
+        valid: !!arc._newcomerEvidence && !arc._newcomerMarkerError,
+        handle: arc._newcomerEvidence?.handle || arc._newcomerHandle || '',
+        error: arc._newcomerMarkerError || '',
+    }));
+    const marked = rows.filter(row => row.marked);
+    const valid = rows.filter(row => row.valid);
+    const malformed = rows.filter(row => row.error);
+    if (castPolicyContract?.supported === false) {
+        return {
+            ok: true,
+            rows,
+            validCount: 0,
+            message: 'Newcomer evidence was not evaluated because this custom template does not support the cast-policy contract.',
+            unsupported: true,
+        };
+    }
+    if (malformed.length) {
+        return { ok: false, reason: `${malformed[0].title}: ${malformed[0].error}.`, rows, validCount: valid.length };
+    }
+    if (policy === 'existing-only' && marked.length) {
+        return { ok: false, reason: 'The response explicitly marked a newcomer while the effective cast policy was Established cast only.', rows, validCount: valid.length };
+    }
+    const required = policy === 'propose' && operation === 'add' && !targeted;
+    if (required && valid.length === 0 && !reviewed) {
+        return { ok: false, reason: 'The active-proposal cast policy required a newcomer arc with one paired concrete entrance beat, but none was returned.', rows, validCount: 0 };
+    }
+    let message = '';
+    if (required && valid.length === 0) message = 'Unmet cast requirement: no suitable newcomer with a paired concrete entrance beat was proposed.';
+    else if (policy === 'propose' && valid.length === 0) message = 'No suitable newcomer proposed for this arc request.';
+    else if (valid.length) message = `${valid.length} newcomer proposal${valid.length === 1 ? '' : 's'} include${valid.length === 1 ? 's' : ''} a paired concrete entrance beat.`;
+    return { ok: true, rows, validCount: valid.length, message, unmetRequirement: required && valid.length === 0 };
 }
 
 /** Enforce the immutable scoped request after parsing. Refresh accepts only
@@ -758,8 +800,22 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             strictHeadings: !!request,
             subjectHandles: request?.sectionKeys.includes('character') ? subjectHandles : undefined,
         });
+        // Malformed evidence and existing-only violations invalidate the whole
+        // response, including overflow rows. Active-proposal coverage, however,
+        // is measured only from the accepted scoped set: a newcomer hidden on an
+        // excluded overflow suggestion must not satisfy a one-arc request.
+        const responseNewcomerEvidence = assessNewcomerEvidence(parsed, castPolicyContract, {
+            reviewed: true,
+            operation: request ? 'refresh' : 'add',
+        });
+        if (!responseNewcomerEvidence.ok) throw new Error(responseNewcomerEvidence.reason);
         const scopedSelection = request ? selectScopedParsedArcs(parsed, request, capturedArcs, subjectCandidates) : null;
         const limitedParsed = scopedSelection ? scopedSelection.accepted : parsed;
+        const newcomerEvidence = assessNewcomerEvidence(limitedParsed, castPolicyContract, {
+            reviewed: reviewOnly && !!request,
+            operation: request?.operation || 'add',
+        });
+        if (!newcomerEvidence.ok) throw new Error(newcomerEvidence.reason);
         const rejectedSuggestions = scopedSelection?.rejected.map(arc => arc.title) || [];
         const participantDiagnostics = limitedParsed
             .filter(arc => arc._participantDiagnostic)
@@ -905,6 +961,9 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                     participantDiagnostics,
                     excludedRecurrences,
                     validationWarning: validation.warning || '',
+                    newcomerEvidence: newcomerEvidence.rows,
+                    newcomerPolicyMessage: newcomerEvidence.message,
+                    newcomerRequirementUnmet: newcomerEvidence.unmetRequirement === true,
                     characterContextMode: selection.mode,
                     characterContextStatus: characterContext.status || '',
                     characterContextCoverage: Array.isArray(characterContext.coverage)
