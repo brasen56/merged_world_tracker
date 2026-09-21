@@ -740,6 +740,7 @@ export function showScopedReview(proposal) {
         diagnostics.rejectedSuggestions?.length ? `${diagnostics.rejectedSuggestions.length} unrequested suggestion${diagnostics.rejectedSuggestions.length === 1 ? '' : 's'} rejected.` : '',
         ...(diagnostics.participantDiagnostics || []),
         diagnostics.newcomerPolicyMessage || '',
+        diagnostics.newcomerOutcomeAttribution?.message || '',
         diagnostics.validationWarning || '',
     ].filter(Boolean);
     const coverageHtml = renderCharacterContextCoverage(
@@ -1561,6 +1562,7 @@ function showTargetedProposal(proposal) {
             <p class="mwt-text-dim mwt-text-sm">Review this proposal. Nothing changes until you choose Apply.</p>
             ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
             ${proposal.newcomerEvidence?.message ? `<p class="sp-proposal-diagnostics">${escapeHtml(proposal.newcomerEvidence.message)}</p>` : ''}
+            ${proposal.newcomerEvidence?.attribution?.message ? `<p class="mwt-text-dim mwt-text-sm">${escapeHtml(proposal.newcomerEvidence.attribution.message)}</p>` : ''}
             ${stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason)} Generate again to apply changes.</p>` : ''}
             ${renderTargetedDiff(proposal)}
             <div class="mwt-flex mwt-gap-8 mwt-mt-8 sp-proposal-actions">

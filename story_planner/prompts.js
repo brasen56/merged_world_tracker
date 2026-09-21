@@ -9,7 +9,7 @@
  * parser, and the UI can never disagree about what a section is called.
  */
 
-import { SECTIONS } from './data.js';
+import { MAX_CONTINUITY_BEATS_PER_ARC, SECTIONS } from './data.js';
 
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
@@ -108,7 +108,7 @@ ABSOLUTE RULES:
 - Work only on the selected arc. Do not return or edit any other arc.
 - Historical beats marked PLANTED or SKIPPED are immutable. Never include them in pendingBeats, claim they happened, rewrite them, or restore skipped setup.
 - pendingBeats contains only the proposed future route, in order. Each beat must be concrete enough for a narrator to perform in one scene.
-- When the cast policy proposes or allows a recurring/major newcomer, use one bounded proposal-local newcomerHandle and put the same entranceHandle on exactly one concrete entrance beat. Leave both empty when no newcomer is proposed. Never use the fields for an established character.
+- When the cast policy proposes or allows a recurring/major newcomer, use one bounded proposal-local newcomerHandle and put the same entranceHandle on exactly one concrete entrance beat within the first ${MAX_CONTINUITY_BEATS_PER_ARC} pending beats. Leave both empty when no newcomer is proposed. Never use the fields for an established character.
 - Treat the description as a possible endpoint, not a fact that has happened.
 - Never write actions, dialogue, thoughts, feelings, or decisions for {{user}}, and never require {{user}} to act.
 - Keep the result concise and grounded in the supplied factual context.`;

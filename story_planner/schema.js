@@ -471,6 +471,10 @@ const ENTRANCE_HANDLE_RE = /\[\s*ENTRANCE\s*:\s*([^\]]*?)\s*\]/gi;
 const NEWCOMER_MARKER_STRIP_RE = /\s*\[\s*NEWCOMER\s*:[^\]]*\]\s*/gi;
 const ENTRANCE_MARKER_STRIP_RE = /\s*\[\s*ENTRANCE\s*:[^\]]*\]\s*/gi;
 export const MAX_NEWCOMER_HANDLE_LENGTH = 24;
+// Read-only continuity projects this many persisted beats per arc. Newcomer
+// entrances must land inside the same window because their proposal-local
+// marker/index is intentionally stripped before persistence.
+export const MAX_CONTINUITY_BEATS_PER_ARC = 4;
 const VALID_NEWCOMER_HANDLE_RE = /^[a-z][a-z0-9_-]{0,23}$/;
 
 /**
@@ -609,6 +613,8 @@ function finalizeNewcomerEvidence(arcs) {
                     : 'newcomer arc is missing its entrance beat';
             } else if (handle && entrances[0] !== handle) {
                 arc._newcomerMarkerError = 'newcomer and entrance handles do not match within the same arc';
+            } else if (handle && arc._entranceBeatIndex >= MAX_CONTINUITY_BEATS_PER_ARC) {
+                arc._newcomerMarkerError = `newcomer entrance must be within the first ${MAX_CONTINUITY_BEATS_PER_ARC} setup beats`;
             }
         }
         if (!handle) continue;

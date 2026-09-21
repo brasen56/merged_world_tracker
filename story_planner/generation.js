@@ -20,7 +20,7 @@ import { getSettings, hasValidSettings } from './settings.js';
 // Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
-import { SECTIONS, storyPlannerSchema, sanitizeStoryPlanRequest, sanitizeCharacterContextSelection, getStoryPlanRequestError, strictSectionKeyFromLabel } from './schema.js';
+import { MAX_CONTINUITY_BEATS_PER_ARC, SECTIONS, storyPlannerSchema, sanitizeStoryPlanRequest, sanitizeCharacterContextSelection, getStoryPlanRequestError, strictSectionKeyFromLabel } from './schema.js';
 import {
     state, getArcs, setArcs, pushPlanToHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
@@ -120,12 +120,21 @@ export function captureJourneySubjectCandidates(candidates, request, capturedArc
     };
 }
 
-function buildReadOnlyContinuityProjection(arcs) {
+export function buildReadOnlyContinuityProjection(arcs) {
     if (!Array.isArray(arcs) || !arcs.length) return '';
     return arcs.slice(0, MAX_CONTINUITY_ARCS).map(arc => {
         const section = SECTIONS.find(item => item.key === arc.section)?.label || arc.section;
         const summary = String(arc.body || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-        return `- [${section}] ${String(arc.title || 'Untitled arc').slice(0, 90)}${summary ? ` — ${summary}` : ''}`;
+        const beats = (Array.isArray(arc.beats) ? arc.beats : []).slice(0, MAX_CONTINUITY_BEATS_PER_ARC).map(beat => {
+            const stateLabel = beat?.state === 'planted' ? 'PLANTED'
+                : beat?.state === 'skipped' ? 'SKIPPED' : 'PENDING';
+            const text = String(beat?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+            return text ? `  - [${stateLabel}] ${text}` : '';
+        }).filter(Boolean);
+        return [
+            `- [${section}] ${String(arc.title || 'Untitled arc').slice(0, 90)}${summary ? ` — ${summary}` : ''}`,
+            ...beats,
+        ].join('\n');
     }).join('\n');
 }
 
@@ -133,15 +142,17 @@ export function storyPaletteProjection(palette = getStoryPalette(), castPolicy =
     const lines = [];
     if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
     if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
+    lines.push('Cast novelty and plot escalation are separate choices: a newcomer need not raise the stakes, and escalation need not add a newcomer. Keep any addition genre-appropriate and useful to the requested arc; friends, clients, witnesses, colleagues, relatives, and other non-antagonist roles are valid.');
+    lines.push('A character already evidenced in the story is established even without a Knowledge record. Registry absence is not proof that someone is new.');
     if (castPolicy === 'existing-only') {
         lines.push('Cast policy — established cast only: use established named story participants. Do not propose a new recurring or major character. Incidental unnamed service or background characters are allowed.');
         lines.push('Do not emit [NEWCOMER:*] or [ENTRANCE:*] proposal markers.');
     } else if (castPolicy === 'propose') {
         lines.push('Cast policy — actively propose new characters: for an Add request, include at least one distinct recurring or major newcomer in an arc that gives them a concrete on-screen entrance. For Refresh or single-arc development, a newcomer is optional and must fit that arc rather than creating an unrelated route.');
-        lines.push('Mark each proposed newcomer arc with one bounded proposal-local handle, for example [NEWCOMER:n1], and mark exactly one concrete setup beat in that same arc [ENTRANCE:n1]. Reuse neither handle on another arc.');
+        lines.push(`Mark each proposed newcomer arc with one bounded proposal-local handle, for example [NEWCOMER:n1], and mark exactly one concrete setup beat within the first ${MAX_CONTINUITY_BEATS_PER_ARC} beats of that same arc [ENTRANCE:n1]. Reuse neither handle on another arc.`);
     } else {
         lines.push('Cast policy — new characters allowed: the user allows new major characters when expansion genuinely serves the story. Prefer useful established threads and cast; there is no newcomer quota.');
-        lines.push('If you propose a recurring or major newcomer, mark its arc [NEWCOMER:n1] and exactly one concrete entrance beat in that same arc [ENTRANCE:n1]. Do not mark established characters.');
+        lines.push(`If you propose a recurring or major newcomer, mark its arc [NEWCOMER:n1] and exactly one concrete entrance beat within the first ${MAX_CONTINUITY_BEATS_PER_ARC} beats of that same arc [ENTRANCE:n1]. Do not mark established characters.`);
     }
     return lines.join('\n');
 }
@@ -433,6 +444,10 @@ export function assessNewcomerEvidence(arcs, castPolicyContract, { reviewed = fa
             validCount: 0,
             message: 'Newcomer evidence was not evaluated because this custom template does not support the cast-policy contract.',
             unsupported: true,
+            attribution: {
+                plannerOutcome: 'not-evaluated', proposedCount: 0, narrationOutcome: 'not-evaluated',
+                message: 'Planner newcomer outcome: not evaluated on this unsupported path. Narration introduction: not evaluated.',
+            },
         };
     }
     if (malformed.length) {
@@ -449,7 +464,15 @@ export function assessNewcomerEvidence(arcs, castPolicyContract, { reviewed = fa
     if (required && valid.length === 0) message = 'Unmet cast requirement: no suitable newcomer with a paired concrete entrance beat was proposed.';
     else if (policy === 'propose' && valid.length === 0) message = 'No suitable newcomer proposed for this arc request.';
     else if (valid.length) message = `${valid.length} newcomer proposal${valid.length === 1 ? '' : 's'} include${valid.length === 1 ? 's' : ''} a paired concrete entrance beat.`;
-    return { ok: true, rows, validCount: valid.length, message, unmetRequirement: required && valid.length === 0 };
+    const attribution = {
+        plannerOutcome: valid.length ? 'proposed' : 'none-explicitly-marked',
+        proposedCount: valid.length,
+        narrationOutcome: 'not-evaluated',
+        message: valid.length
+            ? `Planner outcome: ${valid.length} hypothetical newcomer proposal${valid.length === 1 ? '' : 's'} returned. Narration introduction: not evaluated or asserted.`
+            : 'Planner outcome: no explicitly marked newcomer proposal returned. Unmarked prose still requires human review; narration introduction was not evaluated or asserted.',
+    };
+    return { ok: true, rows, validCount: valid.length, message, attribution, unmetRequirement: required && valid.length === 0 };
 }
 
 /** Enforce the immutable scoped request after parsing. Refresh accepts only
@@ -816,6 +839,17 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             operation: request?.operation || 'add',
         });
         if (!newcomerEvidence.ok) throw new Error(newcomerEvidence.reason);
+        record({
+            level: 'info', module: 'story_planner', event: 'newcomer_outcome',
+            detail: {
+                workflow: request ? 'scoped' : isAuto ? 'automatic' : 'legacy-full',
+                policy: castPolicyContract.policy,
+                supported: castPolicyContract.supported !== false,
+                plannerOutcome: newcomerEvidence.attribution?.plannerOutcome || 'not-evaluated',
+                proposedCount: newcomerEvidence.attribution?.proposedCount || 0,
+                narrationOutcome: 'not-evaluated',
+            },
+        });
         const rejectedSuggestions = scopedSelection?.rejected.map(arc => arc.title) || [];
         const participantDiagnostics = limitedParsed
             .filter(arc => arc._participantDiagnostic)
@@ -963,6 +997,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                     validationWarning: validation.warning || '',
                     newcomerEvidence: newcomerEvidence.rows,
                     newcomerPolicyMessage: newcomerEvidence.message,
+                    newcomerOutcomeAttribution: newcomerEvidence.attribution,
                     newcomerRequirementUnmet: newcomerEvidence.unmetRequirement === true,
                     characterContextMode: selection.mode,
                     characterContextStatus: characterContext.status || '',

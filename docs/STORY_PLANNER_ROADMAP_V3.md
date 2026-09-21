@@ -1,12 +1,12 @@
 # Story Planner V3: scoped generation, character journeys, and cast policy
 
-**Status:** Phases 0 and 1 complete. Phase 2 and Phase 3A-3C **Implemented, not host
+**Status:** Phases 0 and 1 complete. Phase 2 and Phase 3A-3D **Implemented, not host
 verified** — see the status blocks in §5. Phase 0 request-boundary samples are
 synthetic and the consented targeted-develop sample remains a non-blocking
 follow-up; the planner-output attribution required to exit Phase 0 is recorded.
-Phase 3D is not started.
+Phase 3D automated implementation is complete; host/model evaluation remains pending.
 **Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated
-2026-09-20; Phase 2 and Phase 3A-3C status recorded 2026-09-20)
+2026-09-20; Phase 2 and Phase 3A-3D status recorded 2026-09-20)
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
 sketch pending the Phase 0 projection inventory. Independent arc classification
 and execution prerequisites are deferred in §7.
@@ -784,20 +784,21 @@ returned. Existing-only rejects explicit newcomers; human review checks prose fo
 undeclared ones. Every generation path names its effective policy source and
 either proves the paired-marker contract or reports that the path is unsupported.
 
-**Phase 3A-3C status (§8 record)**
+**Phase 3A-3D status (§8 record)**
 
-- **State:** Phase 3A, Phase 3B, and Phase 3C implemented; not host verified.
-  Phase 3D remains not started.
-- **Change reference:** `65b82e3` (3A), `1bccab9` (3B), and current working tree
-  (3C: proposal-local newcomer/entrance evidence, validation, and review diagnostics).
+- **State:** Phase 3A, Phase 3B, Phase 3C, and Phase 3D implemented; not host
+  verified.
+- **Change reference:** `65b82e3` (3A), `1bccab9` (3B), `0c379ca` (3C), and
+  current working tree (3D: newcomer continuity, novelty/escalation guidance, and
+  planner-versus-narration attribution).
   Together these cover store v4 policy migration, independent
   scoped/palette controls, explicit per-workflow request contracts, custom-template
   compatibility reporting, automatic incompatibility skip, and focused regression
   coverage.
-- **Automated checks:** focused Phase 3C and adjacent suites green at 141/141;
-  full suite green at 3,001/3,001; lint clean. Phase 3A-3C are
-  pinned in `test/story_planner_cast_policy.test.js` and supplemented by
-  `test/story_planner_phase3c.test.js`,
+- **Automated checks:** focused Phase 3D and adjacent suites green at 111/111;
+  full suite green at 3,011/3,011; lint clean. Phase 3A-3D are
+  pinned in `test/story_planner_cast_policy.test.js`,
+  `test/story_planner_phase3c.test.js`, `test/story_planner_phase3d.test.js`,
   `test/story_planner_phase0_v3.test.js`, `test/story_planner_phase4.test.js`,
   `test/story_planner_phase6.test.js`, `test/schema_migrations.test.js`,
   `test/backup.test.js`, `test/backup_schema_roundtrip.test.js`, and
@@ -823,10 +824,19 @@ either proves the paired-marker contract or reports that the path is unsupported
   active-proposal coverage, and explicit newcomers under `existing-only` before any
   arc/history write, with no repair call. Overflow-only evidence does not satisfy a
   bounded scoped request.
-- **Known limitations:** Phase 3D still owns newcomer continuity and evaluation.
-  An invented person hidden in unmarked prose remains a documented human-review
-  limitation; registry absence is not treated as proof of novelty. Accepted arcs
-  create no Knowledge record and do not assert that a newcomer has appeared on-screen.
+- **Phase 3D continuity/evaluation result:** bounded read-only continuity now carries
+  each active arc's ordinary title, body, and up to four ordinary beat texts, so an
+  accepted newcomer arc and its concrete entrance remain visible to later scoped
+  requests after proposal markers are stripped. No candidate ID or newcomer field is
+  reconstructed or persisted. Cast guidance separates novelty from escalation,
+  explicitly permits genre-appropriate non-antagonist roles, and treats story-evidenced
+  characters without Knowledge records as established. Proposal diagnostics and
+  privacy-safe request outcome telemetry distinguish a planner-returned hypothetical
+  newcomer from narration, which remains not evaluated or asserted.
+- **Known limitations:** An invented person hidden in unmarked prose remains a
+  documented human-review limitation; registry absence is not treated as proof of
+  novelty, and exact prose deduplication is not claimed. Accepted arcs create no
+  Knowledge record and do not assert that a newcomer has appeared on-screen.
 - **Manual results:** Pending. Host checks should confirm dialog compatibility text,
   scoped and targeted review policy/source/evidence text, direct-commit rejection
   notices, marker-free reviewed content, and the automatic skip notice.

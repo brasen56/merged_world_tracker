@@ -31,6 +31,7 @@ import {
     SECTION_KEYS,
     MAX_ARC_TITLE,
     MAX_ARC_BODY,
+    MAX_CONTINUITY_BEATS_PER_ARC,
     newArcId,
     newBeatId,
     sanitizeBeat,
@@ -47,7 +48,7 @@ import {
     sanitizeStoryPlanRequestPreferences,
 } from './schema.js';
 
-export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, newArcId, newBeatId, sanitizeBeat, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel, strictSectionKeyFromLabel };
+export { SECTIONS, DEFAULT_SECTION, ARC_STATUSES, SECTION_KEYS, MAX_CONTINUITY_BEATS_PER_ARC, newArcId, newBeatId, sanitizeBeat, parsePlanTextToArcs, sanitizeArc, sanitizeArcs, sectionKeyFromLabel, strictSectionKeyFromLabel };
 export { sanitizeStoryPalette, sanitizeCharacterContextSelection };
 export { sanitizePhase7Metrics };
 export { sanitizeStoryPlanRequest };

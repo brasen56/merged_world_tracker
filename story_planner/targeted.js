@@ -13,7 +13,7 @@ import {
 } from '../core/index.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { getSettings, hasValidSettings } from './settings.js';
-import { extractEntranceBeatMarker, extractNewcomerArcMarker, storyPlannerSchema } from './schema.js';
+import { extractEntranceBeatMarker, extractNewcomerArcMarker, MAX_CONTINUITY_BEATS_PER_ARC, storyPlannerSchema } from './schema.js';
 import {
     SECTIONS, buildClosedMemoryProjection, getArcs, getCharacterContextSelection, getDirectionHint,
     newArcId, newBeatId, sanitizeArc, setArcsWithHistory, state,
@@ -104,13 +104,16 @@ function parseTargetedOutput(raw) {
     if (newcomer.error) model._newcomerMarkerError = newcomer.error;
     const entranceHandles = pending.filter(entry => entry.handle).map(entry => entry.handle);
     if (entranceHandles.length) model._entranceHandles = entranceHandles;
+    const entranceBeatIndex = pending.findIndex(entry => entry.handle);
+    if (entranceBeatIndex >= 0) model._entranceBeatIndex = entranceBeatIndex;
     const entranceError = pending.find(entry => entry.error)?.error;
     if (entranceError && !model._newcomerMarkerError) model._newcomerMarkerError = entranceError;
     if (!model._newcomerMarkerError) {
         if (!model._newcomerHandle && entranceHandles.length) model._newcomerMarkerError = 'entrance marker has no newcomer marker on the same arc';
         else if (model._newcomerHandle && entranceHandles.length !== 1) model._newcomerMarkerError = entranceHandles.length ? 'newcomer arc must contain exactly one entrance beat' : 'newcomer arc is missing its entrance beat';
         else if (model._newcomerHandle && entranceHandles[0] !== model._newcomerHandle) model._newcomerMarkerError = 'newcomer and entrance handles do not match within the same arc';
-        else if (model._newcomerHandle) model._newcomerEvidence = { handle: model._newcomerHandle };
+        else if (model._newcomerHandle && entranceBeatIndex >= MAX_CONTINUITY_BEATS_PER_ARC) model._newcomerMarkerError = `newcomer entrance must be within the first ${MAX_CONTINUITY_BEATS_PER_ARC} setup beats`;
+        else if (model._newcomerHandle) model._newcomerEvidence = { handle: model._newcomerHandle, entranceBeatIndex };
     }
     return model;
 }
@@ -211,6 +214,17 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
         const model = parseTargetedOutput(raw);
         const newcomerEvidence = assessNewcomerEvidence([model], castPolicyContract, { reviewed: true, operation, targeted: true });
         if (!newcomerEvidence.ok) throw new Error(newcomerEvidence.reason);
+        record({
+            level: 'info', module: 'story_planner', event: 'newcomer_outcome',
+            detail: {
+                workflow: 'targeted',
+                policy: castPolicyContract.policy,
+                supported: castPolicyContract.supported !== false,
+                plannerOutcome: newcomerEvidence.attribution?.plannerOutcome || 'not-evaluated',
+                proposedCount: newcomerEvidence.attribution?.proposedCount || 0,
+                narrationOutcome: 'not-evaluated',
+            },
+        });
         const proposedArc = proposalArc(operation, sourceArc, model);
         incrementPhase7Metrics({ targetedGenerations: 1 });
         const current = getArcs().find(arc => arc.id === arcId);
