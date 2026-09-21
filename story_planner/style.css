@@ -106,6 +106,15 @@
     font-size: 12px;
 }
 
+.sp-proposal-requirement {
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--mwt-warning);
+    border-radius: var(--mwt-radius);
+    color: var(--mwt-text);
+    font-size: 12px;
+    padding: 8px 10px;
+}
+
 .sp-proposal-selection {
     border: 1px solid var(--mwt-border);
     border-radius: var(--mwt-radius);

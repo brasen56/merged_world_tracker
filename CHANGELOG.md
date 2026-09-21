@@ -12,6 +12,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.9.1]
+
+### Added
+
+- Story Planner V3: scoped generation, character journeys, and cast policy (Phase 3)
+
+### Fixed
+
+- **Knowledge Tracker: the NPC auto-scan now updates the Knowledge Ledger.**
+  Reported from live use: with auto-scan on, tracked majors had Tone,
+  Perceived as, Read on PC and Current Agenda rewritten every cadence while
+  their ledger never grew — yet pressing **Update** on the Major tab for the
+  same NPC added ledger lines normally. Two independent causes:
+  - New facts were appended to the end of the *entry* rather than the end of
+    the *ledger section*. Any entry carrying a managed relationships block
+    (relationship auto-extract, or any manual edit that syncs one) had its new
+    facts written below `<!-- mwt:relationships:end -->`, outside the section,
+    where the Knowledge Ledger reads as untouched. The per-NPC actions never
+    showed it because they strip the relationships block before merging —
+    which is exactly why the manual button appeared to work. Both mergers now
+    insert into the section and preserve the block; the stale
+    `- (no entries yet)` placeholder is replaced by the first real fact
+    instead of sitting above it.
+  - The scan showed the model only the first 800 characters of each tracked
+    major's entry. A real dossier passes 800 around *Appearance*, so the model
+    never saw `Knowledge Ledger:` at all — and every field past the cut read
+    as missing, which the prompt's "FILL MISSING FIELDS" rule then had it
+    rewrite on each run. That single line produced both halves of the report.
+    `<existing_entry>` is now a bounded projection that keeps every field
+    label, clips long values with `…`, and always carries the ledger's recent
+    tail; the scan prompts state that a clipped value is present rather than
+    missing, and ask positively for `new_knowledge` instead of only
+    restricting it.
+- Knowledge Tracker: a scan `update_major` record that used the
+  `initial_knowledge` key (the name the `new_major` schema uses for the same
+  thing) had its facts silently dropped. Either key is now accepted, matching
+  the reclassification and create→update paths.
+- Knowledge Tracker: the NPC auto-scan can no longer overwrite a
+  growth-owned `Personality` line. `runNpcUpdate` has always enforced the
+  evidence/growth partition; the scan path did not, so a cadence scan could
+  re-derive personality for a profiled NPC — the telephone loop the partition
+  exists to prevent.
+
 ## [2.9.0]
 
 ### Added

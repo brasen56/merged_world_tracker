@@ -72,6 +72,14 @@ export function buildSystemPrompt(requestSpec = null, settings = getSettings()) 
 // a tighter cap would hide arcs it could then re-propose — those come back as
 // excluded title recurrences and underfill the request for no visible reason.
 const MAX_CONTINUITY_ARCS = 30;
+// Prompt projection policy only. Keep this independent from
+// MAX_CONTINUITY_BEATS_PER_ARC, which is the response-validation contract for
+// where a newcomer entrance marker may appear.
+export const MAX_CONTINUITY_BEATS_SHOWN = 4;
+// A complete-arc budget: continuity rows are never sliced mid-arc. This bounds
+// long-campaign prompt growth while preserving the most useful arcs in their
+// existing priority/order and making omitted context explicit to the model.
+export const MAX_CONTINUITY_CHARS = 16000;
 export const MAX_JOURNEY_SUBJECT_CANDIDATES = 30;
 
 function subjectCandidateForEntityId(candidates, entityId) {
@@ -122,20 +130,52 @@ export function captureJourneySubjectCandidates(candidates, request, capturedArc
 
 export function buildReadOnlyContinuityProjection(arcs) {
     if (!Array.isArray(arcs) || !arcs.length) return '';
-    return arcs.slice(0, MAX_CONTINUITY_ARCS).map(arc => {
+    const candidates = arcs.slice(0, MAX_CONTINUITY_ARCS);
+    const rows = candidates.map(arc => {
         const section = SECTIONS.find(item => item.key === arc.section)?.label || arc.section;
         const summary = String(arc.body || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-        const beats = (Array.isArray(arc.beats) ? arc.beats : []).slice(0, MAX_CONTINUITY_BEATS_PER_ARC).map(beat => {
+        const storedBeats = Array.isArray(arc.beats) ? arc.beats : [];
+        // Keep pending beats visible even when an arc has already accumulated
+        // enough historical setup to fill the projection. Entrance evidence is
+        // validated against the first pending beats, so showing only the stored
+        // prefix can hide the very beat the next scoped request needs to see.
+        const pendingBeats = storedBeats.filter(beat => beat?.state === 'pending');
+        const historicalBeats = storedBeats.filter(beat => beat?.state !== 'pending');
+        const beats = [
+            ...pendingBeats.slice(0, MAX_CONTINUITY_BEATS_SHOWN),
+            ...historicalBeats.slice(0, Math.max(0, MAX_CONTINUITY_BEATS_SHOWN - pendingBeats.length)),
+        ].map(beat => {
             const stateLabel = beat?.state === 'planted' ? 'PLANTED'
                 : beat?.state === 'skipped' ? 'SKIPPED' : 'PENDING';
             const text = String(beat?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
             return text ? `  - [${stateLabel}] ${text}` : '';
         }).filter(Boolean);
-        return [
+        const text = [
             `- [${section}] ${String(arc.title || 'Untitled arc').slice(0, 90)}${summary ? ` — ${summary}` : ''}`,
             ...beats,
         ].join('\n');
-    }).join('\n');
+        return { text, escapedChars: escapePromptText(text).length };
+    });
+    const included = [];
+    let chars = 0;
+    for (const row of rows) {
+        const cost = row.escapedChars + (included.length ? 1 : 0);
+        if (chars + cost > MAX_CONTINUITY_CHARS) break;
+        included.push(row);
+        chars += cost;
+    }
+    if (included.length < candidates.length) {
+        let omitted = candidates.length - included.length;
+        let marker = `[${omitted} additional active arc${omitted === 1 ? '' : 's'} omitted by the ${MAX_CONTINUITY_CHARS}-character continuity budget.]`;
+        while (included.length && chars + 1 + marker.length > MAX_CONTINUITY_CHARS) {
+            const removed = included.pop();
+            chars -= removed.escapedChars + (included.length ? 1 : 0);
+            omitted = candidates.length - included.length;
+            marker = `[${omitted} additional active arc${omitted === 1 ? '' : 's'} omitted by the ${MAX_CONTINUITY_CHARS}-character continuity budget.]`;
+        }
+        if (marker.length <= MAX_CONTINUITY_CHARS) included.push({ text: marker, escapedChars: marker.length });
+    }
+    return included.map(row => row.text).join('\n');
 }
 
 export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy) {
@@ -274,7 +314,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         ? wrapTag('direction',
             '[The user wants the plan steered this way. Honour it unless the story makes it impossible.]\n' + hint)
         : '';
-    const savedPalette = getStoryPalette();
+    const savedPalette = requestContext.palette || getStoryPalette();
     const castPolicyContract = requestContext.castPolicyContract || describeCastPolicyRequest({
         workflow: request ? 'manual-scoped' : 'legacy-full',
         requestSpec: request,
@@ -596,10 +636,16 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
     // await a provider; settings changed during that wait belong to the next
     // request, not this one (and must not invalidate the captured policy claim).
     const settingsSnapshot = Object.freeze({ ...getSettings() });
+    const capturedPalette = getStoryPalette();
+    const paletteSnapshot = Object.freeze({
+        ...capturedPalette,
+        emphases: Object.freeze([...capturedPalette.emphases]),
+    });
     const castPolicyContract = describeCastPolicyRequest({
         workflow: request ? 'manual-scoped' : 'legacy-full',
         requestSpec: request,
         settings: settingsSnapshot,
+        palette: paletteSnapshot,
     });
     if (isAuto && castPolicyContract.policy !== 'allowed' && !castPolicyContract.supported) {
         console.warn(`[MWT:StoryPlanner] Automatic generation skipped — ${castPolicyContract.message}`);
@@ -768,7 +814,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         const firstUserContent = buildUserPrompt(recent, '', {
             capturedArcs, handles: requestHandles,
             continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
-            settings: settingsSnapshot,
+            settings: settingsSnapshot, palette: paletteSnapshot,
         });
         recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
         let result = await resolved.fetchFn({
@@ -790,7 +836,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             const retryUserContent = buildUserPrompt(recent, validation.reason, {
                 capturedArcs, handles: requestHandles,
                 continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
-                settings: settingsSnapshot,
+                settings: settingsSnapshot, palette: paletteSnapshot,
             });
             recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
             result = await resolved2.fetchFn({
@@ -869,11 +915,6 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             throw new Error('Could not parse any arcs out of the model response.');
         }
 
-        // STORY-PLANNER-02: Snapshot the PRE-OPERATION arcs for history, not
-        // whatever is current after the API returned. This is what makes
-        // Revert restore the pre-generation plan.
-        if (arcsBeforeCall.length && !reviewOnly) pushPlanToHistory(arcsBeforeCall);
-
         // STORY-PLANNER-02: Detect same-chat edits. If the user changed the
         // plan during the API call, the current arcs differ from the revision
         // captured at start. Rebase against the CURRENT state (which includes
@@ -932,6 +973,51 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                 ? { ...arc, primarySubjectEntityId: canonicalRefreshOwners.get(arc.id) }
                 : arc)
             : mergedArcs;
+
+        // Evidence is first checked on the raw response because merge metadata
+        // is intentionally transient. Check it again on the reconstructed arcs
+        // before history is written: Add may exclude an exact-title recurrence,
+        // and merge may otherwise remove the beat paired with a newcomer.
+        const reviewedMergeIds = request?.operation === 'add'
+            ? new Set(addedIds)
+            : request?.operation === 'refresh'
+                ? new Set(matchedIds)
+                : null;
+        const survivingEvidence = limitedParsed.map(parsedArc => {
+            const entranceIndex = parsedArc._newcomerEvidence?.entranceBeatIndex;
+            const entranceText = Number.isInteger(entranceIndex) ? parsedArc.beats?.[entranceIndex]?.text : '';
+            const candidate = newArcs.find(arc => (!reviewedMergeIds || reviewedMergeIds.has(arc.id))
+                && (arc.id === parsedArc.id
+                || (normaliseArcTitleForRace(arc.title) === normaliseArcTitleForRace(parsedArc.title)
+                    && (!entranceText || arc.beats?.some(beat => normaliseArcTitleForRace(beat.text) === normaliseArcTitleForRace(entranceText))))));
+            if (!candidate || !parsedArc._newcomerEvidence) return candidate ? { ...parsedArc, _newcomerMarkerError: parsedArc._newcomerMarkerError } : null;
+            const finalEntranceIndex = candidate.beats.findIndex(beat => beat.state === 'pending'
+                && normaliseArcTitleForRace(beat.text) === normaliseArcTitleForRace(entranceText));
+            if (finalEntranceIndex < 0) return { ...parsedArc, _newcomerMarkerError: 'the paired entrance beat did not survive merging' };
+            return {
+                ...candidate,
+                _newcomerHandle: parsedArc._newcomerHandle,
+                _entranceHandles: [parsedArc._newcomerEvidence.handle],
+                _entranceBeatIndex: finalEntranceIndex,
+                _newcomerEvidence: { handle: parsedArc._newcomerEvidence.handle, entranceBeatIndex: finalEntranceIndex },
+            };
+        }).filter(Boolean);
+        const mergedNewcomerEvidence = assessNewcomerEvidence(survivingEvidence, castPolicyContract, {
+            reviewed: reviewOnly && !!request,
+            operation: request?.operation || 'add',
+        });
+        if (!mergedNewcomerEvidence.ok) throw new Error(mergedNewcomerEvidence.reason);
+        if (newcomerEvidence.validCount > mergedNewcomerEvidence.validCount
+            && !(reviewOnly && request?.operation === 'add')) {
+            throw new Error('A marked newcomer entrance did not survive the final plan merge.');
+        }
+
+        // STORY-PLANNER-02: Snapshot the PRE-OPERATION arcs for history, not
+        // whatever is current after the API returned. This is what makes
+        // Revert restore the pre-generation plan. Do this only after all
+        // post-merge validation has passed.
+        if (arcsBeforeCall.length && !reviewOnly) pushPlanToHistory(arcsBeforeCall);
+        const finalNewcomerEvidence = mergedNewcomerEvidence;
 
         if (reviewOnly && request) {
             const omittedTargetIds = request.operation === 'refresh'
@@ -995,10 +1081,10 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                     participantDiagnostics,
                     excludedRecurrences,
                     validationWarning: validation.warning || '',
-                    newcomerEvidence: newcomerEvidence.rows,
-                    newcomerPolicyMessage: newcomerEvidence.message,
-                    newcomerOutcomeAttribution: newcomerEvidence.attribution,
-                    newcomerRequirementUnmet: newcomerEvidence.unmetRequirement === true,
+                    newcomerEvidence: finalNewcomerEvidence.rows,
+                    newcomerPolicyMessage: finalNewcomerEvidence.message,
+                    newcomerOutcomeAttribution: finalNewcomerEvidence.attribution,
+                    newcomerRequirementUnmet: finalNewcomerEvidence.unmetRequirement === true,
                     characterContextMode: selection.mode,
                     characterContextStatus: characterContext.status || '',
                     characterContextCoverage: Array.isArray(characterContext.coverage)

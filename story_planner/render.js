@@ -739,7 +739,7 @@ export function showScopedReview(proposal) {
         diagnostics.omittedTargetIds?.length ? `${diagnostics.omittedTargetIds.length} selected target${diagnostics.omittedTargetIds.length === 1 ? '' : 's'} omitted and left unchanged.` : '',
         diagnostics.rejectedSuggestions?.length ? `${diagnostics.rejectedSuggestions.length} unrequested suggestion${diagnostics.rejectedSuggestions.length === 1 ? '' : 's'} rejected.` : '',
         ...(diagnostics.participantDiagnostics || []),
-        diagnostics.newcomerPolicyMessage || '',
+        diagnostics.newcomerRequirementUnmet ? '' : diagnostics.newcomerPolicyMessage || '',
         diagnostics.newcomerOutcomeAttribution?.message || '',
         diagnostics.validationWarning || '',
     ].filter(Boolean);
@@ -768,6 +768,7 @@ export function showScopedReview(proposal) {
             ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
             <p class="mwt-text-dim mwt-text-sm">${proposal.stats.added} new · ${proposal.stats.matched} refreshed · ${proposal.stats.carried} carried forward</p>
             <details class="sp-context-coverage-review"><summary>Safe Character Context coverage</summary>${coverageHtml}</details>
+            ${diagnostics.newcomerRequirementUnmet ? `<p class="sp-proposal-requirement" role="alert"><strong>Cast requirement unmet.</strong> ${escapeHtml(diagnostics.newcomerPolicyMessage || 'The requested newcomer coverage was not returned.')}</p>` : ''}
             ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
             <fieldset class="sp-proposal-selection">
                 <legend class="mwt-label">Changes to apply</legend>

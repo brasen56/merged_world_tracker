@@ -630,6 +630,77 @@ export function formatMajorEntry(data) {
 export function isHeaderLine(line) { return /\|/.test(line) && line.split('|').length >= 3 && !/^\s*-/.test(line); }
 export function findHeaderLineIdx(lines) { return lines.findIndex(isHeaderLine); }
 
+// ─── Knowledge Ledger section ────────────────────────────────────────────────
+
+/** Matches the ledger section header on an already-trimmed line. */
+const LEDGER_HEADER_RE = /^knowledge ledger:/i;
+/** The empty-ledger placeholder written by formatMajorEntry/buildPromotedContent. */
+const LEDGER_PLACEHOLDER = '- (no entries yet)';
+
+/** One ledger line: "- <fact> via <source> — <date>". */
+function formatLedgerLine(k) {
+    return `- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`;
+}
+
+/**
+ * Index of every line that belongs to the ledger section, in order.
+ *
+ * The section is the run of "- " items following the header. Blank lines
+ * inside it are tolerated; it ends at the first non-blank line that is not an
+ * item — which is what keeps a trailing relationship block (or any later
+ * section) out of it. Same convention as buildDemotedContent.
+ */
+function ledgerItemIndices(lines, headerIdx) {
+    const idxs = [];
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+        const t = lines[i].trim();
+        if (t === '') continue;
+        if (!t.startsWith('- ')) break;
+        idxs.push(i);
+    }
+    return idxs;
+}
+
+/**
+ * Insert new ledger lines at the end of the LEDGER SECTION — not the end of
+ * the entry.
+ *
+ * THE BUG THIS FIXES: both mergers used to `lines.push(...)`, which appends to
+ * the end of the array. That is the end of the ledger only when the ledger is
+ * the last thing in the entry. As soon as an entry carries a managed
+ * relationships block (relationship auto-extract, or any manual relationship
+ * edit that syncs one), new facts landed BELOW
+ * `<!-- mwt:relationships:end -->` — outside the section, where the Knowledge
+ * Ledger looks untouched to anyone reading the entry.
+ *
+ * The per-NPC paths (runNpcUpdate/runNpcEnrich/runDossierFieldRefresh) never
+ * showed the symptom because they stripRelationshipBlock() first, which is
+ * exactly why "hit Update on the Major tab" worked while the auto-scan did not.
+ *
+ * @param {string[]} lines — entry lines
+ * @param {Array<{fact:string, source?:string, date?:string}>} newKnowledge
+ * @returns {string[]} a new array; `lines` is not mutated
+ */
+export function appendLedgerLines(lines, newKnowledge) {
+    if (!newKnowledge?.length) return lines;
+    const formatted = newKnowledge.map(formatLedgerLine);
+    const headerIdx = lines.findIndex(l => LEDGER_HEADER_RE.test(l.trim()));
+    // No section yet — start one at the end of the entry.
+    if (headerIdx === -1) return [...lines, '', 'Knowledge Ledger:', ...formatted];
+
+    const itemIdxs = ledgerItemIndices(lines, headerIdx);
+    const out = [...lines];
+    // "- (no entries yet)" describes an EMPTY ledger. Real facts replace it
+    // rather than stacking underneath it and contradicting it in the prompt.
+    if (itemIdxs.length === 1 && out[itemIdxs[0]].trim().toLowerCase() === LEDGER_PLACEHOLDER) {
+        out.splice(itemIdxs[0], 1, ...formatted);
+        return out;
+    }
+    const insertAt = (itemIdxs.length ? itemIdxs[itemIdxs.length - 1] : headerIdx) + 1;
+    out.splice(insertAt, 0, ...formatted);
+    return out;
+}
+
 export function buildUpdatedMinorContent(existingContent, fields) {
     const lines = existingContent.split('\n');
     const headerIdx = findHeaderLineIdx(lines);
@@ -650,8 +721,7 @@ export function buildUpdatedMajorContent(existingContent, fields, newKnowledge) 
         if (fields?.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = fields.descriptor; return parts.join(' | '); }
         return line;
     });
-    if (newKnowledge?.length > 0) newKnowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
-    return lines.join('\n');
+    return appendLedgerLines(lines, newKnowledge).join('\n');
 }
 
 export function synthesizeMinorFromUpdate(name, fields) {
@@ -953,17 +1023,73 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
         if (!exists) { lines.splice(insertIdx, 0, `${f.label}: ${val}`); insertIdx++; }
     }
 
-    if (newKnowledge?.length > 0) {
-        // Ensure there's a Knowledge Ledger section, then append.
-        const ledgerLineIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));
-        if (ledgerLineIdx === -1) {
-            lines.push('', 'Knowledge Ledger:');
-            newKnowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
-        } else {
-            newKnowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
-        }
+    return appendLedgerLines(lines, newKnowledge).join('\n');
+}
+
+// ─── Scan entry projection ───────────────────────────────────────────────────
+//
+// What a tracked NPC's existing entry looks like INSIDE a scan prompt. It is a
+// bounded projection, not a copy — the same rule the relationship block
+// follows (see "Compact relationship projection" in relationships.js).
+//
+// It replaces a flat `existing.slice(0, 800)`. That cut was the second half of
+// the missing-ledger report: a real dossier passes 800 characters somewhere
+// around Appearance, so the model never saw `Knowledge Ledger:` at all — it
+// cannot add to a section it does not know exists, and the only other ledger
+// text in the scan prompt is a prohibition. Worse, the fields past the cut
+// (Read on PC, Current Agenda, …) read as MISSING, and the prompt's
+// "CRITICAL — FILL MISSING FIELDS" rule then had the scan rewrite them on
+// every single run. That is exactly the churn testers reported.
+//
+// So: keep every field LABEL (the model needs to see what is already filled),
+// clip long values, and always carry the ledger's recent tail.
+
+/** Per-value character cap inside a scan projection. */
+const SCAN_FIELD_CAP = 120;
+/** How many of the most recent ledger lines a scan projection carries. */
+const SCAN_LEDGER_TAIL = 5;
+/** Backstop against a pathological entry: body lines kept before the ledger. */
+const SCAN_BODY_LINE_CAP = 24;
+
+/**
+ * Project an entry for the "Already Tracked NPCs" section of a scan prompt.
+ *
+ * @param {string} content — the raw lorebook entry
+ * @param {object} [opts] — caps, overridable for tests
+ * @returns {string} the projection ('' when there is nothing to show)
+ */
+export function buildScanEntryProjection(content, {
+    fieldCap = SCAN_FIELD_CAP,
+    ledgerTail = SCAN_LEDGER_TAIL,
+    bodyLineCap = SCAN_BODY_LINE_CAP,
+} = {}) {
+    if (!content || typeof content !== 'string') return '';
+    // The relationships block is a projection of the relationship graph, which
+    // has its own extractor. It is pure prompt cost here.
+    const lines = stripRelationshipBlock(content).split('\n');
+    const headerIdx = lines.findIndex(l => LEDGER_HEADER_RE.test(l.trim()));
+    const body = (headerIdx === -1 ? lines : lines.slice(0, headerIdx)).slice(0, bodyLineCap);
+    // The ellipsis is load-bearing: the prompt tells the model a clipped value
+    // is present-but-abbreviated, NOT missing.
+    const clip = (s) => (s.length > fieldCap ? `${s.slice(0, fieldCap).trimEnd()}…` : s);
+
+    const out = [];
+    for (const line of body) {
+        const t = line.trim();
+        if (t === '') { if (out.length && out[out.length - 1] !== '') out.push(''); continue; }
+        const m = t.match(/^([^:]{1,40}):\s*(.*)$/);
+        out.push(m ? `${m[1]}: ${clip(m[2])}` : clip(t));
     }
-    return lines.join('\n');
+    while (out.length && out[out.length - 1] === '') out.pop();
+
+    if (headerIdx !== -1) {
+        const items = ledgerItemIndices(lines, headerIdx).map(i => lines[i].trim());
+        out.push('', 'Knowledge Ledger:');
+        const dropped = Math.max(0, items.length - ledgerTail);
+        if (dropped > 0) out.push(`- …(${dropped} older ledger line${dropped === 1 ? '' : 's'} not shown)`);
+        for (const item of items.slice(-ledgerTail)) out.push(clip(item));
+    }
+    return out.join('\n');
 }
 
 /**
@@ -1095,14 +1221,12 @@ export async function runScan({ trigger = null } = {}) {
             if (dossierMode && info.type === 'major' && info.uid != null) {
                 try {
                     const existing = await loadEntryContent(info.uid, name);
-                    if (existing) {
-                        // Truncate to keep the prompt manageable (we only need
-                        // enough for the model to see which fields exist).
-                        const trimmed = existing.length > 800
-                            ? existing.slice(0, 800) + '\n…(truncated)'
-                            : existing;
-                        lines.push(`<existing_entry>\n${trimmed}\n</existing_entry>`);
-                    }
+                    // A bounded projection, not a prefix: every field label
+                    // survives and the ledger's recent tail is always carried.
+                    // See buildScanEntryProjection for why the old
+                    // slice(0, 800) made the scan blind to the ledger.
+                    const projected = buildScanEntryProjection(existing);
+                    if (projected) lines.push(`<existing_entry>\n${projected}\n</existing_entry>`);
                 } catch { /* ignore load errors */ }
             }
         }

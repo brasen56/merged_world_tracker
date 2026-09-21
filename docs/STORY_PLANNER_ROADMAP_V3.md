@@ -795,8 +795,8 @@ either proves the paired-marker contract or reports that the path is unsupported
   scoped/palette controls, explicit per-workflow request contracts, custom-template
   compatibility reporting, automatic incompatibility skip, and focused regression
   coverage.
-- **Automated checks:** focused Phase 3D and adjacent suites green at 111/111;
-  full suite green at 3,011/3,011; lint clean. Phase 3A-3D are
+- **Automated checks:** the ten suites listed below green at 355/355; full suite
+  green at 3,025/3,025; lint clean. Phase 3A-3D are
   pinned in `test/story_planner_cast_policy.test.js`,
   `test/story_planner_phase3c.test.js`, `test/story_planner_phase3d.test.js`,
   `test/story_planner_phase0_v3.test.js`, `test/story_planner_phase4.test.js`,
@@ -827,12 +827,39 @@ either proves the paired-marker contract or reports that the path is unsupported
 - **Phase 3D continuity/evaluation result:** bounded read-only continuity now carries
   each active arc's ordinary title, body, and up to four ordinary beat texts, so an
   accepted newcomer arc and its concrete entrance remain visible to later scoped
-  requests after proposal markers are stripped. No candidate ID or newcomer field is
+  requests after proposal markers are stripped. The projection keeps complete arcs
+  under a 16,000-character total cap and reports how many later arcs were omitted;
+  the four displayed beats are a projection policy separate from the four-beat
+  newcomer entrance validation contract. No candidate ID or newcomer field is
   reconstructed or persisted. Cast guidance separates novelty from escalation,
   explicitly permits genre-appropriate non-antagonist roles, and treats story-evidenced
   characters without Knowledge records as established. Proposal diagnostics and
   privacy-safe request outcome telemetry distinguish a planner-returned hypothetical
   newcomer from narration, which remains not evaluated or asserted.
+- **Review fixes:** five defects found reviewing the four Phase 3 commits are
+  closed. (1) The Markdown parser minted an entrance index for a marker-only beat
+  before deciding whether that beat had any text, so `1. [ENTRANCE:n1]` on its own
+  dropped the beat and transferred the entrance claim to the beat after it — a
+  `propose` Add then reported "a paired concrete entrance beat" with no entrance
+  beat at all, and a direct-commit path wrote it. A marked beat with no prose is
+  now malformed. (2) Targeted JSON `title`/`description` were never marker-
+  stripped, so a model that inlined `[NEWCOMER:n1]` alongside the field persisted
+  it into a stored title — the merge key — and into narrator-visible text. Both
+  fields now go through the arc-row extractor, which strips the markers and still
+  evaluates an inline declaration rather than discarding it. (3) The same-arc
+  pairing rules existed twice, verbatim, in the Markdown and targeted parsers;
+  both now call one exported `newcomerPairingError` helper. Pinned by eight cases
+  in `test/story_planner_phase3c.test.js`, seven of which fail against the
+  pre-fix source; the eighth asserts both formats report one shared contract.
+  (4) Generation now captures one immutable Story Palette snapshot before any
+  awaited context work and reuses it for both the first request and retry. (5) An
+  unmet active-proposal cast requirement is a dedicated `role="alert"` warning in
+  scoped review rather than an undifferentiated diagnostics-list item.
+- **Test-discipline record:** Phase 3A intentionally removed the Phase 0 boundary
+  assertion that scoped preferences had no `castPolicy`, because Phase 3A owns that
+  field. It also intentionally inverted the Phase 6 expectation that the built-in
+  default palette emitted no `<story_palette>` block, because every built-in full
+  and targeted request now receives the effective cast-policy clause.
 - **Known limitations:** An invented person hidden in unmarked prose remains a
   documented human-review limitation; registry absence is not treated as proof of
   novelty, and exact prose deduplication is not claimed. Accepted arcs create no

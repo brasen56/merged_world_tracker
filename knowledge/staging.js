@@ -27,6 +27,7 @@ import {
     loadEntryContent, getHistory,
     fieldsFromScanRecord,
 } from './lorebook.js';
+import { hasEvidenceFile } from './evidence.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
@@ -84,6 +85,50 @@ export function trackedType(reg, scannedType) {
     return (reg?.type === 'major' || reg?.type === 'minor') ? reg.type : scannedType;
 }
 
+/**
+ * The ledger facts a scan record carries, under either key the scan schema
+ * uses.
+ *
+ * `new_major` asks for `initial_knowledge` and `update_major` asks for
+ * `new_knowledge` — two names for one concept inside a single JSON contract,
+ * which models mix up constantly. The reclassification path and
+ * enrichStagingItem's create→update promotion both already accept either; the
+ * two update branches read only `new_knowledge`, so an `initial_knowledge`
+ * array on an update record was dropped on the floor without a warning.
+ *
+ * @param {object} data — a scan record
+ * @returns {Array} the ledger facts (possibly empty)
+ */
+export function knowledgeFromRecord(data) {
+    for (const k of [data?.new_knowledge, data?.initial_knowledge]) {
+        if (Array.isArray(k) && k.length > 0) return k;
+    }
+    return [];
+}
+
+/**
+ * Drop fields the scan is not allowed to own for this NPC.
+ *
+ * `personality` belongs to the evidence/growth system as soon as an evidence
+ * file exists — the hard structural partition from NPC_GROWTH_BLUEPRINT.md
+ * that stops a dossier prompt re-deriving personality from its own prior prose
+ * (the telephone loop). runNpcUpdate enforces it; the scan path did not, so a
+ * cadence scan could quietly overwrite a growth-owned Personality line.
+ *
+ * `canon_lock` is deliberately NOT guarded here: it is locked only against the
+ * 🎯 Fields picker, while ordinary updates may establish new immutable facts.
+ *
+ * @param {string} name — the CANONICAL registry key (evidence files are keyed by it)
+ * @param {object} fields — the scan's field bag
+ * @returns {object} `fields`, or a copy with growth-owned keys nulled
+ */
+export function applyFieldOwnership(name, fields) {
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return fields;
+    if (fields.personality == null) return fields;
+    if (!hasEvidenceFile(name)) return fields;
+    return { ...fields, personality: null };
+}
+
 export function buildStagingItems(scanResult) {
     const registry = getRegistry();
     const items = [];
@@ -122,8 +167,8 @@ export function buildStagingItems(scanResult) {
     const reclassified = (data, known, scannedType) => {
         const type = trackedType(known.reg, scannedType);
         const keywords = mergeKeywords(known.reg.keywords, known.key, data.name);
-        const fields = fieldsFromScanRecord(data, type);
-        const newKnowledge = data.initial_knowledge || data.new_knowledge || [];
+        const fields = applyFieldOwnership(known.key, fieldsFromScanRecord(data, type));
+        const newKnowledge = knowledgeFromRecord(data);
         const tracked = known.reg.uid !== null && known.reg.uid !== undefined;
         if (tracked) {
             return {
@@ -192,11 +237,12 @@ export function buildStagingItems(scanResult) {
             // repair the registry identity, not fork it with the model's
             // spelling (which would also fail writeToLorebook's label check).
             const name = regKey || data.name;
+            const owned = applyFieldOwnership(name, data.fields);
             const proposed = type === 'major'
                 ? (dossierMode
-                    ? synthesizeDossierFromUpdate(name, data.fields, data.new_knowledge || [])
-                    : synthesizeMajorFromUpdate(name, data.fields, data.new_knowledge || []))
-                : synthesizeMinorFromUpdate(name, data.fields);
+                    ? synthesizeDossierFromUpdate(name, owned, knowledgeFromRecord(data))
+                    : synthesizeMajorFromUpdate(name, owned, knowledgeFromRecord(data)))
+                : synthesizeMinorFromUpdate(name, owned);
             items.push({ id: makeId(), type, action: 'create', name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords, synthesized: true, ...(type === 'major' ? { dossierMode } : {}) });
             return;
         }
@@ -204,7 +250,7 @@ export function buildStagingItems(scanResult) {
         // item.name is the CANONICAL key, not the model's spelling — accepting
         // re-labels the entry consistently and passes writeToLorebook's
         // KNOWLEDGE-01 comment check instead of detaching a valid uid.
-        items.push({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: data.fields, ...(type === 'major' ? { newKnowledge: data.new_knowledge || [], dossierMode } : {}) });
+        items.push({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: applyFieldOwnership(regKey, data.fields), ...(type === 'major' ? { newKnowledge: knowledgeFromRecord(data), dossierMode } : {}) });
     });
     scanResult.update_major.forEach(data => {
         // KNOWLEDGE-03: Resolve the name through resolveRegistryKey so "Mara"
@@ -217,16 +263,17 @@ export function buildStagingItems(scanResult) {
         if (orphan) {
             misclassifiedCount++;
             const name = regKey || data.name;
+            const owned = applyFieldOwnership(name, data.fields);
             const syn = type === 'major'
                 ? (dossierMode
-                    ? synthesizeDossierFromUpdate(name, data.fields, data.new_knowledge || [])
-                    : synthesizeMajorFromUpdate(name, data.fields, data.new_knowledge || []))
-                : synthesizeMinorFromUpdate(name, data.fields);
+                    ? synthesizeDossierFromUpdate(name, owned, knowledgeFromRecord(data))
+                    : synthesizeMajorFromUpdate(name, owned, knowledgeFromRecord(data)))
+                : synthesizeMinorFromUpdate(name, owned);
             items.push({ id: makeId(), type, action: 'create', name, data, proposedContent: syn, mergedContent: syn, existingContent: null, keywords, synthesized: true, ...(type === 'major' ? { dossierMode } : {}) });
             return;
         }
         if (type !== 'major') typeKeptCount++;
-        items.push({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: data.fields, ...(type === 'major' ? { newKnowledge: data.new_knowledge || [], dossierMode } : {}) });
+        items.push({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: applyFieldOwnership(regKey, data.fields), ...(type === 'major' ? { newKnowledge: knowledgeFromRecord(data), dossierMode } : {}) });
     });
     const notes = [];
     if (reclassifiedCount > 0) notes.push(`${reclassifiedCount} proposal(s) reclassified — the NPC is already tracked under another spelling.`);

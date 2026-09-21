@@ -13,7 +13,7 @@ import {
 } from '../core/index.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { getSettings, hasValidSettings } from './settings.js';
-import { extractEntranceBeatMarker, extractNewcomerArcMarker, MAX_CONTINUITY_BEATS_PER_ARC, storyPlannerSchema } from './schema.js';
+import { extractEntranceBeatMarker, extractNewcomerArcMarker, newcomerPairingError, storyPlannerSchema } from './schema.js';
 import {
     SECTIONS, buildClosedMemoryProjection, getArcs, getCharacterContextSelection, getDirectionHint,
     newArcId, newBeatId, sanitizeArc, setArcsWithHistory, state,
@@ -73,20 +73,40 @@ function parseTargetedOutput(raw) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error('Targeted response was not a JSON object.');
     }
+    // The JSON contract declares a newcomer through its own field, but a model
+    // shown the Markdown marker syntax also inlines it into the title or the
+    // description. Run both fields through the arc-row extractor: the markers
+    // are stripped before they can reach a stored title (the merge key) or the
+    // narrator, and an inline declaration is still evaluated rather than
+    // silently discarded.
+    // Extract markers from the complete field before bounding prose. Otherwise
+    // a long title/body/beat can truncate a valid marker into an unrecognizable
+    // fragment and let invalid evidence reach the proposal.
+    const titleField = extractNewcomerArcMarker(String(parsed.title ?? '').trim());
+    const bodyField = extractNewcomerArcMarker(String(parsed.description ?? parsed.body ?? '').trim());
     const newcomerExplicit = cleanText(parsed.newcomerHandle, 100);
     const newcomer = newcomerExplicit
         ? extractNewcomerArcMarker(`[NEWCOMER:${newcomerExplicit}]`)
         : { handle: '', error: '' };
+    const declaredHandles = [...new Set([newcomer.handle, titleField.handle, bodyField.handle].filter(Boolean))];
+    const declarationError = newcomer.error || titleField.error || bodyField.error
+        || (declaredHandles.length > 1 ? 'duplicate newcomer markers on one arc' : '');
     const pendingEntries = Array.isArray(parsed.pendingBeats)
         ? parsed.pendingBeats.map(value => {
-            const rawText = cleanText(typeof value === 'object' ? value?.text : value, 1000);
+            const rawText = String((typeof value === 'object' ? value?.text : value) ?? '').trim();
             const inline = extractEntranceBeatMarker(rawText);
             const explicitHandle = cleanText(typeof value === 'object' ? value?.entranceHandle : '', 100);
             const explicit = explicitHandle ? extractEntranceBeatMarker(`[ENTRANCE:${explicitHandle}]`) : null;
+            const text = cleanText(inline.content, 1000);
             return {
-                text: cleanText(inline.content, 1000),
+                text,
                 handle: explicit?.handle || inline.handle,
-                error: explicit?.error || inline.error || (explicitHandle && inline.handle ? 'duplicate entrance evidence on one beat' : ''),
+                // Same rule as the Markdown parser: a beat that is nothing but a
+                // marker is dropped below, so its entrance claim is malformed
+                // rather than a silent promotion of whichever beat follows it.
+                error: explicit?.error || inline.error
+                    || (explicitHandle && inline.handle ? 'duplicate entrance evidence on one beat' : '')
+                    || (!text && (explicit?.handle || inline.handle) ? 'entrance marker has no beat text' : ''),
             };
         }) : [];
     const pending = pendingEntries
@@ -95,24 +115,22 @@ function parseTargetedOutput(raw) {
         .slice(0, 20);
     if (!pending.length) throw new Error('Targeted response did not include any pending setup beats.');
     const model = {
-        title: cleanText(parsed.title, 200),
-        body: cleanText(parsed.description ?? parsed.body, 2000),
+        title: cleanText(titleField.content, 200),
+        body: cleanText(bodyField.content, 2000),
         section: SECTIONS.some(section => section.key === parsed.section) ? parsed.section : '',
         pending: pending.map(entry => entry.text),
     };
-    if (newcomerExplicit) model._newcomerHandle = newcomer.handle;
-    if (newcomer.error) model._newcomerMarkerError = newcomer.error;
+    if (newcomerExplicit || titleField.marked || bodyField.marked) model._newcomerHandle = declaredHandles[0] || '';
+    if (declarationError) model._newcomerMarkerError = declarationError;
     const entranceHandles = pending.filter(entry => entry.handle).map(entry => entry.handle);
     if (entranceHandles.length) model._entranceHandles = entranceHandles;
     const entranceBeatIndex = pending.findIndex(entry => entry.handle);
     if (entranceBeatIndex >= 0) model._entranceBeatIndex = entranceBeatIndex;
-    const entranceError = pending.find(entry => entry.error)?.error;
+    const entranceError = pendingEntries.find(entry => entry.error)?.error;
     if (entranceError && !model._newcomerMarkerError) model._newcomerMarkerError = entranceError;
     if (!model._newcomerMarkerError) {
-        if (!model._newcomerHandle && entranceHandles.length) model._newcomerMarkerError = 'entrance marker has no newcomer marker on the same arc';
-        else if (model._newcomerHandle && entranceHandles.length !== 1) model._newcomerMarkerError = entranceHandles.length ? 'newcomer arc must contain exactly one entrance beat' : 'newcomer arc is missing its entrance beat';
-        else if (model._newcomerHandle && entranceHandles[0] !== model._newcomerHandle) model._newcomerMarkerError = 'newcomer and entrance handles do not match within the same arc';
-        else if (model._newcomerHandle && entranceBeatIndex >= MAX_CONTINUITY_BEATS_PER_ARC) model._newcomerMarkerError = `newcomer entrance must be within the first ${MAX_CONTINUITY_BEATS_PER_ARC} setup beats`;
+        const pairingError = newcomerPairingError(model._newcomerHandle, entranceHandles, entranceBeatIndex);
+        if (pairingError) model._newcomerMarkerError = pairingError;
         else if (model._newcomerHandle) model._newcomerEvidence = { handle: model._newcomerHandle, entranceBeatIndex };
     }
     return model;
@@ -167,6 +185,23 @@ function proposalArc(operation, source, model) {
         turnsSinceAdvance: currentBefore?.id === currentAfter?.id ? source.turnsSinceAdvance : 0,
         updatedAt: Date.now(),
     });
+}
+
+function validateReconstructedEvidence(model, proposedArc) {
+    if (!model?._newcomerEvidence) return null;
+    const sourceIndex = model._newcomerEvidence.entranceBeatIndex;
+    const sourceText = model.pending?.[sourceIndex] || '';
+    const key = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const finalIndex = proposedArc.beats.findIndex(beat => beat.state === 'pending'
+        && key(beat.text) === key(sourceText));
+    if (finalIndex < 0) return null;
+    return {
+        ...proposedArc,
+        _newcomerHandle: model._newcomerHandle,
+        _entranceHandles: [model._newcomerEvidence.handle],
+        _entranceBeatIndex: finalIndex,
+        _newcomerEvidence: { handle: model._newcomerEvidence.handle, entranceBeatIndex: finalIndex },
+    };
 }
 
 /** Generate a review-only proposal. This function never writes metadata/history. */
@@ -226,6 +261,16 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
             },
         });
         const proposedArc = proposalArc(operation, sourceArc, model);
+        const reconstructedEvidenceArc = validateReconstructedEvidence(model, proposedArc);
+        if (model._newcomerEvidence && !reconstructedEvidenceArc) {
+            throw new Error('The marked newcomer entrance did not survive historical-beat filtering.');
+        }
+        const finalNewcomerEvidence = assessNewcomerEvidence(
+            reconstructedEvidenceArc ? [reconstructedEvidenceArc] : [proposedArc],
+            castPolicyContract,
+            { reviewed: true, operation, targeted: true },
+        );
+        if (!finalNewcomerEvidence.ok) throw new Error(finalNewcomerEvidence.reason);
         incrementPhase7Metrics({ targetedGenerations: 1 });
         const current = getArcs().find(arc => arc.id === arcId);
         const scopeResult = assertSameScope(scope);
@@ -236,7 +281,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
             operation, sourceArcId: arcId, sourceArc, proposedArc,
             diff: buildArcDiff(sourceArc, proposedArc, operation),
             castPolicyContract: { ...castPolicyContract },
-            newcomerEvidence,
+            newcomerEvidence: finalNewcomerEvidence,
             scope, revision, stale: !!staleReason, staleReason,
         };
     } catch (err) {

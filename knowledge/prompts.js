@@ -35,6 +35,7 @@ Classification guide:
 - A name that unambiguously refers to a listed NPC counts as listed — e.g. "Sophie" or "Sophie Simpson" for tracked "Sophie Simpson" is the SAME NPC. Classify it as an update and use the tracked spelling.
 - Only include NPCs who actually appeared or were meaningfully referenced.
 - For update entries: only include NPCs whose information actually changed.
+- RECORD WHAT THEY LEARNED: for every update_major, fill new_knowledge with the concrete facts that NPC learned or now knows from these messages — established facts only, per the ledger rule above. Return [] only when nothing new was actually established for them.
 - If no NPCs qualify for a category, use an empty array [].`;
 
 export const STATE_UPDATE_PROMPT = `You are a state tracker for an ongoing roleplay. Your sole job is to output an updated version of the entry inside <current_entry>.
@@ -146,6 +147,8 @@ Classification guide:
 - For update entries: only include NPCs whose information actually changed.
 - SECRETS ARE NOT PERMANENT: a disclosed, resolved, or obsolete secret is a change worth an update_major. If a Tier's premise hinges on an in-world event that has clearly passed (compare against current in-world dates), retire that Tier rather than carrying it forward.
 - CRITICAL — FILL MISSING FIELDS: If the "Already Tracked NPCs" section includes an entry's current content (inside <existing_entry> tags) and a dossier field is MISSING or EMPTY, FILL IT IN by inferring from the messages and established facts. Only output null for a field that already has a real value and has genuinely not changed.
+- <existing_entry> IS ABBREVIATED: long values are clipped with "…" and only the most recent Knowledge Ledger lines are shown. A clipped value is PRESENT, not missing — never rewrite a field just because it looks cut off, and treat a field as missing only when its label has no value at all.
+- RECORD WHAT THEY LEARNED: for every update_major, fill new_knowledge with the concrete facts that NPC learned or now knows from these messages — established facts only, per the ledger rule above. Do not restate a fact already shown in their Knowledge Ledger. Return [] only when nothing new was actually established for them.
 - For new_major, leave a field as an empty string "" rather than inventing if truly unknown — but prefer concrete inference from the scene.
 - If no NPCs qualify for a category, use an empty array [].`;
 

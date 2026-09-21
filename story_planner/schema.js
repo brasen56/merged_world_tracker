@@ -600,22 +600,47 @@ function extractNewcomerContinuationMarkers(raw) {
     };
 }
 
+/**
+ * The single same-arc pairing contract, shared by the Markdown parser and the
+ * targeted JSON parser.
+ *
+ * Both response formats carry the same proposal-local evidence, so the rule
+ * deciding whether a pair is valid lives in one place. Two copies drift, and a
+ * newcomer that one path accepts while the other rejects it is exactly the
+ * ambiguity §4.4 replaced the old boolean to avoid.
+ *
+ * @param {string} handle the arc's newcomer handle ('' when none was declared)
+ * @param {string[]} entranceHandles every entrance handle found on that arc's beats
+ * @param {number} entranceBeatIndex position of the entrance beat within the arc
+ * @returns {string} the pairing error, or '' when the evidence is a valid pair
+ */
+export function newcomerPairingError(handle, entranceHandles = [], entranceBeatIndex = -1) {
+    const entrances = Array.isArray(entranceHandles) ? entranceHandles : [];
+    if (!handle) return entrances.length ? 'entrance marker has no newcomer marker on the same arc' : '';
+    if (entrances.length !== 1) {
+        return entrances.length
+            ? 'newcomer arc must contain exactly one entrance beat'
+            : 'newcomer arc is missing its entrance beat';
+    }
+    if (entrances[0] !== handle) return 'newcomer and entrance handles do not match within the same arc';
+    // The entrance BEAT is the deliverable, not the marker. A marker that never
+    // landed on a stored beat leaves nothing for the narrator to perform, so it
+    // can never read as a valid pair.
+    if (!Number.isInteger(entranceBeatIndex) || entranceBeatIndex < 0) return 'newcomer arc is missing its entrance beat';
+    if (entranceBeatIndex >= MAX_CONTINUITY_BEATS_PER_ARC) {
+        return `newcomer entrance must be within the first ${MAX_CONTINUITY_BEATS_PER_ARC} setup beats`;
+    }
+    return '';
+}
+
 function finalizeNewcomerEvidence(arcs) {
     const owners = new Map();
     for (const arc of arcs) {
         const handle = arc._newcomerHandle || '';
         const entrances = Array.isArray(arc._entranceHandles) ? arc._entranceHandles : [];
         if (!arc._newcomerMarkerError) {
-            if (!handle && entrances.length) arc._newcomerMarkerError = 'entrance marker has no newcomer marker on the same arc';
-            else if (handle && entrances.length !== 1) {
-                arc._newcomerMarkerError = entrances.length
-                    ? 'newcomer arc must contain exactly one entrance beat'
-                    : 'newcomer arc is missing its entrance beat';
-            } else if (handle && entrances[0] !== handle) {
-                arc._newcomerMarkerError = 'newcomer and entrance handles do not match within the same arc';
-            } else if (handle && arc._entranceBeatIndex >= MAX_CONTINUITY_BEATS_PER_ARC) {
-                arc._newcomerMarkerError = `newcomer entrance must be within the first ${MAX_CONTINUITY_BEATS_PER_ARC} setup beats`;
-            }
+            const pairingError = newcomerPairingError(handle, entrances, arc._entranceBeatIndex);
+            if (pairingError) arc._newcomerMarkerError = pairingError;
         }
         if (!handle) continue;
         if (owners.has(handle)) {
@@ -742,8 +767,16 @@ export function parsePlanTextToArcs(text, options = {}) {
             const beat = cleanBeatContent(entrance.content);
             if (entrance.error && !last._newcomerMarkerError) last._newcomerMarkerError = entrance.error;
             if (entrance.marked) {
-                last._entranceHandles = [...(last._entranceHandles || []), entrance.handle];
-                if (last._entranceBeatIndex === undefined) last._entranceBeatIndex = last.beats.length;
+                // Record the position only for a beat that is actually stored.
+                // A marker with no prose behind it is dropped below, and an
+                // index minted here would silently annex the NEXT beat as the
+                // entrance the proposal never wrote.
+                if (!beat) {
+                    if (!last._newcomerMarkerError) last._newcomerMarkerError = 'entrance marker has no beat text';
+                } else {
+                    last._entranceHandles = [...(last._entranceHandles || []), entrance.handle];
+                    if (last._entranceBeatIndex === undefined) last._entranceBeatIndex = last.beats.length;
+                }
             }
             if (beat) last.beats.push(sanitizeBeat(beat));
             continue;

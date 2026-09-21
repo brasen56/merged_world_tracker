@@ -289,6 +289,22 @@ describe('Story Planner Phase 4 — targeted proposal model', () => {
         expect(getArcs()[0].beats.map(beat => beat.text)).toEqual(['Second step.', 'First step.']);
     });
 
+    test('rejects newcomer evidence when historical filtering removes its marked beat', async () => {
+        const source = sourceArc();
+        setArcs([source]);
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'propose' } });
+        setFakeApi(() => response({
+            newcomerHandle: 'n1',
+            pendingBeats: [
+                { text: 'A torn manifest arrives.', entranceHandle: 'n1' },
+                { text: 'A genuinely new beat.', entranceHandle: '' },
+            ],
+        }));
+
+        await expect(generateTargetedProposal(source.id, 'alternate'))
+            .rejects.toThrow(/did not survive historical-beat filtering/);
+    });
+
     test('a simple deletion does not report every surviving beat as moved', async () => {
         const source = makeArc({ title: 'Trimmed route', beats: ['First step.', 'Remove me.', 'Third step.'] });
         setArcs([source]);

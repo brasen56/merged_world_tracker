@@ -68,6 +68,23 @@ describe('Story Planner V3 Phase 3C — newcomer marker parsing', () => {
         expect(arc._newcomerEvidence).toEqual({ handle: 'n1', entranceBeatIndex: 0 });
     });
 
+    test('a marker-only entrance beat is malformed instead of annexing the next beat', () => {
+        const [arc] = parsePlanTextToArcs([
+            '## Horizon Arcs',
+            '- [NEWCOMER:n1] The Outside Auditor — Ilyra is an independent auditor.',
+            '  1. [ENTRANCE:n1]',
+            '  2. Mara checks the auditor’s seal against the archive.',
+        ].join('\n'), { strictHeadings: true });
+
+        // The marked line carries no prose, so it is not a beat. The entrance
+        // claim must fail rather than transfer to the beat that follows it.
+        expect(arc.beats.map(beat => beat.text)).toEqual(['Mara checks the auditor’s seal against the archive.']);
+        expect(arc._newcomerMarkerError).toBe('entrance marker has no beat text');
+        expect(arc._newcomerEvidence).toBeUndefined();
+        expect(assessNewcomerEvidence([arc], { policy: 'propose', supported: true }, { reviewed: true, operation: 'add' }))
+            .toMatchObject({ ok: false, reason: expect.stringContaining('has no beat text') });
+    });
+
     test.each([
         ['missing entrance', '## Horizon Arcs\n- [NEWCOMER:n1] Auditor route — Ilyra reviews the transfer.\n  1. The records arrive.', 'missing its entrance beat'],
         ['cross-arc entrance', '## Horizon Arcs\n- [NEWCOMER:n1] Auditor route — Ilyra reviews the transfer.\n- Clerk route — the clerk stalls.\n  1. [ENTRANCE:n1] Ilyra arrives.', 'missing its entrance beat'],
@@ -78,6 +95,7 @@ describe('Story Planner V3 Phase 3C — newcomer marker parsing', () => {
         ['newcomer marker on beat', '## Horizon Arcs\n- Auditor route — Ilyra reviews the transfer.\n  1. [NEWCOMER:n1] Ilyra arrives.', 'only valid on arc rows'],
         ['entrance marker on wrapped body', '## Horizon Arcs\n- Auditor route — The records remain sealed.\n    [ENTRANCE:n1] Ilyra arrives.', 'only valid on setup beats'],
         ['newcomer marker on wrapped body', '## Horizon Arcs\n- Auditor route — The records remain sealed.\n    [NEWCOMER:n1] Ilyra arrives.', 'only valid on arc rows'],
+        ['marker-only entrance beat', '## Horizon Arcs\n- [NEWCOMER:n1] Auditor route — Ilyra reviews the transfer.\n  1. [ENTRANCE:n1]\n  2. Mara checks the seal.', 'has no beat text'],
     ])('flags %s without retaining marker text', (_label, text, reason) => {
         const arcs = parsePlanTextToArcs(text, { strictHeadings: true });
         expect(arcs.some(arc => arc._newcomerMarkerError?.includes(reason))).toBe(true);
@@ -120,6 +138,7 @@ describe('Story Planner V3 Phase 3C — generation boundaries and review diagnos
         ['propose Add without pair', 'propose', establishedPlan, /required a newcomer arc/],
         ['malformed pair', 'allowed', '## Immediate Hooks\n- [NEWCOMER:n1] Broken route — Ilyra waits.\n- Second route — Mara checks the door.\n- Third route — Derek checks the seal.', /missing its entrance beat/],
         ['wrapped entrance marker', 'existing-only', '## Horizon Arcs\n- Auditor route — The records remain sealed.\n    [ENTRANCE:n1] Ilyra arrives.\n- Existing witness — the clerk confirms the handoff.\n- Familiar warning — Derek checks the seal.', /only valid on setup beats/],
+        ['marker-only entrance beat', 'propose', '## Immediate Hooks\n- [NEWCOMER:n1] Auditor route — Ilyra reviews the transfer.\n  1. [ENTRANCE:n1]\n  2. Mara checks the seal.\n- Existing witness — the clerk confirms the handoff.\n- Familiar warning — Derek checks the seal.', /has no beat text/],
     ])('direct-commit %s fails after one response and writes neither arcs nor history', async (_label, castPolicy, response, error) => {
         const existing = makeArc({ title: 'Existing plan', section: 'horizon', beats: ['Keep this beat.'] });
         setArcs([existing]);
@@ -148,8 +167,11 @@ describe('Story Planner V3 Phase 3C — generation boundaries and review diagnos
         expect(getPlanHistory()).toEqual([]);
 
         showScopedReview(proposal);
-        expect(document.getElementById('mwt-sp-scoped-review-modal').textContent)
-            .toContain('Unmet cast requirement');
+        const alert = document.querySelector('.sp-proposal-requirement[role="alert"]');
+        expect(alert).not.toBeNull();
+        expect(alert.textContent).toContain('Unmet cast requirement');
+        expect(document.querySelector('.sp-proposal-diagnostics')?.textContent || '')
+            .not.toContain('Unmet cast requirement');
         document.querySelector('#mwt-sp-scoped-discard').click();
     });
 
@@ -258,5 +280,91 @@ describe('Story Planner V3 Phase 3C — targeted proposal evidence', () => {
         await expect(generateTargetedProposal(source.id, 'develop')).rejects.toThrow(/Established cast only/);
         expect(getArcs()).toEqual([source]);
         expect(getPlanHistory()).toHaveLength(0);
+    });
+
+    test('strips an inline newcomer marker out of the targeted JSON title it would otherwise persist', async () => {
+        const source = makeArc({ title: 'Harbour pact', section: 'horizon', beats: ['The clerk checks the seal.'] });
+        setArcs([source]);
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'propose' } });
+        setFakeApi(() => JSON.stringify({
+            title: '[NEWCOMER:n1] Auditor route',
+            description: 'An independent auditor complicates the pact.',
+            section: 'horizon',
+            pendingBeats: [{ text: 'Ilyra interrupts the records handoff.', entranceHandle: 'n1' }],
+        }));
+
+        const proposal = await generateTargetedProposal(source.id, 'alternate');
+
+        // A marker left in a title reaches the narrator and forks the arc on
+        // merge, so an inline declaration is stripped and still evaluated.
+        expect(proposal.proposedArc.title).toBe('Auditor route');
+        expect(JSON.stringify(proposal.proposedArc)).not.toMatch(/\[(?:NEWCOMER|ENTRANCE):/);
+        expect(proposal.newcomerEvidence).toMatchObject({ ok: true, validCount: 1 });
+    });
+
+    test('extracts a newcomer marker from a long targeted title before truncating it', async () => {
+        const source = makeArc({ title: 'Harbour pact', section: 'horizon', beats: ['The clerk checks the seal.'] });
+        setArcs([source]);
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'propose' } });
+        setFakeApi(() => JSON.stringify({
+            title: `${'A'.repeat(190)} [NEWCOMER:n1] Auditor route`,
+            description: 'An independent auditor complicates the pact.',
+            section: 'horizon',
+            pendingBeats: [{ text: `${'B'.repeat(990)} [ENTRANCE:n1] Ilyra interrupts the records handoff.` }],
+        }));
+
+        const proposal = await generateTargetedProposal(source.id, 'alternate');
+
+        expect(proposal.newcomerEvidence).toMatchObject({ ok: true, validCount: 1 });
+        expect(proposal.proposedArc.title).not.toContain('[NEWCOMER:');
+        expect(proposal.proposedArc.beats[0].text).not.toContain('[ENTRANCE:');
+    });
+
+    test.each([
+        ['misplaced entrance marker in the description', {
+            title: 'Harbour pact', description: 'An auditor complicates the pact. [ENTRANCE:n1]',
+            newcomerHandle: 'n1',
+            pendingBeats: [{ text: 'Ilyra interrupts the records handoff.', entranceHandle: 'n1' }],
+        }, /only valid on setup beats/],
+        ['inline handle conflicting with the declared field', {
+            title: '[NEWCOMER:n2] Auditor route', description: 'An auditor complicates the pact.',
+            newcomerHandle: 'n1',
+            pendingBeats: [{ text: 'Ilyra interrupts the records handoff.', entranceHandle: 'n1' }],
+        }, /duplicate newcomer markers/],
+        ['marker-only pending beat', {
+            title: 'Harbour pact', description: 'An auditor complicates the pact.',
+            newcomerHandle: 'n1',
+            pendingBeats: [{ text: '[ENTRANCE:n1]' }, { text: 'Mara checks the seal.' }],
+        }, /has no beat text/],
+    ])('rejects targeted %s before any proposal is offered', async (_label, response, error) => {
+        const source = makeArc({ title: 'Harbour pact', section: 'horizon', beats: ['The clerk checks the seal.'] });
+        setArcs([source]);
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'propose' } });
+        setFakeApi(() => JSON.stringify({ section: 'horizon', ...response }));
+
+        await expect(generateTargetedProposal(source.id, 'develop')).rejects.toThrow(error);
+        expect(getArcs()).toEqual([source]);
+        expect(getPlanHistory()).toHaveLength(0);
+    });
+
+    test('the Markdown and targeted parsers report one shared pairing contract', async () => {
+        const [arc] = parsePlanTextToArcs(
+            '## Horizon Arcs\n- [NEWCOMER:n1] Auditor route — Ilyra reviews the transfer.\n  1. [ENTRANCE:n2] Ilyra arrives.',
+            { strictHeadings: true },
+        );
+        expect(arc._newcomerMarkerError).toBe('newcomer and entrance handles do not match within the same arc');
+
+        const source = makeArc({ title: 'Harbour pact', section: 'horizon', beats: ['The clerk checks the seal.'] });
+        setArcs([source]);
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'propose' } });
+        setFakeApi(() => JSON.stringify({
+            title: source.title, description: source.body, section: source.section,
+            newcomerHandle: 'n1',
+            pendingBeats: [{ text: 'Ilyra enters the office.', entranceHandle: 'n2' }],
+        }));
+
+        // Same violation, same sentence: the two response formats may not drift
+        // into disagreeing about what a valid pair is.
+        await expect(generateTargetedProposal(source.id, 'develop')).rejects.toThrow(arc._newcomerMarkerError);
     });
 });

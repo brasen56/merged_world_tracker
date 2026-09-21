@@ -3,10 +3,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
-    getArcs, makeArc, setArcs, setPlanData, state,
+    getArcs, getPlanHistory, makeArc, setArcs, setPlanData, state,
 } from '../story_planner/data.js';
 import {
-    assessNewcomerEvidence, buildReadOnlyContinuityProjection, generatePlan, storyPaletteProjection,
+    assessNewcomerEvidence, buildReadOnlyContinuityProjection, generatePlan,
+    MAX_CONTINUITY_BEATS_SHOWN, MAX_CONTINUITY_CHARS, storyPaletteProjection,
 } from '../story_planner/generation.js';
 import { applyScopedPlanProposal } from '../story_planner/proposals.js';
 import { saveSettings } from '../story_planner/settings.js';
@@ -62,6 +63,59 @@ describe('Story Planner V3 Phase 3D — newcomer continuity', () => {
         expect(continuity).not.toMatch(/NEWCOMER|ENTRANCE|n1|proposal-|_newcomer/);
     });
 
+    test('continuity reserves projection slots for pending beats before historical beats', () => {
+        const arc = makeArc({
+            title: 'Delayed entrance',
+            section: 'horizon',
+            beats: [
+                'Historical one', 'Historical two', 'Historical three', 'Historical four',
+                'Pending entrance',
+            ],
+        });
+        arc.beats.slice(0, 4).forEach(beat => { beat.state = 'planted'; });
+
+        const continuity = buildReadOnlyContinuityProjection([arc]);
+
+        expect(continuity).toContain('[PENDING] Pending entrance');
+        expect(continuity).not.toContain('[PLANTED] Historical four');
+    });
+
+    test('continuity has an arc-atomic total-character budget with an explicit omission marker', () => {
+        const arcs = Array.from({ length: 30 }, (_, index) => makeArc({
+            title: `Campaign arc ${index + 1} ${'T'.repeat(90)}`,
+            body: `Long-running continuity ${index + 1} ${'B'.repeat(400)}`,
+            section: 'horizon',
+            beats: Array.from({ length: MAX_CONTINUITY_BEATS_SHOWN }, (_unused, beat) =>
+                `Beat ${beat + 1} for arc ${index + 1} ${'C'.repeat(400)}`),
+        }));
+
+        const continuity = buildReadOnlyContinuityProjection(arcs);
+
+        expect(continuity.length).toBeLessThanOrEqual(MAX_CONTINUITY_CHARS);
+        expect(continuity).toMatch(/additional active arcs omitted by the 16000-character continuity budget/);
+        expect(continuity.endsWith('budget.]')).toBe(true);
+    });
+
+    test('continuity budgets the escaped model-facing text, not only the raw projection', () => {
+        const arcs = Array.from({ length: 30 }, (_, index) => makeArc({
+            title: `Escaped arc ${index + 1} ${'&'.repeat(80)}`,
+            body: '<'.repeat(400),
+            section: 'horizon',
+            beats: Array.from({ length: MAX_CONTINUITY_BEATS_SHOWN }, () => '&'.repeat(400)),
+        }));
+
+        const continuity = buildReadOnlyContinuityProjection(arcs);
+        const escapedLength = continuity.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').length;
+
+        expect(escapedLength).toBeLessThanOrEqual(MAX_CONTINUITY_CHARS);
+        expect(continuity).toMatch(/additional active arcs omitted/);
+    });
+
+    test('continuity display tuning is independent from the newcomer entrance validation limit', () => {
+        expect(MAX_CONTINUITY_BEATS_SHOWN).toBe(4);
+        expect(MAX_CONTINUITY_BEATS_SHOWN).toBeGreaterThan(0);
+    });
+
     test('an applied newcomer arc is visible with its entrance beat to the next scoped generation', async () => {
         setFakeApi(() => newcomerPlan);
         const proposal = await generatePlan(false, {
@@ -75,7 +129,12 @@ describe('Story Planner V3 Phase 3D — newcomer continuity', () => {
         let laterPrompt = '';
         setFakeApi(request => {
             laterPrompt = request.userContent;
-            return '## Immediate Hooks\n- Archive knock — the established clerk arrives with the duplicate ledger.';
+            return [
+                '## Immediate Hooks',
+                '- Archive knock — the established clerk arrives with the duplicate ledger.',
+                '- Sealed warning — Mara finds the same counterfeit mark on an older record.',
+                '- Customs witness — the familiar clerk confirms the archive entry.',
+            ].join('\n');
         });
         await generatePlan(false, {
             operation: 'add', sectionKeys: ['immediate'], requestedCount: 1, castPolicy: 'allowed',
@@ -88,6 +147,35 @@ describe('Story Planner V3 Phase 3D — newcomer continuity', () => {
         const continuityBlock = laterPrompt.match(/<read_only_continuity>([\s\S]*?)<\/read_only_continuity>/)?.[1] || '';
         expect(continuityBlock).not.toMatch(/\[(?:NEWCOMER|ENTRANCE):/);
         expect(continuityBlock).not.toMatch(/proposal-|_newcomer|newcomerHandle/);
+    });
+
+    test('one palette snapshot is reused when a rejected first attempt retries', async () => {
+        setPlanData({ storyPalette: { emphases: ['mystery'], escalation: 'restrained', castPolicy: 'allowed' } });
+        const prompts = [];
+        setFakeApi(request => {
+            prompts.push(request.userContent);
+            if (prompts.length === 1) {
+                setPlanData({ storyPalette: { emphases: ['conflict'], escalation: 'escalating', castPolicy: 'existing-only' } });
+                return 'not a story plan';
+            }
+            return [
+                '## Immediate Hooks',
+                '- Archive knock — the established clerk arrives with the duplicate ledger.',
+                '- Sealed warning — Mara finds the same counterfeit mark on an older record.',
+                '- Customs witness — the familiar clerk confirms the archive entry.',
+            ].join('\n');
+        });
+
+        await generatePlan(false);
+
+        expect(prompts).toHaveLength(2);
+        for (const prompt of prompts) {
+            expect(prompt).toContain('mystery');
+            expect(prompt).toContain('restrained');
+            expect(prompt).toContain('allows new major characters');
+            expect(prompt).not.toContain('Emphasis preferences (not quotas): conflict');
+            expect(prompt).not.toContain('Established cast only');
+        }
     });
 
     test('rejects a newcomer entrance on beat 5 before transient placement evidence is discarded', async () => {
@@ -192,5 +280,22 @@ describe('Story Planner V3 Phase 3D — continuity semantics and attribution', (
             plannerOutcome: 'proposed', proposedCount: 1, narrationOutcome: 'not-evaluated',
         });
         expect(JSON.stringify(proposal.proposedArc)).not.toMatch(/newcomerHandle|_newcomer|entranceHandle/);
+    });
+
+    test('full-plan Add does not count a newcomer on an excluded exact-title recurrence', async () => {
+        const existing = makeArc({ title: 'Existing route', section: 'horizon', beats: ['The old setup.'] });
+        setArcs([existing]);
+        setPlanData({ storyPalette: { emphases: [], escalation: 'balanced', castPolicy: 'propose' } });
+        setFakeApi(() => [
+            '## Horizon Arcs',
+            '- [NEWCOMER:n1] Existing route — A newcomer is incorrectly attached to a recurrence.',
+            '  1. [ENTRANCE:n1] The newcomer interrupts the old route.',
+        ].join('\n'));
+
+        await expect(generatePlan(false, {
+            operation: 'add', sectionKeys: ['horizon'], requestedCount: 1, castPolicy: 'propose',
+        })).rejects.toThrow(/did not survive|required a newcomer/);
+        expect(getPlanHistory()).toEqual([]);
+        expect(getArcs()).toEqual([existing]);
     });
 });
