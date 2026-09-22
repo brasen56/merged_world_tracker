@@ -84,6 +84,8 @@ export const STORY_PLAN_USER_PROMPT = `Based on the story so far, brainstorm {{a
 
 {{safeCharacterContext}}
 
+{{authorContext}}
+
 Output the story plan now. Begin immediately with the first section heading.`;
 
 // ─── Targeted arc development ────────────────────────────────────────────────

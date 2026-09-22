@@ -252,6 +252,9 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         ? sanitizeStoryPlanRequest(requestContext.requestSpec)
         : null;
     const template = request ? STORY_PLAN_USER_PROMPT : (custom || STORY_PLAN_USER_PROMPT);
+    const authorBlock = requestContext.authorContextText
+        ? '<author_context>\nPrivate planning context, sent only for this reviewed request. Canon Lock is immutable. Use it to avoid contradictions; do not copy hidden facts to public title, premise, beats, or payoff. Only include details in the public draft that are safe to reveal; the user must review all narrator-facing text before Apply. Never determine {{user}} actions.\n'
+            + escapePromptText(requestContext.authorContextText) + '\n</author_context>' : '';
 
     // Continuity: feed the existing plan back so regeneration refines it instead
     // of starting from a blank menu. Templates that omit {{previousPlan}} simply
@@ -386,6 +389,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         // block, the same contract as {{worldState}}.
         .replace(/\{\{storyPalette\}\}/g, () => paletteBlock)
         .replace(/\{\{safeCharacterContext\}\}/g, () => characterBlock)
+        .replace(/\{\{authorContext\}\}/g, () => authorBlock)
         .replace(/\{\{arcCount\}\}/g, () => String(request?.requestedCount ?? getArcCount()));
 
     if (request) {
@@ -405,7 +409,11 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     }
 
     if (reminderReason) {
-        out += `\n\n[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;
+        const reminder = `[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;
+        const closing = 'Output the story plan now. Begin immediately with the first section heading.';
+        out = template === STORY_PLAN_USER_PROMPT
+            ? out.replace(closing, `${reminder}\n\n${closing}`)
+            : `${out}\n\n${reminder}`;
     }
     return out;
 }
@@ -819,16 +827,13 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         const firstUserContent = buildUserPrompt(recent, '', {
             capturedArcs, handles: requestHandles,
             continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
+            authorContextText: authorContext?.text,
             settings: settingsSnapshot, palette: paletteSnapshot,
         });
-        const authorInstruction = authorContext?.text
-            ? '\n\n<author_context>\nPrivate planning context, sent only for this reviewed request. Canon Lock is immutable. Use it to avoid contradictions; do not copy hidden facts to public title, premise, beats, or payoff. Include only facts the user wants revealable now. Never determine {{user}} actions.\n'
-                + escapePromptText(authorContext.text) + '\n</author_context>' : '';
-        const reviewedUserContent = firstUserContent + authorInstruction;
-        recordPhase7Request('full', systemPrompt.length + reviewedUserContent.length);
+        recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
         let result = await resolved.fetchFn({
             systemPrompt,
-            userContent: reviewedUserContent,
+            userContent: firstUserContent,
             settings: resolved.settings,
             // Coordinator classification (TODO §1): scheduled auto-plans are
             // background work; the Generate button is foreground.
@@ -845,12 +850,13 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             const retryUserContent = buildUserPrompt(recent, validation.reason, {
                 capturedArcs, handles: requestHandles,
                 continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
+                authorContextText: authorContext?.text,
                 settings: settingsSnapshot, palette: paletteSnapshot,
             });
-            recordPhase7Request('full', systemPrompt.length + retryUserContent.length + authorInstruction.length);
+            recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
             result = await resolved2.fetchFn({
                 systemPrompt,
-                userContent: retryUserContent + authorInstruction,
+                userContent: retryUserContent,
                 settings: resolved2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
                 requestDiagnostics,

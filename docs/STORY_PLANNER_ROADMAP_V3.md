@@ -5,12 +5,13 @@ verified** — see the status blocks in §5. Phase 0 request-boundary samples ar
 synthetic and the consented targeted-develop sample remains a non-blocking
 follow-up; the planner-output attribution required to exit Phase 0 is recorded.
 Phase 3D automated implementation is complete; host/model evaluation remains pending.
+Phase 4 is implemented in code, not host/model verified; human spoiler QA remains pending.
 Phase 5 (arc quality) is **Not started** — a tester prompt experiment precedes any
 code change; see §5.
 **Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated
-2026-09-20; Phase 2 and Phase 3A-3D status recorded 2026-09-20)
-**This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
-sketch pending the Phase 0 projection inventory, and Phase 5 (arc quality) is a
+2026-09-20; Phase 2 and Phase 3A-3D status recorded 2026-09-20; Phase 4 status recorded 2026-09-22)
+**This revision covers:** Phases 0-4. Phase 4 (opt-in author context) is
+implemented but awaits host/model and human spoiler verification. Phase 5 (arc quality) is a
 prompt-only slice added from tester bland-plan feedback. Independent arc
 classification and execution prerequisites are deferred in §7.
 **Audience:** Implementer, co-author, and roleplay testers
@@ -18,7 +19,7 @@ classification and execution prerequisites are deferred in §7.
 current implementation at the file references cited throughout §2.
 
 V3 names the third Story Planner product/design revision. It does **not** name
-the store schema version or extension release. The current store is schema v2;
+the store schema version or extension release. The current store is schema v4;
 each implementation slice must choose and register its own necessary migration.
 
 This document extends [STORY_PLANNER_ROADMAP.md](./STORY_PLANNER_ROADMAP.md).
@@ -44,7 +45,7 @@ develop particular NPCs, and choose whether to expand the cast.
 | Selected context can be omitted or truncated | Per-subject coverage and omission reasons | 2 |
 | Custom templates can silently bypass controls | Compatibility feedback plus code-enforced mutation scope | 1 |
 | Proposal success and narration success are confused | Separate what the planner proposed from what the narrator introduced | 0, 3 |
-| Use full major-NPC dossiers | Opt-in author context with a reviewed-public output contract | 4 (sketch) |
+| Use full major-NPC dossiers | Opt-in author context with a reviewed-public output contract | 4 (implemented, not host verified) |
 | Plans read as bland or repetitive | Dramatic question, causally progressing beats, concrete turning point | 5 |
 | Character journeys are also near- or long-term arcs | Independent type and horizon | Deferred (§7) |
 | Setup complete does not always mean usable now | Execution prerequisites separate from setup completion | Deferred (§7) |
@@ -398,9 +399,9 @@ custom prompt or imply an omitted block was sent. Operation and format
 constraints live in an application-owned envelope validated in code, so custom
 prose can never widen write scope or mark progress.
 
-### 4.6 Phase 4 sketch: opt-in author context
+### 4.6 Phase 4: opt-in author context
 
-Not designed in detail until the Phase 0 projection inventory exists. The shape:
+The Phase 0 projection inventory informed the implemented slice:
 
 For selected major NPCs, offer field groups — public profile, agenda, secrets,
 knowledge and beliefs, read-on-PC, and user-authored canon constraints — opt-in
@@ -873,7 +874,17 @@ either proves the paired-marker contract or reports that the path is unsupported
   scoped and targeted review policy/source/evidence text, direct-commit rejection
   notices, marker-free reviewed content, and the automatic skip notice.
 
-### Phase 4 - Opt-in author context (sketch)
+### Phase 4 - Opt-in author context (implemented, not host verified)
+
+**Status (2026-09-22):** Separate opt-in Knowledge provider and per-NPC field
+selection are implemented for reviewed scoped generation only. The major-NPC
+picker is collapsed by default and bounded by scrolling; legacy whole-plan
+regeneration does not use the selection. Private context is placed before the
+prompt's closing format instruction on both attempts. The existing v4 store
+retains the consent selection without a schema bump. Automated author-context
+boundary, dossier-format, and review tests exist. Host/model testing and human
+semantic-spoiler QA are still pending; no automated filter can guarantee that
+a model draft contains only revealable text.
 
 **Depends on:** Phases 1-2 and the completed Phase 0 projection inventory.
 

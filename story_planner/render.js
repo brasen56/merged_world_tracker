@@ -864,6 +864,7 @@ export function openGenerateDialog() {
     const hiddenSubjectCandidateCount = allSubjectCandidates.filter(candidate => !visibleCandidateIds.has(candidate.entityId)).length;
     const plannerSettings = getSettings();
     const authorConsent = getAuthorContextSelection();
+    const authorCandidates = allSubjectCandidates.filter(candidate => candidate.type === 'major' && candidate.dossierAvailable);
     const configuredCustomTemplates = !!(plannerSettings.customSystemPrompt?.trim() || plannerSettings.customUserPrompt?.trim());
     const legacyPolicy = describeCastPolicyRequest({ workflow: 'legacy-full', settings: plannerSettings });
     const sectionChecks = SECTIONS.map(section => `
@@ -909,14 +910,14 @@ export function openGenerateDialog() {
                 ${hiddenSubjectCandidateCount ? `<p class="mwt-text-dim mwt-text-sm">Showing up to ${MAX_JOURNEY_SUBJECT_CANDIDATES} tracked characters. Saved selections stay visible at the top so they can always be cleared; ${hiddenSubjectCandidateCount} other character${hiddenSubjectCandidateCount === 1 ? ' is' : 's are'} outside this request.</p>` : ''}
                 <p class="mwt-text-dim mwt-text-sm">Subject selection assigns ownership only. It does not add dossier fields to Safe Character Context.</p>
             </fieldset>
-            <fieldset id="sp-generate-author" style="margin:12px 0 0">
-                <legend>Opt-in private NPC author context (this chat)</legend>
-                <p>Selected private dossier fields are sent to the configured planning model, not processed only on-device. They are never stored in the public plan. Review and edit the exact narrator-facing text before Apply. Leave unchecked to send public context only.</p>
-                ${subjectCandidates.map((candidate, index) => `<div class="sp-author-npc-row" data-entity-id="${escapeHtml(candidate.entityId)}">
+            <details id="sp-generate-author" class="sp-generate-author">
+                <summary>Opt-in private NPC author context (this chat)</summary>
+                <p class="mwt-text-dim mwt-text-sm">Only major NPC dossiers are eligible. Selected private fields are sent to the configured planning model, not processed only on-device. The draft must be reviewed and edited before Apply; private facts cannot be automatically withheld. Leave unchecked to send public context only.</p>
+                <div class="sp-author-list">${authorCandidates.map((candidate, index) => `<div class="sp-author-npc-row" data-entity-id="${escapeHtml(candidate.entityId)}">
                     <label class="sp-check-row" for="sp-author-npc-${index}"><input id="sp-author-npc-${index}" type="checkbox" name="sp-author-npc" value="${escapeHtml(candidate.entityId)}" ${authorConsent.entityIds.includes(candidate.entityId) ? 'checked' : ''}>${escapeHtml(candidate.name)}</label>
-                    ${AUTHOR_CONTEXT_FIELD_KEYS.map((field, fieldIndex) => `<label class="sp-check-row" for="sp-author-field-${index}-${fieldIndex}"><input id="sp-author-field-${index}-${fieldIndex}" type="checkbox" name="sp-author-field" value="${field}" ${authorConsent.npcFields[candidate.entityId]?.includes(field) ? 'checked' : ''}>${escapeHtml(field.replaceAll('_', ' '))}</label>`).join('')}
-                </div>`).join('')}
-            </fieldset>
+                    <div class="sp-author-fields">${AUTHOR_CONTEXT_FIELD_KEYS.map((field, fieldIndex) => `<label class="sp-check-row" for="sp-author-field-${index}-${fieldIndex}"><input id="sp-author-field-${index}-${fieldIndex}" type="checkbox" name="sp-author-field" value="${field}" ${authorConsent.npcFields[candidate.entityId]?.includes(field) ? 'checked' : ''}>${escapeHtml(field.replaceAll('_', ' '))}</label>`).join('')}</div>
+                </div>`).join('') || '<p class="mwt-text-dim mwt-text-sm">No major NPC dossiers are available.</p>'}</div>
+            </details>
             ${context.mode !== 'off' ? `<fieldset id="sp-generate-context-sources" style="border:0;padding:0;margin:12px 0 0">
                 <legend class="mwt-label">Safe Character Context sources for this request${context.mode === 'selected' ? ` (select up to ${MAX_CHARACTER_CONTEXT_IDS})` : ''}</legend>
                 <div id="sp-generate-context-source-list" class="sp-check-list">${context.mode === 'selected'
@@ -932,6 +933,7 @@ export function openGenerateDialog() {
             <p class="${configuredCustomTemplates || !legacyPolicy.supported ? 'sp-proposal-diagnostics' : 'mwt-text-dim mwt-text-sm'}">${configuredCustomTemplates
                 ? `Scoped generation uses the built-in safe request format, so your saved custom templates are not used here. Whole-plan cast policy: ${escapeHtml(legacyPolicy.policyLabel)} from ${escapeHtml(legacyPolicy.sourceLabel)}. ${escapeHtml(legacyPolicy.message)}`
                 : `Regenerating the whole plan rewrites every section at once and saves without a review step. It keeps pinned arcs and planted beats. Cast policy: ${escapeHtml(legacyPolicy.policyLabel)} from ${escapeHtml(legacyPolicy.sourceLabel)}.`}
+                Private NPC author-context selections above are <strong>not used</strong> for whole-plan regeneration; use Generate for review to send them.
                 <button id="sp-generate-legacy" class="mwt-btn" type="button">Regenerate the whole plan${configuredCustomTemplates ? ' with custom templates' : ''}</button></p>
             <p id="sp-generate-context-summary" class="mwt-text-dim mwt-text-sm">Public context: ${context.mode === 'off' ? 'off' : context.mode === 'active' ? 'active cast' : `${context.entityIds.length} selected character${context.entityIds.length === 1 ? '' : 's'}`}. Existing context settings are unchanged by this dialog.</p>
             <p id="sp-generate-summary" class="sp-proposal-change" role="status"></p>
@@ -1080,10 +1082,10 @@ export function openGenerateDialog() {
                     [...row.querySelectorAll('input[name="sp-author-field"]:checked')].map(input => input.value),
                 ])),
             });
-            setPlanData({ authorContext: authorSelection });
             if (authorSelection.entityIds.some(id => !authorSelection.npcFields[id]?.length)) {
                 throw new Error('Choose at least one field group for each selected author-context NPC, or deselect that NPC.');
             }
+            setPlanData({ authorContext: authorSelection });
             setControlBusy(button, true);
             const proposal = await generatePlan(false, request, {
                 reviewOnly: true,

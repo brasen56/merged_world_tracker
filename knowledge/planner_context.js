@@ -4,7 +4,7 @@ import { getCurrentWorldStateScene, getGlobalSettings } from '../core/index.js';
 import { DOSSIER_FIELDS, loadEntryContent, extractDossierFieldValues } from './lorebook.js';
 import { getRegistry, resolveRegistryKey } from './registry.js';
 import { getStances } from './relationships.js';
-import { USER_STANCES } from './state.js';
+import { USER_STANCES, RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END } from './state.js';
 
 export const SAFE_CHARACTER_CONTEXT_MAX_RECORDS = 6;
 export const SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS = 700;
@@ -58,6 +58,7 @@ export function listPlannerCharacterCandidates() {
         .map(([name, info]) => ({
             entityId: info.entityId,
             name,
+            type: info.type,
             mergedEntityIds: Array.isArray(info.mergedFrom) ? info.mergedFrom.map(item => item?.entityId).filter(Boolean) : [],
             dossierAvailable: Number.isFinite(Number(info.uid)),
         }))
@@ -340,21 +341,53 @@ const AUTHOR_MAX_CHARS = 12000;
 const AUTHOR_LABELS = new Map(DOSSIER_FIELDS.map(field => [field.label.toLowerCase(), field.key]));
 const PUBLIC_PROFILE_FIELDS = ['role', 'where_to_find', 'appearance', 'voice', 'background', 'personality'];
 
+// Knowledge's managed relationship block (relationships.js
+// injectRelationshipBlock) is appended to an entry whenever a stance or edge is
+// synced, so most well-used dossiers carry one. It is a known boundary, not a
+// guess: both markers must be whole lines and the body may hold only the two
+// line shapes formatRelationshipBlock has ever written. Those lines are already
+// public (the entry is injected as-is) and belong to no author field group, so
+// they are skipped rather than returned.
+const RELATIONSHIP_BLOCK_LINE = /^(Stance toward \{\{user\}\}|Relationships):/;
+
+/**
+ * Split a dossier into its fields and ledger, or refuse it. Errors are clauses
+ * naming a line number, never quoting it: the caller prefixes the NPC's name,
+ * and the message reaches a toast that diagnostics record.
+ */
 export function parseAuthorDossier(content) {
-    if (typeof content !== 'string' || !content.trim()) throw new Error('Dossier is empty.');
+    if (typeof content !== 'string' || !content.trim()) throw new Error('the dossier is empty');
     const fields = {};
     const ledger = [];
     let section = '';
     let seenLedger = false;
+    let seenRelationships = false;
     let lastFieldIndex = -1;
     let headerSeen = false;
-    for (const raw of content.split(/\r?\n/)) {
-        const line = raw.trim();
+    const lines = content.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index].trim();
+        const at = `line ${index + 1}`;
         if (!line) continue;
-        if (!headerSeen && /^\[Dossier\]\s+[^\n|]+\s*\|/.test(line)) { headerSeen = true; continue; }
-        if (headerSeen && !section && /^(Tone|Perceived as|First seen):\s*[^\n]*$/i.test(line)) continue;
+        if (!headerSeen) {
+            if (!/^\[Dossier\]\s+[^\n|]+\s*\|/.test(line)) throw new Error(`it is not in Dossier format (${at} is not a [Dossier] header)`);
+            headerSeen = true;
+            continue;
+        }
+        if (section === 'relationships') {
+            if (line === RELATIONSHIP_BLOCK_END) { section = ''; continue; }
+            if (RELATIONSHIP_BLOCK_LINE.test(line)) continue;
+            throw new Error(`${at} is inside the relationship block but is not a Stance or Relationships line`);
+        }
+        if (line === RELATIONSHIP_BLOCK_START) {
+            if (seenRelationships) throw new Error(`${at} starts a second relationship block`);
+            seenRelationships = true;
+            section = 'relationships';
+            continue;
+        }
+        if (!section && !seenRelationships && /^(Tone|Perceived as|First seen):\s*[^\n]*$/i.test(line)) continue;
         if (/^knowledge ledger\s*:/i.test(line)) {
-            if (seenLedger) throw new Error('Repeated Knowledge Ledger boundary.');
+            if (seenLedger) throw new Error(`${at} repeats the Knowledge Ledger heading`);
             seenLedger = true;
             section = 'ledger';
             continue;
@@ -362,7 +395,7 @@ export function parseAuthorDossier(content) {
         const label = line.match(/^([^:]{1,60}):\s*(.*)$/);
         if (label && AUTHOR_LABELS.has(label[1].toLowerCase())) {
             const fieldIndex = DOSSIER_FIELDS.findIndex(field => field.key === AUTHOR_LABELS.get(label[1].toLowerCase()));
-            if (seenLedger || fieldIndex <= lastFieldIndex) throw new Error('Repeated or out-of-order dossier field.');
+            if (seenLedger || fieldIndex <= lastFieldIndex) throw new Error(`${at} repeats a field or lists it out of order`);
             lastFieldIndex = fieldIndex;
             section = AUTHOR_LABELS.get(label[1].toLowerCase());
             fields[section] = label[2];
@@ -375,9 +408,10 @@ export function parseAuthorDossier(content) {
         // No continuation or foreign section can be classified safely. In
         // particular, a spoofed label inside a multiline secret must not become
         // another character's public field or a fabricated ledger boundary.
-        throw new Error('Unrecognised dossier block boundary.');
+        throw new Error(`${at} is not a dossier field, Knowledge Ledger item, or relationship block line (a value continued onto a new line is the usual cause)`);
     }
-    if (!headerSeen || !seenLedger) throw new Error('Unrecognised dossier block boundary.');
+    if (section === 'relationships') throw new Error('the relationship block is never closed');
+    if (!seenLedger) throw new Error('it has no Knowledge Ledger section');
     return { fields, ledger };
 }
 
@@ -395,21 +429,27 @@ export async function buildPlannerAuthorContext(selection) {
         if (seen.has(item.entityId)) continue;
         seen.add(item.entityId);
         const requestedFields = [...new Set(selection?.npcFields?.[item.requestedEntityId] || selection?.fields || [])];
-        if (!requestedFields.length || requestedFields.some(field => !AUTHOR_CONTEXT_FIELDS.includes(field))) throw new Error('Each selected author-context NPC needs valid field groups.');
-        if (!item.dossierAvailable || getRegistry()[item.name]?.type !== 'major') throw new Error('A selected NPC has no major-NPC dossier; no private context was sent.');
+        if (!requestedFields.length || requestedFields.some(field => !AUTHOR_CONTEXT_FIELDS.includes(field))) throw new Error(`${item.name} needs at least one valid author-context field group.`);
+        if (!item.dossierAvailable || getRegistry()[item.name]?.type !== 'major') throw new Error(`${item.name} has no major-NPC dossier; no private context was sent.`);
         const content = await loadEntryContent(getRegistry()[item.name]?.uid, item.name);
-        if (!content) throw new Error('A selected NPC dossier could not be verified; no private context was sent.');
-        const { fields, ledger } = parseAuthorDossier(content);
-        if (requestedFields.includes('canon_lock') && !fields.canon_lock) throw new Error('A selected NPC has no Canon Lock; no private context was sent.');
+        if (!content) throw new Error(`${item.name}'s dossier could not be verified; no private context was sent.`);
+        let parsed;
+        try {
+            parsed = parseAuthorDossier(content);
+        } catch (error) {
+            throw new Error(`${item.name}'s dossier can't be used as private context: ${error.message}. No private context was sent.`);
+        }
+        const { fields, ledger } = parsed;
+        if (requestedFields.includes('canon_lock') && !fields.canon_lock) throw new Error(`${item.name} has no Canon Lock; no private context was sent.`);
         const values = requestedFields.flatMap(field => field === 'public_profile'
             ? PUBLIC_PROFILE_FIELDS.map(key => [key, fields[key]])
             : field === 'knowledge' ? [['knowledge', ledger.join('\n')]] : [[field, fields[field]]])
             .filter(([, value]) => value && value.toLowerCase() !== 'unknown');
-        if (!values.length) throw new Error('A selected NPC has no values in the requested author-context field groups.');
+        if (!values.length) throw new Error(`${item.name} has no values in the requested author-context field groups.`);
         const record = [`NPC: ${item.name}`, `Entity: ${item.entityId}`, ...values.map(([key, value]) => `${key}: ${value}`)].join('\n');
         if (length + record.length + (records.length ? 2 : 0) > AUTHOR_MAX_CHARS) {
             // Canon constraints cannot be omitted without changing the request's meaning.
-            if (requestedFields.includes('canon_lock')) throw new Error('Author context exceeds the record budget; Canon Lock cannot be omitted.');
+            if (requestedFields.includes('canon_lock')) throw new Error(`Author context exceeds the record budget at ${item.name}; Canon Lock cannot be omitted.`);
             coverage.push({ entityId: item.entityId, name: item.name, status: 'omitted-for-budget' });
             continue;
         }

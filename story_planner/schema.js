@@ -1262,7 +1262,7 @@ export function migrateStoryPlannerV3ToV4(data) {
 export const storyPlannerSchema = defineStoreSchema({
     id: 'storyPlanner',
     metadataKey: 'story_planner_data',
-    currentVersion: 5,
+    currentVersion: 4,
     createDefault: () => ({
         arcs: [],
         storyPalette: sanitizeStoryPalette({}),
@@ -1274,7 +1274,6 @@ export const storyPlannerSchema = defineStoreSchema({
         1: migrateStoryPlannerV1ToV2,
         2: migrateStoryPlannerV2ToV3,
         3: migrateStoryPlannerV3ToV4,
-        4: data => ({ data: { ...data, authorContext: sanitizeAuthorContextSelection({}) }, issues: [] }),
     },
     validate: validateStoryPlannerData,
     policy: defineIssuePolicy({

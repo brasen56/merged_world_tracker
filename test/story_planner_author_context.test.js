@@ -1,12 +1,15 @@
 /** @vitest-environment jsdom */
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { buildPlannerAuthorContext, parseAuthorDossier } from '../knowledge/planner_context.js';
+import { buildUpdatedDossierContent, formatDossierEntry, formatMajorEntry } from '../knowledge/lorebook.js';
+import { addRelationship, formatRelationshipBlock, injectRelationshipBlock, setStance } from '../knowledge/relationships.js';
 import { getLorebookName } from '../knowledge/scope.js';
-import { readField } from '../knowledge/store.js';
-import { state as knowledgeState } from '../knowledge/state.js';
+import { _clearCacheForTests, _setCacheForTests, readField } from '../knowledge/store.js';
+import { state as knowledgeState, RELATIONSHIP_BLOCK_END, RELATIONSHIP_BLOCK_START } from '../knowledge/state.js';
 import { buildAuthorCharacterContext, registerSafeCharacterContextProvider } from '../core/character_context.js';
+import { hideModal } from '../core/modal.js';
 import { buildInjectionBody } from '../story_planner/injection.js';
-import { buildClosedMemoryProjection, buildParkedMemoryProjection, getArcs, makeArc, serializeArcsToText, setArcs } from '../story_planner/data.js';
+import { buildClosedMemoryProjection, buildParkedMemoryProjection, getArcs, makeArc, serializeArcsToText, setArcs, setPlanData, getAuthorContextSelection } from '../story_planner/data.js';
 import { sanitizeAuthorContextSelection, storyPlannerSchema } from '../story_planner/schema.js';
 import { saveSettings } from '../story_planner/settings.js';
 import { captureScope, resetCoreStubs, setFakeApi, setFakeChat, setFakeContextExtras, getFakeMeta } from './stubs/core.js';
@@ -67,8 +70,8 @@ describe('Story Planner private author-context boundary', () => {
         expect([serializeArcsToText(stored), buildInjectionBody(), buildClosedMemoryProjection(stored), buildParkedMemoryProjection(stored)].join('\n')).not.toContain(secret);
     });
 
-    test('selection is bounded per chat, schema migration has its own version', () => {
-        expect(storyPlannerSchema.currentVersion).toBe(5);
+    test('selection is bounded per chat without bumping the compatible store version', () => {
+        expect(storyPlannerSchema.currentVersion).toBe(4);
         expect(sanitizeAuthorContextSelection({ entityIds: ['one', 'one'], fields: ['secrets', 'bogus', 'secrets'] })).toEqual({ entityIds: ['one'], fields: ['secrets'], npcFields: { one: ['secrets'] } });
         expect(sanitizeAuthorContextSelection({ entityIds: ['one', 'two'], npcFields: { one: ['secrets'], two: ['canon_lock', 'unknown'] } }).npcFields)
             .toEqual({ one: ['secrets'], two: ['canon_lock'] });
@@ -101,9 +104,36 @@ describe('Story Planner private author-context boundary', () => {
         const proposal = await generatePlan(false, request, { reviewOnly: true, authorContextSelection });
         expect(requests).toHaveLength(2);
         expect(requests.every(prompt => prompt.includes('SENTINEL_PRIVATE_SEAL'))).toBe(true);
+        for (const prompt of requests) {
+            expect(prompt.indexOf('<author_context>')).toBeLessThan(prompt.indexOf('Output the story plan now.'));
+            expect(prompt.trim().endsWith('Output the story plan now. Begin immediately with the first section heading.')).toBe(true);
+            expect(prompt).not.toContain('Include only facts the user wants revealable now');
+        }
         expect(proposal.diagnostics.authorContextUsed).toBe(true);
         expect(JSON.stringify(getFakeMeta())).not.toContain('SENTINEL_PRIVATE_SEAL');
         vi.unstubAllGlobals();
+    });
+
+    test('dialog shows only major dossiers, starts collapsed, and rejects unsaved invalid consent', async () => {
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [
+                { name: 'Mara', entityId: 'major-id', type: 'major', dossierAvailable: true },
+                { name: 'Guard', entityId: 'minor-id', type: 'minor', dossierAvailable: true },
+                { name: 'No dossier', entityId: 'missing-id', type: 'major', dossierAvailable: false },
+            ],
+        });
+        setPlanData({ authorContext: { entityIds: [], fields: [], npcFields: {} } });
+        const { openGenerateDialog } = await import('../story_planner/render.js');
+        openGenerateDialog();
+        const picker = document.querySelector('#sp-generate-author');
+        expect(picker.open).toBe(false);
+        expect([...picker.querySelectorAll('input[name="sp-author-npc"]')].map(input => input.value)).toEqual(['major-id']);
+        expect(document.querySelector('#sp-generate-legacy').closest('p').textContent).toContain('not used');
+        picker.querySelector('input[name="sp-author-npc"]').click();
+        document.querySelector('#sp-generate-submit').click();
+        expect(getAuthorContextSelection().entityIds).toEqual([]);
+        hideModal('mwt-sp-generate-modal');
+        await new Promise(resolve => setTimeout(resolve, 0));
     });
 
     test('private-informed review edits public text before Apply and leaves withheld facts out', async () => {
@@ -127,5 +157,102 @@ describe('Story Planner private author-context boundary', () => {
         expect(getArcs()).toMatchObject([{ title: 'Public title', body: 'Public consequence' }]);
         expect(JSON.stringify(getFakeMeta())).not.toContain(secret);
         vi.unstubAllGlobals();
+    });
+});
+
+// Every dossier here comes from Knowledge's own writers — formatDossierEntry,
+// formatRelationshipBlock/injectRelationshipBlock, buildUpdatedDossierContent —
+// never a hand-typed string. Hand-typed fixtures are how the parser shipped
+// refusing every NPC with a synced stance or relationship.
+describe('author context reads dossiers as Knowledge writes them', () => {
+    const MARA = {
+        name: 'Mara', species: 'human', descriptor: 'archive clerk', tone: 'guarded', perceived_as: 'helpful', first_seen: 'Day 1',
+        role: 'Clerk', personality: 'Careful', agenda: 'Keep the seal hidden', secrets: 'She forged the seal', canon_lock: 'Mara never sold the seal.',
+        initial_knowledge: [{ fact: 'knows the vault code', source: 'witness', date: 'Day 2' }],
+    };
+    const MARA_REGISTRY = { registry: { Mara: { entityId: 'mara-id', uid: 1, type: 'major' } } };
+    let oldScript;
+
+    beforeEach(() => {
+        _clearCacheForTests();
+        _setCacheForTests(getLorebookName(), MARA_REGISTRY);
+        oldScript = knowledgeState.wiScript;
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        knowledgeState.wiScript = oldScript;
+        // Also cancels the debounced flush that setStance/addRelationship schedule.
+        _clearCacheForTests();
+    });
+
+    /** Mara's entry after Knowledge has synced a stance and one edge into it. */
+    function syncedDossier(data = MARA) {
+        setStance('Mara', 'wary');
+        addRelationship('Mara', 'Derek', 'employee');
+        return injectRelationshipBlock(formatDossierEntry(data), formatRelationshipBlock('Mara'));
+    }
+
+    function serveEntry(content) {
+        knowledgeState.wiScript = { loadWorldInfo: async () => ({ entries: { 1: { comment: 'Mara', content } } }) };
+    }
+
+    test('parses a dossier carrying the managed relationship block, including after later ledger writes', () => {
+        const synced = syncedDossier();
+        expect(synced).toContain(`${RELATIONSHIP_BLOCK_START}\nStance toward {{user}}: wary.\nRelationships: employee of Derek.\n${RELATIONSHIP_BLOCK_END}`);
+
+        const parsed = parseAuthorDossier(synced);
+        expect(parsed.fields).toEqual({
+            role: 'Clerk', personality: 'Careful', agenda: 'Keep the seal hidden',
+            secrets: 'She forged the seal', canon_lock: 'Mara never sold the seal.',
+        });
+        expect(parsed.ledger).toEqual(['- knows the vault code via witness — Day 2']);
+        expect(JSON.stringify(parsed)).not.toMatch(/Stance toward|employee of Derek/);
+
+        // A later scan appends ledger facts ahead of the block, which stays last.
+        const updated = buildUpdatedDossierContent(synced, {}, [{ fact: 'saw the fire', source: 'eyes' }]);
+        expect(updated.trimEnd().endsWith(RELATIONSHIP_BLOCK_END)).toBe(true);
+        expect(parseAuthorDossier(updated).ledger).toEqual(['- knows the vault code via witness — Day 2', '- saw the fire via eyes']);
+        expect(parseAuthorDossier(synced.replace(/\n/g, '\r\n')).fields).toEqual(parsed.fields);
+    });
+
+    test('still refuses a relationship block it cannot verify', () => {
+        const dossier = formatDossierEntry(MARA);
+        const withBlock = body => injectRelationshipBlock(dossier, body);
+        expect(() => parseAuthorDossier(withBlock('Stance toward {{user}}: wary.'))).not.toThrow();
+        // Forged markers around a continuation cannot carry an arbitrary line past the parser.
+        expect(() => parseAuthorDossier(withBlock('Role: forged'))).toThrow(/^line \d+ is inside the relationship block/);
+        expect(() => parseAuthorDossier(`${dossier}\n\n${RELATIONSHIP_BLOCK_START}\nStance toward {{user}}: wary.`)).toThrow(/never closed/);
+        expect(() => parseAuthorDossier(`${withBlock('Relationships: rival of Jonah.')}\n${RELATIONSHIP_BLOCK_START}\n${RELATIONSHIP_BLOCK_END}`))
+            .toThrow(/second relationship block/);
+        expect(() => parseAuthorDossier(`${withBlock('Relationships: rival of Jonah.')}\nNotes: added by hand`)).toThrow(/^line \d+ is not a dossier field/);
+        expect(() => parseAuthorDossier(`${withBlock('Relationships: rival of Jonah.')}\nTone: reset`)).toThrow(/^line \d+ is not a dossier field/);
+    });
+
+    test('names the line for an unusable dossier, and the provider names the NPC without quoting private text', async () => {
+        const multiLine = formatDossierEntry({ ...MARA, secrets: 'She forged the seal\nSENTINEL_CONTINUATION' });
+        const secretsLine = multiLine.split('\n').indexOf('SENTINEL_CONTINUATION') + 1;
+        expect(() => parseAuthorDossier(multiLine)).toThrow(`line ${secretsLine} is not a dossier field`);
+        expect(() => parseAuthorDossier(formatMajorEntry(MARA))).toThrow(/^it is not in Dossier format \(line 1 /);
+
+        serveEntry(multiLine);
+        const error = await buildPlannerAuthorContext({ entityIds: ['mara-id'], npcFields: { 'mara-id': ['secrets'] } }).catch(caught => caught);
+        expect(error.message).toMatch(new RegExp(`^Mara's dossier can't be used as private context: line ${secretsLine} .*No private context was sent\\.$`));
+        expect(error.message).not.toContain('SENTINEL_CONTINUATION');
+
+        serveEntry(formatMajorEntry(MARA));
+        await expect(buildPlannerAuthorContext({ entityIds: ['mara-id'], npcFields: { 'mara-id': ['secrets'] } }))
+            .rejects.toThrow(/^Mara's dossier can't be used as private context: it is not in Dossier format/);
+    });
+
+    test('Knowledge provider sends a synced dossier\'s consented fields without its relationship block', async () => {
+        serveEntry(syncedDossier());
+        const result = await buildPlannerAuthorContext({ entityIds: ['mara-id'], npcFields: { 'mara-id': ['secrets', 'canon_lock', 'knowledge'] } });
+        expect(result.text).toBe([
+            'NPC: Mara', 'Entity: mara-id',
+            'secrets: She forged the seal',
+            'canon_lock: Mara never sold the seal.',
+            'knowledge: - knows the vault code via witness — Day 2',
+        ].join('\n'));
+        expect(result.coverage).toEqual([{ entityId: 'mara-id', name: 'Mara', status: 'complete', fields: 3 }]);
     });
 });
