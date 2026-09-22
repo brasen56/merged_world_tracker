@@ -43,6 +43,7 @@ import {
     storyPlannerSchema,
     sanitizeStoryPalette,
     sanitizeCharacterContextSelection,
+    sanitizeAuthorContextSelection,
     sanitizePhase7Metrics,
     sanitizeStoryPlanRequest,
     sanitizeStoryPlanRequestPreferences,
@@ -148,6 +149,7 @@ export function getPlanData() {
 
 export function getStoryPalette() { return sanitizeStoryPalette(getPlanData().storyPalette); }
 export function getCharacterContextSelection() { return sanitizeCharacterContextSelection(getPlanData().characterContext); }
+export function getAuthorContextSelection() { return sanitizeAuthorContextSelection(getPlanData().authorContext); }
 export function getPhase7Metrics() { return sanitizePhase7Metrics(getPlanData().phase7Metrics); }
 export function getStoryPlanRequestPreferences() {
     const stored = getPlanData().storyPlanRequestPreferences;

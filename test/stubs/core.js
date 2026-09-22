@@ -64,6 +64,7 @@ export {
     listSafeCharacterContextCandidates,
     resolveSafeCharacterContextEntities,
     buildSafeCharacterContext,
+    buildAuthorCharacterContext,
 } from '../../core/character_context.js';
 
 let _chat = [];

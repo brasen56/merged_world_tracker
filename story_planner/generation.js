@@ -13,6 +13,7 @@ import {
     captureRevision, sameRevision,
     wrapTag, escapePromptText, buildSafeCharacterContext, listSafeCharacterContextCandidates,
     resolveSafeCharacterContextEntities, record,
+    buildAuthorCharacterContext,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT, buildStoryPlanSystemPrompt } from './prompts.js';
@@ -599,7 +600,8 @@ export function selectScopedParsedArcs(parsed, requestSpec, capturedArcs = [], s
  * @param {{reviewOnly?: boolean, characterContextSelection?: object|null}} [options]
  * @returns {Promise<object[]|null>} the new arc list, or null if skipped/failed
  */
-export async function generatePlan(isAuto = false, requestSpec = null, { reviewOnly = false, characterContextSelection = null } = {}) {
+export async function generatePlan(isAuto = false, requestSpec = null, { reviewOnly = false, characterContextSelection = null, authorContextSelection = null } = {}) {
+    if (authorContextSelection && (isAuto || !requestSpec || !reviewOnly)) throw new Error('Private context requires a reviewed scoped request.');
     // Part 6 (§7.4): the pause gate is a data-integrity stop — generation
     // would read the unprepared store, spend an API call, and have its
     // refused write (setArcs under the paused seam) mask the loss. Manual
@@ -790,6 +792,9 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             ...selection,
             primarySubjectEntityIds: requestedPrimarySubjectIds,
         });
+        const authorContext = authorContextSelection
+            ? await buildAuthorCharacterContext(authorContextSelection) : null;
+        if (authorContextSelection && !authorContext?.text) throw new Error('Author context returned no complete records; no planning request was sent.');
         const contextScope = assertSameScope(scopeBefore);
         if (!contextScope.ok) {
             console.warn(`[MWT:StoryPlanner] Chat switched while building character context (${contextScope.reason}) — discarding request.`);
@@ -816,10 +821,14 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
             settings: settingsSnapshot, palette: paletteSnapshot,
         });
-        recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
+        const authorInstruction = authorContext?.text
+            ? '\n\n<author_context>\nPrivate planning context, sent only for this reviewed request. Canon Lock is immutable. Use it to avoid contradictions; do not copy hidden facts to public title, premise, beats, or payoff. Include only facts the user wants revealable now. Never determine {{user}} actions.\n'
+                + escapePromptText(authorContext.text) + '\n</author_context>' : '';
+        const reviewedUserContent = firstUserContent + authorInstruction;
+        recordPhase7Request('full', systemPrompt.length + reviewedUserContent.length);
         let result = await resolved.fetchFn({
             systemPrompt,
-            userContent: firstUserContent,
+            userContent: reviewedUserContent,
             settings: resolved.settings,
             // Coordinator classification (TODO §1): scheduled auto-plans are
             // background work; the Generate button is foreground.
@@ -838,10 +847,10 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                 continuityArcs, characterContext, requestSpec: request, subjectCandidates, castPolicyContract,
                 settings: settingsSnapshot, palette: paletteSnapshot,
             });
-            recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
+            recordPhase7Request('full', systemPrompt.length + retryUserContent.length + authorInstruction.length);
             result = await resolved2.fetchFn({
                 systemPrompt,
-                userContent: retryUserContent,
+                userContent: retryUserContent + authorInstruction,
                 settings: resolved2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
                 requestDiagnostics,
@@ -1070,6 +1079,8 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                     };
                 }),
                 diagnostics: {
+                    authorContextCoverage: authorContext?.coverage || [],
+                    authorContextUsed: !!authorContext?.text,
                     droppedSections,
                     deferredForCoverage: scopedSelection?.deferredForCoverage || 0,
                     overflow: scopedSelection?.overflow || 0,

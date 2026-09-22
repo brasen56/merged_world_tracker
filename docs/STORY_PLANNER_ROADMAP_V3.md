@@ -5,11 +5,14 @@ verified** — see the status blocks in §5. Phase 0 request-boundary samples ar
 synthetic and the consented targeted-develop sample remains a non-blocking
 follow-up; the planner-output attribution required to exit Phase 0 is recorded.
 Phase 3D automated implementation is complete; host/model evaluation remains pending.
+Phase 5 (arc quality) is **Not started** — a tester prompt experiment precedes any
+code change; see §5.
 **Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated
 2026-09-20; Phase 2 and Phase 3A-3D status recorded 2026-09-20)
 **This revision covers:** Phases 0-3. Phase 4 (opt-in author context) is a
-sketch pending the Phase 0 projection inventory. Independent arc classification
-and execution prerequisites are deferred in §7.
+sketch pending the Phase 0 projection inventory, and Phase 5 (arc quality) is a
+prompt-only slice added from tester bland-plan feedback. Independent arc
+classification and execution prerequisites are deferred in §7.
 **Audience:** Implementer, co-author, and roleplay testers
 **Sources:** Tester feedback on the shipped Story Planner, plus a review of the
 current implementation at the file references cited throughout §2.
@@ -42,11 +45,13 @@ develop particular NPCs, and choose whether to expand the cast.
 | Custom templates can silently bypass controls | Compatibility feedback plus code-enforced mutation scope | 1 |
 | Proposal success and narration success are confused | Separate what the planner proposed from what the narrator introduced | 0, 3 |
 | Use full major-NPC dossiers | Opt-in author context with a reviewed-public output contract | 4 (sketch) |
+| Plans read as bland or repetitive | Dramatic question, causally progressing beats, concrete turning point | 5 |
 | Character journeys are also near- or long-term arcs | Independent type and horizon | Deferred (§7) |
 | Setup complete does not always mean usable now | Execution prerequisites separate from setup completion | Deferred (§7) |
 
 First release is Phases 0-3. Phase 4 requires the projection inventory produced
-in Phase 0 and is not a prerequisite for anything above it.
+in Phase 0 and is not a prerequisite for anything above it. Phase 5 is a
+prompt-only quality pass, independent of Phase 4 and of the deferred work in §7.
 
 ## 2. Verified baseline
 
@@ -885,6 +890,113 @@ author-only values stay out of narrator payloads, public memory, macros, exports
 progress-check inputs, logs, and telemetry. Human QA verifies semantic spoilers
 that structural tests cannot prove absent.
 
+### Phase 5 - Arc quality: dramatic question, causal beats, concrete turning point
+
+**Depends on:** Phases 1-3 — it tightens the shared full-plan prompt, the
+targeted `develop`/`rework` instructions, and the Character Journey and cast
+clauses those phases shipped. Independent of Phase 4; it touches prompt prose
+only and needs no author-context work.
+
+**Purpose:** Phases 0-3 answer *what* a request covers and *who* owns it. Tester
+feedback exposed a separate axis: whether the returned proposal contains a
+satisfying story to develop. Reported plans were bland or repetitive — setup
+beats that re-demonstrate one trait, or list routine logistics, under a
+destination too loose to build toward.
+
+Two observed examples fix the target. A Character Journey ("Derek Holds Still")
+whose four beats each show the same restraint with a different prop — reorderable,
+so none of them changes the situation. A Horizon Arc ("Old Chem Breaks Ground")
+whose beats are procurement logistics — a fax, a pinned sheet, a chalked name, a
+rental meter — with no dramatic question. Both are **beat** failures, not
+destination failures: "Derek Holds Still" even names its pressure in the body.
+
+This matters because the destination-quality language already shipped and did not
+catch them. The Character Journey clause in `generation.js` already asks the model
+to "pressure a value… possible consequences. Resistance, relapse, deterioration,
+repair…"; that governs `arc.body`, which was not the weak point. Nothing yet
+governs beat-to-beat causal progression. The single beat rule in
+`buildStoryPlanSystemPrompt` (`prompts.js`) — "Order them so each one only makes
+sense after the previous" — is satisfiable by four interchangeable demonstrations.
+
+**Prerequisite evidence, before any prompt edit (mirrors Phase 0):** obtain at
+least one plan generated on the *current* build, because the reported screenshots
+may predate the Phase 2/3 journey and cast revisions. The zero-code probe is the
+Direction Hint, which is user-editable free text (`{{directionHint}}` in
+`prompts.js`): have testers paste the trial paragraph below and regenerate, then
+attribute the residual weakness to the destination (body) or the beats before
+promoting any language into the prompt files.
+
+Trial Direction Hint (the experiment, not yet a code change):
+
+> Give each developed arc a clear dramatic question, a concrete turning point, and
+> meaningful possible consequences. Establish what it builds toward before choosing
+> its setup beats. Each beat should change the situation through new information,
+> pressure, opportunity, or consequence; avoid repeated demonstrations of the same
+> trait and routine logistics without narrative effect. Quiet arcs may culminate in
+> an admission, boundary, discovery, or changed relationship. Preserve player agency
+> and leave uncertain outcomes open.
+
+Work (promote only what the evidence supports; all are writing requirements, no
+fields):
+
+- **Strengthen the shared beat rule** (the `beatsRule` string in
+  `buildStoryPlanSystemPrompt`, `prompts.js`). Require each beat to change the
+  situation — add new information, a cost, a complication, a pressure, or an
+  opportunity — and explicitly reject another instance of the same behavior and
+  routine logistics with no narrative effect. This is the single lever that
+  addresses both example failures, and it covers every section because the rule is
+  shared.
+- **Strengthen the destination spec** (the bullet-format line, currently "1-2
+  sentences naming the central shift"). Ask for the dramatic question, a concrete
+  turning point, and possible consequences. The turning point maps to `arc.body`,
+  which the Ready mechanism already surfaces as the payoff (`injection.js`). **Do
+  not move the payoff into a setup beat** — the existing Ready boundary is what
+  keeps a climax out of the `NOW:` line, and collapsing it would leave Ready
+  nothing to do.
+- **Carry the same vocabulary into the targeted instructions**
+  (`TARGETED_OPERATION_INSTRUCTIONS.develop` and `.rework`, `prompts.js`). "Develop
+  this arc" currently says "improve its description/endpoint" without defining
+  *better*; give it the dramatic-question/turning-point/consequence language so the
+  action has purchase. `rework` preserves the endpoint, so its beat replacement
+  must obey the strengthened beat rule.
+- Restate, do not duplicate. The journey clause in `generation.js` keeps ownership
+  of the pressure/consequence language for Character Journeys; Phase 5 adds the
+  *beat-progression* requirement the shared rule now owns and does not fork a second
+  copy of the destination language into the journey clause.
+
+**Non-goals:**
+
+- **Two-pass generation** — naming the turning point in a first call and building
+  setup toward it in a second. It is the right eventual design and the wrong first
+  slice: it complicates the single-call flow deliberately kept cheap. Deferred to
+  §7, gated on evidence that the writing requirements above were insufficient.
+- No new schema field, migration, UI control, or per-arc quality score, and no
+  model self-evaluation pass. The five questions are writing requirements this
+  release, not five stored fields.
+- No change to the Ready/payoff boundary, injection framing, or enforcement modes.
+
+**Exit (evaluated on real examples, not prompt-contains-phrase tests):** across
+quiet-character, relationship, mystery, and adventure arcs, a generated plan shows
+a clear dramatic question, setup beats that each change the situation rather than
+re-demonstrating a trait or listing logistics, and a turning point distinct from
+its setup. Automated tests may pin only that the clauses are wired into the correct
+prompts and stay within scope (no beat-rule text leaking into an Immediate-Hooks-
+only request, per the existing strict-heading discipline); §6.1's own caveat
+applies — a prompt-phrase assertion is not behavior. The behavioral acceptance is
+the existing §6.2 rows "Quiet or restrained character journey" and "Four genres,
+allowed versus actively-propose," which this phase gives content to.
+
+**Phase 5 status (§8 record)**
+
+- **State:** Not started. Tester Direction Hint experiment in progress
+  (2026-09-21); no prompt files changed yet.
+- **Change reference:** none.
+- **Automated checks:** none yet.
+- **Known limitations:** the destination-quality language shipped in Phases 2-3 did
+  not prevent repeated-demonstration beats, so Phase 5's primary lever is the shared
+  beat rule, and its effect can only be confirmed on live generations.
+- **Manual results:** pending the Direction Hint trial.
+
 ## 6. Acceptance and test plan
 
 ### 6.1 Deterministic tests
@@ -970,6 +1082,10 @@ Deferred, with a decision gate rather than a schedule:
 - **A proposed-cast collection.** Planner-local candidate IDs preserved through
   rename, history, and backup, with explicit linking to a Knowledge NPC.
   *Gate:* wanting to promote a newcomer into a dossier.
+- **Turning-point-first (two-pass) generation.** A first call names each arc's
+  dramatic turning point; a second builds setup toward it. *Gate:* evidence from
+  Phase 5 that single-call writing requirements did not remove bland or repetitive
+  beats.
 - Automatic interpretation of free-text prerequisites; automatic secret release,
   dossier creation, or introduction confirmation; automatic private-author refresh
   or unattended application of proposals; a second model call to summarize every

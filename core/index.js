@@ -48,6 +48,7 @@ export {
     listSafeCharacterContextCandidates,
     resolveSafeCharacterContextEntities,
     buildSafeCharacterContext,
+    buildAuthorCharacterContext,
 } from './character_context.js';
 // Phase 0 diagnostics — in-memory ring buffer + last-run map
 // (core/diagnostics.js). Pure module; re-exported through the barrel so feature

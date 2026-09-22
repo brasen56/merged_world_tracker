@@ -63,7 +63,7 @@ describe('Story Planner V3 Phase 3A — cast policy ownership', () => {
         expect(source.storyPalette).toEqual({ allowNewMajorCharacters: true });
         expect(direct.data.storyPalette).toEqual({ emphases: [], escalation: 'balanced', castPolicy: 'allowed' });
 
-        const current = prepareStore(storyPlannerSchema, direct.data, { version: 4 });
+        const current = prepareStore(storyPlannerSchema, direct.data, { version: storyPlannerSchema.currentVersion });
         expect(current.status).toBe('valid');
         expect(current.changed).toBe(false);
     });

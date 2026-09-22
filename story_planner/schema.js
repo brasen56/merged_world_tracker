@@ -165,6 +165,19 @@ export function sanitizeCharacterContextSelection(value) {
     };
 }
 
+export const AUTHOR_CONTEXT_FIELD_KEYS = Object.freeze(['public_profile', 'agenda', 'secrets', 'knowledge', 'read_on_pc', 'canon_lock']);
+export function sanitizeAuthorContextSelection(value) {
+    const raw = isObject(value) ? value : {};
+    const entityIds = [...new Set(Array.isArray(raw.entityIds) ? raw.entityIds.map(id => String(id).trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)).filter(Boolean) : [])].slice(0, MAX_CHARACTER_CONTEXT_IDS);
+    const fields = [...new Set(Array.isArray(raw.fields) ? raw.fields.filter(field => AUTHOR_CONTEXT_FIELD_KEYS.includes(field)) : [])];
+    return {
+        entityIds,
+        fields,
+        npcFields: Object.fromEntries(entityIds.map(id => [id, [...new Set(Array.isArray(raw.npcFields?.[id])
+            ? raw.npcFields[id].filter(field => AUTHOR_CONTEXT_FIELD_KEYS.includes(field)) : fields)]])),
+    };
+}
+
 const METRIC_COUNTER_FIELDS = Object.freeze([
     'fullGenerations', 'targetedGenerations', 'targetedApplied',
     'progressChecks', 'progressSuggestions', 'progressNoEvidence',
@@ -1000,6 +1013,12 @@ export function validateStoryPlannerData(data) {
             issues.push(repairIssue('character-context-canonicalized', ['characterContext'], 'Story Planner character-context selection was canonicalized to bounded values.', data.characterContext));
         }
     }
+    if (data.authorContext !== undefined) {
+        accepted.authorContext = sanitizeAuthorContextSelection(data.authorContext);
+        if (JSON.stringify(accepted.authorContext) !== JSON.stringify(data.authorContext)) {
+            issues.push(repairIssue('author-context-canonicalized', ['authorContext'], 'Story Planner author context consent was canonicalized.', data.authorContext));
+        }
+    }
     if (data.storyPlanRequestPreferences !== undefined) {
         accepted.storyPlanRequestPreferences = sanitizeStoryPlanRequestPreferences(data.storyPlanRequestPreferences);
         if (JSON.stringify(accepted.storyPlanRequestPreferences) !== JSON.stringify(data.storyPlanRequestPreferences)) {
@@ -1243,22 +1262,25 @@ export function migrateStoryPlannerV3ToV4(data) {
 export const storyPlannerSchema = defineStoreSchema({
     id: 'storyPlanner',
     metadataKey: 'story_planner_data',
-    currentVersion: 4,
+    currentVersion: 5,
     createDefault: () => ({
         arcs: [],
         storyPalette: sanitizeStoryPalette({}),
         storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences({}),
+        authorContext: sanitizeAuthorContextSelection({}),
     }),
     migrations: {
         0: migrateStoryPlannerV0ToV1,
         1: migrateStoryPlannerV1ToV2,
         2: migrateStoryPlannerV2ToV3,
         3: migrateStoryPlannerV3ToV4,
+        4: data => ({ data: { ...data, authorContext: sanitizeAuthorContextSelection({}) }, issues: [] }),
     },
     validate: validateStoryPlannerData,
     policy: defineIssuePolicy({
         repair: [
             'plan-text-migrated', 'beat-id-minted', 'beat-id-duplicate',
+            'author-context-canonicalized',
             'progress-watermarks-invalid', 'progress-watermarks-pruned',
             'ignored-progress-evidence-invalid', 'ignored-progress-evidence-pruned',
             'phase7-metrics-canonicalized',

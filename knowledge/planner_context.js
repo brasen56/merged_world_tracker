@@ -332,3 +332,91 @@ export async function buildPlannerCharacterContext(selection) {
         coverage,
     };
 }
+
+// Author-only projection: intentionally unrelated to buildPlannerCharacterContext.
+// A malformed or unfamiliar dossier is refused, never guessed at or clipped.
+export const AUTHOR_CONTEXT_FIELDS = Object.freeze(['public_profile', 'agenda', 'secrets', 'knowledge', 'read_on_pc', 'canon_lock']);
+const AUTHOR_MAX_CHARS = 12000;
+const AUTHOR_LABELS = new Map(DOSSIER_FIELDS.map(field => [field.label.toLowerCase(), field.key]));
+const PUBLIC_PROFILE_FIELDS = ['role', 'where_to_find', 'appearance', 'voice', 'background', 'personality'];
+
+export function parseAuthorDossier(content) {
+    if (typeof content !== 'string' || !content.trim()) throw new Error('Dossier is empty.');
+    const fields = {};
+    const ledger = [];
+    let section = '';
+    let seenLedger = false;
+    let lastFieldIndex = -1;
+    let headerSeen = false;
+    for (const raw of content.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (!headerSeen && /^\[Dossier\]\s+[^\n|]+\s*\|/.test(line)) { headerSeen = true; continue; }
+        if (headerSeen && !section && /^(Tone|Perceived as|First seen):\s*[^\n]*$/i.test(line)) continue;
+        if (/^knowledge ledger\s*:/i.test(line)) {
+            if (seenLedger) throw new Error('Repeated Knowledge Ledger boundary.');
+            seenLedger = true;
+            section = 'ledger';
+            continue;
+        }
+        const label = line.match(/^([^:]{1,60}):\s*(.*)$/);
+        if (label && AUTHOR_LABELS.has(label[1].toLowerCase())) {
+            const fieldIndex = DOSSIER_FIELDS.findIndex(field => field.key === AUTHOR_LABELS.get(label[1].toLowerCase()));
+            if (seenLedger || fieldIndex <= lastFieldIndex) throw new Error('Repeated or out-of-order dossier field.');
+            lastFieldIndex = fieldIndex;
+            section = AUTHOR_LABELS.get(label[1].toLowerCase());
+            fields[section] = label[2];
+            continue;
+        }
+        if (section === 'ledger' && line.startsWith('- ')) {
+            if (line !== '- (no entries yet)') ledger.push(line);
+            continue;
+        }
+        // No continuation or foreign section can be classified safely. In
+        // particular, a spoofed label inside a multiline secret must not become
+        // another character's public field or a fabricated ledger boundary.
+        throw new Error('Unrecognised dossier block boundary.');
+    }
+    if (!headerSeen || !seenLedger) throw new Error('Unrecognised dossier block boundary.');
+    return { fields, ledger };
+}
+
+export async function buildPlannerAuthorContext(selection) {
+    if (getGlobalSettings().enableKnowledge === false) throw new Error('Knowledge is disabled; private character context was not sent.');
+    const requestedIds = [...new Set(selection?.entityIds || [])];
+    if (!requestedIds.length || requestedIds.length > 24) throw new Error('Select at least one NPC for author context.');
+    const resolution = resolvePlannerCharacterEntities(requestedIds);
+    if (resolution.missing.length) throw new Error('An author-context NPC is unavailable; no private context was sent.');
+    const records = [];
+    const coverage = [];
+    const seen = new Set();
+    let length = 0;
+    for (const item of resolution.resolved) {
+        if (seen.has(item.entityId)) continue;
+        seen.add(item.entityId);
+        const requestedFields = [...new Set(selection?.npcFields?.[item.requestedEntityId] || selection?.fields || [])];
+        if (!requestedFields.length || requestedFields.some(field => !AUTHOR_CONTEXT_FIELDS.includes(field))) throw new Error('Each selected author-context NPC needs valid field groups.');
+        if (!item.dossierAvailable || getRegistry()[item.name]?.type !== 'major') throw new Error('A selected NPC has no major-NPC dossier; no private context was sent.');
+        const content = await loadEntryContent(getRegistry()[item.name]?.uid, item.name);
+        if (!content) throw new Error('A selected NPC dossier could not be verified; no private context was sent.');
+        const { fields, ledger } = parseAuthorDossier(content);
+        if (requestedFields.includes('canon_lock') && !fields.canon_lock) throw new Error('A selected NPC has no Canon Lock; no private context was sent.');
+        const values = requestedFields.flatMap(field => field === 'public_profile'
+            ? PUBLIC_PROFILE_FIELDS.map(key => [key, fields[key]])
+            : field === 'knowledge' ? [['knowledge', ledger.join('\n')]] : [[field, fields[field]]])
+            .filter(([, value]) => value && value.toLowerCase() !== 'unknown');
+        if (!values.length) throw new Error('A selected NPC has no values in the requested author-context field groups.');
+        const record = [`NPC: ${item.name}`, `Entity: ${item.entityId}`, ...values.map(([key, value]) => `${key}: ${value}`)].join('\n');
+        if (length + record.length + (records.length ? 2 : 0) > AUTHOR_MAX_CHARS) {
+            // Canon constraints cannot be omitted without changing the request's meaning.
+            if (requestedFields.includes('canon_lock')) throw new Error('Author context exceeds the record budget; Canon Lock cannot be omitted.');
+            coverage.push({ entityId: item.entityId, name: item.name, status: 'omitted-for-budget' });
+            continue;
+        }
+        records.push(record);
+        length += record.length + (records.length > 1 ? 2 : 0);
+        coverage.push({ entityId: item.entityId, name: item.name, status: 'complete', fields: values.length });
+    }
+    if (!records.length) throw new Error('No complete author-context records fit the budget.');
+    return { text: records.join('\n\n'), coverage };
+}

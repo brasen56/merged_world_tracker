@@ -69,4 +69,15 @@ export async function buildSafeCharacterContext(selection) {
     }
 }
 
+/** Private planning context is a separate, opt-in capability. Never fall back to the public provider. */
+export async function buildAuthorCharacterContext(selection) {
+    if (!Array.isArray(selection?.entityIds) || !selection.entityIds.length
+        || selection.entityIds.some(id => !(selection.npcFields?.[id] || selection.fields || []).length)) {
+        throw new Error('Select at least one author-context field group for every selected NPC. No private context was sent.');
+    }
+    if (typeof provider?.buildAuthorContext !== 'function') throw new Error('Author character context is unavailable. No private context was sent.');
+    // Unlike public context, errors must stop generation, not silently remove a constraint.
+    return provider.buildAuthorContext(selection);
+}
+
 export function _resetSafeCharacterContextProvider() { provider = null; }

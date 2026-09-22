@@ -37,12 +37,12 @@ import {
     getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
     getPlanHistory, pushPlanToHistory, historyEntryToDiffText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
-    getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta, getStoryPalette, getCharacterContextSelection,
+    getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta, getStoryPalette, getCharacterContextSelection, getAuthorContextSelection,
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
     getStoryPlanRequestPreferences,
 } from './data.js';
 import { buildSafeCharacterContext, listSafeCharacterContextCandidates } from '../core/character_context.js';
-import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
+import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, sanitizeAuthorContextSelection, AUTHOR_CONTEXT_FIELD_KEYS, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { describeCastPolicyRequest, generatePlan, MAX_JOURNEY_SUBJECT_CANDIDATES } from './generation.js';
 import { applyScopedPlanProposal, buildArcDiff, previewScopedApply } from './proposals.js';
@@ -768,6 +768,7 @@ export function showScopedReview(proposal) {
             ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
             <p class="mwt-text-dim mwt-text-sm">${proposal.stats.added} new · ${proposal.stats.matched} refreshed · ${proposal.stats.carried} carried forward</p>
             <details class="sp-context-coverage-review"><summary>Safe Character Context coverage</summary>${coverageHtml}</details>
+            ${diagnostics.authorContextUsed ? `<p class="sp-proposal-requirement" role="alert"><strong>Private NPC context informed this draft.</strong> Review and edit every narrator-facing title, premise, beat and payoff below before Apply. Only revealable text belongs here; private facts cannot be automatically withheld.</p><ul>${(diagnostics.authorContextCoverage || []).map(item => `<li>${escapeHtml(item.name)}: ${escapeHtml(item.status)}</li>`).join('')}</ul>` : ''}
             ${diagnostics.newcomerRequirementUnmet ? `<p class="sp-proposal-requirement" role="alert"><strong>Cast requirement unmet.</strong> ${escapeHtml(diagnostics.newcomerPolicyMessage || 'The requested newcomer coverage was not returned.')}</p>` : ''}
             ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
             <fieldset class="sp-proposal-selection">
@@ -779,6 +780,11 @@ export function showScopedReview(proposal) {
                         <span><strong>${escapeHtml(row.title || 'Untitled arc')}</strong><small>${escapeHtml(getSectionMeta(row.section)?.label || row.section)} · ${row.kind === 'added' ? 'new arc' : 'refreshed'}</small></span>
                     </label>
                     ${row.kind === 'added' ? renderScopedAddition(row.arc, proposal) : renderArcDiff(row.diff)}
+                    ${diagnostics.authorContextUsed ? `<div class="sp-author-review" data-arc-id="${escapeHtml(row.id)}">
+                        <label for="sp-author-title-${escapeHtml(row.id)}">Public title${row.kind === 'added' ? '' : ' (identity; unchanged on Refresh)'}</label><input id="sp-author-title-${escapeHtml(row.id)}" class="mwt-input" data-field="title" maxlength="200" value="${escapeHtml(row.arc.title)}" ${row.kind === 'added' ? '' : 'readonly'}>
+                        <label for="sp-author-body-${escapeHtml(row.id)}">Public premise and payoff</label><textarea id="sp-author-body-${escapeHtml(row.id)}" class="mwt-input" data-field="body" maxlength="2000">${escapeHtml(row.arc.body)}</textarea>
+                        ${row.arc.beats.map((beat, index) => `<label for="sp-author-beat-${escapeHtml(row.id)}-${index}">${beat.state === 'pending' ? 'Public setup beat' : 'Historical beat (read only)'} ${index + 1}</label><textarea id="sp-author-beat-${escapeHtml(row.id)}-${index}" class="mwt-input" data-beat="${index}" maxlength="1000" ${beat.state !== 'pending' ? 'readonly' : ''}>${escapeHtml(beat.text)}</textarea>`).join('')}
+                    </div>` : ''}
                 </div>`).join('') : '<p class="mwt-text-dim mwt-text-sm">No material proposal was returned. Diagnostics are preserved below.</p>'}
             </fieldset>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8">
@@ -795,7 +801,22 @@ export function showScopedReview(proposal) {
             return;
         }
         const acceptedProposalIds = [...modal.querySelectorAll('input[name="mwt-sp-proposal"]:checked')].map(input => input.value);
-        const result = applyScopedPlanProposal({ ...proposal, acceptedProposalIds }, getArcs());
+        const reviewedArcs = diagnostics.authorContextUsed ? proposal.arcs.map(arc => {
+            const editor = [...modal.querySelectorAll('.sp-author-review')].find(node => node.dataset.arcId === arc.id);
+            if (!editor) return arc;
+            return { ...arc,
+                title: editor.querySelector('[data-field="title"]').value.trim(),
+                body: editor.querySelector('[data-field="body"]').value.trim(),
+                beats: arc.beats.map((beat, index) => beat.state === 'pending'
+                    ? { ...beat, text: editor.querySelector(`[data-beat="${index}"]`).value.trim() } : beat),
+            };
+        }) : proposal.arcs;
+        if (diagnostics.authorContextUsed && reviewedArcs.some(arc => acceptedProposalIds.includes(arc.id)
+            && (!arc.title || !arc.body || arc.beats.some(beat => !beat.text)))) {
+            notify('Story Planner', 'Public title, premise/payoff and every beat must be nonempty before Apply.', 'warning');
+            return;
+        }
+        const result = applyScopedPlanProposal({ ...proposal, arcs: reviewedArcs, acceptedProposalIds }, getArcs());
         if (!result.ok) {
             if (result.reason === 'targets-changed') {
                 apply.disabled = true;
@@ -842,6 +863,7 @@ export function openGenerateDialog() {
     const visibleCandidateIds = new Set(subjectCandidates.filter(candidate => !candidate.unavailable).map(candidate => candidate.entityId));
     const hiddenSubjectCandidateCount = allSubjectCandidates.filter(candidate => !visibleCandidateIds.has(candidate.entityId)).length;
     const plannerSettings = getSettings();
+    const authorConsent = getAuthorContextSelection();
     const configuredCustomTemplates = !!(plannerSettings.customSystemPrompt?.trim() || plannerSettings.customUserPrompt?.trim());
     const legacyPolicy = describeCastPolicyRequest({ workflow: 'legacy-full', settings: plannerSettings });
     const sectionChecks = SECTIONS.map(section => `
@@ -886,6 +908,14 @@ export function openGenerateDialog() {
                     || '<span class="mwt-text-dim mwt-text-sm">No assignable tracked characters are currently available.</span>'}</div>
                 ${hiddenSubjectCandidateCount ? `<p class="mwt-text-dim mwt-text-sm">Showing up to ${MAX_JOURNEY_SUBJECT_CANDIDATES} tracked characters. Saved selections stay visible at the top so they can always be cleared; ${hiddenSubjectCandidateCount} other character${hiddenSubjectCandidateCount === 1 ? ' is' : 's are'} outside this request.</p>` : ''}
                 <p class="mwt-text-dim mwt-text-sm">Subject selection assigns ownership only. It does not add dossier fields to Safe Character Context.</p>
+            </fieldset>
+            <fieldset id="sp-generate-author" style="margin:12px 0 0">
+                <legend>Opt-in private NPC author context (this chat)</legend>
+                <p>Selected private dossier fields are sent to the configured planning model, not processed only on-device. They are never stored in the public plan. Review and edit the exact narrator-facing text before Apply. Leave unchecked to send public context only.</p>
+                ${subjectCandidates.map((candidate, index) => `<div class="sp-author-npc-row" data-entity-id="${escapeHtml(candidate.entityId)}">
+                    <label class="sp-check-row" for="sp-author-npc-${index}"><input id="sp-author-npc-${index}" type="checkbox" name="sp-author-npc" value="${escapeHtml(candidate.entityId)}" ${authorConsent.entityIds.includes(candidate.entityId) ? 'checked' : ''}>${escapeHtml(candidate.name)}</label>
+                    ${AUTHOR_CONTEXT_FIELD_KEYS.map((field, fieldIndex) => `<label class="sp-check-row" for="sp-author-field-${index}-${fieldIndex}"><input id="sp-author-field-${index}-${fieldIndex}" type="checkbox" name="sp-author-field" value="${field}" ${authorConsent.npcFields[candidate.entityId]?.includes(field) ? 'checked' : ''}>${escapeHtml(field.replaceAll('_', ' '))}</label>`).join('')}
+                </div>`).join('')}
             </fieldset>
             ${context.mode !== 'off' ? `<fieldset id="sp-generate-context-sources" style="border:0;padding:0;margin:12px 0 0">
                 <legend class="mwt-label">Safe Character Context sources for this request${context.mode === 'selected' ? ` (select up to ${MAX_CHARACTER_CONTEXT_IDS})` : ''}</legend>
@@ -1043,10 +1073,22 @@ export function openGenerateDialog() {
         // request reopens the dialog in the state that could not be submitted.
         setPlanData({ storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(request) });
         try {
+            const authorSelection = sanitizeAuthorContextSelection({
+                entityIds: [...modal.querySelectorAll('input[name="sp-author-npc"]:checked')].map(input => input.value),
+                npcFields: Object.fromEntries([...modal.querySelectorAll('.sp-author-npc-row')].map(row => [
+                    row.dataset.entityId,
+                    [...row.querySelectorAll('input[name="sp-author-field"]:checked')].map(input => input.value),
+                ])),
+            });
+            setPlanData({ authorContext: authorSelection });
+            if (authorSelection.entityIds.some(id => !authorSelection.npcFields[id]?.length)) {
+                throw new Error('Choose at least one field group for each selected author-context NPC, or deselect that NPC.');
+            }
             setControlBusy(button, true);
             const proposal = await generatePlan(false, request, {
                 reviewOnly: true,
                 characterContextSelection: getRequestContextSelection(),
+                authorContextSelection: authorSelection.entityIds.length ? authorSelection : null,
             });
             if (proposal) {
                 hideModal(GENERATE_MODAL_ID);
