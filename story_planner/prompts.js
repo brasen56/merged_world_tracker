@@ -11,6 +11,24 @@
 
 import { MAX_CONTINUITY_BEATS_PER_ARC, SECTIONS } from './data.js';
 
+// ─── Arc quality rules (V3 Phase 5) ──────────────────────────────────────────
+// Shared by the full-plan and targeted prompts so the two cannot drift.
+//
+// Testers reported bland plans: four beats re-demonstrating one trait, or
+// beats that were pure logistics (a fax, a pinned sheet, a rental meter). Both
+// were BEAT failures — the destination language the Character Journey clause
+// already carried did not catch them, because the only beat rule was "order
+// them so each one only makes sense after the previous", which interchangeable
+// demonstrations satisfy trivially.
+//
+// The turning point belongs in the description, never in a beat: the
+// description is what Ready Now surfaces as the payoff once setup is complete.
+// A beat that performs the climax leaves Ready nothing to do.
+
+export const ARC_DESTINATION_RULE = 'An arc\'s description names what is wanted or unsettled, what puts it under pressure, and the concrete turning point it builds toward — a confrontation, revelation, opportunity, or decision that could go more than one way. A quiet arc can turn on an admission, a boundary, a discovery, or a changed relationship; it does not need to escalate.';
+
+export const BEAT_PROGRESSION_RULE = 'Each beat must change the situation: it reveals something new, raises a cost, adds a complication, or opens or closes an option. A beat that shows the same behavior again, or that only moves paperwork, schedules, or equipment without consequence, does not count — give it a consequence or cut it. Two strong beats are better than four padded ones. Stop short of the turning point itself: the payoff happens once setup is complete, not inside a beat.';
+
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
 export function buildStoryPlanSystemPrompt(sectionKeys = null) {
@@ -27,14 +45,20 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null) {
     // Journeys-only request invites the model to emit that heading, which the
     // strict-heading validator then rejects as out of scope.
     const has = key => sections.some(section => section.key === key);
+    const hooksOnly = has('immediate') && sections.length === 1;
     const sortRule = has('immediate') || has('horizon')
         ? `- Sort ideas by how soon the story could use them.${has('immediate') ? ' Immediate Hooks must be genuinely usable in the very next scene with no setup;' : ''}${has('horizon') ? ' Horizon Arcs are the ones the story still has to build toward.' : ''}`
         : '- Sort ideas by how soon the story could use them.';
-    const beatsRule = has('immediate') && sections.length === 1
+    // Hooks need no setup and have no turning point to build toward, so a
+    // Hooks-only request keeps the plain one-line description.
+    const bulletRule = hooksOnly
+        ? 'Each bullet is a short arc name, an em-dash, then 1-2 sentences naming the central shift it introduces.'
+        : `Each bullet is a short arc name, an em-dash, then a 1-2 sentence description. ${ARC_DESTINATION_RULE}${has('immediate') ? ' An Immediate Hook can simply name a live opening the next scene can use.' : ''}`;
+    const beatsRule = hooksOnly
         ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
-        : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: the small, concrete, in-scene steps that build toward the arc. A beat must be something a narrator can actually perform in a single scene — a line of dialogue, an object noticed, a character seen somewhere unexpected. Order them so each one only makes sense after the previous. Never write a beat that requires {{user}} to do a specific thing.
+        : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: the small, concrete, in-scene steps that build toward the arc's turning point. A beat must be something a narrator can actually perform in a single scene — a line of dialogue, an object noticed, a character seen somewhere unexpected. Order them so each one only makes sense after the previous. ${BEAT_PROGRESSION_RULE} Never write a beat that requires {{user}} to do a specific thing.
 
-- The Rival's Gambit — a competitor who has only been hinted at makes a decisive move that forces a public confrontation.
+- The Rival's Gambit — a competitor who has only been hinted at wants the same charter, and a decisive move forces a public confrontation where either side could lose standing.
   1. A servant mentions in passing that the competitor was seen leaving the east gate before dawn.
   2. A routine shipment arrives short, and the paperwork points somewhere inconvenient.
   3. The competitor's agent turns up at a social event, pointedly friendly.
@@ -59,7 +83,7 @@ Output only these headings, in this exact order, even if a section has only one 
 
 ${sectionFormatBlock}
 
-Under each heading, use a bullet list. Each bullet is a short arc name, an em-dash, then 1-2 sentences naming the central shift it introduces.
+Under each heading, use a bullet list. ${bulletRule}
 
 ${beatsRule}`;
 }
@@ -97,7 +121,7 @@ export const TARGETED_ARC_SYSTEM_PROMPT = `You are revising one selected story-p
 Use this exact shape:
 {
   "title": "arc title",
-  "description": "the possible endpoint or central shift",
+  "description": "what is wanted or unsettled, what pressures it, and the turning point it builds toward",
   "section": "immediate|emerging|horizon|character|unresolved",
   "newcomerHandle": "n1 or empty string",
   "pendingBeats": [
@@ -109,15 +133,16 @@ Use this exact shape:
 ABSOLUTE RULES:
 - Work only on the selected arc. Do not return or edit any other arc.
 - Historical beats marked PLANTED or SKIPPED are immutable. Never include them in pendingBeats, claim they happened, rewrite them, or restore skipped setup.
-- pendingBeats contains only the proposed future route, in order. Each beat must be concrete enough for a narrator to perform in one scene.
+- pendingBeats contains only the proposed future route, in order. Each beat must be concrete enough for a narrator to perform in one scene. ${BEAT_PROGRESSION_RULE}
 - When the cast policy proposes or allows a recurring/major newcomer, use one bounded proposal-local newcomerHandle and put the same entranceHandle on exactly one concrete entrance beat within the first ${MAX_CONTINUITY_BEATS_PER_ARC} pending beats. Leave both empty when no newcomer is proposed. Never use the fields for an established character.
+- ${ARC_DESTINATION_RULE}
 - Treat the description as a possible endpoint, not a fact that has happened.
 - Never write actions, dialogue, thoughts, feelings, or decisions for {{user}}, and never require {{user}} to act.
 - Keep the result concise and grounded in the supplied factual context.`;
 
 export const TARGETED_OPERATION_INSTRUCTIONS = Object.freeze({
     rework: 'Preserve the arc title, description/endpoint, and section exactly. Replace only its pending setup route with a stronger route toward the same endpoint.',
-    develop: 'Develop this arc. You may improve its description/endpoint, move it to a better section, and replace its pending route. Preserve its title and all historical progress.',
+    develop: 'Develop this arc into a stronger story: sharpen its description so it names what is wanted or unsettled, what pressures it, and a concrete turning point, and replace its pending route so each beat changes the situation. You may move it to a better section. Preserve its title and all historical progress.',
     alternate: 'Suggest a genuinely different route as a new sibling arc. Give it a distinct title, description/endpoint, section, and pending route. The source arc will remain unchanged.',
     setup: 'This long-range arc has no setup beats. Preserve its title, description/endpoint, and section exactly and generate a concrete pending setup route toward that endpoint.',
 });

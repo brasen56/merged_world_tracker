@@ -12,6 +12,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.10.0]
+
+### Added
+
+- **Story Planner V3 Phase 4 — opt-in private NPC author context**
+  (`docs/STORY_PLANNER_ROADMAP_V3.md`). Scoped generation can now plan with
+  what only the author knows. The Generate dialog gains a collapsed
+  **Opt-in private NPC author context (this chat)** picker: every major NPC
+  dossier offers six field groups — public profile, agenda, secrets,
+  knowledge (the Knowledge Ledger), read on PC, and Canon Lock — chosen per
+  NPC and per chat (up to 24 NPCs), never globally. The picker says plainly
+  that selected private fields are **sent to the configured planning model**,
+  not processed only on-device; left unchecked, the request carries public
+  context only, exactly as before. The consent persists in the existing plan
+  store with no schema bump and is canonicalized at the store boundary like
+  any other field (`author-context-canonicalized` repair).
+  - **Private context only rides reviewed scoped requests.** Legacy
+    whole-plan regeneration and unattended automatic generation never read
+    the selection — anything else is refused outright ("Private context
+    requires a reviewed scoped request."). The block travels in an
+    application-owned `<author_context>` envelope above the prompt's closing
+    format instruction on both attempts: Canon Lock is immutable, hidden
+    facts must not be copied into public title, premise, beats, or payoff,
+    and only details safe to reveal may enter the draft. Review answers with
+    a banner — private facts cannot be automatically withheld — and a per-arc
+    author editor where every narrator-facing Public title, Public premise
+    and payoff, and Public setup beat can be edited (historical beats
+    read-only) before anything is stored. Sentinel-fixture tests prove a
+    private value cannot reach a public serializer.
+  - **The dossier reader fails closed.** A new block-boundary parser reads
+    dossiers exactly as Knowledge writes them: a value continued onto a new
+    line, an unclosed relationship block, a missing Knowledge Ledger, or any
+    unclassifiable line refuses that NPC — "No private context was sent." —
+    rather than guessing or clipping, because a clipped secret could invert
+    its meaning. Requesting Canon Lock for an NPC that has none, ticking an
+    NPC with no field group, disabled Knowledge, or an unavailable provider
+    are refused the same way; unlike public context, a failure stops
+    generation instead of quietly dropping a constraint.
+  - **Whole-record budgeting with visible coverage.** Selections are bounded
+    to 12,000 characters of complete records in selection order. Only the
+    Knowledge Ledger — the one group that grows for as long as a chat runs —
+    is ever trimmed, dropping whole older entries behind a "…(N older ledger
+    entries not sent)" marker so missing history is never read as
+    never-learned, and one long ledger cannot starve the NPCs selected after
+    it. Canon Lock is never dropped for budget; an NPC whose record cannot
+    fit is omitted rather than truncated; the review banner reports every NPC
+    as complete, ledger-trimmed, or omitted-for-budget.
+  - Tests: `test/story_planner_author_context.test.js` — the
+    `buildAuthorContext` provider seam, consent persistence across saves,
+    envelope placement and content, the sentinel leak sweep, dossier parsing
+    and every refusal path, budget and coverage behavior, and the author
+    review editor.
+- **Story Planner V3 is complete through its planned scope.** With author
+  context above and the arc-quality pass below, every planned phase of
+  `docs/STORY_PLANNER_ROADMAP_V3.md` has shipped: the Phase 0 attribution
+  and projection inventory (2.9.0), scoped Add/Refresh, selected journey
+  subjects, cast policy, and newcomer continuity (Phases 1–3, 2.9.1), plus
+  Phases 4–5 here. The baseline `docs/STORY_PLANNER_ROADMAP.md` closed with
+  its Phase 7 in 2.9.0. The roadmap's deferred §7 items — an independent arc
+  type and horizon, execution prerequisites, staged disclosure with release
+  flags, a proposed-cast collection, and two-pass turning-point generation —
+  stay behind their decision gates unless community demand or the planner's
+  own metrics ask for them; host/model verification and the human spoiler QA
+  for the newest phases remain recorded as pending in the roadmap.
+
+### Changed
+
+- **Story Planner: arcs are asked for a story, not a to-do list** (V3 Phase
+  5, `docs/STORY_PLANNER_ROADMAP_V3.md`). Reported by testers: plans came
+  back bland. Setup beats showed one character doing the
+  same thing four times, or were only logistics (a fax arrives, a sheet gets
+  pinned, a rental meter starts). Each arc's description now names what is
+  wanted or unsettled, what puts it under pressure, and the concrete turning
+  point it builds toward. Each setup beat must change the situation with new
+  information, a cost, a complication, or a changed option. Repeated
+  demonstrations and logistics without consequence are called out by name. The
+  turning point stays out of the beats, so **Ready Now** still has a payoff to
+  deliver. Quiet arcs may turn on an admission, a boundary, or a changed
+  relationship instead of escalating. **Develop this arc** uses the same
+  standard, so it now knows what "stronger" means. Immediate Hooks are
+  unchanged. A saved custom system prompt still replaces the built-in one for
+  whole-plan regeneration and does not get these rules. If you pasted the
+  trial paragraph into Direction Hint, you can clear it now.
+  Tests: `test/story_planner_arc_quality.test.js` (wiring and scope — both
+  shared rules in the full-plan and targeted prompts, the Hooks-only
+  exemption, and the stronger Develop instruction).
+
 ## [2.9.1]
 
 ### Added

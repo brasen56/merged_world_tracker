@@ -6,10 +6,10 @@ synthetic and the consented targeted-develop sample remains a non-blocking
 follow-up; the planner-output attribution required to exit Phase 0 is recorded.
 Phase 3D automated implementation is complete; host/model evaluation remains pending.
 Phase 4 is implemented in code, not host/model verified; human spoiler QA remains pending.
-Phase 5 (arc quality) is **Not started** — a tester prompt experiment precedes any
-code change; see §5.
+Phase 5 (arc quality) is **Implemented, not host verified** — the prompt edits
+followed a positive Direction Hint trial; see §5.
 **Date:** 2026-09-19 (Phase 1 status and Phase 2-3 handoff rules updated
-2026-09-20; Phase 2 and Phase 3A-3D status recorded 2026-09-20; Phase 4 status recorded 2026-09-22)
+2026-09-20; Phase 2 and Phase 3A-3D status recorded 2026-09-20; Phase 4 and Phase 5 status recorded 2026-09-22)
 **This revision covers:** Phases 0-4. Phase 4 (opt-in author context) is
 implemented but awaits host/model and human spoiler verification. Phase 5 (arc quality) is a
 prompt-only slice added from tester bland-plan feedback. Independent arc
@@ -937,7 +937,7 @@ Direction Hint, which is user-editable free text (`{{directionHint}}` in
 attribute the residual weakness to the destination (body) or the beats before
 promoting any language into the prompt files.
 
-Trial Direction Hint (the experiment, not yet a code change):
+Trial Direction Hint (the experiment that preceded the code change):
 
 > Give each developed arc a clear dramatic question, a concrete turning point, and
 > meaningful possible consequences. Establish what it builds toward before choosing
@@ -999,14 +999,46 @@ allowed versus actively-propose," which this phase gives content to.
 
 **Phase 5 status (§8 record)**
 
-- **State:** Not started. Tester Direction Hint experiment in progress
-  (2026-09-21); no prompt files changed yet.
-- **Change reference:** none.
-- **Automated checks:** none yet.
-- **Known limitations:** the destination-quality language shipped in Phases 2-3 did
-  not prevent repeated-demonstration beats, so Phase 5's primary lever is the shared
-  beat rule, and its effect can only be confirmed on live generations.
-- **Manual results:** pending the Direction Hint trial.
+- **State:** Implemented; not host verified.
+- **Prerequisite evidence (recorded 2026-09-22; author-side trial plus tester
+  reports on the current build):** the trial Direction Hint improved plans both
+  before and after Phase 4 landed. Before Phase 4, hinted beats were much improved
+  but still leaned toward logistics. After Phase 4, the unhinted baseline improved
+  only for NPCs with author context opted in (every field group except the
+  Knowledge Ledger); with the hint, every character and plan improved, matching the
+  pre-Phase 4 hinted result. Attribution: author context and the writing
+  requirements are independent levers. Context gives the model stakes to build from
+  where it exists; the writing requirements help every plan. All three Work items
+  were promoted. The logistics clause is more concrete than the hint's ("only moves
+  paperwork, schedules, or equipment without consequence") because hinted beats
+  still drifted toward logistics. Further tester screenshots are being collected.
+- **Change reference:** current working tree. `ARC_DESTINATION_RULE` and
+  `BEAT_PROGRESSION_RULE` are exported from `prompts.js` and are the single owner of
+  the wording for both the full-plan builder and `TARGETED_ARC_SYSTEM_PROMPT`.
+  `TARGETED_OPERATION_INSTRUCTIONS.develop` now defines a stronger arc. `rework`,
+  `setup`, and `alternate` are unchanged: the shared system rules already govern
+  their beats, and `targeted.js` rebuilds a preserved description from the source
+  arc whatever the model returns. The worked example's description now models a
+  want and a turning point that could go either way; its beats were already
+  consequential and are unchanged. A Hooks-only request keeps its previous one-line
+  description rule and receives neither shared rule; a mixed request exempts hooks
+  explicitly.
+- **Automated checks:** `test/story_planner_arc_quality.test.js`, seven wiring and
+  scope tests. Two planted bugs (an unconditional hook exemption and a dropped
+  targeted beat rule) each failed the suite before being reverted. Full suite green
+  at 3,076/3,076; lint clean.
+- **Red specifications and source assertions changed:** none. The existing prompt
+  pins (`story_planner_phase0_v3.test.js` scope and Hooks-only cases,
+  `story_planner_phase4.test.js` targeted request) pass unchanged.
+- **Known limitations:** wiring tests cannot show model behavior; the effect is
+  confirmed only on live generations. A saved custom full-plan system prompt still
+  replaces the built-in one on the whole-plan path and receives none of these
+  rules; scoped and targeted requests always use the built-in rules. Testers who
+  pasted the trial paragraph into Direction Hint should clear it, or the request
+  carries the same instructions twice.
+- **Manual results:** Direction Hint trial positive (above). A post-change
+  regeneration without the hint, checked against the §6.2 "Quiet or restrained
+  character journey" and genre rows, is pending.
 
 ## 6. Acceptance and test plan
 
