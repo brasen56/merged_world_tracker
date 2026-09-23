@@ -725,6 +725,16 @@ export function closeScopedReviewModal() {
     else hideModal(SCOPED_REVIEW_MODAL_ID);
 }
 
+/** What private context was actually sent for one NPC (buildPlannerAuthorContext coverage). */
+function describeAuthorCoverage(item) {
+    if (item.status === 'omitted-for-budget') return 'not sent: over the private context budget';
+    if (!item.ledgerTotal) return 'sent';
+    if (!item.ledgerSent) return 'sent without its Knowledge Ledger: over the private context budget';
+    return item.ledgerSent < item.ledgerTotal
+        ? `sent, with the newest ${item.ledgerSent} of ${item.ledgerTotal} Knowledge Ledger entries`
+        : `sent, with all ${item.ledgerTotal} Knowledge Ledger entr${item.ledgerTotal === 1 ? 'y' : 'ies'}`;
+}
+
 export function showScopedReview(proposal) {
     const diagnostics = proposal.diagnostics || {};
     const diagnosticItems = [
@@ -768,7 +778,7 @@ export function showScopedReview(proposal) {
             ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
             <p class="mwt-text-dim mwt-text-sm">${proposal.stats.added} new · ${proposal.stats.matched} refreshed · ${proposal.stats.carried} carried forward</p>
             <details class="sp-context-coverage-review"><summary>Safe Character Context coverage</summary>${coverageHtml}</details>
-            ${diagnostics.authorContextUsed ? `<p class="sp-proposal-requirement" role="alert"><strong>Private NPC context informed this draft.</strong> Review and edit every narrator-facing title, premise, beat and payoff below before Apply. Only revealable text belongs here; private facts cannot be automatically withheld.</p><ul>${(diagnostics.authorContextCoverage || []).map(item => `<li>${escapeHtml(item.name)}: ${escapeHtml(item.status)}</li>`).join('')}</ul>` : ''}
+            ${diagnostics.authorContextUsed ? `<p class="sp-proposal-requirement" role="alert"><strong>Private NPC context informed this draft.</strong> Review and edit every narrator-facing title, premise, beat and payoff below before Apply. Only revealable text belongs here; private facts cannot be automatically withheld.</p><ul>${(diagnostics.authorContextCoverage || []).map(item => `<li>${escapeHtml(item.name)}: ${escapeHtml(describeAuthorCoverage(item))}</li>`).join('')}</ul>` : ''}
             ${diagnostics.newcomerRequirementUnmet ? `<p class="sp-proposal-requirement" role="alert"><strong>Cast requirement unmet.</strong> ${escapeHtml(diagnostics.newcomerPolicyMessage || 'The requested newcomer coverage was not returned.')}</p>` : ''}
             ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
             <fieldset class="sp-proposal-selection">

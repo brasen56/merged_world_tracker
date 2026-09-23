@@ -337,8 +337,14 @@ export async function buildPlannerCharacterContext(selection) {
 // Author-only projection: intentionally unrelated to buildPlannerCharacterContext.
 // A malformed or unfamiliar dossier is refused, never guessed at or clipped.
 export const AUTHOR_CONTEXT_FIELDS = Object.freeze(['public_profile', 'agenda', 'secrets', 'knowledge', 'read_on_pc', 'canon_lock']);
-const AUTHOR_MAX_CHARS = 12000;
-const AUTHOR_LABELS = new Map(DOSSIER_FIELDS.map(field => [field.label.toLowerCase(), field.key]));
+export const AUTHOR_MAX_CHARS = 12000;
+// Every single-line label a dossier may carry, keyed by its lowercased text.
+// The preamble labels formatDossierEntry writes under the header are allowed
+// but not returned: no author field group asks for them.
+const DOSSIER_LABELS = new Map([
+    ...['Tone', 'Perceived as', 'First seen'].map(label => [label.toLowerCase(), { label, key: '' }]),
+    ...DOSSIER_FIELDS.map(field => [field.label.toLowerCase(), { label: field.label, key: field.key }]),
+]);
 const PUBLIC_PROFILE_FIELDS = ['role', 'where_to_find', 'appearance', 'voice', 'background', 'personality'];
 
 // Knowledge's managed relationship block (relationships.js
@@ -351,19 +357,36 @@ const PUBLIC_PROFILE_FIELDS = ['role', 'where_to_find', 'appearance', 'voice', '
 const RELATIONSHIP_BLOCK_LINE = /^(Stance toward \{\{user\}\}|Relationships):/;
 
 /**
- * Split a dossier into its fields and ledger, or refuse it. Errors are clauses
- * naming a line number, never quoting it: the caller prefixes the NPC's name,
- * and the message reaches a toast that diagnostics record.
+ * Split a dossier into its fields and ledger, or refuse it.
+ *
+ * Each line is classified on its own: the header, a known label, the Knowledge
+ * Ledger heading or one of its items, or the managed relationship block.
+ * Anything else refuses the whole dossier — above all a value continued onto a
+ * second line, which cannot be told apart from a new section.
+ *
+ * Label ORDER is deliberately not checked. Knowledge's own writer
+ * (buildUpdatedDossierContent) inserts a newly filled field just above the
+ * ledger, so a dossier that grew over several scans is rarely in DOSSIER_FIELDS
+ * order, and requiring that order refused real entries. A repeated label is
+ * still refused. What this gives up: a multi-line value whose continuation
+ * starts with the exact label of a field the entry otherwise lacks reads as
+ * that field — the reading extractDossierFieldValues and the lorebook entry
+ * itself already give it.
+ *
+ * Errors are clauses naming a line number, never quoting it: the caller
+ * prefixes the NPC's name, and the message reaches a toast that diagnostics
+ * record.
  */
 export function parseAuthorDossier(content) {
     if (typeof content !== 'string' || !content.trim()) throw new Error('the dossier is empty');
     const fields = {};
     const ledger = [];
-    let section = '';
-    let seenLedger = false;
-    let seenRelationships = false;
-    let lastFieldIndex = -1;
+    const seenLabels = new Set();
     let headerSeen = false;
+    let seenLedger = false;
+    let inLedger = false;
+    let seenBlock = false;
+    let inBlock = false;
     const lines = content.split(/\r?\n/);
     for (let index = 0; index < lines.length; index++) {
         const line = lines[index].trim();
@@ -374,43 +397,44 @@ export function parseAuthorDossier(content) {
             headerSeen = true;
             continue;
         }
-        if (section === 'relationships') {
-            if (line === RELATIONSHIP_BLOCK_END) { section = ''; continue; }
+        if (inBlock) {
+            if (line === RELATIONSHIP_BLOCK_END) { inBlock = false; continue; }
             if (RELATIONSHIP_BLOCK_LINE.test(line)) continue;
             throw new Error(`${at} is inside the relationship block but is not a Stance or Relationships line`);
         }
+        // The block does not end a ledger it interrupts: builds before the
+        // appendLedgerLines fix (lorebook.js) wrote new facts below it.
         if (line === RELATIONSHIP_BLOCK_START) {
-            if (seenRelationships) throw new Error(`${at} starts a second relationship block`);
-            seenRelationships = true;
-            section = 'relationships';
+            if (seenBlock) throw new Error(`${at} starts a second relationship block`);
+            seenBlock = inBlock = true;
             continue;
         }
-        if (!section && !seenRelationships && /^(Tone|Perceived as|First seen):\s*[^\n]*$/i.test(line)) continue;
         if (/^knowledge ledger\s*:/i.test(line)) {
             if (seenLedger) throw new Error(`${at} repeats the Knowledge Ledger heading`);
-            seenLedger = true;
-            section = 'ledger';
+            seenLedger = inLedger = true;
             continue;
         }
-        const label = line.match(/^([^:]{1,60}):\s*(.*)$/);
-        if (label && AUTHOR_LABELS.has(label[1].toLowerCase())) {
-            const fieldIndex = DOSSIER_FIELDS.findIndex(field => field.key === AUTHOR_LABELS.get(label[1].toLowerCase()));
-            if (seenLedger || fieldIndex <= lastFieldIndex) throw new Error(`${at} repeats a field or lists it out of order`);
-            lastFieldIndex = fieldIndex;
-            section = AUTHOR_LABELS.get(label[1].toLowerCase());
-            fields[section] = label[2];
-            continue;
-        }
-        if (section === 'ledger' && line.startsWith('- ')) {
+        if (inLedger && line.startsWith('- ')) {
             if (line !== '- (no entries yet)') ledger.push(line);
             continue;
         }
-        // No continuation or foreign section can be classified safely. In
-        // particular, a spoofed label inside a multiline secret must not become
-        // another character's public field or a fabricated ledger boundary.
+        const label = line.match(/^([^:]{1,60}):\s*(.*)$/);
+        const known = label && DOSSIER_LABELS.get(label[1].toLowerCase());
+        if (known) {
+            if (seenLabels.has(known.label)) throw new Error(`${at} is a second ${known.label} line`);
+            seenLabels.add(known.label);
+            // A label ends the ledger, as ledgerItemIndices does, so a list
+            // continuing this label's value cannot pass as ledger items.
+            inLedger = false;
+            if (known.key) fields[known.key] = label[2];
+            continue;
+        }
+        // Anything else cannot be classified safely. In particular, a spoofed
+        // label inside a multi-line value must not become a fabricated ledger
+        // boundary.
         throw new Error(`${at} is not a dossier field, Knowledge Ledger item, or relationship block line (a value continued onto a new line is the usual cause)`);
     }
-    if (section === 'relationships') throw new Error('the relationship block is never closed');
+    if (inBlock) throw new Error('the relationship block is never closed');
     if (!seenLedger) throw new Error('it has no Knowledge Ledger section');
     return { fields, ledger };
 }
@@ -421,10 +445,8 @@ export async function buildPlannerAuthorContext(selection) {
     if (!requestedIds.length || requestedIds.length > 24) throw new Error('Select at least one NPC for author context.');
     const resolution = resolvePlannerCharacterEntities(requestedIds);
     if (resolution.missing.length) throw new Error('An author-context NPC is unavailable; no private context was sent.');
-    const records = [];
-    const coverage = [];
+    const entries = [];
     const seen = new Set();
-    let length = 0;
     for (const item of resolution.resolved) {
         if (seen.has(item.entityId)) continue;
         seen.add(item.entityId);
@@ -446,17 +468,79 @@ export async function buildPlannerAuthorContext(selection) {
             : field === 'knowledge' ? [['knowledge', ledger.join('\n')]] : [[field, fields[field]]])
             .filter(([, value]) => value && value.toLowerCase() !== 'unknown');
         if (!values.length) throw new Error(`${item.name} has no values in the requested author-context field groups.`);
-        const record = [`NPC: ${item.name}`, `Entity: ${item.entityId}`, ...values.map(([key, value]) => `${key}: ${value}`)].join('\n');
-        if (length + record.length + (records.length ? 2 : 0) > AUTHOR_MAX_CHARS) {
+        const sendsLedger = values.some(([key]) => key === 'knowledge');
+        entries.push({ entityId: item.entityId, name: item.name, requestedFields, values, ledger: sendsLedger ? ledger : [], keep: 0, size: 0, omitted: false });
+    }
+
+    // Pass 1, in selection order: each NPC's other groups whole, plus its newest
+    // ledger entry when that fits.
+    const included = [];
+    let used = 0;
+    for (const entry of entries) {
+        const separator = included.length ? 2 : 0;
+        const floors = !entry.ledger.length ? [0] : entry.values.length > 1 ? [1, 0] : [1];
+        const keep = floors.find(count => used + separator + renderAuthorRecord(entry, count).length <= AUTHOR_MAX_CHARS);
+        if (keep === undefined) {
             // Canon constraints cannot be omitted without changing the request's meaning.
-            if (requestedFields.includes('canon_lock')) throw new Error(`Author context exceeds the record budget at ${item.name}; Canon Lock cannot be omitted.`);
-            coverage.push({ entityId: item.entityId, name: item.name, status: 'omitted-for-budget' });
+            if (entry.requestedFields.includes('canon_lock')) throw new Error(`Author context exceeds the record budget at ${entry.name}; Canon Lock cannot be omitted.`);
+            entry.omitted = true;
             continue;
         }
-        records.push(record);
-        length += record.length + (records.length > 1 ? 2 : 0);
-        coverage.push({ entityId: item.entityId, name: item.name, status: 'complete', fields: values.length });
+        entry.keep = keep;
+        entry.size = renderAuthorRecord(entry, keep).length;
+        used += separator + entry.size;
+        included.push(entry);
     }
-    if (!records.length) throw new Error('No complete author-context records fit the budget.');
-    return { text: records.join('\n\n'), coverage };
+    // Pass 2: share what is left one older entry at a time, round-robin, so one
+    // long ledger cannot starve the NPCs selected after it. An NPC stops at the
+    // first entry that does not fit, keeping its sent entries one unbroken run.
+    let growing = included.filter(entry => entry.keep && entry.keep < entry.ledger.length);
+    while (growing.length) {
+        growing = growing.filter(entry => {
+            const size = renderAuthorRecord(entry, entry.keep + 1).length;
+            if (used + size - entry.size > AUTHOR_MAX_CHARS) return false;
+            used += size - entry.size;
+            entry.size = size;
+            entry.keep += 1;
+            return entry.keep < entry.ledger.length;
+        });
+    }
+    if (!included.length) throw new Error('No complete author-context records fit the budget.');
+    return {
+        text: included.map(entry => renderAuthorRecord(entry, entry.keep)).join('\n\n'),
+        coverage: entries.map(entry => entry.omitted
+            ? { entityId: entry.entityId, name: entry.name, status: 'omitted-for-budget' }
+            : {
+                entityId: entry.entityId,
+                name: entry.name,
+                status: entry.keep < entry.ledger.length ? 'ledger-trimmed' : 'complete',
+                fields: entry.values.length - (entry.ledger.length && !entry.keep ? 1 : 0),
+                ...(entry.ledger.length ? { ledgerSent: entry.keep, ledgerTotal: entry.ledger.length } : {}),
+            }),
+    };
+}
+
+// The Knowledge Ledger grows for as long as a chat runs, so it is the one group
+// trimmed instead of refused. Each entry is a complete, attributed fact:
+// dropping whole OLDER entries loses history without changing what any sent
+// entry says — unlike clipping a secret, where a cut negation could invert it.
+// The newest win because they are the ones that correct older ones, and the
+// marker tells the model older history exists, so a missing fact is not read
+// as the NPC never having learned it (same convention as the scan projection
+// in lorebook.js). Every other group is still all-or-nothing per NPC.
+function olderLedgerMarker(dropped) {
+    return `- …(${dropped} older ledger entr${dropped === 1 ? 'y' : 'ies'} not sent)`;
+}
+
+/** One NPC's record with only its `keep` newest ledger entries. */
+function renderAuthorRecord(entry, keep) {
+    const lines = [`NPC: ${entry.name}`, `Entity: ${entry.entityId}`];
+    for (const [key, value] of entry.values) {
+        if (key !== 'knowledge') lines.push(`${key}: ${value}`);
+        else if (keep) {
+            const dropped = entry.ledger.length - keep;
+            lines.push(`knowledge: ${[...(dropped ? [olderLedgerMarker(dropped)] : []), ...entry.ledger.slice(-keep)].join('\n')}`);
+        }
+    }
+    return lines.join('\n');
 }

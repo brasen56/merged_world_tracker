@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { buildPlannerAuthorContext, parseAuthorDossier } from '../knowledge/planner_context.js';
+import { AUTHOR_MAX_CHARS, buildPlannerAuthorContext, parseAuthorDossier } from '../knowledge/planner_context.js';
 import { buildUpdatedDossierContent, formatDossierEntry, formatMajorEntry } from '../knowledge/lorebook.js';
 import { addRelationship, formatRelationshipBlock, injectRelationshipBlock, setStance } from '../knowledge/relationships.js';
 import { getLorebookName } from '../knowledge/scope.js';
@@ -170,12 +170,11 @@ describe('author context reads dossiers as Knowledge writes them', () => {
         role: 'Clerk', personality: 'Careful', agenda: 'Keep the seal hidden', secrets: 'She forged the seal', canon_lock: 'Mara never sold the seal.',
         initial_knowledge: [{ fact: 'knows the vault code', source: 'witness', date: 'Day 2' }],
     };
-    const MARA_REGISTRY = { registry: { Mara: { entityId: 'mara-id', uid: 1, type: 'major' } } };
     let oldScript;
 
     beforeEach(() => {
         _clearCacheForTests();
-        _setCacheForTests(getLorebookName(), MARA_REGISTRY);
+        _setCacheForTests(getLorebookName(), { registry: { Mara: { entityId: 'mara-id', uid: 1, type: 'major' } } });
         oldScript = knowledgeState.wiScript;
         vi.spyOn(console, 'warn').mockImplementation(() => {});
     });
@@ -192,8 +191,19 @@ describe('author context reads dossiers as Knowledge writes them', () => {
         return injectRelationshipBlock(formatDossierEntry(data), formatRelationshipBlock('Mara'));
     }
 
+    /** Serve lorebook entries keyed by uid: { 1: ['Mara', content], ... }. */
+    function serveEntries(byUid) {
+        const entries = Object.fromEntries(Object.entries(byUid).map(([uid, [comment, content]]) => [uid, { comment, content }]));
+        knowledgeState.wiScript = { loadWorldInfo: async () => ({ entries }) };
+    }
+
     function serveEntry(content) {
-        knowledgeState.wiScript = { loadWorldInfo: async () => ({ entries: { 1: { comment: 'Mara', content } } }) };
+        serveEntries({ 1: ['Mara', content] });
+    }
+
+    /** `count` distinct ledger facts, oldest first. */
+    function ledgerFacts(count, prefix = 'learned clue') {
+        return Array.from({ length: count }, (_, index) => ({ fact: `${prefix} ${index} about the archive`, source: 'witness' }));
     }
 
     test('parses a dossier carrying the managed relationship block, including after later ledger writes', () => {
@@ -225,7 +235,35 @@ describe('author context reads dossiers as Knowledge writes them', () => {
         expect(() => parseAuthorDossier(`${withBlock('Relationships: rival of Jonah.')}\n${RELATIONSHIP_BLOCK_START}\n${RELATIONSHIP_BLOCK_END}`))
             .toThrow(/second relationship block/);
         expect(() => parseAuthorDossier(`${withBlock('Relationships: rival of Jonah.')}\nNotes: added by hand`)).toThrow(/^line \d+ is not a dossier field/);
-        expect(() => parseAuthorDossier(`${withBlock('Relationships: rival of Jonah.')}\nTone: reset`)).toThrow(/^line \d+ is not a dossier field/);
+        expect(() => parseAuthorDossier(`${withBlock('Relationships: rival of Jonah.')}\nTone: reset`)).toThrow(/^line \d+ is a second Tone line$/);
+    });
+
+    test('accepts a dossier grown by later scans, whose new fields land above the ledger out of canonical order', () => {
+        const early = formatDossierEntry({ ...MARA, canon_lock: '' });
+        const grown = buildUpdatedDossierContent(early, { appearance: 'Tall, ink-stained', canon_lock: 'Mara never sold the seal.' }, []);
+        expect(grown.indexOf('Appearance:')).toBeGreaterThan(grown.indexOf('Secrets:'));
+
+        expect(parseAuthorDossier(grown).fields).toEqual({
+            role: 'Clerk', appearance: 'Tall, ink-stained', personality: 'Careful', agenda: 'Keep the seal hidden',
+            secrets: 'She forged the seal', canon_lock: 'Mara never sold the seal.',
+        });
+        // Order is free; repetition is not.
+        expect(() => parseAuthorDossier(grown.replace('Appearance: Tall, ink-stained', 'Appearance: Tall, ink-stained\nSecrets: forged')))
+            .toThrow(/^line \d+ is a second Secrets line$/);
+    });
+
+    test('reads ledger facts that pre-fix builds wrote below the relationship block', () => {
+        // appendLedgerLines' header comment (lorebook.js): the scan mergers used
+        // to lines.push() new facts, landing them after the block's end marker.
+        // Reproduced here, then a current-build scan on top of it.
+        const legacy = `${syncedDossier()}\n- saw the fire via eyes`;
+        expect(parseAuthorDossier(legacy).ledger).toEqual(['- knows the vault code via witness — Day 2', '- saw the fire via eyes']);
+        const rescanned = buildUpdatedDossierContent(legacy, {}, [{ fact: 'found the key', source: 'search' }]);
+        expect(parseAuthorDossier(rescanned).ledger).toEqual([
+            '- knows the vault code via witness — Day 2', '- found the key via search', '- saw the fire via eyes',
+        ]);
+        // A label still ends the ledger, so a list after it cannot pass as ledger items.
+        expect(() => parseAuthorDossier(`${legacy}\nVoice: low\n- stray item`)).toThrow(/^line \d+ is not a dossier field/);
     });
 
     test('names the line for an unusable dossier, and the provider names the NPC without quoting private text', async () => {
@@ -253,6 +291,68 @@ describe('author context reads dossiers as Knowledge writes them', () => {
             'canon_lock: Mara never sold the seal.',
             'knowledge: - knows the vault code via witness — Day 2',
         ].join('\n'));
-        expect(result.coverage).toEqual([{ entityId: 'mara-id', name: 'Mara', status: 'complete', fields: 3 }]);
+        expect(result.coverage).toEqual([{ entityId: 'mara-id', name: 'Mara', status: 'complete', fields: 3, ledgerSent: 1, ledgerTotal: 1 }]);
+    });
+
+    test('trims an oversized Knowledge Ledger to its newest whole entries instead of refusing the NPC', async () => {
+        const facts = ledgerFacts(400);
+        serveEntry(formatDossierEntry({ ...MARA, initial_knowledge: facts }));
+        // Canon Lock is requested, so before trimming this whole request was refused.
+        const result = await buildPlannerAuthorContext({ entityIds: ['mara-id'], npcFields: { 'mara-id': ['secrets', 'canon_lock', 'knowledge'] } });
+
+        const [coverage] = result.coverage;
+        expect(coverage).toMatchObject({ status: 'ledger-trimmed', fields: 3, ledgerTotal: 400 });
+        expect(coverage.ledgerSent).toBeGreaterThan(1);
+        expect(coverage.ledgerSent).toBeLessThan(400);
+        expect(result.text.length).toBeLessThanOrEqual(AUTHOR_MAX_CHARS);
+        expect(AUTHOR_MAX_CHARS - result.text.length).toBeLessThan(50); // less than one more entry is left unused
+
+        // Other groups whole; the ledger is the newest entries as one unbroken run, after a marker.
+        expect(result.text).toContain(`secrets: She forged the seal\ncanon_lock: Mara never sold the seal.\nknowledge: - …(${400 - coverage.ledgerSent} older ledger entries not sent)\n`);
+        const sent = result.text.split('\n').filter(line => line.startsWith('- learned clue'));
+        expect(sent).toEqual(facts.slice(-coverage.ledgerSent).map(({ fact }) => `- ${fact} via witness`));
+    });
+
+    test('shares the ledger budget so one long ledger cannot starve the NPC selected after it', async () => {
+        readField(getLorebookName(), 'registry', {}).Derek = { entityId: 'derek-id', uid: 2, type: 'major' };
+        serveEntries({
+            1: ['Mara', formatDossierEntry({ ...MARA, initial_knowledge: ledgerFacts(400) })],
+            2: ['Derek', formatDossierEntry({ name: 'Derek', species: 'human', descriptor: 'dockhand', role: 'Dockhand', initial_knowledge: ledgerFacts(5, 'saw ship') })],
+        });
+        const result = await buildPlannerAuthorContext({ entityIds: ['mara-id', 'derek-id'], npcFields: { 'mara-id': ['knowledge'], 'derek-id': ['knowledge'] } });
+
+        expect(result.coverage).toEqual([
+            { entityId: 'mara-id', name: 'Mara', status: 'ledger-trimmed', fields: 1, ledgerSent: expect.any(Number), ledgerTotal: 400 },
+            { entityId: 'derek-id', name: 'Derek', status: 'complete', fields: 1, ledgerSent: 5, ledgerTotal: 5 },
+        ]);
+        expect(result.text.length).toBeLessThanOrEqual(AUTHOR_MAX_CHARS);
+        expect(result.text).toContain('NPC: Derek\nEntity: derek-id\nknowledge: - saw ship 0 about the archive via witness');
+    });
+
+    test('the review says how much of each ledger was sent', async () => {
+        setFakeContextExtras({ getCurrentChatId: () => 'author-coverage-test' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'author-coverage-test' }) });
+        const arc = makeArc({ title: 'Public title', body: 'Public payoff', beats: ['Public beat'] });
+        const { showScopedReview } = await import('../story_planner/render.js');
+        showScopedReview({
+            request: { operation: 'add', sectionKeys: ['horizon'], requestedCount: 1 }, scope: captureScope(),
+            previousArcs: [], arcs: [arc], addedArcIds: [arc.id], reviewArcIds: [arc.id],
+            stats: { added: 1, matched: 0, carried: 0 },
+            diagnostics: { authorContextUsed: true, authorContextCoverage: [
+                { name: 'Mara', status: 'ledger-trimmed', fields: 3, ledgerSent: 240, ledgerTotal: 400 },
+                { name: 'Derek', status: 'complete', fields: 1, ledgerSent: 5, ledgerTotal: 5 },
+                { name: 'Ines', status: 'complete', fields: 1 },
+                { name: 'Tavis', status: 'omitted-for-budget' },
+            ] },
+        });
+        const lines = [...document.querySelectorAll('li')].map(item => item.textContent);
+        expect(lines).toEqual(expect.arrayContaining([
+            'Mara: sent, with the newest 240 of 400 Knowledge Ledger entries',
+            'Derek: sent, with all 5 Knowledge Ledger entries',
+            'Ines: sent',
+            'Tavis: not sent: over the private context budget',
+        ]));
+        hideModal('mwt-sp-scoped-review-modal');
+        vi.unstubAllGlobals();
     });
 });
