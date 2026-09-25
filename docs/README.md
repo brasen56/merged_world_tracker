@@ -15,7 +15,7 @@ repo root; live planning documents live here; everything historical lives in
 | [KNOWLEDGE_RELATIONSHIP_CONTEXT_ROADMAP.md](./KNOWLEDGE_RELATIONSHIP_CONTEXT_ROADMAP.md) | Deferred | Trigger-based roadmap for contextual relationship injection. Not scheduled; pick up only if one of its stated triggers fires. |
 | [STORY_PLANNER_ROADMAP.md](./STORY_PLANNER_ROADMAP.md) | Baseline; host QA pending | Reliability and creative-control roadmap for stable beat identity, durable closed ideas, full beat editing, parked/focused arcs, targeted regeneration, evidence-backed progress suggestions, and public character context. |
 | [STORY_PLANNER_PHASE7_DECISIONS.md](./STORY_PLANNER_PHASE7_DECISIONS.md) | Manual QA pending | Existing Story Planner instrumentation, retained defaults, and host-runtime verification record. |
-| [STORY_PLANNER_ROADMAP_V3.md](./STORY_PLANNER_ROADMAP_V3.md) | Implemented; host QA pending | Phases 0-3: scoped Add/Refresh, selected journey subjects, explicit cast policy, and newcomer continuity/evaluation. Opt-in author context is a sketch; type/horizon and execution prerequisites are deferred with decision gates in its §7. |
+| [STORY_PLANNER_ROADMAP_V3.md](./STORY_PLANNER_ROADMAP_V3.md) | Implemented in code; host QA pending | Phases 0–5: scoped Add/Refresh, journey subjects, cast policy, opt-in author context, and arc quality. Human spoiler and model checks remain pending; type/horizon and execution prerequisites are deferred behind §7 gates. |
 
 Root-level user guides (tracked): `README.md`, `CHANGELOG.md`,
 `DATA_SAFETY_GUIDE.md`, `DIAGNOSTICS_GUIDE.md`, `DIAGNOSTICS_CONSOLE_GUIDE.md`.

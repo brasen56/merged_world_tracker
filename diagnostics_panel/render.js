@@ -382,6 +382,7 @@ export function renderHealthSnapshot(snapshot, { formatTime = (ts) => new Date(t
             <span class="mwt-diag-health-stat">generation use: <strong>${Number(plannerObservation.targetedGenerations) || 0}</strong> targeted · <strong>${Number(plannerObservation.fullGenerations) || 0}</strong> full</span>
             <span class="mwt-diag-health-stat">closed recurrences suppressed: <strong>${Number(plannerObservation.closedRecurrencesSuppressed) || 0}</strong></span>
             <span class="mwt-diag-health-stat">request size: avg <strong>${(Number(plannerObservation.averageRequestChars) || 0).toLocaleString()}</strong> · max <strong>${(Number(plannerObservation.maxRequestChars) || 0).toLocaleString()}</strong> chars</span>
+            <span class="mwt-diag-health-stat">scoped requests: <strong>${Number(plannerObservation.scopedRequests) || 0}</strong> · <strong>${Number(plannerObservation.scopedRequestChars) || 0}</strong> chars total</span>
         </div>` : '';
 
     return `

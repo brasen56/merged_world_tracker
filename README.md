@@ -59,7 +59,7 @@ Instead of juggling multiple standalone extensions, MWT provides a single tabbed
 | **🌍 World State** | Maintains a rolling structured document of the current scene, characters, threads, and plot seeds |
 | **📜 Chronicle** | Generates timestamped summaries of RP events with consolidation, editing, and flexible injection |
 | **🧠 Knowledge** | Scans for NPCs, tracks their knowledge and relationships, and manages state entries via lorebooks |
-| **🗺️ Story Planner** | Brainstorms structured plot arcs across five timeline sections, managed as editable cards with selective injection — inspiration the AI can draw on, not a fixed roadmap |
+| **🗺️ Story Planner** | Brainstorms structured plot arcs across five timeline sections — with scoped Add/Refresh, chosen journey subjects, an explicit cast policy, and opt-in private author context — managed as editable cards with selective injection: inspiration the AI can draw on, not a fixed roadmap |
 | **💭 Interiority** | Generates out-of-band NPC private thoughts and a persistent hidden-intentions ledger — with priority, expiry, and per-NPC privacy controls — that drives on-screen actions without leaking secrets to the narrator |
 
 All five modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output.
@@ -161,7 +161,7 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 
 ### 🗺️ Story Planner
 
-Acts as a "Story Architect" that brainstorms a menu of future plot possibilities across five timeline sections. Each arc is an independently editable card with stable setup-beat progress, lifecycle controls, and selective injection. The plan is inspiration the narrator can draw on — branching possibilities, not a fixed roadmap.
+Acts as a "Story Architect" that brainstorms a menu of future plot possibilities across five timeline sections. Each arc is an independently editable card with stable setup-beat progress, lifecycle controls, and selective injection. The plan is inspiration the narrator can draw on — branching possibilities, not a fixed roadmap. Generation is scoped: ask for ideas only in the sections you chose, for the characters you chose, under an explicit cast policy — and, when you opt in, plan with what only the author knows.
 
 - **Five Timeline Sections** — Arcs are organized by when the story can use them:
   - **Immediate Hooks** — Usable right now, could surface in the very next scene
@@ -178,10 +178,15 @@ Acts as a "Story Architect" that brainstorms a menu of future plot possibilities
   - **Pinned only** — Active arcs you've pinned
   - **Focused only** — Active arcs you've focused
 - **Direction Hint** — A free-text field to steer the next generation (e.g. "more political intrigue," "slow down on romance," "I want a villain arc"). Saved per chat
-- **Configurable Arc Count** — Set how many arcs to request per generation (3–30), from a tight focus to a sprawling menu
+- **Configurable Arc Count** — Set how many arcs to request per full-plan generation (3–30); a scoped Add request can ask for as few as one, from a tight focus to a sprawling menu
+- **Scoped Add/Refresh** — The **🎲 Generate Plan** dialog sends only what you asked for: choose **Add ideas** or **Refresh selected arcs**, check just the sections to touch (everything else is carried forward unchanged), set a requested count (1–30) for Add, or pick the exact active arcs to refresh. Review shows how many arcs are new, refreshed, and carried forward — nothing is saved until you choose **Apply changes**
+- **Journey Subjects & Stable Ownership** — Character Journeys can be planned for **any tracked character** or a **selected** list (up to 30 candidates). Each journey carries a **primary subject** (its owner) and optional **supporting participants**; ownership survives Knowledge rename/merge and is never guessed from prose — only you can assign or change it. Subject selection assigns ownership only; it does not add dossier fields to the context
+- **Cast Policy** — Three explicit policies: **Established cast only** (the model may not introduce new characters), **New characters allowed**, or **Actively propose new characters** (an Add request must include a newcomer arc with a concrete on-screen entrance beat). Proposed newcomers stay hypothetical until the story itself establishes them, and what the planner proposed stays separate from what the narrator actually introduced. Manual scoped requests pick their policy in the dialog; the Story Palette policy governs legacy full-plan, targeted, and automatic generation
+- **Opt-in Private Author Context** — Plan with what only the author knows. A collapsed per-chat picker in the Generate dialog offers major-NPC dossier field groups — public profile, agenda, secrets, Knowledge Ledger, read on PC, and Canon Lock — chosen per NPC (up to 24), with the consent stated plainly: selected private fields are **sent to the configured planning model**. Private context rides only reviewed scoped requests, is budgeted to whole records, fails closed when a dossier cannot be read exactly, and the review banner plus per-arc author editor let you scrub every narrator-facing field before Apply
+- **Story-Quality Prompts** — Each arc is asked for what it wants or unsettles, what puts it under pressure, and the concrete turning point it builds toward; every setup beat must change the situation, and the turning point stays out of the beats so a **Ready** arc still has a payoff to deliver. Quiet arcs may turn on an admission, a boundary, or a changed relationship instead of escalation
 - **Targeted Arc Development** — Rework remaining setup, develop one arc, suggest an alternate route, or generate setup beats through a reviewable proposal that touches only the selected arc after scope/revision checks
 - **Evidence-Backed Progress Review** — **Check progress** scans bounded settled history and proposes only quote-verified beat/resolution changes. Suggestions remain transient until accepted or ignored; no automatic progress-check cadence is enabled
-- **Creative Controls** — Per-chat emphasis chips, restrained/balanced/escalating preference, new-major-character permission, Direction Hint, and opt-in public Knowledge character context shared by full and targeted generation
+- **Creative Controls** — Per-chat emphasis chips, restrained/balanced/escalating preference, the Story Palette cast policy for legacy full-plan/targeted/automatic generation, Direction Hint, and opt-in public **Safe Character Context** (off, active cast, or selected characters) shared by full and targeted generation
 - **Continuity-Aware Regeneration** — Active arcs use request-local identity handles and stable beat IDs; planted/skipped history cannot transfer to rewritten beats. Pinned/in-progress arcs survive omission, parked/closed records remain durable, and exact closed-title recurrence is suppressed
 - **Injection Preview** — Preview exactly what will be injected, showing the current injection mode, arc count, and token estimate
 - **Manual Arc Addition** — Add arcs directly to any section via the `+ Add Arc` button, independent of LLM generation
@@ -189,7 +194,7 @@ Acts as a "Story Architect" that brainstorms a menu of future plot possibilities
 - **User-Safe Prompting** — The system prompt strictly forbids the model from writing actions, dialogue, thoughts, or reactions for `{{user}}`
 - **Auto-Generate** — Automatically refresh the plan every N messages (configurable interval, counted on AI replies)
 - **Injection Toggle** — Independently control whether the plan reaches the AI (toggle injection off without deleting the plan)
-- **Custom Prompts** — Override the default full-plan system and user prompts; the user prompt supports `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, `{{previousPlan}}`, `{{directionHint}}`, `{{storyPalette}}`, `{{safeCharacterContext}}`, and `{{arcCount}}`. Targeted proposals keep their fixed safety contract
+- **Custom Prompts** — Override the default full-plan system and user prompts; the user prompt supports `{{chatHistory}}`, `{{worldState}}`, `{{lastChronicle}}`, `{{previousPlan}}`, `{{directionHint}}`, `{{storyPalette}}`, `{{safeCharacterContext}}`, and `{{arcCount}}`. Custom templates replace the full-plan prompts only — targeted, scoped Add/Refresh, and progress-check prompts keep their fixed safety contracts
 - **Configurable Injection Depth** — Set how far from the bottom of the prompt the plan is injected
 - **Diagnostics and Observation** — Injection diagnostics show focused/pinned/Ready selection, parked/closed/mode omissions, and the exact post-Budget payload. Health/Overview show progress-check and proposal activity; content-free per-chat counters measure request size, targeted-vs-full use, and closed recurrence suppression
 - **Legacy Migration** — Old single-blob plans are automatically parsed into arc cards on first read. The original text is preserved, so migration is recoverable
@@ -513,24 +518,32 @@ For example, with Auto-Refresh set to `10` and Full Refresh Every set to `5`, MW
 ### Story Planner
 
 1. Open the **🗺️ Story Planner** tab
-2. Click **🎲 Generate Plan** to brainstorm a menu of future plot arcs organized across five timeline sections
-3. Review the generated arcs — each appears as an independent card with title, endpoint, section, lifecycle, Pin, Focus, Park/Resume, and a collapsible setup-beat editor
-4. **Manage individual arcs:**
+2. Click **🎲 Generate Plan** to open the scoped generation dialog:
+   - Choose **Add ideas** or **Refresh selected arcs**, and check only the sections to touch — unchecked sections are carried forward unchanged
+   - Set a **requested count** (1–30) for Add, or pick the exact active arcs to refresh (a Character Journey arc needs an assigned, available primary subject first)
+   - Pick this request's **cast policy** — *Established cast only*, *New characters allowed*, or *Actively propose new characters*
+   - With Character Journeys checked, choose **Any tracked character** or **Selected characters** as the journey subjects
+   - Optionally expand **Opt-in private NPC author context (this chat)** to plan with private major-NPC dossier fields (see the Features list above). Left collapsed, the request carries public context only
+   - Prefer the classic full rebuild? Use **Regenerate the whole plan** — it follows the Story Palette cast policy and honors custom templates
+3. Review the scoped proposal before anything is saved. Each row shows its diff; new arcs list their primary subject and supporting participants; coverage, cast-policy, and newcomer diagnostics explain what came back. When private author context was used, edit every narrator-facing title, premise, beat, and payoff in the author editor first. Uncheck rows you don't want, then **Apply changes** or **Discard**
+4. Review the arcs — each appears as an independent card with title, endpoint, section, lifecycle, Pin, Focus, Park/Resume, and a collapsible setup-beat editor
+5. **Manage individual arcs:**
    - Use the **section dropdown** on any card to move an arc between sections (Immediate Hooks → Emerging Arcs → Horizon Arcs → Character Journeys → Unresolved Threads)
    - **Pin** protects an arc through full regeneration; **Focus** spotlights it and powers Focused-only injection; **Park** shelves it without injection, aging, or reminders
+   - Character Journey cards carry a **Journey ownership** editor — assign or change the primary subject and supporting participants; ownership never changes through generation
    - Mark a beat **Planted** only when it happened. Use **Skip** when the route changed; skipped beats remain historical but do not count as planted
    - **Ready** means setup is complete but the arc is still active. Mark it **Resolved** only after the payoff happens; use **Dropped** for a rejected direction
    - Resolved/Dropped arcs remain in **Archive** as closed memory. **Delete** explicitly forgets the record and allows the idea to be proposed again
    - Edit arc titles and bodies inline — changes save automatically
-5. **Add arcs manually** — Click the **+ Add Arc** button at the bottom of any section to create an arc without LLM generation
-6. Use a card's development menu to **Rework remaining setup**, **Develop this arc**, **Suggest an alternate route**, or **Generate setup beats**. Review the diff before applying it
-7. Click **🔎 Check progress** for evidence-backed suggestions. Verify each quoted source, then Accept or Ignore; the checker never writes progress automatically
-8. Choose **All active**, **Pinned only**, or **Focused only** injection. Parked, Resolved, and Dropped records never enter narrator injection
-9. Use the Story Palette, escalation choice, new-character toggle, optional safe character context, and **Direction Hint** to steer full and targeted generation
-10. Use **📋 History** to browse snapshots, diff against the current plan, and restore a previous version
-11. Toggle **🔌 Injection** independently from storage. Toggle **🔄 Auto** only for full-plan regeneration every N AI replies; progress checking remains manual
-12. Use <code>/wt-beat</code> to list waiting beats and Ready arcs, <code>/wt-beat 2</code> to plant item 2, or <code>/wt-beat resolve R1</code> to resolve Ready item R1
-13. Expand **⚙️ Story Planner Settings** for arc count (3–30), injection depth, auto interval, custom full-plan prompts, reminders, palette, and safe character context
+6. **Add arcs manually** — Click the **+ Add Arc** button at the bottom of any section to create an arc without LLM generation
+7. Use a card's development menu to **Rework remaining setup**, **Develop this arc**, **Suggest an alternate route**, or **Generate setup beats**. Review the diff before applying it
+8. Click **🔎 Check progress** for evidence-backed suggestions. Verify each quoted source, then Accept or Ignore; the checker never writes progress automatically
+9. Choose **All active**, **Pinned only**, or **Focused only** injection. Parked, Resolved, and Dropped records never enter narrator injection
+10. Use the Story Palette (emphasis chips, escalation choice, cast policy), optional safe character context, and **Direction Hint** to steer full and targeted generation
+11. Use **📋 History** to browse snapshots, diff against the current plan, and restore a previous version
+12. Toggle **🔌 Injection** independently from storage. Toggle **🔄 Auto** only for full-plan regeneration every N AI replies — automatic generation always regenerates the whole plan and saves without review; progress checking remains manual
+13. Use <code>/wt-beat</code> to list waiting beats and Ready arcs, <code>/wt-beat 2</code> to plant item 2, or <code>/wt-beat resolve R1</code> to resolve Ready item R1
+14. Expand **⚙️ Story Planner Settings** for arc count (3–30), injection depth, auto interval, custom full-plan prompts, reminders, palette, and safe character context
 
 Regeneration is continuity-aware and identity-safe: active arcs carry request-local handles, beats keep stable IDs, planted/skipped history cannot transfer to rewritten setup, and closed/parked decisions survive omission. Exact normalized-title recurrences of Resolved or Dropped arcs are suppressed; near-miss semantic similarity remains reviewable rather than being applied automatically. Old single-blob plans migrate through the schema gate with the source text preserved for recovery.
 

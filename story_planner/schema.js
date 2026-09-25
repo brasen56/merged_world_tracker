@@ -183,9 +183,10 @@ const METRIC_COUNTER_FIELDS = Object.freeze([
     'progressChecks', 'progressSuggestions', 'progressNoEvidence',
     'progressAccepted', 'progressIgnored', 'closedRecurrencesSuppressed',
     'requestCount', 'requestChars', 'maxRequestChars',
+    'scopedRequests', 'scopedRequestChars',
 ]);
 
-const METRIC_KINDS = Object.freeze(['full', 'targeted', 'progress']);
+const METRIC_KINDS = Object.freeze(['full', 'scoped', 'targeted', 'progress']);
 
 /** Canonical, content-free Phase 7 observation counters stored per chat. */
 export function sanitizePhase7Metrics(value) {

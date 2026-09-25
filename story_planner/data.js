@@ -188,6 +188,7 @@ export function recordPhase7Request(kind, chars) {
     return incrementPhase7Metrics({
         requestCount: 1,
         requestChars: size,
+        ...(kind === 'scoped' ? { scopedRequests: 1, scopedRequestChars: size } : {}),
     }, {
         maxRequestChars: Math.max(before.maxRequestChars, size),
         lastRequestAt: Date.now(),

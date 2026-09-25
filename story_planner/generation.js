@@ -830,7 +830,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             authorContextText: authorContext?.text,
             settings: settingsSnapshot, palette: paletteSnapshot,
         });
-        recordPhase7Request('full', systemPrompt.length + firstUserContent.length);
+        recordPhase7Request(request ? 'scoped' : 'full', systemPrompt.length + firstUserContent.length);
         let result = await resolved.fetchFn({
             systemPrompt,
             userContent: firstUserContent,
@@ -853,7 +853,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                 authorContextText: authorContext?.text,
                 settings: settingsSnapshot, palette: paletteSnapshot,
             });
-            recordPhase7Request('full', systemPrompt.length + retryUserContent.length);
+            recordPhase7Request(request ? 'scoped' : 'full', systemPrompt.length + retryUserContent.length);
             result = await resolved2.fetchFn({
                 systemPrompt,
                 userContent: retryUserContent,

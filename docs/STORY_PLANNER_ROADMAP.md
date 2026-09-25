@@ -637,12 +637,15 @@ Exit criteria:
 
 ### Phase 7 — Documentation, observation, and default decisions
 
-**Implementation status (2026-09-19):** Code instrumentation, diagnostics,
+**Implementation status (2026-09-24):** Code instrumentation, diagnostics,
 panel help, README workflow documentation, exact-title closed recurrence
-suppression, and the initial decision record are implemented. The host-runtime
-manual QA matrix remains pending and is tracked in
-`docs/STORY_PLANNER_PHASE7_DECISIONS.md`; it is not represented as completed by
-the automated suite.
+suppression, and the initial decision record are implemented. V3 scoped Add/Refresh
+now has separate request measurements; V3's scoped generation, subject,
+cast-policy, author-context, and arc-quality contracts supersede the relevant
+creative-control language in earlier phases. The host-runtime manual QA matrix
+remains pending in `docs/STORY_PLANNER_PHASE7_DECISIONS.md`; automated tests do
+not count as host/model or human spoiler verification. Opt-in automatic progress
+checking is deferred until the rest of Phase 7 has been verified.
 
 **Purpose:** Finish the feature as a coherent user workflow and measure whether
 the optional automation is justified.

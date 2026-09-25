@@ -607,9 +607,11 @@ Work:
 - **Automated checks:** full suite green. Phase 1 behavior is pinned in
   `test/story_planner_phase0_v3.test.js`, `test/story_planner_phase1.test.js`,
   `test/story_planner_phase2.test.js`, `test/generation_commit_races.test.js`.
-- **Known limitations:** no journey subjects (Phase 2) and no enforceable cast
-  policy (Phase 3) — the dialog states both. Scoped requests are recorded as
-  `full` by `recordPhase7Request`, so Phase 7 metrics do not distinguish them.
+- **Known limitations at Phase 1 handoff:** no journey subjects (Phase 2) and
+  no enforceable cast policy (Phase 3) — the dialog stated both at that time.
+  **Later Phase 7 observation update (2026-09-24):** scoped requests are recorded
+  as `scoped` by `recordPhase7Request`; their count and size are distinguished
+  from legacy full-plan calls. This does not constitute Phase 1 host QA.
   Auto-generation remains full-plan and commits without review; this is now
   labeled in the dialog and in the Auto-Generate Interval help text rather than
   left for a user to infer from the manual path.

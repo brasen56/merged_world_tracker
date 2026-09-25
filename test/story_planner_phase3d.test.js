@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
-    getArcs, getPlanHistory, makeArc, setArcs, setPlanData, state,
+    getArcs, getPhase7Metrics, getPlanHistory, makeArc, setArcs, setPlanData, state,
 } from '../story_planner/data.js';
 import {
     assessNewcomerEvidence, buildReadOnlyContinuityProjection, generatePlan,
@@ -44,6 +44,29 @@ afterEach(() => {
 });
 
 describe('Story Planner V3 Phase 3D — newcomer continuity', () => {
+    test('reviewed scoped retry measures requests but does not count a full-plan commit', async () => {
+        const calls = [];
+        setFakeApi(call => {
+            calls.push(call);
+            return calls.length === 1 ? 'invalid response' : [
+                '## Horizon Arcs',
+                '- Archive knock — the established clerk arrives with the duplicate ledger.',
+            ].join('\n');
+        });
+        const proposal = await generatePlan(false, {
+            operation: 'add', sectionKeys: ['horizon'], requestedCount: 1, castPolicy: 'allowed',
+        }, { reviewOnly: true });
+        expect(proposal.arcs).toHaveLength(1);
+        expect(calls).toHaveLength(2);
+        expect(getPhase7Metrics()).toMatchObject({
+            scopedRequests: 2,
+            scopedRequestChars: calls.reduce((sum, call) => sum + call.systemPrompt.length + call.userContent.length, 0),
+            requestCount: 2, lastRequestKind: 'scoped', fullGenerations: 0,
+        });
+        expect(applyScopedPlanProposal(proposal, getArcs()).ok).toBe(true);
+        expect(getPhase7Metrics().fullGenerations).toBe(0);
+    });
+
     test('bounded read-only continuity includes ordinary title, body, and beats but no transient evidence', () => {
         const arc = makeArc({
             title: 'The Outside Auditor',
