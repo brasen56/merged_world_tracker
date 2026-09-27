@@ -39,6 +39,7 @@ import {
     mergeStats,
     quarantineIssue,
     repairIssue,
+    restoreReceiptMap,
 } from '../core/schema.js';
 import { validateQuarantineStoreData } from '../core/quarantine.js';
 
@@ -449,6 +450,13 @@ export function validateKnowledgeCountersData(data) {
         return { data: {}, issues, stats };
     }
     const accepted = { ...data };
+    if (data.countedReceiptEvents !== undefined) {
+        const restored = restoreReceiptMap(data.countedReceiptEvents, isReceiptCounts);
+        if (!Array.isArray(data.countedReceiptEvents) || restored.size !== data.countedReceiptEvents.length) {
+            issues.push(quarantineIssue('receipt-invalid', ['countedReceiptEvents'], 'Invalid receipt tuples were removed.', data.countedReceiptEvents, 'countedReceiptEvents'));
+        }
+        accepted.countedReceiptEvents = [...restored];
+    }
     for (const key of COUNTER_KEYS) {
         if (data[key] === undefined) continue;
         if (!isFiniteNumber(data[key]) || data[key] < 0) {

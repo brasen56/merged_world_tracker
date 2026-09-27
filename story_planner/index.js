@@ -14,6 +14,7 @@
  */
 
 import { syncSharedConnectionSettings, notify, getChat, captureScope, assertSameScope, getOrCreateReceiptIdentity } from '../core/index.js';
+import { restoreReceiptMap, isPositiveReceiptCount } from '../core/schema.js';
 // Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL pause
 // singleton is read even under the test barrel→stub alias — the same rule
 // story_planner/generation.js follows.
@@ -178,8 +179,7 @@ export function onChatChanged() {
     // Restore the per-chat auto counter (each chat tracks its own progress)
     const saved = getPlanData()?.autoCounter;
     state.autoCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
-    state.countedReceiptEvents = new Map((Array.isArray(getPlanData()?.countedReceiptEvents) ? getPlanData().countedReceiptEvents : [])
-        .filter(([key, count]) => typeof key === 'string' && key && Number.isInteger(count) && count > 0));
+    state.countedReceiptEvents = restoreReceiptMap(getPlanData()?.countedReceiptEvents, isPositiveReceiptCount);
     persistAutoCounter();
     // Track chat length for bulk-delete counter adjustment
     const chat = getChat() || [];

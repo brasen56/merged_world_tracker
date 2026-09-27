@@ -536,9 +536,9 @@ export async function importNpcs() {
             // exported content. If they differ significantly, the uid points
             // at a different NPC's entry — drop it so the correct content is
             // written as a new entry instead.
-            if (incomingUid != null && state.wiScript) {
+            if (incomingUid != null) {
                 const originalUid = incomingUid;
-                incomingUid = await reconcileImportedUid(incomingUid, entry.content, loadEntryContent);
+                incomingUid = await reconcileImportedUid(incomingUid, entry.content, loadEntryContent, name);
                 if (incomingUid === null) {
                     console.warn(
                         `[MWT:Knowledge] Import uid ${originalUid} for "${name}" could not be verified in the local ` +

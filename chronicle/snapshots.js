@@ -158,10 +158,51 @@ export async function generateSnapshot(isAuto = false) {
         state.isMainGenerating = false;
     }
     const chat = getChat();
-    const { index } = resolveAnchor(getChronicleData().lastAnchor);
-    const actualFrom = Math.max(0, index);
+    const chronicle = getChronicleData();
+    const { index, found } = resolveAnchor(chronicle.lastAnchor);
+    const snapshotsBefore = getSnapshots();
+    // Manual entries (and a consolidated entry whose latest source was manual)
+    // carry toIndex: -1 — they record no chat coverage. Only a real recorded
+    // range counts as a resume point, so scan back past the -1 markers; with
+    // none there is no safe fallback on an anchor miss and the refusal below
+    // fires instead of silently re-chronicling history from message zero.
+    const lastCoveredEntry = [...snapshotsBefore].reverse()
+        .find(s => Number.isInteger(s?.toIndex) && s.toIndex >= 0);
+    const lastCovered = lastCoveredEntry ? lastCoveredEntry.toIndex : undefined;
+    if (!found && chronicle.lastAnchor && !Number.isInteger(lastCovered)) {
+        setChronicleData({ anchorStale: true });
+        scSetStatus('Chronicle anchor changed and no snapshot range is available; review the history before generating.', 'error');
+        return null;
+    }
+    // On an anchor miss the boundary message is gone from the chat. If it was
+    // DELETED, every later message shifted down one slot, so the first
+    // uncovered message now sits AT lastCovered — resuming at lastCovered + 1
+    // would skip it forever. Resume AT the recorded boundary instead: in the
+    // benign case (the boundary message was edited rather than deleted) one
+    // already-covered message is re-chronicled, which a summary tolerates; a
+    // skip is unrecoverable loss.
+    let actualFrom = Math.max(0, !found && chronicle.lastAnchor && Number.isInteger(lastCovered)
+        ? lastCovered : index);
+    let startOffset = 0;
+    // Oversized-message continuation: the newest recorded range may have ended
+    // MID-MESSAGE (toCharOffset — buildMessageWindow cuts a single >100k
+    // message at the budget instead of dropping its tail). chronicle.lastAnchor
+    // is that same boundary message, so when it still resolves AND the recorded
+    // range ends at it (the marker belongs to this message, not an older entry
+    // whose snapshot was deleted), resume INSIDE it instead of past it;
+    // otherwise the unseen remainder could never reach a later snapshot.
+    if (found && chronicle.lastAnchor && lastCoveredEntry
+        && Number.isInteger(lastCoveredEntry.toCharOffset) && lastCoveredEntry.toCharOffset >= 0
+        && lastCoveredEntry.toIndex === index - 1) {
+        actualFrom = Math.max(0, index - 1);
+        startOffset = lastCoveredEntry.toCharOffset;
+    }
+    if (!found && chronicle.lastAnchor) {
+        setChronicleData({ anchorStale: true });
+        scSetStatus('Chronicle anchor changed; resuming at the last recorded snapshot boundary. Review the edited entry.', 'warning');
+    }
     if (actualFrom >= chat.length) { scSetStatus('No new messages to chronicle.', 'error'); return null; }
-    const { text, lastMsg, toIndex } = buildMessageWindow(actualFrom, undefined);
+    const { text, toIndex, toCharOffset } = buildMessageWindow(actualFrom, undefined, startOffset);
     if (!text.trim()) { scSetStatus('No filterable messages to chronicle.', 'error'); return null; }
 
     // CHRONICLE-03 (part 2): Record what the counter was when the message
@@ -235,16 +276,20 @@ export async function generateSnapshot(isAuto = false) {
             return null;
         }
 
-        const newAnchor = makeAnchor(lastMsg || chat[chat.length - 1]);
+        const newAnchor = makeAnchor(chat[toIndex]);
         const characters = getCharactersInRange(actualFrom, toIndex);
         const snapshot = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             createdAt: new Date().toISOString(), worldDate, anchor: newAnchor,
             fromIndex: actualFrom, toIndex: typeof toIndex === 'number' ? toIndex : actualFrom,
             text: raw, characters, note: '',
+            // Present only when the window ended mid-message: the character
+            // offset up to which chat[toIndex] is covered. The next generation
+            // resumes inside the message instead of past it.
+            ...(Number.isInteger(toCharOffset) && toCharOffset >= 0 ? { toCharOffset } : {}),
         };
         const snapshots = [...getSnapshots(), snapshot];
-        setChronicleData({ snapshots, lastAnchor: newAnchor, suggestSent: true, anchorStale: false });
+        setChronicleData({ snapshots, lastAnchor: newAnchor, suggestSent: true, anchorStale: !found && !!chronicle.lastAnchor });
         applyInjection();
         // CHRONICLE-03 (part 2): Consume only the messages this snapshot
         // actually covers. Anything that arrived after the window was cut is
@@ -317,7 +362,7 @@ export async function regenerateSnapshot(snapshotId) {
     const from = Math.max(0, snapshot.fromIndex ?? 0);
     const rawTo = snapshot.toIndex !== undefined && snapshot.toIndex > (snapshot.fromIndex ?? 0) ? snapshot.toIndex : Math.min(from + 200, Math.max(0, chat.length - 1));
     const to = Math.max(from, rawTo);
-    const { text } = buildMessageWindow(from, to);
+    const { text, toCharOffset: regenToCharOffset } = buildMessageWindow(from, to);
     if (!text.trim()) {
         scSetStatus('No messages for regeneration.', 'error');
         return;
@@ -385,7 +430,20 @@ export async function regenerateSnapshot(snapshotId) {
                     return;
                 }
                 const updated = [...current];
-                updated[curIdx] = { ...current[curIdx], text: raw, worldDate: newWorldDate };
+                // Regeneration rebuilds the window from the range START (char
+                // offset 0), so the entry's mid-message cut marker must follow
+                // the NEW window: kept if this regeneration itself had to cut
+                // the first message, dropped when the message now fits whole.
+                // A stale marker would make the next generation resume
+                // mid-message and re-chronicle an already-covered chunk.
+                updated[curIdx] = {
+                    ...current[curIdx],
+                    text: raw,
+                    worldDate: newWorldDate,
+                    ...(Number.isInteger(regenToCharOffset) && regenToCharOffset >= 0
+                        ? { toCharOffset: regenToCharOffset }
+                        : { toCharOffset: undefined }),
+                };
                 const written = setChronicleDataChecked({ snapshots: updated });
                 if (!written.ok) {
                     scSetStatus('Could not save regenerated entry; original was kept.', 'error');
@@ -526,6 +584,11 @@ export async function consolidateEntries(ids, baseId = null) {
                 anchor: currentLatest.anchor, fromIndex: currentEarliest.fromIndex ?? -1,
                 toIndex: currentLatest.toIndex ?? -1, text: raw,
                 characters: Array.from(allCharacters), consolidated: true, _consolidatedFrom: ids,
+                // A partial newest entry (window ended mid-message) must keep
+                // its cut marker through the merge, or the next generation
+                // would anchor past the message's unseen remainder.
+                ...(Number.isInteger(currentLatest.toCharOffset) && currentLatest.toCharOffset >= 0
+                    ? { toCharOffset: currentLatest.toCharOffset } : {}),
             };
             const deletedBin = getChronicleData()._deletedBin || [];
             const originals = currentSnapshots.filter(entry => ids.includes(entry.id));

@@ -30,6 +30,8 @@ import {
     isObject,
     quarantineIssue,
     repairIssue,
+    restoreReceiptMap,
+    isPositiveReceiptCount,
 } from '../core/schema.js';
 
 // ─── STORY-PLANNER-04 / -09: Arc canonicalizer ──────────────────────────────
@@ -958,6 +960,13 @@ export function validateStoryPlannerData(data) {
         return { data: {}, issues, stats };
     }
     const accepted = { ...data };
+    if (data.countedReceiptEvents !== undefined) {
+        const restored = restoreReceiptMap(data.countedReceiptEvents, isPositiveReceiptCount);
+        if (!Array.isArray(data.countedReceiptEvents) || restored.size !== data.countedReceiptEvents.length) {
+            issues.push(quarantineIssue('receipt-invalid', ['countedReceiptEvents'], 'Invalid receipt tuples were removed.', data.countedReceiptEvents, 'countedReceiptEvents'));
+        }
+        accepted.countedReceiptEvents = [...restored];
+    }
     if (data.arcs !== undefined) {
         // Deliberately the NON-deduplicating check: sanitizeArcs() below mints
         // a fresh id for a duplicate arc id (STORY-PLANNER-09), so repeats are

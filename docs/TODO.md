@@ -125,7 +125,7 @@ mid-operation" claims:
   unparseable range date currently switches the filter off) in the schema and
   the import. A sweep of the other module templates (`value="${…}"` attributes
   and record-text fields) found no other unescaped chat-metadata values.
-- [ ] **M2-10 — Editing or deleting the last-chronicled message restarts
+- [x] **M2-10 — Editing or deleting the last-chronicled message restarts
   Chronicle from message 0.** `resolveAnchor` returns
   `{ index: 0, found: false }` when the fingerprint misses
   (`chronicle/data.js:214`), generation ignores `found`
@@ -135,7 +135,7 @@ mid-operation" claims:
   Fix: on a miss, resume after the newest snapshot's `toIndex` (or re-anchor
   in the edit hook), and show the stale state. *Reproduced with the real
   functions.*
-- [ ] **M2-03 — An over-budget window drops the OLDEST messages but claims
+- [x] **M2-03 — An over-budget window drops the OLDEST messages but claims
   full coverage.** `buildMessageWindow` fills its 100k-character budget
   newest-first yet returns the original `fromIndex`
   (`chronicle/data.js:442-452`), and generation anchors at the newest message
@@ -144,7 +144,7 @@ mid-operation" claims:
   Compounds with M2-10. Fix: fill oldest-first from the anchor, anchor at the
   last message actually included, and record the true range. *Reproduced:
   the window reported 0→9 and the first included message was #4.*
-- [ ] **Receipt `[null]` crash + root-loop isolation — F7 / M2-07 / NK-10 /
+- [x] **Receipt `[null]` crash + root-loop isolation — F7 / M2-07 / NK-10 /
   SP4-05 (one bug, four copies).** `countedReceiptEvents: [null]` passes all
   four schemas at the current version (checked through `prepareStore`), then
   each restore destructures before validating (`world_state/index.js:64`,
@@ -156,7 +156,7 @@ mid-operation" claims:
   `core/`, tuple checks in the four schemas (Knowledge's v0→v1 migration
   already has the right one, `knowledge/schema.js:715-753`), and a try/catch
   around each module's handler in the root loop.
-- [ ] **M2-07, second half — A snapshot whose `characters` isn't an array
+- [x] **M2-07, second half — A snapshot whose `characters` isn't an array
   breaks Chronicle and the chat-change loop** *(added 2026-09-26; missed
   when §0 was first written)*. Snapshot validation checks only `id` and
   `text`, so `characters: "Alice"` gets in through a Chronicle import, a
@@ -169,7 +169,7 @@ mid-operation" claims:
   `checkChronicleSnapshot` (repair a non-array to `[]`) or read it through an
   array guard; the root-loop try/catch from the item above contains the blast
   radius either way. *Reproduced with the real functions.*
-- [ ] **NK-07 — NPC import can take another NPC's lorebook UID.**
+- [x] **NK-07 — NPC import can take another NPC's lorebook UID.**
   `reconcileImportedUid` loads the entry by UID with no name (so no label
   check) and skips the comparison when the export has no content
   (`knowledge/reconcile.js:112-121`); the caller then strips that UID from its
@@ -177,7 +177,7 @@ mid-operation" claims:
   `content: null` exactly when the source UID is stale
   (`knowledge/staging.js:405-408`). Fix: pass `name` to `loadEntryContent`,
   and drop any UID that can't be verified.
-- [ ] **NK-01 + NK-09 — A failed lorebook save followed by a chat switch loses
+- [x] **NK-01 + NK-09 — A failed lorebook save followed by a chat switch loses
   the edits.** `resetStoreCache` ignores `flushBook()` returning `false` and
   clears the cache anyway (`knowledge/store.js:1327-1341`). The comment
   promising a retry through `flushAll()` (`:1303`) is wrong: `flushAll()` has no
@@ -186,6 +186,17 @@ mid-operation" claims:
   lost profile pointer reports success and the next save duplicates the
   entry. Fix: keep failed dirty books across the reset (or queue them),
   surface the failure, and check the boolean.
+
+  *Tier 1 implementation (2026-09-26):* Chronicle now resumes from the last
+  recorded range on an anchor miss (and displays the stale warning), processes
+  message windows oldest-first with accurate coverage, and repairs malformed
+  character lists. Receipt validation/restoration is shared by the four affected
+  modules and a failed chat-change handler no longer blocks later modules.
+  Knowledge rejects unverified imported UIDs, retains dirty books after failed
+  flushes for retry, and reports profile-pointer flush failure to the UI.
+  Regression coverage: `test/tier1_review_fixes.test.js`. The untracked review
+  probes intentionally assert the former defects; update them to desired
+  behavior before using them as acceptance tests.
 
 ### 🟠 Tier 2 — real bugs, cheap fixes
 
@@ -336,7 +347,8 @@ mid-operation" claims:
 - **M5-3** — The deletion claim is false: a shared `sd-` key stays live as
   long as any message still has that send_date. The proposed first-wins rule
   would also contradict `migrateIndexKeys`, which is last-wins
-  (`interiority/data.js:1756`).
+  (`interiority/data.js:1756`). Its probe (C) was deleted from
+  `test/interiority_module5_review.test.js` accordingly (2026-09-27).
 - **F1** — The model *did* review that interval against the baseline, and the
   digest correctly marks the document as manually edited.
 - **F2** — The skipped chunk has nothing in it to scan (`!chunk.text`).
@@ -374,13 +386,18 @@ mid-operation" claims:
 ### The review probe tests
 
 `test/knowledge_module3_review.test.js`, `test/story_planner_module4_review.test.js`,
-and `test/interiority_module5_review.test.js` pass because they assert today's
-*buggy* behavior, so each fix turns one red, and CI runs on every push. Don't
-commit them as they are. When you fix an item, turn its probe into a test of
-the correct behavior (failing test first), and delete probe C, which pins
-M5-3. The Knowledge probe copies source text into a `vm` sandbox, so it breaks
-on unrelated edits and line-ending changes; import the real module under the
-core stub instead.
+and `test/interiority_module5_review.test.js` started as probes asserting
+today's *buggy* behavior, so each fix turns one red, and CI runs on every
+push. The 2.10.2 Tier 1 fixes converted the three that went red into
+regression pins of the fixed contracts: the Knowledge file's failed-flush
+retention (NK-01 + NK-09) and imported-UID verification (NK-07) probes, and
+the Story Planner file's receipt-tuple quarantine (SP4-05) probe — the two
+Knowledge conversions import the real modules under the core stub instead of
+copying source text into a `vm` sandbox (which breaks on unrelated edits and
+line-ending changes). Probe C in the Interiority file was deleted: it pinned
+M5-3, which the verification above ruled not-a-bug. The remaining probes
+still pin open §0 defects; when you fix one, turn its probe into a test of
+the correct behavior the same way (failing test first).
 
 ---
 

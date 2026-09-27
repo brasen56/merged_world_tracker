@@ -377,6 +377,9 @@ function abandonStaleHydration(bookName, reason = 'cache-reset') {
 export async function hydrateBook(bookName, seed = {}, force = false) {
     if (!bookName) return blankStore();
     const s = slot(bookName);
+    // An outgoing chat's failed write still owns this book. Never rehydrate
+    // over the only copy of those edits; the retry timer remains armed.
+    if (s.dirty && s.hydrated) return s.data;
     if (s.hydrated && !force) return s.data;
 
     // The scope is captured BEFORE the first await and re-checked in front of
@@ -1300,8 +1303,8 @@ export async function flushBook(bookName) {
         markStoreClean(bookName);
         return true;
     } catch (err) {
-        // `dirty` deliberately stays set: flushAll() retries on the next chat
-        // change, and any writeField() re-arms the debounce. Marking it clean
+        // `dirty` deliberately stays set: resetStoreCache retains failed slots
+        // for a later retry, and any writeField() re-arms the debounce. Marking it clean
         // here would strand the write in memory with only this warning.
         console.warn(`[MWT:Knowledge] store: save of "${bookName}" failed (will retry):`, err?.message || err);
         return false;
@@ -1320,24 +1323,35 @@ export function flushAll() {
 /**
  * Drop all cached stores.
  *
- * Called on chat change: the next chat may resolve to different books, and a
- * stale cache would serve one book's registry for another. Flushes pending
- * writes first so nothing is lost on the way out.
+ * Called on chat change: the next chat may resolve to different books. Flushes
+ * pending writes first; failed dirty slots survive for a later retry. A failed
+ * slot must not be replaced by a fresh hydration of the same book.
  */
 export function resetStoreCache() {
     // Serialize with restore transactions: a reset that
     // interleaves a restore's flush/rollback can re-persist cancelled data or
     // clear the cache mid-rollback.
     return withStoreLock(async () => {
-        try {
-            const names = [..._cache.keys()].filter(name => _cache.get(name)?.dirty);
-            for (const name of names) await flushBook(name);
-        } catch { /* best effort — still clear below */ }
-        for (const s of _cache.values()) {
-            if (s.timer) clearTimeout(s.timer);
+        const failed = [];
+        for (const [name, s] of _cache) {
+            if (!s.dirty) continue;
+            try {
+                if (!await flushBook(name)) failed.push(name);
+            } catch (err) {
+                console.warn(`[MWT:Knowledge] store: could not flush "${name}" during cache reset:`, err);
+                failed.push(name);
+            }
         }
-        _cache.clear();
+        for (const [name, s] of _cache) {
+            if (failed.includes(name)) {
+                scheduleFlush(name);
+            } else {
+                if (s.timer) clearTimeout(s.timer);
+                _cache.delete(name);
+            }
+        }
         _cacheGeneration += 1;
+        return failed.length === 0;
     });
 }
 

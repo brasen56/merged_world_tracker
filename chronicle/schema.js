@@ -30,6 +30,10 @@ import {
     isNonEmptyString,
     isObject,
     mergeStats,
+    repairIssue,
+    quarantineIssue,
+    restoreReceiptMap,
+    isPositiveReceiptCount,
 } from '../core/schema.js';
 import { fingerprintValue } from '../core/quarantine.js';
 
@@ -58,9 +62,22 @@ export function validateChronicleData(data) {
     for (const key of ['snapshots', '_deletedBin']) {
         if (data[key] === undefined) continue;
         const checked = checkRecordList(data[key], key, checkChronicleSnapshot, { path: [key] });
-        accepted[key] = checked.records;
         mergeStats(stats, checked.stats);
         issues.push(...checked.issues);
+        accepted[key] = checked.records.map((record, index) => {
+            if (record.characters === undefined || Array.isArray(record.characters)) return record;
+            issues.push(repairIssue('snapshot-characters-repaired', [key, index, 'characters'],
+                'Snapshot characters must be an array; replaced with an empty list.', record.characters));
+            return { ...record, characters: [] };
+        });
+    }
+    if (data.countedReceiptEvents !== undefined) {
+        const restored = restoreReceiptMap(data.countedReceiptEvents, isPositiveReceiptCount);
+        if (!Array.isArray(data.countedReceiptEvents) || restored.size !== data.countedReceiptEvents.length) {
+            issues.push(quarantineIssue('receipt-invalid', ['countedReceiptEvents'],
+                'Invalid receipt tuples were removed.', data.countedReceiptEvents, 'countedReceiptEvents'));
+        }
+        accepted.countedReceiptEvents = [...restored];
     }
     return { data: accepted, issues, stats };
 }

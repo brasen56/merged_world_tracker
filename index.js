@@ -795,8 +795,12 @@ if (eventSource && event_types?.CHAT_CHANGED) {
         // that safe half (each injection applier's paused branch clears its
         // slot), without one read of the blocked store.
         for (const [moduleKey, mod] of Object.entries(modules)) {
-            if (isModulePausedForCurrentScope(moduleKey)) mod.onChatChangedWhilePaused?.();
-            else mod.onChatChanged();
+            try {
+                if (isModulePausedForCurrentScope(moduleKey)) mod.onChatChangedWhilePaused?.();
+                else mod.onChatChanged();
+            } catch (err) {
+                console.error(`[MWT] ${moduleKey} chat-change handler failed:`, err);
+            }
         }
         if (modal?.style.display === 'flex') {
             const activeElement = document.activeElement;

@@ -20,6 +20,7 @@ import { prepareNextStoreValue } from '../core/schema.js';
 // Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStoreWriteBlocked } from '../core/schema_status.js';
+import { restoreReceiptMap, isPositiveReceiptCount } from '../core/schema.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -115,10 +116,7 @@ export function persistMsgSinceSnapshot() {
 }
 
 export function restoreReceiptBookkeeping(data = getChronicleData()) {
-    const entries = Array.isArray(data?.countedReceiptEvents) ? data.countedReceiptEvents : [];
-    state.countedReceiptEvents = new Map(entries.filter(([key, count]) =>
-        typeof key === 'string' && key && Number.isInteger(count) && count > 0
-    ));
+    state.countedReceiptEvents = restoreReceiptMap(data?.countedReceiptEvents, isPositiveReceiptCount);
 }
 
 export function getReceiptIdentity(message) {
@@ -408,7 +406,7 @@ export function shouldIncludeMessage(msg) {
 
 // ─── Build message window ────────────────────────────────────────────────────
 
-export function buildMessageWindow(fromIndex, toIndex) {
+export function buildMessageWindow(fromIndex, toIndex, startOffset = 0) {
     const chat = getChat();
     const start = fromIndex ?? (() => { const { index } = resolveAnchor(getChronicleData().lastAnchor); return index; })();
     const explicitTo = toIndex !== undefined && toIndex !== null;
@@ -428,9 +426,7 @@ export function buildMessageWindow(fromIndex, toIndex) {
     // falls into the next snapshot's range. Regenerate/consolidate pass explicit
     // bounds and keep them unchanged.
     if (!explicitTo) end = Math.max(start, Math.min(end, getStableHistoryEnd(chat)));
-    const slice = chat.slice(start, end);
-    const filtered = slice.filter(shouldIncludeMessage);
-    if (filtered.length === 0) return { text: '', lastMsg: null, fromIndex: start, toIndex: end - 1 };
+    if (end <= start) return { text: '', lastMsg: null, fromIndex: start, toIndex: start - 1, toCharOffset: null };
     const lines = [];
     let total = 0;
     // Character budget for the assembled message window.  This is deliberately
@@ -440,16 +436,50 @@ export function buildMessageWindow(fromIndex, toIndex) {
     // context-building where more history is desirable.  Keeping these
     // independent lets each caller tune its own cost/quality trade-off.
     const MAX = 100000;
-    for (let i = filtered.length - 1; i >= 0; i--) {
-        const msg = filtered[i];
+    let coveredEnd = start - 1;
+    let lastMsg = null;
+    // Character offset into the FIRST message's stripped text where this
+    // window begins. Non-zero when the previous snapshot ended mid-message
+    // (oversized-message continuation, see toCharOffset below).
+    const firstOffset = Math.max(0, Number.isInteger(startOffset) ? startOffset : 0);
+    // Set when the window had to cut the first message MID-TEXT: the character
+    // offset up to which chat[toIndex] is now covered. null = the last covered
+    // message is fully covered. generateSnapshot() persists this on the
+    // snapshot so the NEXT generation resumes inside the message instead of
+    // anchoring past its unseen remainder.
+    let toCharOffset = null;
+    for (let i = start; i < end; i++) {
+        const msg = chat[i];
+        if (!shouldIncludeMessage(msg)) { coveredEnd = i; continue; }
         const name = msg?.name || (msg.is_user ? 'User' : 'Assistant');
-        const text = stripNonNarrative(String(msg.mes || '').trim());
-        const line = `${name}: ${text}`;
-        if (total + line.length > MAX) break;
+        let text = stripNonNarrative(String(msg.mes || '').trim());
+        if (i === start && firstOffset > 0) text = text.slice(firstOffset);
+        if (!text) { coveredEnd = i; continue; }
+        const prefix = `${name}: `;
+        let line = `${prefix}${text}`;
+        // A single oversized message must not stall the anchor — but it also
+        // must not be silently truncated into permanent loss. Cover the first
+        // MAX characters now and record the cut in toCharOffset; the next
+        // snapshot resumes inside this message. The offset advances strictly
+        // every pass, so even a pathological message is walked to its end in
+        // bounded steps.
+        if (!lines.length && line.length > MAX) {
+            const keep = Math.max(1, MAX - prefix.length - 1);
+            line = `${prefix}${text.slice(0, keep)}…`;
+            lines.push(line);
+            total = line.length;
+            coveredEnd = i;
+            lastMsg = msg;
+            toCharOffset = (i === start ? firstOffset : 0) + keep;
+            break;
+        }
+        if (total + line.length + (lines.length ? 1 : 0) > MAX) break;
         lines.push(line);
-        total += line.length + 1;
+        total += line.length + (lines.length > 1 ? 1 : 0);
+        coveredEnd = i;
+        lastMsg = msg;
     }
-    return { text: lines.reverse().join('\n'), lastMsg: filtered[filtered.length - 1], fromIndex: start, toIndex: end - 1 };
+    return { text: lines.join('\n'), lastMsg, fromIndex: start, toIndex: coveredEnd, toCharOffset };
 }
 
 // ─── Message count ───────────────────────────────────────────────────────────

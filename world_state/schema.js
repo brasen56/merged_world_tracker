@@ -26,6 +26,8 @@ import {
     isObject,
     mergeStats,
     quarantineIssue,
+    restoreReceiptMap,
+    isPositiveReceiptCount,
 } from '../core/schema.js';
 
 /**
@@ -58,6 +60,13 @@ export function validateWorldStateData(data) {
         return { data: {}, issues, stats };
     }
     const accepted = { ...data };
+    if (data.countedReceiptEvents !== undefined) {
+        const restored = restoreReceiptMap(data.countedReceiptEvents, isPositiveReceiptCount);
+        if (!Array.isArray(data.countedReceiptEvents) || restored.size !== data.countedReceiptEvents.length) {
+            issues.push(quarantineIssue('receipt-invalid', ['countedReceiptEvents'], 'Invalid receipt tuples were removed.', data.countedReceiptEvents, 'countedReceiptEvents'));
+        }
+        accepted.countedReceiptEvents = [...restored];
+    }
     if (data.text !== undefined && typeof data.text !== 'string') {
         delete accepted.text;
         issues.push(quarantineIssue('text-not-string', ['text'], 'World State text must be a string.', data.text, 'text'));

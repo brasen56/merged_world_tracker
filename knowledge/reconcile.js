@@ -109,12 +109,12 @@ export function findEntryUidByNpcIdentity(entries, name) {
  * The caller supplies the read because NPC import and any future restore format
  * may resolve different books, while the safety policy remains identical.
  */
-export async function reconcileImportedUid(incomingUid, exportedContent, loadContent) {
-    if (incomingUid === null || incomingUid === undefined || typeof loadContent !== 'function') return null;
+export async function reconcileImportedUid(incomingUid, exportedContent, loadContent, name) {
+    if (incomingUid === null || incomingUid === undefined || !name || typeof loadContent !== 'function') return null;
     try {
-        const existing = await loadContent(incomingUid);
-        if (existing === null) return null;
-        if (exportedContent && existing.trim() !== exportedContent.trim()) return null;
+        const existing = await loadContent(incomingUid, name);
+        if (typeof existing !== 'string' || typeof exportedContent !== 'string'
+            || existing.trim() !== exportedContent.trim()) return null;
         return incomingUid;
     } catch {
         return null;

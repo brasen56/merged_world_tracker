@@ -496,12 +496,13 @@ export async function saveProfile(name, profileText) {
         // (setProfileUid already warned if it recorded nothing.)
         if (recorded) {
             try {
-                await flushBook(getLorebookName());
+                if (!await flushBook(getLorebookName())) result.uidRecorded = false;
             } catch (err) {
+                result.uidRecorded = false;
                 console.warn('[MWT:Knowledge] Could not flush profileUid immediately:', err);
             }
         }
-        result.uidRecorded = recorded;
+        if (result.uidRecorded !== false) result.uidRecorded = recorded;
     }
     return result;
 }

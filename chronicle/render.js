@@ -384,6 +384,7 @@ export function renderContent() {
             </div>
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap;margin-top:8px">
                 <input type="text" id="sc-search-input" class="mwt-input" placeholder="Search entries…" value="${escapeHtml(state.pendingSearch)}" style="flex:1">
+                ${getChronicleData().anchorStale ? '<span class="sc-status--warning">Anchor changed — review the last snapshot before continuing.</span>' : ''}
                 ${autoSettings.autoSnapshot ? `<span style="color:var(--mwt-text-dim)">Msgs until auto: ${Math.max(0, (autoSettings.autoSnapshotThreshold || 40) - state.msgSinceSnapshot)}</span>` : `<span style="color:var(--mwt-text-dim)">Msgs since last: ${(() => { const v = getMessageCountSinceLastSnapshot(); return v ?? '?'; })()}</span>`}
             </div>
             ${autoSettings.autoSnapshot ? `<div style="color:var(--mwt-accent);margin-top:4px">Auto-snapshot: ON (~${autoSettings.autoSnapshotThreshold} msgs)</div>` : ''}

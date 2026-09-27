@@ -15,6 +15,7 @@
  */
 
 import { syncSharedConnectionSettings, estimateTokens, getChat, getStableHistoryEnd, getOrCreateReceiptIdentity } from '../core/index.js';
+import { restoreReceiptMap, isPositiveReceiptCount } from '../core/schema.js';
 
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -61,8 +62,7 @@ export function onChatChanged() {
     state.editSessionActive = false;
     const saved = getWorldStateData()?.autoRefreshCounter;
     state.autoRefreshCounter = (typeof saved === 'number' && Number.isFinite(saved)) ? saved : 0;
-    state.countedReceiptEvents = new Map((Array.isArray(getWorldStateData()?.countedReceiptEvents) ? getWorldStateData().countedReceiptEvents : [])
-        .filter(([key, count]) => typeof key === 'string' && key && Number.isInteger(count) && count > 0));
+    state.countedReceiptEvents = restoreReceiptMap(getWorldStateData()?.countedReceiptEvents, isPositiveReceiptCount);
     persistAutoRefreshCounter();
     // Track chat length for bulk-delete counter adjustment
     const chat = getChat() || [];

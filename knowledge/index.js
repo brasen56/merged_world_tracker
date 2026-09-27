@@ -21,6 +21,7 @@ import { registerSafeCharacterContextProvider } from '../core/index.js';
 import { buildPlannerCharacterContext, buildPlannerAuthorContext, listPlannerCharacterCandidates, resolvePlannerCharacterEntities } from './planner_context.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
 import { resetStoreCache, hydrateCurrentBooks } from './store.js';
+import { restoreReceiptMap } from '../core/schema.js';
 // The §5.4 Retry seam: Knowledge's Retry action re-runs hydration (the one
 // preparation path this module owns today). Direct import — see store.js's
 // pause-wiring note about the test-only barrel→stub alias.
@@ -581,8 +582,8 @@ export function onChatChanged() {
     // spent). Metadata written before the swipe fix stored raw receive counts,
     // which would over-decrement the counters when such a receipt is deleted —
     // normalise them to the two-state form on the way in.
-    state.countedReceiptEvents = new Map((Array.isArray(saved?.countedReceiptEvents) ? saved.countedReceiptEvents : [])
-        .filter(([key, counts]) => typeof key === 'string' && key && counts && typeof counts === 'object')
+    state.countedReceiptEvents = new Map([...restoreReceiptMap(saved?.countedReceiptEvents,
+        counts => counts !== null && typeof counts === 'object' && !Array.isArray(counts))]
         .map(([key, counts]) => [key, Object.fromEntries(
             Object.entries(counts).map(([type, value]) => [type, value ? 1 : 0]),
         )]));

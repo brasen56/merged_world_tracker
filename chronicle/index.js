@@ -26,7 +26,7 @@ import {
     getSettings, saveSettings, hasValidSettings,
     getChronicleData, setChronicleData, getSnapshots,
     persistMsgSinceSnapshot, restoreReceiptBookkeeping, getReceiptIdentity,
-    isAnchorStale,
+    isAnchorStale, getMessageCountSinceLastSnapshot,
 } from './data.js';
 
 import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
@@ -144,7 +144,7 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     // mid-generation, onChatChanged has already restored the *new* chat's
     // counter — resetting here would wipe it and persist 0 into the wrong
     // chat's metadata, so only reset when we're still on the same chat.
-    if (!snapshot) {
+    if (!snapshot && getMessageCountSinceLastSnapshot() !== null) {
         if (assertSameScope(scopeBefore).ok) {
             state.msgSinceSnapshot = 0;
             state.countedReceiptEvents.clear();

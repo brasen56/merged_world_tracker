@@ -12,6 +12,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.10.2]
+
+### Fixed
+
+- **Chronicle no longer restarts from message zero when its anchor message is
+  edited or deleted.** The anchor fingerprint misses after an edit, and
+  generation used to fall back to index 0, re-chronicling the whole chat. It
+  now resumes from the newest snapshot with a real recorded range (entries
+  with `toIndex: -1`, such as manual entries, record no coverage), resumes
+  AT the recorded boundary rather than past it — deleting the boundary
+  message shifts the next message into that slot, and resuming past it would
+  skip that message forever — and refuses with a visible error when no
+  recorded range exists. The stale state is surfaced: `anchorStale` shows an
+  "Anchor changed" warning in the entry list, and the next successful
+  generation clears it only when the anchor actually resolved.
+  (M2-10, `docs/TODO.md` §0.)
+
+- **Chronicle's message window now covers the oldest messages first and
+  records the range it actually covered.** The window used to fill its
+  100,000-character budget newest-first yet return the original start
+  index, so messages dropped at the front were never chronicled — easiest
+  to hit on the first Generate of a long existing chat. It now fills
+  oldest-first from the anchor, the new snapshot anchors at the last
+  message actually included, and `fromIndex` / `toIndex` record the true
+  range. A single message larger than the whole budget is cut mid-text with
+  the cut recorded (`toCharOffset`) instead of silently losing its tail:
+  the next Generate resumes inside that message, Regenerate re-derives the
+  marker from its own window, and consolidation keeps a partial newest
+  entry's marker through the merge. (M2-03, `docs/TODO.md` §0.)
+
+- **A malformed receipt event no longer takes down chat-change hydration
+  for every module after it.** `countedReceiptEvents: [null]` passed all
+  four module schemas and then crashed each restore path when it
+  destructured the tuple — and because the root `CHAT_CHANGED` loop had no
+  per-module error handling, one bad store left every later module (World
+  State → Chronicle → Knowledge → Story Planner → Interiority) running on
+  the previous chat's in-memory counters. A shared `restoreReceiptMap()` in
+  `core/schema.js` is now the single restore path in all four modules, each
+  schema quarantines invalid tuples (`receipt-invalid`) instead of passing
+  them through, and each module's chat-change handler runs in its own
+  try/catch so a failure is logged without blocking the rest.
+  (F7 / M2-07 / NK-10 / SP4-05, `docs/TODO.md` §0.)
+
+- **A Chronicle snapshot whose `characters` isn't an array no longer breaks
+  the tab and the chat-change loop.** Such a record — arriving via a
+  Chronicle import, a shared chat, or a backup — used to throw in the stats
+  view and in injection, and therefore in Chronicle's `onChatChanged`. The
+  schema now repairs a non-array list to `[]` in both the entry list and
+  the trash, recording a repair issue. (M2-07, second half,
+  `docs/TODO.md` §0.)
+
+- **Knowledge's NPC import can no longer adopt another NPC's lorebook
+  entry.** UID verification loaded the imported UID with no name check and
+  skipped the content comparison when the export carried no content —
+  exactly the case the exporter writes when the source UID is stale — and
+  the import then stripped that UID from its current owner. Verification
+  now requires the NPC's name, loads the entry by UID and name, requires
+  the exported content to be a string that matches, and drops any UID that
+  cannot be verified, so the content is written as a fresh entry instead.
+  (NK-07, `docs/TODO.md` §0.)
+
+- **Knowledge no longer discards lorebook edits when a save fails across a
+  chat switch.** The cache reset flushed pending books but cleared the
+  cache regardless of the outcome, so a failed write was dropped and the
+  next save duplicated the entry; the promised retry had no callers.
+  Failed dirty books now survive the reset with their retry timer armed, a
+  later hydration never overwrites the only copy of those edits, and the
+  reset reports whether anything failed to flush. `saveProfile()` checks
+  the flush result instead of assuming success, so a profile whose registry
+  pointer could not be persisted reports a repairable partial success
+  rather than "saved." (NK-01 + NK-09, `docs/TODO.md` §0.)
+
+### Added
+
+- Regression coverage for the Tier 1 review fixes:
+  `test/tier1_review_fixes.test.js` pins the oldest-first window budget,
+  the anchor-miss resume point, the snapshot `characters` repair,
+  receipt-tuple rejection across all four schemas and the shared restore,
+  imported-UID verification, and failed-flush retention with retry; and
+  `test/chronicle_window_coverage.test.js` pins oversized-message
+  continuation, deleted-anchor boundary resumption, a manual entry no
+  longer restarting coverage at message zero, and the refusal when no
+  recorded range exists.
+
 ## [2.10.1]
 
 ### Security
