@@ -18,7 +18,7 @@
  */
 
 import {
-    getChat, getStableHistoryEnd, wholePhraseRegex,
+    getChat, getStableHistoryEnd, wholePhraseRegex, stripNonNarrative,
     parseCurrentScene, patchCurrentScene, normalizePresentValue,
 } from '../core/index.js';
 import {
@@ -78,7 +78,12 @@ function sanitizeLastTouchedMsg(lastTouchedMsg, currentMsgIndex) {
 // ─── Scan window (with chat indices) ────────────────────────────────────────
 
 function getScanWindowWithIndices() {
-    const max = getMaxScanMessages(getSettings());
+    const settings = getSettings();
+    const max = getMaxScanMessages(settings);
+    const filters = String(settings.messageFilter || '').split('\n').map(s => s.trim()).filter(Boolean).flatMap(pattern => {
+        try { return [new RegExp(pattern, 'gi')]; }
+        catch (err) { console.warn(`[MWT:WorldState] Invalid regex filter skipped: "${pattern}" — ${err.message}`); return []; }
+    });
     const chat = getChat() || [];
     // Align with getRecentMessagesForScan(): only settled history can mark an
     // entity as touched, so a swiped/discarded turn is deferred rather than
@@ -87,7 +92,8 @@ function getScanWindowWithIndices() {
     const start = Math.max(0, end - max);
     const out = [];
     for (let i = start; i < end; i++) {
-        const text = String(chat[i]?.mes || '');
+        let text = stripNonNarrative(String(chat[i]?.mes || ''));
+        for (const filter of filters) text = text.replace(filter, '');
         if (text.trim()) out.push({ index: i, text });
     }
     return out;
@@ -137,8 +143,7 @@ export function buildProvenance() {
         let foundInWindow = false;
         let windowMentions = 0;
 
-        const escaped = info.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const re = new RegExp(`\\b${escaped}\\b`, 'i');
+        const re = wholePhraseRegex(info.label);
         for (const { index, text: msgText } of scan) {
             if (!re.test(msgText)) continue;
             foundInWindow = true;

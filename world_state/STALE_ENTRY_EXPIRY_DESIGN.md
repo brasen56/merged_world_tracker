@@ -300,14 +300,14 @@ The per-section regeneration path (`regenerateSection` in `sections.js`) should 
    outright, and a canonical name grounds through an alias appearing in
    the evidence.
 4. ✅ **Done (2026-07-03).** `expiryMode: 'quarantine'` (moves stale entries to
-   a `## Archive (Stale)` section, excluded from prompt injection via
-   `injection.js`'s `splitWorldState()`) and `'remove'` are implemented and
+   a `## Archive (Stale)` section, excluded from prompt injection by the
+   document projection in `injection.js`) and `'remove'` are implemented and
    exposed in settings alongside `'mark'` — nothing hides them from the UI,
    but they remain opt-in (`expiryMode` defaults to `'mark'`). Likewise
    `groundingMode: 'strict'` is implemented: on rejection it retries the
-   generation once with the rejection reason as a reminder, then — rather
-   than discarding an otherwise-valid refresh — falls back to a soft strip
-   instead of failing the whole refresh. A manual "🧹 Purge Stale Entries"
+   generation once with the rejection reason as a reminder, then discards
+   the refresh if strict grounding still rejects it (no soft fallback).
+   A manual "🧹 Purge Stale Entries"
    button (`purgeStaleEntries()`, always mode `'remove'`) is available
    independent of the configured `expiryMode`, per §8.
 

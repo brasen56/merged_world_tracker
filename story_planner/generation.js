@@ -23,7 +23,7 @@ import { getSettings, hasValidSettings } from './settings.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { MAX_CONTINUITY_BEATS_PER_ARC, SECTIONS, storyPlannerSchema, sanitizeStoryPlanRequest, sanitizeCharacterContextSelection, getStoryPlanRequestError, strictSectionKeyFromLabel } from './schema.js';
 import {
-    state, getArcs, setArcs, pushPlanToHistory,
+    state, getArcs, setArcsWithHistory,
     parsePlanTextToArcs, serializeArcsToText, mergeRegeneratedArcs,
     getDirectionHint, getArcCount, buildClosedMemoryProjection, buildParkedMemoryProjection,
     getStoryPalette, getCharacterContextSelection,
@@ -1027,11 +1027,8 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             throw new Error('A marked newcomer entrance did not survive the final plan merge.');
         }
 
-        // STORY-PLANNER-02: Snapshot the PRE-OPERATION arcs for history, not
-        // whatever is current after the API returned. This is what makes
-        // Revert restore the pre-generation plan. Do this only after all
-        // post-merge validation has passed.
-        if (arcsBeforeCall.length && !reviewOnly) pushPlanToHistory(arcsBeforeCall);
+        // The reviewed path returns a proposal; the legacy path must commit
+        // its plan and pre-operation history in the same checked write.
         const finalNewcomerEvidence = mergedNewcomerEvidence;
 
         if (reviewOnly && request) {
@@ -1111,7 +1108,8 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             };
         }
 
-        setArcs(newArcs);
+        const written = setArcsWithHistory(newArcs, arcsBeforeCall);
+        if (!written.ok) throw new Error('Story Planner refused the generated plan; no history or success metrics were saved.');
         incrementPhase7Metrics({
             fullGenerations: 1,
             closedRecurrencesSuppressed: suppressedClosed,

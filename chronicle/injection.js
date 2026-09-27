@@ -103,6 +103,21 @@ export function getEntriesForInjection() {
     return [];
 }
 
+/** The one body used by the live prompt, the preview and token estimates. */
+export function buildChronicleInjectionBody(entries = getEntriesForInjection(), snapshots = getSnapshots()) {
+    return [...entries].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+        .map(s => {
+            const num = snapshots.indexOf(s) + 1;
+            const charInfo = s.characters?.length ? ` [${s.characters.join(', ')}]` : '';
+            return `### Chronicle Entry ${num} — ${s.worldDate || s.createdAt}${charInfo}\n${s.text}`;
+        }).join('\n\n---\n\n');
+}
+
+export function buildChronicleInjectionText() {
+    const body = buildChronicleInjectionBody();
+    return body ? `${CHRONICLE_INJECTION_HEADER}\n\n${body}` : '';
+}
+
 export function getInjectionStats() {
     const snapshots = getSnapshots();
     const { mode: injectMode, count: injectCount } = getInjectionSettings();
@@ -111,7 +126,7 @@ export function getInjectionStats() {
     const consolidatedCount = snapshots.filter(s => s.consolidated).length;
     const totalWords = snapshots.reduce((sum, s) => sum + (s.text?.split(/\s+/).length || 0), 0);
     const entriesToInject = getEntriesForInjection();
-    const injectionText = entriesToInject.map(s => s.text || '').join('\n\n---\n\n');
+    const injectionText = entriesToInject.length ? buildChronicleInjectionText() : '';
     const tokenEstimate = estimateTokens(injectionText);
     const allCharacters = new Set();
     snapshots.forEach(s => { if (s.characters) s.characters.forEach(c => allCharacters.add(c)); });
@@ -177,18 +192,7 @@ export function applyInjection() {
     // (this apply + the 💉 Injection diagnostics tab).
     const placement = resolveInjectionPlacement();
 
-    let body = '';
-    if (enabled && snapshots.length > 0) {
-        const entries = getEntriesForInjection();
-        if (entries.length > 0) {
-            entries.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-            body = entries.map(s => {
-                const num = snapshots.indexOf(s) + 1;
-                const charInfo = s.characters?.length ? ` [${s.characters.join(', ')}]` : '';
-                return `### Chronicle Entry ${num} — ${s.worldDate || s.createdAt}${charInfo}\n${s.text}`;
-            }).join('\n\n---\n\n');
-        }
-    }
+    const body = enabled && snapshots.length > 0 ? buildChronicleInjectionBody() : '';
 
     applyExtensionPromptInjection({
         key: EXTENSION_PROMPT_KEY,

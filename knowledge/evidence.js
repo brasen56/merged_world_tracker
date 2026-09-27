@@ -463,6 +463,9 @@ export function mergeEvidenceFiles(keepName, mergeName, tag) {
         const b = mergeMeta[key];
         keepMeta[key] = (typeof a === 'number' && typeof b === 'number') ? Math.min(a, b) : (a ?? b);
     }
+    // The absorbed NPC's capture index belongs to its own timeline. Discard
+    // it on merge so the combined watermark cannot skip equal-time messages.
+    delete keepMeta.lastCaptureIndex;
     keepMeta.updatedAt = Date.now();
     keepMeta.mergedFrom = [
         ...(Array.isArray(keepMeta.mergedFrom) ? keepMeta.mergedFrom : []),
@@ -514,8 +517,7 @@ export function clearEvidence(name) {
         lastCaptureTs: null,
         lastBackfillTs: null,
     };
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 /**
@@ -547,8 +549,7 @@ export function clearAllEvidence() {
         };
         count++;
     }
-    if (count > 0) saveEvidenceMap();
-    return count;
+    return count > 0 && !saveEvidenceMap().ok ? 0 : count;
 }
 
 // ─── Orphaned profiles (evidence clear consequences) ──────────────────────────
@@ -602,7 +603,7 @@ export function orphanedProfilesWarning(orphaned, { prospective = false } = {}) 
  */
 function touch(file) {
     file.meta.updatedAt = Date.now();
-    saveEvidenceMap();
+    return saveEvidenceMap();
 }
 
 // ─── ID generation ───────────────────────────────────────────────────────────
@@ -708,7 +709,7 @@ export function appendRawObservations(name, observations) {
         added++;
     }
 
-    if (added > 0) touch(file);
+    if (added > 0 && !touch(file).ok) throw new Error('Evidence observations could not be saved.');
     return { added, skipped };
 }
 
@@ -750,8 +751,7 @@ export function updateRawObservation(name, id, patch) {
     obs.claim = proposedClaim;
     obs.quote = proposedQuote;
     if (patch.category != null) obs.category = validCategory(patch.category);
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 /**
@@ -777,8 +777,7 @@ export function deleteRawObservation(name, id) {
             con.sources = con.sources.filter(s => s !== id);
         }
     }
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 /**
@@ -796,8 +795,7 @@ export function toggleCanon(name, id, value) {
     const obs = (file.raw || []).find(o => o.id === id);
     if (!obs) return null;
     obs.canon = value != null ? !!value : !obs.canon;
-    touch(file);
-    return obs.canon;
+    return touch(file).ok ? obs.canon : null;
 }
 
 // ─── Consolidation: raw → consolidated (Slice 3) ──────────────────────────────
@@ -933,7 +931,7 @@ export function applyConsolidation(name, consolidated, sourceIds) {
     // never be a replacement.
     file.consolidated.push(...newConsolidated);
 
-    touch(file);
+    if (!touch(file).ok) throw new Error('Consolidated evidence could not be saved.');
     return {
         consolidatedCount: newConsolidated.length,
         archivedCount,
@@ -957,8 +955,7 @@ export function updateConsolidated(name, id, patch) {
     if (!con) return false;
     if (patch.claim != null) con.claim = String(patch.claim).trim();
     if (patch.category != null) con.category = validCategory(patch.category);
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 /**
@@ -976,8 +973,7 @@ export function deleteConsolidated(name, id) {
     const before = (file.consolidated || []).length;
     file.consolidated = (file.consolidated || []).filter(c => c.id !== id);
     if (file.consolidated.length === before) return false;
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 /**
@@ -1008,8 +1004,7 @@ export function expandConsolidated(name, id) {
 
     // Remove the consolidated entry
     file.consolidated = (file.consolidated || []).filter(c => c.id !== id);
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 // ─── User overrides (Slice 3) ────────────────────────────────────────────────
@@ -1040,8 +1035,7 @@ export function addUserOverride(name, text) {
     if (!file.userOverrides) file.userOverrides = [];
     const id = `usr-${String(file.userOverrides.length + 1).padStart(3, '0')}`;
     file.userOverrides.push({ id, text: String(text).trim(), addedAt: Date.now() });
-    touch(file);
-    return id;
+    return touch(file).ok ? id : null;
 }
 
 /**
@@ -1058,8 +1052,7 @@ export function updateUserOverride(name, id, text) {
     const ov = file.userOverrides.find(o => o.id === id);
     if (!ov) return false;
     ov.text = String(text).trim();
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 /**
@@ -1075,8 +1068,7 @@ export function deleteUserOverride(name, id) {
     const before = file.userOverrides.length;
     file.userOverrides = file.userOverrides.filter(o => o.id !== id);
     if (file.userOverrides.length === before) return false;
-    touch(file);
-    return true;
+    return touch(file).ok;
 }
 
 // ─── Reading evidence for profile generation ─────────────────────────────────
@@ -1179,6 +1171,13 @@ export function getCaptureWatermark(name) {
     return file?.meta?.lastCaptureTs ?? null;
 }
 
+/** The index only disambiguates messages sharing the timestamp in this chat. */
+export function getCaptureCursor(name) {
+    const meta = getEvidenceFile(name, false)?.meta;
+    return Number.isInteger(meta?.lastCaptureIndex) && meta.lastCaptureIndex >= 0
+        ? { ts: meta.lastCaptureTs, index: meta.lastCaptureIndex } : null;
+}
+
 /**
  * Advance the capture watermark to the given timestamp (if it's newer than the
  * current value). Called after a successful capture pass.
@@ -1186,12 +1185,20 @@ export function getCaptureWatermark(name) {
  * @param {string} name — NPC name
  * @param {number} ts — the max send_date among captured messages
  */
-export function setCaptureWatermark(name, ts) {
+export function setCaptureWatermark(name, ts, index = null) {
     if (typeof ts !== 'number' || !Number.isFinite(ts)) return;
     const file = getEvidenceFile(name);
     const cur = file.meta.lastCaptureTs;
-    if (cur == null || ts > cur) {
+    const oldIndex = file.meta.lastCaptureIndex;
+    if (cur == null || ts > cur || (ts === cur && Number.isInteger(index) && index > (oldIndex ?? -1))) {
         file.meta.lastCaptureTs = ts;
+        // Legacy timestamps without an index must stay timestamp-only until a
+        // NEWER timestamp is captured; do not reprocess an old equal-time batch.
+        if (Number.isInteger(index) && index >= 0 && (cur == null || ts > cur || oldIndex != null)) {
+            file.meta.lastCaptureIndex = index;
+        } else if (ts > cur) {
+            delete file.meta.lastCaptureIndex;
+        }
         touch(file);
     }
 }

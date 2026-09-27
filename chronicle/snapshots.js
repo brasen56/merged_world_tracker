@@ -12,6 +12,7 @@ import {
     getCurrentWorldState, getWorldStateFactual, getCurrentWorldStateScene,
     captureScope, assertSameScope, isCancellation,
     captureRevision,
+    sameRevision,
 } from '../core/index.js';
 
 import { captureSceneAnchorBaseline, updateSceneAnchor } from '../world_state/scene.js';
@@ -28,11 +29,11 @@ import {
     getChronicleData, setChronicleData, setChronicleDataChecked, getSnapshots,
     getCharactersInRange, scSetStatus, getContentEl,
     makeAnchor, resolveAnchor, buildMessageWindow,
-    persistMsgSinceSnapshot, getReceiptIdentity,
+    getReceiptIdentity,
     _render,
 } from './data.js';
 
-import { applyInjection } from './injection.js';
+import { applyInjection, getInjectionSettings } from './injection.js';
 import { retainChronicleTrash } from './trash.js';
 
 // ─── World State sync ────────────────────────────────────────────────────────
@@ -205,6 +206,11 @@ export async function generateSnapshot(isAuto = false) {
     if (actualFrom >= chat.length) { scSetStatus('No new messages to chronicle.', 'error'); return null; }
     const { text, toIndex, toCharOffset } = buildMessageWindow(actualFrom, undefined, startOffset);
     if (!text.trim()) { scSetStatus('No filterable messages to chronicle.', 'error'); return null; }
+    // Freeze the exact source interval used in the prompt. Same-chat edits
+    // must not attach a newly built anchor/character list to old model output.
+    const sourceRevision = captureRevision(chat.slice(actualFrom, toIndex + 1));
+    const sourceAnchor = makeAnchor(chat[toIndex]);
+    const sourceCharacters = getCharactersInRange(actualFrom, toIndex);
 
     // CHRONICLE-03 (part 2): Record what the counter was when the message
     // window was cut. onMessageReceived() now keeps counting while a snapshot
@@ -213,20 +219,24 @@ export async function generateSnapshot(isAuto = false) {
     // and therefore NOT in this snapshot, so they must still count toward the
     // next one. Subtracting the consumed amount instead of zeroing keeps the
     // auto-snapshot cadence honest across a long generation.
-    const counterAtWindow = state.msgSinceSnapshot;
+    const receiptEventsAtWindow = new Map(state.countedReceiptEvents);
     // The window now ends at `toIndex` (the last included message), not at the
     // end of chat: buildMessageWindow excludes the trailing in-flight pair. Those
-    // excluded messages are still counted in `counterAtWindow`, so they must
+    // excluded messages can have counted events in `receiptEventsAtWindow`, so they must
     // survive the consume below — otherwise the auto-snapshot cadence drifts by
     // the exclusion count on every snapshot.
     // msgSinceSnapshot counts MESSAGE_RECEIVED events, not raw chat entries.
     // The excluded user+assistant pair therefore preserves one assistant
     // receipt rather than two raw-array slots.
     const tailStart = Math.max(0, toIndex + 1);
-    const uncoveredTailReceipts = chat
-        .slice(tailStart)
-        .filter(msg => msg && !msg.is_user && !msg.is_system).length;
-    const consumedAtWindow = counterAtWindow - uncoveredTailReceipts;
+    const tailReceiptKeys = new Set();
+    for (const message of chat.slice(tailStart)) {
+        if (!message || message.is_user || message.is_system) continue;
+        const key = getReceiptIdentity(message);
+        tailReceiptKeys.add(key);
+    }
+    // Only receipt EVENTS in the captured counter can be consumed. Chat rows
+    // loaded from history (or suppressed by panic) have no counted event.
 
     // CHRONICLE-01/02: Capture scope before async API call. The old weak key
     // collapsed two different chats on the same character when chatId was
@@ -276,9 +286,13 @@ export async function generateSnapshot(isAuto = false) {
             scSetStatus('Chat changed during generation — result discarded.', 'warning');
             return null;
         }
+        if (!sameRevision(sourceRevision, (getChat() || []).slice(actualFrom, toIndex + 1))) {
+            scSetStatus('Source messages changed during generation — result discarded.', 'warning');
+            return null;
+        }
 
-        const newAnchor = makeAnchor(chat[toIndex]);
-        const characters = getCharactersInRange(actualFrom, toIndex);
+        const newAnchor = sourceAnchor;
+        const characters = sourceCharacters;
         const snapshot = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             createdAt: new Date().toISOString(), worldDate, anchor: newAnchor,
@@ -290,34 +304,40 @@ export async function generateSnapshot(isAuto = false) {
             ...(Number.isInteger(toCharOffset) && toCharOffset >= 0 ? { toCharOffset } : {}),
         };
         const snapshots = [...getSnapshots(), snapshot];
-        setChronicleData({ snapshots, lastAnchor: newAnchor, suggestSent: true, anchorStale: !found && !!chronicle.lastAnchor });
-        applyInjection();
-        // CHRONICLE-03 (part 2): Consume only the messages this snapshot
-        // actually covers. Anything that arrived after the window was cut is
-        // still uncounted work, so it carries over. Clamped at 0 because a
+        // CHRONICLE-03 (part 2): Consume only counted events this snapshot
+        // actually covers. Anything arriving after the window was cut
+        // remains work, so it carries over. Clamped at 0 because a
         // deletion during generation can lower the counter below the captured
         // value.
-        state.msgSinceSnapshot = Math.max(0, state.msgSinceSnapshot - consumedAtWindow);
+        // A deletion during the API call may already have removed a covered
+        // event from the live counter. Consume only the captured events still
+        // present, or that deletion would subtract a newer arrival twice.
+        const consumedAtWindow = [...receiptEventsAtWindow].reduce((sum, [key, count]) =>
+            sum + (tailReceiptKeys.has(key) ? 0 : Math.min(count, state.countedReceiptEvents.get(key) || 0)), 0);
+        const remainingCounter = Math.max(0, state.msgSinceSnapshot - consumedAtWindow);
         // Consume receipt provenance with the counter. Keep only events that
         // belong to the uncovered tail, rather than relying on Map insertion
         // order (which is unrelated to chat position after regenerations).
-        const tailReceiptCounts = new Map();
-        for (const message of chat.slice(tailStart)) {
-            if (!message || message.is_user || message.is_system) continue;
-            const key = getReceiptIdentity(message);
-            tailReceiptCounts.set(key, (tailReceiptCounts.get(key) || 0) + 1);
+        const remainingEvents = new Map(state.countedReceiptEvents);
+        for (const [key, count] of receiptEventsAtWindow) {
+            const liveCount = remainingEvents.get(key) || 0;
+            const newlyArrived = Math.max(0, liveCount - count);
+            const retain = (tailReceiptKeys.has(key) ? Math.min(count, liveCount) : 0) + newlyArrived;
+            if (retain > 0) remainingEvents.set(key, retain);
+            else remainingEvents.delete(key);
         }
-        for (const [key, count] of state.countedReceiptEvents) {
-            const retain = Math.min(count, tailReceiptCounts.get(key) || 0);
-            if (retain > 0) state.countedReceiptEvents.set(key, retain);
-            else state.countedReceiptEvents.delete(key);
-        }
-        persistMsgSinceSnapshot();
+        const written = setChronicleDataChecked({ snapshots, lastAnchor: newAnchor,
+            suggestSent: true, anchorStale: !found && !!chronicle.lastAnchor,
+            msgSinceSnapshot: remainingCounter, countedReceiptEvents: [...remainingEvents.entries()] });
+        if (!written.ok) { scSetStatus('Chronicle entry could not be saved.', 'error'); return null; }
+        state.msgSinceSnapshot = remainingCounter;
+        state.countedReceiptEvents = remainingEvents;
+        applyInjection();
         state.selectedSnapshotId = snapshot.id;
         // Only update the UI when the Chronicle tab is actually visible —
         // auto-snapshot can fire while the modal is closed, in which case
         // there's nothing to render (and renderContent() would be a no-op).
-        if (getContentEl()) _render.renderContent();
+        if (getContentEl()?.getClientRects().length) _render.renderContent();
         if (getSettings().syncWorldState) syncWorldStateFromSnapshot(snapshot, {
             source: 'generated', scope: scopeBefore,
             expectedRevision: worldStateRevision, baselineStatusSignature: worldStateBaseline,
@@ -340,8 +360,10 @@ export async function generateSnapshot(isAuto = false) {
         notify('Session Chronicle', `Chronicle generation failed: ${err.message}`, 'error');
         return null;
     } finally {
-        state.isGenerating = false;
-        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        if (assertSameScope(scopeBefore).ok) {
+            state.isGenerating = false;
+            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        }
     }
 }
 
@@ -475,8 +497,10 @@ export async function regenerateSnapshot(snapshotId) {
         // reach here the listeners are wired and no longer need the lock
         // (mirrors consolidateEntries, which does not hold the lock during its
         // preview either).
-        state.isGenerating = false;
-        document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        if (assertSameScope(scopeBefore).ok) {
+            state.isGenerating = false;
+            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+        }
     }
 }
 
@@ -508,9 +532,12 @@ export async function consolidateEntries(ids, baseId = null) {
         base = selected[0];
         deltas = selected.slice(1);
     }
-    const baseSection = `=== BASE ENTRY (designated) ===\n${base.text}`;
-    const deltaSections = deltas.map((d, i) => `=== DELTA ${i + 1} (later) ===\n${d.text}`).join('\n\n');
-    const userContent = `${baseSection}\n\n${deltaSections}`;
+    const chronological = [...selected].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const baseSection = `=== BASE ENTRY (designated foundation; not necessarily earliest) ===\n${base.text}`;
+    const deltaSections = deltas.map((d, i) => `=== SOURCE ENTRY ${i + 1} (chronological order among remaining entries) ===\n${d.text}`).join('\n\n');
+    const userContent = `Timeline order (earliest to latest):\n${chronological.map((entry, i) =>
+        `${i + 1}. ${entry.id} — ${entry.worldDate || entry.createdAt}${entry.id === base.id ? ' (designated foundation)' : ''}`).join('\n')}\n` +
+        `The timeline endpoint is entry ${chronological.at(-1).id}; take the Time Anchor from that entry, even if it is BASE.\n\n${baseSection}\n\n${deltaSections}`;
 
     // Pass entries to the preview in base-first order so the preview's
     // index-0-is-BASE labelling matches the actual consolidation intent.
@@ -520,6 +547,7 @@ export async function consolidateEntries(ids, baseId = null) {
     // accept, which can be much later. The callback must check scope before
     // committing anything.
     const scopeBefore = captureScope();
+    const sourceRevisions = ids.map(id => captureRevision(selected.find(entry => entry.id === id)));
 
     _render.showConsolidationPreview(previewEntries, userContent, async (editedResult) => {
         if (state.isGenerating) return;
@@ -554,9 +582,14 @@ export async function consolidateEntries(ids, baseId = null) {
             // replacing entries so a snapshot created while it was open is not
             // lost, and so World State eligibility is checked against the
             // actual newest accepted range rather than the preview's stale one.
+            if (!assertSameScope(scopeBefore).ok) {
+                scSetStatus('Chat changed during consolidation — result discarded.', 'warning');
+                return;
+            }
             const currentSnapshots = getSnapshots();
             const currentSelected = ids.map(id => currentSnapshots.find(entry => entry.id === id)).filter(Boolean);
-            if (currentSelected.length !== selected.length) {
+            if (currentSelected.length !== selected.length || currentSelected.some((entry, i) =>
+                !sameRevision(sourceRevisions[i], entry))) {
                 scSetStatus('One or more selected entries changed during consolidation — result discarded.', 'warning');
                 _render.renderContent();
                 return;
@@ -599,7 +632,11 @@ export async function consolidateEntries(ids, baseId = null) {
             const newSnapshots = [...remaining, consolidated];
             newSnapshots.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
             const updatedBin = retainChronicleTrash([...deletedBin, ...originals], newSnapshots, MAX_TRASH_SIZE);
-            setChronicleData({ snapshots: newSnapshots, _deletedBin: updatedBin, suggestSent: true });
+            const selectedForInjection = getInjectionSettings(getChronicleData()).selectedIds;
+            const remappedSelection = [...new Set(selectedForInjection.map(id => ids.includes(id) ? consolidated.id : id))];
+            const written = setChronicleDataChecked({ snapshots: newSnapshots, _deletedBin: updatedBin,
+                selectedForInjection: remappedSelection, suggestSent: true });
+            if (!written.ok) { scSetStatus('Consolidation could not be saved.', 'error'); return; }
             applyInjection();
             state.consolidateMode = false;
             state.checkedForMerge.clear();
@@ -615,13 +652,15 @@ export async function consolidateEntries(ids, baseId = null) {
                     ? { from: previousNewest.fromIndex, to: previousNewest.toIndex }
                     : null,
             });
-            scSetStatus('Entries consolidated.', 'success');
+            scSetStatus(validation.valid ? 'Entries consolidated.' : `Entries consolidated — review needed: ${validation.reason}`, validation.valid ? 'success' : 'warning');
         } catch (err) {
             scSetStatus(`Consolidation failed: ${err.message}`, 'error');
             notify('Session Chronicle', `Chronicle consolidation failed: ${err.message}`, 'error');
         } finally {
-            state.isGenerating = false;
-            document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+            if (assertSameScope(scopeBefore).ok) {
+                state.isGenerating = false;
+                document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
+            }
         }
     });
 }
@@ -640,7 +679,9 @@ export function createManualEntry() {
         text: '## Summary\n- (write your entry here)\n\n## Relationship & Institutional Shifts\n\n## Open Loops Created\n\n## Open Loops Closed\n\n## Time Anchor\nIn-world date and time:\nLocation:',
         manual: true,
     };
-    setChronicleData({ snapshots: [...getSnapshots(), entry], suggestSent: false });
+    if (!setChronicleDataChecked({ snapshots: [...getSnapshots(), entry], suggestSent: false }).ok) {
+        scSetStatus('New entry could not be saved.', 'error'); return null;
+    }
     applyInjection();
     state.selectedSnapshotId = entry.id;
     _render.renderContent();
@@ -663,7 +704,9 @@ export function deleteEntry(id) {
     const lastAnchor = remaining.length > 0
         ? [...remaining].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).pop()?.anchor || null
         : null;
-    setChronicleData({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false, lastAnchor });
+    if (!setChronicleDataChecked({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false, lastAnchor }).ok) {
+        scSetStatus('Entry could not be deleted.', 'error'); return;
+    }
     applyInjection();
     state.selectedSnapshotId = null;
     _render.renderContent();
@@ -683,7 +726,9 @@ export function bulkDeleteEntries(ids) {
     const lastAnchor = remaining.length > 0
         ? [...remaining].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).pop()?.anchor || null
         : null;
-    setChronicleData({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false, lastAnchor });
+    if (!setChronicleDataChecked({ snapshots: remaining, _deletedBin: updatedBin, selectedForInjection: selectedIds, suggestSent: false, lastAnchor }).ok) {
+        scSetStatus('Entries could not be deleted.', 'error'); return;
+    }
     applyInjection();
     state.bulkDeleteMode = false;
     state.consolidateMode = false;
@@ -700,7 +745,9 @@ export function restoreDeletedEntry(entry) {
     const lastAnchor = snapshots.length > 0
         ? snapshots[snapshots.length - 1]?.anchor || null
         : null;
-    setChronicleData({ snapshots, _deletedBin: updatedBin, suggestSent: false, lastAnchor });
+    if (!setChronicleDataChecked({ snapshots, _deletedBin: updatedBin, suggestSent: false, lastAnchor }).ok) {
+        scSetStatus('Entry could not be restored.', 'error'); return;
+    }
     applyInjection();
     state.selectedSnapshotId = entry.id;
     _render.renderContent();

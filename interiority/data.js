@@ -295,6 +295,7 @@ function _isStoreRoot(value) {
 // check below invalidates the cache on its own; a chat switch does too.
 let _stagedInteriority = null;
 let _stagedInteriorityBase = undefined;
+const _canonicalStores = new WeakSet();
 
 function _resetInteriorityStaging() {
     _stagedInteriority = null;
@@ -313,6 +314,14 @@ function _resetInteriorityStaging() {
  */
 function _refuseWrite() {
     _resetInteriorityStaging();
+}
+
+/** Return only an entry from a newly committed store, never the staged copy. */
+function _commitLedgerEntry(data, id) {
+    const previous = getChatMeta()?.[META_KEY];
+    const committed = saveInteriorityData(data);
+    return committed && committed !== previous
+        ? committed.ledger.find(item => item.id === id) ?? null : null;
 }
 
 /**
@@ -446,7 +455,7 @@ export function saveInteriorityData(data, { privileged = null } = {}) {
     // object), which cannot happen through getInteriorityData() anymore but
     // is kept for safety since this seam is exported.
     let preserveIssues = next.issues;
-    if (live !== data && _isStoreRoot(live)) {
+    if (live !== data && _isStoreRoot(live) && !_canonicalStores.has(live)) {
         try {
             preserveIssues = [...next.issues, ...interioritySchema.validate(live).issues];
         } catch { /* a throwing validator on the live value must not block the
@@ -470,6 +479,7 @@ export function saveInteriorityData(data, { privileged = null } = {}) {
     // object also invalidates the read cache by identity, so the next read
     // re-stages from what was actually committed.
     const committed = clonePlainData(next.data);
+    _canonicalStores.add(committed);
     meta[META_KEY] = committed;
     persistChatMeta();
     return committed;
@@ -578,8 +588,7 @@ export function addLedgerEntry(entry, since, msgIdx) {
         fullEntry.wakeHint = String(entry.wakeHint || '').trim();
     }
     data.ledger.push(fullEntry);
-    saveInteriorityData(data);
-    return fullEntry;
+    return _commitLedgerEntry(data, id);
 }
 
 /**
@@ -635,8 +644,7 @@ export function updateLedgerEntry(id, patch) {
     // engine's pre-edit wording held in the snapshot.
     entry.manual = true;
 
-    saveInteriorityData(data);
-    return entry;
+    return _commitLedgerEntry(data, id);
 }
 
 /** Fields the user can edit from the panel — the ones their edit owns. */
@@ -655,13 +663,15 @@ const USER_EDITED_FIELDS = ['npc', 'action', 'trigger', 'since', 'originalAction
  *   {@link getDeletedIntentions} for why the engine's own removals must not.
  */
 export function removeLedgerEntries(ids, { tombstone = false } = {}) {
-    if (!ids || !ids.length) return;
+    if (!ids || !ids.length) return false;
     const idSet = new Set(ids);
     const data = getInteriorityData();
     const removed = data.ledger.filter(e => idSet.has(e.id));
     data.ledger = data.ledger.filter(e => !idSet.has(e.id));
     if (tombstone && removed.length > 0) _tombstone(data, removed);
-    saveInteriorityData(data);
+    const previous = getChatMeta()?.[META_KEY];
+    const committed = saveInteriorityData(data);
+    return !!committed && committed !== previous;
 }
 
 // ─── Deletion tombstones ─────────────────────────────────────────────────────
@@ -948,8 +958,7 @@ export function addManualLedgerEntry(entry) {
         turnsOpen: 0,
     };
     data.ledger.push(fullEntry);
-    saveInteriorityData(data);
-    return fullEntry;
+    return _commitLedgerEntry(data, id);
 }
 
 // ─── Age tracking & grace period ─────────────────────────────────────────────
@@ -1096,8 +1105,7 @@ export function wakeLedgerEntry(id, gracePeriod = 0) {
     entry.status = 'active';
     const floor = Math.max(0, Number(gracePeriod) || 0);
     entry.turnsOpen = Math.max(entry.turnsOpen || 0, floor);
-    saveInteriorityData(data);
-    return entry;
+    return _commitLedgerEntry(data, id);
 }
 
 /**
@@ -1114,8 +1122,7 @@ export function setLedgerEntryDormant(id, wakeHint) {
     if (!entry) return null;
     entry.status = 'dormant';
     if (wakeHint !== undefined) entry.wakeHint = String(wakeHint || '').trim();
-    saveInteriorityData(data);
-    return entry;
+    return _commitLedgerEntry(data, id);
 }
 
 // ─── Turn counter (§20 lazy poll scheduling) ─────────────────────────────────

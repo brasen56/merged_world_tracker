@@ -524,6 +524,43 @@ describe('Knowledge export/import', () => {
         expect(JSON.parse(entry.content).registry.Mara.type).toBe('major');
     });
 
+    test('an import stops before registry commit when the chat switches during UID reconciliation', async () => {
+        const { getRegistry } = await import('../knowledge/registry.js');
+        const { _setCacheForTests } = await import('../knowledge/store.js');
+        _setCacheForTests('Knowledge Tracker', { registry: {} });
+        let release;
+        const pending = new Promise(resolve => { release = resolve; });
+        wiFake.loadWorldInfo = async () => pending;
+        setPickTextFileStub(async () => JSON.stringify({ entries: {
+            Mara: { uid: 7, type: 'major', keywords: ['Mara'], content: 'Mara dossier text' },
+        } }));
+        const importing = importNpcs();
+        for (let i = 0; i < 20 && !release; i++) await Promise.resolve();
+        // Wait for the lorebook load, rather than just for the picker.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const { bumpEpoch } = await import('../core/scope.js');
+        bumpEpoch();
+        release(null);
+        await importing;
+        expect(getRegistry()).toEqual({});
+        expect(knowledgeState._lastKtStatusLevel).toBe('error');
+        expect(knowledgeState._lastKtStatusMsg).toMatch(/changed during import/);
+    });
+
+    test('failed lorebook content writes do not install a dangling registry entry or success status', async () => {
+        const { getRegistry } = await import('../knowledge/registry.js');
+        const { _setCacheForTests } = await import('../knowledge/store.js');
+        _setCacheForTests('Knowledge Tracker', { registry: {} });
+        wiFake.saveWorldInfo = async () => { throw new Error('disk unavailable'); };
+        setPickTextFileStub(async () => JSON.stringify({ entries: {
+            Mara: { uid: null, type: 'major', keywords: ['Mara'], content: 'Mara dossier text' },
+        } }));
+        await importNpcs();
+        expect(getRegistry()).toEqual({});
+        expect(knowledgeState._lastKtStatusLevel).toBe('error');
+        expect(knowledgeState._lastKtStatusMsg).toMatch(/Could not import "Mara"/);
+    });
+
     test('a chronicle-shaped file is refused with the invalid-format status', async () => {
         await populatedInstall();
         // The realistic user error: the NPC importer fed a Chronicle export

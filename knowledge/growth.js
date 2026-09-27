@@ -59,7 +59,7 @@ import {
     hasEvidenceFile,
     getRawForConsolidation, applyConsolidation,
     getUserOverrides,
-    getCaptureWatermark, setCaptureWatermark,
+    getCaptureWatermark, getCaptureCursor, setCaptureWatermark,
     getBackfillWatermark, setBackfillWatermark,
 } from './evidence.js';
 import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
@@ -149,6 +149,10 @@ export function looksTruncated(text) {
  * @returns {string|null} formatted messages, or null if the chat is empty
  */
 export function getIndexedMessages(count = EVIDENCE_MESSAGE_WINDOW) {
+    return getIndexedMessageWindow(count)?.text ?? null;
+}
+
+function getIndexedMessageWindow(count = EVIDENCE_MESSAGE_WINDOW) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
 
@@ -174,7 +178,15 @@ export function getIndexedMessages(count = EVIDENCE_MESSAGE_WINDOW) {
         if (!text) continue;
         lines.push(`[${i}] ${name}: ${text}`);
     }
-    return lines.length > 0 ? lines.join('\n') : null;
+    if (!lines.length) return null;
+    // The cursor covers the eligible window, including messages whose text was
+    // stripped, but never messages that arrived after this window was captured.
+    let cursor = { ts: 0, index: -1 };
+    for (let i = startIdx; i < end; i++) {
+        const ts = normalizeSendDate(chat[i]?.send_date);
+        if (ts >= cursor.ts) cursor = { ts, index: i };
+    }
+    return { text: lines.join('\n'), cursor };
 }
 
 // ─── Canon extraction ────────────────────────────────────────────────────────
@@ -218,10 +230,11 @@ export function extractCanonFromEntry(content) {
  * @param {number|null} uid — lorebook UID (for loading existing context)
  * @returns {Promise<Array<{category:string, claim:string, quote:string, msgIdx:number}>>}
  */
-export async function captureEvidence(name, uid) {
+export async function captureEvidence(name, uid, captureWindow = getIndexedMessageWindow()) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
+    const scopeBefore = captureScope();
 
-    const messages = getIndexedMessages(EVIDENCE_MESSAGE_WINDOW);
+    const messages = captureWindow?.text;
     if (!messages) throw new Error('No recent messages to analyze.');
 
     // Load the existing entry as identity/context — NOT as a source of
@@ -236,6 +249,7 @@ export async function captureEvidence(name, uid) {
             if (content) existingContext = content;
         } catch { /* ignore load errors */ }
     }
+    if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
 
     const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
@@ -628,6 +642,7 @@ export async function runGrowthProfile(name) {
  */
 export async function runCaptureOnly(name) {
     refuseIfGrowthPaused();
+    const scopeBefore = captureScope();
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
@@ -652,6 +667,7 @@ export async function runCaptureOnly(name) {
     // message is worth capturing if the user clicked the button.
     if (getCaptureWatermark(name) != null) {
         const deltaResult = await runContinuousCapture(name, { minMessages: 1 });
+        if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
         const allEvidence = getEvidenceForProfile(name);
 
         if (deltaResult === null) {
@@ -677,7 +693,9 @@ export async function runCaptureOnly(name) {
     // next press (and continuous capture) only process the delta going forward.
     //
     // Step 1: capture fresh evidence
-    const observations = await captureEvidence(name, uid);
+    const captureWindow = getIndexedMessageWindow();
+    const observations = await captureEvidence(name, uid, captureWindow);
+    if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
     if (observations.length === 0 && !hasEvidenceFile(name)) {
         throw new Error(
             `No behavioral observations found for "${name}" in recent messages. ` +
@@ -689,19 +707,8 @@ export async function runCaptureOnly(name) {
     // Append-only — never overwrites. Duplicate observations are skipped.
     const captureStats = appendRawObservations(name, observations);
 
-    // Seed the capture watermark so continuous capture doesn't re-scan these
-    // same messages. Same logic as runGrowthProfile.
-    {
-        const chatArr = getChat() || [];
-        const eligibleEnd = getEligibleChatEnd(chatArr);
-        const scanStart = Math.max(0, eligibleEnd - EVIDENCE_MESSAGE_WINDOW);
-        let maxScanTs = 0;
-        for (let i = scanStart; i < eligibleEnd; i++) {
-            const t = normalizeSendDate(chatArr[i]?.send_date);
-            if (t > maxScanTs) maxScanTs = t;
-        }
-        if (maxScanTs > 0) setCaptureWatermark(name, maxScanTs);
-    }
+    // Seed from the window sent to the model, never the post-await live chat.
+    if (captureWindow?.cursor?.ts > 0) setCaptureWatermark(name, captureWindow.cursor.ts, captureWindow.cursor.index);
 
     // Return ALL accumulated evidence (not just the fresh capture) so the
     // caller can re-render the full evidence list.
@@ -776,11 +783,13 @@ export async function consolidateEvidence(name) {
  */
 export async function runConsolidation(name) {
     refuseIfGrowthPaused();
+    const scopeBefore = captureScope();
     const registry = getRegistry();
     const info = registry[name];
     if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
 
     const { consolidated, sourceIds } = await consolidateEvidence(name);
+    if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during consolidation — result discarded.');
     const stats = applyConsolidation(name, consolidated, sourceIds);
 
     return { ...stats, consolidated };
@@ -877,7 +886,7 @@ function getEligibleChatEnd(chat = getChat() || []) {
  * @param {number} sinceTs — the watermark (only messages newer than this)
  * @returns {{text:string, maxTs:number, count:number}|null}
  */
-function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages = DELTA_MIN_MESSAGES) {
+function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages = DELTA_MIN_MESSAGES, sinceIndex = null) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
 
@@ -891,7 +900,7 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
         // text, not verbatim quotes. Backfill (Part B) handles them separately.
         if (isIlsSummary(msg)) continue;
         const ts = normalizeSendDate(msg.send_date);
-        if (sinceTs != null && ts <= sinceTs) continue;
+        if (sinceTs != null && (ts < sinceTs || (ts === sinceTs && (sinceIndex === null || i <= sinceIndex)))) continue;
         candidates.push({ msg, idx: i, ts });
     }
 
@@ -905,17 +914,22 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
 
     const lines = [];
     let maxTs = sinceTs ?? 0;
+    let lastIndex = sinceIndex;
     for (const { msg, idx, ts } of window) {
+        // Move past stripped messages too, so a batch with no narrative does
+        // not permanently block later batches.
+        if (ts > maxTs || (ts === maxTs && (lastIndex === null || idx > lastIndex))) {
+            maxTs = ts;
+            lastIndex = idx;
+        }
         const name = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
         // preserveOffScreen:false — sealed off-screen log stays out of Knowledge.
         const text = stripNonNarrative(msg.mes, { preserveOffScreen: false }).trim();
         if (!text) continue;
         lines.push(`[${idx}] ${name}: ${text}`);
-        if (ts > maxTs) maxTs = ts;
     }
 
-    if (lines.length === 0) return null;
-    return { text: lines.join('\n'), maxTs, count: lines.length };
+    return { text: lines.join('\n'), maxTs, lastIndex, count: lines.length };
 }
 
 /**
@@ -964,8 +978,12 @@ export async function runContinuousCapture(name, opts = {}) {
     if (uid === null || uid === undefined) return null;
 
     const sinceTs = getCaptureWatermark(name);
-    const delta = buildDeltaWindow(sinceTs, opts.maxMessages, opts.minMessages);
+    const delta = buildDeltaWindow(sinceTs, opts.maxMessages, opts.minMessages, getCaptureCursor(name)?.index ?? null);
     if (!delta) return null;
+    if (!delta.text) {
+        setCaptureWatermark(name, delta.maxTs, delta.lastIndex);
+        return { added: 0, skipped: 0, maxTs: delta.maxTs };
+    }
 
     // `_retries` lets the catch-up loop disable ktFetchFromApi's own retry so
     // the retry count doesn't multiply with adaptive halving (8 calls per
@@ -979,6 +997,8 @@ export async function runContinuousCapture(name, opts = {}) {
         const content = await loadEntryContent(uid, name);
         if (content) existingContext = content;
     } catch { /* ignore */ }
+
+    if (!scopeStillCurrent(scopeBefore).ok) return null;
 
     const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
@@ -1036,7 +1056,7 @@ export async function runContinuousCapture(name, opts = {}) {
 
     // Advance the watermark regardless of whether observations were found —
     // the messages were processed and we don't want to re-scan them.
-    setCaptureWatermark(name, delta.maxTs);
+    setCaptureWatermark(name, delta.maxTs, delta.lastIndex);
 
     if (stats.added > 0) {
         console.log(`[MWT:Knowledge] Continuous capture for "${name}": +${stats.added} observation(s) from ${delta.count} delta message(s).`);
@@ -1166,6 +1186,7 @@ export async function runContinuousCaptureAll() {
  */
 export async function runIlsBackfillCapture(name, opts = {}) {
     refuseIfGrowthPaused();
+    const scopeBefore = captureScope();
     if (!hasValidSettings()) throw new Error('No API connection configured.');
 
     const registry = getRegistry();
@@ -1253,6 +1274,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         // No quotable text survived stripping — but the batch WAS processed.
         // Advance the watermark so the next run continues forward instead of
         // re-selecting and re-rejecting the same empty batch forever (item 6).
+        if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during backfill — result discarded.');
         setBackfillWatermark(name, maxTs);
         return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs };
     }
@@ -1264,6 +1286,8 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         const content = await loadEntryContent(uid, name);
         if (content) existingContext = content;
     } catch { /* ignore */ }
+
+    if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during backfill — result discarded.');
 
     const worldState = getWorldStateFactual();
     const chronicle = getLatestChronicleEntry();
@@ -1284,6 +1308,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
     ].filter(Boolean).join('\n');
 
     const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: _retries });
+    if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during backfill — result discarded.');
     const cleaned = normaliseOutput(rawResponse);
     const result = parseJsonLenient(cleaned);
 
@@ -1410,6 +1435,7 @@ const SUCCESSES_BEFORE_GROW = 3;
  */
 export async function runCatchUpCapture(name, onProgress) {
     refuseIfGrowthPaused();
+    const scopeBefore = captureScope();
     if (!hasValidSettings()) throw new Error('No API connection configured.');
 
     const registry = getRegistry();
@@ -1462,6 +1488,7 @@ export async function runCatchUpCapture(name, onProgress) {
             try {
                 result = await runIlsBackfillCapture(name, { maxMessages: batchSize, _retries: 0 });
             } catch (err) {
+                if (isCancellation(err) || !scopeStillCurrent(scopeBefore).ok) throw err;
                 // Length error → halve the batch and retry the SAME messages.
                 // The watermark hasn't advanced (the error happens before
                 // setBackfillWatermark), so a smaller batch re-attempts the
@@ -1486,6 +1513,7 @@ export async function runCatchUpCapture(name, onProgress) {
                 errorPhase = 'backfill';
                 break;
             }
+            if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during catch-up — stopped.');
             totalAdded += result.added || 0;
             totalSkipped += result.skipped || 0;
             backfillBatches++;
@@ -1531,6 +1559,7 @@ export async function runCatchUpCapture(name, onProgress) {
             try {
                 result = await runContinuousCapture(name, { maxMessages: batchSize, _retries: 0 });
             } catch (err) {
+                if (isCancellation(err) || !scopeStillCurrent(scopeBefore).ok) throw err;
                 successes = 0;
                 if (err._isLengthError && batchSize > ADAPTIVE_MIN_BATCH) {
                     const halved = Math.max(ADAPTIVE_MIN_BATCH, Math.floor(batchSize / 2));
@@ -1548,6 +1577,7 @@ export async function runCatchUpCapture(name, onProgress) {
                 errorPhase = 'live';
                 break;
             }
+            if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during catch-up — stopped.');
             if (!result) break; // delta too small or nothing to capture
             totalAdded += result.added || 0;
             totalSkipped += result.skipped || 0;

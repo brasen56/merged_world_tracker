@@ -47,18 +47,24 @@ import {
 
 // ─── Message scan helpers ────────────────────────────────────────────────────
 
+let cachedFilterRaw;
+let cachedFilters = [];
+
 function applyMessageFilter(text) {
     const filterRaw = getSettings().messageFilter?.trim();
     if (!filterRaw) return text;
-    const patterns = filterRaw.split('\n').map(p => p.trim()).filter(Boolean);
-    for (const p of patterns) {
-        try {
-            const regex = new RegExp(p, 'gi');
-            text = text.replace(regex, '');
-        } catch (err) {
-            console.warn(`[MWT:WorldState] Invalid regex filter skipped: "${p}" — ${err.message}`);
+    if (filterRaw !== cachedFilterRaw) {
+        cachedFilterRaw = filterRaw;
+        cachedFilters = [];
+        for (const p of filterRaw.split('\n').map(line => line.trim()).filter(Boolean)) {
+            try {
+                cachedFilters.push(new RegExp(p, 'gi'));
+            } catch (err) {
+                console.warn(`[MWT:WorldState] Invalid regex filter skipped: "${p}" — ${err.message}`);
+            }
         }
     }
+    for (const regex of cachedFilters) text = text.replace(regex, '');
     return text.trim();
 }
 
@@ -1166,7 +1172,7 @@ export function scheduleAutoRefresh(reason = 'scheduled') {
     }, 2500);
 }
 
-export function onMessageReceived({ countMessage = true } = {}) {
+export function onMessageReceived({ countMessage = true, messageIndex = null } = {}) {
     // Track chat length so onMessageDeleted can compute the number of removed
     // messages during bulk deletes (e.g. "delete above/below"). This must run
     // every turn — it is NOT gated by the panic switch (countMessage) or by the
@@ -1181,8 +1187,9 @@ export function onMessageReceived({ countMessage = true } = {}) {
     if (!isAutoRefreshEnabled() || !countMessage) return;
 
     state.autoRefreshCounter++;
-    const receipt = [...chat].reverse().find(msg => msg && !msg.is_user && !msg.is_system);
-    if (receipt) {
+    const receipt = Number.isInteger(messageIndex) && messageIndex >= 0 && messageIndex < chat.length
+        ? chat[messageIndex] : [...chat].reverse().find(msg => msg && !msg.is_user && !msg.is_system);
+    if (receipt && !receipt.is_user && !receipt.is_system) {
         const key = getOrCreateReceiptIdentity(receipt);
         state.countedReceiptEvents.set(key, (state.countedReceiptEvents.get(key) || 0) + 1);
     }

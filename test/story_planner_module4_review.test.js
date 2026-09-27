@@ -3,7 +3,7 @@ import {
     migrateStoryPlannerV1ToV2, migrateStoryPlannerV2ToV3,
     validateStoryPlannerData,
 } from '../story_planner/schema.js';
-import { getArcs, makeArc, pushPlanToHistory, updateArc } from '../story_planner/data.js';
+import { addArc, getArcs, makeArc, pushPlanToHistory, removeArc, setArcsWithHistory, updateArc } from '../story_planner/data.js';
 import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
 
 const gate = vi.hoisted(() => ({ blocked: false }));
@@ -22,12 +22,13 @@ beforeEach(() => {
 // contract (quarantine + canonical data, fixed in 2.10.2; docs/TODO.md §0).
 describe('Module 4 review defect reproductions', () => {
     test.each([migrateStoryPlannerV1ToV2, migrateStoryPlannerV2ToV3])(
-        '%s discards a corrupt arc container without an issue', migrate => {
+        '%s quarantines a corrupt arc container', migrate => {
             const raw = { arcs: { recoverable: 'original content' } };
             const result = migrate(raw);
             expect(result.data.arcs).toEqual([]);
-            expect(result.issues).toEqual([]);
-            expect(validateStoryPlannerData(result.data).issues).toEqual([]);
+            expect(result.issues).toEqual([expect.objectContaining({
+                code: 'not-an-array', severity: 'quarantine', path: ['arcs'], record: raw.arcs,
+            })]);
         },
     );
 
@@ -48,13 +49,33 @@ describe('Module 4 review defect reproductions', () => {
         expect(store.history).toHaveLength(0);
     });
 
-    test('updateArc returns a successful-looking proposal after a refused write', () => {
+    test('a refused replacement leaves both plan and history unchanged', () => {
+        const arc = makeArc({ title: 'Original' });
+        const store = { arcs: [arc], history: [] };
+        getFakeMeta().story_planner_data = store;
+        gate.blocked = true;
+        expect(setArcsWithHistory([makeArc({ title: 'Replacement' })], [arc]).ok).toBe(false);
+        expect(getFakeMeta().story_planner_data).toBe(store);
+        expect(store.arcs[0].title).toBe('Original');
+        expect(store.history).toEqual([]);
+    });
+
+    test('updateArc refuses a proposal when its write is blocked', () => {
         const arc = makeArc({ title: 'Original' });
         getFakeMeta().story_planner_data = { arcs: [arc] };
         gate.blocked = true;
         const result = updateArc(arc.id, { title: 'Unsaved' });
-        expect(result.title).toBe('Unsaved');
+        expect(result).toBeNull();
         expect(getArcs()[0].title).toBe('Original');
+    });
+
+    test('add and remove do not report success over a refused write', () => {
+        const arc = makeArc({ title: 'Original' });
+        getFakeMeta().story_planner_data = { arcs: [arc], history: [] };
+        gate.blocked = true;
+        expect(addArc({ title: 'Unsaved' })).toBeNull();
+        expect(removeArc(arc.id)).toBe(false);
+        expect(getArcs()).toEqual([arc]);
     });
 
     // SP4-05 (fixed in 2.10.2): invalid receipt tuples are quarantined by the

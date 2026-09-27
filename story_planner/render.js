@@ -33,11 +33,11 @@ import { getSettings, saveSettings } from './settings.js';
 import {
     state, SECTIONS, ARC_STATUSES, INJECT_MODES, ENFORCEMENT_MODES,
     setPlanData,
-    getArcs, setArcs, addArc, updateArc, setArcStatus, parkArc, resumeArc, removeArc, toggleArcPinned, toggleArcFocused,
+    getArcs, setArcsWithHistory, addArc, updateArc, setArcStatus, parkArc, resumeArc, removeArc, toggleArcPinned, toggleArcFocused,
     isArcReady, getCurrentBeat, getCurrentBeatNumber, getBeatProgress, advanceBeat, retreatBeat,
     addArcBeat, updateArcBeat, setArcBeatState, removeArcBeat, moveArcBeat,
     getNudgeTurns, isNudgeEnabled, OVERDUE_TURNS,
-    getPlanHistory, pushPlanToHistory, historyEntryToDiffText, historyEntryToArcs,
+    getPlanHistory, historyEntryToDiffText, historyEntryToArcs,
     isInjectionEnabled, isAutoEnabled, getAutoInterval,
     getInjectMode, getEnforcement, getDirectionHint, getArcCount, getSectionMeta, getStoryPalette, getCharacterContextSelection, getAuthorContextSelection,
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
@@ -1421,8 +1421,8 @@ export function renderContent() {
 function restorePlan(arcs, { pushCurrent = true } = {}) {
     if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return false;
     const current = getArcs();
-    if (pushCurrent && current.length) pushPlanToHistory(current);
-    setArcs(arcs);
+    const result = pushCurrent ? setArcsWithHistory(arcs, current) : setArcsWithHistory(arcs, []);
+    if (!result.ok) return false;
     applyPlanInjection();
     renderArcs();
     return true;
@@ -1716,6 +1716,7 @@ function handleArcsClick(e) {
 
     if (action === 'add') {
         const arc = mutateWithProjectionCheck(() => addArc({ section: btn.dataset.section || 'emerging' }));
+        if (!arc) return;
         renderArcs();
         // Focus the new card so the user can type straight away.
         const input = state.modal?.querySelector(`.sp-arc[data-id="${selectorEscape(arc.id)}"] .sp-arc-title`);
@@ -1982,8 +1983,7 @@ export function wireEvents() {
         if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return;
         if (!confirm('Clear every arc? A snapshot will be saved to history.')) return;
         const current = getArcs();
-        if (current.length) pushPlanToHistory(current);
-        setArcs([]);
+        if (!setArcsWithHistory([], current).ok) return;
         applyPlanInjection();
         renderArcs();
     });

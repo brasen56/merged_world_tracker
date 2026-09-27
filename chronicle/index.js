@@ -24,15 +24,13 @@ import {
 import {
     state, _render,
     getSettings, saveSettings, hasValidSettings,
-    getChronicleData, setChronicleData, getSnapshots,
+    getChronicleData, setChronicleData, setChronicleDataChecked, getSnapshots,
     persistMsgSinceSnapshot, restoreReceiptBookkeeping, getReceiptIdentity,
     isAnchorStale, getMessageCountSinceLastSnapshot,
 } from './data.js';
 
-import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
-
 import {
-    isInjectionEnabled, getEntriesForInjection, applyInjection,
+    isInjectionEnabled, getEntriesForInjection, applyInjection, buildChronicleInjectionText,
 } from './injection.js';
 
 import { generateSnapshot } from './snapshots.js';
@@ -64,7 +62,15 @@ function initializeReceiptBookkeeping() {
     restoreReceiptBookkeeping();
 }
 
-function recordCurrentReceiptEvent(chat) {
+function recordCurrentReceiptEvent(chat, messageIndex = null) {
+    if (Number.isInteger(messageIndex) && messageIndex >= 0 && messageIndex < chat.length) {
+        const receipt = chat[messageIndex];
+        if (receipt && !receipt.is_user && !receipt.is_system) {
+            const key = getReceiptIdentity(receipt);
+            state.countedReceiptEvents.set(key, (state.countedReceiptEvents.get(key) || 0) + 1);
+        }
+        return;
+    }
     for (let index = chat.length - 1; index >= 0; index--) {
         const message = chat[index];
         if (!message || message.is_user || message.is_system) continue;
@@ -92,7 +98,7 @@ export function getModuleWireEvents() {
     };
 }
 
-export async function onMessageReceived({ countMessage = true } = {}) {
+export async function onMessageReceived({ countMessage = true, messageIndex = null } = {}) {
     // CHRONICLE-03: Messages arriving while a snapshot is being generated
     // must still increment the counter and update lastChatLength. The old
     // early-return on isGenerating meant those messages were never counted,
@@ -113,7 +119,7 @@ export async function onMessageReceived({ countMessage = true } = {}) {
     if (!countMessage) return;
 
     state.msgSinceSnapshot++;
-    recordCurrentReceiptEvent(chat);
+    recordCurrentReceiptEvent(chat, messageIndex);
     persistMsgSinceSnapshot();
 
     const settings = getSettings();
@@ -317,11 +323,7 @@ export function isGeneratingSnapshot() {
 
 export function getTotalTokens() {
     if (!isInjectionEnabled()) return 0;
-    const entries = getEntriesForInjection();
-    if (entries.length === 0) return 0;
-    const text = entries.map(s => s.text || '').join('\n\n---\n\n');
-    const fullInjected = `${CHRONICLE_INJECTION_HEADER}\n\n${text}`;
-    return estimateTokens(fullInjected);
+    return estimateTokens(buildChronicleInjectionText());
 }
 
 export function syncGlobalSettings(patch) {
@@ -335,8 +337,9 @@ export async function triggerSnapshot() {
 
 /** Slash command / macro: set injection enabled/disabled */
 export function setInjectionEnabled(enabled) {
-    setChronicleData({ injectEnabled: !!enabled });
+    if (!setChronicleDataChecked({ injectEnabled: !!enabled }).ok) return false;
     applyInjection();
+    return true;
 }
 
 /** Macro: return the full chronicle injection text */

@@ -2,11 +2,11 @@
 
 import { beforeEach, describe, expect, test } from 'vitest';
 
-import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
+import { resetCoreStubs, setFakeApi, setFakeChat, getFakeMeta } from './stubs/core.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
 import { saveSettings } from '../knowledge/settings.js';
-import { getCaptureWatermark } from '../knowledge/evidence.js';
-import { runCaptureOnly } from '../knowledge/growth.js';
+import { appendRawObservations, getCaptureWatermark, getCaptureCursor, setCaptureWatermark } from '../knowledge/evidence.js';
+import { runCaptureOnly, runContinuousCapture } from '../knowledge/growth.js';
 
 describe('Growth capture bootstrap → incremental transition', () => {
     beforeEach(() => {
@@ -57,5 +57,63 @@ describe('Growth capture bootstrap → incremental transition', () => {
         expect(requests[1]).not.toContain('steadies her breathing');
         expect(requests[1]).not.toContain('I can handle this');
         expect(getCaptureWatermark('Mara')).toBe(Date.parse('2026-01-01T00:02:00.000Z'));
+    });
+
+    test('bootstrap does not consume a message appended while its API request is pending', async () => {
+        const chat = [{ name: 'Mara', mes: 'Before the request', send_date: '2026-01-01T00:00:00.000Z' },
+            { name: 'Mara', mes: 'Still before the request', send_date: '2026-01-01T00:01:00.000Z' }];
+        setFakeChat([...chat, { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' }]);
+        let finish;
+        const requested = new Promise(resolve => { finish = resolve; });
+        setFakeApi(() => requested);
+        const capture = runCaptureOnly('Mara');
+        // Wait for the asynchronous lorebook context load and API submission.
+        for (let i = 0; i < 20 && !finish; i++) await new Promise(resolve => setTimeout(resolve, 0));
+        expect(finish).toBeTypeOf('function');
+        setFakeChat([...chat, { name: 'Mara', mes: 'After the request', send_date: '2026-01-01T00:02:00.000Z' },
+            { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' }]);
+        finish(JSON.stringify({ observations: [{ claim: 'Earlier', quote: 'Before the request', msgIdx: 0 }] }));
+        await capture;
+        expect(getCaptureCursor('Mara')).toEqual({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 1 });
+        expect(getCaptureWatermark('Mara')).toBe(Date.parse('2026-01-01T00:01:00.000Z'));
+    });
+
+    test('tied timestamps resume after the last captured index without replaying the batch', async () => {
+        const chat = [0, 1, 2, 3].map(i => ({ name: 'Mara', mes: `Line ${i}`, send_date: '2026-01-01T00:01:00.000Z' }));
+        setFakeChat([...chat, { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' }]);
+        setCaptureWatermark('Mara', Date.parse('2026-01-01T00:00:00.000Z'), 0);
+        const requests = [];
+        setFakeApi(({ userContent }) => { requests.push(userContent); return JSON.stringify({ observations: [] }); });
+        await runContinuousCapture('Mara', { minMessages: 1, maxMessages: 2 });
+        expect(getCaptureCursor('Mara')).toEqual({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 1 });
+        await runContinuousCapture('Mara', { minMessages: 1, maxMessages: 2 });
+        expect(requests[1]).toContain('Line 2');
+        expect(requests[1]).not.toContain('Line 1');
+        expect(getCaptureCursor('Mara')).toEqual({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 3 });
+        expect(await runContinuousCapture('Mara', { minMessages: 1 })).toBeNull();
+    });
+
+    test('forty stripped messages advance the cursor so later narrative is reachable', async () => {
+        const stripped = Array.from({ length: 40 }, (_, i) => ({
+            name: 'Mara', mes: '<details><summary>tracker</summary>hidden</details>', send_date: 1000 + i,
+        }));
+        setFakeChat([...stripped, { name: 'Mara', mes: 'Mara returns.', send_date: 1040 },
+            { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' }]);
+        setCaptureWatermark('Mara', 999000, 0);
+        const requests = [];
+        setFakeApi(({ userContent }) => { requests.push(userContent); return JSON.stringify({ observations: [] }); });
+        expect(await runContinuousCapture('Mara')).toMatchObject({ added: 0, maxTs: 1039000 });
+        expect(getCaptureCursor('Mara')).toEqual({ ts: 1039000, index: 39 });
+        expect(requests).toHaveLength(0);
+        await runContinuousCapture('Mara', { minMessages: 1 });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toContain('Mara returns.');
+    });
+
+    test('a refused evidence commit never reports observations as added', () => {
+        getFakeMeta().knowledge_growth_evidence = 'invalid existing store';
+        expect(() => appendRawObservations('Mara', [{ claim: 'Stays calm', quote: 'Mara returns.', msgIdx: 0 }]))
+            .toThrow(/could not be saved/);
+        expect(getFakeMeta().knowledge_growth_evidence).toBe('invalid existing store');
     });
 });

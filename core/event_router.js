@@ -106,11 +106,11 @@ export function routeMessageReceived(modules, settings, messageIndex, decline = 
     const countMessage = !settings.injectionMasterOff;
     if (settings.enableWorldState !== false) {
         if (declined('WorldState')) logDecline('MESSAGE_RECEIVED', 'WorldState');
-        else modules.WorldState.onMessageReceived({ countMessage });
+        else modules.WorldState.onMessageReceived({ countMessage, messageIndex });
     }
     if (settings.enableChronicle  !== false) {
         if (declined('Chronicle')) logDecline('MESSAGE_RECEIVED', 'Chronicle');
-        else modules.Chronicle.onMessageReceived({ countMessage });
+        else modules.Chronicle.onMessageReceived({ countMessage, messageIndex });
     }
     if (settings.enableKnowledge  !== false) {
         if (declined('Knowledge')) logDecline('MESSAGE_RECEIVED', 'Knowledge');

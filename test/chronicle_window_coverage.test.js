@@ -118,6 +118,92 @@ describe('Chronicle coverage fixes — oversized messages, anchor deletion, manu
         expect(completed.toCharOffset).toBeUndefined();
     });
 
+    test('a preloaded uncounted tail does not consume the only counted receipt', async () => {
+        const { saveSettings, state, getChronicleData } = await import('../chronicle/data.js');
+        const { generateSnapshot } = await import('../chronicle/snapshots.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        setFakeChat([
+            { id: 'counted', name: 'Mara', mes: 'The recorded scene.' },
+            { id: 'uncounted', name: 'Mara', mes: 'The uncounted tail.' },
+            { id: 'user', name: 'User', is_user: true, mes: 'Question.' },
+            { id: 'reply', name: 'Mara', mes: 'The latest reply.' },
+        ]);
+        state.msgSinceSnapshot = 1;
+        state.countedReceiptEvents = new Map([['id:counted', 1]]);
+        setFakeApi(async () => CHRONICLE_ENTRY);
+        const snapshot = await generateSnapshot();
+        expect(snapshot.toIndex).toBe(1);
+        expect(state.msgSinceSnapshot).toBe(0);
+        expect(getChronicleData().msgSinceSnapshot).toBe(0);
+        expect(state.countedReceiptEvents.size).toBe(0);
+    });
+
+    test('a repeated counted receipt on one excluded tail message keeps every event', async () => {
+        const { saveSettings, state, getChronicleData } = await import('../chronicle/data.js');
+        const { generateSnapshot } = await import('../chronicle/snapshots.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        setFakeChat([
+            { id: 'covered', name: 'Mara', mes: 'Covered scene.' },
+            { id: 'user', name: 'User', is_user: true, mes: 'Question.' },
+            { id: 'tail', name: 'Mara', mes: 'Uncovered reply.' },
+        ]);
+        state.msgSinceSnapshot = 4;
+        state.countedReceiptEvents = new Map([['id:covered', 1], ['id:tail', 3]]);
+        setFakeApi(async () => CHRONICLE_ENTRY);
+        const snapshot = await generateSnapshot();
+        expect(snapshot.toIndex).toBe(0);
+        expect(state.msgSinceSnapshot).toBe(3);
+        expect(getChronicleData().msgSinceSnapshot).toBe(3);
+        expect(state.countedReceiptEvents).toEqual(new Map([['id:tail', 3]]));
+    });
+
+    test('deleting an uncounted row preserves cadence; deleting a counted row reverses its events', async () => {
+        const { state, getChronicleData } = await import('../chronicle/data.js');
+        const { onMessageDeleted } = await import('../chronicle/index.js');
+        const counted = { id: 'counted', name: 'Mara', mes: 'Counted.' };
+        const uncounted = { id: 'uncounted', name: 'Mara', mes: 'Preloaded.' };
+        setFakeChat([counted, uncounted]);
+        state.lastChatLength = 2;
+        state.msgSinceSnapshot = 2;
+        state.countedReceiptEvents = new Map([['id:counted', 2]]);
+        setFakeChat([counted]);
+        onMessageDeleted(1);
+        expect(state.msgSinceSnapshot).toBe(2);
+        expect(getChronicleData().countedReceiptEvents).toEqual([['id:counted', 2]]);
+        setFakeChat([]);
+        onMessageDeleted(0);
+        expect(state.msgSinceSnapshot).toBe(0);
+        expect(getChronicleData().countedReceiptEvents).toEqual([]);
+    });
+
+    test('a counted deletion during generation does not subtract a later arrival twice', async () => {
+        const { saveSettings, state } = await import('../chronicle/data.js');
+        const { generateSnapshot } = await import('../chronicle/snapshots.js');
+        const { onMessageDeleted } = await import('../chronicle/index.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const covered = { id: 'covered', name: 'Mara', mes: 'Old scene.' };
+        const user = { id: 'user', name: 'User', is_user: true, mes: 'Question.' };
+        const removed = { id: 'removed', name: 'Mara', mes: 'Will be deleted.' };
+        const tail = { id: 'tail', name: 'Mara', mes: 'New reply.' };
+        setFakeChat([covered, user, removed]);
+        state.lastChatLength = 3;
+        state.msgSinceSnapshot = 2;
+        state.countedReceiptEvents = new Map([['id:covered', 1], ['id:removed', 1]]);
+        let release;
+        setFakeApi(() => new Promise(resolve => { release = resolve; }));
+        const pending = generateSnapshot();
+        await Promise.resolve();
+        setFakeChat([covered, user]);
+        onMessageDeleted(2);
+        setFakeChat([covered, user, tail]);
+        state.msgSinceSnapshot++;
+        state.countedReceiptEvents.set('id:tail', 1);
+        release(CHRONICLE_ENTRY);
+        await pending;
+        expect(state.msgSinceSnapshot).toBe(1);
+        expect(state.countedReceiptEvents).toEqual(new Map([['id:tail', 1]]));
+    });
+
     // ─── Bug 2: deleting the anchor must not skip the next message ────────────
 
     test('a deleted anchor resumes AT the recorded boundary, not past the shifted-in message', async () => {

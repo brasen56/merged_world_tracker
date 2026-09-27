@@ -14,19 +14,17 @@ import {
 // (a11y plan §4.4).
 import { setControlBusy } from '../core/ui.js';
 
-import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
-
 import {
     state,
     getSettings, saveSettings, hasValidSettings,
-    getChronicleData, setChronicleData, getSnapshots,
+    getChronicleData, setChronicleDataChecked, getSnapshots,
     getContentEl, scSetStatus, getMessageCountSinceLastSnapshot,
     showConfirm,
 } from './data.js';
 
 import {
     isInjectionEnabled, getEntriesForInjection, getInjectionStats, applyInjection,
-    getInjectionSettings, resolveInjectionPlacement,
+    getInjectionSettings, resolveInjectionPlacement, buildChronicleInjectionText,
 } from './injection.js';
 
 import {
@@ -112,7 +110,9 @@ function showEntryEditor(snapshot) {
         if (idx !== -1) {
             const updated = [...snapshots];
             updated[idx] = { ...snapshot, text: newText, note: newNote, _previousText: originalText };
-            setChronicleData({ snapshots: updated });
+            if (!setChronicleDataChecked({ snapshots: updated }).ok) {
+                scSetStatus('Entry could not be saved.', 'error'); return;
+            }
             applyInjection();
             scSetStatus('Entry saved.', 'success');
         }
@@ -150,7 +150,9 @@ function showEntryEditor(snapshot) {
             }
             const updatedTrash = deletedBin.filter(e => !restored.some(r => r.id === e.id));
             const newSnapshots = [...remaining, ...restored].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-            setChronicleData({ snapshots: newSnapshots, _deletedBin: updatedTrash, suggestSent: false });
+            if (!setChronicleDataChecked({ snapshots: newSnapshots, _deletedBin: updatedTrash, suggestSent: false }).ok) {
+                scSetStatus('Undo could not be saved.', 'error'); return;
+            }
             applyInjection();
             state.selectedSnapshotId = null;
             renderContent();
@@ -173,7 +175,10 @@ function showTrashModal() {
             btn.addEventListener('click', () => { const entry = deletedBin.find(e => e.id === btn.dataset.id); if (entry) restoreDeletedEntry(entry); });
         });
         el.querySelector('#sc-empty-trash')?.addEventListener('click', () => {
-            showConfirm('Permanently delete all trashed entries?', 'Cannot be undone.', () => { setChronicleData({ _deletedBin: [] }); renderContent(); scSetStatus('Trash emptied.', 'success'); });
+            showConfirm('Permanently delete all trashed entries?', 'Cannot be undone.', () => {
+                if (!setChronicleDataChecked({ _deletedBin: [] }).ok) { scSetStatus('Trash could not be emptied.', 'error'); return; }
+                renderContent(); scSetStatus('Trash emptied.', 'success');
+            });
         });
     }
     el.querySelector('#sc-back-from-trash')?.addEventListener('click', () => { state.selectedSnapshotId = null; renderContent(); });
@@ -208,15 +213,7 @@ function showPreviewInjection() {
         scSetStatus('No chronicle entries to preview — generate or enable injection first.', 'warning');
         return;
     }
-    const snapshots = getSnapshots();
-    entries.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    const text = entries.map(s => {
-        const num = snapshots.indexOf(s) + 1;
-        const charInfo = s.characters?.length ? ` [${s.characters.join(', ')}]` : '';
-        return `### Chronicle Entry ${num} — ${s.worldDate || s.createdAt}${charInfo}\n${s.text}`;
-    }).join('\n\n---\n\n');
-
-    const injected = `${CHRONICLE_INJECTION_HEADER}\n\n${text}`;
+    const injected = buildChronicleInjectionText();
     const tokens = estimateTokens(injected);
 
     // Resolve depth/role for display through the SAME resolver applyInjection()
@@ -231,7 +228,7 @@ function showPreviewInjection() {
         title: 'Chronicle Injection Preview',
         content: `
             <p class="mwt-text-dim mwt-text-sm mwt-mb-8">
-                This is exactly what gets injected into the prompt (${injected.length} chars, ~${tokens} tokens).
+                Chronicle content before the host's budget and prompt adapter (${injected.length} chars, ~${tokens} tokens).
                 Depth: <strong>${escapeHtml(depth)}</strong> · Role: <strong>${escapeHtml(roleName)}</strong>.
             </p>
             <pre style="white-space:pre-wrap;font-family:var(--mwt-font-mono);font-size:12px;line-height:1.5;background:var(--mwt-bg-light);padding:12px;border-radius:var(--mwt-radius);border:1px solid var(--mwt-border);max-height:60vh;overflow-y:auto">${escapeHtml(injected)}</pre>
@@ -290,7 +287,7 @@ function showInjectionSelector() {
         if (mode === 'recent') { newData.injectCount = parseInt(el.querySelector('#sc-inject-count')?.value) || 2; newData.selectedForInjection = []; }
         else if (mode === 'selected') { const sel = []; el.querySelectorAll('.sc-inject-select-cb:checked').forEach(cb => sel.push(cb.dataset.id)); newData.selectedForInjection = sel; }
         else if (mode === 'range') { newData.injectFromDate = el.querySelector('#sc-inject-from')?.value || ''; newData.injectToDate = el.querySelector('#sc-inject-to')?.value || ''; }
-        setChronicleData(newData);
+        if (!setChronicleDataChecked(newData).ok) { scSetStatus('Injection settings could not be saved.', 'error'); return; }
         applyInjection();
         renderContent();
         scSetStatus(`Injection set to "${mode}".`, 'success');
@@ -526,7 +523,7 @@ function bindMainEvents() {
     el.querySelector('#sc-stats-btn')?.addEventListener('click', () => showStatsModal());
     el.querySelector('#sc-inject-toggle')?.addEventListener('click', () => {
         const next = !isInjectionEnabled();
-        setChronicleData({ injectEnabled: next });
+        if (!setChronicleDataChecked({ injectEnabled: next }).ok) { scSetStatus('Injection setting could not be saved.', 'error'); return; }
         applyInjection();
         renderContent();
         scSetStatus(`Injection ${next ? 'enabled' : 'disabled'}.`, 'success');
@@ -552,6 +549,11 @@ function bindMainEvents() {
     });
     el.querySelector('#sc-reset-btn')?.addEventListener('click', () => {
         showConfirm('Clear all chronicle data?', 'Everything will be deleted.', () => {
+            if (!setChronicleDataChecked({ snapshots: [], _deletedBin: [], lastAnchor: null, anchorStale: false,
+                selectedForInjection: [], injectFromDate: '', injectToDate: '', suggestSent: false,
+                injectEnabled: false, injectCount: 2, injectDepth: 2, msgSinceSnapshot: 0, countedReceiptEvents: [] }).ok) {
+                scSetStatus('Chronicle could not be cleared.', 'error'); return;
+            }
             state.msgSinceSnapshot = 0;
             state.countedReceiptEvents.clear();
             state.selectedSnapshotId = null;
@@ -560,9 +562,6 @@ function bindMainEvents() {
             state.consolidateMode = false;
             state.bulkDeleteMode = false;
             state.pendingSearch = '';
-            setChronicleData({ snapshots: [], _deletedBin: [], lastAnchor: null, anchorStale: false,
-                selectedForInjection: [], injectFromDate: '', injectToDate: '', suggestSent: false,
-                injectEnabled: false, injectCount: 2, injectDepth: 2, msgSinceSnapshot: 0, countedReceiptEvents: [] });
             applyInjection();
             renderContent();
             scSetStatus('Chronicle cleared.', 'success');

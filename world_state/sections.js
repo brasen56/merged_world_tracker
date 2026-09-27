@@ -91,8 +91,7 @@ const SECTION_CONTEXT_BUDGET = 30000;
  *  model was given — never a re-read window that messages arriving mid-await
  *  may have shifted (the frozen-evidence rule, same fix as the delta/full paths).
  */
-function buildSectionUserMessage(sectionName, scanText) {
-    const stored = getWorldStateText();
+function buildSectionUserMessage(sectionName, scanText, stored = getWorldStateText()) {
     const projected = getSettings().hookMode === 'off' ? stripHookSections(stored) : stored;
     const fullState = truncateText(projected.trim() || 'None yet.', SECTION_CONTEXT_BUDGET);
     const recent = scanText || 'No recent messages.';
@@ -181,9 +180,8 @@ export async function regenerateSection(sectionName, variety = 2) {
 
     // WORLD-STATE-02: Capture the target SECTION's revision at start so we can
     // detect same-chat edits to that section during the API call.
-    const sectionRevision = captureRevision(
-        extractOnlySection(getWorldStateText(), sectionName) || ''
-    );
+    const promptDocument = getWorldStateText();
+    const sectionRevision = captureRevision(extractOnlySection(promptDocument, sectionName) || '');
 
     state.wstIsRefreshing = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -214,10 +212,15 @@ export async function regenerateSection(sectionName, variety = 2) {
         // try, retry, soft fallback — works from one evidence set.
         const aliasGroups = s.groundingEnabled ? await collectRegistryAliasGroups() : [];
 
+        // Alias lookup can yield while the user edits the target section.
+        // Check before spending a model call, not only before committing it.
+        if (!assertSameScope(scopeBefore).ok) return null;
+        if (!sameRevision(sectionRevision, extractOnlySection(getWorldStateText(), sectionName) || '')) return null;
+
         const _wsApi3 = resolveApiCall({ moduleSettings: sectionSettings });
         const raw = await _wsApi3.fetchFn({
             systemPrompt: buildSectionSystemPrompt(sectionName, effectiveVariety),
-            userContent: buildSectionUserMessage(sectionName, scanWindowText),
+            userContent: buildSectionUserMessage(sectionName, scanWindowText, promptDocument),
             settings: _wsApi3.settings,
             retries: 1,
         });
@@ -277,7 +280,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                 const _wsApiRetry = resolveApiCall({ moduleSettings: sectionSettings });
                 const rawRetry = await _wsApiRetry.fetchFn({
                     systemPrompt: buildSectionSystemPrompt(sectionName, effectiveVariety),
-                    userContent: buildSectionUserMessage(sectionName, scanWindowText) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
+                    userContent: buildSectionUserMessage(sectionName, scanWindowText, promptDocument) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
                     settings: _wsApiRetry.settings,
                     retries: 1,
                 });

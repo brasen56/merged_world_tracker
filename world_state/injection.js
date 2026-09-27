@@ -289,8 +289,8 @@ export function applyWorldStateInjection() {
         //      that would double-wrap the blocks. applyExtensionPromptInjection's
         //      own `useTags` is a separate, generic mechanism unrelated to the
         //      per-block tags built above.
-        const projection = buildInjectionProjection(text);
-        const payload = projection.payload;
+        const projection = enabled ? buildInjectionProjection(text) : null;
+        const payload = projection?.payload || '';
 
         applyExtensionPromptInjection({
             key: EXTENSION_PROMPT_KEY,
@@ -306,7 +306,7 @@ export function applyWorldStateInjection() {
             // Content-layer wrapping is already applied per-block above; pass
             // false so the generic injector doesn't add an additional wrapper.
             useTags: false,
-            diagnostics: projection.diagnostics,
+            ...(projection ? { diagnostics: projection.diagnostics } : {}),
         });
         console.log(`[MWT:WorldState] Injected ${payload.length} chars at depth ${placement.depth.value}`);
     } catch (err) {

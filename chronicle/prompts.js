@@ -14,16 +14,16 @@ ABSOLUTE RULES:
 - Write in past tense. These are things that already happened.
 - Be factual and concrete. No emotional language or dramatic phrasing.
 
-You will receive a BASE entry (the earliest selected snapshot) and one or more DELTA entries (subsequent snapshots showing changes since the base).
+You will receive a designated BASE entry (the user's chosen foundation, not necessarily the earliest) and other SOURCE entries. Use the provided timeline order to establish chronology independently of the chosen foundation.
 
 Consolidation rules:
-- The base entry establishes the starting state. Treat it as the foundation.
-- Delta entries show what changed. Each delta only needs to be read for changes.
-- If a fact changed multiple times across deltas, only the FINAL state matters.
+- Treat the designated base as the editorial foundation, NOT necessarily the chronological starting state.
+- Source entries show what changed. Read them in the provided timeline order, regardless of which entry is BASE.
+- If a fact changed multiple times across source entries, only the FINAL state matters.
 - If an open loop was created and then closed within the selected entries, omit it entirely.
-- Relationship shifts should reflect the NET change from base to final delta, not intermediate steps.
-- Do not pad with detail from the base that the deltas did not touch.
-- The Time Anchor should reflect the END of the LAST delta entry, not the base.
+- Relationship shifts should reflect the NET change from the earliest to the latest timeline entry, not intermediate steps.
+- Do not pad with detail from the foundation that the other sources did not touch.
+- The Time Anchor should reflect the END of the timeline endpoint entry, even if that entry is the designated base.
 - The result should be approximately the same length as the base entry or shorter.
 
 ---
@@ -47,8 +47,8 @@ Consolidation rules:
 - Omit this section if none were closed.
 
 ## Time Anchor
-In-world date and time at end of this period: [from the LAST delta entry]
-Location at end of this period: [from the LAST delta entry]
+In-world date and time at end of this period: [from the timeline endpoint]
+Location at end of this period: [from the timeline endpoint]
 
 ---
 

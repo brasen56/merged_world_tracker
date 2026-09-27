@@ -1,10 +1,7 @@
 /**
  * test/interiority_module5_review.test.js — Module 5 review probes.
  *
- * DEFECT-DOCUMENTATION TESTS: every assertion below pins CURRENT (defective)
- * behavior found during the NPC Interiority file-by-file review. They are not
- * evidence that anything is fixed. If a defect is repaired, the paired
- * assertion should be updated to the fixed contract (see Module5_Review.md).
+ * Regression tests for refused Interiority writes from the module review.
  *
  * Probes:
  *   A. markLedgerEntryDone() reports success (non-null record) while the
@@ -33,7 +30,7 @@ import { _resetDiagnostics, getEvents } from '../core/diagnostics.js';
 import { _resetEpoch } from '../core/scope.js';
 
 import {
-    addLedgerEntry, setLedgerEntryDormant, getLedger,
+    addLedgerEntry, setLedgerEntryDormant, getLedger, removeLedgerEntries,
 } from '../interiority/data.js';
 import {
     markLedgerEntryDone, wakeLedgerEntryTracked, getLifecycleHistory,
@@ -65,6 +62,14 @@ afterEach(() => {
 });
 
 describe('M5-1/A: manual lifecycle close reports success over a refused write', () => {
+    test('a refused tombstoned removal reports failure and preserves the entry', () => {
+        setFakeChat(CHAT);
+        const entry = addLedgerEntry({ npc: 'Mara', action: 'wait', trigger: 'dawn' }, 'day 1', 0);
+        pauseStore('interiority', { reasonCode: 'future-version', message: 'blocked' });
+        expect(removeLedgerEntries([entry.id], { tombstone: true })).toBe(false);
+        expect(getLedger().some(item => item.id === entry.id)).toBe(true);
+    });
+
     test('markLedgerEntryDone returns a record while the entry survives and nothing persists', () => {
         setFakeChat(CHAT);
         const entry = addLedgerEntry({ npc: 'Mara', action: 'rob the caravan', trigger: 'new moon' }, 'day 1', 0);
@@ -73,10 +78,8 @@ describe('M5-1/A: manual lifecycle close reports success over a refused write', 
         pauseStore('interiority', { reasonCode: 'future-version', message: 'blocked' });
 
         const recorded = markLedgerEntryDone(entry.id);
-        // DEFECT: non-null "success" return…
-        expect(recorded).not.toBeNull();
-        expect(recorded.outcome).toBe('completed');
-        // …over a seam that refused both writes: the entry is still live…
+        expect(recorded).toBeNull();
+        // The refused close leaves the entry live.
         expect(getLedger().some(e => e.id === entry.id)).toBe(true);
         // …and no lifecycle record persisted.
         expect(getLifecycleHistory()).toHaveLength(0);
@@ -94,11 +97,9 @@ describe('M5-1/B + M5-2: phantom wake result and diagnostics over refused writes
         _resetDiagnostics();
 
         const woken = wakeLedgerEntryTracked(entry.id, 0);
-        // DEFECT: the returned (staged, unsaved) object claims the wake…
-        expect(woken?.status).toBe('active');
-        // …while the live store still holds the entry as dormant…
+        expect(woken).toBeNull();
+        // The live store still holds the entry as dormant.
         expect(getLedger().find(e => e.id === entry.id)?.status).toBe('dormant');
-        // …and the audit ring still recorded a transition that never happened.
-        expect(getEvents().some(ev => ev?.event === 'intention_lifecycle')).toBe(true);
+        expect(getEvents().some(ev => ev?.event === 'intention_lifecycle')).toBe(false);
     });
 });

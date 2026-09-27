@@ -88,8 +88,8 @@ describe('PANIC-COUNTER-SYMMETRY — MESSAGE_RECEIVED gating', () => {
         expect(called('kn.recv')).toBe(1);
         expect(called('sp.recv')).toBe(1);
         expect(called('in.recv')).toBe(0); // generation gated too
-        expect(calls['ws.recv'][0]).toEqual([{ countMessage: false }]);
-        expect(calls['ch.recv'][0]).toEqual([{ countMessage: false }]);
+        expect(calls['ws.recv'][0]).toEqual([{ countMessage: false, messageIndex: 5 }]);
+        expect(calls['ch.recv'][0]).toEqual([{ countMessage: false, messageIndex: 5 }]);
         expect(calls['kn.recv'][0]).toEqual([{ countMessage: false }]);
         expect(calls['sp.recv'][0]).toEqual([{ countMessage: false }]);
     });
@@ -107,17 +107,18 @@ describe('PANIC-COUNTER-SYMMETRY — MESSAGE_RECEIVED gating', () => {
     test('panic OFF: counter modules receive countMessage: true', () => {
         const { modules, calls } = makeStubModules();
         routeMessageReceived(modules, {}, 5); // injectionMasterOff is falsey
-        expect(calls['ws.recv'][0]).toEqual([{ countMessage: true }]);
-        expect(calls['ch.recv'][0]).toEqual([{ countMessage: true }]);
+        expect(calls['ws.recv'][0]).toEqual([{ countMessage: true, messageIndex: 5 }]);
+        expect(calls['ch.recv'][0]).toEqual([{ countMessage: true, messageIndex: 5 }]);
         expect(calls['kn.recv'][0]).toEqual([{ countMessage: true }]);
         expect(calls['sp.recv'][0]).toEqual([{ countMessage: true }]);
     });
 
-    test('Interiority onMessageReceived receives the message index; the others do not', () => {
+    test('Interiority receives the index directly; World State and Chronicle receive it with their counter flags', () => {
         const { modules, calls } = makeStubModules();
         routeMessageReceived(modules, {}, 42);
         expect(calls['in.recv'][0]).toEqual([42]);
-        expect(calls['ws.recv'][0]).toEqual([{ countMessage: true }]);
+        expect(calls['ws.recv'][0]).toEqual([{ countMessage: true, messageIndex: 42 }]);
+        expect(calls['ch.recv'][0]).toEqual([{ countMessage: true, messageIndex: 42 }]);
         expect(calls['sp.recv'][0]).toEqual([{ countMessage: true }]);
     });
 });

@@ -33,6 +33,8 @@ import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
 import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema } from './schema.js';
 import { makeQuarantineItem } from '../core/quarantine.js';
+import { captureScope } from '../core/index.js';
+import { scopeStillCurrent } from '../core/scope.js';
 
 // ─── Staging helpers ─────────────────────────────────────────────────────────
 
@@ -426,27 +428,48 @@ export async function exportNpcs() {
 }
 
 export async function importNpcs() {
-    const text = await pickTextFile('.json');
-    if (!text) return;
     try {
+        const text = await pickTextFile('.json');
+        if (!text) return;
         const data = JSON.parse(text);
 
         if (!data.entries || typeof data.entries !== 'object') {
             throw new Error('Invalid format: missing "entries" object.');
         }
 
+        // Pin the destination after the file picker, before any lorebook IO.
+        // A later chat switch or scope-setting change must not commit an old
+        // registry into a different book after an awaited reconciliation.
+        const importScope = captureScope();
+        const destination = getLorebookName();
+        const assertImportDestination = () => {
+            if (!scopeStillCurrent(importScope).ok || getLorebookName() !== destination) {
+                throw new Error('Chat or Knowledge destination changed during import — stopped. Review any entries already imported before retrying.');
+            }
+        };
+
         let imported = 0;
         let skipped = 0;
         let settingsImported = false;
-        const registry = getRegistry();
-
         // Import settings if present
         if (data.settings && data.type === 'knowledge_tracker') {
             if (confirm('Import settings too? (API URL, key, model, etc.)')) {
-                saveSettings({ ...getSettings(), ...data.settings });
+                // Scope and bookBindings determine the destination lorebooks;
+                // neither belongs to a standalone NPC export's settings patch.
+                const allowed = ['apiUrl', 'apiKey', 'modelName', 'connectionProfileId',
+                    'customHeaders', 'maxTokens', 'temperature', 'topP',
+                    'frequencyPenalty', 'presencePenalty'];
+                const patch = Object.fromEntries(allowed
+                    .filter(key => Object.hasOwn(data.settings, key))
+                    .map(key => [key, data.settings[key]]));
+                saveSettings(patch);
                 settingsImported = true;
             }
         }
+        // Work on a detached copy: getRegistry() exposes the cached store
+        // object, so mutating it before the final save leaks partial imports
+        // even when a later lorebook write or scope check fails.
+        const registry = structuredClone(getRegistry());
 
         // ── Recovery guarantee (design §5.2 + §5.1), up-front pass ──────────
         //
@@ -468,7 +491,7 @@ export async function importNpcs() {
             if (recordIssue !== null) refused.push({ name, entry, recordIssue });
         }
         if (refused.length > 0) {
-            const preserved = mergeStoreQuarantineItems(getLorebookName(), refused.map(
+            const preserved = mergeStoreQuarantineItems(destination, refused.map(
                 ({ name, entry, recordIssue }) => makeQuarantineItem({
                     store: knowledgeStoreSchema.id,
                     path: ['registry', name],
@@ -519,6 +542,7 @@ export async function importNpcs() {
             if (incomingUid != null) {
                 const originalUid = incomingUid;
                 incomingUid = await reconcileImportedUid(incomingUid, entry.content, loadEntryContent, name);
+                assertImportDestination();
                 if (incomingUid === null) {
                     console.warn(
                         `[MWT:Knowledge] Import uid ${originalUid} for "${name}" could not be verified in the local ` +
@@ -566,18 +590,19 @@ export async function importNpcs() {
             if (entry.content && state.wiScript && incomingUid == null) {
                 try {
                     const result = await writeToLorebook(name, entry.content, entry.keywords || [name], null);
-                    if (result.success) {
-                        registry[name].uid = result.uid;
-                    }
+                    assertImportDestination();
+                    if (!result.success) throw new Error(result.error || 'lorebook write was refused');
+                    registry[name].uid = result.uid;
                 } catch (err) {
-                    console.warn(`[MWT:Knowledge] Import write failed for "${name}":`, err.message);
+                    assertImportDestination();
+                    throw new Error(`Could not import "${name}" into the lorebook: ${err.message}. Review entries already written before retrying.`);
                 }
             }
 
             const finalUid = registry[name].uid;
             if (entry.history && Array.isArray(entry.history) && entry.history.length > 0 && finalUid != null) {
                 try {
-                    const key = HISTORY_KEY_PREFIX + getLorebookName() + '_' + finalUid;
+                    const key = HISTORY_KEY_PREFIX + destination + '_' + finalUid;
                     localStorage.setItem(key, JSON.stringify(entry.history));
                 } catch { /* quota */ }
             }
@@ -597,10 +622,12 @@ export async function importNpcs() {
             console.warn(`[MWT:Knowledge] Import canonicalized a conflicting identity claim: ${issue.message}`);
         }
 
+        assertImportDestination();
         saveRegistry(registry);
 
         // Trigger re-render
         const { renderNpcsSubTab } = await import('./render.js');
+        assertImportDestination();
         renderNpcsSubTab();
 
         let msg = `Imported ${imported} NPC(s).`;

@@ -26,7 +26,7 @@ export function exportChronicle() {
         lastAnchor: cd.lastAnchor,
         injectEnabled: isInjectionEnabled(),
         injectCount: cd.injectCount || 2,
-        injectDepth: cd.injectDepth || 2,
+        injectDepth: cd.injectDepth ?? 2,
         msgSinceSnapshot: state.msgSinceSnapshot,
         exportedAt: new Date().toISOString(),
         version: SC_VERSION,

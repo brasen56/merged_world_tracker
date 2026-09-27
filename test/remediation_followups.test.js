@@ -44,6 +44,7 @@ describe('CHRONICLE-03 — messages arriving during generation survive the reset
         state.isGenerating = false;
         state.isMainGenerating = false;
         state.msgSinceSnapshot = 0;
+        state.countedReceiptEvents = new Map();
     });
 
     test('the success path consumes only the messages the snapshot covers', async () => {
@@ -51,26 +52,24 @@ describe('CHRONICLE-03 — messages arriving during generation survive the reset
         const { generateSnapshot } = await import('../chronicle/snapshots.js');
         saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
 
-        // 8 messages were waiting when generation started.
+        // Counted events are tied to actual covered receipt identities.
         state.msgSinceSnapshot = 8;
+        state.countedReceiptEvents = new Map([['id:m1', 4], ['id:m3', 4]]);
 
         let release;
         setFakeApi(() => new Promise(resolve => { release = resolve; }));
         const pending = generateSnapshot();
         await Promise.resolve();
 
-        // 3 more arrive mid-flight. They are past the window's toIndex, so this
-        // snapshot does not cover them — they must carry over to the next one.
+        // Three more events arrive mid-flight. The already-counted m3 is also
+        // in the excluded tail, so its event survives alongside the new ones.
         state.msgSinceSnapshot += 3;
 
         release('## Summary\nA valid generated summary.\n\n## Time Anchor\nIn-world date and time at end of this period: 2026-01-01 10:00');
         await pending;
 
-        // The window ends before the excluded in-flight tail (2 messages), so
-        // MESSAGE_RECEIVED counts arrivals, not raw chat entries. The excluded
-        // pair preserves one assistant receipt alongside the 3 arrivals: 4.
-        expect(state.msgSinceSnapshot).toBe(4);
-        expect(getChronicleData().msgSinceSnapshot).toBe(4);
+        expect(state.msgSinceSnapshot).toBe(7);
+        expect(getChronicleData().msgSinceSnapshot).toBe(7);
     });
 
     test('a deletion during generation cannot drive the counter negative', async () => {
@@ -79,6 +78,7 @@ describe('CHRONICLE-03 — messages arriving during generation survive the reset
         saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
 
         state.msgSinceSnapshot = 5;
+        state.countedReceiptEvents = new Map([['id:m1', 2], ['id:m3', 3]]);
         let release;
         setFakeApi(() => new Promise(resolve => { release = resolve; }));
         const pending = generateSnapshot();

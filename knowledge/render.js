@@ -2940,8 +2940,6 @@ function updateEdges(svg, data) {
     const edgeGroup = svg.querySelector('.kt-rel-graph-edges');
     if (!edgeGroup) return;
     edgeGroup.innerHTML = '';
-    const typeColors = new Map();
-    for (const e of data.edges) typeColors.set(e.type, relEdgeColor(e.type));
     for (const p of data.pairs.values()) {
         const aPos = data.nodes.get(p.a);
         const bPos = data.nodes.get(p.b);

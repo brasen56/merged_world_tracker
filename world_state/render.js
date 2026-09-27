@@ -12,6 +12,7 @@ import {
     renderApiSettingsFields, readApiSettingsValues,
     getChat,
     captureScope, assertSameScope,
+    resolveApiCall, normaliseOutput,
 } from '../core/index.js';
 // Direct import (not the barrel) so the real helper runs under the test
 // barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
@@ -1013,24 +1014,20 @@ export function wireEvents() {
     // Test connection
     state.modal.querySelector('#ws-test-connection')?.addEventListener('click', async () => {
         const btn = state.modal.querySelector('#ws-test-connection');
-        const url = state.modal.querySelector('#ws-api-url')?.value.trim();
-        const key = state.modal.querySelector('#ws-api-key')?.value.trim();
-        const model = state.modal.querySelector('#ws-model')?.value.trim();
-        if (!url || !model) { setStatus(state.modal, 'Fill URL and Model first.', 'error'); return; }
-
         try {
+            const values = readApiSettingsValues(state.modal, wsApiFieldOpts);
+            const resolved = resolveApiCall({ moduleSettings: { ...getSettings(), ...values } });
+            if (resolved.mode === 'custom' && (!resolved.settings.apiUrl || !resolved.settings.modelName)) {
+                setStatus(state.modal, 'Fill URL and Model, or configure a connection profile first.', 'error');
+                return;
+            }
             setControlBusy(btn, true); btn.textContent = 'Testing…';
             setStatus(state.modal, 'Testing connection…', 'info');
-            const headers = { 'Content-Type': 'application/json' };
-            if (key) headers['Authorization'] = `Bearer ${key}`;
-            const resp = await fetch(`${url.replace(/\/+$/, '')}/chat/completions`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with: OK' }], max_tokens: 10, temperature: 0 }),
+            const response = await resolved.fetchFn({
+                systemPrompt: 'Reply with: OK', userContent: 'Reply with: OK',
+                settings: { ...resolved.settings, maxTokens: 10, temperature: 0 }, retries: 0,
             });
-            if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
-            const data = await resp.json();
-            setStatus(state.modal, `OK — model replied: "${data?.choices?.[0]?.message?.content?.trim()}"`, 'success', 5000);
+            setStatus(state.modal, `OK — model replied: "${normaliseOutput(response).trim()}"`, 'success', 5000);
         } catch (err) {
             setStatus(state.modal, `Failed: ${err.message}`, 'error');
         } finally {

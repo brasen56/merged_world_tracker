@@ -897,7 +897,9 @@ export function getArcs() {
 export function setArcs(arcs) {
     // STORY-PLANNER-09: Sanitize every arc so history restore / import cannot
     // persist non-canonical arcs that later can't be removed.
-    setPlanData({ arcs: sanitizeArcs(arcs) });
+    const before = getChatMeta()?.[CHAT_DATA_KEY];
+    const committed = setPlanData({ arcs: sanitizeArcs(arcs) });
+    return !!committed && committed !== before;
 }
 
 /** Full plan as markdown — used by the `{{storyplan}}` macro and diff views. */
@@ -909,8 +911,7 @@ export function getPlanText() {
 
 export function addArc(partial = {}) {
     const arc = makeArc(partial);
-    setArcs([...getArcs(), arc]);
-    return arc;
+    return setArcs([...getArcs(), arc]) ? arc : null;
 }
 
 export function updateArc(id, patch = {}) {
@@ -946,8 +947,7 @@ export function updateArc(id, patch = {}) {
     if (!ARC_STATUSES.includes(merged.status)) merged.status = 'active';
     const copy = [...arcs];
     copy[idx] = merged;
-    setArcs(copy);
-    return merged;
+    return setArcs(copy) ? merged : null;
 }
 
 /**
@@ -1028,7 +1028,7 @@ function commitBeatEdit(id, proposedBeats) {
         beats,
         ...(currentChanged ? { turnsSinceAdvance: 0 } : {}),
     });
-    if (currentChanged) cleanNudgeMarksForArc(id);
+    if (updated && currentChanged) cleanNudgeMarksForArc(id);
     return updated;
 }
 
@@ -1099,7 +1099,7 @@ export function removeArc(id) {
     const remaining = arcs.filter(a => a.id !== id);
     if (remaining.length === arcs.length) return false;
     pushPlanToHistory(arcs);
-    setArcs(remaining);
+    if (!setArcs(remaining)) return false;
     // STORY-PLANNER-08: clear this arc's nudge marks immediately rather than
     // waiting for takeDueNudges() to reconcile them lazily on its next call.
     cleanNudgeMarksForArc(id);
@@ -1127,7 +1127,7 @@ export function setArcStatus(id, status, closeReason = '') {
         patch.closeReason = String(closeReason || '').trim().slice(0, MAX_ARC_BODY);
     }
     const updated = updateArc(id, patch);
-    if (arc.status !== next) cleanNudgeMarksForArc(id);
+    if (updated && arc.status !== next) cleanNudgeMarksForArc(id);
     return updated;
 }
 

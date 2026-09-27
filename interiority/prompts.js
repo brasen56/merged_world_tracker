@@ -487,7 +487,10 @@ export function formatLedgerForInjection(ledger) {
     // §20: dormant entries excluded from narrator injection
     const active = ledger.filter(e => e.status !== 'dormant');
     if (active.length === 0) return '';
-    const lines = active.map(e => {
+    // A bounded narrator body prevents an unbounded number of mandatory
+    // actions from crowding out the rest of the prompt. Keep order stable.
+    const MAX_INJECTED_INTENTIONS = 20;
+    const lines = active.slice(0, MAX_INJECTED_INTENTIONS).map(e => {
         // INTERIORITY-06: Cap each field so unbounded entries don't bloat
         // the narrator injection every turn. Lifecycle v2: the line carries
         // the user's priority/expiry annotations (spec §1/§4).
@@ -497,6 +500,9 @@ export function formatLedgerForInjection(ledger) {
         const since = e.since ? ` (since ${cap(e.since, MAX_LEDGER_SINCE)})` : '';
         return `- ${npc} → ${action} → ${trigger}${since}${_lifecycleAnnotations(e)}`;
     });
+    if (active.length > MAX_INJECTED_INTENTIONS) {
+        lines.push(`[${active.length - MAX_INJECTED_INTENTIONS} additional active intentions omitted from narrator injection; review the Interiority ledger.]`);
+    }
     return lines.join('\n');
 }
 

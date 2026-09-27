@@ -1188,6 +1188,8 @@ export function migrateStoryPlannerV0ToV1(data) {
 /** v1 -> v2: make beat progress and lifecycle decisions explicit and durable. */
 export function migrateStoryPlannerV1ToV2(data) {
     if (!isObject(data)) return { data, issues: [] };
+    const issues = !Array.isArray(data.arcs) && data.arcs !== undefined
+        ? [quarantineIssue('not-an-array', ['arcs'], 'arcs must be an array.', data.arcs, 'arcs')] : [];
     const migrateArc = raw => {
         const arc = sanitizeArc(raw, { preserveId: true });
         // Migration can run more than once before a confirmation commits. IDs
@@ -1212,12 +1214,14 @@ export function migrateStoryPlannerV1ToV2(data) {
     if (isObject(next.settingsOverride) && next.settingsOverride.injectMode === 'active') {
         next.settingsOverride = { ...next.settingsOverride, injectMode: 'all' };
     }
-    return { data: next, issues: [] };
+    return { data: next, issues };
 }
 
 /** v2 -> v3: journey ownership is explicit; legacy arcs remain unassigned. */
 export function migrateStoryPlannerV2ToV3(data) {
     if (!isObject(data)) return { data, issues: [] };
+    const issues = !Array.isArray(data.arcs) && data.arcs !== undefined
+        ? [quarantineIssue('not-an-array', ['arcs'], 'arcs must be an array.', data.arcs, 'arcs')] : [];
     const migrateArc = raw => sanitizeArc({
         ...raw,
         primarySubjectEntityId: raw?.primarySubjectEntityId ?? '',
@@ -1236,7 +1240,7 @@ export function migrateStoryPlannerV2ToV3(data) {
                 ? { storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(data.storyPlanRequestPreferences) }
                 : {}),
         },
-        issues: [],
+        issues,
     };
 }
 

@@ -12,7 +12,45 @@
  */
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, beforeEach, afterEach } from 'vitest';
+import { pauseStore, _setScopeKeyResolver, _resetPausedStores } from '../core/schema_status.js';
+import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
+import { GROWTH_EVIDENCE_KEY } from '../knowledge/state.js';
+import {
+    getEvidenceFile, updateRawObservation, deleteRawObservation, toggleCanon,
+    updateConsolidated, deleteConsolidated, expandConsolidated,
+    addUserOverride, updateUserOverride, deleteUserOverride,
+    clearEvidence, clearAllEvidence,
+} from '../knowledge/evidence.js';
+
+beforeEach(() => {
+    resetCoreStubs();
+    _setScopeKeyResolver(() => 'chat:knowledge-review');
+});
+afterEach(() => _resetPausedStores());
+
+test('evidence editors and resets report a refused write without mutating the stored file', () => {
+    getEvidenceFile('Mara');
+    const live = getFakeMeta()[GROWTH_EVIDENCE_KEY];
+    const file = live.Mara;
+    file.raw.push({ id: 'obs-001', category: 'trait', claim: 'Claim', quote: 'Receipt' });
+    file.consolidated.push({ id: 'con-001', category: 'trait', claim: 'Summary', sources: [] });
+    file.userOverrides = [{ id: 'usr-001', text: 'Original' }];
+    pauseStore('knowledgeEvidence', { reasonCode: 'future-version', message: 'blocked' });
+    expect(updateRawObservation('Mara', 'obs-001', { claim: 'Edited' })).toBe(false);
+    expect(deleteRawObservation('Mara', 'obs-001')).toBe(false);
+    expect(toggleCanon('Mara', 'obs-001')).toBeNull();
+    expect(updateConsolidated('Mara', 'con-001', { claim: 'Edited' })).toBe(false);
+    expect(deleteConsolidated('Mara', 'con-001')).toBe(false);
+    expect(expandConsolidated('Mara', 'con-001')).toBe(false);
+    expect(addUserOverride('Mara', 'New')).toBeNull();
+    expect(updateUserOverride('Mara', 'usr-001', 'Edited')).toBe(false);
+    expect(deleteUserOverride('Mara', 'usr-001')).toBe(false);
+    expect(clearEvidence('Mara')).toBe(false);
+    expect(clearAllEvidence()).toBe(0);
+    expect(getFakeMeta()[GROWTH_EVIDENCE_KEY]).toBe(live);
+    expect(live.Mara).toEqual(file);
+});
 
 import { reconcileImportedUid } from '../knowledge/reconcile.js';
 import {
@@ -31,7 +69,7 @@ function load(file, start, end, context) {
 describe('Module 3 review — defect reproductions', () => {
     test('consolidation preserves a source promoted to canon while generation was pending', () => {
         const file = { raw: [{ id: 'obs-001', claim: 'User canon', quote: 'receipt', canon: true, ts: 1 }], consolidated: [], archivedRaw: [] };
-        const c = { getEvidenceFile: () => file, obsIdSequence: () => () => 'con-001', validCategory: x => x, touch() {} };
+        const c = { getEvidenceFile: () => file, obsIdSequence: () => () => 'con-001', validCategory: x => x, touch: () => ({ ok: true }) };
         load('evidence.js', 'export function applyConsolidation(', '/**\n * Update a consolidated', c);
         c.applyConsolidation('Mara', [{ claim: 'Model inference', sources: [1] }], ['obs-001']);
         expect(file.raw).toHaveLength(1);
@@ -96,14 +134,14 @@ describe('Module 3 review — defect reproductions', () => {
         expect(c.sanitizeLorebookName(`${name} (unique123)`)).toBe(name);
     });
 
-    test('timestamp-only delta cursor skips the remainder of a tied timestamp batch', () => {
+    test('delta cursor resumes the remainder of a tied timestamp batch', () => {
         const chat = [1, 2, 3].map(n => ({ name: 'Mara', mes: `message ${n}`, send_date: 100 }));
         const c = { getChat: () => chat, getEligibleChatEnd: () => chat.length,
             isIlsSummary: () => false, normalizeSendDate: x => x, stripNonNarrative: x => x };
         load('growth.js', 'function buildDeltaWindow(', '/**\n * Run a continuous', c);
         const first = c.buildDeltaWindow(null, 2, 1);
         expect(first.count).toBe(2);
-        expect(c.buildDeltaWindow(first.maxTs, 2, 1)).toBeNull();
+        expect(c.buildDeltaWindow(first.maxTs, 2, 1, first.lastIndex)).toMatchObject({ count: 1, lastIndex: 2 });
     });
 
     test('all-stripped leading delta batch stalls before later narrative', () => {
@@ -112,41 +150,23 @@ describe('Module 3 review — defect reproductions', () => {
             isIlsSummary: () => false, normalizeSendDate: x => x,
             stripNonNarrative: x => x === 'stripped' ? '' : x };
         load('growth.js', 'function buildDeltaWindow(', '/**\n * Run a continuous', c);
-        expect(c.buildDeltaWindow(null, 2, 1)).toBeNull();
+        expect(c.buildDeltaWindow(null, 2, 1)).toMatchObject({ text: '', lastIndex: 1, maxTs: 2 });
     });
 
-    test('bootstrap watermark consumes messages arriving during capture', async () => {
-        let complete;
-        let chat = [{ send_date: 10 }];
-        let watermark;
-        const c = { refuseIfGrowthPaused() {}, getRegistry: () => ({ Mara: { uid: 1 } }),
-            hasValidSettings: () => true, getCaptureWatermark: () => null,
-            captureEvidence: () => new Promise(resolve => { complete = resolve; }),
-            appendRawObservations: () => ({ added: 1, skipped: 0 }),
-            getChat: () => chat, getEligibleChatEnd: x => x.length, EVIDENCE_MESSAGE_WINDOW: 80,
-            normalizeSendDate: x => x, setCaptureWatermark: (name, ts) => { watermark = ts; },
-            getEvidenceForProfile: () => [] };
-        load('growth.js', 'export async function runCaptureOnly(', '// ─── Consolidation pass', c);
-        const pending = c.runCaptureOnly('Mara');
-        chat = [...chat, { send_date: 20 }];
-        complete([{ claim: 'captured only the original message' }]);
-        await pending;
-        expect(watermark).toBe(20);
-    });
-
-    test('consolidation applies after scope changes when transport resolves', async () => {
+    test('consolidation does not apply after scope changes when transport resolves', async () => {
         let complete;
         let scope = 'A';
         let writtenScope;
-        const c = { refuseIfGrowthPaused() {}, getRegistry: () => ({ Mara: { uid: 1 } }),
+        const c = { refuseIfGrowthPaused() {}, captureScope: () => scope,
+            scopeStillCurrent: token => ({ ok: token === scope }), getRegistry: () => ({ Mara: { uid: 1 } }),
             consolidateEvidence: () => new Promise(resolve => { complete = resolve; }),
             applyConsolidation: () => { writtenScope = scope; return {}; } };
         load('growth.js', 'export async function runConsolidation(', '// ─── Profile regeneration', c);
         const pending = c.runConsolidation('Mara');
         scope = 'B';
         complete({ consolidated: [], sourceIds: [] });
-        await pending;
-        expect(writtenScope).toBe('B');
+        await expect(pending).rejects.toThrow(/Chat changed/);
+        expect(writtenScope).toBeUndefined();
     });
 
     // NK-07 (fixed in 2.10.2): an imported UID is kept only when the entry it

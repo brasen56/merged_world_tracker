@@ -269,7 +269,15 @@ export function resolveBookNames() {
             .filter(Boolean)
     );
     if (takenByOthers.has(names.knowledge)) {
-        names = deriveBookNames(`${identity.name} (${shortHash(identity.key)})`);
+        const discriminator = ` (${shortHash(identity.key)})`;
+        const cleanBase = sanitizeLorebookName(identity.name);
+        const base = cleanBase.slice(0, MAX_SUFFIX_LENGTH - discriminator.length).trim().replace(/[.\s]+$/, '');
+        names = deriveBookNames(`${base}${discriminator}`);
+        // Never persist a binding that still aliases another identity (e.g.
+        // a pre-existing binding using this discriminator).
+        if (takenByOthers.has(names.knowledge)) {
+            throw new Error('Scoped lorebook name still collides after disambiguation — refusing to bind a shared book.');
+        }
         console.log(
             `[MWT:Knowledge] "${identity.name}" collides with an existing binding — ` +
             `using "${names.knowledge}" instead.`

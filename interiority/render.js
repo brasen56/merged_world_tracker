@@ -16,6 +16,7 @@ import {
 // setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
 // (a11y plan §4.4).
 import { setControlBusy } from '../core/ui.js';
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import {
     state, getSettings, saveSettings,
@@ -802,10 +803,14 @@ function wireEvents(el) {
 
     // Clear ledger button
     el.querySelector('#mwt-int-clear-ledger')?.addEventListener('click', () => {
+        if (isStorePausedForCurrentScope('interiority')) { setIntStatus('Interiority is paused for this chat.', 'error'); return; }
         if (!confirm('Remove all ledger entries? This cannot be undone.')) return;
         // Same tombstoning as the per-entry ✕ — a bulk clear that the next
         // generation immediately undoes is worse than no button at all.
-        removeLedgerEntries(getLedger().map(e => e.id), { tombstone: true });
+        if (!removeLedgerEntries(getLedger().map(e => e.id), { tombstone: true })) {
+            setIntStatus('Ledger could not be cleared.', 'error');
+            return;
+        }
         renderContent();
         document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
     });
@@ -883,6 +888,7 @@ function wireEvents(el) {
     // Lifecycle v2: lifecycle-history actions (event delegation) — reopen a
     // closure, or clear the whole audit trail.
     el.querySelector('#mwt-int-lifecycle-list')?.addEventListener('click', (e) => {
+        if (isStorePausedForCurrentScope('interiority')) { setIntStatus('Interiority is paused for this chat.', 'error'); return; }
         const reopenBtn = e.target.closest('.mwt-int-reopen-btn');
         if (reopenBtn) {
             const historyId = reopenBtn.dataset.hid;
@@ -896,6 +902,7 @@ function wireEvents(el) {
         if (e.target.closest('#mwt-int-clear-history')) {
             if (!confirm('Clear the lifecycle history? Deletion tombstones are untouched. This cannot be undone.')) return;
             const removed = clearLifecycleHistory();
+            if (removed === null) { setIntStatus('Lifecycle history could not be cleared.', 'error'); return; }
             setIntStatus(`Cleared ${removed} lifecycle record(s).`, 'success');
             renderContent();
         }
@@ -907,30 +914,32 @@ function wireEvents(el) {
     const controlsList = el.querySelector('#mwt-int-npc-controls-list');
     if (controlsList) {
         controlsList.addEventListener('change', (e) => {
+            if (isStorePausedForCurrentScope('interiority')) { setIntStatus('Interiority is paused for this chat.', 'error'); renderContent(); return; }
             const target = e.target;
             const npc = target.dataset?.npc;
             if (!npc) return;
             if (target.classList.contains('mwt-int-ctl-privacy')) {
-                setNpcControl(npc, { privacyExcluded: target.checked });
+                if (!setNpcControl(npc, { privacyExcluded: target.checked })) { setIntStatus('Controls could not be saved.', 'error'); renderContent(); return; }
                 setIntStatus(`Privacy ${target.checked ? 'enabled' : 'disabled'} for ${npc}.`, 'success');
             } else if (target.classList.contains('mwt-int-ctl-pause')) {
-                setNpcControl(npc, { pauseNewProposals: target.checked });
+                if (!setNpcControl(npc, { pauseNewProposals: target.checked })) { setIntStatus('Controls could not be saved.', 'error'); renderContent(); return; }
                 setIntStatus(`New proposals ${target.checked ? 'paused' : 'resumed'} for ${npc}.`, 'success');
             } else if (target.classList.contains('mwt-int-ctl-cooldown')) {
-                setNpcControl(npc, { cooldownTurns: Math.max(0, Number(target.value) || 0) });
+                if (!setNpcControl(npc, { cooldownTurns: Math.max(0, Number(target.value) || 0) })) { setIntStatus('Controls could not be saved.', 'error'); renderContent(); return; }
             } else if (target.classList.contains('mwt-int-ctl-cap')) {
-                setNpcControl(npc, { activeCap: Math.max(0, Number(target.value) || 0) });
+                if (!setNpcControl(npc, { activeCap: Math.max(0, Number(target.value) || 0) })) { setIntStatus('Controls could not be saved.', 'error'); renderContent(); return; }
             } else {
                 return;
             }
             renderContent();
         });
         controlsList.addEventListener('click', (e) => {
+            if (isStorePausedForCurrentScope('interiority')) { setIntStatus('Interiority is paused for this chat.', 'error'); return; }
             const removeBtn = e.target.closest('.mwt-int-ctl-remove-btn');
             if (removeBtn) {
                 const npc = removeBtn.dataset.npc;
                 if (npc) {
-                    removeNpcControl(npc);
+                    if (!removeNpcControl(npc)) { setIntStatus('Controls could not be removed.', 'error'); return; }
                     setIntStatus(`Controls removed for ${npc}.`, 'info');
                     renderContent();
                 }
@@ -939,13 +948,14 @@ function wireEvents(el) {
     }
 
     el.querySelector('#mwt-int-controls-add-btn')?.addEventListener('click', () => {
+        if (isStorePausedForCurrentScope('interiority')) { setIntStatus('Interiority is paused for this chat.', 'error'); return; }
         const input = el.querySelector('#mwt-int-controls-add-name');
         const npc = String(input?.value || '').trim();
         if (!npc) {
             setIntStatus('Enter an NPC name to add controls for.', 'error');
             return;
         }
-        setNpcControl(npc, {});
+        if (!setNpcControl(npc, {})) { setIntStatus('Controls could not be saved.', 'error'); return; }
         setIntStatus(`Controls added for ${npc}.`, 'success');
         renderContent();
     });
@@ -956,6 +966,10 @@ function wireEvents(el) {
  * @param {MouseEvent} e
  */
 function handleLedgerListClick(e) {
+    if (isStorePausedForCurrentScope('interiority')) {
+        setIntStatus('Interiority is paused for this chat — no changes were saved.', 'error');
+        return;
+    }
     // §20: Wake button (scheduled list) — flip a dormant intention to active.
     // Lifecycle v2: routed through the tracked wrapper so the wake is audited.
     const wakeBtn = e.target.closest('.mwt-int-wake-btn');
@@ -963,7 +977,7 @@ function handleLedgerListClick(e) {
         const id = wakeBtn.dataset.id;
         if (id) {
             const grace = getSettings().intentionGracePeriod || 0;
-            wakeLedgerEntryTracked(id, grace);
+            if (!wakeLedgerEntryTracked(id, grace)) return;
             setIntStatus('Intention woken — now active.', 'success');
             renderContent();
             document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
@@ -1021,7 +1035,7 @@ function handleLedgerListClick(e) {
     if (sleepBtn) {
         const id = sleepBtn.dataset.id;
         if (id) {
-            sleepLedgerEntryTracked(id);
+            if (!sleepLedgerEntryTracked(id)) return;
             setIntStatus('Intention scheduled — click ✎ to add a wake hint (the event to watch for).', 'success');
             renderContent();
             document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
@@ -1037,7 +1051,10 @@ function handleLedgerListClick(e) {
             // tombstone: this is the USER saying no. Without it the engine
             // re-proposes the same intention next turn from unchanged story
             // context, and a swipe restores it outright from the snapshot.
-            removeLedgerEntries([id], { tombstone: true });
+            if (!removeLedgerEntries([id], { tombstone: true })) {
+                setIntStatus('Intention could not be removed.', 'error');
+                return;
+            }
             renderContent();
             document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));
         }
@@ -1181,19 +1198,25 @@ function handleInlineEditSave(id) {
     const priorityValue = entryEl.querySelector('.mwt-int-edit-priority')?.value ?? undefined;
     const expiresOnValue = entryEl.querySelector('.mwt-int-edit-expireson')?.value ?? undefined;
     const expiresTurnValue = entryEl.querySelector('.mwt-int-edit-expiresturn')?.value ?? undefined;
-    updateLedgerEntry(id, {
+    if (isStorePausedForCurrentScope('interiority')) {
+        setIntStatus('Interiority is paused for this chat — no changes were saved.', 'error');
+        return;
+    }
+    if (!updateLedgerEntry(id, {
         npc, action, trigger,
         priority: priorityValue,
         expiresOn: expiresOnValue,
         expiresTurn: expiresTurnValue,
-    });
+    })) { setIntStatus('Intention could not be saved.', 'error'); return; }
 
     // §20: the wake-hint field only renders for dormant entries. Persist it
     // via setLedgerEntryDormant, which owns the dormant fields (updateLedgerEntry
     // deliberately restricts itself to the four user-editable core fields).
     const wakeHintInput = entryEl.querySelector('.mwt-int-edit-wakehint');
     if (wakeHintInput) {
-        setLedgerEntryDormant(id, wakeHintInput.value.trim());
+        if (!setLedgerEntryDormant(id, wakeHintInput.value.trim())) {
+            setIntStatus('Wake hint could not be saved.', 'error'); return;
+        }
     }
 
     setIntStatus('Intention updated.', 'success');
@@ -1303,7 +1326,9 @@ function handleInlineAddSave() {
         return;
     }
 
-    addManualLedgerEntry({ npc, action, trigger });
+    if (isStorePausedForCurrentScope('interiority') || !addManualLedgerEntry({ npc, action, trigger })) {
+        setIntStatus('Manual intention could not be saved.', 'error'); return;
+    }
     setIntStatus('Manual intention added.', 'success');
     renderContent();
     document.dispatchEvent(new CustomEvent('mwt:interiority-ledger-changed'));

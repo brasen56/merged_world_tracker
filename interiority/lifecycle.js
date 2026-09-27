@@ -28,6 +28,7 @@
  */
 
 import { record } from '../core/diagnostics.js';
+import { getChatMeta } from '../core/index.js';
 import {
     getInteriorityData, saveInteriorityData,
     getLedger, addLedgerEntry, updateLedgerEntry, removeLedgerEntries,
@@ -104,8 +105,8 @@ export function clearLifecycleHistory() {
     const count = data.lifecycleHistory.length;
     if (count === 0) return 0;
     data.lifecycleHistory = [];
-    saveInteriorityData(data);
-    return count;
+    const previous = getChatMeta()?.mwt_interiority;
+    return saveInteriorityData(data) === previous ? null : count;
 }
 
 /** Generate a lifecycle record id: 'lc-' + base36 ts + seq + rand. */
@@ -165,7 +166,8 @@ export function recordLifecycleEvent({
     if (data.lifecycleHistory.length > MAX_LIFECYCLE_EVENTS) {
         data.lifecycleHistory.splice(0, data.lifecycleHistory.length - MAX_LIFECYCLE_EVENTS);
     }
-    saveInteriorityData(data);
+    const previous = getChatMeta()?.mwt_interiority;
+    if (saveInteriorityData(data) === previous) return null;
 
     // Readable diagnostics reason (ring contract: metadata only — outcome,
     // source, ids, turn; the text stays in the store/panel, never the ring).
@@ -396,8 +398,9 @@ export function setNpcControl(npc, patch = {}) {
         : (Number.isFinite(Number(current.lastAcceptedTurn)) ? Math.floor(Number(current.lastAcceptedTurn)) : null);
 
     data.npcControls[key] = current;
-    saveInteriorityData(data);
-    return current;
+    const previous = getChatMeta()?.mwt_interiority;
+    const committed = saveInteriorityData(data);
+    return committed && committed !== previous ? committed.npcControls[key] : null;
 }
 
 /**
@@ -406,11 +409,12 @@ export function setNpcControl(npc, patch = {}) {
  */
 export function removeNpcControl(npc) {
     const key = String(npc ?? '').trim().toLowerCase();
-    if (!key) return;
+    if (!key) return false;
     const data = getInteriorityData();
-    if (!(key in data.npcControls)) return;
+    if (!(key in data.npcControls)) return false;
     delete data.npcControls[key];
-    saveInteriorityData(data);
+    const previous = getChatMeta()?.mwt_interiority;
+    return !!saveInteriorityData(data) && getChatMeta()?.mwt_interiority !== previous;
 }
 
 /**
