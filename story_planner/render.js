@@ -26,6 +26,8 @@ import { createModal, showModal, hideModal } from '../core/modal.js';
 // setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
 // (a11y plan §4.4).
 import { setControlBusy } from '../core/ui.js';
+import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+import { storyPlannerSchema } from './schema.js';
 
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -1417,11 +1419,13 @@ export function renderContent() {
 
 /** Apply a snapshot as the current plan, syncing UI + injection. */
 function restorePlan(arcs, { pushCurrent = true } = {}) {
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return false;
     const current = getArcs();
     if (pushCurrent && current.length) pushPlanToHistory(current);
     setArcs(arcs);
     applyPlanInjection();
     renderArcs();
+    return true;
 }
 
 /** Diff the current plan against the most recent snapshot, with a Revert button. */
@@ -1449,7 +1453,10 @@ function showRevertDiff() {
     });
 
     diffModal.querySelector('#mwt-sp-revert-confirm')?.addEventListener('click', () => {
-        restorePlan(historyEntryToArcs(latest));
+        if (!restorePlan(historyEntryToArcs(latest))) {
+            notify('Story Planner', 'Restore unavailable while Story Planner is paused.', 'warning');
+            return;
+        }
         hideModal('mwt-sp-revert-modal');
         notify('Story Planner', 'Reverted to previous snapshot.', 'success');
     });
@@ -1497,7 +1504,10 @@ function showPlanHistory() {
                 `,
             });
             diffModal2.querySelector('#mwt-sp-restore-hist')?.addEventListener('click', () => {
-                restorePlan(historyEntryToArcs(entry));
+                if (!restorePlan(historyEntryToArcs(entry))) {
+                    notify('Story Planner', 'Restore unavailable while Story Planner is paused.', 'warning');
+                    return;
+                }
                 hideModal('mwt-sp-hist-diff-modal');
                 hideModal('mwt-sp-history-modal');
                 notify('Story Planner', 'Restored from history.', 'success');
@@ -1549,6 +1559,7 @@ function showInjectionPreview() {
 
 /** Persist a UI mutation and re-register when any narrator-facing text changes. */
 function mutateWithProjectionCheck(mutate) {
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return null;
     const before = `${getInjectionHeader()}\n\n${buildInjectionBody()}`;
     const result = mutate();
     if (`${getInjectionHeader()}\n\n${buildInjectionBody()}` !== before) applyPlanInjection();
@@ -1698,6 +1709,7 @@ async function runTargetedAction(button, arcId, operation) {
 
 /** Structural card actions: pin, focus, delete, add. */
 function handleArcsClick(e) {
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return;
     const btn = e.target.closest('[data-action]');
     if (!btn || btn.tagName === 'INPUT' || btn.tagName === 'TEXTAREA' || btn.tagName === 'SELECT') return;
     const action = btn.dataset.action;
@@ -1787,6 +1799,7 @@ function handleArcsClick(e) {
 
 /** Section / status dropdowns — both restructure the list, so re-render. */
 function handleArcsChange(e) {
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return;
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const { action, id } = el.dataset;
@@ -1966,6 +1979,7 @@ export function wireEvents() {
 
     // Clear
     state.modal.querySelector('#sp-clear')?.addEventListener('click', () => {
+        if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return;
         if (!confirm('Clear every arc? A snapshot will be saved to history.')) return;
         const current = getArcs();
         if (current.length) pushPlanToHistory(current);

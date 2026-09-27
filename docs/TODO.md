@@ -198,59 +198,70 @@ mid-operation" claims:
   probes intentionally assert the former defects; update them to desired
   behavior before using them as acceptance tests.
 
-### 🟠 Tier 2 — real bugs, cheap fixes
+### 🟢 Tier 2 — real bugs, cheap fixes (closed 2026-09-27)
 
-- [ ] **SP4-06 — Accepting a beat makes the next beat skip up to 80 messages
+- [x] **SP4-06 — Accepting a beat makes the next beat skip up to 80 messages
   it was never checked against.** Carrying the watermark forward is
   intentional (CHANGELOG 2.8.20), but it's set to the *end of the reviewed
   window* (`story_planner/progress.js:203-205, 361-366`), and each request
   only includes an arc's current beat (`:62`). Seed it from the accepted
   evidence message instead, and update the pinned test in
   `test/story_planner_phase5.test.js`.
-- [ ] **SP4-02 — A refused history write still changes the live store.**
+- [x] **SP4-02 — A refused history write still changes the live store.**
   `getPlanData()` returns the live object, and `pushPlanToHistory` pushes into
   it before `setPlanData` runs (`story_planner/data.js:145-148, 1367-1377`);
   the next save from any module persists the change. Reachable in a paused
   chat, because Revert, Restore, Clear, and arc edits have no pause guard
   (`story_planner/render.js:1419-1422, 1971-1972`). Clone first, as
   `setArcsWithHistory` already does (`:1385-1403`), and add the guard.
-- [ ] **NK-12 — Marking evidence as canon during a consolidation lets it be
+- [x] **NK-12 — Marking evidence as canon during a consolidation lets it be
   archived.** The source check tests existence, not canon
   (`knowledge/evidence.js:897`), and the comment at `:864-869` describes this
   exact race. Add `&& !o.canon`.
-- [ ] **NK-13, Personality only — Enrich can overwrite growth-owned
+- [x] **NK-13, Personality only — Enrich can overwrite growth-owned
   Personality.** `runNpcEnrich` merges `result.fields` unfiltered
   (`knowledge/lorebook.js:1440`), unlike `runNpcUpdate` and the scan path. Run
   it through `applyFieldOwnership`. (The `canon_lock` half is by design, see
   below.)
-- [ ] **M2-13 — Undo consolidation can delete the only complete record.** The
+- [x] **M2-13 — Undo consolidation can delete the only complete record.** The
   trash keeps 50 entries (`chronicle/snapshots.js:532`), so consolidating more
   than 50 evicts originals right away. Undo then restores whatever survived and
   drops the merged entry without trashing it (`chronicle/render.js:132-150`).
-- [ ] **M2-11 — "Clear all chronicle data" keeps `lastAnchor`**
+- [x] **M2-11 — "Clear all chronicle data" keeps `lastAnchor`**
   (`chronicle/render.js:546` only patches the fields it lists), so the next
   Generate resumes after the old anchor. Confirm what Clear All should mean,
   then reset the anchor, stale flag, selection, and range fields.
-- [ ] **M2-08 — Regenerate widens a one-message range to up to 200
+- [x] **M2-08 — Regenerate widens a one-message range to up to 200
   messages.** Change `toIndex > fromIndex` to `>=`
   (`chronicle/snapshots.js:318`).
-- [ ] **M2-12 — The empty Chronicle tab has no Generate, Import, or Trash**
+- [x] **M2-12 — The empty Chronicle tab has no Generate, Import, or Trash**
   (`chronicle/render.js:347`, compare `:376`). A new user has to create a
   blank entry first, and deleting the last entry hides Trash.
-- [ ] **M2-19 — Chronicle's CSS restyles every datetime input in ST.** Unscoped
+- [x] **M2-19 — Chronicle's CSS restyles every datetime input in ST.** Unscoped
   selectors at `chronicle/style.css:310, 346, 350` remove focus outlines
   page-wide, which the file's own comment (`:327-331`) forbids. Scope them to
   Chronicle.
-- [ ] **F5 — World State reads its document with two different grammars.** The
+- [x] **F5 — World State reads its document with two different grammars.** The
   extract/replace/remove helpers and delta insertion
   (`world_state/data.js:46-113`) end a section at any `#` heading and read
   `## Pending Threads` as `Pending`. The strict `parseWorldStateSections` used
   for injection (`core/world_state_document.js:62`) does neither. Route the
   helpers through the core parser.
-- [ ] **F4 — Expiry in quarantine/remove mode leaves indented sub-lines
+- [x] **F4 — Expiry in quarantine/remove mode leaves indented sub-lines
   orphaned.** `world_state/provenance.js:245-285` drops only the bold line.
   `stripNameLines` (`:357-396`) documents fixing this exact bug, so reuse its
   grouping. (Needs two opt-ins: expiry on, and a mode other than `mark`.)
+
+  *Tier 2 implementation (2026-09-27):* The next-beat watermark now starts at
+  accepted evidence, history writes are detached and paused UI edits are
+  guarded, and Knowledge preserves newly canonized sources and Growth-owned
+  Personality. Chronicle undo requires every original and retains even source
+  batches larger than the usual trash limit; Clear All resets anchors and
+  selections, one-message regeneration stays bounded, empty-view actions are
+  available, and datetime CSS is scoped. World State section helpers and delta
+  insertion share the strict document parser, and expiry groups subfields with
+  their parent. Regression coverage: `test/tier2_review_fixes.test.js` and the
+  updated Story Planner / Knowledge review tests.
 
 ### 🟡 Tier 3 — real but narrow (fix while you're in the file)
 

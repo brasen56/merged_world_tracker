@@ -361,7 +361,11 @@ function commitSuggestionWatermark(suggestion, updatedArc = null) {
         const nextBeat = getCurrentBeatRecord(updatedArc);
         const nextKey = nextBeat ? `beat:${updatedArc.id}:${nextBeat.id}`
             : isArcReady(updatedArc) ? `arc:${updatedArc.id}` : '';
-        if (nextKey) progressWatermarks[nextKey] = suggestion.pendingWatermark;
+        // The next beat was not part of this request. Recheck all messages
+        // after the accepted evidence, not just those after the request window.
+        if (nextKey) progressWatermarks[nextKey] = {
+            identity: suggestion.messageIdentity, index: suggestion.sourceIndex,
+        };
     }
     setPlanData({
         progressWatermarks,

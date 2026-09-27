@@ -29,29 +29,30 @@ function load(file, start, end, context) {
 }
 
 describe('Module 3 review — defect reproductions', () => {
-    test('consolidation archives a source promoted to canon while generation was pending', () => {
+    test('consolidation preserves a source promoted to canon while generation was pending', () => {
         const file = { raw: [{ id: 'obs-001', claim: 'User canon', quote: 'receipt', canon: true, ts: 1 }], consolidated: [], archivedRaw: [] };
         const c = { getEvidenceFile: () => file, obsIdSequence: () => () => 'con-001', validCategory: x => x, touch() {} };
         load('evidence.js', 'export function applyConsolidation(', '/**\n * Update a consolidated', c);
         c.applyConsolidation('Mara', [{ claim: 'Model inference', sources: [1] }], ['obs-001']);
-        expect(file.raw).toHaveLength(0);
-        expect(file.archivedRaw[0].canon).toBe(true);
+        expect(file.raw).toHaveLength(1);
+        expect(file.archivedRaw).toHaveLength(0);
         load('evidence.js', 'export function getEvidenceForProfile(', '/**\n * Return a summary', c);
-        expect(c.getEvidenceForProfile('Mara').every(item => !item.canon)).toBe(true);
+        expect(c.getEvidenceForProfile('Mara').some(item => item.canon)).toBe(true);
     });
 
-    test('enrichment forwards model-written canon and personality without ownership filtering', async () => {
+    test('enrichment preserves growth-owned personality but still allows canon updates', async () => {
         let forwarded;
         const c = { hasValidSettings: () => true, loadEntryContent: async () => 'Existing dossier',
             stripRelationshipBlock: x => x, getRecentMessages: () => 'Recent scene',
             getWorldStateFactual: () => '', getLatestChronicleEntry: () => '',
             DOSSIER_ENRICH_PROMPT: '', ktFetchFromApi: async () => '{}', normaliseOutput: x => x,
             parseJsonLenient: () => ({ fields: { canon_lock: 'Replaced canon', personality: 'Replaced profile' } }),
+            applyFieldOwnership: (name, fields) => name === 'Mara' ? { ...fields, personality: null } : fields,
             buildUpdatedDossierContent: (text, fields) => { forwarded = fields; return text; } };
         load('lorebook.js', 'export async function runNpcEnrich(', '// ─── Dossier per-field refresh', c);
         await c.runNpcEnrich('Mara', 1);
         expect(forwarded.canon_lock).toBe('Replaced canon');
-        expect(forwarded.personality).toBe('Replaced profile');
+        expect(forwarded.personality).toBeNull();
     });
 
     // NK-01 + NK-09 (fixed in 2.10.2): a failed flush no longer evicts the

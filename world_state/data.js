@@ -5,8 +5,9 @@
  */
 
 import {
-    getChatMeta, persistChatMeta, preserveQuarantinedRecords, escapeRegex,
+    getChatMeta, persistChatMeta, preserveQuarantinedRecords,
 } from '../core/index.js';
+import { parseWorldStateSections } from '../core/world_state_document.js';
 import { getSettings, saveSettings } from './settings.js';
 import { prepareNextStoreValue, prepareStore } from '../core/schema.js';
 // Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
@@ -41,44 +42,17 @@ export const VARIETY_LABELS = {
     5: 'Chaotic',
 };
 
-// Lookahead marking where the CURRENT "## Section" block ends and the next one
-// begins. Used when extracting/replacing or injecting a single section.
-const NEXT_SECTION_LOOKAHEAD_SRC =
-    '(?=\\s*\\n#{1,6}[ \\t]' +
-    `|\\s*\\n[ \\t]*(?:#{1,6}[ \\t]+)?\\*{0,2}(?:${SECTIONS.map(escapeRegex).join('|')})\\*{0,2}[ \\t]*(?:\\n|$)` +
-    '|\\s*$)';
-
-/** Frozen string — safe to import and use in any RegExp constructor. */
-export const NEXT_SECTION_LOOKAHEAD = NEXT_SECTION_LOOKAHEAD_SRC;
-
 // ─── Section extraction / replacement ────────────────────────────────────────
 // Lives here (not sections.js) so provenance.js can reuse it without a
 // circular import (sections.js already imports provenance.js).
 
-// `\b` requires a word char on (at least) one side of the boundary, which
-// silently fails to match right after a section name ending in punctuation
-// (e.g. "Archive (Stale)" ends in ")"). A negative lookahead for "still part
-// of a longer word" works for both word- and punctuation-ending names.
-const SECTION_NAME_BOUNDARY = '(?![A-Za-z0-9_])';
+function findSection(text, sectionName) {
+    return parseWorldStateSections(text).sections.find(section => section.name === sectionName);
+}
 
-/**
- * Pull out exactly one "## Section\n...body..." block from a larger text.
- * Stops at the next "## " header or end of text.
- *
- * WORLD-STATE-06: The `## Section` pattern is now line-anchored (`^` / multiline)
- * so a body line containing that sequence is NOT read as a section boundary.
- * Without the anchor, a body line like "We discussed ## Plot Seeds in the
- * meeting" would be treated as a section header and truncate the extraction.
- */
+/** Pull exactly one level-two section using the injection document grammar. */
 export function extractOnlySection(text, sectionName) {
-    const escaped = escapeRegex(sectionName);
-    // WORLD-STATE-06: Anchor with `(?:^|\n)` so a body line containing the
-    // section name mid-sentence is NOT read as a section header. We do NOT
-    // use the `m` flag — that would make `$` in NEXT_SECTION_LOOKAHEAD match
-    // at every line end, truncating sections to just their header line.
-    const pattern = new RegExp(`(?:^|\\n)(## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?)${NEXT_SECTION_LOOKAHEAD}`);
-    const match = text.match(pattern);
-    return match ? match[1].trim() : null;
+    return findSection(text, sectionName)?.raw.trim() || null;
 }
 
 /**
@@ -89,13 +63,10 @@ export function extractOnlySection(text, sectionName) {
  * containing the section name) is replaced.
  */
 export function replaceSection(text, sectionName, newContent) {
-    const escaped = escapeRegex(sectionName);
-    // WORLD-STATE-06: Same `(?:^|\n)` anchor as extractOnlySection.
-    const pattern = new RegExp(`(?:^|\\n)## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
+    const section = findSection(text, sectionName);
     const trimmed = newContent.trim();
-    if (pattern.test(text)) {
-        // Replace including the leading newline so we don't leave a blank line.
-        return text.replace(pattern, () => '\n' + trimmed);
+    if (section) {
+        return `${text.slice(0, section.start).trimEnd()}\n\n${trimmed}\n\n${text.slice(section.end).trimStart()}`.trim();
     }
     return (text.trim() + '\n\n' + trimmed).trim();
 }
@@ -107,10 +78,9 @@ export function replaceSection(text, sectionName, newContent) {
  * A missing section is a no-op — the caller decides whether that matters.
  */
 export function removeSection(text, sectionName) {
-    const escaped = escapeRegex(sectionName);
-    const pattern = new RegExp(`(?:^|\\n)## ${escaped}${SECTION_NAME_BOUNDARY}[\\s\\S]*?${NEXT_SECTION_LOOKAHEAD}`);
-    if (!pattern.test(text)) return text;
-    return text.replace(pattern, '').replace(/\n{3,}/g, '\n\n').trim();
+    const section = findSection(text, sectionName);
+    if (!section) return text;
+    return `${text.slice(0, section.start).trimEnd()}\n\n${text.slice(section.end).trimStart()}`.trim();
 }
 
 // ─── Mutable shared state ────────────────────────────────────────────────────

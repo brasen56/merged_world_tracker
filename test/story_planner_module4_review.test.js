@@ -38,14 +38,14 @@ describe('Module 4 review defect reproductions', () => {
         expect(validateStoryPlannerData(result.data).issues).toEqual([]);
     });
 
-    test('history mutates the live store even when its write is blocked', () => {
+    test('a refused history write leaves the live store unchanged', () => {
         const arc = makeArc({ title: 'Original', body: 'Preserve me' });
         const store = { arcs: [arc], history: [] };
         getFakeMeta().story_planner_data = store;
         gate.blocked = true;
         pushPlanToHistory([arc]);
         expect(getFakeMeta().story_planner_data).toBe(store);
-        expect(store.history).toHaveLength(1);
+        expect(store.history).toHaveLength(0);
     });
 
     test('updateArc returns a successful-looking proposal after a refused write', () => {

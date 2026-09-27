@@ -307,7 +307,7 @@
 #sc-inject-count,
 .mwt-input[type="number"],
 input[type="number"].mwt-input,
-input[type="datetime-local"],
+.mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"],
 .mwt-tab-content[data-tab="chronicle"] input[type="number"],
 .mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"],
 .mwt-tab-content[data-tab="chronicle"] input[type="text"],
@@ -326,10 +326,8 @@ input[type="datetime-local"],
   transition: border-color 0.15s;
 }
 /* Keyboard-focus pair for the outline: none in the baseline above (a11y
-   plan §4.3). Only the SCOPED selectors are repeated — the baseline's bare
-   `input[type="datetime-local"]` is covered inside the chronicle tab by the
-   [data-tab="chronicle"] variant, and unscoped element selectors must not
-   be added to an MWT stylesheet loaded into the host page. */
+   plan §4.3). All datetime selectors stay within the Chronicle tab; host
+   inputs must retain their native focus appearance. */
 #sc-inject-count:focus-visible,
 .mwt-input[type="number"]:focus-visible,
 input[type="number"].mwt-input:focus-visible,
@@ -343,11 +341,11 @@ input[type="number"].mwt-input:focus-visible,
   outline-offset: 2px;
 }
 
-input[type="datetime-local"]:focus {
+.mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"]:focus {
   border-color: var(--sc-accent);
 }
 
-input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+.mwt-tab-content[data-tab="chronicle"] input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   filter: invert(0.8);
   cursor: pointer;
 }

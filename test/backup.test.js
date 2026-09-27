@@ -259,6 +259,16 @@ describe('unified backup Phase 1 pure core', () => {
         expect(result.summary.chronicle.updated).toBe(1);
     });
 
+    test('merge retains all originals referenced by a live consolidation, even past the trash cap', () => {
+        const originals = Array.from({ length: 51 }, (_, i) => ({ id: `source-${i}`, text: `Original ${i}` }));
+        const merged = { id: 'merged', text: 'Merged', _consolidatedFrom: originals.map(item => item.id) };
+        const file = backup({ metadata: { chronicle: { snapshots: [], _deletedBin: [{ id: 'new-trash', text: 'New trash' }] } } });
+        const result = planRestore(file, { chronicle: { snapshots: [merged], _deletedBin: originals } });
+        expect(result.ok).toBe(true);
+        expect(result.plan.sections.chronicle._deletedBin.map(item => item.id))
+            .toEqual(originals.map(item => item.id));
+    });
+
     test('does not replace a current section with an empty payload', () => {
         const file = backup({ metadata: { worldState: {} } });
         const result = planRestore(file, {

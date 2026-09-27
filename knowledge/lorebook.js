@@ -23,6 +23,7 @@ import {
 } from './state.js';
 import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
+import { applyFieldOwnership } from './field_ownership.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
@@ -1437,11 +1438,12 @@ export async function runNpcEnrich(name, uid) {
 
         // Build the complete dossier content from the enrich result. We use the
         // dossier merger which will replace existing fields and add missing ones.
-        const merged = buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || []);
+        const fields = applyFieldOwnership(name, result.fields || {});
+        const merged = buildUpdatedDossierContent(currentContent, fields, result.new_knowledge || []);
         return {
             currentContent,
             merged,
-            fields: result.fields || {},
+            fields,
             newKnowledge: result.new_knowledge || [],
             dossierMode: true,
         };

@@ -19,6 +19,7 @@ import { mergeQuarantineItems } from '../core/quarantine.js';
 // bound the runtime writer and the validator use. Already a transitive
 // dependency: schema/registry.js imports this module for the descriptor.
 import { MAX_LIFECYCLE_EVENTS } from '../interiority/schema.js';
+import { retainChronicleTrash } from '../chronicle/trash.js';
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const objectOrEmpty = value => (isObject(value) ? value : {});
@@ -120,7 +121,7 @@ function mergeChronicle(current, incoming, { restoreSessionConfig = false } = {}
         ? mergeUnique(current?._deletedBin, incoming._deletedBin, 'id', 'Chronicle trash entry')
         : { data: cloneBackupData(current?._deletedBin || []), summary: emptySummary() };
     result.snapshots = snapshots.data;
-    result._deletedBin = trash.data.slice(-MAX_TRASH_SIZE);
+    result._deletedBin = retainChronicleTrash(trash.data, result.snapshots, MAX_TRASH_SIZE);
     mergeSafeScalars(result, current, incoming, ['lastAnchor', 'msgSinceSnapshot'], summary);
     const sessionSettings = ['injectEnabled', 'injectMode', 'injectCount', 'injectDepth', 'injectFromDate', 'injectToDate', 'selectedForInjection'];
     skipProtectedScalars(summary, incoming, sessionSettings, 'Chronicle', restoreSessionConfig);

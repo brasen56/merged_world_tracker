@@ -12,6 +12,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.10.3]
+
+### Fixed
+
+- **Accepting a Story Planner beat no longer marks the next beat's messages
+  as reviewed.** Carrying the progress watermark forward on acceptance is
+  intentional, but it was set to the end of the *request window* — and each
+  request only includes an arc's current beat, so the next beat could skip
+  up to 80 messages it was never checked against. The next beat's watermark
+  now starts at the accepted evidence message instead, so every message
+  after it is rechecked when that beat is next evaluated. The pinned
+  expectation in `test/story_planner_phase5.test.js` was updated to the
+  desired behavior. (SP4-06, `docs/TODO.md` §0.)
+
+- **A refused Story Planner history write no longer changes the live store,
+  and a paused chat's plan can no longer be edited from the UI.** History
+  snapshots were pushed into the live plan object before the write was
+  accepted, so the next save from any module persisted a refused write; and
+  Revert, Restore, Clear, and arc edits had no pause guard, so a paused
+  chat could still mutate the plan. History writes are now detached (the
+  history list is cloned before the candidate is pushed), and the restore,
+  mutation, dropdown, and Clear paths are refused while Story Planner is
+  paused for the current scope — a Restore from history reports that it is
+  unavailable instead of silently doing nothing. (SP4-02, `docs/TODO.md` §0.)
+
+- **Evidence marked as canon during a consolidation can no longer be
+  archived by that same consolidation.** The source check tested only
+  existence, not canon status, so a source the user marked as canon while
+  the consolidation call was in flight could be consumed and archived
+  anyway. The check now requires `!o.canon`. (NK-12, `docs/TODO.md` §0.)
+
+- **Knowledge's Enrich can no longer overwrite a growth-owned Personality
+  line.** `runNpcEnrich` merged the model's `fields` unfiltered, unlike
+  `runNpcUpdate` and the scan path, so an enrich call could replace a
+  Personality established by the evidence/growth system. The field-ownership
+  rule moved to a shared `knowledge/field_ownership.js` and Enrich now runs
+  its fields through the same `applyFieldOwnership` the other paths use.
+  (NK-13, `docs/TODO.md` §0.)
+
+- **Undoing a Chronicle consolidation can no longer delete the only complete
+  record.** The trash caps at 50 entries, so consolidating more than 50
+  originals evicted some of them immediately — and Undo then restored
+  whatever survived and dropped the merged entry without trashing it,
+  destroying the only complete record. Undo now requires every original to
+  be present in the trash and refuses (keeping the consolidated entry) when
+  any is missing, and a new `retainChronicleTrash()` in
+  `chronicle/trash.js` — used by delete, bulk delete, consolidation, and
+  backup restore — keeps every source a live consolidation still needs to
+  be undoable (including nested consolidation sources), even when the
+  batch alone exceeds the ordinary trash limit, while ordinary trash stays
+  capped. (M2-13, `docs/TODO.md` §0.)
+
+- **"Clear all chronicle data" now actually clears everything.** The reset
+  only patched the fields it listed, so `lastAnchor` survived and the next
+  Generate resumed after the old anchor. Clear All now also resets the
+  anchor, the `anchorStale` marker, the injection selection and range
+  dates, and the merge checkboxes. (M2-11, `docs/TODO.md` §0.)
+
+- **Regenerating a single-message Chronicle snapshot no longer widens its
+  range to up to 200 messages.** The range guard required `toIndex` to be
+  *strictly* greater than `fromIndex`, so a legitimate one-message range
+  fell through to the `from + 200` fallback. It now accepts `>=`.
+  (M2-08, `docs/TODO.md` §0.)
+
+- **The empty Chronicle tab now offers Generate, Import, and Trash.** A new
+  user with no entries had to create a blank entry first, and deleting the
+  last entry hid the Trash button even with recoverable entries in the
+  bin. The empty view now shows all three, with the Trash button carrying
+  its count. (M2-12, `docs/TODO.md` §0.)
+
+- **Chronicle's stylesheet no longer restyles every datetime input in
+  SillyTavern.** Unscoped `input[type="datetime-local"]` selectors removed
+  focus outlines and recolored calendar pickers page-wide — exactly what
+  the file's own comment forbids. All datetime rules are now scoped to the
+  Chronicle tab. (M2-19, `docs/TODO.md` §0.)
+
+- **World State now reads its document with a single grammar.** The
+  extract/replace/remove section helpers and delta insertion ended a
+  section at any `#` heading and read `## Pending Threads` as `Pending`,
+  while the strict `parseWorldStateSections` used for injection did
+  neither — so an edit could land in a different section than the one
+  injection read. The helpers and `applyDeltaPatch` now route through the
+  core parser, sharing its level-two names and boundaries exactly.
+  (F5, `docs/TODO.md` §0.)
+
+- **Expiry in quarantine/remove mode no longer orphans a stale entry's
+  indented sub-lines.** Only the bold name line was dropped, leaving
+  `- Mood: cautious` stranded under the next entry. Expiry now groups an
+  entry's indented subfields with their parent — removing them together in
+  remove mode and quarantining them together in quarantine mode, reusing
+  `stripNameLines`' grouping for the archive merge. (F4, `docs/TODO.md` §0.)
+
+### Added
+
+- Regression coverage for the Tier 2 review fixes:
+  `test/tier2_review_fixes.test.js` pins the empty-view actions, the
+  all-or-nothing consolidation undo (including a 51-entry batch), trash
+  retention around live consolidations, the Clear All reset, the
+  one-message regenerate range, the scoped datetime CSS, the shared World
+  State document grammar, and grouped expiry subfields;
+  `test/story_planner_restore_pause.test.js` pins the paused-store refusals
+  on Restore and the UI mutation paths; and the Story Planner phase 5,
+  Knowledge module 3, Story Planner module 4, and backup test suites were
+  updated to the new contracts.
+
 ## [2.10.2]
 
 ### Fixed

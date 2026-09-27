@@ -27,7 +27,7 @@ import {
     loadEntryContent, getHistory,
     fieldsFromScanRecord,
 } from './lorebook.js';
-import { hasEvidenceFile } from './evidence.js';
+import { applyFieldOwnership } from './field_ownership.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
@@ -106,28 +106,8 @@ export function knowledgeFromRecord(data) {
     return [];
 }
 
-/**
- * Drop fields the scan is not allowed to own for this NPC.
- *
- * `personality` belongs to the evidence/growth system as soon as an evidence
- * file exists — the hard structural partition from NPC_GROWTH_BLUEPRINT.md
- * that stops a dossier prompt re-deriving personality from its own prior prose
- * (the telephone loop). runNpcUpdate enforces it; the scan path did not, so a
- * cadence scan could quietly overwrite a growth-owned Personality line.
- *
- * `canon_lock` is deliberately NOT guarded here: it is locked only against the
- * 🎯 Fields picker, while ordinary updates may establish new immutable facts.
- *
- * @param {string} name — the CANONICAL registry key (evidence files are keyed by it)
- * @param {object} fields — the scan's field bag
- * @returns {object} `fields`, or a copy with growth-owned keys nulled
- */
-export function applyFieldOwnership(name, fields) {
-    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return fields;
-    if (fields.personality == null) return fields;
-    if (!hasEvidenceFile(name)) return fields;
-    return { ...fields, personality: null };
-}
+/** Keep the existing staging export for callers of the scan ownership helper. */
+export { applyFieldOwnership } from './field_ownership.js';
 
 export function buildStagingItems(scanResult) {
     const registry = getRegistry();

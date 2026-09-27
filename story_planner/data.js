@@ -1367,7 +1367,7 @@ function historyEntrySignature(entry) {
 export function pushPlanToHistory(arcs) {
     const list = Array.isArray(arcs) ? arcs : [];
     if (list.length === 0) return;
-    const history = getPlanHistory();
+    const history = structuredCloneSafe(getPlanHistory());
     const serialized = serializeArcsToText(list);
     if (!serialized.trim()) return;
     const candidate = { arcs: structuredCloneSafe(list) };

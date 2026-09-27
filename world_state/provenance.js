@@ -248,11 +248,21 @@ export function applyExpiry(text, provenance, opts = {}) {
 
         const lines = block.split('\n');
         const kept = [];
+        let droppingSubfields = false;
         for (const line of lines) {
-            if (/^#{1,6}\s/.test(line)) { kept.push(line); continue; }
+            if (/^#{1,6}\s/.test(line)) { droppingSubfields = false; kept.push(line); continue; }
 
             const label = matchBoldLine(line);
-            if (!label) { kept.push(line); continue; }
+            if (!label) {
+                if (droppingSubfields && /^\s+[-*]?/.test(line)) {
+                    if (mode === 'quarantine') quarantineLines.push(line);
+                    continue;
+                }
+                droppingSubfields = false;
+                kept.push(line);
+                continue;
+            }
+            droppingSubfields = false;
 
             const key = label.toLowerCase();
             if (pinnedSet.has(key)) { kept.push(line); continue; }
@@ -273,8 +283,9 @@ export function applyExpiry(text, provenance, opts = {}) {
                 kept.push(/\(stale[^)]*\)\s*$/.test(line) ? line : `${line} (stale — last seen ${age} msgs ago)`);
             } else if (mode === 'quarantine') {
                 quarantineLines.push(line.replace(/\s*\(stale[^)]*\)\s*$/, ''));
+                droppingSubfields = true;
             } else if (mode === 'remove') {
-                // dropped entirely
+                droppingSubfields = true;
             } else {
                 kept.push(line);
             }
@@ -290,10 +301,7 @@ export function applyExpiry(text, provenance, opts = {}) {
             ? existingArchive.split('\n').slice(1).filter(l => l.trim())
             : [];
         const existingKeys = new Set(existingLines.map(l => matchBoldLine(l)?.toLowerCase()).filter(Boolean));
-        const freshLines = quarantineLines.filter(l => {
-            const key = matchBoldLine(l)?.toLowerCase();
-            return key && !existingKeys.has(key);
-        });
+        const freshLines = stripNameLines(quarantineLines.join('\n'), [...existingKeys]).split('\n').filter(Boolean);
         const merged = [`## ${ARCHIVE_SECTION}`, ...existingLines, ...freshLines].join('\n');
         workingText = replaceSection(workingText, ARCHIVE_SECTION, merged);
     }

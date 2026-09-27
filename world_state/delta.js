@@ -33,6 +33,7 @@
 import {
     getStableHistoryEnd, captureRevision, truncateText,
 } from '../core/index.js';
+import { parseWorldStateSections } from '../core/world_state_document.js';
 import {
     SECTIONS, getWorldStateText, getWorldStateData,
     extractOnlySection, replaceSection, removeSection,
@@ -405,15 +406,11 @@ export function bodyHasSectionHeader(body, sectionName) {
 function insertSectionAtCanonicalPosition(text, sectionName, body) {
     const trimmedBody = body.trim();
     const idx = SECTIONS.indexOf(sectionName);
+    const parsed = parseWorldStateSections(text);
     for (let i = idx + 1; idx !== -1 && i < SECTIONS.length; i++) {
-        if (!extractOnlySection(text, SECTIONS[i])) continue;
-        // Find that section's header line and splice in front of it. The
-        // boundary lookahead mirrors data.js's SECTION_NAME_BOUNDARY so a body
-        // line merely mentioning the name is never matched.
-        const escaped = SECTIONS[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const at = text.search(new RegExp(`(?:^|\\n)## ${escaped}(?![A-Za-z0-9_])`));
-        if (at === -1) continue;
-        const insertAt = text[at] === '\n' ? at + 1 : at;
+        const next = parsed.sections.find(section => section.name === SECTIONS[i]);
+        if (!next) continue;
+        const insertAt = next.start;
         return `${text.slice(0, insertAt).trimEnd()}\n\n${trimmedBody}\n\n${text.slice(insertAt).trimStart()}`.trim();
     }
     return (text.trim() + '\n\n' + trimmedBody).trim();

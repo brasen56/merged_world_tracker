@@ -133,6 +133,10 @@ function showEntryEditor(snapshot) {
         if (!snapshot._consolidatedFrom?.length) return;
         showConfirm('Undo consolidation?', 'Restores original entries.', () => {
             const snapshots = getSnapshots();
+            if (!snapshots.some(s => s.id === snapshot.id)) {
+                scSetStatus('Consolidated entry changed — undo cancelled.', 'warning');
+                return;
+            }
             const remaining = snapshots.filter(s => s.id !== snapshot.id);
             const deletedBin = getChronicleData()._deletedBin || [];
             const restored = [];
@@ -140,7 +144,10 @@ function showEntryEditor(snapshot) {
                 const fromTrash = deletedBin.find(e => e.id === origId);
                 if (fromTrash) restored.push({ ...fromTrash, _restored: true });
             }
-            if (!restored.length) { scSetStatus('Originals not found in trash.', 'error'); return; }
+            if (restored.length !== snapshot._consolidatedFrom.length) {
+                scSetStatus('Cannot undo: some original entries are missing from trash. The consolidated entry was kept.', 'error');
+                return;
+            }
             const updatedTrash = deletedBin.filter(e => !restored.some(r => r.id === e.id));
             const newSnapshots = [...remaining, ...restored].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
             setChronicleData({ snapshots: newSnapshots, _deletedBin: updatedTrash, suggestSent: false });
@@ -347,7 +354,7 @@ export function renderContent() {
     }
 
     if (!snapshots.length) {
-        el.innerHTML = `<div style="text-align:center;padding:40px"><p>No chronicle entries yet.</p><p>Entries build over time as you generate snapshots.</p>${!hasApi ? '<p style="color:var(--mwt-danger)">⚠ API not configured</p>' : ''}<div class="mwt-flex mwt-gap-4" style="justify-content:center"><button id="sc-settings-btn" class="mwt-btn">⚙ Settings</button><button id="sc-new-entry-btn" class="mwt-btn mwt-btn-primary">+ New Blank Entry</button></div></div>`;
+        el.innerHTML = `<div style="text-align:center;padding:40px"><p>No chronicle entries yet.</p><p>Entries build over time as you generate snapshots.</p>${!hasApi ? '<p style="color:var(--mwt-danger)">⚠ API not configured</p>' : ''}<div class="mwt-flex mwt-gap-4" style="justify-content:center;flex-wrap:wrap"><button id="sc-generate-btn" class="mwt-btn mwt-btn-primary" ${!hasApi ? 'disabled' : ''}>Generate Entry</button><button id="sc-new-entry-btn" class="mwt-btn">+ Blank Entry</button><button id="sc-import-btn" class="mwt-btn">Import</button><button id="sc-trash-btn" class="mwt-btn">Trash (${(getChronicleData()._deletedBin || []).length})</button><button id="sc-settings-btn" class="mwt-btn">⚙ Settings</button></div></div>`;
         bindMainEvents();
         return;
     }
@@ -547,7 +554,15 @@ function bindMainEvents() {
         showConfirm('Clear all chronicle data?', 'Everything will be deleted.', () => {
             state.msgSinceSnapshot = 0;
             state.countedReceiptEvents.clear();
-            setChronicleData({ snapshots: [], _deletedBin: [], injectEnabled: false, injectCount: 2, injectDepth: 2, msgSinceSnapshot: 0, countedReceiptEvents: [] });
+            state.selectedSnapshotId = null;
+            state.checkedForMerge.clear();
+            state.consolidateBaseId = null;
+            state.consolidateMode = false;
+            state.bulkDeleteMode = false;
+            state.pendingSearch = '';
+            setChronicleData({ snapshots: [], _deletedBin: [], lastAnchor: null, anchorStale: false,
+                selectedForInjection: [], injectFromDate: '', injectToDate: '', suggestSent: false,
+                injectEnabled: false, injectCount: 2, injectDepth: 2, msgSinceSnapshot: 0, countedReceiptEvents: [] });
             applyInjection();
             renderContent();
             scSetStatus('Chronicle cleared.', 'success');

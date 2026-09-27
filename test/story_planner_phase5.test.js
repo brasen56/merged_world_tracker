@@ -80,9 +80,12 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         expect(acceptProgressSuggestion(suggestion).ok).toBe(false);
     });
 
-    test('accepting a beat seeds the next item watermark instead of reopening recent history', async () => {
+    test('accepting a beat seeds the next item watermark at the evidence, not the reviewed tail', async () => {
         const arc = makeArc({ title: 'Two-stage route', beats: ['The seal breaks.', 'The ledger is opened.'] });
         setArcs([arc]);
+        // The first check reviews this settled message AFTER the evidence,
+        // but only the first beat was included in that request.
+        setFakeChat([...messages().slice(0, 2), { id: 'reviewed-tail', name: 'Clerk', mes: 'The clerk prepares the desk.' }, ...messages().slice(2)]);
         setFakeApi(() => modelResult());
         const suggestion = (await checkProgress()).suggestions[0];
 
@@ -91,6 +94,15 @@ describe('Story Planner Phase 5 — evidence-backed progress', () => {
         const updated = getArcs()[0];
         const nextKey = `beat:${updated.id}:${updated.beats[1].id}`;
         expect(getPlanData().progressWatermarks[nextKey]).toEqual({ identity: 'id:evidence', index: 1 });
+        setFakeChat([...messages().slice(0, 2), { id: 'reviewed-tail', name: 'Clerk', mes: 'The clerk prepares the desk.' },
+            { id: 'next', name: 'Clerk', mes: 'The ledger is opened.' }, ...messages().slice(2)]);
+        let request;
+        setFakeApi(({ userContent }) => {
+            request = userContent;
+            return JSON.stringify({ results: [{ item: 'i1', verdict: 'beat_planted', source: 'm2', excerpt: 'The ledger is opened', reason: 'The next beat happened.' }] });
+        });
+        expect((await checkProgress()).suggestions[0].messageIdentity).toBe('id:next');
+        expect(request).toContain('The ledger is opened');
     });
 
     test('resolution acceptance uses the normal Resolve flow and keeps the edited reason', async () => {

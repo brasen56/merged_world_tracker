@@ -894,7 +894,7 @@ export function applyConsolidation(name, consolidated, sourceIds) {
         // committing. A concurrent delete during the API round-trip would
         // leave dangling provenance — a consolidated claim pointing at a
         // source that no longer exists anywhere in the evidence file.
-        const validSourceIds = resolvedSourceIds.filter(id => file.raw.some(o => o.id === id));
+        const validSourceIds = resolvedSourceIds.filter(id => file.raw.some(o => o.id === id && !o.canon));
         if (validSourceIds.length === 0) continue; // all sources deleted during the call — inadmissible
         validSourceIds.forEach(id => consumedRawIds.add(id));
 

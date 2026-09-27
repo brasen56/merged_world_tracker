@@ -33,6 +33,7 @@ import {
 } from './data.js';
 
 import { applyInjection } from './injection.js';
+import { retainChronicleTrash } from './trash.js';
 
 // ─── World State sync ────────────────────────────────────────────────────────
 
@@ -360,7 +361,7 @@ export async function regenerateSnapshot(snapshotId) {
     // message window down to "just the final message". generateSnapshot
     // already clamps via Math.max(0, index); mirror that here.
     const from = Math.max(0, snapshot.fromIndex ?? 0);
-    const rawTo = snapshot.toIndex !== undefined && snapshot.toIndex > (snapshot.fromIndex ?? 0) ? snapshot.toIndex : Math.min(from + 200, Math.max(0, chat.length - 1));
+    const rawTo = snapshot.toIndex !== undefined && snapshot.toIndex >= (snapshot.fromIndex ?? 0) ? snapshot.toIndex : Math.min(from + 200, Math.max(0, chat.length - 1));
     const to = Math.max(from, rawTo);
     const { text, toCharOffset: regenToCharOffset } = buildMessageWindow(from, to);
     if (!text.trim()) {
@@ -592,10 +593,12 @@ export async function consolidateEntries(ids, baseId = null) {
             };
             const deletedBin = getChronicleData()._deletedBin || [];
             const originals = currentSnapshots.filter(entry => ids.includes(entry.id));
-            const updatedBin = [...deletedBin, ...originals].slice(-MAX_TRASH_SIZE);
+            // A merged entry must remain fully undoable even when its source
+            // batch alone exceeds the ordinary trash retention limit.
             const remaining = currentSnapshots.filter(entry => !ids.includes(entry.id));
             const newSnapshots = [...remaining, consolidated];
             newSnapshots.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+            const updatedBin = retainChronicleTrash([...deletedBin, ...originals], newSnapshots, MAX_TRASH_SIZE);
             setChronicleData({ snapshots: newSnapshots, _deletedBin: updatedBin, suggestSent: true });
             applyInjection();
             state.consolidateMode = false;
@@ -656,7 +659,7 @@ export function deleteEntry(id) {
     const deletedBin = getChronicleData()._deletedBin || [];
     const data = getChronicleData();
     const selectedIds = (data.selectedForInjection || []).filter(sid => sid !== id);
-    const updatedBin = [...deletedBin, removed].slice(-MAX_TRASH_SIZE);
+    const updatedBin = retainChronicleTrash([...deletedBin, removed], remaining, MAX_TRASH_SIZE);
     const lastAnchor = remaining.length > 0
         ? [...remaining].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).pop()?.anchor || null
         : null;
@@ -673,7 +676,7 @@ export function bulkDeleteEntries(ids) {
     const toRemove = snapshots.filter(s => ids.includes(s.id));
     const remaining = snapshots.filter(s => !ids.includes(s.id));
     const deletedBin = getChronicleData()._deletedBin || [];
-    const updatedBin = [...deletedBin, ...toRemove].slice(-MAX_TRASH_SIZE);
+    const updatedBin = retainChronicleTrash([...deletedBin, ...toRemove], remaining, MAX_TRASH_SIZE);
     const data = getChronicleData();
     const idSet = new Set(ids);
     const selectedIds = (data.selectedForInjection || []).filter(sid => !idSet.has(sid));
