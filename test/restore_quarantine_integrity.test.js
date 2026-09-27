@@ -1112,7 +1112,7 @@ describe('write-seam fail-closed helpers', () => {
     // ── Round 5, bug 1: the Chronicle import commits through the checked seam ──
 
     /** Import file with one acceptable and one refused snapshot plus a cadence
-     *  counter, matching the standalone exportChronicle() shape. */
+     *  pair, matching the current standalone exportChronicle() shape. */
     function chronicleImportFile() {
         return JSON.stringify({
             snapshots: [
@@ -1120,6 +1120,9 @@ describe('write-seam fail-closed helpers', () => {
                 { id: 'bad', createdAt: '2025-01-02T00:00:00.000Z' },
             ],
             msgSinceSnapshot: 3,
+            // M2-09: current exports carry the counter's receipt provenance;
+            // without this field the import would clamp the counter to zero.
+            countedReceiptEvents: [['id:imported-reply', 3]],
         });
     }
 
@@ -1174,6 +1177,10 @@ describe('write-seam fail-closed helpers', () => {
         const data = getFakeMeta().session_chronicle_data;
         expect(data.snapshots.map(s => s.id)).toEqual(['existing', expect.stringMatching(/^legacy-/)]);
         expect(data.msgSinceSnapshot).toBe(3);
+        // M2-09: the cadence pair restored as ONE commit — the store carries
+        // the file's provenance and the module's in-memory map follows it.
+        expect(data.countedReceiptEvents).toEqual([['id:imported-reply', 3]]);
+        expect(chronicleState.countedReceiptEvents.get('id:imported-reply')).toBe(3);
         // …the file's refused snapshot was preserved by the SAME commit (§5.2)…
         const items = getFakeMeta()[QUARANTINE_METADATA_KEY].items;
         expect(items).toHaveLength(1);

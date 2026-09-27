@@ -16,7 +16,7 @@ import { getSettings, hasValidSettings } from './settings.js';
 import { MAX_PROGRESS_METADATA_ENTRIES, storyPlannerSchema } from './schema.js';
 import {
     getArcs, getCurrentBeatRecord, getPlanData, isArcReady, setArcBeatState,
-    setArcStatus, setPlanData, state,
+    setArcStatus, setPlanData, commitPlanPatch, state,
     incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
 
@@ -272,7 +272,9 @@ export async function checkProgress() {
         }
         if (finalWatermark && settledItems.size) {
             for (const item of capturedItems) if (settledItems.has(item.key)) watermarks[item.key] = finalWatermark;
-            setPlanData({ progressWatermarks: watermarks });
+            if (!commitPlanPatch({ progressWatermarks: watermarks }).ok) {
+                return { suggestions: [], noEvidence: 0, stale: true, staleReason: 'Progress watermark could not be saved.' };
+            }
         }
         state.progressSuggestions = suggestions;
         incrementPhase7Metrics({
@@ -321,7 +323,7 @@ export function acceptProgressSuggestion(suggestion, closeReason = '') {
         ? setArcBeatState(suggestion.arcId, suggestion.beatId, 'planted')
         : setArcStatus(suggestion.arcId, 'resolved', clean(closeReason, 2000));
     if (!updated) return { ok: false, reason: 'store-refused' };
-    commitSuggestionWatermark(suggestion, updated);
+    if (!commitSuggestionWatermark(suggestion, updated)) return { ok: false, reason: 'store-refused' };
     state.progressSuggestions = (state.progressSuggestions || []).filter(candidate => candidate !== suggestion);
     incrementPhase7Metrics({ progressAccepted: 1 });
     return { ok: true, arc: updated };
@@ -344,14 +346,16 @@ export function ignoreProgressSuggestion(suggestion) {
         ? { ...storedWatermarks }
         : {};
     if (!suggestion.stale && suggestion.pendingWatermark) progressWatermarks[suggestion.itemKey] = suggestion.pendingWatermark;
-    setPlanData({ ignoredProgressEvidence: ignored, progressWatermarks });
+    if (!commitPlanPatch({ ignoredProgressEvidence: ignored, progressWatermarks }).ok) {
+        return { ok: false, reason: 'store-refused' };
+    }
     state.progressSuggestions = (state.progressSuggestions || []).filter(candidate => candidate !== suggestion);
     incrementPhase7Metrics({ progressIgnored: 1 });
     return { ok: true };
 }
 
 function commitSuggestionWatermark(suggestion, updatedArc = null) {
-    if (!suggestion?.pendingWatermark) return;
+    if (!suggestion?.pendingWatermark) return true;
     const stored = getPlanData().progressWatermarks;
     const progressWatermarks = {
         ...(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}),
@@ -367,9 +371,9 @@ function commitSuggestionWatermark(suggestion, updatedArc = null) {
             identity: suggestion.messageIdentity, index: suggestion.sourceIndex,
         };
     }
-    setPlanData({
+    return commitPlanPatch({
         progressWatermarks,
-    });
+    }).ok;
 }
 
 /** Mark transient evidence affected by a chat mutation; accepted progress stays. */

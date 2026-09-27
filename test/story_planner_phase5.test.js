@@ -11,6 +11,7 @@ import {
 } from '../story_planner/progress.js';
 import { createModal, releaseManagedInert, showModal } from '../core/modal.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
+import { pauseStore, _resetPausedStores, _setScopeKeyResolver } from '../core/schema_status.js';
 import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
 
 function messages() {
@@ -29,6 +30,8 @@ function modelResult(verdict = 'beat_planted', excerpt = 'The second seal is bro
 beforeEach(() => {
     resetCoreStubs();
     _resetEpoch();
+    _resetPausedStores();
+    _setScopeKeyResolver(() => 'chat:phase-5');
     state.progressSuggestions = [];
     globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'phase-5-chat' }) };
     setFakeChat(messages());
@@ -43,6 +46,15 @@ afterEach(() => {
 });
 
 describe('Story Planner Phase 5 — evidence-backed progress', () => {
+    test('refused ignore retains the suggestion and does not count it', async () => {
+        setFakeApi(() => modelResult());
+        const suggestion = (await checkProgress()).suggestions[0];
+        const before = getPhase7Metrics().progressIgnored;
+        pauseStore('storyPlanner', { reasonCode: 'future-version', message: 'blocked' });
+        expect(ignoreProgressSuggestion(suggestion)).toMatchObject({ ok: false, reason: 'store-paused' });
+        expect(state.progressSuggestions).toContain(suggestion);
+        expect(getPhase7Metrics().progressIgnored).toBe(before);
+    });
     test('returns only verified proposals without settling their watermark or mutating progress', async () => {
         setFakeApi(() => modelResult());
         const result = await checkProgress();

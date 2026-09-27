@@ -669,7 +669,7 @@ export function nextObsId(file, tier) {
  * @param {Array<{category:string, claim:string, quote:string, msgIdx:number|null, verified?:boolean, ts?:number}>} observations
  * @returns {{added: number, skipped: number}} counts
  */
-export function appendRawObservations(name, observations) {
+export function appendRawObservations(name, observations, cursor = null, backfillTs = null) {
     const file = getEvidenceFile(name);
     const chat = getChat() || [];
     // Dedup against BOTH raw[] and archivedRaw[]. After consolidation moves
@@ -709,7 +709,24 @@ export function appendRawObservations(name, observations) {
         added++;
     }
 
-    if (added > 0 && !touch(file).ok) throw new Error('Evidence observations could not be saved.');
+    if (cursor && Number.isFinite(cursor.ts)) {
+        const oldTs = file.meta.lastCaptureTs;
+        const oldIndex = file.meta.lastCaptureIndex;
+        if (oldTs == null || cursor.ts > oldTs
+            || (cursor.ts === oldTs && Number.isInteger(cursor.index) && cursor.index > (oldIndex ?? -1))) {
+            file.meta.lastCaptureTs = cursor.ts;
+            if (Number.isInteger(cursor.index) && cursor.index >= 0
+                && (oldTs == null || cursor.ts > oldTs || oldIndex != null)) {
+                file.meta.lastCaptureIndex = cursor.index;
+            } else if (cursor.ts > oldTs) {
+                delete file.meta.lastCaptureIndex;
+            }
+        }
+    }
+    if (Number.isFinite(backfillTs) && (file.meta.lastBackfillTs == null || backfillTs > file.meta.lastBackfillTs)) {
+        file.meta.lastBackfillTs = backfillTs;
+    }
+    if ((added > 0 || cursor || Number.isFinite(backfillTs)) && !touch(file).ok) throw new Error('Evidence observations could not be saved.');
     return { added, skipped };
 }
 
@@ -1199,8 +1216,9 @@ export function setCaptureWatermark(name, ts, index = null) {
         } else if (ts > cur) {
             delete file.meta.lastCaptureIndex;
         }
-        touch(file);
+        if (!touch(file).ok) return false;
     }
+    return true;
 }
 
 // ─── Backfill watermark (Part B: ILS de-summarize backfill) ──────────────────
@@ -1242,8 +1260,9 @@ export function setBackfillWatermark(name, ts) {
     const cur = file.meta.lastBackfillTs;
     if (cur == null || ts > cur) {
         file.meta.lastBackfillTs = ts;
-        touch(file);
+        if (!touch(file).ok) return false;
     }
+    return true;
 }
 
 // ─── Profile stamp ───────────────────────────────────────────────────────────

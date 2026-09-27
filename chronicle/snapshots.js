@@ -261,14 +261,17 @@ export async function generateSnapshot(isAuto = false) {
         // snapshot is background work; the Snapshot button is foreground.
         const _scTrigger = isAuto ? 'auto' : 'manual';
         let raw = await _scApi1.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi1.settings, retries: 3, trigger: _scTrigger });
+        if (!assertSameScope(scopeBefore).ok) return null;
         raw = normaliseOutput(raw);
         raw = stripToEntry(raw);
         if (!raw.trim()) {
+            if (!assertSameScope(scopeBefore).ok) return null;
             const _scApi1b = resolveApiCall({ moduleSettings: getSettings() });
             raw = await _scApi1b.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]', settings: _scApi1b.settings, retries: 3, trigger: _scTrigger });
             raw = normaliseOutput(raw);
             raw = stripToEntry(raw);
         }
+        if (!assertSameScope(scopeBefore).ok) return null;
         if (!raw.trim()) throw new Error('Chronicle output was empty.');
 
         const validation = validateSnapshotOutput(raw);
@@ -332,6 +335,7 @@ export async function generateSnapshot(isAuto = false) {
         if (!written.ok) { scSetStatus('Chronicle entry could not be saved.', 'error'); return null; }
         state.msgSinceSnapshot = remainingCounter;
         state.countedReceiptEvents = remainingEvents;
+        state.autoSnapshotRetryAt = 0;
         applyInjection();
         state.selectedSnapshotId = snapshot.id;
         // Only update the UI when the Chronicle tab is actually visible —
@@ -345,6 +349,7 @@ export async function generateSnapshot(isAuto = false) {
         scSetStatus('Chronicle entry generated.', 'success');
         return snapshot;
     } catch (err) {
+        if (!assertSameScope(scopeBefore).ok) return null;
         // Coordinator cancellation (TODO §1): the chat changed mid-snapshot and
         // the coordinator aborted the call, or the queued job was retired
         // before it started. The scope guard would have discarded the result
@@ -395,6 +400,8 @@ export async function regenerateSnapshot(snapshotId) {
 
     // CHRONICLE-01: Regeneration needs the same scope guard as generation.
     const scopeBefore = captureScope();
+    const sourceRevision = captureRevision(chat.slice(from, to + 1));
+    const snapshotRevision = captureRevision(snapshot);
 
     state.isGenerating = true;
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
@@ -405,6 +412,7 @@ export async function regenerateSnapshot(snapshotId) {
         let raw = await _scApi2.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi2.settings, retries: 3 });
         raw = normaliseOutput(raw);
         raw = stripToEntry(raw);
+        if (!assertSameScope(scopeBefore).ok) return;
         if (!raw.trim()) throw new Error('Empty output.');
         // Anchor on the full chronicle label so the captured value is just the
         // date/time, not the "at end of this period:" prefix.
@@ -420,6 +428,11 @@ export async function regenerateSnapshot(snapshotId) {
                 `discarding result to avoid cross-chat contamination.`
             );
             scSetStatus('Chat changed during regeneration — result discarded.', 'warning');
+            return;
+        }
+        if (!sameRevision(sourceRevision, (getChat() || []).slice(from, to + 1))
+            || !sameRevision(snapshotRevision, getSnapshots().find(entry => entry.id === snapshotId))) {
+            scSetStatus('Source messages or entry changed during regeneration — result discarded.', 'warning');
             return;
         }
 
@@ -447,8 +460,9 @@ export async function regenerateSnapshot(snapshotId) {
                 // or drop new ones.
                 const current = getSnapshots();
                 const curIdx = current.findIndex(s => s.id === snapshotId);
-                if (curIdx === -1) {
-                    scSetStatus('Entry no longer exists — regenerated text discarded.', 'warning');
+                if (curIdx === -1 || !sameRevision(snapshotRevision, current[curIdx])
+                    || !sameRevision(sourceRevision, (getChat() || []).slice(from, to + 1))) {
+                    scSetStatus('Entry or source messages changed — regenerated text discarded.', 'warning');
                     _render.renderContent();
                     return;
                 }
@@ -488,6 +502,7 @@ export async function regenerateSnapshot(snapshotId) {
             }
         });
     } catch (err) {
+        if (isCancellation(err) || !assertSameScope(scopeBefore).ok) return;
         scSetStatus(`Regeneration failed: ${err.message}`, 'error');
         notify('Session Chronicle', `Chronicle regeneration failed: ${err.message}`, 'error');
     } finally {
@@ -654,6 +669,7 @@ export async function consolidateEntries(ids, baseId = null) {
             });
             scSetStatus(validation.valid ? 'Entries consolidated.' : `Entries consolidated — review needed: ${validation.reason}`, validation.valid ? 'success' : 'warning');
         } catch (err) {
+            if (isCancellation(err) || !assertSameScope(scopeBefore).ok) return;
             scSetStatus(`Consolidation failed: ${err.message}`, 'error');
             notify('Session Chronicle', `Chronicle consolidation failed: ${err.message}`, 'error');
         } finally {

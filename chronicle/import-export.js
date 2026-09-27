@@ -9,13 +9,13 @@ import {
 import {
     state, SC_VERSION,
     getChronicleData, setChronicleDataChecked, getSnapshots,
-    scSetStatus,
+    scSetStatus, restoreReceiptBookkeeping,
     _render,
 } from './data.js';
 
 import { applyInjection, isInjectionEnabled } from './injection.js';
 import { chronicleSchema } from './schema.js';
-import { prepareStore } from '../core/schema.js';
+import { prepareStore, restoreReceiptMap, isPositiveReceiptCount } from '../core/schema.js';
 
 // ─── Export / Import ─────────────────────────────────────────────────────────
 
@@ -28,6 +28,11 @@ export function exportChronicle() {
         injectCount: cd.injectCount || 2,
         injectDepth: cd.injectDepth ?? 2,
         msgSinceSnapshot: state.msgSinceSnapshot,
+        // M2-09: the counter never travels alone. Its receipt provenance is
+        // what lets a later deletion adjust the imported cadence correctly,
+        // and what lets the importer verify the counter is accountable —
+        // written from the same in-memory pair persistMsgSinceSnapshot keeps.
+        countedReceiptEvents: [...state.countedReceiptEvents.entries()],
         exportedAt: new Date().toISOString(),
         version: SC_VERSION,
     };
@@ -108,12 +113,35 @@ function importChronicle(jsonString) {
         }
         merged.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-        // Restore lastAnchor and msgSinceSnapshot (data), but skip injection settings
+        // Restore lastAnchor and the cadence pair, but skip injection settings
         // (session config) to avoid silently overwriting the user's current preferences
         const patch = { snapshots: merged, suggestSent: false };
         if (parsed.lastAnchor) patch.lastAnchor = parsed.lastAnchor;
+        // M2-09: the cadence counter and its receipt provenance restore as ONE
+        // atomic pair in the single checked commit below. Consumption
+        // (generateSnapshot) and deletion adjustment (onMessageDeleted) are
+        // both driven by the receipt map, so a counter restored without its
+        // matching provenance would never drain — an imported counter at or
+        // above the auto-snapshot threshold would re-trigger a snapshot on
+        // every subsequent message, forever — and any destination provenance
+        // left behind would distort future deletion adjustments. Two cases:
+        // a CURRENT export (the field exists, even an explicitly empty map —
+        // user-message increments legitimately carry no receipts) restores the
+        // pair verbatim; a LEGACY export (no countedReceiptEvents field, the
+        // pre-provenance format) cannot account for its counter, so the
+        // cadence restarts clean at zero and the status says so.
+        const hasProvenanceField = Array.isArray(parsed.countedReceiptEvents);
+        const fileReceipts = hasProvenanceField
+            ? restoreReceiptMap(parsed.countedReceiptEvents, isPositiveReceiptCount)
+            : new Map();
+        let counterClamped = false;
         if (typeof parsed.msgSinceSnapshot === 'number' && Number.isFinite(parsed.msgSinceSnapshot)) {
-            patch.msgSinceSnapshot = parsed.msgSinceSnapshot;
+            counterClamped = !hasProvenanceField && parsed.msgSinceSnapshot > 0;
+            patch.msgSinceSnapshot = counterClamped ? 0 : parsed.msgSinceSnapshot;
+            // The pair moves together: destination provenance never survives
+            // a counter replacement. For a clamped legacy import this clears
+            // it; for a current export it is the file's own (validated) map.
+            patch.countedReceiptEvents = [...fileReceipts.entries()];
         }
         if (parsed.injectEnabled !== undefined || parsed.injectCount !== undefined || parsed.injectDepth !== undefined) {
             const restoreInjection = confirm('Import contains injection settings (enabled/count/depth). Restore those too?');
@@ -151,11 +179,20 @@ function importChronicle(jsonString) {
         // or render reporting an import that never landed.
         if (patch.msgSinceSnapshot !== undefined) {
             state.msgSinceSnapshot = patch.msgSinceSnapshot;
+            // The in-memory map must follow the committed counter exactly, or
+            // the next deletion adjusts against provenance the store no
+            // longer holds. restoreReceiptBookkeeping() re-reads the JUST-
+            // committed store value, so it inherits the validator's repaired
+            // tuples rather than the raw file's.
+            restoreReceiptBookkeeping();
         }
         applyInjection();
         state.selectedSnapshotId = null;
         _render.renderContent();
-        scSetStatus(`Imported ${added} entries (${merged.length} total${skipped ? `, ${skipped} skipped (failed validation)` : ''}).`, 'success');
+        // The clamp note explains a deliberate cadence restart for legacy
+        // files, not a failure: the old format's counter predates receipt
+        // provenance and could never drain in this chat.
+        scSetStatus(`Imported ${added} entries (${merged.length} total${skipped ? `, ${skipped} skipped (failed validation)` : ''}${counterClamped ? ', cadence counter reset (no receipt provenance in file)' : ''}).`, 'success');
     } catch (err) {
         scSetStatus(`Import failed: ${err.message}`, 'error');
     }

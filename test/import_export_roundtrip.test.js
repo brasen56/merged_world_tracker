@@ -125,6 +125,9 @@ describe('Chronicle export/import', () => {
             lastAnchor: { ...ANCHOR },
         };
         chronicleState.msgSinceSnapshot = 5;
+        // M2-09: the counter and its receipt provenance are one pair — seed a
+        // self-consistent one (5 counted events for a counter of 5).
+        chronicleState.countedReceiptEvents = new Map([['id:assistant', 5]]);
     }
 
     test('exportChronicle writes the whole module state to a dated file', async () => {
@@ -149,6 +152,9 @@ describe('Chronicle export/import', () => {
         // The trash bin does NOT ride along — a deleted snapshot must not
         // resurrect on another install through the export.
         expect(calls[0].data).not.toHaveProperty('_deletedBin');
+        // M2-09: the counter travels WITH its receipt provenance — an import
+        // must be able to restore the pair atomically.
+        expect(calls[0].data.countedReceiptEvents).toEqual([['id:assistant', 5]]);
         expect(calls[0].data.exportedAt).toBeTruthy();
         expect(chronicleState._lastStatusMsg).toBe('Exported.');
         expect(chronicleState._lastStatusLevel).toBe('success');
@@ -167,6 +173,8 @@ describe('Chronicle export/import', () => {
         setFakeChat([{ mes: 'hello' }]);
         getFakeMeta().session_chronicle_data = { snapshots: [], _deletedBin: [{ ...TRASH[1] }] };
         chronicleState.msgSinceSnapshot = 0;
+        // Clear the in-memory map so the import's post-commit sync is provable.
+        chronicleState.countedReceiptEvents = new Map();
         chronicleState._lastStatusMsg = '';
         // The export carries injection settings, so the import asks confirm()
         // — decline: the destination chat must keep its own session config.
@@ -182,6 +190,11 @@ describe('Chronicle export/import', () => {
         expect(data.lastAnchor).toEqual(ANCHOR);
         expect(data.msgSinceSnapshot).toBe(5);
         expect(chronicleState.msgSinceSnapshot).toBe(5); // module state follows the commit
+        // M2-09: the cadence pair restored atomically — store AND in-memory
+        // map both carry the file's provenance, so a later deletion adjusts
+        // against the receipts the imported counter actually counted.
+        expect(data.countedReceiptEvents).toEqual([['id:assistant', 5]]);
+        expect(chronicleState.countedReceiptEvents.get('id:assistant')).toBe(5);
         // The destination's own trash survived the import untouched — the
         // patch never mentions the bin, and the checked write merges rather
         // than replacing the store around it.
@@ -191,6 +204,40 @@ describe('Chronicle export/import', () => {
         expect(chronicleState._lastStatusLevel).toBe('success');
     });
 
+
+    test('a legacy export without receipt provenance resets the cadence instead of importing an orphan counter', async () => {
+        // Pre-M2-09 exports carried msgSinceSnapshot but no countedReceiptEvents
+        // field. Such a counter can never be consumed by a snapshot (consumption
+        // is provenance-driven) nor decremented by a deletion, so importing it
+        // verbatim would re-trigger auto-snapshots forever once past the
+        // threshold — and leaving the destination's own provenance in place
+        // would let it distort future deletion adjustments.
+        getFakeMeta().session_chronicle_data = {
+            snapshots: [],
+            _deletedBin: [],
+            countedReceiptEvents: [['id:local', 2]],
+        };
+        chronicleState.msgSinceSnapshot = 0;
+        chronicleState.countedReceiptEvents = new Map([['id:local', 2]]);
+        chronicleState._lastStatusMsg = '';
+        chronicleState._lastStatusLevel = '';
+        setPickTextFileStub(async () => JSON.stringify({
+            snapshots: [{ id: 'legacy', text: 'legacy entry', createdAt: '2025-01-01T00:00:00.000Z' }],
+            msgSinceSnapshot: 37,
+        }));
+
+        await triggerImport();
+
+        const data = getFakeMeta().session_chronicle_data;
+        expect(data.msgSinceSnapshot).toBe(0);
+        // The pair moves together: the destination's own provenance cannot
+        // survive a counter replacement it never accounted for.
+        expect(data.countedReceiptEvents).toEqual([]);
+        expect(chronicleState.msgSinceSnapshot).toBe(0);
+        expect(chronicleState.countedReceiptEvents.size).toBe(0);
+        expect(chronicleState._lastStatusMsg).toContain('cadence counter reset');
+        expect(chronicleState._lastStatusLevel).toBe('success');
+    });
 
     test('an unparseable file fails with an error status and keeps the current chronicle', async () => {
         getFakeMeta().session_chronicle_data = {

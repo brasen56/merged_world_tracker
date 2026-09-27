@@ -705,10 +705,9 @@ export async function runCaptureOnly(name) {
 
     // Step 2: append fresh observations to the raw tier (persisted).
     // Append-only — never overwrites. Duplicate observations are skipped.
-    const captureStats = appendRawObservations(name, observations);
-
-    // Seed from the window sent to the model, never the post-await live chat.
-    if (captureWindow?.cursor?.ts > 0) setCaptureWatermark(name, captureWindow.cursor.ts, captureWindow.cursor.index);
+    // Seed from the window sent to the model in the SAME evidence commit.
+    const cursor = captureWindow?.cursor?.ts > 0 ? captureWindow.cursor : null;
+    const captureStats = appendRawObservations(name, observations, cursor);
 
     // Return ALL accumulated evidence (not just the fresh capture) so the
     // caller can re-render the full evidence list.
@@ -981,7 +980,7 @@ export async function runContinuousCapture(name, opts = {}) {
     const delta = buildDeltaWindow(sinceTs, opts.maxMessages, opts.minMessages, getCaptureCursor(name)?.index ?? null);
     if (!delta) return null;
     if (!delta.text) {
-        setCaptureWatermark(name, delta.maxTs, delta.lastIndex);
+        if (!setCaptureWatermark(name, delta.maxTs, delta.lastIndex)) throw new Error('Evidence cursor could not be saved.');
         return { added: 0, skipped: 0, maxTs: delta.maxTs };
     }
 
@@ -1052,11 +1051,10 @@ export async function runContinuousCapture(name, opts = {}) {
         };
     });
 
-    const stats = appendRawObservations(name, admitted);
+    const stats = appendRawObservations(name, admitted, { ts: delta.maxTs, index: delta.lastIndex });
 
-    // Advance the watermark regardless of whether observations were found —
-    // the messages were processed and we don't want to re-scan them.
-    setCaptureWatermark(name, delta.maxTs, delta.lastIndex);
+    // The append committed observations and cursor together, including when
+    // there were no observations to append.
 
     if (stats.added > 0) {
         console.log(`[MWT:Knowledge] Continuous capture for "${name}": +${stats.added} observation(s) from ${delta.count} delta message(s).`);
@@ -1275,7 +1273,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         // Advance the watermark so the next run continues forward instead of
         // re-selecting and re-rejecting the same empty batch forever (item 6).
         if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during backfill — result discarded.');
-        setBackfillWatermark(name, maxTs);
+        if (!setBackfillWatermark(name, maxTs)) throw new Error('Backfill cursor could not be saved.');
         return { added: 0, skipped: 0, expandedSummaries: summaryIndices.size, maxTs };
     }
 
@@ -1366,10 +1364,8 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         };
     });
 
-    const stats = appendRawObservations(name, admitted);
-    // Advance the backfill watermark (not the capture watermark) across this
-    // batch only, so repeat runs continue forward through the remaining history.
-    setBackfillWatermark(name, maxTs);
+    // Advance the backfill watermark with the observations in one commit.
+    const stats = appendRawObservations(name, admitted, null, maxTs);
 
     console.log(
         `[MWT:Knowledge] ILS backfill for "${name}": expanded ${summaryIndices.size} summary(ies) to ${lines.length} ` +

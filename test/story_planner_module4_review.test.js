@@ -3,7 +3,7 @@ import {
     migrateStoryPlannerV1ToV2, migrateStoryPlannerV2ToV3,
     validateStoryPlannerData,
 } from '../story_planner/schema.js';
-import { addArc, getArcs, makeArc, pushPlanToHistory, removeArc, setArcsWithHistory, updateArc } from '../story_planner/data.js';
+import { addArc, addArcBeat, getArcs, makeArc, pushPlanToHistory, removeArc, setArcsWithHistory, updateArc } from '../story_planner/data.js';
 import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
 
 const gate = vi.hoisted(() => ({ blocked: false }));
@@ -76,6 +76,19 @@ describe('Module 4 review defect reproductions', () => {
         expect(addArc({ title: 'Unsaved' })).toBeNull();
         expect(removeArc(arc.id)).toBe(false);
         expect(getArcs()).toEqual([arc]);
+    });
+
+    test('beat edit and deletion each commit history with their arc change, never separately', () => {
+        const arc = makeArc({ title: 'Original', beats: ['First beat'] });
+        getFakeMeta().story_planner_data = { arcs: [arc], history: [] };
+        gate.blocked = true;
+        expect(addArcBeat(arc.id, 'Second beat')).toBeNull();
+        expect(removeArc(arc.id)).toBe(false);
+        expect(getFakeMeta().story_planner_data.history).toEqual([]);
+        expect(getArcs()).toEqual([arc]);
+        gate.blocked = false;
+        expect(addArcBeat(arc.id, 'Second beat')).not.toBeNull();
+        expect(getFakeMeta().story_planner_data.history).toHaveLength(1);
     });
 
     // SP4-05 (fixed in 2.10.2): invalid receipt tuples are quarantined by the

@@ -167,8 +167,7 @@ export function recordPhase7Metrics(patch = {}) {
         startedAt: before.startedAt || now,
         updatedAt: now,
     };
-    setPlanData({ phase7Metrics: sanitizePhase7Metrics(next) });
-    return getPhase7Metrics();
+    return commitPlanPatch({ phase7Metrics: sanitizePhase7Metrics(next) }).ok ? getPhase7Metrics() : null;
 }
 
 /** Additive helper for counters; scalar last-* fields may be supplied beside them. */
@@ -902,6 +901,13 @@ export function setArcs(arcs) {
     return !!committed && committed !== before;
 }
 
+/** Apply related store changes only if the write replaces the previous store. */
+export function commitPlanPatch(patch) {
+    const before = getChatMeta()?.[CHAT_DATA_KEY];
+    const committed = setPlanData(patch);
+    return { ok: !!committed && committed !== before, data: committed };
+}
+
 /** Full plan as markdown — used by the `{{storyplan}}` macro and diff views. */
 export function getPlanText() {
     return serializeArcsToText(getArcs());
@@ -1023,11 +1029,11 @@ function commitBeatEdit(id, proposedBeats) {
     const same = beatSequenceFingerprint(arc.beats) === beatSequenceFingerprint(beats);
     if (same) return arc;
 
-    pushPlanToHistory(arcs);
-    const updated = updateArc(id, {
-        beats,
-        ...(currentChanged ? { turnsSinceAdvance: 0 } : {}),
-    });
+    const nextArcs = arcs.map(candidate => candidate.id === id
+        ? { ...candidate, beats, ...(currentChanged ? { turnsSinceAdvance: 0 } : {}), updatedAt: Date.now() }
+        : candidate);
+    const written = setArcsWithHistory(nextArcs, arcs);
+    const updated = written.ok ? written.arcs.find(candidate => candidate.id === id) : null;
     if (updated && currentChanged) cleanNudgeMarksForArc(id);
     return updated;
 }
@@ -1098,8 +1104,7 @@ export function removeArc(id) {
     const arcs = getArcs();
     const remaining = arcs.filter(a => a.id !== id);
     if (remaining.length === arcs.length) return false;
-    pushPlanToHistory(arcs);
-    if (!setArcs(remaining)) return false;
+    if (!setArcsWithHistory(remaining, arcs).ok) return false;
     // STORY-PLANNER-08: clear this arc's nudge marks immediately rather than
     // waiting for takeDueNudges() to reconcile them lazily on its next call.
     cleanNudgeMarksForArc(id);
@@ -1366,15 +1371,15 @@ function historyEntrySignature(entry) {
  */
 export function pushPlanToHistory(arcs) {
     const list = Array.isArray(arcs) ? arcs : [];
-    if (list.length === 0) return;
+    if (list.length === 0) return false;
     const history = structuredCloneSafe(getPlanHistory());
     const serialized = serializeArcsToText(list);
-    if (!serialized.trim()) return;
+    if (!serialized.trim()) return false;
     const candidate = { arcs: structuredCloneSafe(list) };
-    if (history.length && historyEntrySignature(history[history.length - 1]) === historyEntrySignature(candidate)) return;
+    if (history.length && historyEntrySignature(history[history.length - 1]) === historyEntrySignature(candidate)) return false;
     history.push({ ...candidate, timestamp: Date.now() });
     if (history.length > MAX_PLAN_HISTORY) history.splice(0, history.length - MAX_PLAN_HISTORY);
-    setPlanData({ history });
+    return commitPlanPatch({ history }).ok;
 }
 
 /**

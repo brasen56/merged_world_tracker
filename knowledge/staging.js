@@ -451,7 +451,10 @@ export async function importNpcs() {
         let imported = 0;
         let skipped = 0;
         let settingsImported = false;
-        // Import settings if present
+        let settingsPatch = null;
+        // Defer unrelated settings until the registry import succeeds. In
+        // particular a refused/partial lorebook import must not change API
+        // configuration just because the user approved the file's settings.
         if (data.settings && data.type === 'knowledge_tracker') {
             if (confirm('Import settings too? (API URL, key, model, etc.)')) {
                 // Scope and bookBindings determine the destination lorebooks;
@@ -462,8 +465,7 @@ export async function importNpcs() {
                 const patch = Object.fromEntries(allowed
                     .filter(key => Object.hasOwn(data.settings, key))
                     .map(key => [key, data.settings[key]]));
-                saveSettings(patch);
-                settingsImported = true;
+                settingsPatch = patch;
             }
         }
         // Work on a detached copy: getRegistry() exposes the cached store
@@ -583,7 +585,6 @@ export async function importNpcs() {
                     ...(Array.isArray(entry.mergedFrom) ? entry.mergedFrom : []),
                 ],
             };
-            imported++;
 
             // If the uid was dropped (or was never present) but content is
             // available, write it as a new entry in the local lorebook.
@@ -624,6 +625,12 @@ export async function importNpcs() {
 
         assertImportDestination();
         saveRegistry(registry);
+        assertImportDestination();
+        if (settingsPatch && Object.keys(settingsPatch).length) {
+            saveSettings(settingsPatch);
+            settingsImported = true;
+        }
+        imported = Object.keys(data.entries).length - skipped - refused.length;
 
         // Trigger re-render
         const { renderNpcsSubTab } = await import('./render.js');

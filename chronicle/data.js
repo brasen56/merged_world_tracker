@@ -83,6 +83,8 @@ export const state = {
     _lastStatusMsg: '',
     _lastStatusLevel: '',
     msgSinceSnapshot: 0,
+    /** In-memory retry gate after an auto-snapshot failure; never consumes receipts. */
+    autoSnapshotRetryAt: 0,
     /** Last observed chat length, used by onMessageDeleted to compute how many
      *  messages were removed during bulk deletes (e.g. "delete above/below"). */
     lastChatLength: 0,

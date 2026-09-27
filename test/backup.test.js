@@ -287,6 +287,7 @@ describe('unified backup Phase 1 pure core', () => {
                 chronicle: {
                     snapshots: [], injectEnabled: true, injectCount: 9,
                     lastAnchor: { msgIndex: 9 }, msgSinceSnapshot: 9,
+                    countedReceiptEvents: [['id:m9', 9]],
                 },
                 interiority: { enabled: false, turnCounter: 999, ledger: [], deletedIntentions: [] },
             },
@@ -295,6 +296,7 @@ describe('unified backup Phase 1 pure core', () => {
             chronicle: {
                 snapshots: [], injectEnabled: false, injectCount: 2,
                 lastAnchor: { msgIndex: 2 }, msgSinceSnapshot: 2,
+                countedReceiptEvents: [['id:m2', 2]],
             },
             interiority: { enabled: true, turnCounter: 4, ledger: [], deletedIntentions: [] },
         });
@@ -302,10 +304,36 @@ describe('unified backup Phase 1 pure core', () => {
         expect(result.plan.sections.chronicle).toMatchObject({
             injectEnabled: false, injectCount: 2,
             lastAnchor: { msgIndex: 9 }, msgSinceSnapshot: 9,
+            countedReceiptEvents: [['id:m9', 9]],
         });
         expect(result.plan.sections.interiority).toMatchObject({ enabled: true, turnCounter: 4 });
         expect(result.summary.chronicle.skipped).toHaveLength(2);
         expect(result.summary.interiority.skipped).toHaveLength(2);
+    });
+
+    test('keeps the cadence pair when a legacy backup carries no receipt provenance (M2-09)', () => {
+        // Pre-provenance backups carry a counter with no countedReceiptEvents
+        // field. That counter can never drain in this chat (consumption is
+        // provenance-driven), and letting the destination's own provenance
+        // survive under a replaced counter would distort deletion
+        // adjustments — so the destination's pair stays untouched.
+        const file = backup({
+            metadata: {
+                chronicle: {
+                    snapshots: [], lastAnchor: { msgIndex: 9 }, msgSinceSnapshot: 9,
+                },
+            },
+        });
+        const result = planRestore(file, {
+            chronicle: {
+                snapshots: [], msgSinceSnapshot: 2,
+                countedReceiptEvents: [['id:m2', 2]],
+            },
+        });
+
+        expect(result.plan.sections.chronicle.msgSinceSnapshot).toBe(2);
+        expect(result.plan.sections.chronicle.countedReceiptEvents).toEqual([['id:m2', 2]]);
+        expect(result.summary.chronicle.skipped[0].reason).toMatch(/no receipt provenance/);
     });
 
     test('merges Story Planner arcs by id instead of replacing the current plan', () => {

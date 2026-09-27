@@ -26,7 +26,7 @@ import {
     getSettings, saveSettings, hasValidSettings,
     getChronicleData, setChronicleData, setChronicleDataChecked, getSnapshots,
     persistMsgSinceSnapshot, restoreReceiptBookkeeping, getReceiptIdentity,
-    isAnchorStale, getMessageCountSinceLastSnapshot,
+    isAnchorStale,
 } from './data.js';
 
 import {
@@ -132,30 +132,22 @@ export async function onMessageReceived({ countMessage = true, messageIndex = nu
         return;
     }
 
-    if (!settings.autoSnapshot || !hasValidSettings() || state.msgSinceSnapshot < threshold) {
+    if (!settings.autoSnapshot || !hasValidSettings() || state.msgSinceSnapshot < Math.max(threshold, state.autoSnapshotRetryAt || 0)) {
         return;
     }
 
     console.log(`[MWT:Chronicle] Auto-snapshot at ${state.msgSinceSnapshot} messages`);
-    // CHRONICLE-02: Capture scope so the failure-reset below can tell a genuine
-    // failure apart from a mid-generation chat switch. Uses the scope guard
-    // (getCurrentChatId + epoch) instead of the old weak key.
+    // CHRONICLE-02: A chat switch must not update the incoming chat's retry
+    // gate or announce success for the outgoing chat.
     const scopeBefore = captureScope();
     const snapshot = await generateSnapshot(true);
-    // On failure, reset the counter (success resets inside generateSnapshot).
-    // Without this, a persistent failure (API down, empty output) left the
-    // counter at ≥ threshold, causing every subsequent MESSAGE_RECEIVED to
-    // immediately re-trigger an API call — a retry storm that flooded the
-    // endpoint. BUT: if the null result is because the user switched chats
-    // mid-generation, onChatChanged has already restored the *new* chat's
-    // counter — resetting here would wipe it and persist 0 into the wrong
-    // chat's metadata, so only reset when we're still on the same chat.
-    if (!snapshot && getMessageCountSinceLastSnapshot() !== null) {
-        if (assertSameScope(scopeBefore).ok) {
-            state.msgSinceSnapshot = 0;
-            state.countedReceiptEvents.clear();
-            persistMsgSinceSnapshot();
-        }
+    if (!assertSameScope(scopeBefore).ok) return;
+    // A failed call leaves receipts pending. Back off until another full
+    // threshold arrives, rather than retrying on every subsequent message.
+    if (!snapshot) {
+        state.autoSnapshotRetryAt = state.msgSinceSnapshot + threshold;
+    } else {
+        state.autoSnapshotRetryAt = 0;
     }
     // Only notify on success — generateSnapshot returns null on failure and
     // already shows its own error status/notification in that case.
@@ -166,6 +158,7 @@ export async function onMessageReceived({ countMessage = true, messageIndex = nu
 
 export function onChatChanged() {
     state.isGenerating = false;
+    state.autoSnapshotRetryAt = 0;
     state.isMainGenerating = false;
     state.selectedSnapshotId = null;
     state.consolidateMode = false;
@@ -200,6 +193,7 @@ export function onChatChanged() {
  */
 export function onChatChangedWhilePaused() {
     state.isGenerating = false;
+    state.autoSnapshotRetryAt = 0;
     state.isMainGenerating = false;
     state.selectedSnapshotId = null;
     state.consolidateMode = false;

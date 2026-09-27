@@ -317,6 +317,24 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
         expect(chronicleState.selectedSnapshotId).not.toBe('entry');
     });
 
+    test('regeneration discards output if its source entry changes during the API call', async () => {
+        const snapshot = makeChronicleSnapshot({
+            id: 'entry', createdAt: '2026-06-04T00:00:00.000Z', fromIndex: 0, toIndex: 3,
+            anchorValue: 'June 4, 2026 evening', location: 'Harbour office',
+        });
+        seedChronicle([snapshot]);
+        let release;
+        const pending = new Promise(resolve => { release = resolve; });
+        response = () => pending;
+        const work = regenerateSnapshot('entry');
+        const revised = { ...snapshot, text: snapshot.text + '\nAn editor changed this.' };
+        setChronicleData({ snapshots: [revised] });
+        release(chronicleOutput('June 5, 2026 2pm'));
+        await work;
+        expect(getSnapshots()[0].text).toBe(revised.text);
+        expect(getWorldStateText()).toBe('');
+    });
+
     test('reproduces an older-range consolidation changing the present scene', async () => {
         const first = makeChronicleSnapshot({
             id: 'first', createdAt: '2026-06-01T00:00:00.000Z', fromIndex: 0, toIndex: 1,

@@ -17,7 +17,7 @@ import { pauseStore, _setScopeKeyResolver, _resetPausedStores } from '../core/sc
 import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
 import { GROWTH_EVIDENCE_KEY } from '../knowledge/state.js';
 import {
-    getEvidenceFile, updateRawObservation, deleteRawObservation, toggleCanon,
+    getEvidenceFile, appendRawObservations, getCaptureCursor, updateRawObservation, deleteRawObservation, toggleCanon,
     updateConsolidated, deleteConsolidated, expandConsolidated,
     addUserOverride, updateUserOverride, deleteUserOverride,
     clearEvidence, clearAllEvidence,
@@ -50,6 +50,18 @@ test('evidence editors and resets report a refused write without mutating the st
     expect(clearAllEvidence()).toBe(0);
     expect(getFakeMeta()[GROWTH_EVIDENCE_KEY]).toBe(live);
     expect(live.Mara).toEqual(file);
+});
+
+test('capture observations and cursor are one checked evidence commit', () => {
+    const observation = { category: 'trait', claim: 'Mara is wary', quote: 'Be careful', msgIdx: 0 };
+    const cursor = { ts: 1234, index: 4 };
+    pauseStore('knowledgeEvidence', { reasonCode: 'future-version', message: 'blocked' });
+    expect(() => appendRawObservations('Mara', [observation], cursor)).toThrow('could not be saved');
+    expect(getFakeMeta()[GROWTH_EVIDENCE_KEY].Mara).toBeUndefined();
+    _resetPausedStores();
+    expect(appendRawObservations('Mara', [observation], cursor).added).toBe(1);
+    expect(getCaptureCursor('Mara')).toEqual(cursor);
+    expect(getFakeMeta()[GROWTH_EVIDENCE_KEY].Mara.raw).toHaveLength(1);
 });
 
 import { reconcileImportedUid } from '../knowledge/reconcile.js';

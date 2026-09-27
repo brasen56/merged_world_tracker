@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the consolidation call was in flight could be consumed and archived
   anyway. The check now requires `!o.canon`. (NK-12, `docs/TODO.md` §0.)
 
+- **A Chronicle export can no longer strand an orphan cadence counter in
+  the destination chat.** The standalone export carried `msgSinceSnapshot`
+  without its receipt provenance, and both the standalone import and a
+  backup merge restore imported the counter alone — a counter its
+  provenance cannot account for is never consumed by a snapshot
+  (consumption is provenance-driven) nor decremented by a deletion, so an
+  imported counter at or above the auto-snapshot threshold would
+  re-trigger a snapshot on every subsequent message, forever, and any
+  destination provenance left behind would distort future deletion
+  adjustments. The export now carries `countedReceiptEvents`, the import
+  restores the pair as ONE atomic checked commit, a legacy export without
+  the provenance field imports its counter clamped to zero (with a status
+  note), and the backup merge keeps the destination's pair when the backup
+  cannot account for its counter. (M2-09, `docs/TODO.md` §0.)
+
 - **Knowledge's Enrich can no longer overwrite a growth-owned Personality
   line.** `runNpcEnrich` merged the model's `fields` unfiltered, unlike
   `runNpcUpdate` and the scan path, so an enrich call could replace a
@@ -116,6 +131,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on Restore and the UI mutation paths; and the Story Planner phase 5,
   Knowledge module 3, Story Planner module 4, and backup test suites were
   updated to the new contracts.
+
+- `test/chronicle_module2_review.test.js` pins the §0 chat-switch
+  discards: generation, regeneration (at the diff-preview accept callback),
+  and consolidation (at the preview-confirm callback) discard results that
+  settle after the chat changed, the auto-snapshot wrapper touches neither
+  the incoming chat's retry gate nor the success toast, and a stale job
+  cannot release a newer job's busy flag. The import/backup suites pin the
+  new atomic counter/provenance pair policy, including the legacy-file
+  clamp. (M2-01/M2-04/M2-05/M2-09, `docs/TODO.md` §0.)
 
 ## [2.10.2]
 

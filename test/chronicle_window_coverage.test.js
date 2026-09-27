@@ -44,9 +44,33 @@ describe('Chronicle coverage fixes — oversized messages, anchor deletion, manu
         state.isGenerating = false;
         state.isMainGenerating = false;
         state.msgSinceSnapshot = 0;
+        state.autoSnapshotRetryAt = 0;
     });
 
     // ─── Bug 1: oversized message is split, not silently truncated ────────────
+    test('failed auto-snapshot preserves receipt cadence and backs off instead of resetting it', async () => {
+        const { state, saveSettings, getChronicleData } = await import('../chronicle/data.js');
+        const { onMessageReceived } = await import('../chronicle/index.js');
+        saveSettings({ autoSnapshot: true, autoSnapshotThreshold: 1, apiUrl: 'https://example.test', modelName: 'test-model' });
+        setFakeChat([
+            { id: 'a', name: 'Mara', mes: 'An opening scene.' },
+            { id: 'b', name: 'Mara', mes: 'Another scene.' },
+            { id: 'c', name: 'User', is_user: true, mes: 'Continue.' },
+            { id: 'd', name: 'Mara', mes: 'A pending reply.' },
+        ]);
+        let requests = 0;
+        setFakeApi(() => { requests++; throw new Error('offline'); });
+        await onMessageReceived({ messageIndex: 0 });
+        expect(state.msgSinceSnapshot).toBe(1);
+        expect(getChronicleData().msgSinceSnapshot).toBe(1);
+        expect(state.countedReceiptEvents.size).toBe(1);
+        expect(state.autoSnapshotRetryAt).toBe(2);
+        const firstAttempts = requests;
+        // A threshold of two lets the next receipt retry, but not a retry
+        // loop against the same event before another message arrives.
+        expect(firstAttempts).toBeGreaterThan(0);
+        expect(requests).toBe(firstAttempts);
+    });
 
     test('an oversized first message is cut mid-text and its remainder reaches the next window', async () => {
         const { buildMessageWindow } = await import('../chronicle/data.js');

@@ -122,7 +122,27 @@ function mergeChronicle(current, incoming, { restoreSessionConfig = false } = {}
         : { data: cloneBackupData(current?._deletedBin || []), summary: emptySummary() };
     result.snapshots = snapshots.data;
     result._deletedBin = retainChronicleTrash(trash.data, result.snapshots, MAX_TRASH_SIZE);
-    mergeSafeScalars(result, current, incoming, ['lastAnchor', 'msgSinceSnapshot'], summary);
+    // M2-09: the cadence counter and its receipt provenance are one pair —
+    // consumption (generateSnapshot) and deletion adjustment
+    // (onMessageDeleted) are both driven by the receipt map, so a counter
+    // restored without its matching provenance would never drain (an imported
+    // counter at or above the auto-snapshot threshold would re-trigger a
+    // snapshot on every subsequent message, forever) and any destination
+    // provenance left behind would distort future deletion adjustments. A
+    // backup section that carries the counter therefore restores the PAIR
+    // together — including an explicitly empty map, which is a legitimate
+    // live state (user-message increments carry no receipts). A legacy
+    // backup with a counter but no countedReceiptEvents field cannot account
+    // for it, so the destination's pair is kept untouched and the summary
+    // says why.
+    if (Object.prototype.hasOwnProperty.call(incoming || {}, 'msgSinceSnapshot')) {
+        if (Array.isArray(incoming.countedReceiptEvents)) {
+            mergeSafeScalars(result, current, incoming, ['msgSinceSnapshot', 'countedReceiptEvents'], summary);
+        } else {
+            addSkip(summary, 'msgSinceSnapshot', 'Chronicle cadence counter was preserved; the backup carries no receipt provenance for it.');
+        }
+    }
+    mergeSafeScalars(result, current, incoming, ['lastAnchor'], summary);
     const sessionSettings = ['injectEnabled', 'injectMode', 'injectCount', 'injectDepth', 'injectFromDate', 'injectToDate', 'selectedForInjection'];
     skipProtectedScalars(summary, incoming, sessionSettings, 'Chronicle', restoreSessionConfig);
     if (restoreSessionConfig) mergeSafeScalars(result, current, incoming, sessionSettings, summary);
