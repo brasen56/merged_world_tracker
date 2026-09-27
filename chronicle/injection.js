@@ -20,6 +20,54 @@ import {
     getChronicleData, getSnapshots,
 } from './data.js';
 
+// ─── Injection settings ──────────────────────────────────────────────────────
+
+/** The modes the ⚙ Injection settings view offers. */
+export const INJECT_MODES = Object.freeze(['recent', 'selected', 'all', 'range']);
+
+// ISO 8601 dates: what the view's <input type="datetime-local"> writes (a
+// date, optionally with a time), plus an optional zone designator so a full
+// timestamp like "2026-01-03T00:00:00Z" keeps filtering as it always has.
+// Date.parse() alone is not a sufficient check — V8 accepts
+// "Tue Mar 01 2011 (<img>)" because it treats the parentheses as a comment.
+const INJECT_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+function injectDateOrEmpty(value) {
+    return typeof value === 'string' && INJECT_DATE_PATTERN.test(value) && Number.isFinite(Date.parse(value))
+        ? value
+        : '';
+}
+
+/**
+ * This chat's injection selection settings, in a known-good shape.
+ *
+ * They live in chat metadata that the Chronicle schema passes through
+ * unvalidated (it checks only the record lists), and that metadata can
+ * arrive from outside MWT: a Chronicle import, a shared .jsonl chat
+ * (SillyTavern copies its chat_metadata verbatim), or a backup restore.
+ * Every consumer — selection, stats, the settings view — reads through here,
+ * so a malformed value falls back to its default instead of reaching a
+ * slice(), a date comparison, or the page. M2-07 (docs/TODO.md §0). Rendering
+ * still escapes these values: this is a type check, not the XSS boundary.
+ *
+ * @param {object} [data] the Chronicle store (defaults to this chat's)
+ * @returns {{ mode: string, count: number, fromDate: string, toDate: string, selectedIds: string[] }}
+ */
+export function getInjectionSettings(data = getChronicleData()) {
+    const src = data && typeof data === 'object' ? data : {};
+    const rawCount = src.injectCount;
+    const count = (typeof rawCount === 'number' || typeof rawCount === 'string') ? Number(rawCount) : NaN;
+    return {
+        mode: INJECT_MODES.includes(src.injectMode) ? src.injectMode : 'recent',
+        count: Number.isFinite(count) && count >= 1 ? Math.floor(count) : 2,
+        fromDate: injectDateOrEmpty(src.injectFromDate),
+        toDate: injectDateOrEmpty(src.injectToDate),
+        selectedIds: Array.isArray(src.selectedForInjection)
+            ? src.selectedForInjection.filter(id => typeof id === 'string')
+            : [],
+    };
+}
+
 // ─── Injection ───────────────────────────────────────────────────────────────
 
 export function isInjectionEnabled() {
@@ -29,21 +77,19 @@ export function isInjectionEnabled() {
 export function getEntriesForInjection() {
     const data = getChronicleData();
     const snapshots = getSnapshots();
-    const mode = data.injectMode || 'recent';
-    const count = data.injectCount || 2;
+    const { mode, count, fromDate, toDate, selectedIds } = getInjectionSettings(data);
     if (mode === 'recent') return snapshots.slice(-count);
-    if (mode === 'selected') return snapshots.filter(s => (data.selectedForInjection || []).includes(s.id));
+    if (mode === 'selected') return snapshots.filter(s => selectedIds.includes(s.id));
     if (mode === 'all') return [...snapshots];
     if (mode === 'range') {
-        const { injectFromDate, injectToDate } = data;
         // CHRONICLE-06: Open-ended range semantics. A single bound now filters
         // one direction instead of silently returning nothing (the old code
         // required BOTH dates or injected zero entries while still reporting
         // Range mode as active). `from` only → everything after it; `to` only →
         // everything before it; neither → unbounded (all). A reversed pair is
         // normalised rather than producing an empty injection.
-        const from = injectFromDate ? new Date(injectFromDate) : null;
-        const to = injectToDate ? new Date(injectToDate) : null;
+        const from = fromDate ? new Date(fromDate) : null;
+        const to = toDate ? new Date(toDate) : null;
         let lo = from;
         let hi = to;
         if (from && to && from > to) { lo = to; hi = from; }
@@ -59,9 +105,7 @@ export function getEntriesForInjection() {
 
 export function getInjectionStats() {
     const snapshots = getSnapshots();
-    const data = getChronicleData();
-    const injectMode = data.injectMode || 'recent';
-    const injectCount = data.injectCount || 2;
+    const { mode: injectMode, count: injectCount } = getInjectionSettings();
     const totalEntries = snapshots.length;
     const manualCount = snapshots.filter(s => s.manual).length;
     const consolidatedCount = snapshots.filter(s => s.consolidated).length;
@@ -95,7 +139,15 @@ export function resolveInjectionPlacement() {
     const globalSettings = getGlobalSettings();
     const gd = globalSettings.chronicleDepth;
     const globalDepthWins = gd != null && Number.isFinite(Number(gd));
-    const chatDepth = getChronicleData().injectDepth;
+    // Chat metadata (M2-07): only a finite, non-negative number (or numeric
+    // string) is a depth — anything else reads as absent and falls through to
+    // the built-in 2, exactly like a missing value.
+    const rawChatDepth = getChronicleData().injectDepth;
+    const chatDepthNum = typeof rawChatDepth === 'number'
+        || (typeof rawChatDepth === 'string' && rawChatDepth.trim() !== '')
+        ? Number(rawChatDepth)
+        : NaN;
+    const chatDepth = Number.isFinite(chatDepthNum) && chatDepthNum >= 0 ? Math.floor(chatDepthNum) : null;
     return {
         depth: {
             value: globalDepthWins ? Number(gd) : (chatDepth ?? 2),

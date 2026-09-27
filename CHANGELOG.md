@@ -12,6 +12,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.10.1]
+
+### Security
+
+- **Chronicle no longer renders its stored injection settings as HTML.** The
+  ⚙ Injection settings view and the 📊 Stats view put this chat's
+  `injectCount`, `injectFromDate` / `injectToDate`, and `injectMode` into the
+  page unescaped, and the Chronicle schema passes those keys through without
+  validating them. A crafted value arriving in a Chronicle import, a shared
+  `.jsonl` chat (SillyTavern keeps its `chat_metadata` verbatim), or a backup
+  restore could inject HTML, including script event handlers, into the page
+  as soon as either view was opened. All of these values, and the injection
+  preview's depth and role, are now escaped where they render. Found in the
+  2026-09-25 module reviews (M2-07, `docs/TODO.md` §0).
+
+### Fixed
+
+- **Malformed Chronicle injection settings now fall back to their defaults.**
+  A new `getInjectionSettings()` in `chronicle/injection.js` is the single read
+  path for the mode, count, range dates, and Selected list. An unknown mode now
+  reads as Recent (it used to inject nothing); a non-numeric count reads as 2
+  (it used to inject *every* entry, because `slice(-NaN)` is `slice(0)`); a
+  range date that isn't ISO 8601 reads as "no bound"; and a Selected list that
+  isn't an array reads as empty (it used to throw). A malformed per-chat depth
+  falls back to the built-in 2, and the injection preview now reads depth and
+  role through the same `resolveInjectionPlacement()` the real injection uses,
+  so the two can no longer disagree. Well-formed settings behave exactly as
+  before. Pinned by `test/chronicle_injection_settings_xss.test.js`.
+
 ## [2.10.0]
 
 ### Added

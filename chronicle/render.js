@@ -6,7 +6,6 @@
 import {
     escapeHtml, buildInlineDiff, estimateTokens,
     renderApiSettingsFields, readApiSettingsValues,
-    getGlobalSettings,
     createModal, showModal, hideModal, setStatus,
 } from '../core/index.js';
 // Direct import (not the barrel) so the real helper runs under the test
@@ -27,6 +26,7 @@ import {
 
 import {
     isInjectionEnabled, getEntriesForInjection, getInjectionStats, applyInjection,
+    getInjectionSettings, resolveInjectionPlacement,
 } from './injection.js';
 
 import {
@@ -186,7 +186,7 @@ function showStatsModal() {
         <h3>📊 Statistics</h3>
         <div class="sc-stats-grid"><div><span>Total Entries:</span><strong>${stats.totalEntries}</strong></div><div><span>Generated:</span><strong>${stats.generatedCount}</strong></div><div><span>Manual:</span><strong>${stats.manualCount}</strong></div><div><span>Consolidated:</span><strong>${stats.consolidatedCount}</strong></div></div>
         <div class="sc-stats-grid"><div><span>Total Words:</span><strong>${stats.totalWords}</strong></div><div><span>Avg/Entry:</span><strong>${stats.totalEntries > 0 ? Math.round(stats.totalWords / stats.totalEntries) : 0}</strong></div></div>
-        <h4>Injection (${stats.injectMode})</h4>
+        <h4>Injection (${escapeHtml(stats.injectMode)})</h4>
         <div class="sc-stats-grid"><div><span>Entries:</span><strong>${stats.entriesToInject}</strong></div><div><span>Est. Tokens:</span><strong class="${tokenWarningClass}">${stats.tokenEstimate}</strong></div><div><span>Status:</span><strong>${tokenWarning}</strong></div></div>
         <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px"><strong>Status</strong> compares estimated injection tokens against a ~4000 token soft limit. To reduce tokens: lower the entry count in <strong>⚙ Injection Settings</strong> (gear button below entry list), switch from "All" to "Recent" mode, or consolidate older entries.</p>
         <h4>Characters (${stats.characterCount})</h4><p>${escapeHtml(topChars)}</p>
@@ -212,10 +212,12 @@ function showPreviewInjection() {
     const injected = `${CHRONICLE_INJECTION_HEADER}\n\n${text}`;
     const tokens = estimateTokens(injected);
 
-    // Resolve depth/role for display
-    const globalSettings = getGlobalSettings();
-    const depth = Number.isFinite(globalSettings.chronicleDepth) ? globalSettings.chronicleDepth : (getChronicleData().injectDepth ?? 2);
-    const roleName = globalSettings.chronicleRole || 'system';
+    // Resolve depth/role for display through the SAME resolver applyInjection()
+    // uses, so the preview cannot disagree with what is registered — and the
+    // chat's injectDepth arrives normalized, never as raw metadata (M2-07).
+    const placement = resolveInjectionPlacement();
+    const depth = placement.depth.value;
+    const roleName = placement.role.value;
 
     const previewModal = createModal({
         id: 'mwt-sc-injection-preview',
@@ -223,7 +225,7 @@ function showPreviewInjection() {
         content: `
             <p class="mwt-text-dim mwt-text-sm mwt-mb-8">
                 This is exactly what gets injected into the prompt (${injected.length} chars, ~${tokens} tokens).
-                Depth: <strong>${depth}</strong> · Role: <strong>${roleName}</strong>.
+                Depth: <strong>${escapeHtml(depth)}</strong> · Role: <strong>${escapeHtml(roleName)}</strong>.
             </p>
             <pre style="white-space:pre-wrap;font-family:var(--mwt-font-mono);font-size:12px;line-height:1.5;background:var(--mwt-bg-light);padding:12px;border-radius:var(--mwt-radius);border:1px solid var(--mwt-border);max-height:60vh;overflow-y:auto">${escapeHtml(injected)}</pre>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8">
@@ -251,18 +253,19 @@ function showPreviewInjection() {
 function showInjectionSelector() {
     const el = getContentEl();
     if (!el) return;
-    const data = getChronicleData();
     const snapshots = getSnapshots();
-    const currentMode = data.injectMode || 'recent';
-    const currentCount = data.injectCount || 2;
-    const selectedForInjection = data.selectedForInjection || [];
+    // Normalized AND escaped below (M2-07): these values come from chat
+    // metadata, which can arrive in a shared chat, import, or backup.
+    const {
+        mode: currentMode, count: currentCount, fromDate, toDate, selectedIds: selectedForInjection,
+    } = getInjectionSettings();
     el.innerHTML = `<div>
         <h3>Injection Settings</h3>
         <div><label for="sc-inject-mode-recent"><input type="radio" id="sc-inject-mode-recent" name="sc-inject-mode" value="recent" ${currentMode === 'recent' ? 'checked' : ''}> Recent</label><label for="sc-inject-mode-selected"><input type="radio" id="sc-inject-mode-selected" name="sc-inject-mode" value="selected" ${currentMode === 'selected' ? 'checked' : ''}> Selected</label><label for="sc-inject-mode-all"><input type="radio" id="sc-inject-mode-all" name="sc-inject-mode" value="all" ${currentMode === 'all' ? 'checked' : ''}> All</label><label for="sc-inject-mode-range"><input type="radio" id="sc-inject-mode-range" name="sc-inject-mode" value="range" ${currentMode === 'range' ? 'checked' : ''}> Range</label></div>
         <div id="sc-inject-mode-options">
-            <div id="sc-recent-options" style="display:${currentMode === 'recent' ? 'block' : 'none'}"><label for="sc-inject-count">Count: <input type="number" id="sc-inject-count" value="${currentCount}" min="1" max="${snapshots.length}"></label></div>
+            <div id="sc-recent-options" style="display:${currentMode === 'recent' ? 'block' : 'none'}"><label for="sc-inject-count">Count: <input type="number" id="sc-inject-count" value="${escapeHtml(currentCount)}" min="1" max="${snapshots.length}"></label></div>
             <div id="sc-selected-options" style="display:${currentMode === 'selected' ? 'block' : 'none'}">${snapshots.map((s, i) => `<label for="sc-inject-select-${i}"><input type="checkbox" id="sc-inject-select-${i}" class="sc-inject-select-cb" data-id="${escapeHtml(s.id)}" ${selectedForInjection.includes(s.id) ? 'checked' : ''}> ${escapeHtml(s.worldDate || s.createdAt)} — ${escapeHtml((s.text || '').slice(0, 50))}</label>`).join('<br>')}</div>
-            <div id="sc-range-options" style="display:${currentMode === 'range' ? 'block' : 'none'}"><label for="sc-inject-from">From: <input type="datetime-local" id="sc-inject-from" value="${data.injectFromDate || ''}"></label><label for="sc-inject-to">To: <input type="datetime-local" id="sc-inject-to" value="${data.injectToDate || ''}"></label></div>
+            <div id="sc-range-options" style="display:${currentMode === 'range' ? 'block' : 'none'}"><label for="sc-inject-from">From: <input type="datetime-local" id="sc-inject-from" value="${escapeHtml(fromDate)}"></label><label for="sc-inject-to">To: <input type="datetime-local" id="sc-inject-to" value="${escapeHtml(toDate)}"></label></div>
         </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-apply-injection" class="mwt-btn mwt-btn-primary">Apply</button><button id="sc-cancel-injection" class="mwt-btn">Cancel</button></div>
     </div>`;
