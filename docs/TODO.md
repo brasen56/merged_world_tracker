@@ -6,20 +6,28 @@
 > (the bug-fix queue), so the two source files can be treated as archived
 > reference and this file becomes the live queue.
 >
-> **Status at a glance (re-verified 2026-08-22):**
+> **Status at a glance (re-verified 2026-08-22; §0 added 2026-09-26):**
+> - 🔴 **Module review round: OPEN (see §0 below).** The co-author's five
+>   per-module reviews (2026-09-25) were re-verified against `core/`, the root
+>   `index.js`, and the live SillyTavern source: 7 top-tier items (the
+>   security fix, M2-07, shipped in 2.10.1), 11 cheap fixes, a batch of narrow
+>   ones, plus the findings that turned out not to be bugs, recorded so they
+>   aren't re-opened.
 > - 🟢 **Bug-fix baseline: COMPLETE.** All 48 code findings + 6 test-coverage gaps
 >   from the 2026-08-02 audit are closed (Tier 0 → Tier 5 + both follow-up passes).
 >   The shared primitives (`core/scope.js`, `core/revision.js`, `core/prompt.js`,
 >   `core/api.js`) are built **and** wired into production.
 > - 🟢 **Tests:** 9 files / 165 tests at audit time → 21 files / 430 at the last
->   glance → **99 files / 2493 tests now** (suite re-run 2026-09-11, all green —
->   includes the schema validation + migrations milestone, Parts 1–7, the
+>   glance → 99 files / 2493 on 2026-09-11 → **123 files / 3093 tests now**
+>   (re-run 2026-09-26 after the 2.10.1 fix, all green; the three uncommitted
+>   review probes from §0 are not counted). The 09-11 run already covered the schema
+>   validation + migrations milestone, Parts 1–7, the
 >   World State delta-mode feature, the Knowledge per-field dossier
 >   refresh, the entity identity + alias service, the §6 deeper-coverage
 >   pass: API failure families, generation commit races, import/export round
 >   trips, lorebook hydration retry, and modal interactions, and the
 >   Overview dashboard: status collector, pane, profile-audit extraction,
->   and maintenance tools).
+>   and maintenance tools.
 > - 🟢 **Lint + CI:** ESLint (correctness-only) + GitHub Actions (lint+test, Node
 >   20 & 22) shipped and green. `manifest.json homePage` populated. The Appendix A
 >   zero-churn rule expansion (`eqeqeq`, `prefer-const`, `no-shadow`, …) landed in
@@ -33,7 +41,7 @@
 > - 🟢 **Backup/restore + housekeeping tail: COMPLETE (v1.5.0).** Unified
 >   chat-local backup/restore (engine + UI), CHANGELOG started, Vitest
 >   `world-info.js` warning silenced.
-> - 🟡 **What's left = this file:** the §1 subsystems (entity identity now
+> - 🟡 **What's left = this file:** the §0 bug queue, the §1 subsystems (entity identity now
 >   heads the queue — schema validation + migrations finished in 2.0.0; the
 >   central generation coordinator + cancellation model shipped in 2.4.0), the
 >   §2 context-budget panel **(shipped 2.5.0)**, the "Bucket C" feature work, and a small
@@ -50,6 +58,10 @@
 The source docs already triaged everything into three buckets. This file keeps
 that split because it predicts the *kind* of work each item is:
 
+- **§0 — Module review findings (added 2026-09-26).** Bug fixes from the
+  co-author's per-module reviews, each re-verified. **Do these first**: Tier 1
+  is security and silent data loss. Also holds the triage of the reviews'
+  refactor suggestions and what to do with their probe tests.
 - **§1 — Subsystems (Bucket B).** Bugs behind these were fixed "as bugs now,
   behind one seam." The seam exists; the full subsystem does not. **Highest
   leverage** — each one retires a whole class of future bugs.
@@ -66,6 +78,311 @@ Priority tags: **P1** = reliability impact worth doing before nice-to-haves;
 Work is not blocked top-to-bottom — pick what you want — but the
 [recommended order](#recommended-order) at the bottom reflects what the audits
 argued gives the most safety per unit of effort.
+
+## §0 — Module review findings (verified 2026-09-26)
+
+The co-author's per-module reviews (`Module1_Review.md` … `Module5_Review.md` +
+`Review_Checklist.md`, repo root, written 2026-09-25, currently untracked) are
+**evidence only**, like the archived `AUDIT_*.md` files. They covered the five
+module folders but not `core/`, so every finding was re-checked against
+`core/`, the root `index.js`, and the live SillyTavern source. Their
+module-level mechanics were almost always right; the corrections are about
+reachability and severity. The tiers below are this verification's, not the
+reviews'. Item IDs match the review files.
+
+Three facts from outside the module folders decide most "the chat switched
+mid-operation" claims:
+
+- `core/coordinator.js` retires every in-flight model call on `CHAT_CHANGED`
+  and discards a result that arrives after the abort. **But** ST swaps
+  `chat_metadata` before it emits `CHAT_CHANGED` (`getChat()` awaits
+  `printMessages()` in between), so a per-module `assertSameScope` after each
+  await is still needed for that window.
+- While any MWT modal is open, `core/modal.js:339` makes the whole host page
+  inert, so a user can't switch chats with an MWT dialog or file picker open.
+- The root `CHAT_CHANGED` loop (`index.js:797-800`) has no per-module
+  try/catch, and ST's event emitter swallows the throw.
+
+### 🔴 Tier 1 — security and silent data loss
+
+- [x] **M2-07 — Stored XSS in Chronicle's injection settings (security).**
+  ✅ *Fixed in 2.10.1:* every value is escaped where it renders, and all
+  consumers read through the new `getInjectionSettings()` /
+  `resolveInjectionPlacement()` (mode enum, count ≥ 1, ISO 8601 dates, array
+  selection, finite depth), which also fixes a malformed count injecting every
+  entry and a non-array selection throwing. The schema still passes these keys
+  through, so the read path is the guard. Pinned by
+  `test/chronicle_injection_settings_xss.test.js`. *Original finding:*
+  `chronicle/render.js:189, 263, 265` put `injectMode`, `injectCount`, and
+  `injectFromDate` / `injectToDate` into the HTML unescaped.
+  `validateChronicleData` passes those keys through (`chronicle/schema.js:44-47`),
+  and `importChronicle` copies `injectCount` untyped
+  (`chronicle/import-export.js:118-124`). A crafted value can arrive through a
+  chronicle import, a shared `.jsonl` chat (ST's import copies the header and
+  its `chat_metadata` verbatim), or an MWT backup restore, and page scripts can
+  read custom API keys saved in MWT settings. Fix: `escapeHtml` all four, and
+  type-check these fields (count integer, mode enum, parseable dates; an
+  unparseable range date currently switches the filter off) in the schema and
+  the import. A sweep of the other module templates (`value="${…}"` attributes
+  and record-text fields) found no other unescaped chat-metadata values.
+- [ ] **M2-10 — Editing or deleting the last-chronicled message restarts
+  Chronicle from message 0.** `resolveAnchor` returns
+  `{ index: 0, found: false }` when the fingerprint misses
+  (`chronicle/data.js:214`), generation ignores `found`
+  (`chronicle/snapshots.js:161-162`), and the edit/swipe/delete hooks only set
+  `anchorStale`, which nothing reads (`chronicle/index.js:257-296`). ST
+  messages rarely carry an `id`, so fixing a typo in that message is enough.
+  Fix: on a miss, resume after the newest snapshot's `toIndex` (or re-anchor
+  in the edit hook), and show the stale state. *Reproduced with the real
+  functions.*
+- [ ] **M2-03 — An over-budget window drops the OLDEST messages but claims
+  full coverage.** `buildMessageWindow` fills its 100k-character budget
+  newest-first yet returns the original `fromIndex`
+  (`chronicle/data.js:442-452`), and generation anchors at the newest message
+  (`chronicle/snapshots.js:238`), so the dropped messages are never
+  chronicled. Easiest trigger: the first Generate on an existing long chat.
+  Compounds with M2-10. Fix: fill oldest-first from the anchor, anchor at the
+  last message actually included, and record the true range. *Reproduced:
+  the window reported 0→9 and the first included message was #4.*
+- [ ] **Receipt `[null]` crash + root-loop isolation — F7 / M2-07 / NK-10 /
+  SP4-05 (one bug, four copies).** `countedReceiptEvents: [null]` passes all
+  four schemas at the current version (checked through `prepareStore`), then
+  each restore destructures before validating (`world_state/index.js:64`,
+  `chronicle/data.js:118-119`, `knowledge/index.js:584`,
+  `story_planner/index.js:181`). Because the root loop has no try/catch, one
+  bad store skips hydration for every module after it (World State →
+  Chronicle → Knowledge → Story Planner → Interiority), and those modules keep
+  the previous chat's in-memory counters. Fix: one shared restore helper in
+  `core/`, tuple checks in the four schemas (Knowledge's v0→v1 migration
+  already has the right one, `knowledge/schema.js:715-753`), and a try/catch
+  around each module's handler in the root loop.
+- [ ] **M2-07, second half — A snapshot whose `characters` isn't an array
+  breaks Chronicle and the chat-change loop** *(added 2026-09-26; missed
+  when §0 was first written)*. Snapshot validation checks only `id` and
+  `text`, so `characters: "Alice"` gets in through a Chronicle import, a
+  shared chat, or a backup. It then throws in the list view's stats
+  (`chronicle/injection.js:117`, run on every render), in `applyInjection()`
+  whenever that entry is injected (`:187`), and so in Chronicle's
+  `onChatChanged`, which takes down the later modules like the receipt crash
+  above. Also `chronicle/render.js:89, 181, 208` and the consolidation merge
+  (`chronicle/snapshots.js:514`). Fix: check `characters` in
+  `checkChronicleSnapshot` (repair a non-array to `[]`) or read it through an
+  array guard; the root-loop try/catch from the item above contains the blast
+  radius either way. *Reproduced with the real functions.*
+- [ ] **NK-07 — NPC import can take another NPC's lorebook UID.**
+  `reconcileImportedUid` loads the entry by UID with no name (so no label
+  check) and skips the comparison when the export has no content
+  (`knowledge/reconcile.js:112-121`); the caller then strips that UID from its
+  current owner (`knowledge/staging.js:539-556`). The exporter writes
+  `content: null` exactly when the source UID is stale
+  (`knowledge/staging.js:405-408`). Fix: pass `name` to `loadEntryContent`,
+  and drop any UID that can't be verified.
+- [ ] **NK-01 + NK-09 — A failed lorebook save followed by a chat switch loses
+  the edits.** `resetStoreCache` ignores `flushBook()` returning `false` and
+  clears the cache anyway (`knowledge/store.js:1327-1341`). The comment
+  promising a retry through `flushAll()` (`:1303`) is wrong: `flushAll()` has no
+  callers. `saveProfile` wraps its flush in try/catch, but a failed flush
+  returns `false` rather than throwing (`knowledge/growth.js:500-504`), so a
+  lost profile pointer reports success and the next save duplicates the
+  entry. Fix: keep failed dirty books across the reset (or queue them),
+  surface the failure, and check the boolean.
+
+### 🟠 Tier 2 — real bugs, cheap fixes
+
+- [ ] **SP4-06 — Accepting a beat makes the next beat skip up to 80 messages
+  it was never checked against.** Carrying the watermark forward is
+  intentional (CHANGELOG 2.8.20), but it's set to the *end of the reviewed
+  window* (`story_planner/progress.js:203-205, 361-366`), and each request
+  only includes an arc's current beat (`:62`). Seed it from the accepted
+  evidence message instead, and update the pinned test in
+  `test/story_planner_phase5.test.js`.
+- [ ] **SP4-02 — A refused history write still changes the live store.**
+  `getPlanData()` returns the live object, and `pushPlanToHistory` pushes into
+  it before `setPlanData` runs (`story_planner/data.js:145-148, 1367-1377`);
+  the next save from any module persists the change. Reachable in a paused
+  chat, because Revert, Restore, Clear, and arc edits have no pause guard
+  (`story_planner/render.js:1419-1422, 1971-1972`). Clone first, as
+  `setArcsWithHistory` already does (`:1385-1403`), and add the guard.
+- [ ] **NK-12 — Marking evidence as canon during a consolidation lets it be
+  archived.** The source check tests existence, not canon
+  (`knowledge/evidence.js:897`), and the comment at `:864-869` describes this
+  exact race. Add `&& !o.canon`.
+- [ ] **NK-13, Personality only — Enrich can overwrite growth-owned
+  Personality.** `runNpcEnrich` merges `result.fields` unfiltered
+  (`knowledge/lorebook.js:1440`), unlike `runNpcUpdate` and the scan path. Run
+  it through `applyFieldOwnership`. (The `canon_lock` half is by design, see
+  below.)
+- [ ] **M2-13 — Undo consolidation can delete the only complete record.** The
+  trash keeps 50 entries (`chronicle/snapshots.js:532`), so consolidating more
+  than 50 evicts originals right away. Undo then restores whatever survived and
+  drops the merged entry without trashing it (`chronicle/render.js:132-150`).
+- [ ] **M2-11 — "Clear all chronicle data" keeps `lastAnchor`**
+  (`chronicle/render.js:546` only patches the fields it lists), so the next
+  Generate resumes after the old anchor. Confirm what Clear All should mean,
+  then reset the anchor, stale flag, selection, and range fields.
+- [ ] **M2-08 — Regenerate widens a one-message range to up to 200
+  messages.** Change `toIndex > fromIndex` to `>=`
+  (`chronicle/snapshots.js:318`).
+- [ ] **M2-12 — The empty Chronicle tab has no Generate, Import, or Trash**
+  (`chronicle/render.js:347`, compare `:376`). A new user has to create a
+  blank entry first, and deleting the last entry hides Trash.
+- [ ] **M2-19 — Chronicle's CSS restyles every datetime input in ST.** Unscoped
+  selectors at `chronicle/style.css:310, 346, 350` remove focus outlines
+  page-wide, which the file's own comment (`:327-331`) forbids. Scope them to
+  Chronicle.
+- [ ] **F5 — World State reads its document with two different grammars.** The
+  extract/replace/remove helpers and delta insertion
+  (`world_state/data.js:46-113`) end a section at any `#` heading and read
+  `## Pending Threads` as `Pending`. The strict `parseWorldStateSections` used
+  for injection (`core/world_state_document.js:62`) does neither. Route the
+  helpers through the core parser.
+- [ ] **F4 — Expiry in quarantine/remove mode leaves indented sub-lines
+  orphaned.** `world_state/provenance.js:245-285` drops only the bold line.
+  `stripNameLines` (`:357-396`) documents fixing this exact bug, so reuse its
+  grouping. (Needs two opt-ins: expiry on, and a mode other than `mark`.)
+
+### 🟡 Tier 3 — real but narrow (fix while you're in the file)
+
+- [ ] **Knowledge Catch Up keeps working in the new chat after a switch**
+  *(found during verification, not in the reviews)*. A coordinator
+  cancellation lands in the generic error branch (`knowledge/growth.js:1482`),
+  and Phase 2 then runs `runContinuousCapture` against whichever chat is
+  open. Stop both phases on `isCancellation(err)` or a scope change.
+- [ ] **NK-04 — The capture cursor is timestamp-only**
+  (`knowledge/growth.js:893`). Rare on stock ST, whose timestamps have
+  milliseconds. On hosts with minute-resolution `send_date` (the Aikobots
+  fork), a message in the same minute as the last capture is skipped for good.
+  Add a message-identity or index tie-breaker.
+- [ ] **NK-03 — The first-capture watermark is computed after the await**
+  (`knowledge/growth.js:691-702`), so a message that settles during the call
+  is marked done without being captured. Return the cursor from the window
+  that was actually sent.
+- [ ] **Unchecked writes that report success** — M5-1 / M5-2 / M5-4, SP4-03,
+  M2-02, NK-08. Every write seam refuses correctly and the re-render shows
+  the truth, but callers still show a success message, log a diagnostics
+  event, or advance counters. Use each module's existing checked seam at the
+  call sites the user sees, and give Interiority's panel actions the pause
+  guard the other modules have (`interiority/render.js:940-1045`).
+- [ ] **Missing post-await scope checks** — M2-01
+  (`chronicle/snapshots.js:482-498`) and NK-02 (Knowledge consolidation, first
+  capture, ILS backfill). Only the metadata-swap window described above can
+  reach them. One `assertSameScope` line each.
+- [ ] **SP4-01 — Story Planner migrations drop a corrupt `arcs` container
+  with no quarantine issue** (`story_planner/schema.js:1196-1231`). Emit one,
+  as Knowledge's migration does. Needs corrupted v1/v2 data.
+- [ ] **M2-18 — An auto-snapshot can re-render over an open Chronicle editor**
+  (`chronicle/snapshots.js:270-274` checks that the element exists, not that
+  it's visible). Needs a reply to finish while you're editing an entry.
+- [ ] **Chronicle consolidation behavior** — M2-14 (Selected-mode IDs aren't
+  remapped to the merged entry), M2-15 (BASE can be a non-earliest entry while
+  the prompt assumes the earliest), M2-16 (the success message overwrites
+  validation warnings).
+- [ ] **M2-17 — Chronicle's previews and estimates build the payload their own
+  way.** The preview's depth and role now come from
+  `resolveInjectionPlacement()` (2.10.1). Still open: the stats token estimate
+  skips the header and per-entry labels, the public token helper skips the
+  labels, and the preview doesn't show the structural wrapper the real
+  injection adds. One payload builder should feed all three.
+- [ ] **Chronicle races and counters** — M2-04 (anchor and character list
+  rebuilt from post-await history), M2-05 (`onChatChanged` clears
+  `isGenerating`; Story Planner deliberately doesn't, and the coordinator's
+  one-call-per-module limit caps the damage at a duplicate queued job),
+  M2-09 (receipt accounting drift).
+- [ ] **World State odds and ends** — F6 (receipt counting isn't tied to the
+  event's message; the router already extracts the index at `index.js:823`
+  but only passes it to Interiority), F9 (section regen builds its prompt
+  separately from the captured revision, wasting a call when an edit lands
+  in between), F8 (build the injection projection only when enabled; the
+  chat-switch half is already covered by `resetBudgetInjections()`).
+- [ ] **Knowledge odds and ends** — NK-05 (the stall needs 40 consecutive
+  messages that strip to nothing), NK-06 (the collision suffix gets
+  truncated, but only with non-global scope and names near 64 characters),
+  NK-11 (whitelist which settings an import may set; a merged `scope`
+  silently changes which books the import writes to).
+- [ ] **Interiority odds and ends** — M5-5 (every save validates the whole
+  live store twice; measure before optimizing), M5-6 (no cap on active
+  intentions by default; the budget hard cap, Max Turns Open, and per-NPC
+  `activeCap` already exist as opt-ins).
+
+### Small bugs from the reviews' "smells" and "observations" sections
+
+- [ ] **World State provenance scans unfiltered text.**
+  `getScanWindowWithIndices` (`world_state/provenance.js:80-94`) skips the
+  `stripNonNarrative` pass and regex filter that `scanMessageLine` applies
+  (`world_state/refresh.js:68-76`). A tracker block that lists the cast keeps
+  every NPC "fresh", so expiry never fires for them. Share the filtering and
+  keep the indices.
+- [ ] **World State label matching uses `\b…\b`**
+  (`world_state/provenance.js:141`), so names ending in punctuation ("Jonah
+  Jr.") never match. `SECTION_NAME_BOUNDARY` in `world_state/data.js` already
+  fixed this for section names.
+- [ ] **World State's Test Connection button skips the real transport**
+  (`world_state/render.js:1014-1039`). It ignores `customHeaders` and any
+  configured connection profile, so it can report a false failure or a
+  meaningless success. Route it through `resolveApiCall`.
+- [ ] **Chronicle export turns depth 0 into 2** — `injectDepth: cd.injectDepth || 2`
+  (`chronicle/import-export.js:29`). Use `??`.
+- [ ] **Doc drift** — `world_state/STALE_ENTRY_EXPIRY_DESIGN.md:302-311` cites
+  the removed `splitWorldState()` and says strict grounding falls back to a
+  soft strip. It now discards (`world_state/refresh.js:653`).
+- [ ] **Dead code** — the unused `typeColors` map in the relationship-graph
+  redraw (`knowledge/render.js:2943-2944`).
+- [ ] *(Performance nit)* World State recompiles the user's regex filters for
+  every message on every scan (`world_state/refresh.js:50-63`). Cache them per
+  settings change.
+
+### Verified not bugs — don't re-open
+
+- **M5-3** — The deletion claim is false: a shared `sd-` key stays live as
+  long as any message still has that send_date. The proposed first-wins rule
+  would also contradict `migrateIndexKeys`, which is last-wins
+  (`interiority/data.js:1756`).
+- **F1** — The model *did* review that interval against the baseline, and the
+  digest correctly marks the document as manually edited.
+- **F2** — The skipped chunk has nothing in it to scan (`!chunk.text`).
+- **F3** — Each refresh checks scope, then commits and returns synchronously.
+  The modal is rebuilt on every open and on `CHAT_CHANGED`, and the v1.4.3
+  `editSessionActive` gate covers the only path that reads the editor back
+  into the store.
+- **F7's `settingsOverride` part** — Optional chaining; nothing throws.
+- **NK-08** — The capture watermark lives in the same evidence file and goes
+  through the same write seam, and a paused module is refused at entry.
+- **NK-13's `canon_lock` half** — By design (`knowledge/staging.js:118-119`).
+- **Not reachable by a user** (the host is inert while an MWT modal is open,
+  and the file picker is modal): F10, M2-06, SP4-04. A scope check there
+  would only guard against another script switching chats.
+
+### The reviews' refactor suggestions — triage
+
+- **Do them as part of the fixes, not as a separate phase.** Module 3's "one
+  checked result contract" is the unchecked-writes item above: use each
+  module's existing checked seam, no new framework. Its "capture batch object"
+  is the NK-03 / NK-04 fix. Module 4's detached history, retiring the
+  unchecked direct commit, and recovery-preserving migrations are SP4-02,
+  SP4-03, and SP4-01.
+- **Already exists, so don't rebuild it:** Module 3's "operation context".
+  `captureScope` / `assertSameScope`, `captureRevision`, and the coordinator
+  already are that. Add the missing checks instead.
+- **Decline or defer:** splitting `world_state/render.js` (1,155 lines) and
+  `world_state/refresh.js` (1,215 lines), Module 3's "smaller UI/controllers",
+  and Module 4's `render.js` split. No bug needs them, and whole-file moves in
+  this repo's mixed line endings wreck diffs and `git blame`. Revisit only if
+  one specific fix keeps fighting one of those files. Module 3's "import plan
+  with preview" is feature-sized, so park it in §3 if imports become a pain.
+- **The smells that were really small bugs** are listed above.
+
+### The review probe tests
+
+`test/knowledge_module3_review.test.js`, `test/story_planner_module4_review.test.js`,
+and `test/interiority_module5_review.test.js` pass because they assert today's
+*buggy* behavior, so each fix turns one red, and CI runs on every push. Don't
+commit them as they are. When you fix an item, turn its probe into a test of
+the correct behavior (failing test first), and delete probe C, which pins
+M5-3. The Knowledge probe copies source text into a `vm` sandbox, so it breaks
+on unrelated edits and line-ending changes; import the real module under the
+core stub instead.
+
+---
 
 ## §1 — Subsystems that unify several now-fixed bugs (Bucket B) · highest leverage
 
@@ -452,6 +769,13 @@ specific area:
 
 ## Recommended order
 
+**2026-09-26: §0 goes first.** The module-review round reopened a bug queue,
+including one security fix (M2-07). Work §0 Tier 1, then Tier 2, before new
+features; take Tier 3 items when you're already editing those files. The
+reviews' refactor suggestions are triaged inside §0: most become part of the
+fixes, and the large file splits are declined. The history below still stands
+for everything after §0.
+
 Re-prioritized 2026-08-06 after the bug baseline closed (incorporating co-author
 review). The original audits' "defer everything until async paths are guarded"
 rationale is now **moot** — those paths are guarded — so there's no longer a
@@ -550,4 +874,6 @@ mode shipped (§3-F); Knowledge per-field dossier refresh shipped (§3-F); the
 §6 optional-coverage pass is now fully landed (the generation coordinator
 shipped in 2.4.0 unlocked its scheduler item); the unified Overview dashboard +
 console-tools UI shipped in 2.8.0 (both §3-F items ticked); suite at 99 files /
-2493 tests, all green.*
+2493 tests, all green. **2026-09-26:** added §0 (the per-module review findings,
+re-verified against `core/`, the root `index.js`, and the live ST source);
+M2-07 fixed in 2.10.1; suite at 123 files / 3093 tests, all green.*
