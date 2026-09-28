@@ -258,8 +258,7 @@ export function usesGlobalDefaults() {
 
 export function setUsesGlobalDefaults(useGlobal) {
     if (useGlobal === true) {
-        setPlanData({ useGlobalDefaults: true });
-        return;
+        return commitPlanPatch({ useGlobalDefaults: true }).ok;
     }
     // This only ever fires while the chat is currently on global defaults (the
     // checkbox can't be unchecked from an already-unchecked state), so the
@@ -272,7 +271,7 @@ export function setUsesGlobalDefaults(useGlobal) {
     for (const key of GLOBAL_SETTING_KEYS) {
         overrides[key] = normalizePlanSetting(key, globalSettings[key] ?? LEGACY_LOCAL_DEFAULTS[key]);
     }
-    setPlanData({ useGlobalDefaults: false, settingsOverride: overrides });
+    return commitPlanPatch({ useGlobalDefaults: false, settingsOverride: overrides }).ok;
 }
 
 /**
@@ -322,8 +321,8 @@ function normalizePlanSetting(key, value) {
 }
 
 export function setPlanSetting(key, value) {
-    if (usesGlobalDefaults()) saveSettings({ [key]: value });
-    else setPlanData({ settingsOverride: { ...(getPlanData().settingsOverride || {}), [key]: value } });
+    if (usesGlobalDefaults()) return saveSettings({ [key]: value });
+    return commitPlanPatch({ settingsOverride: { ...(getPlanData().settingsOverride || {}), [key]: value } }).ok;
 }
 
 // ─── Arc identity ────────────────────────────────────────────────────────────
@@ -1073,6 +1072,29 @@ export function setArcBeatState(id, beatId, beatState, reason = '') {
     return commitBeatEdit(id, arc.beats.map(candidate => candidate.id === beatId ? next : candidate));
 }
 
+/** Commit reviewed progress, its cursor, and the undo snapshot together. */
+export function acceptProgressMutation(id, beatId, closeReason, progressWatermarks) {
+    const arcs = getArcs();
+    const arc = arcs.find(candidate => candidate.id === id);
+    if (!arc || (beatId && !arc.beats.some(beat => beat.id === beatId))) return null;
+    const now = Date.now();
+    const next = beatId ? {
+        ...arc,
+        beats: reconcilePatchedBeats(arc.beats, arc.beats.map(beat => beat.id === beatId
+            ? { ...beat, state: 'planted', stateReason: '', updatedAt: now } : beat)),
+        turnsSinceAdvance: 0,
+        updatedAt: now,
+    } : {
+        ...arc, status: 'resolved', closedAt: now,
+        closeReason: String(closeReason || '').trim().slice(0, MAX_ARC_BODY), updatedAt: now,
+    };
+    const written = setArcsWithHistory(arcs.map(candidate => candidate.id === id ? next : candidate), arcs,
+        { progressWatermarks });
+    if (!written.ok) return null;
+    cleanNudgeMarksForArc(id);
+    return written.arcs.find(candidate => candidate.id === id) || null;
+}
+
 /** Permanently remove one beat. The UI owns the specific confirmation. */
 export function removeArcBeat(id, beatId) {
     const arc = getArcs().find(candidate => candidate.id === id);
@@ -1387,7 +1409,7 @@ export function pushPlanToHistory(arcs) {
  * checked metadata write. Targeted proposals use this seam so a refused write
  * cannot consume a history slot without also applying the reviewed plan.
  */
-export function setArcsWithHistory(arcs, before = getArcs()) {
+export function setArcsWithHistory(arcs, before = getArcs(), extraPatch = {}) {
     const storeBefore = getPlanData();
     const nextArcs = sanitizeArcs(Array.isArray(arcs) ? arcs : []);
     const prior = Array.isArray(before) ? before : [];
@@ -1401,7 +1423,7 @@ export function setArcsWithHistory(arcs, before = getArcs()) {
             if (history.length > MAX_PLAN_HISTORY) history.splice(0, history.length - MAX_PLAN_HISTORY);
         }
     }
-    const committed = setPlanData({ arcs: nextArcs, history });
+    const committed = setPlanData({ arcs: nextArcs, history, ...extraPatch });
     return {
         ok: !!committed && committed !== storeBefore,
         arcs: Array.isArray(committed?.arcs) ? committed.arcs : getArcs(),

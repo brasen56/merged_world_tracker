@@ -16,9 +16,15 @@ import {
 // Part 6 injection pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
+// Direct import (not the barrel) so the event reaches the real ring, as in
+// lifecycle.js.
+import { record } from '../core/diagnostics.js';
 
-import { INJECTION_HEADER, formatLedgerForInjection } from './prompts.js';
+import { INJECTION_HEADER, formatLedgerForInjection, selectInjectedIntentions } from './prompts.js';
 import { INJECTION_KEY, INJECTION_TAG, getLedger, getInteriorityData, getActiveLedger, getDormantLedger } from './data.js';
+
+/** Last omitted count reported to diagnostics (see applyIntentionsInjection). */
+let _lastReportedOmitted = 0;
 
 /**
  * Resolve the depth/role this module's injection will use, WITH provenance —
@@ -108,5 +114,22 @@ export function applyIntentionsInjection() {
     });
 
     const dormantNote = dormantCount > 0 ? ` (${dormantCount} dormant, filtered)` : '';
-    console.log(`[MWT:Interiority] Injection ${enabled && body ? 'applied' : 'cleared'} — ${activeCount} active of ${ledger.length} ledger entries${dormantNote}, depth ${placement.depth.value}.`);
+    // M5-6: over the cap, the lowest-priority / oldest intentions are left out
+    // of the narrator block. Tell the user through diagnostics (and the panel
+    // note in render.js), never through the prompt. Recorded when the count
+    // changes, so the Log tab isn't flooded on every turn.
+    const omitted = enabled && body ? selectInjectedIntentions(ledger).omitted : 0;
+    if (omitted !== _lastReportedOmitted) {
+        _lastReportedOmitted = omitted;
+        if (omitted > 0) {
+            record({
+                level: 'warn',
+                module: 'interiority',
+                event: 'intentions_injection_capped',
+                detail: { active: activeCount, injected: activeCount - omitted, omitted },
+            });
+        }
+    }
+    const cappedNote = omitted > 0 ? ` (${omitted} over the narrator cap, not injected)` : '';
+    console.log(`[MWT:Interiority] Injection ${enabled && body ? 'applied' : 'cleared'} — ${activeCount} active of ${ledger.length} ledger entries${dormantNote}${cappedNote}, depth ${placement.depth.value}.`);
 }

@@ -351,7 +351,7 @@ export function renderContent() {
     }
 
     if (!snapshots.length) {
-        el.innerHTML = `<div style="text-align:center;padding:40px"><p>No chronicle entries yet.</p><p>Entries build over time as you generate snapshots.</p>${!hasApi ? '<p style="color:var(--mwt-danger)">⚠ API not configured</p>' : ''}<div class="mwt-flex mwt-gap-4" style="justify-content:center;flex-wrap:wrap"><button id="sc-generate-btn" class="mwt-btn mwt-btn-primary" ${!hasApi ? 'disabled' : ''}>Generate Entry</button><button id="sc-new-entry-btn" class="mwt-btn">+ Blank Entry</button><button id="sc-import-btn" class="mwt-btn">Import</button><button id="sc-trash-btn" class="mwt-btn">Trash (${(getChronicleData()._deletedBin || []).length})</button><button id="sc-settings-btn" class="mwt-btn">⚙ Settings</button></div></div>`;
+        el.innerHTML = `<div data-sc-view="list" style="text-align:center;padding:40px"><p>No chronicle entries yet.</p><p>Entries build over time as you generate snapshots.</p>${!hasApi ? '<p style="color:var(--mwt-danger)">⚠ API not configured</p>' : ''}<div class="mwt-flex mwt-gap-4" style="justify-content:center;flex-wrap:wrap"><button id="sc-generate-btn" class="mwt-btn mwt-btn-primary" ${!hasApi ? 'disabled' : ''}>Generate Entry</button><button id="sc-new-entry-btn" class="mwt-btn">+ Blank Entry</button><button id="sc-import-btn" class="mwt-btn">Import</button><button id="sc-trash-btn" class="mwt-btn">Trash (${(getChronicleData()._deletedBin || []).length})</button><button id="sc-settings-btn" class="mwt-btn">⚙ Settings</button></div></div>`;
         bindMainEvents();
         return;
     }
@@ -376,8 +376,10 @@ export function renderContent() {
     const autoSettings = getSettings();
 
     const _injStats = getInjectionStats();
+    // data-sc-view="list" marks the only view background work may replace
+    // (getVisibleChronicleView, M2-18).
     el.innerHTML = `
-        <div class="sc-toolbar">
+        <div class="sc-toolbar" data-sc-view="list">
             ${!hasApi ? '<p style="color:var(--mwt-danger)">⚠ API not configured — <button id="sc-open-settings-btn" class="mwt-btn" style="display:inline">Open Settings</button></p>' : ''}
             <div class="mwt-flex mwt-gap-4" style="flex-wrap:wrap">
                 <button id="sc-generate-btn" class="mwt-btn mwt-btn-primary" ${!hasApi ? 'disabled' : ''}>Generate Entry</button>
@@ -576,6 +578,10 @@ function bindMainEvents() {
             state.pendingSearch = e.target.value;
             clearTimeout(debounce);
             debounce = setTimeout(() => {
+                // The user may have opened an entry or another view since
+                // typing; that replaced this input. Re-rendering now would
+                // throw that view (and any unsaved text) away (M2-18).
+                if (!e.target.isConnected) return;
                 // renderContent() rebuilds the whole tab (including this input),
                 // which destroys focus/caret mid-typing. Restore both onto the
                 // fresh input — but only if the user was still in the field.

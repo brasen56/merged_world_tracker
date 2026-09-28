@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { getArcs, getPhase7Metrics, getPlanData, makeArc, setArcs, state, updateArc } from '../story_planner/data.js';
+import { getArcs, getPhase7Metrics, getPlanData, makeArc, setArcs, state, updateArc, CHAT_DATA_KEY } from '../story_planner/data.js';
 import { saveSettings } from '../story_planner/settings.js';
 import {
     onChatChangedWhilePaused, onMessageDeleted, onMessageEdited, onMessageSwiped,
@@ -12,7 +12,7 @@ import {
 import { createModal, releaseManagedInert, showModal } from '../core/modal.js';
 import { _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { pauseStore, _resetPausedStores, _setScopeKeyResolver } from '../core/schema_status.js';
-import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
+import { resetCoreStubs, setFakeApi, setFakeChat, getFakeMeta } from './stubs/core.js';
 
 function messages() {
     return [
@@ -46,6 +46,21 @@ afterEach(() => {
 });
 
 describe('Story Planner Phase 5 — evidence-backed progress', () => {
+    test('refused acceptance leaves arc, watermark, history, metrics, and suggestion intact', async () => {
+        setFakeApi(() => modelResult());
+        const suggestion = (await checkProgress()).suggestions[0];
+        const before = getFakeMeta()[CHAT_DATA_KEY];
+        const count = getPhase7Metrics().progressAccepted;
+        // Paused storage refuses the combined operation before any arc write.
+        pauseStore('storyPlanner', { reasonCode: 'future-version', message: 'blocked' });
+        expect(acceptProgressSuggestion(suggestion)).toMatchObject({ ok: false, reason: 'store-paused' });
+        expect(getFakeMeta()[CHAT_DATA_KEY]).toBe(before);
+        expect(before.arcs[0].beats[0].state).toBe('pending');
+        expect(before.progressWatermarks).toBeUndefined();
+        expect(before.history).toBeUndefined();
+        expect(getPhase7Metrics().progressAccepted).toBe(count);
+        expect(state.progressSuggestions).toContain(suggestion);
+    });
     test('refused ignore retains the suggestion and does not count it', async () => {
         setFakeApi(() => modelResult());
         const suggestion = (await checkProgress()).suggestions[0];

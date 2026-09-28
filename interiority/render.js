@@ -28,6 +28,20 @@ import {
     DORMANT_POLL_INTERVAL, getDormantPollInterval,
 } from './data.js';
 import { INTENTION_PRIORITIES } from './schema.js';
+import { MAX_INJECTED_INTENTIONS, selectInjectedIntentions } from './prompts.js';
+
+/**
+ * M5-6: when more intentions are active than the narrator block carries, say
+ * which ones are left out and how to change that — here, where the user can
+ * act on it, never inside the prompt.
+ */
+function renderInjectionCapNote(ledger) {
+    const { kept, omitted } = selectInjectedIntentions(ledger);
+    if (omitted === 0) return '';
+    return `<p class="mwt-int-cap-note" role="note" style="color:var(--mwt-warning);font-size:12px;margin-bottom:8px">
+                    Only ${kept.length} of ${kept.length + omitted} active intentions reach the narrator (limit ${MAX_INJECTED_INTENTIONS}): the highest priority first, then the most recent. Raise an intention's priority to keep it in, or sleep or finish ones that can wait.
+                </p>`;
+}
 // Deferred lifecycle work (spec §2–§5): user lifecycle actions, audit history,
 // conflicts, and per-NPC controls.
 import {
@@ -81,6 +95,7 @@ export function renderContent() {
                 <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:8px">
                     Persistent NPC intentions injected into the narrator prompt. These are hidden plans that surface only as NPC actions when their trigger condition is met. Click ✎ to edit an intention if the story changes its context.
                 </p>
+                ${renderInjectionCapNote(ledger)}
                 <div id="mwt-int-ledger-list" class="mwt-int-ledger-list">
                     ${renderLedgerList(ledger.filter(e => e.status !== 'dormant'))}
                 </div>
@@ -530,9 +545,9 @@ function handleInnerStateEditSave(npc) {
     // setInnerState with empty string clears the state (deletes the key).
     // `manual` marks this as user-authored so a later rollback to a snapshot
     // taken BEFORE this edit doesn't silently revert it.
-    setInnerState(npc, line, { manual: true });
-    setIntStatus(line ? 'Inner state updated.' : 'Inner state cleared.', 'success');
+    const saved = setInnerState(npc, line, { manual: true });
     renderContent();
+    setIntStatus(saved ? (line ? 'Inner state updated.' : 'Inner state cleared.') : 'Inner state could not be saved.', saved ? 'success' : 'error');
 }
 
 /**
@@ -717,7 +732,7 @@ export function renderSettingsPanel() {
 
     panel.querySelector('#mwt-int-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(panel, apiFieldOpts);
-        saveSettings({
+        const saved = saveSettings({
             ...apiValues,
             autoMode: panel.querySelector('#mwt-int-auto-mode')?.checked ?? true,
             generateThoughts: panel.querySelector('#mwt-int-gen-thoughts')?.checked ?? true,
@@ -736,7 +751,7 @@ export function renderSettingsPanel() {
             intentionMaxTurnsOpen: Math.max(0, Number(panel.querySelector('#mwt-int-max-turns')?.value) || 0),
             captureIntentionsDiagnostics: panel.querySelector('#mwt-int-capture-diagnostics')?.checked ?? false,
         });
-        setIntStatus('Settings saved.', 'success');
+        setIntStatus(saved ? 'Settings saved.' : 'Settings could not be saved.', saved ? 'success' : 'error');
         renderContent();
     });
 }
@@ -841,8 +856,9 @@ function wireEvents(el) {
         if (removeBtn) {
             const npc = removeBtn.dataset.npc;
             if (npc) {
-                setInnerState(npc, ''); // empty string clears the state
+                const saved = setInnerState(npc, ''); // empty string clears the state
                 renderContent();
+                setIntStatus(saved ? 'Inner state cleared.' : 'Inner state could not be cleared.', saved ? 'success' : 'error');
             }
             return;
         }

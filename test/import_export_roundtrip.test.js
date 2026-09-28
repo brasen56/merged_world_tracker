@@ -608,6 +608,38 @@ describe('Knowledge export/import', () => {
         expect(knowledgeState._lastKtStatusMsg).toMatch(/Could not import "Mara"/);
     });
 
+    test('partial import retry reuses exact physical entries without another write or history push', async () => {
+        const { getRegistry } = await import('../knowledge/registry.js');
+        const { _setCacheForTests } = await import('../knowledge/store.js');
+        _setCacheForTests('Knowledge Tracker', { registry: {} });
+        const file = JSON.stringify({ entries: {
+            Mara: { uid: null, type: 'major', keywords: ['Mara'], content: 'Mara dossier text' },
+            Sophie: { uid: null, type: 'minor', keywords: ['Sophie'], content: 'Sophie dossier text' },
+        } });
+        setPickTextFileStub(async () => file);
+        const save = wiFake.saveWorldInfo.bind(wiFake);
+        let saves = 0;
+        wiFake.saveWorldInfo = async (...args) => {
+            if (++saves === 2) throw new Error('disk unavailable');
+            return save(...args);
+        };
+        await importNpcs();
+        expect(getRegistry()).toEqual({});
+        expect(knowledgeState._lastKtStatusMsg).toMatch(/1 entries were written; retry will skip identical entries/);
+        expect(getFakeMeta().mwtKnowledgeNpcImportAttempt.written).toBe(1);
+        const priorHistory = { ...localStorage._data };
+        wiFake.saveWorldInfo = vi.fn(save);
+        await importNpcs();
+        expect(knowledgeState._lastKtStatusMsg).toMatch(/Previous import didn't finish/);
+        expect(knowledgeState._lastKtStatusMsg).toMatch(/identical lorebook entries reused/);
+        expect(knowledgeState._lastKtStatusLevel).toBe('success');
+        expect(wiFake.saveWorldInfo).toHaveBeenCalledTimes(1);
+        expect(localStorage._data).toEqual(priorHistory);
+        expect(getRegistry().Mara.uid).not.toBeNull();
+        expect(getRegistry().Sophie.uid).not.toBeNull();
+        expect(getFakeMeta().mwtKnowledgeNpcImportAttempt).toBeUndefined();
+    });
+
     test('a chronicle-shaped file is refused with the invalid-format status', async () => {
         await populatedInstall();
         // The realistic user error: the NPC importer fed a Chronicle export

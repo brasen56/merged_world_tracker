@@ -32,7 +32,7 @@ import { storyPlannerSchema } from './schema.js';
 import { getSettings, saveSettings } from './settings.js';
 import {
     state, SECTIONS, ARC_STATUSES, INJECT_MODES, ENFORCEMENT_MODES,
-    setPlanData,
+    setPlanData, commitPlanPatch, getPlanData,
     getArcs, setArcsWithHistory, addArc, updateArc, setArcStatus, parkArc, resumeArc, removeArc, toggleArcPinned, toggleArcFocused,
     isArcReady, getCurrentBeat, getCurrentBeatNumber, getBeatProgress, advanceBeat, retreatBeat,
     addArcBeat, updateArcBeat, setArcBeatState, removeArcBeat, moveArcBeat,
@@ -1941,7 +1941,11 @@ export function wireEvents() {
     state.modal.querySelectorAll('input[name="sp-inject-mode"]').forEach(radio => {
         radio.addEventListener('change', () => {
             if (!radio.checked) return;
-            setPlanSetting('injectMode', radio.value);
+            if (!setPlanSetting('injectMode', radio.value)) {
+                refreshScopedControls();
+                notify('Story Planner', 'Injection mode could not be saved.', 'error');
+                return;
+            }
             applyPlanInjection();
             renderArcs();
         });
@@ -1949,7 +1953,11 @@ export function wireEvents() {
 
     // Enforcement ("Push") — applies immediately, like the inject-mode radios.
     state.modal.querySelector('#sp-enforcement')?.addEventListener('change', (e) => {
-        setPlanSetting('enforcement', e.target.value);
+        if (!setPlanSetting('enforcement', e.target.value)) {
+            refreshScopedControls();
+            notify('Story Planner', 'Enforcement could not be saved.', 'error');
+            return;
+        }
         applyPlanInjection();
         const blurb = state.modal.querySelector('#sp-enforcement-blurb');
         if (blurb) blurb.textContent = ENFORCEMENT_MODES.find(m => m.key === getEnforcement())?.blurb || '';
@@ -2006,17 +2014,26 @@ export function wireEvents() {
         const autoInterval = autoIntervalRaw === '' ? 10 : Number(autoIntervalRaw);
         const arcCountRaw = state.modal.querySelector('#sp-arc-count')?.value;
         const arcCount = arcCountRaw === '' ? 10 : Number(arcCountRaw);
-        saveSettings({
+        const intervalValue = isNaN(autoInterval) ? 10 : Math.max(1, autoInterval);
+        const countValue = isNaN(arcCount) ? 10 : Math.min(30, Math.max(1, arcCount));
+        const globalDefaults = usesGlobalDefaults();
+        const globalSaved = saveSettings({
             ...apiValues,
+            ...(globalDefaults ? { autoInterval: intervalValue, arcCount: countValue } : {}),
             customSystemPrompt: state.modal.querySelector('#sp-custom-system-prompt')?.value || '',
             customUserPrompt: state.modal.querySelector('#sp-custom-user-prompt')?.value || '',
             injectionDepth: isNaN(depth) ? 4 : depth,
         });
         const nudgeTurnsRaw = state.modal.querySelector('#sp-nudge-turns')?.value;
         const nudgeTurns = nudgeTurnsRaw === '' ? OVERDUE_TURNS : Number(nudgeTurnsRaw);
-        setPlanSetting('autoInterval', isNaN(autoInterval) ? 10 : Math.max(1, autoInterval));
-        setPlanSetting('arcCount', isNaN(arcCount) ? 10 : Math.min(30, Math.max(1, arcCount)));
-        setPlanData({
+        if (!globalSaved) {
+            notify('Story Planner', 'Settings could not be saved.', 'error');
+            return;
+        }
+        const overrides = { ...(getPlanData().settingsOverride || {}),
+            autoInterval: intervalValue, arcCount: countValue };
+        const saved = commitPlanPatch({
+            ...(globalDefaults ? {} : { settingsOverride: overrides }),
             directionHint: state.modal.querySelector('#sp-direction-hint')?.value || '',
             storyPalette: {
                 emphases: [...state.modal.querySelectorAll('input[name="sp-palette-emphasis"]:checked')].map(input => input.value),
@@ -2026,15 +2043,18 @@ export function wireEvents() {
             characterContext: readCharacterContextSelection(state.modal),
             nudgeEnabled: state.modal.querySelector('#sp-nudge-enabled')?.checked !== false,
             nudgeTurns: isNaN(nudgeTurns) ? OVERDUE_TURNS : Math.min(60, Math.max(3, nudgeTurns)),
-        });
+        }).ok;
         refreshDisplay();
         applyPlanInjection();
-        notify('Story Planner', 'Settings saved.', 'success');
+        notify('Story Planner', saved ? 'Settings saved.' : 'Chat settings could not be saved.', saved ? 'success' : 'error');
     });
 
     // Toggle injection
     state.modal.querySelector('#sp-toggle-inject')?.addEventListener('click', () => {
-        setPlanSetting('injectEnabled', !isInjectionEnabled());
+        if (!setPlanSetting('injectEnabled', !isInjectionEnabled())) {
+            notify('Story Planner', 'Injection setting could not be saved.', 'error');
+            return;
+        }
         applyPlanInjection();
         refreshDisplay();
     });
@@ -2042,16 +2062,23 @@ export function wireEvents() {
     // Toggle auto-generate
     state.modal.querySelector('#sp-toggle-auto')?.addEventListener('click', () => {
         const now = !isAutoEnabled();
-        setPlanSetting('autoEnabled', now);
+        if (!setPlanSetting('autoEnabled', now)) {
+            notify('Story Planner', 'Auto-generate setting could not be saved.', 'error');
+            return;
+        }
         if (now) {
             state.autoCounter = 0;
-            setPlanData({ autoCounter: 0 });
+            if (!commitPlanPatch({ autoCounter: 0 }).ok) notify('Story Planner', 'Auto counter could not be saved.', 'error');
         }
         refreshDisplay();
     });
 
     state.modal.querySelector('#sp-use-global-defaults')?.addEventListener('change', (e) => {
-        setUsesGlobalDefaults(e.target.checked);
+        if (!setUsesGlobalDefaults(e.target.checked)) {
+            refreshScopedControls();
+            notify('Story Planner', 'Settings scope could not be saved.', 'error');
+            return;
+        }
         refreshDisplay();
         applyPlanInjection();
         notify('Story Planner', e.target.checked ? 'Using global defaults.' : 'Using settings for this chat.', 'info');

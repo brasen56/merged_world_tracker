@@ -466,6 +466,7 @@ export function mergeEvidenceFiles(keepName, mergeName, tag) {
     // The absorbed NPC's capture index belongs to its own timeline. Discard
     // it on merge so the combined watermark cannot skip equal-time messages.
     delete keepMeta.lastCaptureIndex;
+    delete keepMeta.lastCaptureIdentity;
     keepMeta.updatedAt = Date.now();
     keepMeta.mergedFrom = [
         ...(Array.isArray(keepMeta.mergedFrom) ? keepMeta.mergedFrom : []),
@@ -713,13 +714,18 @@ export function appendRawObservations(name, observations, cursor = null, backfil
         const oldTs = file.meta.lastCaptureTs;
         const oldIndex = file.meta.lastCaptureIndex;
         if (oldTs == null || cursor.ts > oldTs
-            || (cursor.ts === oldTs && Number.isInteger(cursor.index) && cursor.index > (oldIndex ?? -1))) {
+            || (cursor.ts === oldTs && Number.isInteger(cursor.index)
+                && (cursor.index > (oldIndex ?? -1) || (typeof cursor.identity === 'string'
+                    && file.meta.lastCaptureIdentity && cursor.identity !== file.meta.lastCaptureIdentity)))) {
             file.meta.lastCaptureTs = cursor.ts;
             if (Number.isInteger(cursor.index) && cursor.index >= 0
                 && (oldTs == null || cursor.ts > oldTs || oldIndex != null)) {
                 file.meta.lastCaptureIndex = cursor.index;
+                if (typeof cursor.identity === 'string') file.meta.lastCaptureIdentity = cursor.identity;
+                else delete file.meta.lastCaptureIdentity;
             } else if (cursor.ts > oldTs) {
                 delete file.meta.lastCaptureIndex;
+                delete file.meta.lastCaptureIdentity;
             }
         }
     }
@@ -1192,7 +1198,8 @@ export function getCaptureWatermark(name) {
 export function getCaptureCursor(name) {
     const meta = getEvidenceFile(name, false)?.meta;
     return Number.isInteger(meta?.lastCaptureIndex) && meta.lastCaptureIndex >= 0
-        ? { ts: meta.lastCaptureTs, index: meta.lastCaptureIndex } : null;
+        ? { ts: meta.lastCaptureTs, index: meta.lastCaptureIndex,
+            ...(typeof meta.lastCaptureIdentity === 'string' ? { identity: meta.lastCaptureIdentity } : {}) } : null;
 }
 
 /**
@@ -1202,19 +1209,24 @@ export function getCaptureCursor(name) {
  * @param {string} name — NPC name
  * @param {number} ts — the max send_date among captured messages
  */
-export function setCaptureWatermark(name, ts, index = null) {
+export function setCaptureWatermark(name, ts, index = null, identity = null) {
     if (typeof ts !== 'number' || !Number.isFinite(ts)) return;
     const file = getEvidenceFile(name);
     const cur = file.meta.lastCaptureTs;
     const oldIndex = file.meta.lastCaptureIndex;
-    if (cur == null || ts > cur || (ts === cur && Number.isInteger(index) && index > (oldIndex ?? -1))) {
+    if (cur == null || ts > cur || (ts === cur && Number.isInteger(index)
+        && (index > (oldIndex ?? -1) || (typeof identity === 'string'
+            && file.meta.lastCaptureIdentity && identity !== file.meta.lastCaptureIdentity)))) {
         file.meta.lastCaptureTs = ts;
         // Legacy timestamps without an index must stay timestamp-only until a
         // NEWER timestamp is captured; do not reprocess an old equal-time batch.
         if (Number.isInteger(index) && index >= 0 && (cur == null || ts > cur || oldIndex != null)) {
             file.meta.lastCaptureIndex = index;
+            if (typeof identity === 'string') file.meta.lastCaptureIdentity = identity;
+            else delete file.meta.lastCaptureIdentity;
         } else if (ts > cur) {
             delete file.meta.lastCaptureIndex;
+            delete file.meta.lastCaptureIdentity;
         }
         if (!touch(file).ok) return false;
     }

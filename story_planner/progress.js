@@ -15,8 +15,8 @@ import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import { MAX_PROGRESS_METADATA_ENTRIES, storyPlannerSchema } from './schema.js';
 import {
-    getArcs, getCurrentBeatRecord, getPlanData, isArcReady, setArcBeatState,
-    setArcStatus, setPlanData, commitPlanPatch, state,
+    getArcs, getCurrentBeatRecord, getPlanData, isArcReady,
+    acceptProgressMutation, commitPlanPatch, state,
     incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
 
@@ -314,16 +314,19 @@ function verifySuggestion(suggestion) {
     return { ok: true };
 }
 
-/** Accept through the ordinary user-authored mutation seams. */
+/** Accept progress, watermark, and undo history in one checked write. */
 export function acceptProgressSuggestion(suggestion, closeReason = '') {
     if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return { ok: false, reason: 'store-paused' };
     const verified = verifySuggestion(suggestion);
     if (!verified.ok) return verified;
-    const updated = suggestion.kind === 'beat'
-        ? setArcBeatState(suggestion.arcId, suggestion.beatId, 'planted')
-        : setArcStatus(suggestion.arcId, 'resolved', clean(closeReason, 2000));
+    const arc = getArcs().find(candidate => candidate.id === suggestion.arcId);
+    const preview = suggestion.kind === 'beat' ? {
+        ...arc, beats: arc.beats.map(beat => beat.id === suggestion.beatId ? { ...beat, state: 'planted' } : beat),
+    } : { ...arc, status: 'resolved' };
+    const watermarks = suggestionWatermarks(suggestion, preview);
+    const updated = acceptProgressMutation(suggestion.arcId,
+        suggestion.kind === 'beat' ? suggestion.beatId : null, clean(closeReason, 2000), watermarks);
     if (!updated) return { ok: false, reason: 'store-refused' };
-    if (!commitSuggestionWatermark(suggestion, updated)) return { ok: false, reason: 'store-refused' };
     state.progressSuggestions = (state.progressSuggestions || []).filter(candidate => candidate !== suggestion);
     incrementPhase7Metrics({ progressAccepted: 1 });
     return { ok: true, arc: updated };
@@ -354,13 +357,13 @@ export function ignoreProgressSuggestion(suggestion) {
     return { ok: true };
 }
 
-function commitSuggestionWatermark(suggestion, updatedArc = null) {
-    if (!suggestion?.pendingWatermark) return true;
+function suggestionWatermarks(suggestion, updatedArc) {
     const stored = getPlanData().progressWatermarks;
     const progressWatermarks = {
         ...(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}),
-        [suggestion.itemKey]: suggestion.pendingWatermark,
     };
+    if (!suggestion?.pendingWatermark) return progressWatermarks;
+    progressWatermarks[suggestion.itemKey] = suggestion.pendingWatermark;
     if (updatedArc?.status === 'active') {
         const nextBeat = getCurrentBeatRecord(updatedArc);
         const nextKey = nextBeat ? `beat:${updatedArc.id}:${nextBeat.id}`
@@ -371,9 +374,7 @@ function commitSuggestionWatermark(suggestion, updatedArc = null) {
             identity: suggestion.messageIdentity, index: suggestion.sourceIndex,
         };
     }
-    return commitPlanPatch({
-        progressWatermarks,
-    }).ok;
+    return progressWatermarks;
 }
 
 /** Mark transient evidence affected by a chat mutation; accepted progress stays. */
@@ -412,7 +413,9 @@ function rewindProgressWatermarks(messageIndex) {
         else delete progressWatermarks[key];
         changed = true;
     }
-    if (changed) setPlanData({ progressWatermarks });
+    if (changed && !commitPlanPatch({ progressWatermarks }).ok) {
+        console.warn('[MWT:StoryPlanner] Could not rewind progress watermarks; the saved cursor remains unchanged.');
+    }
 }
 
 export function clearProgressSuggestions() {

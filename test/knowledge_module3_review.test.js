@@ -149,18 +149,20 @@ describe('Module 3 review — defect reproductions', () => {
     test('delta cursor resumes the remainder of a tied timestamp batch', () => {
         const chat = [1, 2, 3].map(n => ({ name: 'Mara', mes: `message ${n}`, send_date: 100 }));
         const c = { getChat: () => chat, getEligibleChatEnd: () => chat.length,
-            isIlsSummary: () => false, normalizeSendDate: x => x, stripNonNarrative: x => x };
+            isIlsSummary: () => false, normalizeSendDate: x => x, stripNonNarrative: x => x,
+            getOrCreateReceiptIdentity: msg => `message:${msg.mes}` };
         load('growth.js', 'function buildDeltaWindow(', '/**\n * Run a continuous', c);
         const first = c.buildDeltaWindow(null, 2, 1);
         expect(first.count).toBe(2);
-        expect(c.buildDeltaWindow(first.maxTs, 2, 1, first.lastIndex)).toMatchObject({ count: 1, lastIndex: 2 });
+        expect(c.buildDeltaWindow(first.maxTs, 2, 1, { index: first.lastIndex })).toMatchObject({ count: 1, lastIndex: 2 });
     });
 
     test('all-stripped leading delta batch stalls before later narrative', () => {
         const chat = [1, 2, 3].map(n => ({ mes: n === 3 ? 'narrative' : 'stripped', send_date: n }));
         const c = { getChat: () => chat, getEligibleChatEnd: () => chat.length,
             isIlsSummary: () => false, normalizeSendDate: x => x,
-            stripNonNarrative: x => x === 'stripped' ? '' : x };
+            stripNonNarrative: x => x === 'stripped' ? '' : x,
+            getOrCreateReceiptIdentity: msg => `message:${msg.send_date}` };
         load('growth.js', 'function buildDeltaWindow(', '/**\n * Run a continuous', c);
         expect(c.buildDeltaWindow(null, 2, 1)).toMatchObject({ text: '', lastIndex: 1, maxTs: 2 });
     });

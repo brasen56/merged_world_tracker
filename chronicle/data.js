@@ -134,6 +134,23 @@ export function getContentEl() {
     return state.contentEl;
 }
 
+/**
+ * Which Chronicle view is on screen right now: 'list' (the entry list or its
+ * empty state — the views render.js marks with data-sc-view="list"), 'other'
+ * (an entry editor, a regeneration/consolidation preview, a settings or
+ * injection form, trash, stats), or null when the tab is not visible.
+ *
+ * Work that finishes in the background may replace only the list (M2-18):
+ * every other view can hold unsaved input or a pending decision.
+ *
+ * @returns {'list'|'other'|null}
+ */
+export function getVisibleChronicleView() {
+    const el = getContentEl();
+    if (!el?.isConnected || !el.getClientRects?.().length) return null;
+    return el.querySelector('[data-sc-view="list"]') ? 'list' : 'other';
+}
+
 export function scSetStatus(msg, level = 'info') {
     state._lastStatusMsg = msg;
     state._lastStatusLevel = level;
@@ -428,7 +445,7 @@ export function buildMessageWindow(fromIndex, toIndex, startOffset = 0) {
     // falls into the next snapshot's range. Regenerate/consolidate pass explicit
     // bounds and keep them unchanged.
     if (!explicitTo) end = Math.max(start, Math.min(end, getStableHistoryEnd(chat)));
-    if (end <= start) return { text: '', lastMsg: null, fromIndex: start, toIndex: start - 1, toCharOffset: null };
+    if (end <= start) return { text: '', lastMsg: null, fromIndex: start, toIndex: start - 1, toCharOffset: null, complete: true };
     const lines = [];
     let total = 0;
     // Character budget for the assembled message window.  This is deliberately
@@ -450,6 +467,11 @@ export function buildMessageWindow(fromIndex, toIndex, startOffset = 0) {
     // snapshot so the NEXT generation resumes inside the message instead of
     // anchoring past its unseen remainder.
     let toCharOffset = null;
+    // False when the budget (or an oversized-message cut) stopped the window
+    // before `end`. generateSnapshot() simply resumes from `toIndex` next
+    // time; regenerateSnapshot() must refuse instead, because it keeps the
+    // entry's recorded range and would silently drop the uncovered end.
+    let complete = true;
     for (let i = start; i < end; i++) {
         const msg = chat[i];
         if (!shouldIncludeMessage(msg)) { coveredEnd = i; continue; }
@@ -473,15 +495,16 @@ export function buildMessageWindow(fromIndex, toIndex, startOffset = 0) {
             coveredEnd = i;
             lastMsg = msg;
             toCharOffset = (i === start ? firstOffset : 0) + keep;
+            complete = false;
             break;
         }
-        if (total + line.length + (lines.length ? 1 : 0) > MAX) break;
+        if (total + line.length + (lines.length ? 1 : 0) > MAX) { complete = false; break; }
         lines.push(line);
         total += line.length + (lines.length > 1 ? 1 : 0);
         coveredEnd = i;
         lastMsg = msg;
     }
-    return { text: lines.join('\n'), lastMsg, fromIndex: start, toIndex: coveredEnd, toCharOffset };
+    return { text: lines.join('\n'), lastMsg, fromIndex: start, toIndex: coveredEnd, toCharOffset, complete };
 }
 
 // ─── Message count ───────────────────────────────────────────────────────────

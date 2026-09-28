@@ -19,9 +19,12 @@ describe('Growth capture bootstrap → incremental transition', () => {
     });
 
     test('seeds the bootstrap watermark, then sends only newer messages', async () => {
-        setFakeChat([
+        const original = [
             { name: 'Mara', mes: 'Mara steadies her breathing.', send_date: '2026-01-01T00:00:00.000Z' },
             { name: 'Mara', mes: 'Mara says, "I can handle this."', send_date: '2026-01-01T00:01:00.000Z' },
+        ];
+        setFakeChat([
+            ...original,
             { is_system: true, mes: 'in-flight placeholder', send_date: '2026-01-01T00:01:00.000Z' },
             { is_system: true, mes: 'in-flight placeholder', send_date: '2026-01-01T00:01:00.000Z' },
         ]);
@@ -43,8 +46,7 @@ describe('Growth capture bootstrap → incremental transition', () => {
         expect(requests[0]).toContain('I can handle this');
 
         setFakeChat([
-            { name: 'Mara', mes: 'Mara steadies her breathing.', send_date: '2026-01-01T00:00:00.000Z' },
-            { name: 'Mara', mes: 'Mara says, "I can handle this."', send_date: '2026-01-01T00:01:00.000Z' },
+            ...original,
             { name: 'Mara', mes: 'Mara says, "I will not run."', send_date: '2026-01-01T00:02:00.000Z' },
             { is_system: true, mes: 'in-flight placeholder', send_date: '2026-01-01T00:02:00.000Z' },
             { is_system: true, mes: 'in-flight placeholder', send_date: '2026-01-01T00:02:00.000Z' },
@@ -74,7 +76,7 @@ describe('Growth capture bootstrap → incremental transition', () => {
             { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' }]);
         finish(JSON.stringify({ observations: [{ claim: 'Earlier', quote: 'Before the request', msgIdx: 0 }] }));
         await capture;
-        expect(getCaptureCursor('Mara')).toEqual({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 1 });
+        expect(getCaptureCursor('Mara')).toMatchObject({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 1, identity: expect.any(String) });
         expect(getCaptureWatermark('Mara')).toBe(Date.parse('2026-01-01T00:01:00.000Z'));
     });
 
@@ -85,11 +87,11 @@ describe('Growth capture bootstrap → incremental transition', () => {
         const requests = [];
         setFakeApi(({ userContent }) => { requests.push(userContent); return JSON.stringify({ observations: [] }); });
         await runContinuousCapture('Mara', { minMessages: 1, maxMessages: 2 });
-        expect(getCaptureCursor('Mara')).toEqual({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 1 });
+        expect(getCaptureCursor('Mara')).toMatchObject({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 1, identity: expect.any(String) });
         await runContinuousCapture('Mara', { minMessages: 1, maxMessages: 2 });
         expect(requests[1]).toContain('Line 2');
         expect(requests[1]).not.toContain('Line 1');
-        expect(getCaptureCursor('Mara')).toEqual({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 3 });
+        expect(getCaptureCursor('Mara')).toMatchObject({ ts: Date.parse('2026-01-01T00:01:00.000Z'), index: 3, identity: expect.any(String) });
         expect(await runContinuousCapture('Mara', { minMessages: 1 })).toBeNull();
     });
 
@@ -103,7 +105,7 @@ describe('Growth capture bootstrap → incremental transition', () => {
         const requests = [];
         setFakeApi(({ userContent }) => { requests.push(userContent); return JSON.stringify({ observations: [] }); });
         expect(await runContinuousCapture('Mara')).toMatchObject({ added: 0, maxTs: 1039000 });
-        expect(getCaptureCursor('Mara')).toEqual({ ts: 1039000, index: 39 });
+        expect(getCaptureCursor('Mara')).toMatchObject({ ts: 1039000, index: 39, identity: expect.any(String) });
         expect(requests).toHaveLength(0);
         await runContinuousCapture('Mara', { minMessages: 1 });
         expect(requests).toHaveLength(1);
@@ -115,5 +117,37 @@ describe('Growth capture bootstrap → incremental transition', () => {
         expect(() => appendRawObservations('Mara', [{ claim: 'Stays calm', quote: 'Mara returns.', msgIdx: 0 }]))
             .toThrow(/could not be saved/);
         expect(getFakeMeta().knowledge_growth_evidence).toBe('invalid existing store');
+    });
+
+    test('reanchors equal timestamps after earlier history is deleted', async () => {
+        const ts = '2026-01-01T00:01:00.000Z';
+        const chat = [0, 1, 2, 3].map(i => ({ id: `line-${i}`, name: 'Mara', mes: `Line ${i}`, send_date: ts }));
+        const tail = [{ is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' }];
+        setFakeChat([...chat, ...tail]);
+        const requests = [];
+        setFakeApi(({ userContent }) => { requests.push(userContent); return JSON.stringify({ observations: [] }); });
+        await runContinuousCapture('Mara', { minMessages: 1, maxMessages: 4 });
+        setFakeChat([...chat.slice(3), { id: 'new', name: 'Mara', mes: 'New after deletion', send_date: ts }, ...tail]);
+        await runContinuousCapture('Mara', { minMessages: 1 });
+        expect(requests).toHaveLength(2);
+        expect(requests[1]).toContain('New after deletion');
+        expect(requests[1]).not.toContain('Line 3');
+        expect(getCaptureCursor('Mara')).toMatchObject({ index: 1, identity: 'id:new' });
+        expect(await runContinuousCapture('Mara', { minMessages: 1 })).toBeNull();
+    });
+
+    test('replays equal-time survivors when the boundary itself was summarized away', async () => {
+        const ts = '2026-01-01T00:01:00.000Z';
+        const originals = [0, 1, 2].map(i => ({ id: `old-${i}`, name: 'Mara', mes: `Old ${i}`, send_date: ts }));
+        const tail = [{ is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' }];
+        setFakeChat([...originals, ...tail]);
+        const requests = [];
+        setFakeApi(({ userContent }) => { requests.push(userContent); return JSON.stringify({ observations: [] }); });
+        await runContinuousCapture('Mara', { minMessages: 1 });
+        setFakeChat([originals[1], { id: 'new', name: 'Mara', mes: 'New equal-time line', send_date: ts }, ...tail]);
+        await runContinuousCapture('Mara', { minMessages: 1 });
+        expect(requests[1]).toContain('New equal-time line');
+        expect(getCaptureCursor('Mara')).toMatchObject({ index: 1, identity: 'id:new' });
+        expect(await runContinuousCapture('Mara', { minMessages: 1 })).toBeNull();
     });
 });

@@ -484,13 +484,13 @@ export const INJECTION_HEADER = `[NPC intentions ledger — live, hidden NPC pla
  */
 export function formatLedgerForInjection(ledger) {
     if (!ledger || !ledger.length) return '';
-    // §20: dormant entries excluded from narrator injection
-    const active = ledger.filter(e => e.status !== 'dormant');
-    if (active.length === 0) return '';
-    // A bounded narrator body prevents an unbounded number of mandatory
-    // actions from crowding out the rest of the prompt. Keep order stable.
-    const MAX_INJECTED_INTENTIONS = 20;
-    const lines = active.slice(0, MAX_INJECTED_INTENTIONS).map(e => {
+    // §20: dormant entries are excluded; M5-6: at most MAX_INJECTED_INTENTIONS,
+    // chosen by selectInjectedIntentions(). The omission is reported to the
+    // user (panel + diagnostics), never here: an instruction inside the
+    // narrator prompt would only be echoed into the story.
+    const { kept } = selectInjectedIntentions(ledger);
+    if (kept.length === 0) return '';
+    const lines = kept.map(e => {
         // INTERIORITY-06: Cap each field so unbounded entries don't bloat
         // the narrator injection every turn. Lifecycle v2: the line carries
         // the user's priority/expiry annotations (spec §1/§4).
@@ -500,10 +500,38 @@ export function formatLedgerForInjection(ledger) {
         const since = e.since ? ` (since ${cap(e.since, MAX_LEDGER_SINCE)})` : '';
         return `- ${npc} → ${action} → ${trigger}${since}${_lifecycleAnnotations(e)}`;
     });
-    if (active.length > MAX_INJECTED_INTENTIONS) {
-        lines.push(`[${active.length - MAX_INJECTED_INTENTIONS} additional active intentions omitted from narrator injection; review the Interiority ledger.]`);
-    }
     return lines.join('\n');
+}
+
+/**
+ * How many active intentions the narrator block carries. A bounded body keeps
+ * an unbounded number of mandatory actions from crowding out the rest of the
+ * prompt (M5-6).
+ */
+export const MAX_INJECTED_INTENTIONS = 20;
+
+const INJECTION_PRIORITY_RANK = Object.freeze({ urgent: 3, high: 2, normal: 1, low: 0 });
+
+/**
+ * Choose which active (non-dormant) intentions reach the narrator. Under the
+ * cap every one does; over it, the highest priority wins, then the most
+ * recently declared — the ledger is append-only, so a later position is a
+ * newer intention. The kept entries keep their ledger order, so the block
+ * still reads chronologically.
+ *
+ * @param {Array<object>} ledger
+ * @returns {{ kept: Array<object>, omitted: number }}
+ */
+export function selectInjectedIntentions(ledger) {
+    const active = (Array.isArray(ledger) ? ledger : []).filter(e => e && e.status !== 'dormant');
+    if (active.length <= MAX_INJECTED_INTENTIONS) return { kept: active, omitted: 0 };
+    const rank = e => INJECTION_PRIORITY_RANK[e.priority] ?? INJECTION_PRIORITY_RANK.normal;
+    const chosen = new Set(active
+        .map((entry, index) => ({ entry, index }))
+        .sort((a, b) => rank(b.entry) - rank(a.entry) || b.index - a.index)
+        .slice(0, MAX_INJECTED_INTENTIONS)
+        .map(({ entry }) => entry));
+    return { kept: active.filter(e => chosen.has(e)), omitted: active.length - chosen.size };
 }
 
 // ─── Dormant poll prompt (v2 §20) ────────────────────────────────────────────

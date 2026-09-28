@@ -27,7 +27,7 @@ import {
     state, MAX_ENTRY_WORD_COUNT, MAX_TRASH_SIZE,
     getSettings,
     getChronicleData, setChronicleData, setChronicleDataChecked, getSnapshots,
-    getCharactersInRange, scSetStatus, getContentEl,
+    getCharactersInRange, scSetStatus, getVisibleChronicleView,
     makeAnchor, resolveAnchor, buildMessageWindow,
     getReceiptIdentity,
     _render,
@@ -337,11 +337,15 @@ export async function generateSnapshot(isAuto = false) {
         state.countedReceiptEvents = remainingEvents;
         state.autoSnapshotRetryAt = 0;
         applyInjection();
-        state.selectedSnapshotId = snapshot.id;
-        // Only update the UI when the Chronicle tab is actually visible —
-        // auto-snapshot can fire while the modal is closed, in which case
-        // there's nothing to render (and renderContent() would be a no-op).
-        if (getContentEl()?.getClientRects().length) _render.renderContent();
+        // M2-18: finishing in the background must not replace the view the
+        // user is working in. Only the entry list may be re-rendered; an open
+        // editor, preview, or settings form keeps its unsaved state (the
+        // status line reports the new entry). A manual Generate — clicked
+        // from the list — still opens the new entry; an auto-snapshot never
+        // navigates on the user's behalf.
+        const view = getVisibleChronicleView();
+        if (!isAuto && view !== 'other') state.selectedSnapshotId = snapshot.id;
+        if (view === 'list') _render.renderContent();
         if (getSettings().syncWorldState) syncWorldStateFromSnapshot(snapshot, {
             source: 'generated', scope: scopeBefore,
             expectedRevision: worldStateRevision, baselineStatusSignature: worldStateBaseline,
@@ -390,9 +394,19 @@ export async function regenerateSnapshot(snapshotId) {
     const from = Math.max(0, snapshot.fromIndex ?? 0);
     const rawTo = snapshot.toIndex !== undefined && snapshot.toIndex >= (snapshot.fromIndex ?? 0) ? snapshot.toIndex : Math.min(from + 200, Math.max(0, chat.length - 1));
     const to = Math.max(from, rawTo);
-    const { text, toCharOffset: regenToCharOffset } = buildMessageWindow(from, to);
+    const { text, toIndex: coveredTo, toCharOffset: regenToCharOffset, complete } = buildMessageWindow(from, to);
     if (!text.trim()) {
         scSetStatus('No messages for regeneration.', 'error');
+        return;
+    }
+    // Regeneration keeps the entry's recorded range, so a window the budget
+    // stopped before `to` would summarize only the start of that range and
+    // silently drop its newest end (a consolidated entry, or one made before
+    // windows were filled oldest-first). Refuse before spending a model call.
+    // A window cut inside one oversized message that ends AT `to` is the
+    // normal mid-message continuation, which toCharOffset records below.
+    if (!complete && coveredTo < to) {
+        scSetStatus(`This entry covers more chat than one regeneration can read (messages ${from}–${to}; only up to ${coveredTo} fits). Edit it by hand, or regenerate the original entries before consolidating.`, 'error');
         return;
     }
     const worldState = getWorldStateFactual().trim();

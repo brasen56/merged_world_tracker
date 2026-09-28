@@ -44,6 +44,7 @@ import {
 // Direct import (not the barrel) so the REAL scope module is read under the
 // test barrel→stub alias.
 import { scopeStillCurrent } from '../core/scope.js';
+import { getOrCreateReceiptIdentity } from '../core/message_identity.js';
 // Part 6 (§7.4) pause guard for the Growth profiler's direct entry points.
 // Direct import (not the barrel) so the REAL pause singleton is read even under
 // the test barrel→stub alias — the same rule knowledge/index.js applies to its
@@ -184,7 +185,7 @@ function getIndexedMessageWindow(count = EVIDENCE_MESSAGE_WINDOW) {
     let cursor = { ts: 0, index: -1 };
     for (let i = startIdx; i < end; i++) {
         const ts = normalizeSendDate(chat[i]?.send_date);
-        if (ts >= cursor.ts) cursor = { ts, index: i };
+        if (ts >= cursor.ts) cursor = { ts, index: i, identity: getOrCreateReceiptIdentity(chat[i]) };
     }
     return { text: lines.join('\n'), cursor };
 }
@@ -885,9 +886,25 @@ function getEligibleChatEnd(chat = getChat() || []) {
  * @param {number} sinceTs — the watermark (only messages newer than this)
  * @returns {{text:string, maxTs:number, count:number}|null}
  */
-function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages = DELTA_MIN_MESSAGES, sinceIndex = null) {
+function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages = DELTA_MIN_MESSAGES, sinceCursor = null) {
     const chat = getChat();
     if (!chat || !chat.length) return null;
+
+    let sinceIndex = sinceCursor?.index ?? null;
+    if (sinceCursor?.identity) {
+        // A timestamp tie uses the boundary's CURRENT position, not the index
+        // it had before summarization/deletion shifted the chat array.
+        sinceIndex = -1;
+        for (let i = 0; i < getEligibleChatEnd(chat); i++) {
+            const msg = chat[i];
+            const identity = msg?.id != null ? `id:${msg.id}`
+                : msg?.extra?.mesid != null ? `mesid:${msg.extra.mesid}`
+                    : msg?.extra?.mwt_uuid ? `uuid:${msg.extra.mwt_uuid}` : null;
+            if (identity === sinceCursor.identity) { sinceIndex = i; break; }
+        }
+        // If the boundary itself was removed, replay surviving equal-time
+        // messages rather than permanently skipping an unseen arrival.
+    }
 
     // Collect live (non-summary) messages newer than the watermark.
     const candidates = [];
@@ -914,12 +931,14 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
     const lines = [];
     let maxTs = sinceTs ?? 0;
     let lastIndex = sinceIndex;
+    let lastIdentity = null;
     for (const { msg, idx, ts } of window) {
         // Move past stripped messages too, so a batch with no narrative does
         // not permanently block later batches.
         if (ts > maxTs || (ts === maxTs && (lastIndex === null || idx > lastIndex))) {
             maxTs = ts;
             lastIndex = idx;
+            lastIdentity = getOrCreateReceiptIdentity(msg);
         }
         const name = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
         // preserveOffScreen:false — sealed off-screen log stays out of Knowledge.
@@ -928,7 +947,7 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
         lines.push(`[${idx}] ${name}: ${text}`);
     }
 
-    return { text: lines.join('\n'), maxTs, lastIndex, count: lines.length };
+    return { text: lines.join('\n'), maxTs, lastIndex, lastIdentity, count: lines.length };
 }
 
 /**
@@ -977,10 +996,10 @@ export async function runContinuousCapture(name, opts = {}) {
     if (uid === null || uid === undefined) return null;
 
     const sinceTs = getCaptureWatermark(name);
-    const delta = buildDeltaWindow(sinceTs, opts.maxMessages, opts.minMessages, getCaptureCursor(name)?.index ?? null);
+    const delta = buildDeltaWindow(sinceTs, opts.maxMessages, opts.minMessages, getCaptureCursor(name));
     if (!delta) return null;
     if (!delta.text) {
-        if (!setCaptureWatermark(name, delta.maxTs, delta.lastIndex)) throw new Error('Evidence cursor could not be saved.');
+        if (!setCaptureWatermark(name, delta.maxTs, delta.lastIndex, delta.lastIdentity)) throw new Error('Evidence cursor could not be saved.');
         return { added: 0, skipped: 0, maxTs: delta.maxTs };
     }
 
@@ -1051,7 +1070,7 @@ export async function runContinuousCapture(name, opts = {}) {
         };
     });
 
-    const stats = appendRawObservations(name, admitted, { ts: delta.maxTs, index: delta.lastIndex });
+    const stats = appendRawObservations(name, admitted, { ts: delta.maxTs, index: delta.lastIndex, identity: delta.lastIdentity });
 
     // The append committed observations and cursor together, including when
     // there were no observations to append.

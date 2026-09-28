@@ -43,13 +43,16 @@ describe('Interiority refused writes and bounded injection', () => {
         expect(getLedger()[0].action).toBe('leave');
     });
 
-    test('narrator sees only a bounded number of active intentions with an omission marker', () => {
+    test('narrator sees only a bounded number of active intentions, the most recent kept', () => {
+        // Selection by priority then recency, and the no-notice-in-prompt
+        // rule, are pinned in test/interiority_injection_cap.test.js.
         const ledger = Array.from({ length: 25 }, (_, n) => ({
             npc: 'Avery', action: `action ${n}`, trigger: 'dawn', status: 'active',
         }));
         const output = formatLedgerForInjection(ledger);
-        expect(output).toContain('action 19');
-        expect(output).not.toContain('action 20 →');
-        expect(output).toContain('5 additional active intentions omitted');
+        expect(output).toContain('action 24 →');
+        expect(output).toContain('action 5 →');
+        expect(output).not.toContain('action 4 →');
+        expect(output).not.toMatch(/omitted/);
     });
 });

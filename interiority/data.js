@@ -1271,9 +1271,10 @@ export function getInnerState(npcName) {
  * @param {string} line - the new line (empty string clears the state)
  * @param {object} [opts]
  * @param {boolean} [opts.manual=false] - true when the user authored this line
+ * @returns {boolean} whether the change was committed
  */
 export function setInnerState(npcName, line, { manual = false } = {}) {
-    if (!npcName) return;
+    if (!npcName) return false;
     const trimmed = String(line || '').slice(0, MAX_INNER_STATE_LENGTH);
     const data = getInteriorityData();
     if (!data.innerStates || typeof data.innerStates !== 'object') {
@@ -1286,7 +1287,9 @@ export function setInnerState(npcName, line, { manual = false } = {}) {
     } else {
         delete data.innerStates[key];
     }
-    saveInteriorityData(data);
+    const before = getChatMeta()?.mwt_interiority;
+    const committed = saveInteriorityData(data);
+    return committed !== before && committed === getChatMeta()?.mwt_interiority;
 }
 
 /**

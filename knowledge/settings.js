@@ -218,7 +218,7 @@ export function showKnowledgeSettings() {
         const prevBindState = !!s.bindStateBook;
         const prevStateScope = ['global', 'character', 'chat'].includes(s.stateScope) ? s.stateScope : 'character';
         const newStateScope = ['global', 'character', 'chat'].includes(stateScopeChosen) ? stateScopeChosen : 'character';
-        saveSettings({
+        const saved = saveSettings({
             ...apiValues,
             scope: ['global', 'character', 'chat'].includes(chosenScope) ? chosenScope : 'global',
             autoTriggerEnabled: el.querySelector('#kt-cfg-auto-trigger')?.checked ?? false,
@@ -237,6 +237,10 @@ export function showKnowledgeSettings() {
             bindStateBook: newBindState,
             stateScope: newStateScope,
         });
+        if (!saved) {
+            ktSetStatus('Settings could not be saved.', 'error');
+            return;
+        }
         state.activeSubTab = 'staging';
         // A scope change points the module at different lorebooks, so the
         // cached stores for the old books must be flushed and the new ones
