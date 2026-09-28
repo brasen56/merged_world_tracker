@@ -139,7 +139,7 @@ describe('Module 3 review — defect reproductions', () => {
         }
     });
 
-    test('64-character suffix discards the collision discriminator', () => {
+    test('the sanitizer alone truncates a 64-character suffix (the resolver reserves space)', () => {
         const c = { ILLEGAL_FILENAME_CHARS: /[\\/:*?"<>|\u0000-\u001f]/g, MAX_SUFFIX_LENGTH: 64 };
         load('scope.js', 'export function sanitizeLorebookName(', '/**\n * Build the three book names', c);
         const name = 'A'.repeat(64);

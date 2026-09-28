@@ -442,6 +442,13 @@ export function collectScopeSnapshot({
             text: `This ${resolution.scope}'s name sanitises to nothing usable in a lorebook filename — the GLOBAL books are in use, deliberately unbound.`,
         });
     }
+    if (resolution.mode === 'collision-refused') {
+        warnings.push({
+            id: 'scope-name-collision',
+            level: 'fail',
+            text: resolution.note,
+        });
+    }
     if (fallbackEvents.count > 0) {
         const last = fallbackEvents.last;
         warnings.push({
@@ -450,7 +457,7 @@ export function collectScopeSnapshot({
             text: `Scope fell back to the global books ${fallbackEvents.count}× this session (scope_fallback_global warns)${last?.epoch != null ? ` — last at epoch ${last.epoch}` : ''}${last?.ts != null ? `, ${new Date(last.ts).toLocaleTimeString()}` : ''}. Check the identity rows below for which lookup came back absent.`,
         });
     }
-    if (resolution.valid === false) {
+    if (resolution.valid === false && resolution.mode === 'global') {
         warnings.push({
             id: 'scope-setting-invalid',
             level: 'warn',

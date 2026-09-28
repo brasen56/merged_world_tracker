@@ -6,7 +6,7 @@
  * render.js (which calls staging functions from event handlers).
  */
 
-import { getPlayerNames, getUserNames, notify, downloadJson, pickTextFile, getChatMeta, persistChatMeta } from '../core/index.js';
+import { getPlayerNames, getUserNames, notify, downloadJson, pickTextFile } from '../core/index.js';
 
 import {
     TRACKER_SENTINEL,
@@ -373,8 +373,6 @@ export function mergeScanResults(newItems, removeNotification) {
 
 // ─── NPC Export / Import ─────────────────────────────────────────────────────
 
-const IMPORT_ATTEMPT_KEY = 'mwtKnowledgeNpcImportAttempt';
-
 function identicalImportEntry(entries, name, content) {
     const matches = Object.values(entries || {}).filter(entry => !isStoreEntry(entry)
         && normalizeRegistryName(entry?.comment) === normalizeRegistryName(name));
@@ -383,13 +381,6 @@ function identicalImportEntry(entries, name, content) {
         || matches[0].content?.trim() !== content.trim()) return null;
     const uid = Number(matches[0].uid);
     return Number.isInteger(uid) && uid >= 0 ? uid : null;
-}
-
-function importFileFingerprint(text) {
-    // Deterministic, bounded metadata; never retain exported dossiers in chat metadata.
-    let hash = 2166136261;
-    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
-    return `${text.length}:${(hash >>> 0).toString(16)}`;
 }
 
 export async function exportNpcs() {
@@ -447,8 +438,7 @@ export async function exportNpcs() {
 }
 
 export async function importNpcs() {
-    let attempt = null;
-    let attemptMeta = null;
+    let written = 0;
     try {
         const text = await pickTextFile('.json');
         if (!text) return;
@@ -463,13 +453,7 @@ export async function importNpcs() {
         // registry into a different book after an awaited reconciliation.
         const importScope = captureScope();
         const destination = getLorebookName();
-        const fingerprint = importFileFingerprint(text);
-        attemptMeta = getChatMeta();
-        const previous = attemptMeta?.[IMPORT_ATTEMPT_KEY];
-        const sameAttempt = previous?.destination === destination && previous.fingerprint === fingerprint;
-        const retryNotice = sameAttempt && previous.written > 0
-            ? ` Previous import didn't finish — ${previous.written} entries were written; retry will skip identical entries.` : '';
-        if (retryNotice) ktSetStatus(retryNotice.trim(), 'warning');
+        if (!destination) throw new Error('Knowledge lorebook name collision — import refused. Repair the saved book bindings first.');
         const assertImportDestination = () => {
             if (!scopeStillCurrent(importScope).ok || getLorebookName() !== destination) {
                 throw new Error('Chat or Knowledge destination changed during import — stopped. Review any entries already imported before retrying.');
@@ -500,12 +484,6 @@ export async function importNpcs() {
         // object, so mutating it before the final save leaks partial imports
         // even when a later lorebook write or scope check fails.
         const registry = structuredClone(getRegistry());
-        if (attemptMeta) {
-            attempt = { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                destination, fingerprint, written: sameAttempt ? previous.written : 0 };
-            attemptMeta[IMPORT_ATTEMPT_KEY] = attempt;
-            persistChatMeta();
-        }
         let reused = 0;
 
         // ── Recovery guarantee (design §5.2 + §5.1), up-front pass ──────────
@@ -635,10 +613,7 @@ export async function importNpcs() {
                     if (!result.success) throw new Error(result.error || 'lorebook write was refused');
                     registry[name].uid = result.uid;
                     if (existingUid !== null) reused++;
-                    else if (attempt) {
-                        attempt.written++;
-                        persistChatMeta();
-                    }
+                    else written++;
                 } catch (err) {
                     assertImportDestination();
                     throw new Error(`Could not import "${name}" into the lorebook: ${err.message}. Review entries already written before retrying.`);
@@ -692,17 +667,8 @@ export async function importNpcs() {
         if (settingsImported) msg += ' Settings restored.';
         else if (settingsPatch && Object.keys(settingsPatch).length) msg += ' Settings could not be restored.';
         if (reused) msg += ` ${reused} identical lorebook entries reused without rewriting.`;
-        if (attempt && attemptMeta?.[IMPORT_ATTEMPT_KEY] === attempt) {
-            delete attemptMeta[IMPORT_ATTEMPT_KEY];
-            persistChatMeta();
-        }
-        ktSetStatus(msg + retryNotice, settingsPatch && Object.keys(settingsPatch).length && !settingsImported ? 'warning' : 'success');
+        ktSetStatus(msg, settingsPatch && Object.keys(settingsPatch).length && !settingsImported ? 'warning' : 'success');
     } catch (err) {
-        const written = attempt?.written || 0;
-        if (attempt && !written && attemptMeta?.[IMPORT_ATTEMPT_KEY] === attempt) {
-            delete attemptMeta[IMPORT_ATTEMPT_KEY];
-            persistChatMeta();
-        }
         ktSetStatus(`Import failed: ${err.message}` + (written
             ? ` ${written} entries were written; retry will skip identical entries.` : ''), 'error');
     }

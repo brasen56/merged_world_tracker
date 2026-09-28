@@ -37,7 +37,7 @@ import {
     renderDiagnosticsPanel,
 } from '../diagnostics_panel/render.js';
 import { peekStore, isHydrated, _setCacheForTests, _clearCacheForTests, STORE_VERSION } from '../knowledge/store.js';
-import { shortHash } from '../knowledge/scope.js';
+import { deriveBookNames, shortHash } from '../knowledge/scope.js';
 import { record, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { MWT_VERSION } from '../core/version.js';
 
@@ -141,6 +141,39 @@ describe('explainBookResolution — every resolveBookNames() mode, read-only', (
         expect(r.mode).toBe('collision-disambiguated');
         expect(r.books.knowledge).toBe(`Knowledge Tracker - Mara (${shortHash('char:mara-v2.png')})`);
         expect(r.wouldSaveBinding).toBe(true);
+    });
+
+    test('long-name disambiguation matches the caller and a second collision refuses read-only', () => {
+        const name = 'A'.repeat(64);
+        const key = 'char:second.png';
+        const suffix = ` (${shortHash(key)})`;
+        const first = deriveBookNames(name);
+        const occupied = deriveBookNames(`${'A'.repeat(64 - suffix.length)}${suffix}`);
+        const args = { scope: 'character', character: { key, name }, bindings: { 'char:first.png': first } };
+        const ok = explainBookResolution(args);
+        expect(ok.books).toEqual(occupied);
+        expect(ok.wouldSaveBinding).toBe(true);
+        const refused = explainBookResolution({ ...args, bindings: { ...args.bindings, 'char:third.png': occupied } });
+        expect(refused.mode).toBe('collision-refused');
+        expect(refused.valid).toBe(false);
+        expect(refused.books.knowledge).toBeNull();
+        expect(refused.wouldSaveBinding).toBe(false);
+    });
+
+    test('a surviving collision is reported as a failure in the scope snapshot', () => {
+        const name = 'A'.repeat(64);
+        const key = 'char:second.png';
+        const suffix = ` (${shortHash(key)})`;
+        const bindings = {
+            'char:first.png': deriveBookNames(name),
+            'char:third.png': deriveBookNames(`${'A'.repeat(64 - suffix.length)}${suffix}`),
+        };
+        const snap = collectScopeSnapshot(deps({
+            scopeApi: { getCharacterIdentity: () => ({ key, name }), getChatIdentity: () => null },
+            getKnowledgeSettings: () => ({ scope: 'character', bookBindings: bindings }),
+        }));
+        expect(snap.resolution.mode).toBe('collision-refused');
+        expect(snap.warnings).toContainEqual(expect.objectContaining({ id: 'scope-name-collision', level: 'fail' }));
     });
 });
 

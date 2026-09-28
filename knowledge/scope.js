@@ -37,7 +37,7 @@
 import { getContextSafe, record } from '../core/index.js';
 
 import {
-    LOREBOOK_NAME, STATE_LOREBOOK_NAME, PROFILE_LOREBOOK_NAME,
+    LOREBOOK_NAME, STATE_LOREBOOK_NAME, PROFILE_LOREBOOK_NAME, ktSetStatus,
 } from './state.js';
 import { getSettings, saveSettings } from './settings.js';
 
@@ -129,6 +129,13 @@ export function shortHash(str) {
     }
     const combined = (Math.abs(h1).toString(36) + Math.abs(h2).toString(36)).slice(0, 8);
     return combined || '0';
+}
+
+/** Reserve room for the identity discriminator before applying the 64-char cap. */
+function disambiguatedBookNames(name, discriminator, derive = deriveBookNames) {
+    const base = sanitizeLorebookName(name)
+        .slice(0, MAX_SUFFIX_LENGTH - discriminator.length).trim().replace(/[.\s]+$/, '');
+    return derive(`${base}${discriminator}`);
 }
 
 // ─── Identity resolution (reads the live ST context) ────────────────────────
@@ -270,13 +277,14 @@ export function resolveBookNames() {
     );
     if (takenByOthers.has(names.knowledge)) {
         const discriminator = ` (${shortHash(identity.key)})`;
-        const cleanBase = sanitizeLorebookName(identity.name);
-        const base = cleanBase.slice(0, MAX_SUFFIX_LENGTH - discriminator.length).trim().replace(/[.\s]+$/, '');
-        names = deriveBookNames(`${base}${discriminator}`);
+        names = disambiguatedBookNames(identity.name, discriminator);
         // Never persist a binding that still aliases another identity (e.g.
         // a pre-existing binding using this discriminator).
         if (takenByOthers.has(names.knowledge)) {
-            throw new Error('Scoped lorebook name still collides after disambiguation — refusing to bind a shared book.');
+            const message = 'Scoped lorebook name still collides after disambiguation — refusing to bind a shared book. Change the character name or repair its saved book bindings.';
+            console.warn(`[MWT:Knowledge] ${message}`);
+            ktSetStatus(message, 'error');
+            return null;
         }
         console.log(
             `[MWT:Knowledge] "${identity.name}" collides with an existing binding — ` +
@@ -290,13 +298,13 @@ export function resolveBookNames() {
 }
 
 /** Current Knowledge Tracker lorebook name. */
-export function getLorebookName() { return resolveBookNames().knowledge; }
+export function getLorebookName() { return resolveBookNames()?.knowledge ?? null; }
 
 /** Current State Tracker lorebook name. */
-export function getStateLorebookName() { return resolveBookNames().state; }
+export function getStateLorebookName() { return resolveBookNames()?.state ?? null; }
 
 /** Current NPC Profiles lorebook name. */
-export function getProfileLorebookName() { return resolveBookNames().profiles; }
+export function getProfileLorebookName() { return resolveBookNames()?.profiles ?? null; }
 
 // ─── Resolution explainer (the read-only mirror of resolveBookNames) ──────────
 
@@ -422,7 +430,16 @@ export function explainBookResolution({
             .filter(Boolean)
     );
     if (takenByOthers.has(names.knowledge)) {
-        names = derive(`${identity.name} (${hash(identity.key)})`);
+        names = disambiguatedBookNames(identity.name, ` (${hash(identity.key)})`, derive);
+        if (takenByOthers.has(names.knowledge)) {
+            return {
+                scope: normalized, valid: false, mode: 'collision-refused',
+                identityKey: identity.key, identityName: identity.name ?? null,
+                books: { knowledge: null, state: null, profiles: null },
+                note: 'Scoped lorebook name still collides after disambiguation — change the character name or repair its saved book bindings. No new binding will be saved.',
+                wouldSaveBinding: false,
+            };
+        }
         return {
             scope: normalized,
             valid: true,

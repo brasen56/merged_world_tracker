@@ -181,6 +181,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
     // Resolve the book ONCE. Calling the resolver per save could target two
     // different books within a single write if the scope changed mid-flight.
     const book = getLorebookName();
+    if (!book) return { success: false, error: 'Knowledge lorebook name collision — no book was written.' };
     try {
         let wi = await state.wiScript.loadWorldInfo(book);
         // Auto-create the lorebook if it doesn't exist yet.

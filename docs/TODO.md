@@ -265,93 +265,247 @@ mid-operation" claims:
 
 ### 🟡 Tier 3 — real but narrow (fix while you're in the file)
 
-- [ ] **Knowledge Catch Up keeps working in the new chat after a switch**
+- [x] **Knowledge Catch Up keeps working in the new chat after a switch**
   *(found during verification, not in the reviews)*. A coordinator
   cancellation lands in the generic error branch (`knowledge/growth.js:1482`),
   and Phase 2 then runs `runContinuousCapture` against whichever chat is
   open. Stop both phases on `isCancellation(err)` or a scope change.
-- [ ] **NK-04 — The capture cursor is timestamp-only**
+- [x] **NK-04 — The capture cursor is timestamp-only**
   (`knowledge/growth.js:893`). Rare on stock ST, whose timestamps have
   milliseconds. On hosts with minute-resolution `send_date` (the Aikobots
   fork), a message in the same minute as the last capture is skipped for good.
   Add a message-identity or index tie-breaker.
-- [ ] **NK-03 — The first-capture watermark is computed after the await**
+- [x] **NK-03 — The first-capture watermark is computed after the await**
   (`knowledge/growth.js:691-702`), so a message that settles during the call
   is marked done without being captured. Return the cursor from the window
   that was actually sent.
-- [ ] **Unchecked writes that report success** — M5-1 / M5-2 / M5-4, SP4-03,
+- [x] **Unchecked writes that report success** — M5-1 / M5-2 / M5-4, SP4-03,
   M2-02, NK-08. Every write seam refuses correctly and the re-render shows
   the truth, but callers still show a success message, log a diagnostics
   event, or advance counters. Use each module's existing checked seam at the
   call sites the user sees, and give Interiority's panel actions the pause
   guard the other modules have (`interiority/render.js:940-1045`).
-- [ ] **Missing post-await scope checks** — M2-01
+  *Partly addressed:* Chronicle's generation, editor, manual entry, deletion,
+  restore, Clear All, injection settings and consolidation use checked commits;
+  the snapshot counter/receipt patch commits together with its entry.
+  Interiority's ledger mutators and lifecycle record no longer return/diagnose
+  refused writes, with a panel pause guard. Story Planner's legacy callers,
+  Knowledge evidence edge cases and remaining panel actions need a separate pass.
+  Knowledge's observation append and consolidation now refuse success if the
+  evidence commit fails. Evidence editor mutations and clear operations now
+  report refused commits; Story Planner add/update/remove and Interiority panel
+  removals likewise check their saves. Remaining panel actions and split
+  history/write operations still need review. *Further pass (2026-09-27):*
+  Story Planner beat edits and arc removal now commit history with arcs;
+  progress ignore/settled-watermark writes check the result, and refused
+  metrics writes no longer return a staged success. Knowledge first/continuous
+  capture and ILS backfill commit observations and cursor together (and refuse
+  failed cursor writes). Progress acceptance still splits its arc and cursor
+  writes; planner settings and some remaining panels need checked commits.
+- [x] **Missing post-await scope checks** — M2-01
   (`chronicle/snapshots.js:482-498`) and NK-02 (Knowledge consolidation, first
   capture, ILS backfill). Only the metadata-swap window described above can
-  reach them. One `assertSameScope` line each.
-- [ ] **SP4-01 — Story Planner migrations drop a corrupt `arcs` container
+  reach them. One `assertSameScope` line each. *NK-02's Knowledge capture,
+  consolidation, and ILS backfill paths now check scope; Chronicle's remaining
+  call sites still need review.* Chronicle consolidation now checks scope and
+  selected-entry revisions after the transport resolves. Regeneration now also
+  checks the source message interval and entry revision after transport and
+  at preview acceptance; retries/late failures avoid new-chat UI updates.
+  *Closed (2026-09-27):* the remaining Chronicle call sites were reviewed —
+  every await re-asserts scope (generation after each transport and the
+  empty-output retry, regeneration at transport and at preview acceptance,
+  consolidation at preview entry and after the transport, the auto-snapshot
+  wrapper before touching the retry gate), and the render-layer button
+  handlers only reset DOM-local busy state. Pinned by
+  `test/chronicle_module2_review.test.js` (chat switch during generation,
+  both previews, and the auto-snapshot wrapper; a stale job cannot release
+  a newer job's busy flag).
+- [x] **SP4-01 — Story Planner migrations drop a corrupt `arcs` container
   with no quarantine issue** (`story_planner/schema.js:1196-1231`). Emit one,
   as Knowledge's migration does. Needs corrupted v1/v2 data.
-- [ ] **M2-18 — An auto-snapshot can re-render over an open Chronicle editor**
+- [x] **M2-18 — An auto-snapshot can re-render over an open Chronicle editor**
   (`chronicle/snapshots.js:270-274` checks that the element exists, not that
   it's visible). Needs a reply to finish while you're editing an entry.
-- [ ] **Chronicle consolidation behavior** — M2-14 (Selected-mode IDs aren't
+  *Reopened 2026-09-27:* the first fix only skipped the re-render while the
+  tab was hidden (the harmless case); a visible editor was still replaced,
+  and jsdom's empty `getClientRects()` hid that from the tests. *Fixed
+  2026-09-27:* background completion re-renders only the entry list
+  (`getVisibleChronicleView()` in `chronicle/data.js`, the list marked
+  `data-sc-view="list"`); an open editor, preview, or form is left alone. A
+  manual Generate from the list still opens the new entry; an auto-snapshot
+  never navigates. The search debounce no longer re-renders after you've
+  navigated away. Pinned by `test/chronicle_background_render.test.js`.
+- [x] **Regenerate claims coverage it doesn't have** *(found in the
+  2026-09-27 review; the regenerate half of M2-03)*. Regeneration kept the
+  entry's recorded range but summarized only what fit oldest-first, so a
+  range over one window (a consolidated entry, or one made before 2.10.2)
+  silently lost its newest end. *Fixed 2026-09-27:* `buildMessageWindow()`
+  reports `complete`, and `regenerateSnapshot()` refuses, before any model
+  call, a window the budget stopped short of the entry's end (the
+  single-oversized-message continuation is still allowed). Pinned by
+  `test/chronicle_regenerate_coverage.test.js`.
+- [x] **Chronicle consolidation behavior** — M2-14 (Selected-mode IDs aren't
   remapped to the merged entry), M2-15 (BASE can be a non-earliest entry while
   the prompt assumes the earliest), M2-16 (the success message overwrites
-  validation warnings).
-- [ ] **M2-17 — Chronicle's previews and estimates build the payload their own
+  validation warnings). Selected IDs now remap to the merged entry, and the
+  prompt names the actual timeline endpoint independently of the designated base.
+- [x] **M2-17 — Chronicle's previews and estimates build the payload their own
   way.** The preview's depth and role now come from
   `resolveInjectionPlacement()` (2.10.1). Still open: the stats token estimate
   skips the header and per-entry labels, the public token helper skips the
   labels, and the preview doesn't show the structural wrapper the real
-  injection adds. One payload builder should feed all three.
-- [ ] **Chronicle races and counters** — M2-04 (anchor and character list
+  injection adds. One payload builder now feeds all three; the preview labels
+  its text as pre-adapter content rather than claiming final host-prompt parity.
+- [x] **Chronicle races and counters** — M2-04 (anchor and character list
   rebuilt from post-await history), M2-05 (`onChatChanged` clears
   `isGenerating`; Story Planner deliberately doesn't, and the coordinator's
   one-call-per-module limit caps the damage at a duplicate queued job),
   M2-09 (receipt accounting drift).
-- [ ] **World State odds and ends** — F6 (receipt counting isn't tied to the
+  *Partly addressed:* generation freezes source metadata and detects edits;
+  scope-aware finalizers avoid clearing another chat's busy flag. Receipt
+  provenance is committed with the snapshot. Counted receipt events in the
+  excluded tail (including repeated events on one message), preloaded uncounted
+  rows, and deletions during generation now have regression coverage. Still
+  review auto-snapshot failure/reset and chat-switch cadence paths.
+  *Further pass (2026-09-27):* auto-snapshot failure now preserves the counted
+  receipts and counter, backing off to the next full threshold instead of
+  clearing provenance; the retry gate resets on chat switch. Regeneration
+  discards results when the source entry or messages change mid-request.
+  *Closed (2026-09-27):* M2-04's frozen source metadata + revision checks and
+  M2-05's scope-owned busy-flag release (with the coordinator-cancellation
+  branch in all three catches) were already in place and are now pinned by
+  `test/chronicle_module2_review.test.js`. The M2-09 remainder — the
+  export/import half — is fixed: `exportChronicle()` now carries
+  `countedReceiptEvents` beside the counter, the standalone import restores
+  the pair in ONE checked commit (a legacy export without the provenance
+  field clamps its counter to zero, since an unaccountable counter can never
+  drain and would re-trigger auto-snapshots forever; the status says so), and
+  the backup merge restore applies the same pair rule (a legacy backup keeps
+  the destination's pair and the summary says why). The in-memory map follows
+  the committed pair via `restoreReceiptBookkeeping()`. Pinned by
+  `test/import_export_roundtrip.test.js`, `test/backup.test.js`, and
+  `test/restore_quarantine_integrity.test.js`.
+- [x] **World State odds and ends** — F6 (receipt counting isn't tied to the
   event's message; the router already extracts the index at `index.js:823`
   but only passes it to Interiority), F9 (section regen builds its prompt
   separately from the captured revision, wasting a call when an edit lands
   in between), F8 (build the injection projection only when enabled; the
   chat-switch half is already covered by `resetBudgetInjections()`).
-- [ ] **Knowledge odds and ends** — NK-05 (the stall needs 40 consecutive
+  The router now passes the receipt index; section prompts share the captured
+  document and refuse preflight edits; disabled injection skips projection.
+- [x] **Knowledge odds and ends** — NK-05 (the stall needs 40 consecutive
   messages that strip to nothing), NK-06 (the collision suffix gets
   truncated, but only with non-global scope and names near 64 characters),
   NK-11 (whitelist which settings an import may set; a merged `scope`
   silently changes which books the import writes to).
-- [ ] **Interiority odds and ends** — M5-5 (every save validates the whole
+  *Partly addressed:* the 40-message stripped batch advances its cursor without
+  an API call (regression covered); collision suffix space is reserved. NPC
+  imports cannot change scope/book bindings, pin and recheck the destination,
+  stage the registry in a detached copy, and stop on failed lorebook writes.
+  File-level atomic rollback (including settings, quarantine, and history
+  side effects) is not implemented; inspect prior entries before retrying a
+  partially written import.
+  *Further pass (2026-09-27):* approved API settings are deferred until the
+  registry import has succeeded; import counts reflect accepted records.
+  Standalone import remains non-transactional across the host lorebook,
+  quarantine, history, and registry stores; see the rollback warning above.
+- [x] **Interiority odds and ends** — M5-5 (every save validates the whole
   live store twice; measure before optimizing), M5-6 (no cap on active
   intentions by default; the budget hard cap, Max Turns Open, and per-NPC
   `activeCap` already exist as opt-ins).
+  Known-canonical committed clones skip repeat live validation; narrator
+  injection now caps active entries at 20. *Revised 2026-09-27:* the first
+  cap kept the oldest 20 in ledger order (dropping the newest, even
+  `urgent` ones) and put "…review the Interiority ledger" into the narrator
+  prompt. `selectInjectedIntentions()` now keeps the highest priority, then
+  the most recent, printed in ledger order; the omission shows as a note in
+  the Active Intentions panel and an `intentions_injection_capped`
+  diagnostics event, never in the prompt. Pinned by
+  `test/interiority_injection_cap.test.js`.
 
 ### Small bugs from the reviews' "smells" and "observations" sections
 
-- [ ] **World State provenance scans unfiltered text.**
+- [x] **World State provenance scans unfiltered text.**
   `getScanWindowWithIndices` (`world_state/provenance.js:80-94`) skips the
   `stripNonNarrative` pass and regex filter that `scanMessageLine` applies
   (`world_state/refresh.js:68-76`). A tracker block that lists the cast keeps
   every NPC "fresh", so expiry never fires for them. Share the filtering and
   keep the indices.
-- [ ] **World State label matching uses `\b…\b`**
+- [x] **World State label matching uses `\b…\b`**
   (`world_state/provenance.js:141`), so names ending in punctuation ("Jonah
   Jr.") never match. `SECTION_NAME_BOUNDARY` in `world_state/data.js` already
   fixed this for section names.
-- [ ] **World State's Test Connection button skips the real transport**
+- [x] **World State's Test Connection button skips the real transport**
   (`world_state/render.js:1014-1039`). It ignores `customHeaders` and any
   configured connection profile, so it can report a false failure or a
   meaningless success. Route it through `resolveApiCall`.
-- [ ] **Chronicle export turns depth 0 into 2** — `injectDepth: cd.injectDepth || 2`
+- [x] **Chronicle export turns depth 0 into 2** — `injectDepth: cd.injectDepth || 2`
   (`chronicle/import-export.js:29`). Use `??`.
-- [ ] **Doc drift** — `world_state/STALE_ENTRY_EXPIRY_DESIGN.md:302-311` cites
+- [x] **Doc drift** — `world_state/STALE_ENTRY_EXPIRY_DESIGN.md:302-311` cites
   the removed `splitWorldState()` and says strict grounding falls back to a
   soft strip. It now discards (`world_state/refresh.js:653`).
-- [ ] **Dead code** — the unused `typeColors` map in the relationship-graph
+- [x] **Dead code** — the unused `typeColors` map in the relationship-graph
   redraw (`knowledge/render.js:2943-2944`).
-- [ ] *(Performance nit)* World State recompiles the user's regex filters for
+- [x] *(Performance nit)* World State recompiles the user's regex filters for
   every message on every scan (`world_state/refresh.js:50-63`). Cache them per
   settings change.
+
+### Follow-ups from the 2026-09-27 review of the §0 fixes
+
+The fix work was checked item by item against each finding (lint, the full
+suite, and a browser-load check that every static and dynamic import
+resolves — vitest turns a missing named import into `undefined`, the browser
+into a load failure). Nearly everything held up; M2-18, the regenerate gap,
+and the M5-6 cap were fixed the same day (see those items). Still open:
+
+- [x] **NPC import writes an unregistered chat-metadata key.**
+  `mwtKnowledgeNpcImportAttempt` (`knowledge/staging.js`, `importNpcs`) goes
+  straight into `chat_metadata` with `persistChatMeta()` — outside every
+  store's write seam, so it isn't schema-validated, pause-aware, backed up,
+  or listed in Diagnostics. It only supports resuming an interrupted import.
+  Dropped the attempt marker. Retries still compare name and content against
+  physical lorebook entries, reusing exact matches without another write;
+  only the cross-reload interrupted-import notice is gone.
+- [x] **NK-06's caller fix is untested, and it refuses by throwing.** The
+  reserved-space disambiguation in `resolveBookNames()` has no test (the
+  review probe still pins only the helper's truncation, under a name saying
+  the discriminator is lost). A surviving collision throws from the function
+  every Knowledge operation calls; prefer a surfaced refusal. The real resolver
+  now has long-name and surviving-collision tests; a collision returns no book,
+  reports an error, and blocks null-book store writes. The read-only explainer
+  and Scope diagnostics show the same refusal.
+- [ ] **Legacy cadence counters get two different policies.** A file whose
+  counter has no receipt provenance: the Chronicle import resets it to 0,
+  the backup restore keeps the destination's pair. Pick one.
+- [ ] **Knowledge capture stamps a UUID into every message it scans.**
+  `getIndexedMessageWindow()` / `buildDeltaWindow()` call
+  `getOrCreateReceiptIdentity()` per message as the cursor advances (up to
+  80 chat writes per capture); only the final cursor message needs one.
+- [ ] **The capture-cursor advance rule is duplicated** in
+  `appendRawObservations()` and `setCaptureWatermark()`
+  (`knowledge/evidence.js`). One helper, so capture and backfill can't drift.
+- [ ] **Story Planner pause UX.** The restore failure message always says
+  "unavailable while paused", even for a validation refusal, and
+  `handleArcsClick` silently ignores every click while paused (read-only
+  ones included).
+- [ ] **SP4-01's `null`-record half is still present.** A `null` arc record
+  still migrates into an accepted blank arc
+  (`test/story_planner_module4_review.test.js` pins it under "defect
+  reproductions"). Decide: drop it with a repair issue, or accept it and
+  move the test out of the defect block.
+- [ ] *(Nit)* `receipt-invalid` isn't registered in the World State / Story
+  Planner issue policies (catalog only — no behavior depends on it), and
+  the new receipt helpers sit above `core/schema.js`'s file header.
+- [ ] **Housekeeping.** Rename probes whose names still describe fixed bugs
+  (the Interiority M5-1 tests, Knowledge's "stalls" probe) and the Knowledge
+  file header ("Most assertions below still reproduce CURRENT defects");
+  rename or fold `test/temporary_bug_fixes.test.js`; collapse the layered
+  "Partly addressed… / Further pass… / Closed…" notes under ticked items to
+  their final state (e.g. M2-17 still opens with "Still open:", and the
+  unchecked-writes item still says progress acceptance splits its writes —
+  it no longer does). Informational: `replaceSection()` now normalizes
+  spacing around the section it touches, so an older document's first edit
+  shows whitespace-only history noise.
 
 ### Verified not bugs — don't re-open
 

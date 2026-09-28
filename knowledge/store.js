@@ -911,6 +911,7 @@ export async function clearStoreQuarantine(bookName) {
  * Safe to call before hydration; render paths rely on that.
  */
 export function readField(bookName, field, fallback = {}) {
+    if (!bookName) return fallback;
     const s = slot(bookName);
     const value = s.data[field];
     if (value === undefined || value === null) {
@@ -930,6 +931,7 @@ export function readField(bookName, field, fallback = {}) {
  * The restore's own writes use _writeFieldDirect.
  */
 export function writeField(bookName, field, value) {
+    if (!bookName) return;
     if (_storeTransaction) {
         _deferredWrites.push({ bookName, field, value });
         return;

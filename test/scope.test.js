@@ -221,6 +221,43 @@ describe('resolveBookNames', () => {
         expect(second).toContain('Mara');
     });
 
+    test('long names reserve space for the discriminator and bind separate books', () => {
+        saveSettings({ scope: 'character' });
+        const firstName = 'A'.repeat(64);
+        setFakeContextExtras({ characterId: 0, characters: [{ name: firstName, avatar: 'first.png' }] });
+        const first = resolveBookNames();
+        setFakeContextExtras({ characterId: 0, characters: [{ name: firstName + ' different tail', avatar: 'second.png' }] });
+        const second = resolveBookNames();
+        expect(second.knowledge).toBe(`Knowledge Tracker - ${'A'.repeat(64 - ` (${shortHash('char:second.png')})`.length)} (${shortHash('char:second.png')})`);
+        for (const field of ['knowledge', 'state', 'profiles']) expect(second[field]).not.toBe(first[field]);
+        expect(getSettings().bookBindings['char:second.png']).toEqual(second);
+    });
+
+    test('an occupied discriminator refuses visibly without binding or writing to a shared book', async () => {
+        const { getRegistry, saveRegistry } = await import('../knowledge/registry.js');
+        const { _clearCacheForTests } = await import('../knowledge/store.js');
+        const { state } = await import('../knowledge/state.js');
+        _clearCacheForTests();
+        saveSettings({ scope: 'character' });
+        const name = 'A'.repeat(64);
+        setFakeContextExtras({ characterId: 0, characters: [{ name, avatar: 'first.png' }] });
+        const first = resolveBookNames();
+        const key = 'char:second.png';
+        const suffix = ` (${shortHash(key)})`;
+        const occupied = deriveBookNames(`${'A'.repeat(64 - suffix.length)}${suffix}`);
+        saveSettings({ bookBindings: { ...getSettings().bookBindings, 'char:third.png': occupied } });
+        setFakeContextExtras({ characterId: 0, characters: [{ name, avatar: 'second.png' }] });
+        expect(resolveBookNames()).toBeNull();
+        expect(state._lastKtStatusMsg).toMatch(/still collides/);
+        expect(state._lastKtStatusLevel).toBe('error');
+        expect(getSettings().bookBindings[key]).toBeUndefined();
+        expect(getRegistry()).toEqual({});
+        saveRegistry({ Mara: { uid: 3 } });
+        expect(getRegistry()).toEqual({});
+        expect(getSettings().bookBindings['char:first.png']).toEqual(first);
+        _clearCacheForTests();
+    });
+
     test('chat scope derives per-chat books', () => {
         saveSettings({ scope: 'chat' });
         setFakeContextExtras({ getCurrentChatId: () => 'chat-42' });

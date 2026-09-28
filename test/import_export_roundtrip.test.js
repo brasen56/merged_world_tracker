@@ -626,11 +626,10 @@ describe('Knowledge export/import', () => {
         await importNpcs();
         expect(getRegistry()).toEqual({});
         expect(knowledgeState._lastKtStatusMsg).toMatch(/1 entries were written; retry will skip identical entries/);
-        expect(getFakeMeta().mwtKnowledgeNpcImportAttempt.written).toBe(1);
+        expect(getFakeMeta()).not.toHaveProperty('mwtKnowledgeNpcImportAttempt');
         const priorHistory = { ...localStorage._data };
         wiFake.saveWorldInfo = vi.fn(save);
         await importNpcs();
-        expect(knowledgeState._lastKtStatusMsg).toMatch(/Previous import didn't finish/);
         expect(knowledgeState._lastKtStatusMsg).toMatch(/identical lorebook entries reused/);
         expect(knowledgeState._lastKtStatusLevel).toBe('success');
         expect(wiFake.saveWorldInfo).toHaveBeenCalledTimes(1);
