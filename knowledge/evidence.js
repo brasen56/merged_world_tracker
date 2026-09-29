@@ -655,6 +655,29 @@ export function nextObsId(file, tier) {
 
 // ─── Capture: append to raw[] ────────────────────────────────────────────────
 
+/** Advance a staged evidence file's cursor; the caller owns the checked commit. */
+function advanceCaptureCursor(meta, { ts, index = null, identity = null }) {
+    if (!Number.isFinite(ts)) return false;
+    const oldTs = meta.lastCaptureTs;
+    const oldIndex = meta.lastCaptureIndex;
+    if (!(oldTs == null || ts > oldTs || (ts === oldTs && Number.isInteger(index)
+        && (index > (oldIndex ?? -1) || (typeof identity === 'string'
+            && meta.lastCaptureIdentity && identity !== meta.lastCaptureIdentity))))) return false;
+
+    meta.lastCaptureTs = ts;
+    // A legacy timestamp-only boundary must remain timestamp-only on an
+    // equal-time pass; it cannot safely acquire an index until time advances.
+    if (Number.isInteger(index) && index >= 0 && (oldTs == null || ts > oldTs || oldIndex != null)) {
+        meta.lastCaptureIndex = index;
+        if (typeof identity === 'string') meta.lastCaptureIdentity = identity;
+        else delete meta.lastCaptureIdentity;
+    } else if (ts > oldTs) {
+        delete meta.lastCaptureIndex;
+        delete meta.lastCaptureIdentity;
+    }
+    return true;
+}
+
 /**
  * Append captured observations to the raw tier. This is the ONLY write path
  * for capture — it never touches consolidated[] and never overwrites.
@@ -710,25 +733,7 @@ export function appendRawObservations(name, observations, cursor = null, backfil
         added++;
     }
 
-    if (cursor && Number.isFinite(cursor.ts)) {
-        const oldTs = file.meta.lastCaptureTs;
-        const oldIndex = file.meta.lastCaptureIndex;
-        if (oldTs == null || cursor.ts > oldTs
-            || (cursor.ts === oldTs && Number.isInteger(cursor.index)
-                && (cursor.index > (oldIndex ?? -1) || (typeof cursor.identity === 'string'
-                    && file.meta.lastCaptureIdentity && cursor.identity !== file.meta.lastCaptureIdentity)))) {
-            file.meta.lastCaptureTs = cursor.ts;
-            if (Number.isInteger(cursor.index) && cursor.index >= 0
-                && (oldTs == null || cursor.ts > oldTs || oldIndex != null)) {
-                file.meta.lastCaptureIndex = cursor.index;
-                if (typeof cursor.identity === 'string') file.meta.lastCaptureIdentity = cursor.identity;
-                else delete file.meta.lastCaptureIdentity;
-            } else if (cursor.ts > oldTs) {
-                delete file.meta.lastCaptureIndex;
-                delete file.meta.lastCaptureIdentity;
-            }
-        }
-    }
+    if (cursor) advanceCaptureCursor(file.meta, cursor);
     if (Number.isFinite(backfillTs) && (file.meta.lastBackfillTs == null || backfillTs > file.meta.lastBackfillTs)) {
         file.meta.lastBackfillTs = backfillTs;
     }
@@ -1212,22 +1217,7 @@ export function getCaptureCursor(name) {
 export function setCaptureWatermark(name, ts, index = null, identity = null) {
     if (typeof ts !== 'number' || !Number.isFinite(ts)) return;
     const file = getEvidenceFile(name);
-    const cur = file.meta.lastCaptureTs;
-    const oldIndex = file.meta.lastCaptureIndex;
-    if (cur == null || ts > cur || (ts === cur && Number.isInteger(index)
-        && (index > (oldIndex ?? -1) || (typeof identity === 'string'
-            && file.meta.lastCaptureIdentity && identity !== file.meta.lastCaptureIdentity)))) {
-        file.meta.lastCaptureTs = ts;
-        // Legacy timestamps without an index must stay timestamp-only until a
-        // NEWER timestamp is captured; do not reprocess an old equal-time batch.
-        if (Number.isInteger(index) && index >= 0 && (cur == null || ts > cur || oldIndex != null)) {
-            file.meta.lastCaptureIndex = index;
-            if (typeof identity === 'string') file.meta.lastCaptureIdentity = identity;
-            else delete file.meta.lastCaptureIdentity;
-        } else if (ts > cur) {
-            delete file.meta.lastCaptureIndex;
-            delete file.meta.lastCaptureIdentity;
-        }
+    if (advanceCaptureCursor(file.meta, { ts, index, identity })) {
         if (!touch(file).ok) return false;
     }
     return true;

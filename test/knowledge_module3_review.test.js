@@ -1,14 +1,8 @@
 /** Review probes for the Module 3 (Knowledge) findings (docs/TODO.md §0).
  *
- * Most assertions below still reproduce CURRENT defects: their functions are
- * extracted from actual source and run with explicit boundary stubs. These are
- * not host integration tests.
- *
- * Two probes were converted into regression pins of FIXED behavior (2.10.2):
- * NK-01 + NK-09 (failed-flush retention across a cache reset) and NK-07
- * (imported-UID verification). Per docs/TODO.md §0 "The review probe tests",
- * those import the real modules under the core stub instead of copying source
- * text into a `vm` sandbox.
+ * Regression coverage for the reviewed fixes. Some tests extract functions
+ * from source with explicit boundary stubs; these are not host integration
+ * tests. Store and imported-UID probes use the real modules under core stubs.
  */
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -78,7 +72,7 @@ function load(file, start, end, context) {
     vm.runInNewContext(source.slice(from, to).replace(/^export /gm, ''), context);
 }
 
-describe('Module 3 review — defect reproductions', () => {
+describe('Module 3 review — regression probes', () => {
     test('consolidation preserves a source promoted to canon while generation was pending', () => {
         const file = { raw: [{ id: 'obs-001', claim: 'User canon', quote: 'receipt', canon: true, ts: 1 }], consolidated: [], archivedRaw: [] };
         const c = { getEvidenceFile: () => file, obsIdSequence: () => () => 'con-001', validCategory: x => x, touch: () => ({ ok: true }) };
@@ -157,7 +151,7 @@ describe('Module 3 review — defect reproductions', () => {
         expect(c.buildDeltaWindow(first.maxTs, 2, 1, { index: first.lastIndex })).toMatchObject({ count: 1, lastIndex: 2 });
     });
 
-    test('all-stripped leading delta batch stalls before later narrative', () => {
+    test('all-stripped leading delta batch advances its cursor without model text', () => {
         const chat = [1, 2, 3].map(n => ({ mes: n === 3 ? 'narrative' : 'stripped', send_date: n }));
         const c = { getChat: () => chat, getEligibleChatEnd: () => chat.length,
             isIlsSummary: () => false, normalizeSendDate: x => x,

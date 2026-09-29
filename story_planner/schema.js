@@ -1185,6 +1185,20 @@ export function migrateStoryPlannerV0ToV1(data) {
     return { data: next, issues };
 }
 
+/** Preserve malformed legacy arc records for recovery before sanitizing survivors. */
+function migrateArcRecords(records, path, migrateArc, issues) {
+    const migrated = [];
+    for (let index = 0; index < records.length; index++) {
+        const raw = records[index];
+        if (!isObject(raw)) {
+            issues.push(quarantineIssue('arc-not-object', [...path, index], 'Arc must be an object.', raw));
+        } else {
+            migrated.push(migrateArc(raw));
+        }
+    }
+    return migrated;
+}
+
 /** v1 -> v2: make beat progress and lifecycle decisions explicit and durable. */
 export function migrateStoryPlannerV1ToV2(data) {
     if (!isObject(data)) return { data, issues: [] };
@@ -1204,10 +1218,11 @@ export function migrateStoryPlannerV1ToV2(data) {
         }));
         return arc;
     };
-    const next = { ...data, arcs: Array.isArray(data.arcs) ? data.arcs.map(migrateArc) : [] };
+    const next = { ...data, arcs: Array.isArray(data.arcs)
+        ? migrateArcRecords(data.arcs, ['arcs'], migrateArc, issues) : [] };
     if (Array.isArray(data.history)) {
-        next.history = data.history.map(entry => isObject(entry) && Array.isArray(entry.arcs)
-            ? { ...entry, arcs: entry.arcs.map(migrateArc) }
+        next.history = data.history.map((entry, index) => isObject(entry) && Array.isArray(entry.arcs)
+            ? { ...entry, arcs: migrateArcRecords(entry.arcs, ['history', index, 'arcs'], migrateArc, issues) }
             : entry);
     }
     if (next.injectMode === 'active') next.injectMode = 'all';
@@ -1230,10 +1245,10 @@ export function migrateStoryPlannerV2ToV3(data) {
     return {
         data: {
             ...data,
-            arcs: Array.isArray(data.arcs) ? data.arcs.map(migrateArc) : [],
+            arcs: Array.isArray(data.arcs) ? migrateArcRecords(data.arcs, ['arcs'], migrateArc, issues) : [],
             ...(Array.isArray(data.history) ? {
-                history: data.history.map(entry => isObject(entry) && Array.isArray(entry.arcs)
-                    ? { ...entry, arcs: entry.arcs.map(migrateArc) }
+                history: data.history.map((entry, index) => isObject(entry) && Array.isArray(entry.arcs)
+                    ? { ...entry, arcs: migrateArcRecords(entry.arcs, ['history', index, 'arcs'], migrateArc, issues) }
                     : entry),
             } : {}),
             ...(Object.hasOwn(data, 'storyPlanRequestPreferences')
@@ -1302,6 +1317,7 @@ export const storyPlannerSchema = defineStoreSchema({
         fatal: ['root-not-object'],
         record: [
             'not-an-array',
+            'receipt-invalid',
             'arc-not-object',
             'arc-missing-id',
             'arc-title-not-string',

@@ -215,15 +215,29 @@ export function getChatIdentity() {
 // ─── Resolution ─────────────────────────────────────────────────────────────
 
 /**
+ * The refused collision last reported. Every registry read resolves the book
+ * names, so an unrepaired collision would otherwise log on each one. Cleared
+ * by any successful resolution, so leaving and returning reports it again.
+ */
+let _reportedCollision = null;
+
+/**
  * Resolve the three lorebook names for the current scope.
  *
  * Reuses a previously saved binding when one exists for this identity, so
  * renaming a card does not orphan its books. Falls back to the global names
  * whenever the current scope cannot be identified.
  *
- * @returns {{ knowledge: string, state: string, profiles: string }}
+ * @returns {{ knowledge: string, state: string, profiles: string }|null} —
+ *   null when a scoped name still collides after disambiguation (refused)
  */
 export function resolveBookNames() {
+    const names = resolveScopedBookNames();
+    if (names) _reportedCollision = null;
+    return names;
+}
+
+function resolveScopedBookNames() {
     const settings = getSettings();
     const scope = SCOPES.includes(settings.scope) ? settings.scope : 'global';
     if (scope === 'global') return deriveBookNames(null);
@@ -281,9 +295,13 @@ export function resolveBookNames() {
         // Never persist a binding that still aliases another identity (e.g.
         // a pre-existing binding using this discriminator).
         if (takenByOthers.has(names.knowledge)) {
-            const message = 'Scoped lorebook name still collides after disambiguation — refusing to bind a shared book. Change the character name or repair its saved book bindings.';
-            console.warn(`[MWT:Knowledge] ${message}`);
-            ktSetStatus(message, 'error');
+            const report = `${identity.key} → ${names.knowledge}`;
+            if (_reportedCollision !== report) {
+                _reportedCollision = report;
+                const message = 'Scoped lorebook name still collides after disambiguation — refusing to bind a shared book. Change the character name or repair its saved book bindings.';
+                console.warn(`[MWT:Knowledge] ${message}`);
+                ktSetStatus(message, 'error');
+            }
             return null;
         }
         console.log(

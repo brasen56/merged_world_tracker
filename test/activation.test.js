@@ -27,6 +27,7 @@ import {
 } from './stubs/core.js';
 import { state } from '../knowledge/state.js';
 import { getSettings, saveSettings as saveKnowledgeSettings } from '../knowledge/settings.js';
+import { deriveBookNames, shortHash, resolveBookNames } from '../knowledge/scope.js';
 import {
     applyActivationBindings, removeActivationBindings, pruneStaleLedger,
 } from '../knowledge/activation.js';
@@ -90,6 +91,22 @@ function useCharacterChat() {
 const ledgerOf = () => getSettings().activation;
 const sawEvent = (name) => getEvents().some((e) => e?.event === name);
 
+/** Arrange a real refusal: both the base and the disambiguated name are taken. */
+function useCollidingCharacter() {
+    const name = 'A'.repeat(64);
+    const key = 'char:second.png';
+    const suffix = ` (${shortHash(key)})`;
+    saveKnowledgeSettings({
+        scope: 'character',
+        bookBindings: {
+            'char:first.png': deriveBookNames(name),
+            'char:third.png': deriveBookNames(`${'A'.repeat(64 - suffix.length)}${suffix}`),
+        },
+    });
+    setFakeContextExtras({ characterId: 0, characters: [{ name, avatar: 'second.png' }] });
+    expect(resolveBookNames()).toBeNull();
+}
+
 beforeEach(() => {
     resetCoreStubs();
     // Wire the fake extension_settings into the fake context so the Knowledge
@@ -109,6 +126,52 @@ afterEach(() => {
 // ─── Knowledge book → the chat's bound-book slot ─────────────────────────────
 
 describe('applyActivationBindings — Knowledge → chat slot', () => {
+    test('a refused collision leaves an MWT-owned chat slot and both State slots untouched', async () => {
+        saveKnowledgeSettings({ bindKnowledgeToChat: true, bindStateBook: true, stateScope: 'global' });
+        await applyActivationBindings('test');
+        const meta = getFakeMeta();
+        expect(meta.world_info).toBe('Knowledge Tracker');
+        expect(meta.mwt_chat_world_info).toBe('Knowledge Tracker');
+        expect(wiFake.selected_world_info).toEqual(['State Tracker']);
+        const before = structuredClone(ledgerOf());
+        const saves = wiFake.calls.updateSettings;
+
+        useCollidingCharacter();
+        const res = await applyActivationBindings('scope change');
+
+        expect(res.applied).toEqual([]);
+        expect(res.skipped.join(' ')).toMatch(/could not be resolved/);
+        expect(sawEvent('activation_skip_book_resolution')).toBe(true);
+        expect(meta.world_info).toBe('Knowledge Tracker');
+        expect(meta.mwt_chat_world_info).toBe('Knowledge Tracker');
+        expect(wiFake.selected_world_info).toEqual(['State Tracker']);
+        expect(wiFake.calls.updateSettings).toBe(saves);
+        expect(ledgerOf()).toEqual(before);
+
+        saveKnowledgeSettings({ stateScope: 'character' });
+        const auxRes = await applyActivationBindings('scope change');
+        expect(auxRes.applied).toEqual([]);
+        expect(auxRes.skipped).toHaveLength(1);
+        expect(wiFake.calls.addAux).toBe(0);
+        expect(wiFake.world_info.charLore).toEqual([]);
+        expect(meta.world_info).toBe('Knowledge Tracker');
+    });
+
+    test('a refused collision does not bind an empty chat slot or State selection', async () => {
+        useCollidingCharacter();
+        saveKnowledgeSettings({ bindKnowledgeToChat: true, bindStateBook: true, stateScope: 'global' });
+
+        const res = await applyActivationBindings('test');
+
+        expect(res.applied).toEqual([]);
+        expect(res.skipped).toHaveLength(1);
+        expect(getFakeMeta().world_info).toBeUndefined();
+        expect(getFakeMeta().mwt_chat_world_info).toBeUndefined();
+        expect(wiFake.selected_world_info).toEqual([]);
+        expect(wiFake.calls.updateSettings).toBe(0);
+        expect(ledgerOf()).toEqual({ chatSlot: [], global: [], charAux: {} });
+    });
+
     test('binds the Knowledge book to an empty chat slot and records the ledger', async () => {
         saveKnowledgeSettings({ bindKnowledgeToChat: true });
 
@@ -784,6 +847,24 @@ describe('removeActivationBindings', () => {
 // ─── pruneStaleLedger ────────────────────────────────────────────────────────
 
 describe('pruneStaleLedger', () => {
+    test('a refused collision preserves ownership and does not interrupt reconciliation', async () => {
+        useCollidingCharacter();
+        saveKnowledgeSettings({
+            activation: {
+                chatSlot: ['Knowledge Tracker - Old'],
+                global: ['State Tracker - Old'],
+                charAux: { 'second.png': ['State Tracker - Old'] },
+            },
+        });
+        const before = structuredClone(ledgerOf());
+
+        expect(() => pruneStaleLedger()).not.toThrow();
+        expect(ledgerOf()).toEqual(before);
+        expect(wiFake.calls.updateSettings).toBe(0);
+        expect(wiFake.calls.setAux).toBe(0);
+        expect((await applyActivationBindings('scope change')).applied).toEqual([]);
+    });
+
     test('keeps every live binding, drops dead names, and never touches ST', () => {
         saveKnowledgeSettings({
             bookBindings: {

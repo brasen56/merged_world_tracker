@@ -205,19 +205,20 @@ describe('Chronicle export/import', () => {
     });
 
 
-    test('a legacy export without receipt provenance resets the cadence instead of importing an orphan counter', async () => {
+    test('a legacy export without receipt provenance preserves the destination cadence pair', async () => {
         // Pre-M2-09 exports carried msgSinceSnapshot but no countedReceiptEvents
         // field. Such a counter can never be consumed by a snapshot (consumption
         // is provenance-driven) nor decremented by a deletion, so importing it
         // verbatim would re-trigger auto-snapshots forever once past the
-        // threshold — and leaving the destination's own provenance in place
-        // would let it distort future deletion adjustments.
+        // threshold. Keep the destination's own counter and matching receipt
+        // provenance rather than replacing either one with an orphan value.
         getFakeMeta().session_chronicle_data = {
             snapshots: [],
             _deletedBin: [],
+            msgSinceSnapshot: 2,
             countedReceiptEvents: [['id:local', 2]],
         };
-        chronicleState.msgSinceSnapshot = 0;
+        chronicleState.msgSinceSnapshot = 2;
         chronicleState.countedReceiptEvents = new Map([['id:local', 2]]);
         chronicleState._lastStatusMsg = '';
         chronicleState._lastStatusLevel = '';
@@ -229,13 +230,12 @@ describe('Chronicle export/import', () => {
         await triggerImport();
 
         const data = getFakeMeta().session_chronicle_data;
-        expect(data.msgSinceSnapshot).toBe(0);
-        // The pair moves together: the destination's own provenance cannot
-        // survive a counter replacement it never accounted for.
-        expect(data.countedReceiptEvents).toEqual([]);
-        expect(chronicleState.msgSinceSnapshot).toBe(0);
-        expect(chronicleState.countedReceiptEvents.size).toBe(0);
-        expect(chronicleState._lastStatusMsg).toContain('cadence counter reset');
+        expect(data.snapshots).toHaveLength(1);
+        expect(data.msgSinceSnapshot).toBe(2);
+        expect(data.countedReceiptEvents).toEqual([['id:local', 2]]);
+        expect(chronicleState.msgSinceSnapshot).toBe(2);
+        expect([...chronicleState.countedReceiptEvents]).toEqual([['id:local', 2]]);
+        expect(chronicleState._lastStatusMsg).toContain('destination cadence preserved');
         expect(chronicleState._lastStatusLevel).toBe('success');
     });
 

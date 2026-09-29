@@ -3,20 +3,10 @@
  *
  * Regression tests for refused Interiority writes from the module review.
  *
- * Probes:
- *   A. markLedgerEntryDone() reports success (non-null record) while the
- *      write seam refuses everything — the ledger keeps the entry and no
- *      lifecycle record persists. Manual panel lifecycle actions have no
- *      store-pause guard (only generation does, interiority/index.js:266).
- *   B. wakeLedgerEntryTracked() returns a staged object claiming
- *      status:'active' after its save refused; the live store still says
- *      'dormant', and the diagnostics ring still recorded an
- *      intention_lifecycle event for a transition that never landed
- *      (interiority/lifecycle.js:148-179 records unconditionally).
- *   C. DELETED (2026-09-27): the mu-/sd- duplicate-key asymmetry probe pinned
- *      M5-3, which the docs/TODO.md §0 verification ruled not-a-bug — sd-
- *      last-wins is by design, matching migrateIndexKeys
- *      (interiority/data.js:1756).
+ * M5-1/A: refused lifecycle closes preserve the entry and history.
+ * M5-1/B + M5-2: refused wakes preserve the dormant entry and emit no
+ * lifecycle diagnostics. The M5-3 duplicate-key probe was removed: sd-
+ * last-wins is intentional (docs/TODO.md §0).
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -61,7 +51,7 @@ afterEach(() => {
     delete globalThis.document;
 });
 
-describe('M5-1/A: manual lifecycle close reports success over a refused write', () => {
+describe('M5-1/A: refused lifecycle closes preserve the ledger', () => {
     test('a refused tombstoned removal reports failure and preserves the entry', () => {
         setFakeChat(CHAT);
         const entry = addLedgerEntry({ npc: 'Mara', action: 'wait', trigger: 'dawn' }, 'day 1', 0);
@@ -70,7 +60,7 @@ describe('M5-1/A: manual lifecycle close reports success over a refused write', 
         expect(getLedger().some(item => item.id === entry.id)).toBe(true);
     });
 
-    test('markLedgerEntryDone returns a record while the entry survives and nothing persists', () => {
+    test('markLedgerEntryDone returns null while the entry survives and nothing persists', () => {
         setFakeChat(CHAT);
         const entry = addLedgerEntry({ npc: 'Mara', action: 'rob the caravan', trigger: 'new moon' }, 'day 1', 0);
         expect(getLedger()).toHaveLength(1);
@@ -86,8 +76,8 @@ describe('M5-1/A: manual lifecycle close reports success over a refused write', 
     });
 });
 
-describe('M5-1/B + M5-2: phantom wake result and diagnostics over refused writes', () => {
-    test('wakeLedgerEntryTracked returns an "active" staged object while the store keeps it dormant', () => {
+describe('M5-1/B + M5-2: refused wakes leave state and diagnostics unchanged', () => {
+    test('wakeLedgerEntryTracked returns null while the store keeps the entry dormant', () => {
         setFakeChat(CHAT);
         const entry = addLedgerEntry({ npc: 'Derek', action: 'guard the door', trigger: 'dawn' }, 'day 1', 0);
         setLedgerEntryDormant(entry.id, 'dawn');

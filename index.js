@@ -1147,7 +1147,10 @@ try {
             const charIdentity = scopeApi.getCharacterIdentity();
             const chatIdentity = scopeApi.getChatIdentity();
             const scope = ktSettingsApi.getSettings().scope || 'global';
+            // null = a scoped name that still collides after disambiguation;
+            // Knowledge refuses every book for this scope until it is repaired.
             const books = scopeApi.resolveBookNames();
+            const refused = '(refused: name collision)';
 
             console.log('[MWT] Resolution:');
             console.table({
@@ -1156,11 +1159,11 @@ try {
                     ? `${charIdentity.key} → "${charIdentity.name}"${charIdentity.isGroup ? ' (group)' : ''}`
                     : '(unresolved)',
                 'chat identity': chatIdentity ? chatIdentity.key : '(unresolved)',
-                'Knowledge book': books.knowledge,
-                'State book': books.state,
-                'Profiles book': books.profiles,
-                'Knowledge store loaded': storeApi.isHydrated(books.knowledge),
-                'State store loaded': storeApi.isHydrated(books.state),
+                'Knowledge book': books?.knowledge ?? refused,
+                'State book': books?.state ?? refused,
+                'Profiles book': books?.profiles ?? refused,
+                'Knowledge store loaded': books ? storeApi.isHydrated(books.knowledge) : false,
+                'State store loaded': books ? storeApi.isHydrated(books.state) : false,
             });
 
             const usedIdentity = scope === 'chat' ? chatIdentity : charIdentity;
@@ -1171,7 +1174,14 @@ try {
                     `which lookup came back absent.`
                 );
             }
-            if (!storeApi.isHydrated(books.knowledge)) {
+            if (!books) {
+                console.warn(
+                    `[MWT] ⚠ This ${scope}'s lorebook name collides with other saved bindings even ` +
+                    `after disambiguation, so Knowledge reads and writes no book here. Run ` +
+                    `MWT.scope.bindings() to see which binding holds the name, or open ` +
+                    `Diagnostics → Scope & storage.`
+                );
+            } else if (!storeApi.isHydrated(books.knowledge)) {
                 console.warn(
                     '[MWT] ⚠ The Knowledge store is not loaded, so creating entries is blocked ' +
                     '(this is deliberate — it prevents duplicate entries). Switch chats to retry, ' +

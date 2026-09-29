@@ -40,12 +40,38 @@ import {
     clearEvidence,
     deleteRawObservation,
     nextObsId,
+    getCaptureCursor,
+    getCaptureWatermark,
+    setCaptureWatermark,
 } from '../knowledge/evidence.js';
 
 // Reset the fake SillyTavern state before every single test. Without this,
 // evidence written by one test would still be there for the next test, making
 // failures confusing and order-dependent.
 beforeEach(() => resetCoreStubs());
+
+describe('capture cursor advancement', () => {
+    test.each([
+        ['timestamp-only', { ts: 100 }, { ts: 100, index: 2, identity: 'id:old' }, 100, null],
+        ['newer timestamp', { ts: 100, index: 4, identity: 'id:old' }, { ts: 101, index: 0, identity: 'id:new' }, 101, { ts: 101, index: 0, identity: 'id:new' }],
+        ['older timestamp', { ts: 100, index: 4, identity: 'id:old' }, { ts: 99, index: 6, identity: 'id:new' }, 100, { ts: 100, index: 4, identity: 'id:old' }],
+        ['equal-time higher index', { ts: 100, index: 4, identity: 'id:old' }, { ts: 100, index: 5, identity: 'id:new' }, 100, { ts: 100, index: 5, identity: 'id:new' }],
+        ['equal-time rebased identity', { ts: 100, index: 4, identity: 'id:old' }, { ts: 100, index: 1, identity: 'id:new' }, 100, { ts: 100, index: 1, identity: 'id:new' }],
+        ['newer timestamp without index', { ts: 100, index: 4, identity: 'id:old' }, { ts: 101 }, 101, null],
+    ])('%s behaves identically for append and watermark-only commits', (_label, first, next, ts, cursor) => {
+        const writers = [
+            (name, value) => appendRawObservations(name, [], value),
+            (name, value) => setCaptureWatermark(name, value.ts, value.index, value.identity),
+        ];
+        for (const [index, write] of writers.entries()) {
+            const name = `Mara-${index}`;
+            write(name, first);
+            write(name, next);
+            expect(getCaptureWatermark(name)).toBe(ts);
+            expect(getCaptureCursor(name)).toEqual(cursor);
+        }
+    });
+});
 
 // ── Helper: build a minimal observation object the way capture does ─────────
 // Reused across multiple tests to keep them short and readable.

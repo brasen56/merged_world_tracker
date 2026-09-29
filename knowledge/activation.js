@@ -55,7 +55,7 @@ import {
 } from './state.js';
 import { getSettings, saveSettings } from './settings.js';
 import {
-    getLorebookName, getStateLorebookName, getCharacterIdentity, resolveBookNames,
+    getCharacterIdentity, resolveBookNames,
 } from './scope.js';
 
 const say = (level, event, detail) =>
@@ -434,12 +434,22 @@ export async function applyActivationBindings(reason = 'apply', {
     }
 
     const settings = getSettings();
+    // A refused scoped-name collision has no safe activation target. Resolve
+    // before touching either slot (including an MWT-owned slot from an older
+    // scope), and leave ownership intact for a later retry after repair.
+    const books = (settings.bindKnowledgeToChat || settings.bindStateBook)
+        ? resolveBookNames() : null;
+    if ((settings.bindKnowledgeToChat || settings.bindStateBook) && !books) {
+        say('warn', 'activation_skip_book_resolution', { reason });
+        out.skipped.push('Lorebook names could not be resolved — World Info bindings left unchanged. Repair the scoped book-name collision and retry.');
+        return out;
+    }
     const ledger = getLedger();
     let dirty = false;
 
     // ── Knowledge book → this chat's bound-book slot ────────────────────────
     if (settings.bindKnowledgeToChat) {
-        const book = getLorebookName();
+        const book = books.knowledge;
         if (!hasChatMetadata(ctx)) {
             say('info', 'activation_skip_kt_no_chat', { reason, book });
             out.skipped.push(`No open chat — "${book}" will be bound on the next chat change.`);
@@ -503,7 +513,7 @@ export async function applyActivationBindings(reason = 'apply', {
 
     // ── State book → the slot chosen by stateScope ──────────────────────────
     if (settings.bindStateBook) {
-        const book = getStateLorebookName();
+        const book = books.state;
         const stateScope = ['global', 'character', 'chat'].includes(settings.stateScope)
             ? settings.stateScope : 'character';
 
@@ -765,6 +775,10 @@ export async function removeActivationBindings(which = { chat: true, state: true
  * @param {object} [deps.settings] — settings snapshot (defaults to live)
  */
 export function pruneStaleLedger({ settings = getSettings() } = {}) {
+    // Refused collisions are temporary. Without a resolved target, pruning
+    // could discard ownership of a still-bound book before it can be removed.
+    const resolved = resolveBookNames();
+    if (!resolved) return;
     const live = new Set([LOREBOOK_NAME, STATE_LOREBOOK_NAME, PROFILE_LOREBOOK_NAME]);
     for (const binding of Object.values(settings.bookBindings || {})) {
         for (const name of Object.values(binding || {})) {
@@ -773,7 +787,7 @@ export function pruneStaleLedger({ settings = getSettings() } = {}) {
     }
     // resolveBookNames() may save a first-time binding — the same side effect
     // every getLorebookName() call already performs, so nothing new here.
-    for (const name of Object.values(resolveBookNames())) {
+    for (const name of Object.values(resolved)) {
         if (typeof name === 'string' && name) live.add(name);
     }
 

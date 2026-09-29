@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
     migrateStoryPlannerV1ToV2, migrateStoryPlannerV2ToV3,
-    validateStoryPlannerData,
+    storyPlannerSchema, validateStoryPlannerData,
 } from '../story_planner/schema.js';
+import { prepareStore } from '../core/schema.js';
 import { addArc, addArcBeat, getArcs, makeArc, pushPlanToHistory, removeArc, setArcsWithHistory, updateArc } from '../story_planner/data.js';
 import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
 
@@ -17,10 +18,7 @@ beforeEach(() => {
     gate.blocked = false;
 });
 
-// Defect reproductions: these assert current behavior, not desired contracts —
-// except the receipt-tuple test below, which now pins the FIXED SP4-05
-// contract (quarantine + canonical data, fixed in 2.10.2; docs/TODO.md §0).
-describe('Module 4 review defect reproductions', () => {
+describe('Module 4 review regressions', () => {
     test.each([migrateStoryPlannerV1ToV2, migrateStoryPlannerV2ToV3])(
         '%s quarantines a corrupt arc container', migrate => {
             const raw = { arcs: { recoverable: 'original content' } };
@@ -32,12 +30,31 @@ describe('Module 4 review defect reproductions', () => {
         },
     );
 
-    test('v2 migration turns a malformed record into an accepted blank arc', () => {
-        const result = migrateStoryPlannerV2ToV3({ arcs: [null] });
-        expect(result.data.arcs).toHaveLength(1);
-        expect(result.data.arcs[0].title).toBe('');
-        expect(validateStoryPlannerData(result.data).issues).toEqual([]);
+    test.each([1, 2])('preparing a v%i store retains rejected null arcs in quarantine', version => {
+        const result = prepareStore(storyPlannerSchema, { arcs: [null], history: [{ arcs: [null] }] }, { version });
+        expect(result.data.arcs).toEqual([]);
+        expect(result.data.history[0].arcs).toEqual([]);
+        expect(result.quarantined).toEqual([
+            expect.objectContaining({ reasonCode: 'arc-not-object', raw: null }),
+            expect.objectContaining({ reasonCode: 'arc-not-object', raw: null }),
+        ]);
     });
+
+    test.each([migrateStoryPlannerV1ToV2, migrateStoryPlannerV2ToV3])(
+        '%s quarantines non-object arcs in live and history lists before sanitization', migrate => {
+            const valid = { id: 'arc-1', title: 'Keep this', section: 'immediate', beats: [] };
+            const result = migrate({ arcs: [null, valid, 'bad'], history: [{ arcs: [valid, null] }] });
+            expect(result.data.arcs).toHaveLength(1);
+            expect(result.data.arcs[0].title).toBe('Keep this');
+            expect(result.data.history[0].arcs).toHaveLength(1);
+            expect(result.issues).toEqual([
+                expect.objectContaining({ code: 'arc-not-object', severity: 'quarantine', path: ['arcs', 0], record: null }),
+                expect.objectContaining({ code: 'arc-not-object', severity: 'quarantine', path: ['arcs', 2], record: 'bad' }),
+                expect.objectContaining({ code: 'arc-not-object', severity: 'quarantine', path: ['history', 0, 'arcs', 1], record: null }),
+            ]);
+            expect(validateStoryPlannerData(result.data).issues).toEqual([]);
+        },
+    );
 
     test('a refused history write leaves the live store unchanged', () => {
         const arc = makeArc({ title: 'Original', body: 'Preserve me' });

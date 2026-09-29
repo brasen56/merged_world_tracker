@@ -34,8 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chat could still mutate the plan. History writes are now detached (the
   history list is cloned before the candidate is pushed), and the restore,
   mutation, dropdown, and Clear paths are refused while Story Planner is
-  paused for the current scope — a Restore from history reports that it is
-  unavailable instead of silently doing nothing. (SP4-02, `docs/TODO.md` §0.)
+  paused for the current scope. Revert and Restore from history say whether
+  they were refused because Story Planner is paused or because the store
+  refused the write, instead of silently doing nothing; the arc buttons
+  explain the pause; and expanding or collapsing sections still works.
+  (SP4-02, `docs/TODO.md` §0.)
 
 - **Evidence marked as canon during a consolidation can no longer be
   archived by that same consolidation.** The source check tested only
@@ -52,11 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   imported counter at or above the auto-snapshot threshold would
   re-trigger a snapshot on every subsequent message, forever, and any
   destination provenance left behind would distort future deletion
-  adjustments. The export now carries `countedReceiptEvents`, the import
-  restores the pair as ONE atomic checked commit, a legacy export without
-  the provenance field imports its counter clamped to zero (with a status
-  note), and the backup merge keeps the destination's pair when the backup
-  cannot account for its counter. (M2-09, `docs/TODO.md` §0.)
+  adjustments. The export now carries `countedReceiptEvents`, and the import
+  restores the pair as ONE atomic checked commit. A legacy export without
+  the provenance field cannot account for its counter, so the standalone
+  import keeps the destination's counter and receipt map (with a status
+  note), the same policy the backup merge applies. (M2-09, `docs/TODO.md` §0.)
 
 - **Knowledge's Enrich can no longer overwrite a growth-owned Personality
   line.** `runNpcEnrich` merged the model's `fields` unfiltered, unlike
@@ -119,6 +122,143 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remove mode and quarantining them together in quarantine mode, reusing
   `stripNameLines`' grouping for the archive merge. (F4, `docs/TODO.md` §0.)
 
+- **An auto-snapshot no longer replaces an open Chronicle editor.** A
+  snapshot that finished in the background re-rendered the Chronicle tab,
+  so a reply arriving while you edited an entry threw the edit away. It now
+  re-renders only the entry list; an open editor, preview, or form is left
+  alone, and an auto-snapshot never switches the view (a manual Generate
+  from the list still opens the new entry). The search box no longer
+  re-renders after you've moved on. (M2-18, `docs/TODO.md` §0.)
+
+- **Regenerate refuses an entry it can't read in full.** An entry whose
+  range is larger than one message window (a consolidated entry, or one
+  made before 2.10.2) kept its recorded range while only the oldest part was
+  summarized, silently losing its newest end. Regeneration now refuses
+  before any model call and says why; one message too large for a window on
+  its own is still allowed. (The regenerate half of M2-03, `docs/TODO.md` §0.)
+
+- **Chronicle consolidation keeps the right entries selected and its
+  warnings visible.** In Selected injection mode the merged entry now takes
+  over its sources' selection instead of dropping out; the prompt names the
+  actual earliest and latest entries rather than assuming the designated
+  base is the earliest; and a validation warning ("review needed") is no
+  longer overwritten by the success message. (M2-14, M2-15, M2-16,
+  `docs/TODO.md` §0.)
+
+- **Chronicle's injection preview, token estimate, and live injection now
+  build the same payload.** Each built its text its own way, so the preview
+  could disagree with what was injected. One builder feeds all three, and
+  the preview takes its depth and role from the live injection's resolver;
+  it is labelled as the text before the host's prompt adapter. (M2-17,
+  `docs/TODO.md` §0.)
+
+- **Chronicle export keeps an injection depth of 0.** `injectDepth || 2`
+  turned depth 0 into 2 on export; it now uses `??`. (`docs/TODO.md` §0.)
+
+- **Knowledge Catch Up stops when you switch chats.** A cancelled request
+  fell into the generic error branch, and the second phase then ran
+  continuous capture against whichever chat was open. Both phases now stop
+  on a cancellation or a scope change. (`docs/TODO.md` §0.)
+
+- **Knowledge capture no longer skips messages that share a timestamp with
+  the last capture.** The capture cursor was timestamp-only, so on hosts
+  with minute-resolution `send_date` (the Aikobots fork) a message in the
+  same minute as the last capture was skipped for good. The cursor now
+  carries the message's index and identity as a tie-breaker and finds its
+  boundary again after summarization or deletion shifts the chat. Only that
+  boundary message is stamped with an identity (at most one chat save per
+  capture window), not every message scanned. The first-capture cursor also
+  comes from the window actually sent, so a message that arrives during the
+  call is no longer marked captured. (NK-03, NK-04, `docs/TODO.md` §0.)
+
+- **Knowledge capture no longer stalls on a long run of non-narrative
+  messages.** A batch of 40 messages that all strip to nothing (tracker
+  blocks, for example) blocked every later capture; it now advances the
+  cursor without an API call. (NK-05, `docs/TODO.md` §0.)
+
+- **Knowledge capture, consolidation, and ILS backfill discard results
+  that land after a chat switch.** They now check the chat after each
+  await instead of writing into whichever chat is open. (NK-02,
+  `docs/TODO.md` §0.)
+
+- **NPC import can no longer change which books it writes to, and a retry
+  reuses what a failed attempt already wrote.** A file's settings could set
+  the scope or book bindings and silently redirect the import. Imports now
+  apply only an approved list of settings, after the registry import
+  succeeds; the destination book is pinned and rechecked, the registry is
+  staged in a copy, and a failed lorebook write stops the import. A retry
+  compares name and content against the book's entries and reuses exact
+  matches without writing them again. The import is still not atomic across
+  the lorebook, quarantine, history, and registry, so review the entries a
+  failed import wrote before retrying. (NK-11, `docs/TODO.md` §0.)
+
+- **Two characters whose Knowledge book names still collide no longer
+  share a book or break Knowledge.** Scoped book names are capped at 64
+  characters, and for long names the cap cut off the suffix that tells two
+  same-named cards apart; its space is now reserved. If a name still
+  collides (another binding already holds the disambiguated name),
+  Knowledge refuses rather than throwing from the resolver every Knowledge
+  operation calls: it saves no binding, reads and writes no book, leaves
+  World Info activation untouched, reports the error once in the Knowledge
+  status line, and shows it in Diagnostics → Scope & storage and in
+  `MWT.scope.diagnose()`. (NK-06, `docs/TODO.md` §0.)
+
+- **Refused writes no longer report success.** Several actions reported
+  success, logged diagnostics, or advanced counters after the store refused
+  the write (a paused store, or failed validation). They now check the
+  commit: Chronicle's entry, settings, and counter operations; Interiority's
+  ledger, lifecycle, and manual inner-state edits (a refused wake no longer
+  logs a lifecycle event); Story Planner's arc, beat, and settings changes,
+  with an accepted progress suggestion committing the arc, its evidence
+  cursor, and the undo snapshot in one write; and Knowledge's evidence
+  edits, capture, consolidation, ILS backfill, and settings, none of which
+  advance the capture cursor on a refusal. (M5-1, M5-2, M5-4, SP4-03, M2-02,
+  `docs/TODO.md` §0.)
+
+- **Story Planner migrations keep corrupt arc data for recovery.** A v1 or
+  v2 store whose `arcs` container wasn't a list, or whose arc records
+  weren't objects (including arcs saved in history), lost them or turned
+  them into blank arcs. The migrations now quarantine them with their
+  original path and value, so they can be exported as recovery data.
+  (SP4-01, `docs/TODO.md` §0.)
+
+- **At most 20 active intentions reach the narrator, chosen by priority,
+  then recency.** Nothing capped the narrator block by default, so a long
+  chat injected every open intention. It now carries the 20 with the
+  highest priority, then the most recent, printed in ledger order. When
+  some are left out, a note appears under Active Intentions and an
+  `intentions_injection_capped` event is logged in Diagnostics; nothing
+  about the omission goes into the prompt. (M5-6, `docs/TODO.md` §0.)
+
+- **World State expiry reads the same filtered text as the scan.**
+  Provenance skipped the non-narrative strip and your regex filters, so a
+  tracker block that lists the cast kept every NPC "fresh" and expiry never
+  fired for them. It now shares the scan's filtering. Names ending in
+  punctuation ("Jonah Jr.") now match too. (`docs/TODO.md` §0.)
+
+- **World State counts receipts against the event's own message, and
+  section regeneration uses the document it was built from.** The router
+  now passes the message index to World State as well as Interiority (F6).
+  A section prompt now shares the captured document and refuses an edit
+  made during preflight, instead of spending a call on a stale prompt (F9).
+  (`docs/TODO.md` §0.)
+
+- **World State's Test Connection uses the real transport.** It ignored
+  custom headers and any configured connection profile, so it could report
+  a false failure or a meaningless success. It now goes through the same
+  resolver as a refresh. (`docs/TODO.md` §0.)
+
+### Changed
+
+- World State builds its injection projection only when injection is
+  enabled (F8), and compiles your regex filters once per settings change
+  instead of for every message on every scan.
+- Interiority skips repeat validation of known-canonical committed clones;
+  every save used to validate the whole live store twice. (M5-5.)
+- Removed the unused `typeColors` map from the relationship graph, and
+  corrected `world_state/STALE_ENTRY_EXPIRY_DESIGN.md`, which still cited
+  `splitWorldState()` and a soft-strip fallback for strict grounding.
+
 ### Added
 
 - Regression coverage for the Tier 2 review fixes:
@@ -139,7 +279,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the incoming chat's retry gate nor the success toast, and a stale job
   cannot release a newer job's busy flag. The import/backup suites pin the
   new atomic counter/provenance pair policy, including the legacy-file
-  clamp. (M2-01/M2-04/M2-05/M2-09, `docs/TODO.md` §0.)
+  case. (M2-01/M2-04/M2-05/M2-09, `docs/TODO.md` §0.)
+
+- Regression coverage for the Tier 3 fixes and review follow-ups:
+  `test/chronicle_background_render.test.js` (background snapshots and an
+  open editor), `test/chronicle_regenerate_coverage.test.js`,
+  `test/interiority_injection_cap.test.js`,
+  `test/tier3_module_review_followup.test.js`, and
+  `test/refused_immediate_edits.test.js`; the scope, activation, capture,
+  evidence, import/export, and Story Planner pause suites pin the collision
+  refusal, single-message identity stamping, the shared cursor rule, the
+  legacy counter policy, and the refusal messages. The Knowledge, Story
+  Planner, and Interiority module-review probes now assert the fixed
+  behavior.
 
 ## [2.10.2]
 

@@ -124,23 +124,20 @@ function importChronicle(jsonString) {
         // matching provenance would never drain — an imported counter at or
         // above the auto-snapshot threshold would re-trigger a snapshot on
         // every subsequent message, forever — and any destination provenance
-        // left behind would distort future deletion adjustments. Two cases:
-        // a CURRENT export (the field exists, even an explicitly empty map —
-        // user-message increments legitimately carry no receipts) restores the
-        // pair verbatim; a LEGACY export (no countedReceiptEvents field, the
-        // pre-provenance format) cannot account for its counter, so the
-        // cadence restarts clean at zero and the status says so.
+        // left behind would distort future deletion adjustments. A CURRENT
+        // export (the field exists, even an explicitly empty map — user-message
+        // increments legitimately carry no receipts) restores the pair. A
+        // LEGACY export cannot account for its counter, so leave the
+        // destination's pair untouched, as backup merge does.
         const hasProvenanceField = Array.isArray(parsed.countedReceiptEvents);
         const fileReceipts = hasProvenanceField
             ? restoreReceiptMap(parsed.countedReceiptEvents, isPositiveReceiptCount)
             : new Map();
-        let counterClamped = false;
-        if (typeof parsed.msgSinceSnapshot === 'number' && Number.isFinite(parsed.msgSinceSnapshot)) {
-            counterClamped = !hasProvenanceField && parsed.msgSinceSnapshot > 0;
-            patch.msgSinceSnapshot = counterClamped ? 0 : parsed.msgSinceSnapshot;
+        const counterPreserved = !hasProvenanceField && typeof parsed.msgSinceSnapshot === 'number' && Number.isFinite(parsed.msgSinceSnapshot);
+        if (hasProvenanceField && typeof parsed.msgSinceSnapshot === 'number' && Number.isFinite(parsed.msgSinceSnapshot)) {
+            patch.msgSinceSnapshot = parsed.msgSinceSnapshot;
             // The pair moves together: destination provenance never survives
-            // a counter replacement. For a clamped legacy import this clears
-            // it; for a current export it is the file's own (validated) map.
+            // a counter replacement; use the file's own (validated) map.
             patch.countedReceiptEvents = [...fileReceipts.entries()];
         }
         if (parsed.injectEnabled !== undefined || parsed.injectCount !== undefined || parsed.injectDepth !== undefined) {
@@ -189,10 +186,7 @@ function importChronicle(jsonString) {
         applyInjection();
         state.selectedSnapshotId = null;
         _render.renderContent();
-        // The clamp note explains a deliberate cadence restart for legacy
-        // files, not a failure: the old format's counter predates receipt
-        // provenance and could never drain in this chat.
-        scSetStatus(`Imported ${added} entries (${merged.length} total${skipped ? `, ${skipped} skipped (failed validation)` : ''}${counterClamped ? ', cadence counter reset (no receipt provenance in file)' : ''}).`, 'success');
+        scSetStatus(`Imported ${added} entries (${merged.length} total${skipped ? `, ${skipped} skipped (failed validation)` : ''}${counterPreserved ? ', destination cadence preserved (no receipt provenance in file)' : ''}).`, 'success');
     } catch (err) {
         scSetStatus(`Import failed: ${err.message}`, 'error');
     }

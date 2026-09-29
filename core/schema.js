@@ -1,13 +1,3 @@
-/** Restore only well-formed receipt tuples from untrusted chat metadata. */
-export function restoreReceiptMap(value, validValue) {
-    const entries = Array.isArray(value) ? value : [];
-    return new Map(entries.filter(tuple => Array.isArray(tuple) && tuple.length === 2
-        && typeof tuple[0] === 'string' && tuple[0].length > 0 && validValue(tuple[1])));
-}
-
-export function isPositiveReceiptCount(value) {
-    return Number.isInteger(value) && value > 0;
-}
 /**
  * core/schema.js — Generic, dependency-free validation/migration engine.
  *
@@ -25,6 +15,19 @@ export function isPositiveReceiptCount(value) {
  * import is core/quarantine.js, same layer.
  */
 import { fingerprintValue, makeQuarantineItem, mergeQuarantineItems } from './quarantine.js';
+
+// ─── Shared receipt validation ────────────────────────────────────────────────
+
+/** Restore only well-formed receipt tuples from untrusted chat metadata. */
+export function restoreReceiptMap(value, validValue) {
+    const entries = Array.isArray(value) ? value : [];
+    return new Map(entries.filter(tuple => Array.isArray(tuple) && tuple.length === 2
+        && typeof tuple[0] === 'string' && tuple[0].length > 0 && validValue(tuple[1])));
+}
+
+export function isPositiveReceiptCount(value) {
+    return Number.isInteger(value) && value > 0;
+}
 
 // ─── Shared predicates ───────────────────────────────────────────────────────
 //

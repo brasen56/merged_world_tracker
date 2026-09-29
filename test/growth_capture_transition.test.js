@@ -1,12 +1,12 @@
 /** Growth capture must transition from its one-time bootstrap to a delta-only scan. */
 
-import { beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { resetCoreStubs, setFakeApi, setFakeChat, getFakeMeta } from './stubs/core.js';
+import { resetCoreStubs, setFakeApi, setFakeChat, getFakeChat, getFakeMeta, setFakeContextExtras } from './stubs/core.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
 import { saveSettings } from '../knowledge/settings.js';
 import { appendRawObservations, getCaptureWatermark, getCaptureCursor, setCaptureWatermark } from '../knowledge/evidence.js';
-import { runCaptureOnly, runContinuousCapture } from '../knowledge/growth.js';
+import { getIndexedMessages, runCaptureOnly, runContinuousCapture } from '../knowledge/growth.js';
 
 describe('Growth capture bootstrap → incremental transition', () => {
     beforeEach(() => {
@@ -16,6 +16,39 @@ describe('Growth capture bootstrap → incremental transition', () => {
             registry: { Mara: { uid: 7, type: 'major', keywords: ['Mara'] } },
         });
         saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+    });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    test('bootstrap scan stamps only the final cursor message, not every scanned message', async () => {
+        const saveChatDebounced = vi.fn();
+        setFakeContextExtras({ saveChatDebounced });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ saveChatDebounced }) });
+        setFakeChat([
+            ...Array.from({ length: 6 }, (_, i) => ({ name: 'Mara', mes: `Line ${i}`, send_date: 1000 + i })),
+            { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' },
+        ]);
+        expect(getIndexedMessages()).toContain('Line 5');
+        expect(getFakeChat().slice(0, 5).every(msg => msg.extra?.mwt_uuid === undefined)).toBe(true);
+        expect(getFakeChat()[5].extra.mwt_uuid).toBeTruthy();
+        expect(saveChatDebounced).toHaveBeenCalledTimes(1);
+    });
+
+    test('delta capture stamps only the final cursor message, including stripped text', async () => {
+        const saveChatDebounced = vi.fn();
+        setFakeContextExtras({ saveChatDebounced });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ saveChatDebounced }) });
+        setFakeChat([
+            ...Array.from({ length: 4 }, (_, i) => ({ name: 'Mara', mes: `Line ${i}`, send_date: 1000 + i })),
+            { name: 'Mara', mes: '<details><summary>tracker</summary>hidden</details>', send_date: 1004 },
+            { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' },
+        ]);
+        setFakeApi(() => JSON.stringify({ observations: [] }));
+        await runContinuousCapture('Mara', { minMessages: 1 });
+        expect(getCaptureCursor('Mara')).toMatchObject({ index: 4, identity: expect.stringMatching(/^uuid:/) });
+        expect(getFakeChat().slice(0, 4).every(msg => msg.extra?.mwt_uuid === undefined)).toBe(true);
+        expect(getFakeChat()[4].extra.mwt_uuid).toBeTruthy();
+        expect(saveChatDebounced).toHaveBeenCalledTimes(1);
     });
 
     test('seeds the bootstrap watermark, then sends only newer messages', async () => {

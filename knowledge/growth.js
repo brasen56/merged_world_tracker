@@ -185,8 +185,9 @@ function getIndexedMessageWindow(count = EVIDENCE_MESSAGE_WINDOW) {
     let cursor = { ts: 0, index: -1 };
     for (let i = startIdx; i < end; i++) {
         const ts = normalizeSendDate(chat[i]?.send_date);
-        if (ts >= cursor.ts) cursor = { ts, index: i, identity: getOrCreateReceiptIdentity(chat[i]) };
+        if (ts >= cursor.ts) cursor = { ts, index: i };
     }
+    if (cursor.index >= 0) cursor.identity = getOrCreateReceiptIdentity(chat[cursor.index]);
     return { text: lines.join('\n'), cursor };
 }
 
@@ -931,14 +932,12 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
     const lines = [];
     let maxTs = sinceTs ?? 0;
     let lastIndex = sinceIndex;
-    let lastIdentity = null;
     for (const { msg, idx, ts } of window) {
         // Move past stripped messages too, so a batch with no narrative does
         // not permanently block later batches.
         if (ts > maxTs || (ts === maxTs && (lastIndex === null || idx > lastIndex))) {
             maxTs = ts;
             lastIndex = idx;
-            lastIdentity = getOrCreateReceiptIdentity(msg);
         }
         const name = msg.is_user ? (msg.name || 'User') : (msg.name || 'Assistant');
         // preserveOffScreen:false — sealed off-screen log stays out of Knowledge.
@@ -947,6 +946,7 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
         lines.push(`[${idx}] ${name}: ${text}`);
     }
 
+    const lastIdentity = lastIndex === null || lastIndex < 0 ? null : getOrCreateReceiptIdentity(chat[lastIndex]);
     return { text: lines.join('\n'), maxTs, lastIndex, lastIdentity, count: lines.length };
 }
 

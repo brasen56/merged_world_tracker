@@ -159,6 +159,7 @@ export async function writeStateTracker(uid, name, content) {
     // name resolved differently there than at load, one character's registry
     // would be written into another character's book.
     const book = getStateLorebookName();
+    if (!book) return { success: false, error: 'Knowledge lorebook name collision — no book was written.' };
     try {
         const wi = await state.wiScript.loadWorldInfo(book);
         const entry = wi?.entries?.[uid];
@@ -466,6 +467,9 @@ export async function writeProfileToLorebook(name, content, existingUid) {
     // Resolve ONCE — see writeToLorebook. This one spans a load, a create and a
     // re-load before it saves, so it has the most await boundaries to cross.
     const book = getProfileLorebookName();
+    // SillyTavern's load/create/save all no-op on a falsy name, so without
+    // this the write below would "succeed" into an in-memory book.
+    if (!book) return { success: false, error: 'Knowledge lorebook name collision — no book was written.' };
     try {
         let wi = await state.wiScript.loadWorldInfo(book);
         // Auto-create the lorebook if it doesn't exist yet (same pattern as

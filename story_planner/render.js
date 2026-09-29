@@ -1419,13 +1419,19 @@ export function renderContent() {
 
 /** Apply a snapshot as the current plan, syncing UI + injection. */
 function restorePlan(arcs, { pushCurrent = true } = {}) {
-    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return false;
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return { ok: false, reason: 'paused' };
     const current = getArcs();
     const result = pushCurrent ? setArcsWithHistory(arcs, current) : setArcsWithHistory(arcs, []);
-    if (!result.ok) return false;
+    if (!result.ok) return { ok: false, reason: 'refused' };
     applyPlanInjection();
     renderArcs();
-    return true;
+    return { ok: true };
+}
+
+function notifyRestoreRefusal(reason) {
+    notify('Story Planner', reason === 'paused'
+        ? 'Restore unavailable while Story Planner is paused.'
+        : 'Restore failed: the Story Planner store refused the write; the current plan was kept.', 'warning');
 }
 
 /** Diff the current plan against the most recent snapshot, with a Revert button. */
@@ -1453,8 +1459,9 @@ function showRevertDiff() {
     });
 
     diffModal.querySelector('#mwt-sp-revert-confirm')?.addEventListener('click', () => {
-        if (!restorePlan(historyEntryToArcs(latest))) {
-            notify('Story Planner', 'Restore unavailable while Story Planner is paused.', 'warning');
+        const result = restorePlan(historyEntryToArcs(latest));
+        if (!result.ok) {
+            notifyRestoreRefusal(result.reason);
             return;
         }
         hideModal('mwt-sp-revert-modal');
@@ -1504,8 +1511,9 @@ function showPlanHistory() {
                 `,
             });
             diffModal2.querySelector('#mwt-sp-restore-hist')?.addEventListener('click', () => {
-                if (!restorePlan(historyEntryToArcs(entry))) {
-                    notify('Story Planner', 'Restore unavailable while Story Planner is paused.', 'warning');
+                const result = restorePlan(historyEntryToArcs(entry));
+                if (!result.ok) {
+                    notifyRestoreRefusal(result.reason);
                     return;
                 }
                 hideModal('mwt-sp-hist-diff-modal');
@@ -1709,10 +1717,13 @@ async function runTargetedAction(button, arcId, operation) {
 
 /** Structural card actions: pin, focus, delete, add. */
 function handleArcsClick(e) {
-    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) return;
     const btn = e.target.closest('[data-action]');
     if (!btn || btn.tagName === 'INPUT' || btn.tagName === 'TEXTAREA' || btn.tagName === 'SELECT') return;
     const action = btn.dataset.action;
+    if (isStorePausedForCurrentScope(storyPlannerSchema.id)) {
+        notify('Story Planner', 'Arc changes are unavailable while Story Planner is paused.', 'warning');
+        return;
+    }
 
     if (action === 'add') {
         const arc = mutateWithProjectionCheck(() => addArc({ section: btn.dataset.section || 'emerging' }));

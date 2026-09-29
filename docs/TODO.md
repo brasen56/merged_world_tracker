@@ -280,38 +280,21 @@ mid-operation" claims:
   is marked done without being captured. Return the cursor from the window
   that was actually sent.
 - [x] **Unchecked writes that report success** — M5-1 / M5-2 / M5-4, SP4-03,
-  M2-02, NK-08. Every write seam refuses correctly and the re-render shows
-  the truth, but callers still show a success message, log a diagnostics
-  event, or advance counters. Use each module's existing checked seam at the
-  call sites the user sees, and give Interiority's panel actions the pause
-  guard the other modules have (`interiority/render.js:940-1045`).
-  *Partly addressed:* Chronicle's generation, editor, manual entry, deletion,
-  restore, Clear All, injection settings and consolidation use checked commits;
-  the snapshot counter/receipt patch commits together with its entry.
-  Interiority's ledger mutators and lifecycle record no longer return/diagnose
-  refused writes, with a panel pause guard. Story Planner's legacy callers,
-  Knowledge evidence edge cases and remaining panel actions need a separate pass.
-  Knowledge's observation append and consolidation now refuse success if the
-  evidence commit fails. Evidence editor mutations and clear operations now
-  report refused commits; Story Planner add/update/remove and Interiority panel
-  removals likewise check their saves. Remaining panel actions and split
-  history/write operations still need review. *Further pass (2026-09-27):*
-  Story Planner beat edits and arc removal now commit history with arcs;
-  progress ignore/settled-watermark writes check the result, and refused
-  metrics writes no longer return a staged success. Knowledge first/continuous
-  capture and ILS backfill commit observations and cursor together (and refuse
-  failed cursor writes). Progress acceptance still splits its arc and cursor
-  writes; planner settings and some remaining panels need checked commits.
+  M2-02, NK-08. Formerly, callers could report success, log diagnostics,
+  or advance counters after a write seam refused. Call sites now use checked
+  commits, and Interiority's panel actions guard paused stores.
+  Chronicle's entry, settings, and counter/receipt operations use checked
+  commits. Interiority's ledger and lifecycle actions refuse blocked writes
+  without false success or diagnostics; the panel checks pause. Story Planner
+  arc and beat changes commit with history, and progress acceptance commits its
+  arc and cursor together; ignore, watermark, and metrics writes check results.
+  Knowledge evidence edits, capture, consolidation, and ILS backfill report
+  refused writes without advancing the capture cursor.
 - [x] **Missing post-await scope checks** — M2-01
   (`chronicle/snapshots.js:482-498`) and NK-02 (Knowledge consolidation, first
-  capture, ILS backfill). Only the metadata-swap window described above can
-  reach them. One `assertSameScope` line each. *NK-02's Knowledge capture,
-  consolidation, and ILS backfill paths now check scope; Chronicle's remaining
-  call sites still need review.* Chronicle consolidation now checks scope and
-  selected-entry revisions after the transport resolves. Regeneration now also
-  checks the source message interval and entry revision after transport and
-  at preview acceptance; retries/late failures avoid new-chat UI updates.
-  *Closed (2026-09-27):* the remaining Chronicle call sites were reviewed —
+  capture, ILS backfill). The metadata-swap window can reach these paths.
+  Knowledge capture, consolidation, and ILS backfill check scope after awaits.
+  Chronicle's remaining call sites were reviewed —
   every await re-asserts scope (generation after each transport and the
   empty-output retry, regeneration at transport and at preview acceptance,
   consolidation at preview entry and after the transport, the auto-snapshot
@@ -350,38 +333,26 @@ mid-operation" claims:
   validation warnings). Selected IDs now remap to the merged entry, and the
   prompt names the actual timeline endpoint independently of the designated base.
 - [x] **M2-17 — Chronicle's previews and estimates build the payload their own
-  way.** The preview's depth and role now come from
-  `resolveInjectionPlacement()` (2.10.1). Still open: the stats token estimate
-  skips the header and per-entry labels, the public token helper skips the
-  labels, and the preview doesn't show the structural wrapper the real
-  injection adds. One payload builder now feeds all three; the preview labels
+  way.** One payload builder now feeds all three; the preview's depth and role
+  come from `resolveInjectionPlacement()`. The preview labels
   its text as pre-adapter content rather than claiming final host-prompt parity.
 - [x] **Chronicle races and counters** — M2-04 (anchor and character list
   rebuilt from post-await history), M2-05 (`onChatChanged` clears
   `isGenerating`; Story Planner deliberately doesn't, and the coordinator's
   one-call-per-module limit caps the damage at a duplicate queued job),
   M2-09 (receipt accounting drift).
-  *Partly addressed:* generation freezes source metadata and detects edits;
-  scope-aware finalizers avoid clearing another chat's busy flag. Receipt
-  provenance is committed with the snapshot. Counted receipt events in the
-  excluded tail (including repeated events on one message), preloaded uncounted
-  rows, and deletions during generation now have regression coverage. Still
-  review auto-snapshot failure/reset and chat-switch cadence paths.
-  *Further pass (2026-09-27):* auto-snapshot failure now preserves the counted
-  receipts and counter, backing off to the next full threshold instead of
-  clearing provenance; the retry gate resets on chat switch. Regeneration
-  discards results when the source entry or messages change mid-request.
-  *Closed (2026-09-27):* M2-04's frozen source metadata + revision checks and
+  Auto-snapshot failure preserves counted receipts and counters, backing off
+  to the next full threshold; the retry gate resets on chat switch.
+  Regeneration discards results when source entries or messages change.
+  M2-04's frozen source metadata + revision checks and
   M2-05's scope-owned busy-flag release (with the coordinator-cancellation
   branch in all three catches) were already in place and are now pinned by
   `test/chronicle_module2_review.test.js`. The M2-09 remainder — the
   export/import half — is fixed: `exportChronicle()` now carries
   `countedReceiptEvents` beside the counter, the standalone import restores
   the pair in ONE checked commit (a legacy export without the provenance
-  field clamps its counter to zero, since an unaccountable counter can never
-  drain and would re-trigger auto-snapshots forever; the status says so), and
-  the backup merge restore applies the same pair rule (a legacy backup keeps
-  the destination's pair and the summary says why). The in-memory map follows
+  field keeps the destination counter and receipt map together, as does backup
+  merge restore; the status/summary explains why). The in-memory map follows
   the committed pair via `restoreReceiptBookkeeping()`. Pinned by
   `test/import_export_roundtrip.test.js`, `test/backup.test.js`, and
   `test/restore_quarantine_integrity.test.js`.
@@ -398,14 +369,13 @@ mid-operation" claims:
   truncated, but only with non-global scope and names near 64 characters),
   NK-11 (whitelist which settings an import may set; a merged `scope`
   silently changes which books the import writes to).
-  *Partly addressed:* the 40-message stripped batch advances its cursor without
+  The 40-message stripped batch advances its cursor without
   an API call (regression covered); collision suffix space is reserved. NPC
   imports cannot change scope/book bindings, pin and recheck the destination,
   stage the registry in a detached copy, and stop on failed lorebook writes.
   File-level atomic rollback (including settings, quarantine, and history
   side effects) is not implemented; inspect prior entries before retrying a
-  partially written import.
-  *Further pass (2026-09-27):* approved API settings are deferred until the
+  partially written import. Approved API settings are deferred until the
   registry import has succeeded; import counts reflect accepted records.
   Standalone import remains non-transactional across the host lorebook,
   quarantine, history, and registry stores; see the rollback warning above.
@@ -456,7 +426,7 @@ The fix work was checked item by item against each finding (lint, the full
 suite, and a browser-load check that every static and dynamic import
 resolves — vitest turns a missing named import into `undefined`, the browser
 into a load failure). Nearly everything held up; M2-18, the regenerate gap,
-and the M5-6 cap were fixed the same day (see those items). Still open:
+and the M5-6 cap were fixed the same day (see those items). Final follow-ups:
 
 - [x] **NPC import writes an unregistered chat-metadata key.**
   `mwtKnowledgeNpcImportAttempt` (`knowledge/staging.js`, `importNpcs`) goes
@@ -473,37 +443,31 @@ and the M5-6 cap were fixed the same day (see those items). Still open:
   every Knowledge operation calls; prefer a surfaced refusal. The real resolver
   now has long-name and surviving-collision tests; a collision returns no book,
   reports an error, and blocks null-book store writes. The read-only explainer
-  and Scope diagnostics show the same refusal.
-- [ ] **Legacy cadence counters get two different policies.** A file whose
-  counter has no receipt provenance: the Chronicle import resets it to 0,
-  the backup restore keeps the destination's pair. Pick one.
-- [ ] **Knowledge capture stamps a UUID into every message it scans.**
-  `getIndexedMessageWindow()` / `buildDeltaWindow()` call
-  `getOrCreateReceiptIdentity()` per message as the cursor advances (up to
-  80 chat writes per capture); only the final cursor message needs one.
-- [ ] **The capture-cursor advance rule is duplicated** in
-  `appendRawObservations()` and `setCaptureWatermark()`
-  (`knowledge/evidence.js`). One helper, so capture and backfill can't drift.
-- [ ] **Story Planner pause UX.** The restore failure message always says
-  "unavailable while paused", even for a validation refusal, and
-  `handleArcsClick` silently ignores every click while paused (read-only
-  ones included).
-- [ ] **SP4-01's `null`-record half is still present.** A `null` arc record
-  still migrates into an accepted blank arc
-  (`test/story_planner_module4_review.test.js` pins it under "defect
-  reproductions"). Decide: drop it with a repair issue, or accept it and
-  move the test out of the defect block.
-- [ ] *(Nit)* `receipt-invalid` isn't registered in the World State / Story
-  Planner issue policies (catalog only — no behavior depends on it), and
-  the new receipt helpers sit above `core/schema.js`'s file header.
-- [ ] **Housekeeping.** Rename probes whose names still describe fixed bugs
-  (the Interiority M5-1 tests, Knowledge's "stalls" probe) and the Knowledge
-  file header ("Most assertions below still reproduce CURRENT defects");
-  rename or fold `test/temporary_bug_fixes.test.js`; collapse the layered
-  "Partly addressed… / Further pass… / Closed…" notes under ticked items to
-  their final state (e.g. M2-17 still opens with "Still open:", and the
-  unchecked-writes item still says progress acceptance splits its writes —
-  it no longer does). Informational: `replaceSection()` now normalizes
+  and Scope diagnostics show the same refusal. *2026-09-28 residue:*
+  `MWT.scope.diagnose()` reports the refusal instead of throwing on the null
+  result; the profile and State Tracker writers refuse like `writeToLorebook`
+  (the profile writer used to "succeed" into an in-memory book); the warning
+  and status fire once per collision, not on every registry read. Pinned in
+  `test/scope.test.js`.
+- [x] **Legacy cadence counters get two different policies.** Standalone
+  Chronicle import now matches backup restore: when a file's counter lacks
+  receipt provenance, keep the destination counter and receipt map together.
+- [x] **Knowledge capture stamps a UUID into every message it scans.**
+  `getIndexedMessageWindow()` / `buildDeltaWindow()` now resolve the cursor
+  first and stamp only its final message (at most one chat write per window).
+- [x] **The capture-cursor advance rule is duplicated.** Both evidence write
+  paths now use one private cursor helper, preserving their separate commits.
+- [x] **Story Planner pause UX.** Restore reports pause separately from other
+  write refusals; blocked arc actions explain why, while read-only disclosure
+  controls remain usable.
+- [x] **SP4-01's `null`-record half.** v1/v2 migrations quarantine non-object
+  arc records (including history arcs) with their original paths and raw values
+  instead of turning them into blank arcs. Regression tests cover both versions.
+- [x] *(Nit)* Registered `receipt-invalid` in the World State and Story Planner
+  record policies and moved the receipt helpers below `core/schema.js`'s header.
+- [x] **Housekeeping.** Renamed stale review probes and the temporary test file;
+  consolidated the checked items' interim notes into their final state.
+  Informational: `replaceSection()` now normalizes
   spacing around the section it touches, so an older document's first edit
   shows whitespace-only history noise.
 

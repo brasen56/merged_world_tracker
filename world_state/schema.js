@@ -135,6 +135,7 @@ export const worldStateSchema = defineStoreSchema({
         fatal: ['root-not-object'],
         record: [
             'text-not-string',
+            'receipt-invalid',
             'not-an-array',
             'history-not-object',
             'history-missing-text',

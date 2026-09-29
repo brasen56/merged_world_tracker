@@ -7,6 +7,7 @@
  * guarding that one property.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 
 import { resetCoreStubs, setFakeContextExtras } from './stubs/core.js';
@@ -286,5 +287,99 @@ describe('resolveBookNames', () => {
             characters: [{ name: 'Mara', avatar: 'mara.png' }],
         });
         expect(resolveBookNames().knowledge).toBe('Knowledge Tracker');
+    });
+});
+
+// ─── A refused collision, downstream ─────────────────────────────────────────
+
+describe('a refused scoped-name collision', () => {
+    const LONG_NAME = 'A'.repeat(64);
+    const collisionContext = { characterId: 0, characters: [{ name: LONG_NAME, avatar: 'second.png' }] };
+
+    /** Occupy both the base name and the disambiguated name, then switch to the loser. */
+    function useRefusedCollision() {
+        const suffix = ` (${shortHash('char:second.png')})`;
+        saveSettings({
+            scope: 'character',
+            bookBindings: {
+                'char:first.png': deriveBookNames(LONG_NAME),
+                'char:third.png': deriveBookNames(`${'A'.repeat(64 - suffix.length)}${suffix}`),
+            },
+        });
+        setFakeContextExtras(collisionContext);
+        expect(resolveBookNames()).toBeNull();
+    }
+
+    const collisionWarnings = () => vi.mocked(console.warn).mock.calls
+        .filter(([message]) => /still collides/.test(String(message)));
+
+    test('is reported once per collision, not on every registry read', () => {
+        vi.mocked(console.warn).mockClear();
+        useRefusedCollision();
+        for (let i = 0; i < 5; i++) expect(resolveBookNames()).toBeNull();
+        expect(collisionWarnings()).toHaveLength(1);
+
+        // Leaving the colliding scope and coming back reports it again.
+        saveSettings({ scope: 'global' });
+        expect(resolveBookNames()).not.toBeNull();
+        saveSettings({ scope: 'character' });
+        expect(resolveBookNames()).toBeNull();
+        expect(collisionWarnings()).toHaveLength(2);
+    });
+
+    test('the profile and State Tracker writers refuse instead of writing to no book', async () => {
+        const { state } = await import('../knowledge/state.js');
+        const { writeProfileToLorebook, writeStateTracker } = await import('../knowledge/lorebook.js');
+        const previous = state.wiScript;
+        // SillyTavern's own functions no-op on a falsy name; a writer that
+        // carries on anyway builds an in-memory book and reports success.
+        state.wiScript = {
+            loadWorldInfo: vi.fn(async () => undefined),
+            createNewWorldInfo: vi.fn(async () => false),
+            saveWorldInfo: vi.fn(async () => undefined),
+        };
+        try {
+            useRefusedCollision();
+            const profile = await writeProfileToLorebook('Mara', 'A portrait.', null);
+            expect(profile).toMatchObject({ success: false, error: expect.stringMatching(/collision/) });
+            const tracker = await writeStateTracker(3, 'Tracker', 'content');
+            expect(tracker).toMatchObject({ success: false, error: expect.stringMatching(/collision/) });
+            expect(state.wiScript.saveWorldInfo).not.toHaveBeenCalled();
+        } finally {
+            state.wiScript = previous;
+        }
+    });
+
+    test('MWT.scope.diagnose() reports the refusal instead of throwing', async () => {
+        // index.js registers window.MWT at module top level and cannot be
+        // imported under Vitest, so evaluate diagnose() from its source with
+        // the same module namespaces index.js hands it. The markers are
+        // single-line, so line endings don't matter; a rename fails loudly.
+        const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+        const start = source.indexOf('diagnose: () => {');
+        const end = source.indexOf('bindings: () => {', start);
+        expect(start).toBeGreaterThan(-1);
+        expect(end).toBeGreaterThan(start);
+        const body = source.slice(start + 'diagnose: '.length, end).trim().replace(/,$/, '');
+        const scopeApi = await import('../knowledge/scope.js');
+        const ktSettingsApi = await import('../knowledge/settings.js');
+        const storeApi = await import('../knowledge/store.js');
+        const diagnose = new Function('SillyTavern', 'scopeApi', 'ktSettingsApi', 'storeApi', `return (${body});`)(
+            { getContext: () => collisionContext }, scopeApi, ktSettingsApi, storeApi);
+        const table = vi.spyOn(console, 'table').mockImplementation(() => {});
+
+        useRefusedCollision();
+        vi.mocked(console.warn).mockClear();
+        let report;
+        expect(() => { report = diagnose(); }).not.toThrow();
+
+        expect(report.books).toBeNull();
+        expect(table).toHaveBeenLastCalledWith(expect.objectContaining({
+            'Knowledge book': expect.stringMatching(/refused/),
+        }));
+        const warnings = vi.mocked(console.warn).mock.calls.map(([message]) => String(message));
+        expect(warnings.some(message => /collide/.test(message) && /MWT\.scope\.bindings\(\)/.test(message))).toBe(true);
+        // Not the misleading "store is not loaded" advice.
+        expect(warnings.some(message => /not loaded/.test(message))).toBe(false);
     });
 });
