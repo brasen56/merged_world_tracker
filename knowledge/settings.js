@@ -2,7 +2,7 @@
  * knowledge/settings.js — Settings manager and settings panel for the Knowledge module.
  */
 
-import { createSettingsManager, syncSharedConnectionSettings, renderApiSettingsFields, readApiSettingsValues } from '../core/index.js';
+import { createSettingsManager, syncSharedConnectionSettings, renderApiSettingsFields, readApiSettingsValues, wireApiSettingsFields } from '../core/index.js';
 
 import { SETTINGS_KEY, state, getNpcsContentEl, ktSetStatus } from './state.js';
 
@@ -115,16 +115,17 @@ export function showKnowledgeSettings() {
         ? `⚠ Lorebook scope is "${ktScopeChoice}" but the State target is "${stateScopeChoice}" — a ${ktScopeChoice}-level State book will be switched on in ${stateScopeChoice === 'global' ? 'every chat' : 'every chat with this card'}, including ones that never wrote it.`
         : '';
     const apiFieldOpts = {
+        profileId: 'kt-cfg-connection-profile',
         urlId: 'kt-cfg-api-url', keyId: 'kt-cfg-api-key', modelId: 'kt-cfg-model',
         maxTokensId: 'kt-cfg-max-tokens', tempId: 'kt-cfg-temp', topPId: 'kt-cfg-top-p',
         freqId: 'kt-cfg-freq-pen', presId: 'kt-cfg-pres-pen', headersId: 'kt-cfg-headers',
         maxTokensDefault: 8000, tempDefault: 0.1,
+        headersHintHtml: 'Custom Headers: JSON object of extra HTTP headers. Leave blank if unsure.',
     };
     el.innerHTML = `<div class="kt-settings-form">
         <h3>Knowledge Tracker Settings</h3>
         <div class="mwt-settings-grid">
             ${renderApiSettingsFields(s, apiFieldOpts)}
-            <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Headers: JSON object of extra HTTP headers. Leave blank if unsure.</p>
         </div>
         <div style="margin-top:12px">
             <label class="mwt-label" for="kt-cfg-scope">Lorebook scope</label>
@@ -201,6 +202,7 @@ export function showKnowledgeSettings() {
         <div id="kt-status" class="kt-status" style="margin-top:8px"></div>
     </div>`;
 
+    wireApiSettingsFields(el, apiFieldOpts);
     el.querySelector('#kt-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(el, apiFieldOpts);
         // Cooldown 0 ("no cooldown") is a legitimate value (the input allows

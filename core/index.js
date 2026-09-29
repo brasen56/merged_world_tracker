@@ -90,7 +90,7 @@ export {
     redactForReport,
 } from './redaction.js';
 export { downloadBlob, downloadJson, pickTextFile } from './file.js';
-export { renderApiSettingsFields, readApiSettingsValues, createFloatingButtonBar } from './ui.js';
+export { renderApiSettingsFields, readApiSettingsValues, wireApiSettingsFields, renderConnectionProfileSelect, createFloatingButtonBar } from './ui.js';
 export { stripNonNarrative, stripNonNarrativeFromFormatted } from './strip.js';
 export { getOrCreateReceiptIdentity } from './message_identity.js';
 export { findQuoteMatch, quoteMatchesMessage, normalizeForMatch, isIlsSummary } from './quote_match.js';

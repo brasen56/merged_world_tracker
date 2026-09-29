@@ -8,8 +8,9 @@
  */
 
 import {
-    escapeHtml, getContextSafe,
-    renderApiSettingsFields, readApiSettingsValues,
+    escapeHtml,
+    renderApiSettingsFields, readApiSettingsValues, wireApiSettingsFields,
+    renderConnectionProfileSelect,
 } from '../core/index.js';
 // Direct import (not the barrel) so the real helper runs under the test
 // barrel→stub alias — the wireTablist precedent (accessibility Slice 2).
@@ -603,33 +604,6 @@ function renderThoughtsList(msgKeys) {
 // ─── Settings panel ──────────────────────────────────────────────────────────
 
 /**
- * Build the HTML for a Connection Manager profile <select>, mirroring the
- * global settings panel. Reused for the thoughts-specific profile selector.
- *
- * @param {string} selectId - DOM id for the <select>
- * @param {string} selectedProfileId - currently-selected profile id
- * @param {string} noneLabel - label for the empty/none option
- * @returns {string}
- */
-function renderConnectionProfileSelect(selectId, selectedProfileId, noneLabel) {
-    let optionsHtml = `<option value="">${escapeHtml(noneLabel)}</option>`;
-    try {
-        const ctx = getContextSafe();
-        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
-        const activeId = ctx?.extensionSettings?.connectionManager?.selectedProfile || '';
-        for (const profile of profiles) {
-            const id = profile.id;
-            if (!id) continue;
-            const name = profile.name || id;
-            const selected = id === selectedProfileId ? ' selected' : '';
-            const isActive = id === activeId ? ' (active)' : '';
-            optionsHtml += `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(name)}${isActive}</option>`;
-        }
-    } catch { /* connection manager unavailable */ }
-    return `<select id="${selectId}" class="mwt-input">${optionsHtml}</select>`;
-}
-
-/**
  * Render the settings panel inside the Interiority tab.
  */
 export function renderSettingsPanel() {
@@ -638,6 +612,7 @@ export function renderSettingsPanel() {
 
     const s = getSettings();
     const apiFieldOpts = {
+        profileId: 'mwt-int-connection-profile',
         urlId: 'mwt-int-api-url', keyId: 'mwt-int-api-key', modelId: 'mwt-int-model',
         maxTokensId: 'mwt-int-max-tokens', tempId: 'mwt-int-temp', topPId: 'mwt-int-top-p',
         freqId: 'mwt-int-freq-pen', presId: 'mwt-int-pres-pen', headersId: 'mwt-int-headers',
@@ -730,6 +705,7 @@ export function renderSettingsPanel() {
         if (v2Dials) v2Dials.style.display = splitCheckbox.checked ? '' : 'none';
     });
 
+    wireApiSettingsFields(panel, apiFieldOpts);
     panel.querySelector('#mwt-int-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(panel, apiFieldOpts);
         const saved = saveSettings({

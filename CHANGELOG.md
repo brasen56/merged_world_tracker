@@ -16,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A module's Model and API URL fields work again after "Sync to Modules".**
+  Syncing with a Connection Profile selected writes that profile into every
+  module, and a module's own profile outranks its custom API — but no module
+  panel showed the profile. Editing a module's Model and saving stored the
+  new name while every generation kept going through the profile's model.
+  Every module panel (World State, Chronicle, Knowledge, Story Planner,
+  Interiority) now starts its API fields with a **Connection Profile**
+  select: choose *None* to use the custom API below it, or a profile, which
+  hides the fields it overrides (only Max Tokens still applies). A saved
+  profile that was since deleted in SillyTavern now shows as "Missing
+  profile" rather than *None*, so saving an unrelated setting can no longer
+  silently switch a module's API — in the main Settings tab too. World
+  State's "fill in both URL and Model" check now skips when a profile is
+  selected. (`core/ui.js`; `test/module_connection_profile.test.js`.)
+
 - **Accepting a Story Planner beat no longer marks the next beat's messages
   as reviewed.** Carrying the progress watermark forward on acceptance is
   intentional, but it was set to the end of the *request window* — and each

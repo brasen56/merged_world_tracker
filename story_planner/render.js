@@ -12,7 +12,7 @@
 
 import {
     escapeHtml, estimateTokens, notify,
-    renderApiSettingsFields, readApiSettingsValues,
+    renderApiSettingsFields, readApiSettingsValues, wireApiSettingsFields,
     computeLcsDiff, renderDiffHtml,
     assertSameScope,
 } from '../core/index.js';
@@ -59,9 +59,10 @@ import {
 } from './progress.js';
 
 // ─── API field IDs ───────────────────────────────────────────────────────────
-// One shared map for BOTH renderApiSettingsFields and readApiSettingsValues so
-// every field round-trips (the two must use identical ids).
+// One shared map for renderApiSettingsFields, wireApiSettingsFields and
+// readApiSettingsValues so every field round-trips (all must use identical ids).
 const SP_API_FIELD_IDS = {
+    profileId: 'sp-connection-profile',
     urlId: 'sp-api-url', keyId: 'sp-api-key', modelId: 'sp-model',
     maxTokensId: 'sp-max-tokens', tempId: 'sp-temp',
     topPId: 'sp-top-p', freqId: 'sp-freq-pen', presId: 'sp-pres-pen', headersId: 'sp-headers',
@@ -2015,6 +2016,8 @@ export function wireEvents() {
 
     // Preview exactly what gets injected
     state.modal.querySelector('#sp-preview')?.addEventListener('click', () => showInjectionPreview());
+
+    wireApiSettingsFields(state.modal, SP_API_FIELD_IDS);
 
     // Save settings
     state.modal.querySelector('#sp-save-settings')?.addEventListener('click', () => {

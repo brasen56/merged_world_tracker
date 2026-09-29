@@ -8,6 +8,7 @@
  */
 
 import { escapeHtml } from './diff.js';
+import { getContextSafe } from './context.js';
 import { notify } from './notifications.js';
 import { recordSchemaEvent, schemaEventForSeverity } from './schema_status.js';
 import { validateFloatPositions } from '../schema/secondary.js';
@@ -20,7 +21,51 @@ function numberValue(value, fallback) {
 }
 
 /**
+ * Render a <select> of SillyTavern Connection Manager profiles. Shared by the
+ * global Settings tab, every module panel (renderApiSettingsFields' profileId
+ * option), and Interiority's thoughts-profile override.
+ *
+ * A stored id that matches no profile — deleted in ST, or Connection Manager
+ * unavailable — keeps an option of its own. Without it the select would show
+ * the None option, and saving any unrelated setting would silently clear the
+ * profile and switch the module to a different API.
+ *
+ * @param {string} selectId
+ * @param {string} selectedProfileId stored profile id ('' = none)
+ * @param {string} noneLabel text of the empty option
+ */
+export function renderConnectionProfileSelect(selectId, selectedProfileId, noneLabel) {
+    const selected = selectedProfileId || '';
+    let found = !selected;
+    let optionsHtml = `<option value="">${escapeHtml(noneLabel)}</option>`;
+    try {
+        const ctx = getContextSafe();
+        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
+        const activeId = ctx?.extensionSettings?.connectionManager?.selectedProfile || '';
+        for (const profile of profiles) {
+            const id = profile?.id;
+            if (!id) continue;
+            const isSelected = id === selected;
+            if (isSelected) found = true;
+            const name = profile.name || id;
+            const isActive = id === activeId ? ' (active)' : '';
+            optionsHtml += `<option value="${escapeHtml(id)}"${isSelected ? ' selected' : ''}>${escapeHtml(name)}${isActive}</option>`;
+        }
+    } catch { /* connection manager unavailable */ }
+    if (!found) {
+        optionsHtml += `<option value="${escapeHtml(selected)}" selected>Missing profile (${escapeHtml(selected)})</option>`;
+    }
+    return `<select id="${selectId}" class="mwt-input">${optionsHtml}</select>`;
+}
+
+/**
  * Render the common API settings fields used by the global and module panels.
+ *
+ * With `opts.profileId`, the fields start with a Connection Profile select.
+ * A module's own profile outranks its custom URL/Model (resolveApiCall), and
+ * "Sync to Modules" writes one into every module — so a panel that edits the
+ * custom fields must also show, and let the user clear, the profile that
+ * overrides them. Pair with wireApiSettingsFields() for the show/hide toggle.
  *
  * @param {object} s settings object
  * @param {object} opts field IDs/defaults
@@ -36,48 +81,72 @@ export function renderApiSettingsFields(s, opts = {}) {
         freqId = 'freq-pen',
         presId = 'pres-pen',
         headersId = 'headers',
+        profileId = null,
         maxTokensDefault = 2000,
         tempDefault = 0.3,
         includeAdvanced = true,
         includeHeaders = true,
+        headersHintHtml = '',
     } = opts;
 
+    // The Connection Manager transport sends only the profile id and Max
+    // Tokens, so every other field here is dead while a profile is selected.
+    // Those carry data-mwt-api-custom and are hidden, rather than left
+    // looking editable — dead fields that look live are the bug this fixes.
+    const profileSelected = !!(profileId && s.connectionProfileId);
+    const custom = (style = '') => {
+        if (!profileId) return style ? ` style="${style}"` : '';
+        const css = (profileSelected ? 'display:none;' : '') + style;
+        return ` data-mwt-api-custom="${profileId}"${css ? ` style="${css}"` : ''}`;
+    };
+
+    const profile = profileId ? `
+        <label class="mwt-label" for="${profileId}">Connection Profile</label>
+        ${renderConnectionProfileSelect(profileId, s.connectionProfileId, '— None (use custom API below) —')}
+        <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">A profile brings its own model and preset, so only Max Tokens applies from this panel while one is selected. "Sync to Modules" on the main Settings tab sets this for every module.</p>
+    ` : '';
+
     const advanced = includeAdvanced ? `
-        <label class="mwt-label" for="${topPId}">Top P</label>
-        <input id="${topPId}" class="mwt-input" type="number"
+        <label class="mwt-label" for="${topPId}"${custom()}>Top P</label>
+        <input id="${topPId}" class="mwt-input" type="number"${custom()}
                value="${numberValue(s.topP, 1.0)}" min="0" max="1" step="0.05">
 
-        <label class="mwt-label" for="${freqId}">Freq Penalty</label>
-        <input id="${freqId}" class="mwt-input" type="number"
+        <label class="mwt-label" for="${freqId}"${custom()}>Freq Penalty</label>
+        <input id="${freqId}" class="mwt-input" type="number"${custom()}
                value="${numberValue(s.frequencyPenalty, 0)}" min="-2" max="2" step="0.1">
 
-        <label class="mwt-label" for="${presId}">Pres Penalty</label>
-        <input id="${presId}" class="mwt-input" type="number"
+        <label class="mwt-label" for="${presId}"${custom()}>Pres Penalty</label>
+        <input id="${presId}" class="mwt-input" type="number"${custom()}
                value="${numberValue(s.presencePenalty, 0)}" min="-2" max="2" step="0.1">
     ` : '';
 
+    const headersHint = headersHintHtml
+        ? `<div${custom()}></div><p${custom('font-size:11px;color:var(--mwt-text-dim);margin:0')}>${headersHintHtml}</p>`
+        : '';
     const headers = includeHeaders ? `
-        <label class="mwt-label" for="${headersId}">Custom Headers</label>
-        <textarea id="${headersId}" class="mwt-input" rows="2"
+        <label class="mwt-label" for="${headersId}"${custom()}>Custom Headers</label>
+        <textarea id="${headersId}" class="mwt-input" rows="2"${custom()}
                   placeholder='{"X-Custom": "value"}'>${escapeHtml(s.customHeaders || '')}</textarea>
+        ${headersHint}
     ` : '';
 
     // Slice 4 (a11y plan §4.4): every label carries an explicit for= pointing
     // at its control. The inputs already had stable ids (readApiSettingsValues
     // queries by them), so the sibling pairs just needed the association.
     return `
-        <label class="mwt-label" for="${urlId}">API URL</label>
-        <input id="${urlId}" class="mwt-input" type="text"
+        ${profile}
+        <label class="mwt-label" for="${urlId}"${custom()}>API URL</label>
+        <input id="${urlId}" class="mwt-input" type="text"${custom()}
                value="${escapeHtml(s.apiUrl || '')}"
                placeholder="https://api.openai.com/v1">
 
-        <label class="mwt-label" for="${keyId}">API Key</label>
-        <input id="${keyId}" class="mwt-input" type="password"
+        <label class="mwt-label" for="${keyId}"${custom()}>API Key</label>
+        <input id="${keyId}" class="mwt-input" type="password"${custom()}
                value="${escapeHtml(s.apiKey || '')}"
                placeholder="sk-...">
 
-        <label class="mwt-label" for="${modelId}">Model</label>
-        <input id="${modelId}" class="mwt-input" type="text"
+        <label class="mwt-label" for="${modelId}"${custom()}>Model</label>
+        <input id="${modelId}" class="mwt-input" type="text"${custom()}
                value="${escapeHtml(s.modelName || '')}"
                placeholder="gpt-4o-mini">
 
@@ -85,8 +154,8 @@ export function renderApiSettingsFields(s, opts = {}) {
         <input id="${maxTokensId}" class="mwt-input" type="number"
                value="${numberValue(s.maxTokens, maxTokensDefault)}" min="100" max="32000">
 
-        <label class="mwt-label" for="${tempId}">Temperature</label>
-        <input id="${tempId}" class="mwt-input" type="number"
+        <label class="mwt-label" for="${tempId}"${custom()}>Temperature</label>
+        <input id="${tempId}" class="mwt-input" type="number"${custom()}
                value="${numberValue(s.temperature, tempDefault)}" min="0" max="2" step="0.05">
         ${advanced}
         ${headers}
@@ -94,7 +163,32 @@ export function renderApiSettingsFields(s, opts = {}) {
 }
 
 /**
+ * Wire the controls renderApiSettingsFields() emitted: picking a profile
+ * hides the custom-API fields it overrides, picking None shows them again.
+ * A no-op without `opts.profileId`. Call after the markup is in the DOM.
+ *
+ * @param {Element} root — container the fields were rendered into
+ * @param {object} opts — same ID map as renderApiSettingsFields
+ */
+export function wireApiSettingsFields(root, opts = {}) {
+    const { profileId = null } = opts;
+    const select = profileId ? root?.querySelector(`#${profileId}`) : null;
+    if (!select) return;
+    const sync = () => {
+        for (const node of root.querySelectorAll(`[data-mwt-api-custom="${profileId}"]`)) {
+            node.style.display = select.value ? 'none' : '';
+        }
+    };
+    select.addEventListener('change', sync);
+    sync();
+}
+
+/**
  * Read API settings values from a DOM container element.
+ *
+ * `connectionProfileId` is included only when the profile select is present,
+ * so a panel rendered without one never clears a synced profile it does not
+ * show.
  *
  * @param {Element} el — container to querySelect from
  * @param {object} opts — same ID map as renderApiSettingsFields
@@ -111,6 +205,7 @@ export function readApiSettingsValues(el, opts = {}) {
         freqId = 'freq-pen',
         presId = 'pres-pen',
         headersId = 'headers',
+        profileId = null,
         maxTokensDefault = 2000,
     } = opts;
 
@@ -133,8 +228,10 @@ export function readApiSettingsValues(el, opts = {}) {
     const topPRaw = el.querySelector(`#${topPId}`)?.value;
     const freqRaw = el.querySelector(`#${freqId}`)?.value;
     const presRaw = el.querySelector(`#${presId}`)?.value;
+    const profileSelect = profileId ? el.querySelector(`#${profileId}`) : null;
 
     return {
+        ...(profileSelect ? { connectionProfileId: profileSelect.value || '' } : {}),
         apiUrl: el.querySelector(`#${urlId}`)?.value?.trim() || '',
         apiKey: el.querySelector(`#${keyId}`)?.value?.trim() || '',
         modelName: el.querySelector(`#${modelId}`)?.value?.trim() || '',

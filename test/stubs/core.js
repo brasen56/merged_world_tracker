@@ -59,6 +59,8 @@ import { stripNonNarrative } from '../../core/strip.js';
 // directly (test/budget.test.js), the injection_diagnostics tier5 pattern.
 import { enforceInjectionBudget } from '../../core/budget.js';
 import { _resetSafeCharacterContextProvider } from '../../core/character_context.js';
+// Real API-field helpers — opt-in per test via useRealApiSettingsFields().
+import * as _realUi from '../../core/ui.js';
 export {
     registerSafeCharacterContextProvider,
     listSafeCharacterContextCandidates,
@@ -72,6 +74,7 @@ let _meta = {};
 let _contextExtras = {};
 let _extSettings = {};
 let _pickTextFileImpl = null;
+let _realApiFields = false;
 let _apiImpl = null;
 let _parseImpl = null;
 let _promptCalls = [];
@@ -89,6 +92,7 @@ export function resetCoreStubs() {
     _contextExtras = {};
     _extSettings = {};
     _pickTextFileImpl = null;
+    _realApiFields = false;
     _apiImpl = null;
     _parseImpl = null;
     _promptCalls = [];
@@ -661,6 +665,7 @@ export async function pickTextFile(accept) {
  * inputs would just couple these tests to core/ui.js's layout.
  */
 export function renderApiSettingsFields(_s = {}, opts = {}) {
+    if (_realApiFields) return _realUi.renderApiSettingsFields(_s, opts);
     const ids = Object.entries(opts)
         .filter(([k, v]) => k.endsWith('Id') && typeof v === 'string')
         .map(([, v]) => `<input id="${v}" value="">`)
@@ -668,9 +673,29 @@ export function renderApiSettingsFields(_s = {}, opts = {}) {
     return `<div class="mwt-stub-api-fields">${ids}</div>`;
 }
 
-export function readApiSettingsValues() {
+export function readApiSettingsValues(el, opts) {
+    if (_realApiFields) return _realUi.readApiSettingsValues(el, opts);
     return {};
 }
+
+export function wireApiSettingsFields(root, opts) {
+    if (_realApiFields) _realUi.wireApiSettingsFields(root, opts);
+}
+
+/**
+ * Opt the current test into the REAL API-field helpers from core/ui.js, for
+ * tests that drive a module's Save through the Connection Profile select —
+ * the minimal fakes above would hide exactly the behavior under test.
+ * resetCoreStubs() switches back to the fakes.
+ */
+export function useRealApiSettingsFields() {
+    _realApiFields = true;
+}
+
+// Pure markup over the connection-manager profile list; the real one reads
+// the real getContextSafe(), so under test it sees no profiles unless a test
+// installs a SillyTavern global.
+export const renderConnectionProfileSelect = _realUi.renderConnectionProfileSelect;
 export const createFloatingButtonBar = notImplemented('createFloatingButtonBar');
 // Pure shared bounds — re-exported from the real module so production and test
 // barrel consumers agree on the supported setting range.

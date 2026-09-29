@@ -9,7 +9,7 @@ import {
     escapeHtml, computeLcsDiff, renderDiffHtml, estimateTokens,
     createModal, showModal, hideModal, setStatus,
     downloadJson, pickTextFile,
-    renderApiSettingsFields, readApiSettingsValues,
+    renderApiSettingsFields, readApiSettingsValues, wireApiSettingsFields,
     getChat,
     captureScope, assertSameScope,
     resolveApiCall, normaliseOutput,
@@ -21,6 +21,15 @@ import {
 import { setControlBusy } from '../core/ui.js';
 
 import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntities, EXPIRY_SECTIONS_DEFAULT } from './settings.js';
+
+// One id map for renderApiSettingsFields, wireApiSettingsFields and
+// readApiSettingsValues, so the rendered fields and the Save reader agree.
+const WS_API_FIELD_IDS = {
+    profileId: 'ws-connection-profile',
+    urlId: 'ws-api-url', keyId: 'ws-api-key', modelId: 'ws-model',
+    maxTokensId: 'ws-max-tokens', tempId: 'ws-temp',
+    includeAdvanced: false, includeHeaders: false,
+};
 import {
     state, SECTIONS, VARIETY_LABELS,
     getWorldStateText, getWorldStateData, setWorldStateData, setWorldStateDataChecked,
@@ -641,7 +650,7 @@ export function render() {
         <details class="mwt-mt-8">
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500"><span aria-hidden="true">⚙️</span> World State Settings</summary>
             <div class="mwt-settings-grid mwt-mt-8">
-                ${renderApiSettingsFields(s, { urlId: 'ws-api-url', keyId: 'ws-api-key', modelId: 'ws-model', maxTokensId: 'ws-max-tokens', tempId: 'ws-temp', includeAdvanced: false, includeHeaders: false })}
+                ${renderApiSettingsFields(s, WS_API_FIELD_IDS)}
 
                 <div class="mwt-label">Settings Scope</div>
                 <div>
@@ -954,11 +963,11 @@ export function wireEvents() {
         setStatus(state.modal, `Purged ${report.length} stale entr${report.length === 1 ? 'y' : 'ies'}.`, 'success', 3000);
     });
 
-    const wsApiFieldOpts = { urlId: 'ws-api-url', keyId: 'ws-api-key', modelId: 'ws-model', maxTokensId: 'ws-max-tokens', tempId: 'ws-temp', includeAdvanced: false, includeHeaders: false };
+    wireApiSettingsFields(state.modal, WS_API_FIELD_IDS);
 
     // Save settings
     state.modal.querySelector('#ws-save-settings')?.addEventListener('click', () => {
-        const apiValues = readApiSettingsValues(state.modal, wsApiFieldOpts);
+        const apiValues = readApiSettingsValues(state.modal, WS_API_FIELD_IDS);
         const autoSaveSec = parseInt(state.modal.querySelector('#ws-auto-save-interval')?.value, 10) || DEFAULT_AUTO_SAVE_INTERVAL;
         const customPrompt = state.modal.querySelector('#ws-custom-prompt')?.value.trim() || '';
         const depth = parseInt(state.modal.querySelector('#ws-injection-depth')?.value, 10);
@@ -981,7 +990,8 @@ export function wireEvents() {
         // Both empty is fine — the module then falls back to the global API
         // settings (see resolveApiCall). Only a *partial* config is an error,
         // since it would silently mix module and global connection fields.
-        if (!!apiValues.apiUrl !== !!apiValues.modelName) {
+        // A selected profile makes the (hidden) custom fields irrelevant.
+        if (!apiValues.connectionProfileId && !!apiValues.apiUrl !== !!apiValues.modelName) {
             setStatus(state.modal, 'Fill in both API URL and Model, or leave both blank to use the global settings.', 'error');
             return;
         }
@@ -1015,7 +1025,7 @@ export function wireEvents() {
     state.modal.querySelector('#ws-test-connection')?.addEventListener('click', async () => {
         const btn = state.modal.querySelector('#ws-test-connection');
         try {
-            const values = readApiSettingsValues(state.modal, wsApiFieldOpts);
+            const values = readApiSettingsValues(state.modal, WS_API_FIELD_IDS);
             const resolved = resolveApiCall({ moduleSettings: { ...getSettings(), ...values } });
             if (resolved.mode === 'custom' && (!resolved.settings.apiUrl || !resolved.settings.modelName)) {
                 setStatus(state.modal, 'Fill URL and Model, or configure a connection profile first.', 'error');

@@ -9,7 +9,6 @@
 // ─── Core imports ────────────────────────────────────────────────────────────
 
 import { getContextSafe } from './core/context.js';
-import { escapeHtml } from './core/diff.js';
 import { bumpEpoch } from './core/scope.js';
 // Generation coordinator (TODO §1 / PI §P1): the central cross-module job
 // queue both API transports submit through. Same direct-import rule as the
@@ -32,7 +31,7 @@ import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings
 // injections are never rejected by the previous chat's stale snapshots.
 import { getBudgetSettings, saveBudgetSettings, resetBudgetInjections } from './core/budget.js';
 import { createModal, showModal, setStatus, releaseManagedInert } from './core/modal.js';
-import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues, setControlBusy } from './core/ui.js';
+import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues, renderConnectionProfileSelect, setControlBusy } from './core/ui.js';
 // Main modal tab shell — the render/wire seam core/main_tabs.js owns so the
 // main tab bar's exact rendering path is testable under jsdom (index.js
 // itself cannot be imported into Vitest; see test/main_tabbar_adoption.test.js).
@@ -241,22 +240,6 @@ function renderSettingsTab() {
     const hasProfile = !!s.connectionProfileId;
     const apiFieldsStyle = hasProfile ? 'display:none' : '';
 
-    // Build connection profile dropdown options from ST's Connection Manager
-    let profileOptionsHtml = '<option value="">— None (use custom API below) —</option>';
-    try {
-        const ctx = getContextSafe();
-        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
-        const selectedId = ctx?.extensionSettings?.connectionManager?.selectedProfile || '';
-        for (const profile of profiles) {
-            const id = profile.id;
-            if (!id) continue;
-            const name = profile.name || id;
-            const selected = id === s.connectionProfileId ? ' selected' : '';
-            const isActive = id === selectedId ? ' (active)' : '';
-            profileOptionsHtml += `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(name)}${isActive}</option>`;
-        }
-    } catch { /* ignore */ }
-
     // Accessibility plan §4.4 / Slice 4, in the markup below:
     //  - decorative leading emoji sit in aria-hidden spans, so a heading is
     //    "Injection Settings", not "wrench Injection Settings";
@@ -275,9 +258,7 @@ function renderSettingsTab() {
             </p>
             <div class="mwt-settings-grid">
             <label class="mwt-label" style="grid-column:1/2" for="mwt-s-connection-profile">Connection Profile</label>
-            <select id="mwt-s-connection-profile" class="mwt-input" style="grid-column:2/3">
-                ${profileOptionsHtml}
-            </select>
+            ${renderConnectionProfileSelect('mwt-s-connection-profile', s.connectionProfileId, '— None (use custom API below) —')}
             <p style="font-size:11px;color:var(--mwt-text-dim);margin:0;grid-column:1/3">
                 Select a Connection Manager profile to use with all backends (OpenAI, TextGen, etc.) with full preset/instruct support. Leave empty to configure a custom API URL/Key below. Profiles marked (active) are ST's currently selected profile.
             </p>

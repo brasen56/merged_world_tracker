@@ -5,7 +5,7 @@
 
 import {
     escapeHtml, buildInlineDiff, estimateTokens,
-    renderApiSettingsFields, readApiSettingsValues,
+    renderApiSettingsFields, readApiSettingsValues, wireApiSettingsFields,
     createModal, showModal, hideModal, setStatus,
 } from '../core/index.js';
 // Direct import (not the barrel) so the real helper runs under the test
@@ -300,16 +300,17 @@ function showSettingsModal() {
     if (!el) return;
     const s = getSettings();
     const apiFieldOpts = {
+        profileId: 'sc-connection-profile',
         urlId: 'sc-api-url', keyId: 'sc-api-key', modelId: 'sc-model',
         maxTokensId: 'sc-max-tokens', tempId: 'sc-temp', topPId: 'sc-top-p',
         freqId: 'sc-freq-pen', presId: 'sc-pres-pen', headersId: 'sc-headers',
         maxTokensDefault: 8000,
+        headersHintHtml: 'Custom Headers: JSON object of extra HTTP headers sent with each API request. Example: <code>{"X-Organization":"my-org"}</code>. Leave blank if unsure.',
     };
     el.innerHTML = `<div>
         <h3>Chronicle Settings</h3>
         <div class="mwt-settings-grid">
             ${renderApiSettingsFields(s, apiFieldOpts)}
-            <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Headers: JSON object of extra HTTP headers sent with each API request. Example: <code>{"X-Organization":"my-org"}</code>. Leave blank if unsure.</p>
         </div>
         <div style="margin-top:12px">
             <label for="sc-filter-system"><input type="checkbox" id="sc-filter-system" ${s.filterSystem !== false ? 'checked' : ''}> Filter system messages <span style="font-size:11px;color:var(--mwt-text-dim)">(hides SillyTavern system prompts, jailbreaks, etc.)</span></label><br>
@@ -320,6 +321,7 @@ function showSettingsModal() {
         <div style="margin-top:8px"><label for="sc-auto-threshold">Auto-snapshot threshold: <input type="number" id="sc-auto-threshold" class="mwt-input" style="width:80px;display:inline-block" value="${s.autoSnapshotThreshold || 40}" min="5" max="500"></label> <span style="font-size:11px;color:var(--mwt-text-dim)">messages between auto-generations</span></div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button><button id="sc-cancel-settings" class="mwt-btn">Cancel</button></div>
     </div>`;
+    wireApiSettingsFields(el, apiFieldOpts);
     el.querySelector('#sc-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(el, apiFieldOpts);
         saveSettings({
