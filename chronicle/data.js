@@ -13,6 +13,7 @@ import {
     stripNonNarrative,
     getStableHistoryEnd,
     getOrCreateReceiptIdentity,
+    sendDateToMs,
 } from '../core/index.js';
 
 import { backfillSnapshotIds, chronicleSchema } from './schema.js';
@@ -176,6 +177,10 @@ export function makeAnchor(msg) {
     if (!msg) return null;
     const chat = getChat();
     const mes = String(msg.mes || '');
+    // The boundary's send time survives what its index does not: condensing
+    // (ILS summaries) and bulk deletes shift every later index, so an anchor
+    // miss locates the boundary by time instead (resumeIndexByTime).
+    const sendDate = sendDateToMs(msg.send_date);
     return {
         id: msg.id ?? null,
         msgIndex: chat.indexOf(msg),
@@ -183,7 +188,32 @@ export function makeAnchor(msg) {
         start: mes.slice(0, 80),
         end: mes.slice(-80),
         length: mes.length,
+        ...(sendDate !== null ? { sendDate } : {}),
     };
+}
+
+/**
+ * Where coverage resumes when the anchor message is gone, located by send
+ * time: AT the slot just past the last live message sent strictly before
+ * `boundaryMs`. Like the index fallback in generateSnapshot(), this resumes
+ * AT the boundary rather than past it — an edited or swiped boundary is
+ * re-chronicled, a deleted one lets the next message take its place.
+ * Messages without a readable send_date never mark the boundary on their own.
+ *
+ * @param {object[]} chat
+ * @param {number} boundaryMs epoch milliseconds
+ * @returns {number|null} resume index (0 when every dated message is newer),
+ *   or null when no message carries a readable send time
+ */
+export function resumeIndexByTime(chat, boundaryMs) {
+    let dated = false;
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const sent = sendDateToMs(chat[i]?.send_date);
+        if (sent === null) continue;
+        dated = true;
+        if (sent < boundaryMs) return i + 1;
+    }
+    return dated ? 0 : null;
 }
 
 export function resolveAnchor(anchor) {

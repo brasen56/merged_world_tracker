@@ -12,6 +12,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Chronicle no longer stalls on "No new messages to chronicle" after a
+  chat is condensed.** 2.10.2 made an anchor miss resume at the last
+  entry's recorded message index instead of restarting from zero. Once ILS
+  (or a bulk delete) folded the anchor message into a summary, the chat
+  became shorter than that index, so every Generate and every auto-snapshot
+  refused, and the "Msgs until auto" counter stayed at 0 whatever the
+  threshold. Anchors now record the boundary message's send time, and a miss
+  finds the boundary by time, which survives condensing even when the old
+  index still falls inside the chat but points at the wrong message. For an
+  anchor written before this change, a recorded index past the end of the
+  chat falls back to the entry's creation time. Either way the first entry
+  after condensing can re-read a summary that overlaps the previous entry,
+  so review it. (`chronicle/data.js` `makeAnchor`/`resumeIndexByTime`,
+  `chronicle/snapshots.js` `resumeAfterLostAnchor`.)
+
+- **Stray auto-snapshot counts no longer re-fire the auto-snapshot on
+  every reply.** The counter only drains through the receipt events behind
+  it. Counts with no event behind them (carried over from before receipt
+  tracking, or with the event lost) were never consumed. Once they alone
+  reached the threshold, each reply triggered another two-message entry. A
+  successful snapshot now drops the stray counts that were present when its
+  window was cut. Counts that arrive during generation still carry over.
+  (`test/chronicle_window_coverage.test.js` pins all three cases.)
+
 ## [2.10.3]
 
 ### Fixed

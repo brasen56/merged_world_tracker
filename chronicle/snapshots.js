@@ -28,7 +28,7 @@ import {
     getSettings,
     getChronicleData, setChronicleData, setChronicleDataChecked, getSnapshots,
     getCharactersInRange, scSetStatus, getVisibleChronicleView,
-    makeAnchor, resolveAnchor, buildMessageWindow,
+    makeAnchor, resolveAnchor, resumeIndexByTime, buildMessageWindow,
     getReceiptIdentity,
     _render,
 } from './data.js';
@@ -142,6 +142,44 @@ function chroniclePaused() {
     return true;
 }
 
+/**
+ * The resume point when the anchor message no longer resolves. Resuming past
+ * already-covered history re-chronicles a little, which a summary tolerates;
+ * resuming too late is unrecoverable loss, so every branch errs early.
+ *
+ * 1. The anchor recorded its send time: resume at the boundary's slot, found
+ *    by time (resumeIndexByTime). Survives condensing and bulk deletes.
+ * 2. An older anchor without one, while the entry's recorded boundary index
+ *    is still inside the chat: resume AT that index. A deletion shifts the
+ *    first uncovered message down into it (lastCovered + 1 would skip it
+ *    forever); an edit re-chronicles the one covered message.
+ * 3. That index is at or past the end of the chat: messages before it were
+ *    condensed (ILS) or bulk-deleted, so it points at nothing, and resuming
+ *    there refused with "No new messages" on every attempt. Resume after
+ *    the last message sent before the entry was CREATED — nothing newer can
+ *    be in it. The few in-flight messages the entry deliberately left out
+ *    (sent just before it) count as covered here; case 1 has no such gap.
+ *
+ * @param {object[]} chat
+ * @param {object} anchor chronicle.lastAnchor (known to be unresolvable)
+ * @param {object} lastCoveredEntry newest snapshot with a real toIndex
+ * @returns {number}
+ */
+function resumeAfterLostAnchor(chat, anchor, lastCoveredEntry) {
+    if (Number.isFinite(anchor.sendDate)) {
+        const byTime = resumeIndexByTime(chat, anchor.sendDate);
+        if (byTime !== null) return byTime;
+    }
+    const lastCovered = lastCoveredEntry.toIndex;
+    if (lastCovered < chat.length) return lastCovered;
+    const createdMs = Date.parse(lastCoveredEntry.createdAt);
+    if (Number.isFinite(createdMs)) {
+        const byTime = resumeIndexByTime(chat, createdMs);
+        if (byTime !== null) return byTime;
+    }
+    return lastCovered;
+}
+
 // ─── Generate snapshot ───────────────────────────────────────────────────────
 
 export async function generateSnapshot(isAuto = false) {
@@ -176,15 +214,8 @@ export async function generateSnapshot(isAuto = false) {
         scSetStatus('Chronicle anchor changed and no snapshot range is available; review the history before generating.', 'error');
         return null;
     }
-    // On an anchor miss the boundary message is gone from the chat. If it was
-    // DELETED, every later message shifted down one slot, so the first
-    // uncovered message now sits AT lastCovered — resuming at lastCovered + 1
-    // would skip it forever. Resume AT the recorded boundary instead: in the
-    // benign case (the boundary message was edited rather than deleted) one
-    // already-covered message is re-chronicled, which a summary tolerates; a
-    // skip is unrecoverable loss.
-    let actualFrom = Math.max(0, !found && chronicle.lastAnchor && Number.isInteger(lastCovered)
-        ? lastCovered : index);
+    let actualFrom = Math.max(0, !found && chronicle.lastAnchor
+        ? resumeAfterLostAnchor(chat, chronicle.lastAnchor, lastCoveredEntry) : index);
     let startOffset = 0;
     // Oversized-message continuation: the newest recorded range may have ended
     // MID-MESSAGE (toCharOffset — buildMessageWindow cuts a single >100k
@@ -201,7 +232,7 @@ export async function generateSnapshot(isAuto = false) {
     }
     if (!found && chronicle.lastAnchor) {
         setChronicleData({ anchorStale: true });
-        scSetStatus('Chronicle anchor changed; resuming at the last recorded snapshot boundary. Review the edited entry.', 'warning');
+        scSetStatus('Chronicle anchor changed (its message was edited, deleted, or condensed); resuming where the last entry ended. Review the new entry.', 'warning');
     }
     if (actualFrom >= chat.length) { scSetStatus('No new messages to chronicle.', 'error'); return null; }
     const { text, toIndex, toCharOffset } = buildMessageWindow(actualFrom, undefined, startOffset);
@@ -220,6 +251,7 @@ export async function generateSnapshot(isAuto = false) {
     // next one. Subtracting the consumed amount instead of zeroing keeps the
     // auto-snapshot cadence honest across a long generation.
     const receiptEventsAtWindow = new Map(state.countedReceiptEvents);
+    const counterAtWindow = state.msgSinceSnapshot;
     // The window now ends at `toIndex` (the last included message), not at the
     // end of chat: buildMessageWindow excludes the trailing in-flight pair. Those
     // excluded messages can have counted events in `receiptEventsAtWindow`, so they must
@@ -317,7 +349,6 @@ export async function generateSnapshot(isAuto = false) {
         // present, or that deletion would subtract a newer arrival twice.
         const consumedAtWindow = [...receiptEventsAtWindow].reduce((sum, [key, count]) =>
             sum + (tailReceiptKeys.has(key) ? 0 : Math.min(count, state.countedReceiptEvents.get(key) || 0)), 0);
-        const remainingCounter = Math.max(0, state.msgSinceSnapshot - consumedAtWindow);
         // Consume receipt provenance with the counter. Keep only events that
         // belong to the uncovered tail, rather than relying on Map insertion
         // order (which is unrelated to chat position after regenerations).
@@ -329,6 +360,15 @@ export async function generateSnapshot(isAuto = false) {
             if (retain > 0) remainingEvents.set(key, retain);
             else remainingEvents.delete(key);
         }
+        // The counter only drains through receipt events, so increments with
+        // no event behind them (a count carried over from before receipt
+        // provenance, or one whose event was lost) were never consumed: once
+        // they alone reached the threshold, every later reply fired another
+        // auto-snapshot. Drop the ones already counted when the window was
+        // cut; anything arriving during generation still carries over.
+        const eventsAtWindow = [...receiptEventsAtWindow.values()].reduce((sum, count) => sum + count, 0);
+        const unaccountedAtWindow = Math.max(0, counterAtWindow - eventsAtWindow);
+        const remainingCounter = Math.max(0, state.msgSinceSnapshot - consumedAtWindow - unaccountedAtWindow);
         const written = setChronicleDataChecked({ snapshots, lastAnchor: newAnchor,
             suggestSent: true, anchorStale: !found && !!chronicle.lastAnchor,
             msgSinceSnapshot: remainingCounter, countedReceiptEvents: [...remainingEvents.entries()] });
