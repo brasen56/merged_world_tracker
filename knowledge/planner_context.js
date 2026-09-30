@@ -338,6 +338,22 @@ export async function buildPlannerCharacterContext(selection) {
 // A malformed or unfamiliar dossier is refused, never guessed at or clipped.
 export const AUTHOR_CONTEXT_FIELDS = Object.freeze(['public_profile', 'agenda', 'secrets', 'knowledge', 'read_on_pc', 'canon_lock']);
 export const AUTHOR_MAX_CHARS = 12000;
+// Private author-context budget presets. A closed list with no unlimited
+// option on purpose: the projection must stay bounded beside the rest of the
+// planning request and the response allowance. These are proposed starting
+// sizes, not model-specific safe limits. Mirrored for the picker by
+// story_planner/schema.js's AUTHOR_CONTEXT_BUDGETS; a test pins the two equal.
+export const AUTHOR_CONTEXT_BUDGET_PRESETS = Object.freeze([
+    { key: 'standard', label: 'Standard', chars: AUTHOR_MAX_CHARS },
+    { key: 'expanded', label: 'Expanded', chars: 24000 },
+    { key: 'large', label: 'Large', chars: 48000 },
+]);
+const AUTHOR_BUDGET_CHARS = new Map(AUTHOR_CONTEXT_BUDGET_PRESETS.map(preset => [preset.key, preset.chars]));
+
+/** The character ceiling for one private author-context build. Unknown keys keep the default. */
+export function resolveAuthorContextBudgetChars(budget) {
+    return AUTHOR_BUDGET_CHARS.get(budget) ?? AUTHOR_MAX_CHARS;
+}
 // Every single-line label a dossier may carry, keyed by its lowercased text.
 // The preamble labels formatDossierEntry writes under the header are allowed
 // but not returned: no author field group asks for them.
@@ -474,12 +490,13 @@ export async function buildPlannerAuthorContext(selection) {
 
     // Pass 1, in selection order: each NPC's other groups whole, plus its newest
     // ledger entry when that fits.
+    const maxChars = resolveAuthorContextBudgetChars(selection?.budget);
     const included = [];
     let used = 0;
     for (const entry of entries) {
         const separator = included.length ? 2 : 0;
         const floors = !entry.ledger.length ? [0] : entry.values.length > 1 ? [1, 0] : [1];
-        const keep = floors.find(count => used + separator + renderAuthorRecord(entry, count).length <= AUTHOR_MAX_CHARS);
+        const keep = floors.find(count => used + separator + renderAuthorRecord(entry, count).length <= maxChars);
         if (keep === undefined) {
             // Canon constraints cannot be omitted without changing the request's meaning.
             if (entry.requestedFields.includes('canon_lock')) throw new Error(`Author context exceeds the record budget at ${entry.name}; Canon Lock cannot be omitted.`);
@@ -498,7 +515,7 @@ export async function buildPlannerAuthorContext(selection) {
     while (growing.length) {
         growing = growing.filter(entry => {
             const size = renderAuthorRecord(entry, entry.keep + 1).length;
-            if (used + size - entry.size > AUTHOR_MAX_CHARS) return false;
+            if (used + size - entry.size > maxChars) return false;
             used += size - entry.size;
             entry.size = size;
             entry.keep += 1;
@@ -506,8 +523,11 @@ export async function buildPlannerAuthorContext(selection) {
         });
     }
     if (!included.length) throw new Error('No complete author-context records fit the budget.');
+    const projection = included.map(entry => renderAuthorRecord(entry, entry.keep)).join('\n\n');
     return {
-        text: included.map(entry => renderAuthorRecord(entry, entry.keep)).join('\n\n'),
+        text: projection,
+        chars: projection.length,
+        budgetChars: maxChars,
         coverage: entries.map(entry => entry.omitted
             ? { entityId: entry.entityId, name: entry.name, status: 'omitted-for-budget' }
             : {

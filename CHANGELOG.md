@@ -12,7 +12,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.10.4]
+
+### Added
+
+- **The private NPC author-context budget is now selectable in the Generate
+  dialog, with coverage previewed before generation.** The opt-in private
+  author-context section offers three presets — **Standard (12,000
+  characters, the previous fixed ceiling)**, **Expanded (24,000)**, and
+  **Large (48,000)** — remembered per chat and applied only to the
+  additional private planning context, not the model's whole context window;
+  the helper text states plainly that larger presets send more dossier
+  material to the planning model and still have to fit alongside the rest of
+  the request and the response allowance, and that these are starting
+  presets rather than model-specific safe limits. A live **Coverage before
+  generation** preview inside the section runs the exact builder the
+  reviewed request will run, on-device, and reports per NPC how many
+  Knowledge Ledger entries would be included ("80 of 120 … older entries
+  omitted — increase the budget or select fewer NPCs/field groups"), plus
+  the characters/tokens planned against the chosen ceiling. Every existing
+  protection is unchanged: records are sent whole or not at all (never
+  clipped mid-text), fair sharing across NPC ledgers is preserved, Canon
+  Lock still refuses when it cannot fit, consent and mandatory draft review
+  are untouched, and there is deliberately no unlimited option.
+  (`knowledge/planner_context.js` `AUTHOR_CONTEXT_BUDGET_PRESETS`/
+  `resolveAuthorContextBudgetChars`, `story_planner/schema.js`
+  `AUTHOR_CONTEXT_BUDGETS`, `story_planner/render.js` budget select +
+  preview.)
 
 ### Fixed
 

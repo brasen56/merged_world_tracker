@@ -43,8 +43,8 @@ import {
     usesGlobalDefaults, setUsesGlobalDefaults, setPlanSetting,
     getStoryPlanRequestPreferences,
 } from './data.js';
-import { buildSafeCharacterContext, listSafeCharacterContextCandidates } from '../core/character_context.js';
-import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, sanitizeAuthorContextSelection, AUTHOR_CONTEXT_FIELD_KEYS, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
+import { buildAuthorCharacterContext, buildSafeCharacterContext, listSafeCharacterContextCandidates } from '../core/character_context.js';
+import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, sanitizeAuthorContextSelection, AUTHOR_CONTEXT_BUDGETS, AUTHOR_CONTEXT_FIELD_KEYS, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { describeCastPolicyRequest, generatePlan, MAX_JOURNEY_SUBJECT_CANDIDATES } from './generation.js';
 import { applyScopedPlanProposal, buildArcDiff, previewScopedApply } from './proposals.js';
@@ -738,6 +738,34 @@ function describeAuthorCoverage(item) {
         : `sent, with all ${item.ledgerTotal} Knowledge Ledger entr${item.ledgerTotal === 1 ? 'y' : 'ies'}`;
 }
 
+const AUTHOR_BUDGET_ADVICE = 'Increase the budget or select fewer NPCs/field groups to include more.';
+const formatChars = value => value.toLocaleString('en-US');
+
+/**
+ * Pre-generation coverage for the private author-context selection, from the
+ * same builder the reviewed request will use. Dialog-only display: building
+ * the projection reads dossiers on-device and sends nothing.
+ */
+function renderAuthorContextCoveragePreview(result, budgetKey) {
+    const preset = AUTHOR_CONTEXT_BUDGETS.find(item => item.key === budgetKey) || AUTHOR_CONTEXT_BUDGETS[0];
+    const ceiling = Number(result?.budgetChars) || preset.chars;
+    const used = result?.text?.length || 0;
+    const rows = (result?.coverage || []).map(item => {
+        const name = item.name || item.entityId || 'Unknown NPC';
+        if (item.status === 'omitted-for-budget') {
+            return `<li><strong>${escapeHtml(name)}</strong>: none of its records fit — not included. ${escapeHtml(AUTHOR_BUDGET_ADVICE)}</li>`;
+        }
+        if (item.status === 'ledger-trimmed') {
+            return `<li><strong>${escapeHtml(name)}</strong>: ${Number(item.ledgerSent) || 0} of ${Number(item.ledgerTotal) || 0} Knowledge Ledger entries included; older entries omitted. ${escapeHtml(AUTHOR_BUDGET_ADVICE)}</li>`;
+        }
+        return `<li><strong>${escapeHtml(name)}</strong>: ${item.ledgerTotal
+            ? `all ${Number(item.ledgerTotal)} Knowledge Ledger entr${item.ledgerTotal === 1 ? 'y' : 'ies'} included`
+            : 'requested field groups included in full'}.</li>`;
+    }).join('');
+    return `<p class="mwt-text-dim mwt-text-sm">${escapeHtml(preset.label)} budget (${formatChars(ceiling)} characters): about ${formatChars(used)} characters (~${estimateTokens(result?.text || '')} tokens) of additional private planning context.</p>
+        ${rows ? `<ul class="sp-context-coverage">${rows}</ul>` : ''}`;
+}
+
 export function showScopedReview(proposal) {
     const diagnostics = proposal.diagnostics || {};
     const diagnosticItems = [
@@ -930,6 +958,19 @@ export function openGenerateDialog() {
                     <label class="sp-check-row" for="sp-author-npc-${index}"><input id="sp-author-npc-${index}" type="checkbox" name="sp-author-npc" value="${escapeHtml(candidate.entityId)}" ${authorConsent.entityIds.includes(candidate.entityId) ? 'checked' : ''}>${escapeHtml(candidate.name)}</label>
                     <div class="sp-author-fields">${AUTHOR_CONTEXT_FIELD_KEYS.map((field, fieldIndex) => `<label class="sp-check-row" for="sp-author-field-${index}-${fieldIndex}"><input id="sp-author-field-${index}-${fieldIndex}" type="checkbox" name="sp-author-field" value="${field}" ${authorConsent.npcFields[candidate.entityId]?.includes(field) ? 'checked' : ''}>${escapeHtml(field.replaceAll('_', ' '))}</label>`).join('')}</div>
                 </div>`).join('') || '<p class="mwt-text-dim mwt-text-sm">No major NPC dossiers are available.</p>'}</div>
+                <div class="mwt-settings-grid mwt-mt-8">
+                    <label class="mwt-label" for="sp-author-budget">Private author-context budget</label>
+                    <div>
+                        <select id="sp-author-budget" class="mwt-input" style="max-width:280px" aria-describedby="sp-author-budget-help">
+                            ${AUTHOR_CONTEXT_BUDGETS.map(preset => `<option value="${escapeHtml(preset.key)}" ${preset.key === authorConsent.budget ? 'selected' : ''}>${escapeHtml(preset.label)} — ${formatChars(preset.chars)} characters${preset.key === 'standard' ? ' (default)' : ''}</option>`).join('')}
+                        </select>
+                        <p id="sp-author-budget-help" class="mwt-text-dim mwt-text-sm">Caps only the additional private planning context this section adds — not the model's whole context window. Larger presets send more dossier material to the planning model and still have to fit alongside the rest of the request and the response allowance. These are starting presets, not model-specific safe limits. Records are sent whole or not at all; nothing is ever clipped mid-entry. Saved per chat.</p>
+                    </div>
+                </div>
+                <div class="mwt-mt-8">
+                    <div class="mwt-label">Coverage before generation</div>
+                    <div id="sp-author-coverage" aria-live="polite"><p class="mwt-text-dim mwt-text-sm">Select at least one NPC and field group to preview coverage. The preview is computed on-device; nothing is sent until you Generate for review.</p></div>
+                </div>
             </details>
             ${context.mode !== 'off' ? `<fieldset id="sp-generate-context-sources" style="border:0;padding:0;margin:12px 0 0">
                 <legend class="mwt-label">Safe Character Context sources for this request${context.mode === 'selected' ? ` (select up to ${MAX_CHARACTER_CONTEXT_IDS})` : ''}</legend>
@@ -973,6 +1014,17 @@ export function openGenerateDialog() {
         : context.mode === 'active'
             ? { ...context, excludedEntityIds: [...excludedContextSourceIds] }
             : context;
+    // Single reader for the private author-context controls: the coverage
+    // preview and the submit handler must see the same selection, or the
+    // preview would stop describing the request that is actually sent.
+    const readAuthorSelection = () => sanitizeAuthorContextSelection({
+        entityIds: [...modal.querySelectorAll('input[name="sp-author-npc"]:checked')].map(input => input.value),
+        npcFields: Object.fromEntries([...modal.querySelectorAll('.sp-author-npc-row')].map(row => [
+            row.dataset.entityId,
+            [...row.querySelectorAll('input[name="sp-author-field"]:checked')].map(input => input.value),
+        ])),
+        budget: modal.querySelector('#sp-author-budget')?.value,
+    });
     const getRequest = () => {
         const operation = modal.querySelector('input[name="sp-generate-operation"]:checked')?.value || 'add';
         const sectionKeys = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
@@ -1088,13 +1140,7 @@ export function openGenerateDialog() {
         // request reopens the dialog in the state that could not be submitted.
         setPlanData({ storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(request) });
         try {
-            const authorSelection = sanitizeAuthorContextSelection({
-                entityIds: [...modal.querySelectorAll('input[name="sp-author-npc"]:checked')].map(input => input.value),
-                npcFields: Object.fromEntries([...modal.querySelectorAll('.sp-author-npc-row')].map(row => [
-                    row.dataset.entityId,
-                    [...row.querySelectorAll('input[name="sp-author-field"]:checked')].map(input => input.value),
-                ])),
-            });
+            const authorSelection = readAuthorSelection();
             if (authorSelection.entityIds.some(id => !authorSelection.npcFields[id]?.length)) {
                 throw new Error('Choose at least one field group for each selected author-context NPC, or deselect that NPC.');
             }
@@ -1146,6 +1192,36 @@ export function openGenerateDialog() {
         refreshContextCoverage();
     });
     refreshContextCoverage();
+    // Preflight for the private author-context selection: run the exact builder
+    // the reviewed request will run, locally, and report what would be sent.
+    // Errors surface here as feedback instead of failing the submit later.
+    let authorCoverageRequestRevision = 0;
+    const refreshAuthorContextCoverage = () => {
+        const host = modal.querySelector('#sp-author-coverage');
+        if (!host) return;
+        const revision = ++authorCoverageRequestRevision;
+        const selection = readAuthorSelection();
+        if (!selection.entityIds.length) {
+            host.innerHTML = '<p class="mwt-text-dim mwt-text-sm">No private context selected; the request will carry public context only.</p>';
+            return;
+        }
+        if (selection.entityIds.some(id => !selection.npcFields[id]?.length)) {
+            host.innerHTML = '<p class="mwt-text-dim mwt-text-sm">Choose at least one field group for every selected NPC to preview coverage.</p>';
+            return;
+        }
+        Promise.resolve(buildAuthorCharacterContext(selection)).then(result => {
+            if (revision === authorCoverageRequestRevision && host.isConnected) {
+                host.innerHTML = renderAuthorContextCoveragePreview(result, selection.budget);
+            }
+        }).catch(error => {
+            if (revision === authorCoverageRequestRevision && host.isConnected) {
+                host.innerHTML = `<p class="mwt-text-dim mwt-text-sm">Preview stopped: ${escapeHtml(error.message)}</p>`;
+            }
+        });
+    };
+    modal.querySelector('.sp-author-list')?.addEventListener('change', refreshAuthorContextCoverage);
+    modal.querySelector('#sp-author-budget')?.addEventListener('change', refreshAuthorContextCoverage);
+    refreshAuthorContextCoverage();
 }
 
 // ─── Render ──────────────────────────────────────────────────────────────────

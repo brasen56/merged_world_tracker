@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { AUTHOR_MAX_CHARS, buildPlannerAuthorContext, parseAuthorDossier } from '../knowledge/planner_context.js';
+import { AUTHOR_CONTEXT_BUDGET_PRESETS, AUTHOR_MAX_CHARS, buildPlannerAuthorContext, parseAuthorDossier, resolveAuthorContextBudgetChars } from '../knowledge/planner_context.js';
 import { buildUpdatedDossierContent, formatDossierEntry, formatMajorEntry } from '../knowledge/lorebook.js';
 import { addRelationship, formatRelationshipBlock, injectRelationshipBlock, setStance } from '../knowledge/relationships.js';
 import { getLorebookName } from '../knowledge/scope.js';
@@ -10,7 +10,7 @@ import { buildAuthorCharacterContext, registerSafeCharacterContextProvider } fro
 import { hideModal } from '../core/modal.js';
 import { buildInjectionBody } from '../story_planner/injection.js';
 import { buildClosedMemoryProjection, buildParkedMemoryProjection, getArcs, makeArc, serializeArcsToText, setArcs, setPlanData, getAuthorContextSelection } from '../story_planner/data.js';
-import { sanitizeAuthorContextSelection, storyPlannerSchema } from '../story_planner/schema.js';
+import { sanitizeAuthorContextSelection, storyPlannerSchema, AUTHOR_CONTEXT_BUDGETS } from '../story_planner/schema.js';
 import { saveSettings } from '../story_planner/settings.js';
 import { captureScope, resetCoreStubs, setFakeApi, setFakeChat, setFakeContextExtras, getFakeMeta } from './stubs/core.js';
 
@@ -72,9 +72,24 @@ describe('Story Planner private author-context boundary', () => {
 
     test('selection is bounded per chat without bumping the compatible store version', () => {
         expect(storyPlannerSchema.currentVersion).toBe(4);
-        expect(sanitizeAuthorContextSelection({ entityIds: ['one', 'one'], fields: ['secrets', 'bogus', 'secrets'] })).toEqual({ entityIds: ['one'], fields: ['secrets'], npcFields: { one: ['secrets'] } });
+        expect(sanitizeAuthorContextSelection({ entityIds: ['one', 'one'], fields: ['secrets', 'bogus', 'secrets'] })).toEqual({ entityIds: ['one'], fields: ['secrets'], budget: 'standard', npcFields: { one: ['secrets'] } });
         expect(sanitizeAuthorContextSelection({ entityIds: ['one', 'two'], npcFields: { one: ['secrets'], two: ['canon_lock', 'unknown'] } }).npcFields)
             .toEqual({ one: ['secrets'], two: ['canon_lock'] });
+    });
+
+    test('the budget is one closed preset list on both sides of the seam, defaulting to Standard', () => {
+        // The picker (schema.js) and the enforcement side (planner_context.js)
+        // must not drift: unknown or missing budgets keep the pre-setting
+        // ceiling, and there is deliberately no unlimited option.
+        expect(AUTHOR_CONTEXT_BUDGETS).toEqual(AUTHOR_CONTEXT_BUDGET_PRESETS);
+        expect(AUTHOR_CONTEXT_BUDGETS.map(preset => preset.key)).toEqual(['standard', 'expanded', 'large']);
+        expect(resolveAuthorContextBudgetChars('standard')).toBe(AUTHOR_MAX_CHARS);
+        expect(resolveAuthorContextBudgetChars('expanded')).toBe(24000);
+        expect(resolveAuthorContextBudgetChars('large')).toBe(48000);
+        expect(resolveAuthorContextBudgetChars('unlimited')).toBe(AUTHOR_MAX_CHARS);
+        expect(resolveAuthorContextBudgetChars(undefined)).toBe(AUTHOR_MAX_CHARS);
+        expect(sanitizeAuthorContextSelection({ entityIds: [], budget: 'large' }).budget).toBe('large');
+        expect(sanitizeAuthorContextSelection({ entityIds: [], budget: 'unlimited' }).budget).toBe('standard');
     });
 
     test('private context is sent only through a reviewed scoped call, including retry', async () => {
@@ -134,6 +149,51 @@ describe('Story Planner private author-context boundary', () => {
         expect(getAuthorContextSelection().entityIds).toEqual([]);
         hideModal('mwt-sp-generate-modal');
         await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    test('dialog previews coverage before generation and remembers the chosen budget per chat', async () => {
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'author-budget-test' });
+        setFakeChat([
+            { is_user: true, name: 'User', mes: 'We prepare the journey and carefully review the records while deciding which route to take next.' },
+            { is_user: false, name: 'Mara', mes: 'The archive is open and the records are ready for review.' },
+        ]);
+        setFakeContextExtras({ getCurrentChatId: () => 'author-budget-test' });
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'author-budget-test' }) });
+        setFakeApi(async () => '## Horizon Arcs\n- The Open Door — Public turning point.\n  - Public setup beat.');
+        const budgets = new Map([['standard', 12000], ['expanded', 24000], ['large', 48000]]);
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [{ name: 'Mara', entityId: 'm', type: 'major', dossierAvailable: true }],
+            buildAuthorContext: async selection => ({
+                text: 'NPC: Mara\nEntity: m\nknowledge: - sentinel ledger line',
+                budgetChars: budgets.get(selection.budget) || 12000,
+                coverage: [{ entityId: 'm', name: 'Mara', status: 'ledger-trimmed', fields: 1, ledgerSent: 80, ledgerTotal: 120 }],
+            }),
+        });
+        const { openGenerateDialog } = await import('../story_planner/render.js');
+        openGenerateDialog();
+        const section = document.querySelector('#sp-generate-author');
+        const budget = document.querySelector('#sp-author-budget');
+        expect([...budget.options].map(option => option.value)).toEqual(['standard', 'expanded', 'large']);
+        expect(budget.value).toBe('standard');
+        expect(document.querySelector('#sp-author-coverage').textContent).toContain('No private context selected');
+        section.querySelector('input[name="sp-author-npc"]').click();
+        expect(document.querySelector('#sp-author-coverage').textContent).toContain('Choose at least one field group');
+        section.querySelector('input[name="sp-author-field"][value="knowledge"]').click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const preview = () => document.querySelector('#sp-author-coverage').textContent;
+        expect(preview()).toContain('Mara: 80 of 120 Knowledge Ledger entries included; older entries omitted.');
+        expect(preview()).toContain('Increase the budget or select fewer NPCs/field groups to include more.');
+        expect(preview()).toContain('Standard budget (12,000 characters)');
+        budget.value = 'large';
+        budget.dispatchEvent(new Event('change'));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(preview()).toContain('Large budget (48,000 characters)');
+        document.querySelector('#sp-generate-submit').click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(getAuthorContextSelection()).toMatchObject({ entityIds: ['m'], budget: 'large', npcFields: { m: ['knowledge'] } });
+        hideModal('mwt-sp-scoped-review-modal');
+        hideModal('mwt-sp-generate-modal');
+        vi.unstubAllGlobals();
     });
 
     test('private-informed review edits public text before Apply and leaves withheld facts out', async () => {
@@ -327,6 +387,32 @@ describe('author context reads dossiers as Knowledge writes them', () => {
         ]);
         expect(result.text.length).toBeLessThanOrEqual(AUTHOR_MAX_CHARS);
         expect(result.text).toContain('NPC: Derek\nEntity: derek-id\nknowledge: - saw ship 0 about the archive via witness');
+    });
+
+    test('larger budget presets keep more whole ledger entries, and Canon Lock still refuses what cannot fit', async () => {
+        serveEntry(formatDossierEntry({ ...MARA, initial_knowledge: ledgerFacts(900) }));
+        const at = budget => buildPlannerAuthorContext({ entityIds: ['mara-id'], npcFields: { 'mara-id': ['secrets', 'canon_lock', 'knowledge'] }, budget });
+        const standard = await at();
+        const expanded = await at('expanded');
+        const large = await at('large');
+
+        // Entries stay whole at every ceiling; only how many of the newest fit changes.
+        expect(standard.budgetChars).toBe(12000);
+        expect(expanded.budgetChars).toBe(24000);
+        expect(large.budgetChars).toBe(48000);
+        expect(standard.coverage[0].status).toBe('ledger-trimmed');
+        expect(expanded.coverage[0].ledgerSent).toBeGreaterThan(standard.coverage[0].ledgerSent);
+        expect(large.coverage[0].ledgerSent).toBeGreaterThanOrEqual(expanded.coverage[0].ledgerSent);
+        expect(large.coverage[0].status).toBe('complete'); // ~44k characters of whole entries fit Large
+        for (const [result, ceiling] of [[standard, 12000], [expanded, 24000], [large, 48000]]) {
+            expect(result.text.length).toBeLessThanOrEqual(ceiling);
+        }
+
+        // A record that cannot fit even without its ledger is refused: Canon
+        // Lock is never dropped to make room, and a bigger budget is the fix.
+        serveEntry(formatDossierEntry({ ...MARA, secrets: 'x'.repeat(13000) }));
+        await expect(at()).rejects.toThrow(/Canon Lock cannot be omitted/);
+        await expect(at('expanded')).resolves.toMatchObject({ budgetChars: 24000, coverage: [expect.objectContaining({ status: 'complete' })] });
     });
 
     test('the review says how much of each ledger was sent', async () => {

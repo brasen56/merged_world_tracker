@@ -168,6 +168,14 @@ export function sanitizeCharacterContextSelection(value) {
 }
 
 export const AUTHOR_CONTEXT_FIELD_KEYS = Object.freeze(['public_profile', 'agenda', 'secrets', 'knowledge', 'read_on_pc', 'canon_lock']);
+// Picker-side copy of knowledge/planner_context.js's
+// AUTHOR_CONTEXT_BUDGET_PRESETS (the enforcement side); a test pins the two
+// equal. Deliberately a closed preset list with no unlimited option.
+export const AUTHOR_CONTEXT_BUDGETS = Object.freeze([
+    { key: 'standard', label: 'Standard', chars: 12000 },
+    { key: 'expanded', label: 'Expanded', chars: 24000 },
+    { key: 'large', label: 'Large', chars: 48000 },
+]);
 export function sanitizeAuthorContextSelection(value) {
     const raw = isObject(value) ? value : {};
     const entityIds = [...new Set(Array.isArray(raw.entityIds) ? raw.entityIds.map(id => String(id).trim().slice(0, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH)).filter(Boolean) : [])].slice(0, MAX_CHARACTER_CONTEXT_IDS);
@@ -175,6 +183,9 @@ export function sanitizeAuthorContextSelection(value) {
     return {
         entityIds,
         fields,
+        // The stored default is the pre-setting ceiling, so existing chats keep
+        // exactly the projection they had before budgets existed.
+        budget: AUTHOR_CONTEXT_BUDGETS.some(preset => preset.key === raw.budget) ? raw.budget : 'standard',
         npcFields: Object.fromEntries(entityIds.map(id => [id, [...new Set(Array.isArray(raw.npcFields?.[id])
             ? raw.npcFields[id].filter(field => AUTHOR_CONTEXT_FIELD_KEYS.includes(field)) : fields)]])),
     };
