@@ -390,6 +390,97 @@ describe('Phase 0 Chronicle chronology and concurrency reproductions', () => {
         expect(getWorldStateText()).toBe(UNCHANGED_SCENE_BEFORE);
     });
 
+    // Generates one entry, condenses the chat the way ILS does (a summary
+    // message replaces the covered history), then generates a second entry.
+    // Every index shifted down, so the second records a LOWER range than the
+    // first. Its anchor finds the resume point by the boundary's send time.
+    async function generateAcrossCondense() {
+        const sentAt = minute => `2026-06-04T18:${String(minute).padStart(2, '0')}:00.000Z`;
+        const dated = CHAT.map((message, i) => ({ ...message, send_date: sentAt(i) }));
+        setFakeChat(dated);
+        response = chronicleOutput('June 4, 2026 evening', 'Harbour office');
+        const first = await generateSnapshot();
+        setFakeChat([
+            { id: 'summary', name: 'Summary', mes: 'Summary of messages 0 to 7.', send_date: sentAt(30) },
+            ...dated.slice(8),
+            { id: 'n0', name: 'User', is_user: true, mes: 'A new question.', send_date: sentAt(31) },
+            { id: 'n1', name: 'Mara', mes: 'A new reply.', send_date: sentAt(32) },
+            { id: 'n2', name: 'User', is_user: true, mes: 'An in-flight question.', send_date: sentAt(33) },
+            { id: 'n3', name: 'Mara', mes: 'An in-flight reply.', send_date: sentAt(34) },
+        ]);
+        response = chronicleOutput('June 5, 2026 2pm', 'Customs quay');
+        const second = await generateSnapshot();
+        return { first, second };
+    }
+
+    test('applies the scene of an entry generated after the chat was condensed', async () => {
+        seedWorldState(MINIMAL_SCENE);
+
+        const { first, second } = await generateAcrossCondense();
+
+        expect(first).toMatchObject({ fromIndex: 0, toIndex: 7 });
+        expect(second).toMatchObject({ fromIndex: 0, toIndex: 4 });
+        expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('scene sync skipped'));
+        expect(getWorldStateField('Date')).toBe('June 5, 2026');
+        expect(getWorldStateField('Time')).toBe('2pm');
+        expect(getWorldStateField('Location')).toBe('Customs quay');
+
+        // The entry from before the condense still holds the higher range, but
+        // it is the older one: regenerating it must not roll the scene back.
+        response = chronicleOutput('June 4, 2026 evening', 'Harbour office');
+        await regenerateSnapshot(first.id);
+
+        expect(requests).toHaveLength(3);
+        expect(getWorldStateField('Time')).toBe('2pm');
+        expect(getWorldStateField('Location')).toBe('Customs quay');
+    });
+
+    test('a consolidation after a condense still includes the newest entry it merged', async () => {
+        seedWorldState(MINIMAL_SCENE);
+        const { first, second } = await generateAcrossCondense();
+        response = chronicleOutput('June 5, 2026 late afternoon', 'Customs quay');
+
+        await consolidateEntries([first.id, second.id]);
+        await consolidationCompletion;
+
+        expect(getSnapshots()).toHaveLength(1);
+        expect(getWorldStateField('Date')).toBe('June 5, 2026');
+        expect(getWorldStateField('Time')).toBe('Late afternoon');
+    });
+
+    test('ranks a consolidated entry by its newest source, so a skipped older entry cannot overwrite it', async () => {
+        const first = makeChronicleSnapshot({
+            id: 'first', createdAt: '2026-06-01T00:00:00.000Z', fromIndex: 0, toIndex: 1,
+            anchorValue: 'June 1, 2026 2pm', location: 'Customs quay',
+        });
+        const skipped = makeChronicleSnapshot({
+            id: 'skipped', createdAt: '2026-06-02T00:00:00.000Z', fromIndex: 2, toIndex: 3,
+            anchorValue: 'June 2, 2026 late afternoon', location: 'Old ferry landing',
+        });
+        const newest = makeChronicleSnapshot({
+            id: 'newest', createdAt: '2026-06-04T00:00:00.000Z', fromIndex: 4, toIndex: 7,
+            anchorValue: 'June 4, 2026 evening', location: 'Harbour office',
+        });
+        seedChronicle([first, skipped, newest]);
+        seedWorldState(MINIMAL_SCENE);
+        response = chronicleOutput('June 4, 2026 evening', 'Harbour office');
+
+        await consolidateEntries(['first', 'newest']);
+        await consolidationCompletion;
+
+        // The merge keeps its earliest source's createdAt, so it is listed
+        // BEFORE the entry it skipped, yet it covers through the newest one.
+        expect(getSnapshots().map(entry => entry.id).at(-1)).toBe('skipped');
+        expect(getWorldStateField('Time')).toBe('Evening');
+
+        response = chronicleOutput('June 2, 2026 late afternoon', 'Old ferry landing');
+        await regenerateSnapshot('skipped');
+
+        expect(requests).toHaveLength(2);
+        expect(getWorldStateField('Time')).toBe('Evening');
+        expect(getWorldStateField('Location')).toBe('Harbour office');
+    });
+
     test('proves a Chronicle sync can invalidate an in-flight World State refresh', async () => {
         seedWorldState(UNCHANGED_SCENE_BEFORE);
         saveWorldSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });

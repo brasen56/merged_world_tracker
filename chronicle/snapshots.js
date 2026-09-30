@@ -47,8 +47,40 @@ function extractSceneAnchor(text) {
     };
 }
 
-function acceptedSourceRanges(snapshots = getSnapshots()) {
-    return snapshots.map(entry => ({
+// When an entry's coverage ends. A consolidated entry takes its EARLIEST
+// source's createdAt (its display slot) but covers through its LATEST source,
+// so it ranks by the newest source it merged. The trash keeps every live
+// consolidation's sources, nested merges included (retainChronicleTrash).
+function coveredThroughMs(entry, trashById, seen = new Set()) {
+    const created = new Date(entry?.createdAt).getTime();
+    let latest = Number.isFinite(created) ? created : -Infinity;
+    for (const id of Array.isArray(entry?._consolidatedFrom) ? entry._consolidatedFrom : []) {
+        const source = trashById.get(id);
+        if (!source || seen.has(id)) continue;
+        seen.add(id);
+        latest = Math.max(latest, coveredThroughMs(source, trashById, seen));
+    }
+    return latest;
+}
+
+/**
+ * Entries oldest first by when their coverage ends: the order World State
+ * reads "newest" from. Message indices cannot order entries, because
+ * condensing (ILS summaries) and bulk deletes renumber the chat, so every entry
+ * written afterwards records lower indices than the older ones.
+ */
+function timelineOrder(snapshots) {
+    const trash = getChronicleData()._deletedBin || [];
+    const trashById = new Map(trash.map(entry => [entry?.id, entry]));
+    return snapshots
+        .map((entry, position) => ({ entry, position, at: coveredThroughMs(entry, trashById) }))
+        // Ties keep list order. Compared explicitly: -Infinity - -Infinity is NaN.
+        .sort((a, b) => (a.at === b.at ? a.position - b.position : a.at < b.at ? -1 : 1))
+        .map(item => item.entry);
+}
+
+function acceptedSourceRanges() {
+    return timelineOrder(getSnapshots()).map(entry => ({
         id: entry.id,
         range: { from: entry.fromIndex, to: entry.toIndex },
     }));
@@ -667,9 +699,10 @@ export async function consolidateEntries(ids, baseId = null) {
                 .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
             const currentEarliest = currentChronological[0];
             const currentLatest = currentChronological[currentChronological.length - 1];
-            const previousNewest = [...currentSnapshots]
-                .filter(entry => Number.isInteger(entry?.fromIndex) && Number.isInteger(entry?.toIndex))
-                .sort((a, b) => a.toIndex - b.toIndex || a.fromIndex - b.fromIndex)
+            // Same timeline order World State checks newest by, not the highest
+            // range: after condensing, an older entry can hold the larger indices.
+            const previousNewest = timelineOrder(currentSnapshots)
+                .filter(entry => Number.isInteger(entry?.toIndex) && entry.toIndex >= 0)
                 .at(-1);
             const allCharacters = new Set();
             currentSelected.forEach(entry => { if (entry.characters) entry.characters.forEach(character => allCharacters.add(character)); });

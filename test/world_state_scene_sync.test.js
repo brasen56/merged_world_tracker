@@ -125,6 +125,63 @@ describe('updateSceneAnchor', () => {
         expect(updateSceneAnchor(candidate({ sourceRange: { from: 8, to: 9 } })).status).toBe('store-refused');
     });
 
+    test('takes the newest entry from Chronicle order, not the highest message range', () => {
+        // Condensing renumbered the chat: the entry written afterwards records
+        // lower indices than the older entry still listed before it.
+        const condensed = [
+            { id: 'before-condense', range: { from: 129, to: 187 } },
+            { id: 'newest', range: { from: 2, to: 10 } },
+        ];
+        expect(updateSceneAnchor(candidate({
+            sourceId: 'before-condense', sourceRange: { from: 129, to: 187 }, acceptedSources: condensed,
+        }))).toMatchObject({ status: 'stale-source', reason: 'not-newest-accepted-range' });
+        expect(updateSceneAnchor(candidate({
+            sourceRange: { from: 2, to: 11 }, acceptedSources: condensed,
+        }))).toMatchObject({ status: 'stale-source', reason: 'not-newest-accepted-range' });
+        expect(getWorldStateText()).toBe(MINIMAL_SCENE);
+
+        expect(updateSceneAnchor(candidate({
+            sourceRange: { from: 2, to: 10 }, acceptedSources: condensed,
+        })).status).toBe('applied');
+    });
+
+    test('manual entries never compete, but a covered entry with an inverted range does', () => {
+        expect(updateSceneAnchor(candidate({
+            acceptedSources: [
+                { id: 'newest', range: { from: 4, to: 7 } },
+                { id: 'manual', range: { from: -1, to: -1 } },
+            ],
+        })).status).toBe('applied');
+        // A consolidation spanning a condensed chat ends below where it starts.
+        // It is no usable candidate, but it still holds the newest coverage.
+        expect(updateSceneAnchor(candidate({
+            dateTime: 'June 5, 2026 evening',
+            acceptedSources: [
+                { id: 'newest', range: { from: 4, to: 7 } },
+                { id: 'merged', range: { from: 30, to: 11 } },
+            ],
+        }))).toMatchObject({ status: 'stale-source', reason: 'not-newest-accepted-range' });
+        expect(getWorldStateText()).toContain('Date: June 4, 2026');
+    });
+
+    test('a later deferred candidate replaces the waiting one even with lower message indices', () => {
+        let accepted = [{ id: 'before-condense', range: { from: 129, to: 187 } }];
+        state.wstIsRefreshing = true;
+        expect(updateSceneAnchor(candidate({
+            dateTime: 'June 3, 2026 evening', sourceId: 'before-condense',
+            sourceRange: { from: 129, to: 187 }, getAcceptedSources: () => accepted,
+        })).status).toBe('deferred');
+        accepted = [...accepted, { id: 'newest', range: { from: 2, to: 10 } }];
+        expect(updateSceneAnchor(candidate({
+            sourceRange: { from: 2, to: 10 }, getAcceptedSources: () => accepted,
+        })).status).toBe('deferred');
+        state.wstIsRefreshing = false;
+
+        expect(settleSceneAnchorSync()).toMatchObject({ status: 'applied' });
+        expect(getWorldStateText()).toContain('Date: June 4, 2026');
+        expect(settleSceneAnchorSync()).toBeNull();
+    });
+
     test('requires consolidation to include the previously newest range', () => {
         const outcome = updateSceneAnchor(candidate({
             source: 'consolidation',

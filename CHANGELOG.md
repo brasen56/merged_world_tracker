@@ -40,6 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window was cut. Counts that arrive during generation still carry over.
   (`test/chronicle_window_coverage.test.js` pins all three cases.)
 
+- **Chronicle entries written after a condense update World State's scene
+  again.** World State accepted a Chronicle Time Anchor only from the entry
+  with the highest message range. Condensing renumbers the chat, so every
+  new entry recorded lower indices than the older entries still listed. Each
+  one was skipped with `stale-source (not-newest-accepted-range)` and the
+  scene's date, time, and location stopped following the story. "Newest" now
+  follows Chronicle's timeline: when each entry's coverage ends, by creation
+  time. A consolidated entry ranks by the newest source it merged. The same
+  order picks the previous newest entry that a consolidation must include.
+  A candidate that arrives while a World State refresh runs now always
+  replaces the one waiting, because it has just passed the same check.
+  Regenerating an older entry still cannot roll the scene back.
+  (`world_state/scene.js` `newestAcceptedSource`/`queueCandidate`,
+  `chronicle/snapshots.js` `timelineOrder`.)
+
 ## [2.10.3]
 
 ### Fixed
