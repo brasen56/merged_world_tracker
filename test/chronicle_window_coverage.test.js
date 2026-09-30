@@ -329,4 +329,104 @@ describe('Chronicle coverage fixes — oversized messages, anchor deletion, manu
         expect(requests).toHaveLength(0);
         expect(getChronicleData().anchorStale).toBe(true);
     });
+
+    // ─── Condensed chats: indices shift, send times do not ───────────────────
+
+    test('a condensed chat shorter than the recorded boundary resumes by the entry time instead of refusing forever', async () => {
+        const { saveSettings, setChronicleData, getChronicleData } = await import('../chronicle/data.js');
+        const { generateSnapshot } = await import('../chronicle/snapshots.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        // An anchor from before anchors recorded a send time. ILS condensed
+        // its boundary message (index 187) into a summary, leaving a chat far
+        // shorter than that index: resuming AT it refused with "No new
+        // messages to chronicle" on every attempt.
+        const anchor = { id: null, msgIndex: 187, name: 'Mara', start: 'The condensed boundary.', end: 'The condensed boundary.', length: 23 };
+        setChronicleData({
+            snapshots: [{ id: 's1', createdAt: '2026-09-29T23:36:00.000Z', text: '## Summary\n- Prior coverage.', fromIndex: 129, toIndex: 187, anchor }],
+            lastAnchor: anchor,
+        });
+        setFakeChat([
+            { name: 'Summary', mes: 'Summary of the early chapters.', send_date: '2026-09-27T17:56:00.000Z' },
+            { name: 'Summary', mes: 'Summary of the middle chapters.', send_date: '2026-09-27T17:09:00.000Z' },
+            // Written after the entry: it may hold messages the entry never saw.
+            { name: 'Summary', mes: 'Summary of the latest morning.', send_date: '2026-09-30T01:25:00.000Z' },
+            { name: 'Mara', mes: 'The first new reply.', send_date: '2026-09-30T00:26:00.000Z' },
+            { name: 'User', is_user: true, mes: 'A new question.', send_date: '2026-09-30T00:30:00.000Z' },
+            { name: 'Mara', mes: 'The second new reply.', send_date: '2026-09-30T00:35:00.000Z' },
+            { name: 'User', is_user: true, mes: 'Another question.', send_date: '2026-09-30T00:40:00.000Z' },
+            { name: 'Mara', mes: 'The in-flight reply.', send_date: '2026-09-30T00:45:00.000Z' },
+        ]);
+        const requests = [];
+        setFakeApi(async (request) => { requests.push(request); return CHRONICLE_ENTRY; });
+
+        const snapshot = await generateSnapshot();
+        expect(snapshot).not.toBeNull();
+        expect(snapshot.fromIndex).toBe(2);
+        expect(requests[0].userContent).toContain('Summary of the latest morning.');
+        expect(requests[0].userContent).toContain('The first new reply.');
+        expect(requests[0].userContent).toContain('The second new reply.');
+        expect(requests[0].userContent).not.toContain('Summary of the early chapters.');
+        expect(requests[0].userContent).not.toContain('Summary of the middle chapters.');
+        expect(getChronicleData().anchorStale).toBe(true);
+    });
+
+    test('an anchor with a send time resumes by time when condensing shifted its old index', async () => {
+        const { saveSettings, setChronicleData, makeAnchor } = await import('../chronicle/data.js');
+        const { generateSnapshot } = await import('../chronicle/snapshots.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        const at = hour => `2026-09-30T${String(hour).padStart(2, '0')}:00:00.000Z`;
+        const original = [
+            { name: 'Mara', mes: 'Scene one.', send_date: at(1) },
+            { name: 'Mara', mes: 'Scene two.', send_date: at(2) },
+            { name: 'Mara', mes: 'Scene three.', send_date: at(3) },
+            { name: 'Mara', mes: 'The boundary scene.', send_date: at(4) },
+            { name: 'Mara', mes: 'Uncovered one.', send_date: at(5) },
+            { name: 'Mara', mes: 'Uncovered two.', send_date: at(6) },
+            { name: 'Mara', mes: 'Uncovered three.', send_date: at(7) },
+            { name: 'User', is_user: true, mes: 'Question.', send_date: at(8) },
+            { name: 'Mara', mes: 'In flight.', send_date: at(9) },
+        ];
+        setFakeChat(original);
+        const anchor = makeAnchor(original[3]);
+        expect(anchor.sendDate).toBe(Date.parse(at(4)));
+        setChronicleData({
+            snapshots: [{ id: 's1', createdAt: at(5), text: '## Summary\n- Prior coverage.', fromIndex: 0, toIndex: 3, anchor }],
+            lastAnchor: anchor,
+        });
+        // One summary replaces scenes one through four. The recorded index 3
+        // is still inside the chat but now points at "Uncovered three." —
+        // resuming there would skip the two replies before it forever.
+        setFakeChat([{ name: 'Summary', mes: 'Summary of scenes one to four.', send_date: at(10) }, ...original.slice(4)]);
+        const requests = [];
+        setFakeApi(async (request) => { requests.push(request); return CHRONICLE_ENTRY; });
+
+        const snapshot = await generateSnapshot();
+        expect(snapshot).not.toBeNull();
+        expect(snapshot.fromIndex).toBe(0);
+        expect(requests[0].userContent).toContain('Uncovered one.');
+        expect(requests[0].userContent).toContain('Uncovered two.');
+        expect(requests[0].userContent).toContain('Uncovered three.');
+    });
+
+    test('counter increments with no receipt event behind them drain after a successful snapshot', async () => {
+        const { saveSettings, state, getChronicleData } = await import('../chronicle/data.js');
+        const { generateSnapshot } = await import('../chronicle/snapshots.js');
+        saveSettings({ apiUrl: 'https://example.test', modelName: 'test-model' });
+        setFakeChat([
+            { id: 'covered', name: 'Mara', mes: 'Covered scene.' },
+            { id: 'user', name: 'User', is_user: true, mes: 'Question.' },
+            { id: 'tail', name: 'Mara', mes: 'Uncovered reply.' },
+        ]);
+        // Eleven of the thirteen increments have no event behind them. Only
+        // events are ever consumed, so without the clamp the counter stayed
+        // at 12 — a threshold of 12 — and every later reply re-fired.
+        state.msgSinceSnapshot = 13;
+        state.countedReceiptEvents = new Map([['id:covered', 1], ['id:tail', 1]]);
+        setFakeApi(async () => CHRONICLE_ENTRY);
+        const snapshot = await generateSnapshot();
+        expect(snapshot.toIndex).toBe(0);
+        expect(state.msgSinceSnapshot).toBe(1);
+        expect(getChronicleData().msgSinceSnapshot).toBe(1);
+        expect(state.countedReceiptEvents).toEqual(new Map([['id:tail', 1]]));
+    });
 });

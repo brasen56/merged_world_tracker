@@ -37,16 +37,23 @@ function normalizeRange(range) {
     return { from, to };
 }
 
-function compareRanges(a, b) {
-    return a.to - b.to || a.from - b.from;
+// Manual entries record no chat range (toIndex -1), so they never compete for
+// the scene. A covered entry still competes when its range is not usable as a
+// candidate range (a consolidation spanning a condensed chat ends below where
+// it starts): it holds the newest coverage all the same.
+function recordsCoverage(source) {
+    const to = Number(source?.range?.to);
+    return source?.id != null && Number.isInteger(to) && to >= 0;
 }
 
+/**
+ * The last covered entry in Chronicle's timeline order, which is the order
+ * `acceptedSources` arrives in. Message ranges cannot decide this: condensing
+ * (ILS summaries) and bulk deletes renumber the chat, so every entry written
+ * afterwards records lower indices than the older entries still listed.
+ */
 function newestAcceptedSource(sources) {
-    return (Array.isArray(sources) ? sources : [])
-        .map(item => ({ id: item?.id, range: normalizeRange(item?.range) }))
-        .filter(item => item.id != null && item.range)
-        .sort((a, b) => compareRanges(a.range, b.range))
-        .at(-1) || null;
+    return (Array.isArray(sources) ? sources : []).filter(recordsCoverage).at(-1) || null;
 }
 
 function statusSignature(status) {
@@ -64,24 +71,16 @@ export function captureSceneAnchorBaseline() {
     return statusSignature(getDeltaStatus());
 }
 
-function sameCandidateScope(a, b) {
-    return a?.scope?.epoch === b?.scope?.epoch
-        && a?.scope?.identity?.key === b?.scope?.identity?.key;
-}
-
+// Every candidate reaches the queue straight after passing sourceEligible(),
+// so it was the newest accepted entry when it arrived: a later arrival always
+// supersedes the one waiting (or belongs to another chat). Comparing ranges
+// here kept the older candidate after a condensed chat renumbered the new one.
 function queueCandidate(candidate) {
-    const queued = {
+    pendingCandidate = {
         ...candidate,
         queuedStatusSignature: captureSceneAnchorBaseline(),
         queuedTextDigest: digestText(getWorldStateText()),
     };
-    if (!pendingCandidate || !sameCandidateScope(pendingCandidate, candidate)) {
-        pendingCandidate = queued;
-    } else {
-        const oldRange = normalizeRange(pendingCandidate.sourceRange);
-        const newRange = normalizeRange(candidate.sourceRange);
-        if (!oldRange || (newRange && compareRanges(newRange, oldRange) >= 0)) pendingCandidate = queued;
-    }
     return result('deferred', { sourceId: candidate.sourceId });
 }
 
@@ -103,8 +102,9 @@ function sourceEligible(candidate, sourceRange) {
         ? candidate.getAcceptedSources()
         : candidate.acceptedSources;
     const newest = newestAcceptedSource(acceptedSources);
-    if (!newest || String(newest.id) !== String(candidate.sourceId)
-        || compareRanges(newest.range, sourceRange) !== 0) {
+    const newestRange = normalizeRange(newest?.range);
+    if (!newest || String(newest.id) !== String(candidate.sourceId) || !newestRange
+        || newestRange.from !== sourceRange.from || newestRange.to !== sourceRange.to) {
         return result('stale-source', { reason: 'not-newest-accepted-range' });
     }
 
@@ -123,8 +123,10 @@ function sourceEligible(candidate, sourceRange) {
  * Apply (or defer) one trusted Chronicle scene-anchor candidate.
  *
  * `sourceRange` is inclusive (`from`/`to` chat-array indexes). `acceptedSources`
- * is the Chronicle list after its own successful commit, allowing this owner to
- * independently verify that the candidate is still the newest accepted range.
+ * is the Chronicle list after its own successful commit, oldest first in
+ * Chronicle's timeline order, allowing this owner to independently verify that
+ * the candidate is still the newest accepted entry and still has the range it
+ * was generated from.
  */
 export function updateSceneAnchor(candidate = {}) {
     if (isStorePausedForCurrentScope(worldStateSchema.id)) return result('store-refused', { reason: 'store-paused' });
