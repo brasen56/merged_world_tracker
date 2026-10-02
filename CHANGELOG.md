@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.10.5]
+
+### Fixed
+
+- Accidental clicks outside the story planner review would discard the generated draft. Not you must use Appy, Discard, the close button or 'Escape' to dismiss the draft. Switching chats still clears the review for safety.
+
 ## [2.10.4]
 
 ### Added

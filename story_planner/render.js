@@ -800,6 +800,8 @@ export function showScopedReview(proposal) {
     const modal = createModal({
         id: SCOPED_REVIEW_MODAL_ID,
         title: 'Generate Story Plan — Review',
+        // Outside clicks must not destroy an unsaved generated proposal.
+        closeOnBackdrop: false,
         destroyOnClose: true,
         onClose: finishScopedReview,
         content: `
@@ -1707,6 +1709,8 @@ function showTargetedProposal(proposal) {
     const modal = createModal({
         id: 'mwt-sp-targeted-modal',
         title: `${targetedOperationLabel(proposal.operation)} — Review`,
+        // Match scoped review: only an intentional close discards the draft.
+        closeOnBackdrop: false,
         destroyOnClose: true,
         onClose: finishTargetedReview,
         content: `
