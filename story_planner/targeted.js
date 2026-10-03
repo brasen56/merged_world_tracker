@@ -44,8 +44,13 @@ function arcContext(arc) {
     ].join('\n');
 }
 
-/** Build the fixed prompt used only by targeted operations. */
-export function buildTargetedUserPrompt(operation, arc, characterContext = {}, castPolicyContract = describeCastPolicyRequest({ workflow: 'targeted' })) {
+/**
+ * Build the fixed prompt used only by targeted operations. `guidance` is the
+ * one-shot note from the pre-generation dialog: when present it is used for
+ * this single request in place of the saved Direction Hint, so steering one
+ * run never lingers in later generations.
+ */
+export function buildTargetedUserPrompt(operation, arc, characterContext = {}, castPolicyContract = describeCastPolicyRequest({ workflow: 'targeted' }), { guidance = '' } = {}) {
     if (!TARGETED_OPERATIONS.includes(operation)) throw new Error(`Unknown targeted operation: ${operation}`);
     const blocks = [
         `Operation: ${TARGETED_OPERATION_INSTRUCTIONS[operation]}`,
@@ -57,7 +62,7 @@ export function buildTargetedUserPrompt(operation, arc, characterContext = {}, c
     if (world) blocks.push(wrapTag('factual_world_state', world));
     const chronicle = getLatestChronicleEntry().trim();
     if (chronicle) blocks.push(wrapTag('latest_chronicle', chronicle));
-    const direction = getDirectionHint().trim();
+    const direction = cleanText(guidance, 2000) || getDirectionHint().trim();
     if (direction) blocks.push(wrapTag('direction_hint', direction));
     const palette = storyPaletteProjection(undefined, castPolicyContract.policy);
     if (palette) blocks.push(wrapTag('story_palette', palette));
@@ -205,7 +210,7 @@ function validateReconstructedEvidence(model, proposedArc) {
 }
 
 /** Generate a review-only proposal. This function never writes metadata/history. */
-export async function generateTargetedProposal(arcId, operation = 'develop') {
+export async function generateTargetedProposal(arcId, operation = 'develop', { guidance = '' } = {}) {
     if (!TARGETED_OPERATIONS.includes(operation)) throw new Error('Unknown targeted arc action.');
     if (state.isGenerating && !state.targetedActionInFlight) throw new Error('Story Planner is already generating.');
     if (isStorePausedForCurrentScope(storyPlannerSchema.id)) throw new Error('Story Planner is paused for this chat.');
@@ -213,6 +218,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
     const source = getArcs().find(arc => arc.id === arcId);
     if (!source) throw new Error('That arc no longer exists.');
     if (source.status !== 'active') throw new Error('Only active arcs can be developed.');
+    const runGuidance = cleanText(guidance, 2000);
     const scope = captureScope();
     const sourceArc = clone(source);
     const revision = captureArcRevision(sourceArc);
@@ -237,7 +243,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
             characterContextTokens: Number(characterContext.tokens) || Math.ceil(String(characterContext.text || '').length / 4),
             characterContextRecords: Number(characterContext.records) || 0,
         };
-        const userContent = buildTargetedUserPrompt(operation, sourceArc, characterContext, castPolicyContract);
+        const userContent = buildTargetedUserPrompt(operation, sourceArc, characterContext, castPolicyContract, { guidance: runGuidance });
         recordPhase7Request('targeted', TARGETED_ARC_SYSTEM_PROMPT.length + userContent.length);
         const raw = await resolved.fetchFn({
             systemPrompt: TARGETED_ARC_SYSTEM_PROMPT,
@@ -279,6 +285,7 @@ export async function generateTargetedProposal(arcId, operation = 'develop') {
                 : !sameRevision(revision, materialArcShape(current)) ? 'The source arc changed while this proposal was generated.' : '';
         return {
             operation, sourceArcId: arcId, sourceArc, proposedArc,
+            guidance: runGuidance,
             diff: buildArcDiff(sourceArc, proposedArc, operation),
             castPolicyContract: { ...castPolicyContract },
             newcomerEvidence: finalNewcomerEvidence,

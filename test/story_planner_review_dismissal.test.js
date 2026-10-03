@@ -95,6 +95,11 @@ describe('Story Planner review backdrop safety', () => {
         renderContent();
         wireEvents();
         document.querySelector(`[data-id="${source.id}"] [data-action="target-develop"]`).click();
+        // Targeted actions now open a one-shot guidance dialog first; leaving
+        // the note blank falls back to the saved Direction Hint.
+        const guidance = document.getElementById('mwt-sp-guidance-modal');
+        expect(guidance).not.toBeNull();
+        guidance.querySelector('#mwt-sp-guidance-go').click();
         await vi.waitFor(() => expect(document.getElementById('mwt-sp-targeted-modal')).not.toBeNull());
         const modal = document.getElementById('mwt-sp-targeted-modal');
 

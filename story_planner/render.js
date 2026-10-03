@@ -1715,6 +1715,7 @@ function showTargetedProposal(proposal) {
         onClose: finishTargetedReview,
         content: `
             <p class="mwt-text-dim mwt-text-sm">Review this proposal. Nothing changes until you choose Apply.</p>
+            ${proposal.guidance ? `<p class="mwt-text-dim mwt-text-sm"><strong>Guidance used for this run:</strong> ${escapeHtml(proposal.guidance)}</p>` : ''}
             ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
             ${proposal.newcomerEvidence?.message ? `<p class="sp-proposal-diagnostics">${escapeHtml(proposal.newcomerEvidence.message)}</p>` : ''}
             ${proposal.newcomerEvidence?.attribution?.message ? `<p class="mwt-text-dim mwt-text-sm">${escapeHtml(proposal.newcomerEvidence.attribution.message)}</p>` : ''}
@@ -1756,7 +1757,56 @@ function showTargetedProposal(proposal) {
     }
 }
 
-async function runTargetedAction(button, arcId, operation) {
+/**
+ * One-shot guidance step before a targeted run: a small dialog whose note is
+ * used for that single request in place of the saved Direction Hint. The note
+ * never persists, so steering one run leaves nothing to clean up afterwards.
+ */
+function promptTargetedGuidance(button, arcId, operation) {
+    if (state.isGenerating) {
+        notify('Story Planner', 'Story Planner is already generating.', 'info');
+        return;
+    }
+    if (state.targetedReviewOpen) {
+        notify('Story Planner', 'Review or discard the open targeted proposal first.', 'info');
+        return;
+    }
+    const arc = getArcs().find(item => item.id === arcId);
+    if (!arc) {
+        notify('Story Planner', 'That arc no longer exists.', 'warning');
+        return;
+    }
+    const modal = createModal({
+        id: 'mwt-sp-guidance-modal',
+        title: targetedOperationLabel(operation),
+        // Same draft-safety rule as the review modal: an outside click must
+        // not silently discard what the user has typed into the note.
+        closeOnBackdrop: false,
+        destroyOnClose: true,
+        content: `
+            <p class="mwt-text-dim mwt-text-sm">Optional steering for <strong>${escapeHtml(arc.title || 'untitled arc')}</strong>, used for this one request in place of the saved Direction Hint. It is not stored.</p>
+            <label class="mwt-label" for="mwt-sp-guidance-input">Guidance for this run (optional)</label>
+            <textarea id="mwt-sp-guidance-input" class="mwt-input" rows="3" placeholder="e.g. push toward a public confrontation, keep the rival off-page"></textarea>
+            <div class="mwt-flex mwt-gap-8 mwt-mt-8 sp-proposal-actions">
+                <button id="mwt-sp-guidance-cancel" class="mwt-btn">Cancel</button>
+                <button id="mwt-sp-guidance-go" class="mwt-btn mwt-btn-primary">Generate</button>
+            </div>`,
+    });
+    modal.querySelector('#mwt-sp-guidance-cancel')?.addEventListener('click', () => hideModal('mwt-sp-guidance-modal'));
+    modal.querySelector('#mwt-sp-guidance-go')?.addEventListener('click', () => {
+        // Read the note before hiding — destroyOnClose removes the textarea.
+        const guidance = modal.querySelector('#mwt-sp-guidance-input')?.value || '';
+        hideModal('mwt-sp-guidance-modal');
+        runTargetedAction(button, arcId, operation, guidance);
+    });
+    if (!showModal('mwt-sp-guidance-modal')) {
+        hideModal('mwt-sp-guidance-modal');
+        return;
+    }
+    modal.querySelector('#mwt-sp-guidance-input')?.focus();
+}
+
+async function runTargetedAction(button, arcId, operation, guidance = '') {
     if (state.isGenerating) {
         notify('Story Planner', 'Story Planner is already generating.', 'info');
         return;
@@ -1773,7 +1823,7 @@ async function runTargetedAction(button, arcId, operation) {
     try {
         setControlBusy(button, true);
         button.innerHTML = '<span aria-hidden="true">⏳</span> Generating…';
-        const proposal = await generateTargetedProposal(arcId, operation);
+        const proposal = await generateTargetedProposal(arcId, operation, { guidance });
         if (proposal) {
             state.targetedActionInFlight = false;
             state.isGenerating = false;
@@ -1821,7 +1871,7 @@ function handleArcsClick(e) {
     const beatId = btn.dataset.beatId;
 
     if (action.startsWith('target-')) {
-        runTargetedAction(btn, id, action.slice('target-'.length));
+        promptTargetedGuidance(btn, id, action.slice('target-'.length));
     } else if (action === 'beat-done') {
         mutateWithProjectionCheck(() => advanceBeat(id));
         renderArcs();
