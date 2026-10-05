@@ -537,17 +537,17 @@ describe('new intentions require current evidence (knowledge_entry is background
     // which the old rules treated as a full fact source — and proposed them
     // as new_intentions even though <recent_messages> showed the NPC doing
     // nothing of the sort. The ledger must now be background evidence only:
-    // a new intention needs a NEW motivating event in the recent window —
+    // a new intention needs current support in the recent window —
     // the decision itself may stay private — never a restated ledger line.
 
     test('the system prompt grounds new intentions in recent messages', () => {
         const prompt = buildSystemPrompt({ intentions: true });
         expect(prompt).toContain('NEW INTENTIONS —');
-        expect(prompt).toContain('newly motivate the plan');
+        expect(prompt).toContain('in <recent_messages> must support the plan');
         expect(prompt).toContain('BACKGROUND EVIDENCE ONLY');
     });
 
-    test('evidence is a new motivating event; the decision may stay private', () => {
+    test('the motive must be current; the decision may stay private', () => {
         // [P1] The rule used to require the plan to be visibly formed or
         // committed on-screen, which turned Interiority into explicit-plan
         // extraction and suppressed genuinely hidden intentions. The
@@ -555,6 +555,17 @@ describe('new intentions require current evidence (knowledge_entry is background
         const prompt = buildSystemPrompt({ intentions: true });
         expect(prompt).toContain('may remain entirely private');
         expect(prompt).not.toContain('forming, deciding on, or committing');
+    });
+
+    test.each([false, true])('thoughts=%s: ongoing motives and current opportunities can support private follow-through', (thoughts) => {
+        const prompt = buildSystemPrompt({ thoughts, intentions: true });
+        expect(prompt).toContain('serves an ongoing motive or responds to a current need or opportunity');
+        expect(prompt).toContain('An ongoing motive can qualify when the recent messages show it is still relevant');
+        expect(prompt).toContain('a brand-new event or changed situation is NOT required');
+        expect(prompt).toContain('reread the original letter before handing in the paper');
+        expect(prompt).toContain('even though the deadline and worry were established earlier');
+        expect(prompt).toContain('Do not merely list the public submission appointment');
+        expect(prompt).not.toContain('must newly motivate the plan');
     });
 
     test.each([false, true])('thoughts=%s: intentions generate future decisions rather than only extract existing plans', (thoughts) => {

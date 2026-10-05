@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.11.3]
+
+### Fixed
+
+- **Ongoing motives can lead to private intentions.** The separate intentions
+  call was framed as a tracker, and new plans required a newly motivating
+  event. It now explicitly generates private future decisions from ongoing
+  motives, current needs, and opportunities supported by the recent scene,
+  including ordinary caring or practical plans. A brand-new event is no
+  longer required. Current evidence, completion, duplicate, and shared-calendar
+  checks still apply; stale dossier plans alone remain insufficient and no
+  proposal quota is added.
+- **Intentions captures retain the recent story window.** Large dossiers
+  could fill the report's 20,000-character prompt allowance before any recent
+  messages were included. Oversized user prompts now omit the middle and
+  preserve the recent-message suffix, keeping the newest events when the
+  window itself exceeds the allowance.
+- **Malformed Interiority responses no longer count as successful calls.**
+  In split mode, valid JSON without the required `npcs` array could silently
+  discard intentions while the separate thoughts call continued working.
+  Incorrect response envelopes now retry once and record the failure in the
+  intentions capture. The dormant poll checks its own `intentions` array;
+  valid empty arrays still succeed without a retry.
+
 ## [2.11.2]
 
 ### Fixed
