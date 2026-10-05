@@ -125,18 +125,31 @@ describe('detail level prompt templates', () => {
         }
     });
 
-    // Tester report (2.11.0): limits were ignored — 10 Pending bullets, four of
-    // them "Tonight" — because every limit ended "unless more are necessary to
-    // preserve live obligations" and the overflow rule forbade dropping any
-    // obligation. Limits now count bullets and merging is the way to fit.
-    test.each(['minimal', 'standard', 'detailed'])('%s limits bind by merging, never by dropping obligations', (level) => {
+    // Tester reports: in 2.11.0 limits were ignored — 10 Pending bullets, four
+    // of them "Tonight" — because every limit ended "unless more are necessary
+    // to preserve live obligations". The first fix overcorrected: "remove
+    // stale entries first" and "exceed only when every bullet is a live
+    // obligation" let Standard delete two live Active Threads (a thread is not
+    // an obligation) to meet its combined limit of 4. Limits are now met by
+    // merging only; deletion needs the story's evidence.
+    test.each(['minimal', 'standard', 'detailed'])('%s limits bind by merging, never by deleting', (level) => {
         const prompt = buildDefaultSystemPrompt('off', level);
 
         expect(prompt).not.toContain('unless more are necessary to preserve live obligations');
-        expect(prompt).toContain('Limits count bullets, not facts.');
-        expect(prompt).toContain('merge entries that share a due time, thread, or character into one bullet ("- Tonight: deliver the ledger; call Mara back")');
-        expect(prompt).toContain('Exceed a limit only when every remaining bullet is a separate live obligation.');
-        expect(prompt).toContain('Merging keeps the fact. Never drop an unresolved obligation, injury, or meaningful negative fact just to fit.');
+        expect(prompt).not.toContain('first remove entries that are resolved, stale');
+        expect(prompt).not.toContain('separate live obligation');
+        expect(prompt).toContain('Limits count bullets, not facts, and are met by merging, never by deleting.');
+        expect(prompt).toContain('If every remaining bullet is still a separate live entry, keep them all and exceed the limit.');
+        expect(prompt).toContain('Remove an entry only when the story resolved it, cancelled it, or made it irrelevant — never to meet a limit or a length target.');
+        expect(prompt).toContain('Pending holds one bullet per due time');
+    });
+
+    // Tester report: a Standard rewrite dropped "realized scope limit: English
+    // only by December, German later" while adding the rule list it had used.
+    test.each(['minimal', 'standard', 'detailed'])('%s shortens by cutting method, not outcome', (level) => {
+        expect(buildDefaultSystemPrompt('off', level)).toContain(
+            'Shortening an entry keeps its outcome, decisions, deadlines, and consequences; cut the how — methods, step lists, and technical detail.',
+        );
     });
 
     // Tester report (2.11.0): "tungsten chain; steel bracelet; Nokia
@@ -242,11 +255,17 @@ describe('detail level prompt templates', () => {
 
         const toStandard = buildFormatChangeNote('detailed', 'standard');
         expect(toStandard).toContain('written for the Detailed detail level; this generation uses the Standard detail level');
-        expect(toStandard).toContain('including entries where nothing happened, which must be rewritten, not copied');
+        expect(toStandard).toContain('convert any entry that does not, including entries where nothing happened');
+        // Conversion is where the tester's threads were lost: it must say
+        // what a rewrite may not touch.
+        expect(toStandard).toContain('Converting changes layout and length, never the facts: keep every open thread, obligation, decision, and deadline, and merge rather than delete to meet the limits.');
+        expect(toStandard).not.toContain('rewritten, not copied');
         expect(toStandard).toContain('Notable status and Key constraint → Condition; Current goal → Goal; Worn / Significant Items → Items');
         expect(buildFormatChangeNote('standard', 'minimal')).toContain('Collapse each character block into ONE line');
         expect(buildFormatChangeNote('minimal', 'detailed')).toContain('do not invent detail to fill a field');
         expect(buildFormatChangeNote('custom', 'standard')).toContain('written for a custom prompt');
+        expect(buildFormatChangeNote('unknown', 'minimal')).toContain('[FORMAT CHECK: The existing world state was edited, imported, or restored since the last refresh');
+        expect(buildFormatChangeNote('unknown', 'custom')).toBe('');
     });
 
     test('getPromptProfile reports the level, or custom when a Custom Prompt is set', () => {
@@ -422,6 +441,35 @@ describe('detail levels across generation paths', () => {
             expect(request.userContent).toContain('Notable status and Key constraint → Condition');
         }
         expect(getDeltaStatus().promptProfile).toBe('standard');
+    });
+
+    // The tester's method: ⏪ Revert to the original Detailed document between
+    // runs. Revert restores text only, so the recorded profile still says
+    // what the LAST refresh produced. Running the same level twice in a row
+    // would then see recorded === selected and skip the note — and the
+    // reverted Detailed blocks would be copied forward again.
+    test('a reverted document gets a format check even when the recorded level matches', async () => {
+        saveSettings({ detailLevel: 'standard' });
+        seedFullRefresh(STANDARD_DOC, 'standard');
+        setWorldStateData({ text: DETAILED_DOC }); // what Revert writes: text only
+        response = STANDARD_DOC;
+
+        await refreshWorldState();
+
+        expect(requests[0].userContent).toContain('[FORMAT CHECK: The existing world state was edited, imported, or restored since the last refresh, so it may not follow the Standard detail level');
+        expect(requests[0].userContent).toContain('Notable status and Key constraint → Condition');
+        expect(requests[0].userContent).not.toContain('FORMAT CHANGE');
+    });
+
+    test('section regeneration over a reverted document gets the format check too', async () => {
+        saveSettings({ detailLevel: 'standard' });
+        seedFullRefresh(STANDARD_DOC, 'standard');
+        setWorldStateData({ text: DETAILED_DOC });
+        response = '## Key Character States\n- **Alex**:\n  - Condition: Sprained ankle; cannot run.';
+
+        await regenerateSection('Key Character States');
+
+        expect(requests[0].userContent).toContain('[FORMAT CHECK:');
     });
 
     test('no conversion note on a first generation or once the format matches', async () => {

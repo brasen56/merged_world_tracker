@@ -42,7 +42,7 @@ import {
     DeltaPatchError, planAutoRefresh, getDeltaStatus, buildRefreshStatusDelta,
     buildPartialRefreshStatus, digestText, isDeltaModeEnabled,
     buildDeltaSystemPrompt, buildDeltaUserMessage, parseDeltaPatch, applyDeltaPatch,
-    bodyHasSectionHeader, recordedPromptProfile, promptFormatChanged,
+    bodyHasSectionHeader, recordedPromptProfile, promptFormatChanged, storedDocumentFormat,
 } from './delta.js';
 
 // ─── Message scan helpers ────────────────────────────────────────────────────
@@ -528,7 +528,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         const promptProfile = getPromptProfile();
         // Frozen with the prompt for the same reason: every attempt (first,
         // validation retry, grounding retry) must get the same instructions.
-        const formatChangeNote = buildFormatChangeNote(recordedPromptProfile(), promptProfile);
+        const formatChangeNote = buildFormatChangeNote(storedDocumentFormat(), promptProfile);
         // The scan window for THIS run, frozen before the first await:
         //   - a catch-up pass scans exactly the chunk its loop sized, and
         //     stamps the watermark where that chunk ends;

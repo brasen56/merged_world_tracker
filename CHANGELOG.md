@@ -12,7 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [2.10.1]
+## [2.11.2]
+
+### Fixed
+
+- **Shrinking a document no longer deletes live threads.** In 2.11.1,
+  limits were met by first removing "stale" entries, and a section could
+  only go over its limit if every bullet was a live *obligation*. A thread
+  is not an obligation, so a Standard conversion cut a tester's four Active
+  Threads to two, and the lost threads did not come back. Limits are now met
+  by merging only. An entry is removed only when the story resolved it,
+  cancelled it, or made it irrelevant, never to meet a limit or a length
+  target. If every remaining bullet is still a separate live entry, the
+  section keeps them all.
+- **Shortened entries keep their outcome.** The same conversion rewrote
+  "…realized scope limit: English only by December, German later" into a
+  list of the rules Alex had implemented, losing the decision and its
+  deadline. When an entry is shortened, the outcome, decisions, deadlines,
+  and consequences now stay, and methods, step lists, and technical detail
+  are cut. The format-change note no longer says entries "must be
+  rewritten, not copied". It now says converting changes layout and length,
+  never the facts.
+- **Pending groups by due time on every level.** Detailed still listed
+  several separate "Today" bullets because it was under its limit. Pending
+  now always holds one bullet per due time.
+- **Reverted, imported, or hand-edited documents get a format check.**
+  ⏪ Revert restores only the text, so the saved format record still
+  described the last refresh. If you reverted a Detailed snapshot while on
+  Standard and refreshed twice, the second refresh skipped the format note
+  and copied the old character fields forward. A document that no longer
+  matches its last refresh is now treated as unknown format, and the next
+  refresh or Section Regenerate is told to bring every entry into the
+  selected level's format.
+
+## [2.11.1]
 
 ### Fixed
 

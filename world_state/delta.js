@@ -131,6 +131,21 @@ export function recordedPromptProfile(status = getDeltaStatus()) {
     return getPromptProfile() === 'custom' ? 'custom' : 'detailed';
 }
 
+/**
+ * The format of the document as it is stored NOW — what a generation reads as
+ * its previous state. The recorded profile describes what the last refresh
+ * produced, and stays true through partial updates (they re-stamp the
+ * digest). After a manual edit, an import, or ⏪ Revert (which restores text
+ * only) the digest no longer matches, the record describes some other text,
+ * and the honest answer is 'unknown'. Reverting a Detailed snapshot while
+ * Standard is recorded must still get a format note, or the model copies
+ * the snapshot's old fields forward.
+ */
+export function storedDocumentFormat(status = getDeltaStatus(), text = getWorldStateText()) {
+    if (!status.lastRefreshDigest || digestText(text) !== status.lastRefreshDigest) return 'unknown';
+    return recordedPromptProfile(status);
+}
+
 /** Was the stored document written in a different format than the one selected now? */
 export function promptFormatChanged(status = getDeltaStatus()) {
     return recordedPromptProfile(status) !== getPromptProfile();

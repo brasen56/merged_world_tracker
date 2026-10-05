@@ -78,7 +78,7 @@ For Key Character States, write ONE line per character. Combine an item and its 
         sizeRules: `- Target roughly 250–400 words for the whole document. This is a target, not a reason to omit necessary continuity.
 - Limits: 3 Off-Screen bullets, 3 Pending bullets, 3 active/unresolved thread bullets combined, 2 World Pressures.
 - Keep every bullet and every character entry to one line. Add a clause only when leaving it out would cause a continuity error.
-- Minimal means less repetition, not less memory: never drop an injury, debt, obligation, or meaningful negative fact to save space — merge it instead.`,
+- Minimal means less repetition, not less memory: never drop an injury, debt, obligation, open thread, or meaningful negative fact to save space — merge it instead.`,
     },
     standard: {
         omits: [],
@@ -171,8 +171,10 @@ function buildOneHomeRules(profile) {
         : '\n- Recent Changes records what just happened in a few words; its lasting result belongs in its home section.';
     return `- Each fact has ONE home. Do not restate an obligation, thread, or condition in a second section.
 - Route each fact to the FIRST home that fits: due at a specific time or agreed date → Pending. An unmet promise, debt, or mystery the story raised → Unresolved Threads. An ongoing storyline → Active Threads. An outside force or development bearing down → World Pressures. A character's condition, limits, or items → Key Character States.${recentChanges}
-- Limits count bullets, not facts. When a section is over its limit: first remove entries that are resolved, stale, or do not belong in that section; then merge entries that share a due time, thread, or character into one bullet ("- Tonight: deliver the ledger; call Mara back"). Exceed a limit only when every remaining bullet is a separate live obligation.
-- Merging keeps the fact. Never drop an unresolved obligation, injury, or meaningful negative fact just to fit.`;
+- Pending holds one bullet per due time: everything due at the same time shares a bullet ("- Tonight: deliver the ledger; call Mara back").
+- Limits count bullets, not facts, and are met by merging, never by deleting. When a section is over its limit, merge entries that share a due time, thread, or character into one bullet. If every remaining bullet is still a separate live entry, keep them all and exceed the limit.
+- Remove an entry only when the story resolved it, cancelled it, or made it irrelevant — never to meet a limit or a length target.
+- Shortening an entry keeps its outcome, decisions, deadlines, and consequences; cut the how — methods, step lists, and technical detail.`;
 }
 
 export const DETAIL_LEVEL_NAMES = Object.freeze({ minimal: 'Minimal', standard: 'Standard', detailed: 'Detailed' });
@@ -193,14 +195,22 @@ const FORMAT_CONVERSION_STEPS = Object.freeze({
  * entry — old fields, old length, old bullet count — straight into the new
  * document. Empty when the formats match or a Custom Prompt is in charge.
  *
- * @param {string} previousProfile — the stored document's prompt profile
+ * @param {string} previousProfile — the stored document's format (delta.js
+ *   storedDocumentFormat): a prompt profile, or 'unknown' after a manual
+ *   edit, import, or revert
  * @param {string} currentProfile — the profile the prompt was built with
  */
 export function buildFormatChangeNote(previousProfile, currentProfile) {
-    if (!previousProfile || previousProfile === currentProfile || !DETAIL_LEVEL_NAMES[currentProfile]) return '';
-    const previousName = previousProfile === 'custom' ? 'a custom prompt' : `the ${DETAIL_LEVEL_NAMES[previousProfile] ?? previousProfile} detail level`;
     const currentName = DETAIL_LEVEL_NAMES[currentProfile];
-    return `[FORMAT CHANGE: The existing world state was written for ${previousName}; this generation uses the ${currentName} detail level. Treat the existing world state ONLY as a source of facts. Write everything you output in the ${currentName} format and limits from the system prompt — including entries where nothing happened, which must be rewritten, not copied. ${FORMAT_CONVERSION_STEPS[currentProfile]}]`;
+    if (!previousProfile || previousProfile === currentProfile || !currentName) return '';
+    let opening;
+    if (previousProfile === 'unknown') {
+        opening = `[FORMAT CHECK: The existing world state was edited, imported, or restored since the last refresh, so it may not follow the ${currentName} detail level this generation uses.`;
+    } else {
+        const previousName = previousProfile === 'custom' ? 'a custom prompt' : `the ${DETAIL_LEVEL_NAMES[previousProfile] ?? previousProfile} detail level`;
+        opening = `[FORMAT CHANGE: The existing world state was written for ${previousName}; this generation uses the ${currentName} detail level.`;
+    }
+    return `${opening} Treat the existing world state ONLY as a source of facts. Every entry you output must fit the ${currentName} format — convert any entry that does not, including entries where nothing happened. Converting changes layout and length, never the facts: keep every open thread, obligation, decision, and deadline, and merge rather than delete to meet the limits. ${FORMAT_CONVERSION_STEPS[currentProfile]}]`;
 }
 
 /** Build the built-in full-document prompt for the effective hook mode and detail level. */
@@ -251,7 +261,7 @@ ${buildOneHomeRules(profile)}
 - Keep unresolved promises, mysteries, debts, and scheduled obligations until they are fulfilled, cancelled, explicitly superseded, or clearly abandoned. A passed deadline makes an existing obligation overdue; it does not make the obligation disappear.
 - Keep active consequences and threads until evidence resolves them or makes them irrelevant. Do not delete persistent facts, obligations, or threads only because they were not mentioned recently.
 - Remove resolved, superseded, or genuinely no-longer-continuity-relevant entries. Do not preserve stale material by default.
-- Update only what has actually changed — except format. The Previous World State is a source of facts, not a template: rewrite any entry whose fields, length, or bullet count the format above does not allow, even when nothing about it changed.
+- Update only what has actually changed — except format. The Previous World State is a source of facts, not a template: rewrite any entry whose fields or length the format above does not allow, even when nothing about it changed.
 - Prefer concrete facts over interpretation.
 - Do NOT speculate, theorize, or generate meta-analysis. Track only what was concretely established in the story.
 - A world-state entry is a STATEMENT OF CURRENT FACT or STATUS - NEVER a question about the material. Do NOT add "what is X?" / "why does Y do Z?" / "...all unexplored" style entries. Those are analysis, not world state.

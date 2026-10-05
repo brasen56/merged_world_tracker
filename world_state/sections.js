@@ -32,7 +32,7 @@ import {
 import { applyWorldStateInjection } from './injection.js';
 import { getRecentMessagesForScan } from './refresh.js';
 import { buildProvenance, groundingGate, collectRegistryAliasGroups } from './provenance.js';
-import { getDeltaStatus, buildPartialRefreshStatus, recordedPromptProfile } from './delta.js';
+import { getDeltaStatus, buildPartialRefreshStatus, storedDocumentFormat } from './delta.js';
 import { settleSceneAnchorSync } from './scene.js';
 
 export { extractOnlySection, replaceSection };
@@ -218,7 +218,7 @@ export async function regenerateSection(sectionName, variety = 2) {
         // the API await could lose the oldest part of this window to messages
         // that arrived meanwhile, stripping names the model legitimately used.
         const scanWindowText = getRecentMessagesForScan();
-        const formatChangeNote = buildFormatChangeNote(recordedPromptProfile(), getPromptProfile());
+        const formatChangeNote = buildFormatChangeNote(storedDocumentFormat(undefined, promptDocument), getPromptProfile());
 
         // TODO §1: the grounding gate's alias consultation (same as the full
         // refresh path), collected with the other pre-flight captures — ABOVE
