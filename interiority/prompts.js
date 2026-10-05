@@ -136,17 +136,23 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
         // the intentions call re-proposes it, slightly reworded). Replaced
         // with short sequential candidate checks plus one contrastive
         // example, because small/flash-tier models follow ordered checks far
-        // better than compound paragraphs. The "at most two" wording matches
-        // the code-side per-NPC cap (validateAndApply's maxNewIntentionsPerNpc,
-        // default 2) — prompt and code must not drift.
-        rules.push(`${++n}. NEW INTENTIONS — for each candidate, run these checks in order and propose it ONLY if it passes all three:`);
+        // better than compound paragraphs.
+        //
+        // The prompt deliberately states NO numeric cap: a 4B local model
+        // anchored on "at most two" and returned two intentions for every NPC,
+        // restating dossier lines. validateAndApply's maxNewIntentionsPerNpc
+        // is the authoritative cap; the prompt only asks for restraint.
+        // Check 4 (the quoted "evidence") is verified code-side against the
+        // message window — see validateAndApply.
+        rules.push(`${++n}. NEW INTENTIONS — for each candidate, run these checks in order and propose it ONLY if it passes all four:`);
         rules.push(`   1. A current situation, unmet need, or opportunity in <recent_messages> must support the plan. An ongoing motive can qualify when the recent messages show it is still relevant; a brand-new event or changed situation is NOT required. The decision may remain entirely private — the NPC need not announce, show, or decide anything on-screen.`);
         rules.push(`   2. Check the final message of the supplied window: if the candidate's action has already been carried out there (or earlier in the window), it is not a plan. Never re-propose a completed action.`);
         rules.push(`   3. Do not repeat an existing plan from <open_intentions> or <already_scheduled>, and do not repeat another proposal for the same NPC.`);
+        rules.push(`   4. Quote your evidence: copy 4-20 words verbatim from <recent_messages> into "evidence" — the line that shows the situation supporting the plan. The quote must come from <recent_messages>, never from <knowledge_entry>. If you cannot quote such a line, do not propose the plan.`);
         rules.push(`   <knowledge_entry> is BACKGROUND EVIDENCE ONLY: it may explain a motive, but never restate or paraphrase a plan-shaped line from it as a new intention. The mere passage of time (a deadline or festival drawing near) does not motivate a plan; already-scheduled intentions are woken by a separate system, never re-proposed here.`);
         rules.push(`   Example (one scene, final message: "the courier hands over a sealed parcel"): "hand over the sealed parcel" is NOT a new plan — that action is already done; "open the sealed parcel in private before dawn" CAN be one — a future action newly motivated by the delivery.`);
         rules.push(`   Example (ongoing concern, recent messages: "the student worries their source will be challenged before submitting the paper"): "reread the original letter before handing in the paper" CAN be a private plan even though the deadline and worry were established earlier. Do not merely list the public submission appointment.`);
-        rules.push(`   Propose at most two new intentions per NPC. Zero new intentions is a normal, expected result.`);
+        rules.push(`   Most NPCs on most turns should get no new intention — propose one only when a quoted line genuinely motivates it, and never pad. Zero new intentions is a normal, expected result.`);
         rules.push(`${++n}. New intentions require BOTH a concrete "action" AND a specific "trigger" condition (the event or circumstance when the NPC will act). Vague triggers like "soon" or "when the time is right" are not acceptable — use concrete, verifiable conditions.`);
         rules.push(`${++n}. INTENTION HORIZON — for each new intention, classify when it will fire:`);
         rules.push(`   - "immediate": the trigger could be met any turn now (e.g. "next time Jonah leaves the house"). Use for event-conditional or situational triggers.`);
@@ -178,7 +184,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
     if (wantIntentions) {
         npcFields.push('      "executed": ["i-3f9a"]');
         npcFields.push('      "dropped": [{ "id": "i-77c2", "reason": "in-voice one-liner" }]');
-        npcFields.push('      "new_intentions": [{ "action": "...", "trigger": "...", "horizon": "immediate|event|scheduled", "wake_hint": "required when scheduled" }]');
+        npcFields.push('      "new_intentions": [{ "action": "...", "trigger": "...", "horizon": "immediate|event|scheduled", "evidence": "verbatim quote from <recent_messages>", "wake_hint": "ONLY when horizon is scheduled; omit otherwise" }]');
     }
 
     const notes = [];

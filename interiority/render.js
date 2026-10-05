@@ -688,6 +688,11 @@ export function renderSettingsPanel() {
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">Max Turns Open: engine-authored intentions older than this close automatically as expired. NEVER applies to user-authored (<span aria-hidden="true">✋</span>) intentions, and per-entry overrides win. 0 = never.</p>
 
             <div style="margin-top:12px">
+                <label for="mwt-int-require-evidence"><input type="checkbox" id="mwt-int-require-evidence" ${s.requireIntentionEvidence === true ? 'checked' : ''}> Require a quoted line for every new intention</label>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">New intentions are always asked to quote the line from the recent messages that motivates them, and a quote that can't be found in those messages is rejected. Turn this ON to also reject intentions that carry no quote. Recommended for small local models, which tend to turn dossier lines into plans; leave OFF for large models that may omit the quote.</p>
+            </div>
+
+            <div style="margin-top:12px">
                 <label for="mwt-int-capture-diagnostics"><input type="checkbox" id="mwt-int-capture-diagnostics" ${s.captureIntentionsDiagnostics === true ? 'checked' : ''}> Capture intentions generation diagnostics (temporary reporter tool)</label>
                 <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, the latest intentions generation — every constituent call's prompt and raw model response, the ledger before/after, and each accept/reject reason — is kept in memory ONLY (never saved to the chat or settings) and is cleared on chat switch and reload. It appears in the Diagnostics 📋 Copy Report only while that report's "include content" opt-in is checked. Leave OFF unless actively reporting an intentions issue.</p>
             </div>
@@ -725,6 +730,7 @@ export function renderSettingsPanel() {
             dormantPollInterval: Math.max(1, Number(panel.querySelector('#mwt-int-dormant-poll')?.value) || 10),
             lifecycleDedupTurns: Math.max(0, Number(panel.querySelector('#mwt-int-dedup-turns')?.value ?? 8) || 0),
             intentionMaxTurnsOpen: Math.max(0, Number(panel.querySelector('#mwt-int-max-turns')?.value) || 0),
+            requireIntentionEvidence: panel.querySelector('#mwt-int-require-evidence')?.checked ?? false,
             captureIntentionsDiagnostics: panel.querySelector('#mwt-int-capture-diagnostics')?.checked ?? false,
         });
         setIntStatus(saved ? 'Settings saved.' : 'Settings could not be saved.', saved ? 'success' : 'error');

@@ -626,10 +626,28 @@ describe('new-intention prompt rule — lifecycle Tier 1 sequential checks', () 
         expect(prompt).toContain('newly motivated by the delivery');
     });
 
-    test('the per-NPC cap is stated and zero is called normal', () => {
+    test('restraint is requested without a numeric cap, and zero is called normal', () => {
         const prompt = buildSystemPrompt({ intentions: true });
-        expect(prompt).toContain('at most two new intentions per NPC');
+        // No number to anchor on (a 4B returned two per NPC when told "at most
+        // two"); the code-side maxNewIntentionsPerNpc is the authoritative cap.
+        expect(prompt).not.toContain('at most two');
+        expect(prompt).toContain('Most NPCs on most turns should get no new intention');
         expect(prompt).toContain('Zero new intentions is a normal, expected result');
+    });
+
+    test('a quoted-evidence check is required and must come from the messages', () => {
+        const prompt = buildSystemPrompt({ intentions: true });
+        expect(prompt).toContain('passes all four');
+        expect(prompt).toContain('copy 4-20 words verbatim from <recent_messages>');
+        expect(prompt).toContain('never from <knowledge_entry>');
+        expect(prompt).toContain('"evidence": "verbatim quote from <recent_messages>"');
+        // wake_hint is scheduled-only (the 4B copied the trigger into it).
+        expect(prompt).toContain('ONLY when horizon is scheduled');
+    });
+
+    test('a thoughts-only prompt carries no evidence contract', () => {
+        const prompt = buildSystemPrompt({ thoughts: true, intentions: false });
+        expect(prompt).not.toContain('"evidence"');
     });
 });
 

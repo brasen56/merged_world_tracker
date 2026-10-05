@@ -271,6 +271,89 @@ describe('executed/dropped ids are owner-checked (lifecycle Tier 1 item 2)', () 
     });
 });
 
+// ─── Evidence gate — quoted support must be in the message window ────────────
+
+describe('new-intention evidence gate', () => {
+    // Real-world shape (a 4B local model on Danny): one intention restated a
+    // dossier agenda line, another came from ledger/appearance text. Neither
+    // is in the story window, so a quote offered for them cannot be found.
+    const SCENE = [
+        { name: 'User', is_user: true, mes: 'Alex slides the grading sheet across the desk.', extra: {} },
+        { name: 'Narrator', mes: 'Priya checks her arithmetic in the margin while Okonkwo studies the board.', extra: {} },
+    ];
+
+    test('keeps an intention whose quote is in the window', async () => {
+        setFakeChat(SCENE);
+        saveSettings({ intentionGracePeriod: 0 });
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                new_intentions: [{
+                    action: 'recheck the arithmetic', trigger: 'Priya leaves the board', horizon: 'immediate',
+                    evidence: 'Priya checks her arithmetic in the margin',
+                }],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action)).toEqual(['recheck the arithmetic']);
+    });
+
+    test('rejects an intention whose quote is not in the window, without using a cap slot', async () => {
+        setFakeChat(SCENE);
+        saveSettings({ intentionGracePeriod: 0 });
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                new_intentions: [
+                    { action: 'memorize the segment descriptor', trigger: 'the ruling', horizon: 'immediate',
+                      evidence: 'Memorize the segment descriptor cold so he can judge fairly' },
+                    { action: 'bring a granola bar', trigger: 'office hours', horizon: 'immediate',
+                      evidence: 'Often has a granola bar in hand' },
+                    { action: 'recheck the arithmetic', trigger: 'Priya leaves', horizon: 'immediate',
+                      evidence: 'Priya checks her arithmetic in the margin' },
+                    { action: 'ask about the ruling', trigger: 'Okonkwo turns', horizon: 'immediate',
+                      evidence: 'Okonkwo studies the board' },
+                ],
+            }],
+        }, ['Mara'], 1);
+
+        // Both fabricated quotes are rejected and consume nothing, so both
+        // grounded proposals still fit under the default cap of two.
+        expect(getLedger().map(e => e.action)).toEqual(['recheck the arithmetic', 'ask about the ruling']);
+    });
+
+    test('a proposal with no quote is accepted by default (frontier models may omit it)', async () => {
+        setFakeChat(SCENE);
+        saveSettings({ intentionGracePeriod: 0 });
+
+        await validateAndApply({
+            npcs: [{ name: 'Mara', new_intentions: [{ action: 'stash the coin', trigger: 'sundown', horizon: 'immediate' }] }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action)).toEqual(['stash the coin']);
+    });
+
+    test('requireIntentionEvidence also rejects proposals with no quote', async () => {
+        setFakeChat(SCENE);
+        saveSettings({ intentionGracePeriod: 0, requireIntentionEvidence: true });
+
+        await validateAndApply({
+            npcs: [{
+                name: 'Mara',
+                new_intentions: [
+                    { action: 'stash the coin', trigger: 'sundown', horizon: 'immediate' },
+                    { action: 'recheck the arithmetic', trigger: 'Priya leaves', horizon: 'immediate',
+                      evidence: 'Priya checks her arithmetic in the margin' },
+                ],
+            }],
+        }, ['Mara'], 1);
+
+        expect(getLedger().map(e => e.action)).toEqual(['recheck the arithmetic']);
+    });
+});
+
 // ─── Lifecycle plan Tier 1 — per-NPC accepted-proposal cap ───────────────────
 
 describe('per-NPC accepted-proposal cap (lifecycle Tier 1 item 3)', () => {

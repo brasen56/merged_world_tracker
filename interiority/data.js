@@ -222,6 +222,12 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // consume it. 0 blocks new proposals entirely. Not the final
         // lifecycle cost-control design.
         maxNewIntentionsPerNpc: 2,
+        // Evidence gate for new intentions. The prompt asks the model to quote
+        // the supporting line; a quote that is NOT in the message window is
+        // always rejected. This flag additionally rejects proposals that carry
+        // no quote at all — meant for small local models, which otherwise mine
+        // the dossier. Off by default: frontier models may omit the field.
+        requireIntentionEvidence: false,
         // Lifecycle plan Tier 1 item 4: opt-in, generation-scoped intentions
         // diagnostics capture (latest generation only: prompts, raw model
         // responses, ledger before/after, accept/reject reasons). In-memory

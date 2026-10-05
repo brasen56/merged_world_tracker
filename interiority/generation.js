@@ -15,6 +15,7 @@ import {
     assertSameScope, isCancellation,
 } from '../core/index.js';
 
+import { quoteMatchesMessage } from '../core/quote_match.js';
 import { REGISTRY_KEY } from '../knowledge/state.js';
 // Static, unlike the registry ACCESSORS below (which stay dynamic so the
 // interiority module does not pull the knowledge store into its load path).
@@ -1821,6 +1822,10 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
         const maxNewPerNpc = Math.max(0, Math.min(20, Number(settings.maxNewIntentionsPerNpc ?? 2) || 0));
         let acceptedNewCount = 0;
         if (Array.isArray(npcResult.new_intentions)) {
+            // Recomputed here (not threaded through the call chain): the window
+            // is the same one the call saw — scope was asserted above — and an
+            // empty window fails open in judgeIntentionEvidence.
+            const evidenceWindow = getStrippedRecentMessages(Math.max(1, settings.messageWindow || 8));
             for (const ni of npcResult.new_intentions) {
                 if (!ni) continue;
                 const action = String(ni.action || '').trim();
@@ -1828,6 +1833,19 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 if (!action || !trigger) {
                     console.warn(`[MWT:Interiority] ${name}: discarding new intention missing action/trigger — got keys: [${Object.keys(ni).join(', ')}].`);
                     noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason: 'missing-action-or-trigger' });
+                    continue;
+                }
+
+                // Evidence gate: a quoted line that is not in the window means
+                // the plan came from the dossier/ledger, not the scene. Checked
+                // before dedup and the cap so a rejected proposal never
+                // consumes another candidate's slot.
+                const evidence = String(ni.evidence || '').trim();
+                const evidenceVerdict = judgeIntentionEvidence(evidence, evidenceWindow, settings.requireIntentionEvidence === true);
+                if (evidenceVerdict !== 'ok') {
+                    const reason = evidenceVerdict === 'missing' ? 'missing-evidence' : 'evidence-not-in-window';
+                    console.log(`[MWT:Interiority] ${name}: rejecting new intention "${action.slice(0, 60)}" (${reason}).`);
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason });
                     continue;
                 }
 
@@ -2020,4 +2038,28 @@ function getStrippedRecentMessages(windowSize) {
         filterSystem: true,
         strip: true,
     }) || '';
+}
+
+/**
+ * Judge a new intention's quoted `evidence` against the message window.
+ *
+ * Policy (the point is catching small models that mine the dossier instead of
+ * the scene, without penalising frontier models that simply omit the field):
+ *  - no window text to check against → 'ok' (fail open; nothing to verify)
+ *  - evidence omitted → 'ok', or 'missing' when `requireEvidence` is on
+ *  - evidence present but not found in the window → 'not-found'
+ * Matching reuses core/quote_match.js (verbatim, or bigram-tolerant for a
+ * dialogue tag splitting the quote), so Knowledge, Story Planner and
+ * Interiority share one definition of "this quote is in the chat".
+ *
+ * @param {string} evidence
+ * @param {string} windowText - the stripped message window
+ * @param {boolean} requireEvidence
+ * @returns {'ok'|'missing'|'not-found'}
+ */
+export function judgeIntentionEvidence(evidence, windowText, requireEvidence = false) {
+    if (!windowText) return 'ok';
+    const quote = String(evidence || '').trim();
+    if (!quote) return requireEvidence ? 'missing' : 'ok';
+    return quoteMatchesMessage(quote, null, { mes: windowText }) ? 'ok' : 'not-found';
 }
