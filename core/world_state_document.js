@@ -477,7 +477,9 @@ export function patchCurrentScene(text, patch = {}) {
 // World State details are structured as scalar fields or bullets. A
 // free-standing sentence is therefore prose leakage; deliberately do not match
 // bullets, so factual entries such as "- Alex entered..." remain valid.
-const UNSTRUCTURED_PROSE_RE = /^\s*(?![-+*#>`]|(?:Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn)\b[^\r\n]*:)[A-Z][^\r\n]*[.!?]\s*$/m;
+// The field-label allowlist covers every detail level's character fields
+// (world_state/prompts.js): Standard's Condition and Items included.
+const UNSTRUCTURED_PROSE_RE = /^\s*(?![-+*#>`]|(?:Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn|Condition|Items)\b[^\r\n]*:)[A-Z][^\r\n]*[.!?]\s*$/m;
 
 const RP_MARKERS = Object.freeze([
     { pattern: /^\s*(?:[-+]\s+)?\*(?!\*)[^*\r\n]+\*(?!\*)\s*$/m, label: 'asterisk-formatted action' },
@@ -487,7 +489,7 @@ const RP_MARKERS = Object.freeze([
         label: 'standalone dialogue',
     },
     {
-        pattern: /^(?!(?:Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn)\b)[A-Z][a-z]+:\s*["“”]/m,
+        pattern: /^(?!(?:Date|Time|Location|Present|Situation|Mood|Goal|Status|Notable|Current|Immediate|Key|Worn|Condition|Items)\b)[A-Z][a-z]+:\s*["“”]/m,
         label: 'dialogue formatting (Name: "...)',
     },
     {

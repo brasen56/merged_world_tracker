@@ -48,8 +48,11 @@ const CHAT = Array.from({ length: 10 }, (_, i) => ({
 // defaultSystemPrompt: 1375 before the Plot Seeds contract, 1505 after it. The
 // contract is worth ~130 tokens on EVERY call, delta calls included — keep it
 // stated in the rules rather than modelled as example seed text.
+// 1744 after the detail levels (2026-10-04): the shared one-home routing, item
+// rule, and overflow priority cost ~240 prompt tokens per call, paid to shrink
+// the saved document — and so the narrator injection on every turn.
 const TOKEN_BASELINES = Object.freeze({
-    defaultSystemPrompt: 1505,
+    defaultSystemPrompt: 1744,
     customSystemPrompt: 16,
     hookBearingStored: 124,
     hookOffInjected: 122,

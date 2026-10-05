@@ -89,10 +89,16 @@ Maintains a live, structured document describing the current state of the rolepl
   - Pending obligations
   - Active & Unresolved Threads
   - World Pressures
-  - Key Character States (mood, goal, status, pressure, items)
+  - Key Character States (shape depends on the Detail Level, below)
   - Story Momentum
   - Plot Seeds (with off/passive/proactive/assertive hook modes)
   - Potential Entrances
+- **Detail Level** — Choose how much the built-in prompt writes per entry, which sets the size of the injection on every turn:
+  - **Minimal** — One line per character (condition, limits, critical items), no Recent Changes. Target 250–400 words
+  - **Standard** — Short character blocks (Mood, Goal, Condition, Items) and tighter section limits. Target 400–550 words
+  - **Detailed** (default) — Full six-field character blocks (mood, goal, status, pressure, constraint, items). Target 600–800 words
+
+  Every level keeps injuries, possessions, debts, and open obligations. Each fact is stored in one section only, and items are listed only when forgetting them would cause a continuity error. After a change, the next full 🔄 Refresh rebuilds the document in the new format; ⚡ Delta waits until it has. A Custom Prompt replaces all three levels.
 - **Plot Seed Hook Modes** — Control how aggressively the LLM introduces narrative hooks:
   - **Off** — Plot Seeds are not injected into the prompt at all
   - **Passive** — Hooks are available but the LLM decides when to use them

@@ -20,7 +20,10 @@ import {
 // (a11y plan §4.4).
 import { setControlBusy } from '../core/ui.js';
 
-import { DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntities, EXPIRY_SECTIONS_DEFAULT } from './settings.js';
+import {
+    DEFAULT_AUTO_SAVE_INTERVAL, getSettings, saveSettings, getPinnedEntities, EXPIRY_SECTIONS_DEFAULT,
+    DETAIL_LEVELS, normalizeDetailLevel, getPromptProfile,
+} from './settings.js';
 
 // One id map for renderApiSettingsFields, wireApiSettingsFields and
 // readApiSettingsValues, so the rendered fields and the Save reader agree.
@@ -44,9 +47,11 @@ import {
 } from './injection.js';
 import { refreshWorldState, refreshWorldStateDelta, restartAutoSaveTimer } from './refresh.js';
 import { regenerateSection } from './sections.js';
-import { HOOK_SECTIONS } from './prompts.js';
+import { HOOK_SECTIONS, detailLevelIncludesSection } from './prompts.js';
 import { buildProvenance, getStalenessReport, purgeStaleEntries } from './provenance.js';
 import { deriveDocumentStatus, getDeltaReconcileEvery, getDeltaStaleAfterMsgs } from './delta.js';
+
+const DETAIL_LEVEL_LABELS = Object.freeze({ minimal: 'Minimal', standard: 'Standard', detailed: 'Detailed' });
 
 // ─── Document status chip (TODO §3-F / PI §3) ────────────────────────────────
 // Surfaces whether the document is fully reconciled / delta-updated / manually
@@ -494,9 +499,13 @@ export function render() {
     const autoInterval = getAutoRefreshInterval();
     const maxScan = getMaxScanMessages(s);
 
+    const customPromptActive = !!s.customPrompt?.trim();
+    const detailLevel = normalizeDetailLevel(s.detailLevel);
+
     const sectionOptions = SECTIONS.map(sec => {
         const hookSection = HOOK_SECTIONS.includes(sec);
-        const disabled = hookSection && s.hookMode === 'off' ? ' disabled' : '';
+        const outsideDetailLevel = !customPromptActive && !detailLevelIncludesSection(detailLevel, sec);
+        const disabled = (hookSection && s.hookMode === 'off') || outsideDetailLevel ? ' disabled' : '';
         return `<option value="${escapeHtml(sec)}" data-hook-section="${hookSection}"${disabled}>${escapeHtml(sec)}</option>`;
     }).join('');
 
@@ -670,6 +679,14 @@ export function render() {
                 <label class="mwt-label" for="ws-auto-save-interval">Auto-Save (sec)</label>
                 <input id="ws-auto-save-interval" class="mwt-input" type="number" value="${s.autoSaveInterval || DEFAULT_AUTO_SAVE_INTERVAL}" min="30">
 
+                <label class="mwt-label" for="ws-detail-level">Detail Level</label>
+                <div>
+                    <select id="ws-detail-level" class="mwt-input" style="max-width:180px"${customPromptActive ? ' disabled' : ''}>
+                        ${DETAIL_LEVELS.map(level => `<option value="${level}"${level === detailLevel ? ' selected' : ''}>${DETAIL_LEVEL_LABELS[level]}</option>`).join('')}
+                    </select>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Minimal:</b> one line per character and no Recent Changes — the smallest injection. <b>Standard:</b> short character blocks (mood, goal, condition, items) and tighter section limits. <b>Detailed:</b> full six-field character blocks. Every level keeps injuries, possessions, and open obligations. A change applies from the next full 🔄 Refresh, which rebuilds the current document in the new format (⚡ Delta waits for it). Not used while a Custom Prompt is set.</p>
+                </div>
+
                 <label class="mwt-label" for="ws-custom-prompt">Custom Prompt</label>
                 <textarea id="ws-custom-prompt" class="mwt-input" rows="3" placeholder="Leave blank for default prompt">${escapeHtml(s.customPrompt || '')}</textarea>
                 <div></div><p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Custom Prompt completely replaces the built-in generation prompt. Structural output checks still apply, but built-in compactness guidance is not added. With Hook Mode Off, hook sections are removed before saving and injection. Click "Reset Prompt" to clear.</p>
@@ -714,6 +731,12 @@ export function render() {
 }
 
 // ─── Event wiring ────────────────────────────────────────────────────────────
+
+function syncDetailLevelControl() {
+    const select = state.modal?.querySelector('#ws-detail-level');
+    const customPrompt = state.modal?.querySelector('#ws-custom-prompt');
+    if (select && customPrompt) select.disabled = !!customPrompt.value.trim();
+}
 
 export function wireEvents() {
     if (!state.modal) return;
@@ -973,6 +996,7 @@ export function wireEvents() {
         const depth = parseInt(state.modal.querySelector('#ws-injection-depth')?.value, 10);
         const maxScan = parseInt(state.modal.querySelector('#ws-max-scan-messages')?.value, 10);
         const hookMode = state.modal.querySelector('#ws-hook-mode')?.value || 'passive';
+        const detailLevel = normalizeDetailLevel(state.modal.querySelector('#ws-detail-level')?.value);
         const messageFilter = state.modal.querySelector('#ws-message-filter')?.value || '';
 
         const expiryEnabled = !!state.modal.querySelector('#ws-expiry-enabled')?.checked;
@@ -996,6 +1020,7 @@ export function wireEvents() {
             return;
         }
 
+        const promptProfileBefore = getPromptProfile();
         saveSettings({
             ...apiValues,
             autoSaveInterval: Math.max(30, autoSaveSec),
@@ -1003,6 +1028,7 @@ export function wireEvents() {
             injectionDepth: isNaN(depth) ? 1 : depth,
             maxScanMessages: Math.min(Math.max(1, isNaN(maxScan) ? 20 : maxScan), 30),
             hookMode,
+            detailLevel,
             messageFilter,
             expiryEnabled,
             expiryStaleAfterMsgs,
@@ -1018,8 +1044,23 @@ export function wireEvents() {
         applyWorldStateInjection();
         restartAutoSaveTimer();
         refreshProvenancePanel();
-        setStatus(state.modal, 'Settings saved.', 'success', 3000);
+        // The saved document keeps its old format (and its injection size)
+        // until a full refresh rebuilds it — say so rather than let the user
+        // wonder why nothing shrank.
+        const formatChanged = getPromptProfile() !== promptProfileBefore && !!getWorldStateText().trim();
+        setStatus(
+            state.modal,
+            formatChanged
+                ? 'Settings saved. The prompt format changed — run 🔄 Refresh to rebuild this chat\'s World State in the new format.'
+                : 'Settings saved.',
+            formatChanged ? 'info' : 'success',
+            formatChanged ? 8000 : 3000,
+        );
     });
+
+    // Detail Level only shapes the built-in prompt, so it is greyed out while
+    // a Custom Prompt is typed in — live, not only at the next render.
+    state.modal.querySelector('#ws-custom-prompt')?.addEventListener('input', syncDetailLevelControl);
 
     // Test connection
     state.modal.querySelector('#ws-test-connection')?.addEventListener('click', async () => {
@@ -1115,6 +1156,7 @@ export function wireEvents() {
     state.modal.querySelector('#ws-reset-prompt')?.addEventListener('click', () => {
         const ta = state.modal.querySelector('#ws-custom-prompt');
         if (ta) ta.value = '';
+        syncDetailLevelControl();
         setStatus(state.modal, 'Custom prompt cleared.', 'info', 3000);
     });
 

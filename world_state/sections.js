@@ -18,7 +18,9 @@ import {
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 
-import { buildDefaultSystemPrompt, HOOK_SECTIONS, stripHookSections } from './prompts.js';
+import {
+    buildDefaultSystemPrompt, HOOK_SECTIONS, stripHookSections, detailLevelIncludesSection,
+} from './prompts.js';
 import { getSettings, hasValidSettings, getPinnedEntities, usesBuiltInPlotSeedContract } from './settings.js';
 import {
     state, SECTIONS, VARIETY_LABELS,
@@ -38,7 +40,7 @@ export { extractOnlySection, replaceSection };
 function buildSystemPrompt() {
     const settings = getSettings();
     const custom = settings.customPrompt?.trim();
-    return custom || buildDefaultSystemPrompt(settings.hookMode);
+    return custom || buildDefaultSystemPrompt(settings.hookMode, settings.detailLevel);
 }
 
 function buildSectionSystemPrompt(sectionName, variety) {
@@ -159,6 +161,14 @@ export async function regenerateSection(sectionName, variety = 2) {
     }
     if (!SECTIONS.includes(sectionName)) {
         throw new Error(`Unknown section: ${sectionName}`);
+    }
+    // The section override says "use the formatting and rules defined above
+    // for that section" — with no template above, the model would improvise
+    // one. A Custom Prompt defines its own sections, so only the built-in
+    // prompt is checked.
+    const promptSettings = getSettings();
+    if (!promptSettings.customPrompt?.trim() && !detailLevelIncludesSection(promptSettings.detailLevel, sectionName)) {
+        throw new Error(`"${sectionName}" is not part of the ${promptSettings.detailLevel} detail level. Switch to a larger detail level to regenerate it.`);
     }
     if (state.wstIsRefreshing) {
         throw new Error('World State is already refreshing.');

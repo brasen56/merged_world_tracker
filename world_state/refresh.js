@@ -26,7 +26,7 @@ import { worldStateSchema } from './schema.js';
 import { buildDefaultSystemPrompt, stripHookSections } from './prompts.js';
 import {
     getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL, getPinnedEntities,
-    usesBuiltInPlotSeedContract,
+    usesBuiltInPlotSeedContract, getPromptProfile,
 } from './settings.js';
 import {
     state, getWorldStateText, setWorldStateDataChecked,
@@ -159,7 +159,7 @@ export function getMessagesSinceForScan(sinceMsg) {
 function buildSystemPrompt() {
     const settings = getSettings();
     const custom = settings.customPrompt?.trim();
-    return custom || buildDefaultSystemPrompt(settings.hookMode);
+    return custom || buildDefaultSystemPrompt(settings.hookMode, settings.detailLevel);
 }
 
 function validateGeneratedDocument(text) {
@@ -515,6 +515,11 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         if (!chat || chat.length === 0) return null;
 
         const systemPrompt = buildSystemPrompt();
+        // Recorded with the commit so a later delta can tell which format
+        // this document was written in. Captured with the prompt, not at the
+        // write: a detail-level change saved mid-call must not be stamped onto
+        // a document the old prompt produced.
+        const promptProfile = getPromptProfile();
         // The scan window for THIS run, frozen before the first await:
         //   - a catch-up pass scans exactly the chunk its loop sized, and
         //     stamps the watermark where that chunk ends;
@@ -702,7 +707,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         // the document as manually edited.
         const written = commitHistorySnapshot(oldText, {
             text,
-            deltaStatus: buildRefreshStatusDelta('full', text, getDeltaStatus(), scanEnd),
+            deltaStatus: buildRefreshStatusDelta('full', text, getDeltaStatus(), scanEnd, promptProfile),
         });
         if (!written.ok) {
             console.error(`[MWT:WorldState] Refresh refused at the store write (${written.reason ?? 'unknown reason'}) — the previous world state was kept.`);
@@ -818,6 +823,17 @@ export async function refreshWorldStateDelta(isAuto = false) {
         console.warn('[MWT:WorldState] Delta declined — the document has manual edits since its last refresh; a full refresh must reconcile them.');
         if (isAuto) return refreshWorldState(isAuto);
         throw new DeltaPatchError('This document has manual edits since its last refresh — run a full Refresh first to reconcile them.');
+    }
+    // Detail level (or Custom Prompt) changed since the last full refresh. A
+    // delta leaves every section it does not mention untouched, so switching
+    // Detailed → Minimal would keep the long character blocks indefinitely.
+    // The full refresh rebuilds the whole document in the new format — same
+    // policy as planAutoRefresh's 'detail-level-changed'. A status with no
+    // recorded profile (written before detail levels existed) never blocks.
+    if (baselineStatus.promptProfile && baselineStatus.promptProfile !== getPromptProfile()) {
+        console.warn(`[MWT:WorldState] Delta declined — the document was built with the "${baselineStatus.promptProfile}" prompt but "${getPromptProfile()}" is now selected; a full refresh must rebuild it.`);
+        if (isAuto) return refreshWorldState(isAuto);
+        throw new DeltaPatchError('The World State detail level changed since the last full refresh — run a full Refresh to rebuild the document in the new format.');
     }
     // The delta scan must cover EVERY unseen message since the refresh
     // watermark, not just the latest maxScanMessages. When the whole interval

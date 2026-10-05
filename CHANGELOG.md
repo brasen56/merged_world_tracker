@@ -12,6 +12,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.11.0]
+
+### Added
+
+- **World State Detail Level: Minimal, Standard, or Detailed.** A new
+  setting in ⚙️ World State Settings picks how much the built-in prompt
+  writes per entry, so users can shrink the injection sent on every turn.
+  All three levels use the same section names, so the parser, delta patches,
+  injection, expiry, and grounding work unchanged.
+  - **Minimal** writes one line per character (condition, limits, and
+    continuity-critical items), drops Recent Changes, and targets 250–400
+    words.
+  - **Standard** writes four short character fields (Mood, Goal, Condition,
+    Items) with tighter section limits, and targets 400–550 words.
+    **Condition** combines the old Notable status and Key constraint, so
+    injuries and restraints always have a place.
+  - **Detailed** is the previous template and stays the default, so existing
+    users keep the same document layout. It does pick up the shared rules
+    listed under Changed below.
+
+  Every level keeps injuries, possessions, debts, and open obligations. The
+  setting is greyed out while a Custom Prompt is set, because the Custom
+  Prompt still replaces the built-in template entirely.
+
+### Changed
+
+- **All levels, Detailed included, now give each fact one home.** A routing
+  rule sends each fact to exactly one section (Pending → Unresolved
+  Threads → Active Threads → World Pressures → Key Character States), so the
+  same obligation is no longer listed under three headings.
+- **New item rule for all levels.** An item is listed only if forgetting it
+  would cause a continuity error. Ordinary clothing and incidental props
+  ("pencil behind ear, one shoe unlaced") are no longer listed.
+- **Over-limit sections are trimmed in a fixed order.** Resolved or stale
+  entries go first, then related entries are merged. A live obligation or
+  injury is never dropped just to fit.
+- These shared rules add about 240 tokens to the generation prompt on each
+  call. They do not add to the narrator injection, which is what they shrink.
+
+### Fixed
+
+- **Switching detail level no longer leaves the old format behind.** A delta
+  rewrites only the sections it mentions, so after switching from Detailed to
+  Minimal the long character blocks would have stayed indefinitely. Each full
+  refresh now records the prompt format it used. A scheduled delta after a
+  format change runs a full refresh instead, and a manual ⚡ Delta asks for a
+  full 🔄 Refresh first. Documents saved before this change never force an
+  extra refresh.
+- Standard's **Condition:** and **Items:** labels are recognised as character
+  fields, so a field line that lost its dash is no longer flagged as stray
+  narrative prose.
+
 ## [2.10.5]
 
 ### Fixed

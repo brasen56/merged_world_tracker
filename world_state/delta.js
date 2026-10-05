@@ -38,7 +38,7 @@ import {
     SECTIONS, getWorldStateText, getWorldStateData,
     extractOnlySection, replaceSection, removeSection,
 } from './data.js';
-import { getSettings } from './settings.js';
+import { getSettings, getPromptProfile, PROMPT_PROFILES } from './settings.js';
 
 // ─── Settings accessors ───────────────────────────────────────────────────────
 
@@ -75,6 +75,12 @@ export function getDeltaStaleAfterMsgs() {
 //   deltasSinceFull    — consecutive partial updates since the last full one
 //   lastRefreshDigest  — digest of the document text AS COMMITTED by that
 //                        refresh; any later divergence = manual edit
+//   promptProfile      — the detail level ('minimal' | 'standard' | 'detailed')
+//                        or 'custom' the last FULL refresh was generated with;
+//                        null when unknown (written before detail levels
+//                        existed). Partial updates carry it forward unchanged.
+//                        Added without a version bump: a missing value
+//                        normalizes to null, which never forces a full refresh.
 
 const DELTA_STATUS_VERSION = 1;
 
@@ -93,6 +99,7 @@ function normalizeDeltaStatus(raw) {
             lastRefreshAt: 0,
             deltasSinceFull: 0,
             lastRefreshDigest: '',
+            promptProfile: null,
         };
     }
     return {
@@ -102,7 +109,12 @@ function normalizeDeltaStatus(raw) {
         lastRefreshAt: Number.isFinite(raw.lastRefreshAt) ? raw.lastRefreshAt : 0,
         deltasSinceFull: Number.isFinite(raw.deltasSinceFull) ? Math.max(0, Math.floor(raw.deltasSinceFull)) : 0,
         lastRefreshDigest: typeof raw.lastRefreshDigest === 'string' ? raw.lastRefreshDigest : '',
+        promptProfile: normalizePromptProfile(raw.promptProfile),
     };
+}
+
+function normalizePromptProfile(value) {
+    return PROMPT_PROFILES.includes(value) ? value : null;
 }
 
 export function getDeltaStatus() {
@@ -122,8 +134,12 @@ export function getDeltaStatus() {
  * @param {number} msgIndex — stable-history END this refresh scanned through
  *   (the message watermark). NOT chat length: the in-flight tail beyond the
  *   settled-history cutoff is never scanned and must not be stamped as seen.
+ * @param {string} [promptProfile] — for a 'full' refresh, the prompt profile
+ *   (settings.js getPromptProfile) its prompt was built with. Ignored for
+ *   partial updates, which keep the previous value: they patch a document in
+ *   the format its last full refresh chose.
  */
-export function buildRefreshStatusDelta(kind, committedText, prevStatus, msgIndex) {
+export function buildRefreshStatusDelta(kind, committedText, prevStatus, msgIndex, promptProfile) {
     const prev = normalizeDeltaStatus(prevStatus);
     return {
         schemaVersion: DELTA_STATUS_VERSION,
@@ -132,6 +148,7 @@ export function buildRefreshStatusDelta(kind, committedText, prevStatus, msgInde
         lastRefreshAt: Date.now(),
         deltasSinceFull: kind === 'full' ? 0 : prev.deltasSinceFull + 1,
         lastRefreshDigest: digestText(committedText),
+        promptProfile: kind === 'full' ? normalizePromptProfile(promptProfile) : prev.promptProfile,
     };
 }
 
@@ -229,6 +246,9 @@ export function deriveDocumentStatus({ currentMsgIndex } = {}) {
  *     reconciled once before cheap updates can build on it)
  *   - manual edits since the last refresh → full (reconcile the user's edits
  *     with the chat instead of patching on top of an unverified baseline)
+ *   - detail level / Custom Prompt changed since the last full refresh → full
+ *     (a delta only rewrites the sections it mentions, so the rest of the
+ *     document would stay in the old format)
  *   - deltasSinceFull >= reconcileEvery → full (periodic reconciliation)
  */
 export function planAutoRefresh() {
@@ -238,6 +258,7 @@ export function planAutoRefresh() {
     const st = getDeltaStatus();
     if (!st.lastRefreshDigest) return { kind: 'full', reason: 'no-refresh-baseline' };
     if (digestText(text) !== st.lastRefreshDigest) return { kind: 'full', reason: 'manual-edits-since-refresh' };
+    if (st.promptProfile && st.promptProfile !== getPromptProfile()) return { kind: 'full', reason: 'detail-level-changed' };
     if (st.deltasSinceFull >= getDeltaReconcileEvery()) return { kind: 'full', reason: 'reconciliation-due' };
     return { kind: 'delta', reason: 'scheduled' };
 }

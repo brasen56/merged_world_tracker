@@ -15,6 +15,22 @@ export const DEFAULT_AUTO_SAVE_INTERVAL = 120;
 
 export const EXPIRY_SECTIONS_DEFAULT = ['Off-Screen', 'Pending', 'Unresolved Threads', 'Active Threads'];
 
+// ─── Detail level (built-in prompt preset) ───────────────────────────────────
+//
+// How much the built-in prompt writes per entry, smallest first. All three
+// share the section names, parser, and validators; 'detailed' is the original
+// template, so it stays the default and existing users see no change.
+
+export const DETAIL_LEVELS = Object.freeze(['minimal', 'standard', 'detailed']);
+export const DEFAULT_DETAIL_LEVEL = 'detailed';
+
+/** Every value getPromptProfile() can return — what deltaStatus may record. */
+export const PROMPT_PROFILES = Object.freeze([...DETAIL_LEVELS, 'custom']);
+
+export function normalizeDetailLevel(level) {
+    return DETAIL_LEVELS.includes(level) ? level : DEFAULT_DETAIL_LEVEL;
+}
+
 export const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
     legacyKey: 'world_state_settings',
@@ -36,6 +52,7 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
         injectionDepth: 1,
         maxScanMessages: 20,
         hookMode: 'passive',
+        detailLevel: DEFAULT_DETAIL_LEVEL,
         messageFilter: '',
         // Expiry (§5.2) — off by default, non-destructive mode when enabled.
         expiryEnabled: false,
@@ -64,6 +81,16 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
     },
     logPrefix: '[MWT:WorldState]',
 });
+
+/**
+ * Which prompt shapes generated documents: a built-in detail level, or
+ * 'custom' when a Custom Prompt replaces the built-in template wholesale.
+ * A full refresh records it in deltaStatus so a later delta can tell that the
+ * document it would patch was written in a different format (delta.js).
+ */
+export function getPromptProfile(settings = getSettings()) {
+    return settings?.customPrompt?.trim() ? 'custom' : normalizeDetailLevel(settings?.detailLevel);
+}
 
 /** Parse the comma-separated pinnedEntities setting into a clean array. */
 export function getPinnedEntities(settings) {
