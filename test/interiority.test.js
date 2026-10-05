@@ -557,6 +557,16 @@ describe('new intentions require current evidence (knowledge_entry is background
         expect(prompt).not.toContain('forming, deciding on, or committing');
     });
 
+    test.each([false, true])('thoughts=%s: intentions generate future decisions rather than only extract existing plans', (thoughts) => {
+        const prompt = buildSystemPrompt({ thoughts, intentions: true });
+        expect(prompt).toContain('GENERATE AS WELL AS TRACK');
+        expect(prompt).toContain('You may create that unspoken future decision');
+        expect(prompt).toContain('it need not already appear in dialogue or narration');
+        expect(prompt).toContain('ordinary, caring, practical, or self-protective');
+        expect(prompt).toContain('inventing past events, knowledge, or completed actions is not');
+        expect(prompt).not.toContain('A stale intention is worse than a missing one');
+    });
+
     test('the mere passage of time is not a motivating event', () => {
         // Waking already-scheduled intentions for approaching dates is the
         // dormant poll's job (§20) — never a reason to re-propose here.
@@ -568,6 +578,8 @@ describe('new intentions require current evidence (knowledge_entry is background
     test('thoughts-only calls never see the intention-evidence rule', () => {
         expect(buildSystemPrompt({ thoughts: true, intentions: false }))
             .not.toContain('NEW INTENTIONS —');
+        expect(buildSystemPrompt({ thoughts: true, intentions: false }))
+            .not.toContain('GENERATE AS WELL AS TRACK');
     });
 });
 

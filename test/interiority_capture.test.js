@@ -181,6 +181,31 @@ describe('bounds', () => {
         expect(stored).toContain('truncated');
     });
 
+    test('large dossiers do not crowd the recent story window out of the capture', () => {
+        const recent = '<recent_messages>Courier delivers a sealed parcel.\nMara pockets it.</recent_messages>\nOutput JSON.';
+        const userContent = `<npc name="Mara"><knowledge_entry>${'old facts\n'.repeat(CAPTURE_TEXT_CHAR_CAP)}</knowledge_entry></npc>\n${recent}`;
+        beginIntentionsGenerationCapture({ enabled: true });
+        noteIntentionsCaptureCall({ userContent }).finish({ parsed: true });
+        const stored = completeIntentionsGenerationCapture({ ledgerAfter: [] }).calls[0].userContent;
+
+        expect(stored).toContain('<npc name="Mara">');
+        expect(stored).toContain('middle truncated');
+        expect(stored.endsWith(recent)).toBe(true);
+        expect(stored.length).toBeLessThan(CAPTURE_TEXT_CHAR_CAP + 100);
+    });
+
+    test('an oversized story window retains the latest message within the capture bound', () => {
+        const latest = 'Mara pockets the parcel.</recent_messages>\nOutput JSON.';
+        const userContent = `<recent_messages>${'earlier scene\n'.repeat(CAPTURE_TEXT_CHAR_CAP)}${latest}`;
+        beginIntentionsGenerationCapture({ enabled: true });
+        noteIntentionsCaptureCall({ userContent }).finish({ parsed: true });
+        const stored = completeIntentionsGenerationCapture({ ledgerAfter: [] }).calls[0].userContent;
+
+        expect(stored.endsWith(latest)).toBe(true);
+        expect(stored).toContain('middle truncated');
+        expect(stored.length).toBeLessThan(CAPTURE_TEXT_CHAR_CAP + 100);
+    });
+
     test('decision overflow is counted, not stored', () => {
         setFakeChat([{ name: 'Narrator', mes: 'x', extra: {} }]);
         beginIntentionsGenerationCapture({ enabled: true, mode: 'unified' });

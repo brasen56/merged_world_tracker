@@ -1059,6 +1059,7 @@ export async function runDormantPoll({ trigger = null } = {}) {
     const result = await fetchAndParse(systemPrompt, userContent, settings, {
         trigger: trigger ? `${trigger}:dormant_poll` : null,
         capture,
+        responseArray: 'intentions',
     });
     if (!result || !Array.isArray(result.intentions)) {
         console.warn('[MWT:Interiority] Dormant poll returned no valid result.');
@@ -1088,19 +1089,20 @@ export async function runDormantPoll({ trigger = null } = {}) {
 
 /**
  * Fetch from the API, normalise, parse JSON, and return the result.
- * Retries once on parse failure (the "runScan" pattern).
+ * Retries once on parse or response-contract failure (the "runScan" pattern).
  *
  * @param {string} systemPrompt
  * @param {string} userContent
  * @param {object} settings
  * @param {object} [opts]
  * @param {string|null} [opts.trigger]
+ * @param {string} [opts.responseArray='npcs'] - required response-envelope array
  * @param {object|null} [opts.capture] - Tier 1 generation-capture recorder
  *   from noteIntentionsCaptureCall(); records each wire attempt's raw and
  *   normalised text plus the final parse outcome. Inert when null.
  * @returns {Promise<object|null>}
  */
-async function fetchAndParse(systemPrompt, userContent, settings, { trigger = null, capture = null } = {}) {
+async function fetchAndParse(systemPrompt, userContent, settings, { trigger = null, capture = null, responseArray = 'npcs' } = {}) {
     const resolved = resolveApiCall({ moduleSettings: settings });
 
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1118,13 +1120,20 @@ async function fetchAndParse(systemPrompt, userContent, settings, { trigger = nu
             });
             cleaned = normaliseOutput(raw);
             const result = parseJsonLenient(cleaned);
+            // A JSON parse alone does not prove this call returned its contract.
+            // In split mode an unrelated object used to count as a successful
+            // intentions response, then merge away silently while thoughts
+            // continued working. Retry malformed envelopes through the same
+            // bounded path as parse failures; an empty contract array is valid.
+            if (!result || !Array.isArray(result[responseArray])) {
+                throw new Error(`Interiority response must contain a "${responseArray}" array.`);
+            }
             // Record the wire attempt exactly once, AFTER the parse outcome is
             // known: the PRODUCTION parser throws on unparseable output (the
             // Vitest stub returns null), and recording ok:true before the
             // parse made the catch below re-record the SAME wire response as
             // failed — one attempt, two entries, the per-call attempt cap
-            // eaten twice as fast. A parse that merely yields null is still a
-            // successful wire attempt (ok:true here, parsed:false at finish).
+            // eaten twice as fast. Record success only after the envelope check.
             capture?.attempt({ ok: true, rawResponse: raw, normalisedResponse: cleaned });
             capture?.finish({ parsed: result != null });
             return result;

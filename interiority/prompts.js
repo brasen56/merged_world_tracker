@@ -80,7 +80,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
         if (wantThoughts) {
             return 'You are an interiority engine for a role-playing story. You generate the private thoughts of NPCs (non-player characters).';
         }
-        return 'You are an intention tracker for a role-playing story. You track and update the hidden intentions of NPCs (non-player characters).';
+        return 'You are an interiority engine for a role-playing story. You generate grounded private intentions for NPCs (non-player characters) and evaluate their existing plans.';
     })();
 
     const contextLine = wantIntentions
@@ -110,6 +110,10 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
     }
 
     if (wantIntentions) {
+        // Split calls have no thoughts task to prompt creative inference. Merely
+        // calling this a tracker and listing rejection rules can turn the call
+        // into extraction, despite the later permission to keep decisions private.
+        rules.push(`${++n}. GENERATE AS WELL AS TRACK: For each NPC, consider what they might privately choose to do NEXT in response to a recent event they experienced or witnessed, using their dossier to ground the motive. You may create that unspoken future decision; it need not already appear in dialogue or narration. Private plans can be ordinary, caring, practical, or self-protective — they need not be deceptive or dramatic. Creating a grounded future decision is allowed; inventing past events, knowledge, or completed actions is not. Check each candidate against the rules below.`);
         rules.push(`${++n}. Evaluate each open intention from the <open_intentions> list. The DEFAULT outcome is "open" (carry forward) — only mark "executed" or "dropped" when there is clear, unmistakable evidence:`);
         rules.push(`   - "executed": ONLY if the recent messages show the NPC has ALREADY COMPLETED the action in full — either enacted in narrative prose or logged as completed in an Off-Screen Events module block (a details block titled "Off-Screen Events"). Discussing, planning, preparing for, deciding to do, or beginning the action is NOT execution. The action must be done.`);
         rules.push(`   - "dropped": ONLY if the NPC has EXPLICITLY abandoned or cancelled the intention (said so, or clearly changed their mind), OR if its user-defined expiresOn condition ("no longer plausible once …") is unmistakably satisfied by the recent events. When dropping for expiresOn, cite that condition in the reason. A changed situation, a delay, a new complication, or the trigger not arriving yet is NOT a drop unless it unmistakably satisfies expiresOn — the intention waits.`);
@@ -137,7 +141,7 @@ export function buildSystemPrompt({ thoughts = true, intentions = true } = {}) {
         rules.push(`   1. A recent event or circumstance in <recent_messages> must newly motivate the plan (a threat, an opportunity, a slight, a loss, a reveal, a changed situation). The decision may remain entirely private — the NPC need not announce, show, or decide anything on-screen.`);
         rules.push(`   2. Check the final message of the supplied window: if the candidate's action has already been carried out there (or earlier in the window), it is not a plan. Never re-propose a completed action.`);
         rules.push(`   3. Do not repeat an existing plan from <open_intentions> or <already_scheduled>, and do not repeat another proposal for the same NPC.`);
-        rules.push(`   <knowledge_entry> is BACKGROUND EVIDENCE ONLY: it may explain a motive, but never restate or paraphrase a plan-shaped line from it as a new intention. The mere passage of time (a deadline or festival drawing near) does not motivate a plan; already-scheduled intentions are woken by a separate system, never re-proposed here. A stale intention is worse than a missing one.`);
+        rules.push(`   <knowledge_entry> is BACKGROUND EVIDENCE ONLY: it may explain a motive, but never restate or paraphrase a plan-shaped line from it as a new intention. The mere passage of time (a deadline or festival drawing near) does not motivate a plan; already-scheduled intentions are woken by a separate system, never re-proposed here.`);
         rules.push(`   Example (one scene, final message: "the courier hands over a sealed parcel"): "hand over the sealed parcel" is NOT a new plan — that action is already done; "open the sealed parcel in private before dawn" CAN be one — a future action newly motivated by the delivery.`);
         rules.push(`   Propose at most two new intentions per NPC. Zero new intentions is a normal, expected result.`);
         rules.push(`${++n}. New intentions require BOTH a concrete "action" AND a specific "trigger" condition (the event or circumstance when the NPC will act). Vague triggers like "soon" or "when the time is right" are not acceptable — use concrete, verifiable conditions.`);

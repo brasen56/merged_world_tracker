@@ -88,6 +88,21 @@ function _capText(value) {
     return `${text.slice(0, CAPTURE_TEXT_CHAR_CAP)}\n…[truncated — ${text.length} chars total]`;
 }
 
+/** Keep the evidence window even when large dossiers fill the prompt's front. */
+function _capUserContent(value) {
+    const text = String(value ?? '');
+    if (text.length <= CAPTURE_TEXT_CHAR_CAP) return text;
+    const recentStart = text.lastIndexOf('<recent_messages>');
+    // The builders put recent messages at the end. Preserve that whole suffix
+    // when it fits; for an oversized window retain its newest messages. Other
+    // prompt shapes fall back to an even head/tail split.
+    const tailLength = recentStart >= 0
+        ? Math.min(text.length - recentStart, CAPTURE_TEXT_CHAR_CAP)
+        : Math.floor(CAPTURE_TEXT_CHAR_CAP / 2);
+    const headLength = CAPTURE_TEXT_CHAR_CAP - tailLength;
+    return `${text.slice(0, headLength)}\n…[middle truncated — ${text.length} chars total]\n${text.slice(-tailLength)}`;
+}
+
 /** Copy a ledger array into the bounded capture shape (no live references). */
 function _capLedger(entries) {
     const list = Array.isArray(entries) ? entries : [];
@@ -209,7 +224,7 @@ export function noteIntentionsCaptureCall({
         label: String(label || ''),
         npc: npc == null ? null : String(npc),
         systemPrompt: _capText(systemPrompt),
-        userContent: _capText(userContent),
+        userContent: _capUserContent(userContent),
         attempts: [],
         parsed: null,
         cancelled: false,

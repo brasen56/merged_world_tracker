@@ -40,7 +40,10 @@ beforeEach(() => {
     // fetchFn — so `trigger` is observable exactly where core/api.js reads it.
     setFakeApi(async (req) => {
         apiCalls.push(req);
-        return '{"npcs": []}';
+        // Each call must satisfy its own envelope; an invalid poll response
+        // now correctly retries and would obscure the trigger-count assertion.
+        return req.userContent.includes('<dormant_intentions>')
+            ? '{"intentions": []}' : '{"npcs": []}';
     });
     globalThis.document = {
         dispatchEvent: vi.fn(),
