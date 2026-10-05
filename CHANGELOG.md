@@ -12,6 +12,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.10.1]
+
+### Fixed
+
+- **Switching detail level now converts every entry, not just the changed
+  ones.** After switching to Standard, a character with no new events kept
+  all six Detailed fields until the entry was deleted by hand. The prompt
+  said "update only what has actually changed", so the model copied the
+  unchanged block forward. The first refresh after a switch now tells the
+  model the document was written for another level and must be rewritten,
+  not copied. It also says how to convert the character fields (Notable
+  status and Key constraint → Condition, and so on). Section Regenerate
+  sends the same note.
+- **Section limits now apply.** Testers still saw ten Pending bullets (four
+  of them due "Tonight") and seven Active Threads on every level. Each limit
+  ended with "unless more are necessary to preserve live obligations", and
+  the overflow rule forbade dropping any obligation, so no limit could ever
+  apply. Limits now count bullets. Entries that share a due time, thread, or
+  character are merged into one bullet; a section may go over its limit
+  only when every remaining bullet is a separate live obligation. Pending
+  is described as "not a to-do list".
+- **Item lists are shorter.** The 2.11.0 item rule listed qualifying
+  categories (phones, documents, removed clothing), and models treated that
+  list as permission: "Nokia (glovebox)", "paperwork sack", "shirt removed
+  (over chair)". An item is now listed only while the story is using it,
+  named in one to three words, with no owner or location unless that
+  matters. Items that are put away stay off the list, and each level caps
+  items per character (Minimal 2, Standard 3, Detailed 5).
+- **Documents saved before detail levels now count as Detailed.** Choosing
+  Minimal or Standard rebuilds them once, where 2.11.0 let a delta patch
+  them indefinitely in the old format. They still need no rebuild on
+  Detailed, the default.
+
+### Changed
+
+- The generation prompt is about 180 tokens longer per call (~1,920 tokens
+  on Detailed with hooks on). This is the cost of the fixes above; the
+  narrator injection, which they shrink, does not grow.
+
 ## [2.11.0]
 
 ### Added

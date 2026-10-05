@@ -47,11 +47,9 @@ import {
 } from './injection.js';
 import { refreshWorldState, refreshWorldStateDelta, restartAutoSaveTimer } from './refresh.js';
 import { regenerateSection } from './sections.js';
-import { HOOK_SECTIONS, detailLevelIncludesSection } from './prompts.js';
+import { HOOK_SECTIONS, DETAIL_LEVEL_NAMES, detailLevelIncludesSection } from './prompts.js';
 import { buildProvenance, getStalenessReport, purgeStaleEntries } from './provenance.js';
 import { deriveDocumentStatus, getDeltaReconcileEvery, getDeltaStaleAfterMsgs } from './delta.js';
-
-const DETAIL_LEVEL_LABELS = Object.freeze({ minimal: 'Minimal', standard: 'Standard', detailed: 'Detailed' });
 
 // ─── Document status chip (TODO §3-F / PI §3) ────────────────────────────────
 // Surfaces whether the document is fully reconciled / delta-updated / manually
@@ -682,7 +680,7 @@ export function render() {
                 <label class="mwt-label" for="ws-detail-level">Detail Level</label>
                 <div>
                     <select id="ws-detail-level" class="mwt-input" style="max-width:180px"${customPromptActive ? ' disabled' : ''}>
-                        ${DETAIL_LEVELS.map(level => `<option value="${level}"${level === detailLevel ? ' selected' : ''}>${DETAIL_LEVEL_LABELS[level]}</option>`).join('')}
+                        ${DETAIL_LEVELS.map(level => `<option value="${level}"${level === detailLevel ? ' selected' : ''}>${DETAIL_LEVEL_NAMES[level]}</option>`).join('')}
                     </select>
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0"><b>Minimal:</b> one line per character and no Recent Changes — the smallest injection. <b>Standard:</b> short character blocks (mood, goal, condition, items) and tighter section limits. <b>Detailed:</b> full six-field character blocks. Every level keeps injuries, possessions, and open obligations. A change applies from the next full 🔄 Refresh, which rebuilds the current document in the new format (⚡ Delta waits for it). Not used while a Custom Prompt is set.</p>
                 </div>

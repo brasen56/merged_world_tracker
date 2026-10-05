@@ -16,7 +16,7 @@ import { estimateTokens, resetCoreStubs, setFakeApi, setFakeChat } from './stubs
 import { _resetEpoch } from '../core/scope.js';
 import { validateWorldStateDocument } from '../core/world_state_document.js';
 import {
-    buildDefaultSystemPrompt, DEFAULT_SYSTEM_PROMPT, HOOK_SECTIONS, detailLevelIncludesSection,
+    buildDefaultSystemPrompt, buildFormatChangeNote, DEFAULT_SYSTEM_PROMPT, HOOK_SECTIONS, detailLevelIncludesSection,
 } from '../world_state/prompts.js';
 import { getPromptProfile, getSettings, saveSettings } from '../world_state/settings.js';
 import { getWorldStateText, setWorldStateData, state } from '../world_state/data.js';
@@ -24,6 +24,7 @@ import { refreshWorldState, refreshWorldStateDelta } from '../world_state/refres
 import { regenerateSection } from '../world_state/sections.js';
 import {
     buildPartialRefreshStatus, buildRefreshStatusDelta, DeltaPatchError, getDeltaStatus, planAutoRefresh,
+    recordedPromptProfile,
 } from '../world_state/delta.js';
 
 const SCENE = [
@@ -64,6 +65,19 @@ const STANDARD_DOC = [
     '  - Items: the ledger',
 ].join('\n');
 
+const DETAILED_DOC = [
+    SCENE,
+    '',
+    '## Key Character States',
+    '- **Alex**:',
+    '  - Mood: tense',
+    '  - Current goal: reach the drop before midnight',
+    '  - Notable status: sprained ankle',
+    '  - Immediate pressure: curfew is close',
+    '  - Key constraint: cannot run',
+    '  - Worn / Significant Items: the ledger',
+].join('\n');
+
 function makeChat(n = 6) {
     return Array.from({ length: n }, (_, i) => ({
         id: `m${i}`,
@@ -100,17 +114,60 @@ describe('detail level prompt templates', () => {
         expect(prompt).toContain('copy its value EXACTLY, byte-for-byte');
         // Smaller levels repeat less; they never forget more.
         expect(prompt).toContain('A passed deadline makes an existing obligation overdue');
-        expect(prompt).toContain('Injuries, impairments, possessions, meaningful negative states, and other persistent facts remain');
+        expect(prompt).toContain('Injuries, impairments, meaningful negative states, and other persistent facts remain until a change is established. Items follow the item rule.');
         expect(prompt).toContain('Preserve meaningful negative facts such as "unarmed"');
         expect(prompt).toContain('Each fact has ONE home');
         expect(prompt).toContain('Route each fact to the FIRST home that fits');
-        expect(prompt).toContain('Never drop an unresolved obligation, injury, possession, or meaningful negative fact just to fit.');
-        expect(prompt).toContain('Item rule: list an item only if forgetting it would cause a continuity error');
-        expect(prompt).toContain('Never list ordinary clothing, accessories, or incidental props.');
         expect(prompt).toContain('Do NOT invent anything not supported');
+        expect(prompt).toContain('Pending is not a to-do list');
         for (const section of ['Off-Screen', 'Pending', 'Active Threads', 'Unresolved Threads', 'World Pressures', 'Key Character States']) {
             expect(prompt).toContain(`## ${section}`);
         }
+    });
+
+    // Tester report (2.11.0): limits were ignored — 10 Pending bullets, four of
+    // them "Tonight" — because every limit ended "unless more are necessary to
+    // preserve live obligations" and the overflow rule forbade dropping any
+    // obligation. Limits now count bullets and merging is the way to fit.
+    test.each(['minimal', 'standard', 'detailed'])('%s limits bind by merging, never by dropping obligations', (level) => {
+        const prompt = buildDefaultSystemPrompt('off', level);
+
+        expect(prompt).not.toContain('unless more are necessary to preserve live obligations');
+        expect(prompt).toContain('Limits count bullets, not facts.');
+        expect(prompt).toContain('merge entries that share a due time, thread, or character into one bullet ("- Tonight: deliver the ledger; call Mara back")');
+        expect(prompt).toContain('Exceed a limit only when every remaining bullet is a separate live obligation.');
+        expect(prompt).toContain('Merging keeps the fact. Never drop an unresolved obligation, injury, or meaningful negative fact just to fit.');
+    });
+
+    // Tester report (2.11.0): "tungsten chain; steel bracelet; Nokia
+    // (glovebox); paperwork sack; shirt removed (over chair)". The old rule's
+    // category list (phones, documents, removed clothing) read as a whitelist.
+    test.each(['minimal', 'standard', 'detailed'])('%s item rule tests use, not category', (level) => {
+        const prompt = buildDefaultSystemPrompt('off', level);
+
+        expect(prompt).toContain('Item rule: list an item only while the story is using it');
+        expect(prompt).toContain('Being a phone, a document, a bag, jewelry, or clothing is not by itself a reason to list it.');
+        expect(prompt).toContain('add an owner or location only when that changes what happens next');
+        expect(prompt).toContain('Items put away (in a car, a bag, another room) stay off the list');
+        expect(prompt).not.toContain('clothing that was removed, damaged, or made plot-relevant');
+    });
+
+    // Tester report (2.11.0): after switching to Standard, Alex kept every
+    // Detailed field until the entry was deleted by hand — "Update only what
+    // has actually changed" licensed copying an unchanged block forward.
+    test.each(['minimal', 'standard', 'detailed'])('%s treats the previous state as facts, not a template', (level) => {
+        const prompt = buildDefaultSystemPrompt('off', level);
+
+        expect(prompt).toContain('Update only what has actually changed — except format.');
+        expect(prompt).toContain('The Previous World State is a source of facts, not a template');
+    });
+
+    test.each([
+        ['minimal', '[condition and limits; at most 2 items under the item rule;'],
+        ['standard', '  - Items: [at most 3, under the item rule]'],
+        ['detailed', '  - Worn / Significant Items: [at most 5, under the item rule]'],
+    ])('%s caps items per character', (level, field) => {
+        expect(buildDefaultSystemPrompt('off', level)).toContain(field);
     });
 
     test.each(['minimal', 'standard', 'detailed'])('%s adds hook sections only when hook mode is on', (level) => {
@@ -128,7 +185,7 @@ describe('detail level prompt templates', () => {
 
         expect(prompt).not.toContain('## Recent Changes');
         expect(prompt).not.toContain('Recent Changes records');
-        expect(prompt).toContain('- **Name**: [condition and limits; continuity-critical items;');
+        expect(prompt).toContain('- **Name**: [condition and limits;');
         expect(prompt).toContain('write ONE line per character');
         expect(prompt).toContain('Omit routine mood, posture, clothing, and inferred goals.');
         expect(prompt).toContain('Minimal means less repetition, not less memory');
@@ -143,7 +200,7 @@ describe('detail level prompt templates', () => {
         expect(prompt).toContain('  - Mood: [one or two words]');
         expect(prompt).toContain('  - Goal: [what they want right now, under 10 words]');
         expect(prompt).toContain('  - Condition: [injuries, impairments, restraints, or other hard limits');
-        expect(prompt).toContain('  - Items: [up to 4 continuity-critical items');
+        expect(prompt).toContain('  - Items: [at most 3');
         expect(prompt).toContain('Target roughly 400–550 words');
         for (const dropped of ['Notable status:', 'Immediate pressure:', 'Key constraint:', 'Worn / Significant Items:']) {
             expect(prompt).not.toContain(dropped);
@@ -176,6 +233,20 @@ describe('detail level prompt templates', () => {
         expect(detailLevelIncludesSection('standard', 'Recent Changes')).toBe(true);
         expect(detailLevelIncludesSection('detailed', 'Recent Changes')).toBe(true);
         expect(detailLevelIncludesSection(undefined, 'Recent Changes')).toBe(true);
+    });
+
+    test('the format-change note names the conversion for the target level', () => {
+        expect(buildFormatChangeNote('standard', 'standard')).toBe('');
+        expect(buildFormatChangeNote('minimal', 'custom')).toBe('');
+        expect(buildFormatChangeNote(null, 'minimal')).toBe('');
+
+        const toStandard = buildFormatChangeNote('detailed', 'standard');
+        expect(toStandard).toContain('written for the Detailed detail level; this generation uses the Standard detail level');
+        expect(toStandard).toContain('including entries where nothing happened, which must be rewritten, not copied');
+        expect(toStandard).toContain('Notable status and Key constraint → Condition; Current goal → Goal; Worn / Significant Items → Items');
+        expect(buildFormatChangeNote('standard', 'minimal')).toContain('Collapse each character block into ONE line');
+        expect(buildFormatChangeNote('minimal', 'detailed')).toContain('do not invent detail to fill a field');
+        expect(buildFormatChangeNote('custom', 'standard')).toContain('written for a custom prompt');
     });
 
     test('getPromptProfile reports the level, or custom when a Custom Prompt is set', () => {
@@ -312,17 +383,68 @@ describe('detail levels across generation paths', () => {
         expect(planAutoRefresh()).toEqual({ kind: 'delta', reason: 'scheduled' });
     });
 
-    test('a status written before detail levels existed never forces a full refresh', () => {
-        saveSettings({ deltaMode: true, detailLevel: 'minimal' });
-        const legacy = buildRefreshStatusDelta('full', STANDARD_DOC, {}, 2);
+    test('a document from before detail levels reads as Detailed (or custom under a Custom Prompt)', () => {
+        saveSettings({ deltaMode: true, detailLevel: 'detailed' });
+        const legacy = buildRefreshStatusDelta('full', DETAILED_DOC, {}, 2);
         delete legacy.promptProfile;
-        setWorldStateData({ text: STANDARD_DOC, deltaStatus: legacy });
+        setWorldStateData({ text: DETAILED_DOC, deltaStatus: legacy });
 
         expect(getDeltaStatus().promptProfile).toBeNull();
+        expect(recordedPromptProfile()).toBe('detailed');
+        // On the default level there is nothing to rebuild…
+        expect(planAutoRefresh()).toEqual({ kind: 'delta', reason: 'scheduled' });
+        // …but picking a smaller level must rebuild it, or a delta would
+        // patch Detailed-shaped blocks forever.
+        saveSettings({ detailLevel: 'minimal' });
+        expect(planAutoRefresh()).toEqual({ kind: 'full', reason: 'detail-level-changed' });
+        // A Custom Prompt user's legacy document already follows their prompt.
+        saveSettings({ customPrompt: 'My format.' });
+        expect(recordedPromptProfile()).toBe('custom');
         expect(planAutoRefresh()).toEqual({ kind: 'delta', reason: 'scheduled' });
 
         setWorldStateData({ deltaStatus: { ...legacy, promptProfile: 'enormous' } });
         expect(getDeltaStatus().promptProfile).toBeNull();
+    });
+
+    // The reported case: a Standard refresh over a Detailed document kept
+    // Alex's six fields because nothing about Alex had changed.
+    test('a full refresh after a level switch tells every attempt to convert, not copy', async () => {
+        saveSettings({ detailLevel: 'standard' });
+        seedFullRefresh(DETAILED_DOC, 'detailed');
+        // A rejected first attempt proves the retry carries the note too.
+        response = () => (requests.length === 1 ? `${STANDARD_DOC}\nAlex left. The ledger stayed.` : STANDARD_DOC);
+
+        await refreshWorldState();
+
+        expect(requests).toHaveLength(2);
+        for (const request of requests) {
+            expect(request.userContent).toContain('[FORMAT CHANGE: The existing world state was written for the Detailed detail level; this generation uses the Standard detail level.');
+            expect(request.userContent).toContain('Notable status and Key constraint → Condition');
+        }
+        expect(getDeltaStatus().promptProfile).toBe('standard');
+    });
+
+    test('no conversion note on a first generation or once the format matches', async () => {
+        saveSettings({ detailLevel: 'minimal' });
+        response = MINIMAL_DOC;
+
+        await refreshWorldState(); // first run — nothing to convert
+        await refreshWorldState(); // recorded as minimal now
+
+        expect(requests).toHaveLength(2);
+        for (const request of requests) expect(request.userContent).not.toContain('FORMAT CHANGE');
+    });
+
+    test('regenerating a section after a level switch carries the conversion note', async () => {
+        saveSettings({ detailLevel: 'standard' });
+        seedFullRefresh(DETAILED_DOC, 'detailed');
+        response = '## Key Character States\n- **Alex**:\n  - Condition: Sprained ankle; cannot run.';
+
+        await regenerateSection('Key Character States');
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0].userContent).toContain('[FORMAT CHANGE:');
+        expect(requests[0].userContent).toContain('Notable status and Key constraint → Condition');
     });
 
     test('a manual ⚡ Delta after a format change is declined without spending a call', async () => {

@@ -23,7 +23,7 @@ import {
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 
-import { buildDefaultSystemPrompt, stripHookSections } from './prompts.js';
+import { buildDefaultSystemPrompt, buildFormatChangeNote, stripHookSections } from './prompts.js';
 import {
     getSettings, hasValidSettings, DEFAULT_AUTO_SAVE_INTERVAL, getPinnedEntities,
     usesBuiltInPlotSeedContract, getPromptProfile,
@@ -42,7 +42,7 @@ import {
     DeltaPatchError, planAutoRefresh, getDeltaStatus, buildRefreshStatusDelta,
     buildPartialRefreshStatus, digestText, isDeltaModeEnabled,
     buildDeltaSystemPrompt, buildDeltaUserMessage, parseDeltaPatch, applyDeltaPatch,
-    bodyHasSectionHeader,
+    bodyHasSectionHeader, recordedPromptProfile, promptFormatChanged,
 } from './delta.js';
 
 // ─── Message scan helpers ────────────────────────────────────────────────────
@@ -255,8 +255,11 @@ const PREV_STATE_BUDGET = 30000;
  *  validation retry, grounding retry) and the grounding gate all see the
  *  EXACT evidence the model was given — never a re-read window that messages
  *  arriving mid-await may have shifted (the frozen-evidence rule).
+ * @param {string} formatChangeNote — prompts.js buildFormatChangeNote() output,
+ *  frozen by the caller with the system prompt. Skipped on a first run: there
+ *  is no earlier document to convert.
  */
-function buildUserMessage(scanText, reminderReason = '') {
+function buildUserMessage(scanText, reminderReason = '', formatChangeNote = '') {
     const settings = getSettings();
     const stored = getWorldStateText();
     const projected = settings.hookMode === 'off' ? stripHookSections(stored) : stored;
@@ -276,6 +279,9 @@ function buildUserMessage(scanText, reminderReason = '') {
     ];
     if (isFirstRun) {
         lines.push('This is a NEW document — extract the current state of the world from the recent messages. Do NOT narrate, summarize the story, or continue the roleplay.');
+    } else if (formatChangeNote) {
+        lines.push('');
+        lines.push(formatChangeNote);
     }
     if (reminderReason) {
         lines.push('');
@@ -520,6 +526,9 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         // write: a detail-level change saved mid-call must not be stamped onto
         // a document the old prompt produced.
         const promptProfile = getPromptProfile();
+        // Frozen with the prompt for the same reason: every attempt (first,
+        // validation retry, grounding retry) must get the same instructions.
+        const formatChangeNote = buildFormatChangeNote(recordedPromptProfile(), promptProfile);
         // The scan window for THIS run, frozen before the first await:
         //   - a catch-up pass scans exactly the chunk its loop sized, and
         //     stamps the watermark where that chunk ends;
@@ -562,7 +571,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         const _wsApi1 = resolveApiCall({ moduleSettings: getSettings() });
         let result = await _wsApi1.fetchFn({
             systemPrompt,
-            userContent: buildUserMessage(scanWindowText),
+            userContent: buildUserMessage(scanWindowText, '', formatChangeNote),
             settings: _wsApi1.settings,
             // Coordinator classification (TODO §1): a scheduled refresh is
             // background work the user-generation policy may hold; a button
@@ -580,7 +589,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             const _wsApi2 = resolveApiCall({ moduleSettings: getSettings() });
             result = await _wsApi2.fetchFn({
                 systemPrompt,
-                userContent: buildUserMessage(scanWindowText, validation.reason),
+                userContent: buildUserMessage(scanWindowText, validation.reason, formatChangeNote),
                 settings: _wsApi2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
             });
@@ -631,7 +640,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                 const _wsApi3 = resolveApiCall({ moduleSettings: getSettings() });
                 result = await _wsApi3.fetchFn({
                     systemPrompt,
-                    userContent: buildUserMessage(scanWindowText, grounding.reason),
+                    userContent: buildUserMessage(scanWindowText, grounding.reason, formatChangeNote),
                     settings: _wsApi3.settings,
                     trigger: isAuto ? 'auto' : 'manual',
                 });
@@ -829,9 +838,9 @@ export async function refreshWorldStateDelta(isAuto = false) {
     // Detailed → Minimal would keep the long character blocks indefinitely.
     // The full refresh rebuilds the whole document in the new format — same
     // policy as planAutoRefresh's 'detail-level-changed'. A status with no
-    // recorded profile (written before detail levels existed) never blocks.
-    if (baselineStatus.promptProfile && baselineStatus.promptProfile !== getPromptProfile()) {
-        console.warn(`[MWT:WorldState] Delta declined — the document was built with the "${baselineStatus.promptProfile}" prompt but "${getPromptProfile()}" is now selected; a full refresh must rebuild it.`);
+    // recorded profile reads as Detailed (recordedPromptProfile).
+    if (promptFormatChanged(baselineStatus)) {
+        console.warn(`[MWT:WorldState] Delta declined — the document was built with the "${recordedPromptProfile(baselineStatus)}" prompt but "${getPromptProfile()}" is now selected; a full refresh must rebuild it.`);
         if (isAuto) return refreshWorldState(isAuto);
         throw new DeltaPatchError('The World State detail level changed since the last full refresh — run a full Refresh to rebuild the document in the new format.');
     }

@@ -51,8 +51,11 @@ const CHAT = Array.from({ length: 10 }, (_, i) => ({
 // 1744 after the detail levels (2026-10-04): the shared one-home routing, item
 // rule, and overflow priority cost ~240 prompt tokens per call, paid to shrink
 // the saved document — and so the narrator injection on every turn.
+// 1921 after the first tester round (2026-10-05): merge-to-fit limits, the
+// use-based item rule with per-level caps, and "facts, not a template" —
+// each answering a reported failure, not speculative tuning.
 const TOKEN_BASELINES = Object.freeze({
-    defaultSystemPrompt: 1744,
+    defaultSystemPrompt: 1921,
     customSystemPrompt: 16,
     hookBearingStored: 124,
     hookOffInjected: 122,

@@ -78,9 +78,10 @@ export function getDeltaStaleAfterMsgs() {
 //   promptProfile      — the detail level ('minimal' | 'standard' | 'detailed')
 //                        or 'custom' the last FULL refresh was generated with;
 //                        null when unknown (written before detail levels
-//                        existed). Partial updates carry it forward unchanged.
+//                        existed — see recordedPromptProfile for how that
+//                        reads). Partial updates carry it forward unchanged.
 //                        Added without a version bump: a missing value
-//                        normalizes to null, which never forces a full refresh.
+//                        normalizes to null.
 
 const DELTA_STATUS_VERSION = 1;
 
@@ -115,6 +116,24 @@ function normalizeDeltaStatus(raw) {
 
 function normalizePromptProfile(value) {
     return PROMPT_PROFILES.includes(value) ? value : null;
+}
+
+/**
+ * The format the stored document was written in. A status from before detail
+ * levels has no record: the built-in prompt then was today's Detailed, and a
+ * Custom Prompt user's document already follows their own prompt — so an
+ * unrecorded document reads as Detailed, or as custom while a Custom Prompt is
+ * set. A legacy document therefore needs no rebuild on the default level, and
+ * gets one when the user picks Minimal or Standard.
+ */
+export function recordedPromptProfile(status = getDeltaStatus()) {
+    if (status.promptProfile) return status.promptProfile;
+    return getPromptProfile() === 'custom' ? 'custom' : 'detailed';
+}
+
+/** Was the stored document written in a different format than the one selected now? */
+export function promptFormatChanged(status = getDeltaStatus()) {
+    return recordedPromptProfile(status) !== getPromptProfile();
 }
 
 export function getDeltaStatus() {
@@ -258,7 +277,7 @@ export function planAutoRefresh() {
     const st = getDeltaStatus();
     if (!st.lastRefreshDigest) return { kind: 'full', reason: 'no-refresh-baseline' };
     if (digestText(text) !== st.lastRefreshDigest) return { kind: 'full', reason: 'manual-edits-since-refresh' };
-    if (st.promptProfile && st.promptProfile !== getPromptProfile()) return { kind: 'full', reason: 'detail-level-changed' };
+    if (promptFormatChanged(st)) return { kind: 'full', reason: 'detail-level-changed' };
     if (st.deltasSinceFull >= getDeltaReconcileEvery()) return { kind: 'full', reason: 'reconciliation-due' };
     return { kind: 'delta', reason: 'scheduled' };
 }

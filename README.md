@@ -98,7 +98,7 @@ Maintains a live, structured document describing the current state of the rolepl
   - **Standard** — Short character blocks (Mood, Goal, Condition, Items) and tighter section limits. Target 400–550 words
   - **Detailed** (default) — Full six-field character blocks (mood, goal, status, pressure, constraint, items). Target 600–800 words
 
-  Every level keeps injuries, possessions, debts, and open obligations. Each fact is stored in one section only, and items are listed only when forgetting them would cause a continuity error. After a change, the next full 🔄 Refresh rebuilds the document in the new format; ⚡ Delta waits until it has. A Custom Prompt replaces all three levels.
+  Every level keeps injuries, debts, and open obligations; when a section is over its limit, entries are merged (for example, everything due "Tonight" in one bullet) rather than dropped. Each fact is stored in one section only, and items are listed only while the story is using them (at most 2 / 3 / 5 per character). After a change, the next full 🔄 Refresh rewrites the whole document in the new format, including entries where nothing happened; ⚡ Delta waits until it has. A Custom Prompt replaces all three levels.
 - **Plot Seed Hook Modes** — Control how aggressively the LLM introduces narrative hooks:
   - **Off** — Plot Seeds are not injected into the prompt at all
   - **Passive** — Hooks are available but the LLM decides when to use them

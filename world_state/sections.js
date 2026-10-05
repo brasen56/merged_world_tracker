@@ -19,9 +19,11 @@ import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 
 import {
-    buildDefaultSystemPrompt, HOOK_SECTIONS, stripHookSections, detailLevelIncludesSection,
+    buildDefaultSystemPrompt, buildFormatChangeNote, HOOK_SECTIONS, stripHookSections, detailLevelIncludesSection,
 } from './prompts.js';
-import { getSettings, hasValidSettings, getPinnedEntities, usesBuiltInPlotSeedContract } from './settings.js';
+import {
+    getSettings, hasValidSettings, getPinnedEntities, usesBuiltInPlotSeedContract, getPromptProfile,
+} from './settings.js';
 import {
     state, SECTIONS, VARIETY_LABELS,
     getWorldStateText, commitHistorySnapshot, setProvenance,
@@ -30,7 +32,7 @@ import {
 import { applyWorldStateInjection } from './injection.js';
 import { getRecentMessagesForScan } from './refresh.js';
 import { buildProvenance, groundingGate, collectRegistryAliasGroups } from './provenance.js';
-import { getDeltaStatus, buildPartialRefreshStatus } from './delta.js';
+import { getDeltaStatus, buildPartialRefreshStatus, recordedPromptProfile } from './delta.js';
 import { settleSceneAnchorSync } from './scene.js';
 
 export { extractOnlySection, replaceSection };
@@ -93,11 +95,11 @@ const SECTION_CONTEXT_BUDGET = 30000;
  *  model was given — never a re-read window that messages arriving mid-await
  *  may have shifted (the frozen-evidence rule, same fix as the delta/full paths).
  */
-function buildSectionUserMessage(sectionName, scanText, stored = getWorldStateText()) {
+function buildSectionUserMessage(sectionName, scanText, stored = getWorldStateText(), formatChangeNote = '') {
     const projected = getSettings().hookMode === 'off' ? stripHookSections(stored) : stored;
     const fullState = truncateText(projected.trim() || 'None yet.', SECTION_CONTEXT_BUDGET);
     const recent = scanText || 'No recent messages.';
-    return [
+    const lines = [
         '### Full Current World State (for context only — do not include in output)',
         fullState,
         '',
@@ -107,7 +109,11 @@ function buildSectionUserMessage(sectionName, scanText, stored = getWorldStateTe
         '='.repeat(60),
         `Output ONLY the regenerated "## ${sectionName}" section now.`,
         `Begin with the header "## ${sectionName}" — nothing before it.`,
-    ].join('\n');
+    ];
+    // Same copy-forward risk as the full refresh: the old block is right
+    // there in the context, so a regenerated section would keep its fields.
+    if (formatChangeNote && projected.trim()) lines.push('', formatChangeNote);
+    return lines.join('\n');
 }
 
 function validateSectionOutput(text, sectionName) {
@@ -212,6 +218,7 @@ export async function regenerateSection(sectionName, variety = 2) {
         // the API await could lose the oldest part of this window to messages
         // that arrived meanwhile, stripping names the model legitimately used.
         const scanWindowText = getRecentMessagesForScan();
+        const formatChangeNote = buildFormatChangeNote(recordedPromptProfile(), getPromptProfile());
 
         // TODO §1: the grounding gate's alias consultation (same as the full
         // refresh path), collected with the other pre-flight captures — ABOVE
@@ -230,7 +237,7 @@ export async function regenerateSection(sectionName, variety = 2) {
         const _wsApi3 = resolveApiCall({ moduleSettings: sectionSettings });
         const raw = await _wsApi3.fetchFn({
             systemPrompt: buildSectionSystemPrompt(sectionName, effectiveVariety),
-            userContent: buildSectionUserMessage(sectionName, scanWindowText, promptDocument),
+            userContent: buildSectionUserMessage(sectionName, scanWindowText, promptDocument, formatChangeNote),
             settings: _wsApi3.settings,
             retries: 1,
         });
@@ -290,7 +297,7 @@ export async function regenerateSection(sectionName, variety = 2) {
                 const _wsApiRetry = resolveApiCall({ moduleSettings: sectionSettings });
                 const rawRetry = await _wsApiRetry.fetchFn({
                     systemPrompt: buildSectionSystemPrompt(sectionName, effectiveVariety),
-                    userContent: buildSectionUserMessage(sectionName, scanWindowText, promptDocument) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
+                    userContent: buildSectionUserMessage(sectionName, scanWindowText, promptDocument, formatChangeNote) + `\n\n[REMINDER: ${grounding.reason}. Output ONLY the section with grounded names.]`,
                     settings: _wsApiRetry.settings,
                     retries: 1,
                 });
