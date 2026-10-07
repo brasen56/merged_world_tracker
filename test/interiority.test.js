@@ -1001,4 +1001,17 @@ describe('off-screen events are sealed to the acting NPC and named witnesses', (
         expect(INJECTION_HEADER).toContain('Never execute invisibly');
         expect(INJECTION_HEADER).toContain('demanded again next turn');
     });
+
+    test('a departure that would cut off a conversation is begun now and finished next turn', () => {
+        // NPCs answered a thank-you and walked out in the same response, so
+        // the player never got to reply. Only that case is carved out: every
+        // other met intention still completes this turn, and beginning the
+        // departure counts as acting, so "never defer" still holds.
+        expect(INJECTION_HEADER).toContain('MUST complete the action this turn');
+        expect(INJECTION_HEADER).toContain('a conversation the player character has not ended');
+        expect(INJECTION_HEADER).toContain('the response ends while they are still present');
+        expect(INJECTION_HEADER).toContain('next turn they finish it');
+        expect(INJECTION_HEADER).toContain('not deferring');
+        expect(INJECTION_HEADER).toContain('never defer');
+    });
 });

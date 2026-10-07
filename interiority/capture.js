@@ -276,6 +276,12 @@ export function noteIntentionsCaptureDecision(decision = {}) {
         id: decision.id == null ? null : String(decision.id),
         action: decision.action == null ? null : _capText(decision.action).slice(0, 500),
         trigger: decision.trigger == null ? null : _capText(decision.trigger).slice(0, 500),
+        // New-intention evidence gate: the quote the model gave and what the
+        // check concluded ('ok' | 'missing' | 'not-found' | 'no-window'), so a
+        // report shows why a proposal was kept — 'no-window' means the check
+        // had nothing to compare against and failed open.
+        evidence: decision.evidence == null ? null : _capText(decision.evidence).slice(0, 500),
+        evidenceCheck: decision.evidenceCheck == null ? null : String(decision.evidenceCheck),
     });
 }
 

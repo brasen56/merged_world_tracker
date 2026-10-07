@@ -1842,10 +1842,11 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 // consumes another candidate's slot.
                 const evidence = String(ni.evidence || '').trim();
                 const evidenceVerdict = judgeIntentionEvidence(evidence, evidenceWindow, settings.requireIntentionEvidence === true);
+                const evidenceCheck = !evidenceWindow ? 'no-window' : evidenceVerdict === 'ok' && !evidence ? 'omitted' : evidenceVerdict;
                 if (evidenceVerdict !== 'ok') {
                     const reason = evidenceVerdict === 'missing' ? 'missing-evidence' : 'evidence-not-in-window';
                     console.log(`[MWT:Interiority] ${name}: rejecting new intention "${action.slice(0, 60)}" (${reason}).`);
-                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason });
+                    noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', action, trigger, outcome: 'rejected', reason, evidence, evidenceCheck });
                     continue;
                 }
 
@@ -1946,7 +1947,7 @@ export async function validateAndApply(result, roster, msgIdx, scopeToken, preTu
                 acceptedNewCount += 1;
                 // Lifecycle v2 (spec §5): arm this NPC's proposal cooldown.
                 noteProposalAccepted(name);
-                noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', id: created.id, action, trigger, outcome: 'accepted' });
+                noteIntentionsCaptureDecision({ npc: name, kind: 'new_intention', id: created.id, action, trigger, outcome: 'accepted', evidence, evidenceCheck });
                 ledgerChanged = true;
             }
         }

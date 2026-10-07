@@ -213,7 +213,7 @@ Generates NPC private thoughts and a persistent **intentions ledger** in a separ
 - **Out-of-Band Generation** — NPC thoughts are generated in a separate API call with restricted context, physically isolated from the narration pass
 - **Persistent Intentions Ledger** — Open intentions survive any number of turns; each entry has an action, trigger condition, and in-world "since" timestamp
 - **Private Follow-Through** — Plans can grow from ongoing motives, current needs, and opportunities supported by the recent scene. A new threat or reveal is not required; old dossier plans alone are insufficient, and completed actions and public appointments are excluded
-- **Execution Demand Injection** — When an intention's trigger is met, the ledger injects a mechanical directive (`<mwt_npc_intentions>`) that the narrator must execute on-screen
+- **Execution Demand Injection** — When an intention's trigger is met, the ledger injects a mechanical directive (`<mwt_npc_intentions>`) that the narrator must execute on-screen. A departure that would end a conversation the player hasn't ended is started on-screen and finished the next turn, so the player can still respond
 - **Batched Mode (default)** — One API call per turn covers all scene NPCs simultaneously
 - **Strict Mode (optional)** — One call per NPC for true knowledge partition (NPC A's dossier secrets never co-resident with NPC B's thoughts)
 - **Auto or Manual** — Generate automatically on every AI message, or trigger per-message with a 💭 button

@@ -12,6 +12,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.11.4]
+
+### Changed
+
+- **New intentions must quote their evidence.** Small local models (seen with a
+  4B) returned the maximum number of intentions for every NPC, mostly restating
+  dossier "Current Agenda" lines. The intentions contract now has an `evidence`
+  field — a short verbatim quote from the recent messages — and a quote that
+  cannot be found in the message window is rejected (reason
+  `evidence-not-in-window`, visible in intentions diagnostics). Proposals with no
+  quote are still accepted by default so models that omit the field are
+  unaffected; a new **Require a quoted line** setting also rejects those.
+- The prompt no longer states a numeric cap ("at most two"), which small models
+  treated as a target; it asks for restraint instead. **Max New/NPC** remains the
+  enforced limit. `wake_hint` is now documented as scheduled-only.
+- **Departures no longer cut the player off.** NPCs would answer a thank-you
+  and walk out in the same response when a met intention sent them away,
+  leaving the player no chance to reply. When an intention would take a
+  present NPC out of a conversation the player hasn't ended, the narrator
+  header (`interiority/prompts.js` `INJECTION_HEADER`) now has the NPC start
+  it on-screen and finish it the next turn, unless the player's reply gives
+  them a reason to stay. Every other met intention still completes the turn
+  its trigger is met, and beginning a departure counts as acting, so "never
+  defer" still holds. The evaluation prompt already treats a begun action as
+  open, so the entry stays live until the exit actually happens. Pinned in
+  `test/interiority.test.js`.
+
 ## [2.11.3]
 
 ### Fixed
