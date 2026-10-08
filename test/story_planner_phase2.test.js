@@ -20,7 +20,7 @@ import {
     updateArcBeat,
 } from '../story_planner/data.js';
 import { buildInjectionBody } from '../story_planner/injection.js';
-import { captureScope, getFakeMeta, registerSafeCharacterContextProvider, resetCoreStubs, setFakeContextExtras } from './stubs/core.js';
+import { captureScope, getFakeMeta, getFakeNotifications, registerSafeCharacterContextProvider, resetCoreStubs, setFakeApi, setFakeChat, setFakeContextExtras } from './stubs/core.js';
 
 beforeEach(() => resetCoreStubs());
 
@@ -620,7 +620,14 @@ describe('Story Planner scoped generate dialog', () => {
         input.dispatchEvent(new Event('change', { bubbles: true }));
     };
 
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(async () => {
+        // A review opened by a submit test must be closed through the modal
+        // manager: its modal stack outlives the body reset in openDialog and
+        // would block every later dialog, even if that test failed midway.
+        const { hideModal } = await import('../core/modal.js');
+        hideModal('mwt-sp-scoped-review-modal');
+        vi.unstubAllGlobals();
+    });
 
     test('toggling a target keeps that checkbox and its focus', async () => {
         await openDialog({ preselectTargets: true });
@@ -748,6 +755,50 @@ describe('Story Planner scoped generate dialog', () => {
         toggle(saved);
         expect(inputs.filter(input => input.checked)).toHaveLength(0);
         expect(document.querySelector('#sp-generate-summary').textContent).toContain('Select at least one NPC');
+    });
+
+    test('a saved subject selection does not block a request without Character Journeys', async () => {
+        // Tester report: with Selected subjects saved, unchecking Character
+        // Journeys hid the picker, but the hidden selection still reached
+        // generation, which captured no subject table for the request and
+        // rejected every saved subject as outside the 30-character limit.
+        registerSafeCharacterContextProvider({
+            listCandidates: () => [
+                { entityId: 'entity-derek', name: 'Derek', mergedEntityIds: [] },
+                { entityId: 'entity-ezra', name: 'Ezra', mergedEntityIds: [] },
+            ],
+        });
+        setFakeChat([
+            { is_user: true, name: 'User', mes: 'We compare every harbour signature against the customs archive, preserve the chain of custody, and prepare the records handoff while deciding which established witness can verify the discrepancy.' },
+            { is_user: false, name: 'Mara', mes: 'The forged seal is in the ledger.' },
+            { is_user: true, name: 'User', mes: 'We prepare the handoff.' },
+        ]);
+        const calls = [];
+        setFakeApi(call => {
+            calls.push(call);
+            return '## Horizon Arcs\n- The Harbor Lease — The dockmaster wants the warehouse back before the fleet arrives.\n  1. A notice goes up on the warehouse door.';
+        });
+        await openDialog({
+            settings: { apiUrl: 'https://example.test', modelName: 'subject-scope-model' },
+            preferences: {
+                operation: 'add', sectionKeys: ['character', 'horizon'], requestedCount: 1,
+                subjectMode: 'selected', subjectEntityIds: ['entity-ezra'],
+            },
+        });
+        toggle(document.querySelector('input[name="sp-generate-section"][value="character"]'));
+        expect(document.querySelector('#sp-generate-subjects').hidden).toBe(true);
+
+        document.querySelector('#sp-generate-submit').click();
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        await vi.waitFor(() => expect(document.getElementById('mwt-sp-scoped-review-modal')).not.toBeNull());
+
+        expect(getFakeNotifications().filter(note => note.level === 'error')).toEqual([]);
+        expect(calls[0].userContent).not.toContain('<journey_subjects>');
+        // Only the request drops the filter: re-checking Character Journeys
+        // must bring the saved choice back.
+        expect(getStoryPlanRequestPreferences()).toMatchObject({
+            sectionKeys: ['horizon'], subjectMode: 'selected', subjectEntityIds: ['entity-ezra'],
+        });
     });
 
     test('excludes unassigned Journeys from Refresh with a visible manual-assignment reason', async () => {

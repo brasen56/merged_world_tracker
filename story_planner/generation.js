@@ -685,6 +685,17 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         notify('Story Planner', `Automatic generation skipped: ${castPolicyContract.message}`, 'warning');
         return null;
     }
+    // Journey subjects filter Character Journeys only (§4.1). The dialog keeps a
+    // saved subject selection while that section is unchecked, so re-checking
+    // it restores the choice, and the hidden selection still arrives here. A
+    // request without the section captures no subject table, so leaving the
+    // selection in place reported every saved subject as "outside the request
+    // limit" and blocked an unrelated request. Drop it from this request only;
+    // the saved preference is untouched.
+    if (request && !request.sectionKeys.includes('character')
+        && (request.subjectMode !== 'any' || request.subjectEntityIds.length)) {
+        request = sanitizeStoryPlanRequest({ ...request, subjectMode: 'any', subjectEntityIds: [] });
+    }
     if (request?.sectionKeys.includes('character') && request.subjectMode === 'selected') {
         const resolution = resolveSafeCharacterContextEntities(request.subjectEntityIds);
         if (resolution.missing?.length) {

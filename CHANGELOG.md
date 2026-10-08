@@ -12,6 +12,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.11.5]
+
+### Changed
+
+- **Story Planner arcs are asked for events, not portraits.** Testers still got
+  bland Character Journeys after the Phase 5 arc-quality rules: the subject
+  alone with a prop or a reminder, and a "turning point" that was a state of
+  mind ("composure cracks") rather than something that happens. Two Direction
+  Hint trials both improved this, and their wording is now built in
+  (`story_planner/prompts.js`):
+  - **NPCs may act toward the player.** The prompt used to forbid writing for
+    `{{user}}` several different ways and never said what NPCs *may* do, so
+    models kept the player out of the beats entirely. One shared rule now lets
+    NPCs ask, offer, demand, disclose, set boundaries, or try to persuade
+    `{{user}}`, leaves the response open, and forbids a later beat from
+    assuming `{{user}}` agreed or complied. Used by full-plan, scoped, and
+    targeted requests.
+  - **Descriptions name the encounter but don't stage it.** An arc must be a
+    new playable situation, say what makes it pressing now, and name the
+    encounter it builds toward, in one or two sentences. Setting, props, and
+    outcome are left to the scene; a trial that asked for a "stageable scene"
+    over-scripted the payoff and acted it out in a beat.
+  - **Beats are judged by what they change.** Each beat must leave someone
+    knowing, wanting, risking, owing, or having something new; foreshadowing and
+    repeated emotion don't count. Deliveries and documents are fine when they
+    change something.
+  - **New worked examples.** The single example (a servant's remark, a
+    shipment with paperwork, an agent turning up) was being copied nearly beat
+    for beat. It is replaced by two invented, unrelated examples, one of which
+    has an NPC approach `{{user}}`.
+  - **Grounding rule.** Plans must not invent past events or a character's
+    skills, history, or relationships, or link two threads just because they
+    appear near each other in the context.
+  - The Character Journeys section hint no longer says journeys belong "to a
+    person rather than a plot"; the journey subject clause now names who or what
+    applies the pressure.
+
+  - **The planner is told who `{{user}}` is.** SillyTavern substitutes macros
+    only in instruct sequences, not in the message content an extension sends,
+    so every planner rule reached the model as a literal `{{user}}` while the
+    recent story showed the persona's name. A GLM 5.3 trial wrote beats like
+    "Alex discovers the discrepancy herself" for the player. Full-plan, scoped,
+    and targeted requests now open with a `<player_character>` block naming
+    the persona, as Interiority already does. Custom full-plan templates get it
+    too.
+  - **Someone other than the player performs every beat.** The agency rule
+    now gives a per-beat check: a beat that needs `{{user}}` to do, notice,
+    admit, or decide something is rewritten as what an NPC does or what the
+    world puts in front of them.
+  - **Beats commit to one event.** The same trial hedged with beats offering
+    "a letter, a call, or a question", beats that were a choice someone
+    "faces", and descriptions ending in "whether X or Y is the question". Beats
+    must now be one specific event, and descriptions must say what concretely
+    could be gained or lost, in under 50 words.
+
+  A saved custom full-plan system prompt still replaces the built-in one and
+  gets none of the rule changes.
+
+### Fixed
+
+- **Unchecking Character Journeys no longer blocks generation.** With Journey
+  subjects set to **Selected characters**, unchecking Character Journeys hid
+  the subject picker, but the hidden selection was still sent. Generation then
+  failed with "selected Journey subject is outside the 30-character request
+  limit", because a request without that section builds no subject list. A
+  request without Character Journeys now ignores the subject filter. The saved
+  selection is kept, so re-checking the section brings it back. Pinned in
+  `test/story_planner_phase2.test.js`. Testers using one of the trial Direction Hints should clear
+  it. Wiring is pinned in `test/story_planner_arc_quality.test.js`; whether
+  models actually produce better arcs can only be checked on live generations.
+
 ## [2.11.4]
 
 ### Changed

@@ -1084,6 +1084,51 @@ allowed versus actively-propose," which this phase gives content to.
   the trial hint cleared, at least one Horizon or Emerging arc, a journey for a
   second subject, and a second model.
 
+**Phase 5 follow-up, second trial (2026-10-08)**
+
+- **Evidence (GLM 5.3, follow-up build, two Character Journeys plus quoted
+  beats from other arcs):** NPCs now drive most beats and no payoff was staged.
+  Remaining problems: (1) several beats were performed by the player's persona
+  ("Alex discovers…", "Alex admits at a meal…", "Alex signs a remark…");
+  (2) beats hedged with alternatives or were a choice someone "faces";
+  (3) descriptions ran to about 70 words and ended in "whether X or Y is the
+  question".
+- **Root cause of (1):** SillyTavern 1.19.0 runs `substituteParams` only on
+  instruct prefixes and suffixes (`public/scripts/instruct-mode.js`), and
+  `ChatCompletionService` passes message content through unchanged. Every
+  planner rule therefore reached the model as a literal `{{user}}`, with nothing
+  linking it to the persona name on the player's lines in the recent story. The
+  older Kimi "Planted Error" plan also wrote Alex's actions, so this predates
+  the follow-up's agency permission.
+- **Change:** `buildPlayerCharacterBlock()` (`generation.js`) adds a
+  self-describing `<player_character>` block to full-plan, scoped, custom-
+  template, and targeted requests, following Interiority. `PLAYER_AGENCY_RULE`
+  refers to that block and adds a per-beat actor check. `BEAT_PROGRESSION_RULE`
+  requires one committed event per beat. `ARC_DESTINATION_RULE` asks for what
+  concretely could be gained or lost, names "whether X or Y is the question" as
+  an abstraction, limits descriptions to under 50 words, and restricts "do not
+  stage it" to the turning point. The second worked example was shortened to
+  match.
+- **Not done:** a review-time warning for beats that open with the persona's
+  name. It would be a cheap human-review aid, but it is a name heuristic and is
+  held until the prompt fix has been tried.
+- **Automated checks:** five new tests in
+  `test/story_planner_arc_quality.test.js`, including that both worked examples
+  stay under the word limit they teach. A planted bug (player block dropped from
+  the targeted prompt) failed the suite before being reverted. Full suite green
+  at 3,362/3,362; lint clean.
+- **Manual results (2026-10-08, tester; GLM 5.3 and Kimi K2.6):** no
+  player-performed beats across several generations on either model. Seven
+  arcs were reviewed across Character Journeys, Emerging Arcs, and Unresolved
+  Threads. Most beats are a single committed event driven by an NPC or the
+  world, and most descriptions name a concrete encounter at roughly 40–50
+  words. Remaining weaknesses are minor: some descriptions still end in "either
+  holding or breaking" style phrasing, some beats use passive voice to avoid
+  naming who acts ("a note appears", "the test run exposes"), and one beat was
+  an obstacle unconnected to the arc. The tester also reports that Kimi mixes up
+  Knowledge Ledger facts more than GLM; this is treated as a model difference
+  and not acted on.
+
 ## 6. Acceptance and test plan
 
 ### 6.1 Deterministic tests
