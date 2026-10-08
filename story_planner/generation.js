@@ -355,7 +355,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
             ? 'Selected mode: every Character Journey primary must use a [SELECTED] handle, and each selected handle must be primary at least once before any repeat.'
             : 'Any mode: every Character Journey primary may use any captured handle.',
         'Every Character Journey bullet must begin with exactly one [SUBJECT:sN] marker and may add one [SUPPORT:sN,sN] marker. Do not put these markers on other sections.',
-        'A Journey should pressure a value, relationship, fear, habit, or obligation; provide an observable opportunity to respond and possible consequences. Resistance, relapse, deterioration, repair, or no resolution are all valid. Never decide what {{user}} thinks, chooses, or does.',
+        'A Journey puts a value, relationship, fear, habit, or obligation under pressure from a specific person, problem, or opportunity, and builds toward an encounter the subject has to respond to. Resistance, relapse, deterioration, repair, or no resolution are all valid outcomes. The pressure can come from another character or from the subject\'s relationship with {{user}}, and the subject may act toward {{user}}; never decide what {{user}} thinks, chooses, or does.',
         ...targetOwnership,
         '</journey_subjects>',
     ].join('\n') : '';

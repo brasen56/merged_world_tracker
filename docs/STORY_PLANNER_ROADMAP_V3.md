@@ -1042,6 +1042,48 @@ allowed versus actively-propose," which this phase gives content to.
   regeneration without the hint, checked against the §6.2 "Quiet or restrained
   character journey" and genre rows, is pending.
 
+**Phase 5 follow-up (§8 record, 2026-10-07)**
+
+- **State:** Implemented; not host verified.
+- **Evidence:** on the Phase 5 build, a tester (Kimi K2.6 thinking, temp 1, no
+  hint) still got bland Character Journeys. The rules were met in form only:
+  the description named a "pressure" and a "turning point" that was a state of
+  mind ("threatens to crack his composure"), and the beats showed the subject
+  alone reacting to reminders. Three beats closely matched the worked example's
+  shapes (a bystander mentions something, a delivery arrives with paperwork,
+  someone appears). The earlier judgement in this section that the example's
+  beats "were already consequential" is withdrawn. The best arc in that batch
+  was a Horizon Arc with an outside party, a deadline, and beats that pushed
+  back on a goal.
+- **Direction Hint trials** (three samples, all one subject and one model, so
+  weak evidence): both trial hints produced NPC-driven beats. A hint asking for
+  "a scene you could stage" gave one strong result and one that over-scripted
+  the payoff (props, a timer), acted it out in the final beat, and ran to about
+  90 words. A section-agnostic hint built on "each beat must alter the
+  conditions for the next" gave the cleanest causal chain, but invented a skill
+  the character does not have in canon.
+- **Change:** `ARC_DESTINATION_RULE` (playable situation, why now, name the
+  encounter but do not stage it, one or two sentences) and
+  `BEAT_PROGRESSION_RULE` (causal sequence; who knows, wants, risks, owes, or
+  has something new; setup is not foreshadowing) were rewritten. New shared
+  `PLAYER_AGENCY_RULE` and `STORY_GROUNDING_RULE` are used by full-plan, scoped
+  (Hooks-only included), and targeted prompts, replacing the repeated
+  `{{user}}` prohibitions. The agency rule grants NPC initiative toward
+  `{{user}}` and forbids later beats from assuming compliance. The single worked
+  example was replaced by two invented, unrelated examples. The Character
+  Journeys section hint (`schema.js`) and the journey subject clause
+  (`generation.js`) now describe events and a source of pressure.
+- **Not done:** a rotating example pool (it would make the system prompt
+  non-deterministic, which hurts prompt caching and breaks the constant
+  prompt pins) and two-pass generation (§7 gate unchanged).
+- **Automated checks:** five new wiring tests in
+  `test/story_planner_arc_quality.test.js`. A planted bug (agency rule dropped
+  from the targeted prompt) failed the suite before being reverted. Full suite
+  green at 3,357/3,357; lint clean.
+- **Manual results:** pending. Ask for two or three regenerations per chat with
+  the trial hint cleared, at least one Horizon or Emerging arc, a journey for a
+  second subject, and a second model.
+
 ## 6. Acceptance and test plan
 
 ### 6.1 Deterministic tests

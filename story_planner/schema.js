@@ -406,7 +406,9 @@ export const SECTIONS = [
     {
         key: 'character',
         label: 'Character Journeys',
-        hint: 'Per-character growth, change, or reckoning — arcs that belong to a person rather than a plot.',
+        // Prompt-only text (prompts.js). The old hint said journeys belong "to a
+        // person rather than a plot", which invited event-free journeys.
+        hint: 'Events that put a particular character\'s values, relationships, or habitual choices under pressure, with room for change, resistance, repair, or deterioration.',
         blurb: 'Growth arcs belonging to a character',
     },
     {

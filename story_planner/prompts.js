@@ -24,10 +24,32 @@ import { MAX_CONTINUITY_BEATS_PER_ARC, SECTIONS } from './data.js';
 // The turning point belongs in the description, never in a beat: the
 // description is what Ready Now surfaces as the payoff once setup is complete.
 // A beat that performs the climax leaves Ready nothing to do.
+//
+// Phase 5 follow-up (Direction Hint trials, 2026-10): plans still met the
+// rules in form — "the pressure between gratitude and unease threatens to
+// crack his composure" names a pressure and a turning point without naming an
+// event. Two trial hints each produced NPC-driven beats. One that asked for "a
+// scene you could stage" over-scripted the payoff (props, timer) and acted it
+// out in the last beat, so the destination names the encounter but must not
+// stage it. Beats are checked by what they change for someone, not by banning
+// kinds of beat: a delivery or a document is fine when it changes something.
 
-export const ARC_DESTINATION_RULE = 'An arc\'s description names what is wanted or unsettled, what puts it under pressure, and the concrete turning point it builds toward — a confrontation, revelation, opportunity, or decision that could go more than one way. A quiet arc can turn on an admission, a boundary, a discovery, or a changed relationship; it does not need to escalate.';
+export const ARC_DESTINATION_RULE = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences, its description names what someone wants or what is unsettled, the specific person, problem, opportunity, or discovery that makes it newly consequential now, and the encounter it builds toward — a confrontation, revelation, offer, admission, boundary, or decision that could go more than one way — and what could change because of it. Name the encounter but do not stage it: leave the setting details, props, and outcome to the scene. "Trust is tested", "composure cracks", or "must choose between X and Y" say what a scene would mean, not what happens in it. A quiet arc can turn on an admission, a boundary, a discovery, or a changed relationship; it does not need to escalate.';
 
-export const BEAT_PROGRESSION_RULE = 'Each beat must change the situation: it reveals something new, raises a cost, adds a complication, or opens or closes an option. A beat that shows the same behavior again, or that only moves paperwork, schedules, or equipment without consequence, does not count — give it a consequence or cut it. Two strong beats are better than four padded ones. Stop short of the turning point itself: the payoff happens once setup is complete, not inside a beat.';
+export const BEAT_PROGRESSION_RULE = 'Build setup as a causal sequence: each beat changes the conditions for the next. After a beat, someone should know, want, risk, owe, or have available something they did not before. Setup is not foreshadowing: a reminder, a mood, or the same emotion shown again does not count, and neither does moving paperwork, schedules, or equipment without consequence. An arrival, a document, or a discovery is fine when it changes something. Two strong beats are better than four padded ones. Stop short of the turning point itself: the payoff happens once setup is complete, not inside a beat.';
+
+// ─── Player agency and grounding (shared) ────────────────────────────────────
+// The prompt used to forbid writing for {{user}} five different ways and never
+// said what NPCs MAY do with them. Models read that as "keep {{user}} out of
+// the beats", so relationship journeys became an NPC alone with props. The
+// permission is the point of this rule; the last sentence keeps it from
+// turning into "{{user}} agreed" one beat later.
+
+export const PLAYER_AGENCY_RULE = '{{user}} belongs to the player. Never write {{user}}\'s actions, words, thoughts, feelings, or choices, and never suggest what {{user}} should do. NPCs may still initiate with {{user}}: ask questions, make offers or demands, disclose information, set boundaries, or try to influence them. That is often the strongest kind of beat. Describe the NPC\'s move and what is at stake, leave {{user}}\'s response and the outcome open, and never write a later beat that assumes {{user}} accepted, agreed, attended, or complied.';
+
+// Testers saw two unrelated threads merged because they sat near each other in
+// the context, and a character given a skill their canon says they lack.
+export const STORY_GROUNDING_RULE = 'Stay inside established canon. Keep existing relationships between people, projects, and obligations as the story has them, and never invent past events or a character\'s skills, history, or relationships. Two threads that appear near each other in the context are not connected unless the story says so. A new connection or fact must arrive through a future event in the arc, not be asserted as existing history.';
 
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
@@ -53,27 +75,40 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null) {
     // Hooks-only request keeps the plain one-line description.
     const bulletRule = hooksOnly
         ? 'Each bullet is a short arc name, an em-dash, then 1-2 sentences naming the central shift it introduces.'
-        : `Each bullet is a short arc name, an em-dash, then a 1-2 sentence description. ${ARC_DESTINATION_RULE}${has('immediate') ? ' An Immediate Hook can simply name a live opening the next scene can use.' : ''}`;
+        : `Each bullet is a short arc name, an em-dash, then its description. ${ARC_DESTINATION_RULE}${has('immediate') ? ' An Immediate Hook can simply name a live opening the next scene can use.' : ''}`;
+    // The worked examples are invented and deliberately unlike each other (an
+    // external plot, a quiet relationship) so no single beat shape gets copied.
+    // The previous single example's beats (a servant mentions something, a
+    // shipment arrives with paperwork, an agent turns up) reappeared almost
+    // verbatim in tester plans. The second example shows an NPC acting toward
+    // {{user}} without a later beat assuming the answer.
     const beatsRule = hooksOnly
         ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
-        : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: the small, concrete, in-scene steps that build toward the arc's turning point. A beat must be something a narrator can actually perform in a single scene — a line of dialogue, an object noticed, a character seen somewhere unexpected. Order them so each one only makes sense after the previous. ${BEAT_PROGRESSION_RULE} Never write a beat that requires {{user}} to do a specific thing.
+        : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: concrete, in-scene events that build toward the arc's turning point. A beat must be something a narrator can actually perform in a single scene — someone asks, offers, refuses, or reveals something; something arrives or is discovered; a deadline moves. ${BEAT_PROGRESSION_RULE}
 
-- The Rival's Gambit — a competitor who has only been hinted at wants the same charter, and a decisive move forces a public confrontation where either side could lose standing.
-  1. A servant mentions in passing that the competitor was seen leaving the east gate before dawn.
-  2. A routine shipment arrives short, and the paperwork points somewhere inconvenient.
-  3. The competitor's agent turns up at a social event, pointedly friendly.
+Two examples of the format, from unrelated stories. Do not reuse their events or beat patterns.
+
+- The Harbor Lease — The dockmaster wants the guild's warehouse back before the autumn fleet arrives, and a damning inspection report gives her the grounds; it builds toward a hearing before the harbor council where the guild must answer the report, and losing it could cost them the warehouse.
+  1. The dockmaster's clerk posts an inspection notice on the warehouse door, citing rot no one on the crew has seen.
+  2. A carpenter hired to check the beams finds them sound and points out that the notice was signed by an inspector who retired last spring.
+  3. The dockmaster moves the hearing up a week, before anyone can find the retired inspector.
+
+- The Spare Room — Mira wants to stop being the one her brother calls in every crisis, and his plan to move in "just for a month" makes it urgent; it builds toward Mira telling him what she will and won't keep doing for him, which could strain them or let them finally deal with each other as equals.
+  1. Mira's brother asks {{user}} to help talk her round, saying she always listens to them.
+  2. Mira finds out he went to {{user}} before asking her, and calls off the dinner where she had planned to say yes.
+  3. Her brother arrives with his bags a week early, before she has given him an answer.
 ${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are already usable as-is.' : ''}`;
 
     return `You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.
 
 ABSOLUTE RULES:
-- Output ONLY the story plan document. No narration, dialogue, or roleplay continuation.
+- Output ONLY the story plan document. Never continue the roleplay or write any part of it as a scene. Summarizing what an NPC asks, offers, or reveals is planning, not dialogue.
 - Frame every idea as a future arc, chapter, or episode — never a time frame ("three days later", "next month").
 ${sortRule}
-- Treat every arc as a hypothesis: describe attempts, pressures, complications, and possible outcomes. Never decide what {{user}} chooses or claim an uncertain outcome succeeds.
+- Treat every arc as a hypothesis: describe attempts, pressures, complications, and possible outcomes, and never claim an uncertain outcome succeeds.
+- ${PLAYER_AGENCY_RULE}
+- ${STORY_GROUNDING_RULE}
 - Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.
-- You are STRICTLY FORBIDDEN from writing dialogue, actions, thoughts, or emotional reactions for {{user}}. Never describe what {{user}} does, feels, or says.
-- Do not predict or suggest what {{user}} should do next.
 - If you are shown a previous plan, an arc's name is its identifier: reproduce the name of any arc you carry forward EXACTLY as written, and never copy a [BRACKETED] annotation into a name. Renaming an arc loses its tracked progress and duplicates it.
 - The previous plan may put a tracker marker such as [ARC:…] in front of an arc's name. When you carry that arc forward, copy its marker exactly at the start of the bullet, before the name and outside any bold. Never put a marker on a new arc, on a beat, or on a different arc.
 - Be punchy and plot-focused.
@@ -137,12 +172,13 @@ ABSOLUTE RULES:
 - When the cast policy proposes or allows a recurring/major newcomer, use one bounded proposal-local newcomerHandle and put the same entranceHandle on exactly one concrete entrance beat within the first ${MAX_CONTINUITY_BEATS_PER_ARC} pending beats. Leave both empty when no newcomer is proposed. Never use the fields for an established character.
 - ${ARC_DESTINATION_RULE}
 - Treat the description as a possible endpoint, not a fact that has happened.
-- Never write actions, dialogue, thoughts, feelings, or decisions for {{user}}, and never require {{user}} to act.
+- ${PLAYER_AGENCY_RULE}
+- ${STORY_GROUNDING_RULE}
 - Keep the result concise and grounded in the supplied factual context.`;
 
 export const TARGETED_OPERATION_INSTRUCTIONS = Object.freeze({
     rework: 'Preserve the arc title, description/endpoint, and section exactly. Replace only its pending setup route with a stronger route toward the same endpoint.',
-    develop: 'Develop this arc into a stronger story: sharpen its description so it names what is wanted or unsettled, what pressures it, and a concrete turning point, and replace its pending route so each beat changes the situation. You may move it to a better section. Preserve its title and all historical progress.',
+    develop: 'Develop this arc into a stronger story: sharpen its description so it names what someone wants or what is unsettled, what makes it consequential now, and a concrete turning point, and replace its pending route so each beat changes the situation. You may move it to a better section. Preserve its title and all historical progress.',
     alternate: 'Suggest a genuinely different route as a new sibling arc. Give it a distinct title, description/endpoint, section, and pending route. The source arc will remain unchanged.',
     setup: 'This long-range arc has no setup beats. Preserve its title, description/endpoint, and section exactly and generate a concrete pending setup route toward that endpoint.',
 });
