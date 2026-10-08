@@ -13,7 +13,7 @@ import {
     captureRevision, sameRevision,
     wrapTag, escapePromptText, buildSafeCharacterContext, listSafeCharacterContextCandidates,
     resolveSafeCharacterContextEntities, record,
-    buildAuthorCharacterContext,
+    buildAuthorCharacterContext, getUserNames,
 } from '../core/index.js';
 
 import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT, buildStoryPlanSystemPrompt } from './prompts.js';
@@ -55,6 +55,25 @@ export function getRecentMessagesForPlan() {
         total += line.length + 1;
     }
     return lines.reverse().join('\n');
+}
+
+/**
+ * Name the player's character for the planning model.
+ *
+ * SillyTavern substitutes macros only in instruct sequences, never in message
+ * content an extension sends (checked against ST 1.19.0), so every planner
+ * rule reaches the model as a literal `{{user}}` while the recent story labels
+ * the player's lines with their persona name. A tester's plans wrote beats
+ * like "Alex discovers…" and "Alex admits…" for the persona, so this says
+ * outright which character the {{user}} rules govern. Interiority's
+ * <player_character> block exists for the same reason. The block explains
+ * itself, so a custom full-plan system prompt also benefits.
+ */
+export function buildPlayerCharacterBlock() {
+    const name = String([...getUserNames({ lower: false })][0] || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    return name
+        ? wrapTag('player_character', `[{{user}} in these instructions is the player's character, who appears in the story as the name below. Every rule about {{user}} applies to this character.]\n${name}`)
+        : '';
 }
 
 // ─── Prompt builder ──────────────────────────────────────────────────────────
@@ -407,6 +426,10 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         ].join('\n');
         out = `${scopeBlock}${subjectBlock ? `\n\n${subjectBlock}` : ''}\n\n${out}`;
     }
+    // Prepended rather than templated, so a custom full-plan template that
+    // predates the block still says who {{user}} is.
+    const playerBlock = buildPlayerCharacterBlock();
+    if (playerBlock) out = `${playerBlock}\n\n${out}`;
 
     if (reminderReason) {
         const reminder = `[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;

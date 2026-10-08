@@ -34,9 +34,15 @@ import { MAX_CONTINUITY_BEATS_PER_ARC, SECTIONS } from './data.js';
 // stage it. Beats are checked by what they change for someone, not by banning
 // kinds of beat: a delivery or a document is fine when it changes something.
 
-export const ARC_DESTINATION_RULE = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences, its description names what someone wants or what is unsettled, the specific person, problem, opportunity, or discovery that makes it newly consequential now, and the encounter it builds toward — a confrontation, revelation, offer, admission, boundary, or decision that could go more than one way — and what could change because of it. Name the encounter but do not stage it: leave the setting details, props, and outcome to the scene. "Trust is tested", "composure cracks", or "must choose between X and Y" say what a scene would mean, not what happens in it. A quiet arc can turn on an admission, a boundary, a discovery, or a changed relationship; it does not need to escalate.';
+// Second trial (GLM 5.3, 2026-10-08): beats were NPC-driven, but both plans
+// hedged — beats offering "a letter, a call, or a question" instead of one
+// event, beats that were a choice someone "faces", and descriptions ending in
+// "whether X or Y is the question". The stakes clause asks for something that
+// can be won or lost, and the no-staging clause is limited to the turning
+// point so it cannot be read as permission to leave beats vague.
+export const ARC_DESTINATION_RULE = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences (under 50 words), its description names what someone wants or what is unsettled, the specific person, problem, opportunity, or discovery that makes it newly consequential now, and the encounter it builds toward — a confrontation, revelation, offer, admission, boundary, or decision that could go more than one way — and what concretely could be gained or lost. Name the encounter but do not stage it: leave the setting details, props, and outcome of that encounter to the scene. "Trust is tested", "composure cracks", "must choose between X and Y", or "whether X or Y is the question" say what a scene would mean, not what happens in it. A quiet arc can turn on an admission, a boundary, a discovery, or a changed relationship; it does not need to escalate.';
 
-export const BEAT_PROGRESSION_RULE = 'Build setup as a causal sequence: each beat changes the conditions for the next. After a beat, someone should know, want, risk, owe, or have available something they did not before. Setup is not foreshadowing: a reminder, a mood, or the same emotion shown again does not count, and neither does moving paperwork, schedules, or equipment without consequence. An arrival, a document, or a discovery is fine when it changes something. Two strong beats are better than four padded ones. Stop short of the turning point itself: the payoff happens once setup is complete, not inside a beat.';
+export const BEAT_PROGRESSION_RULE = 'Build setup as a causal sequence: each beat changes the conditions for the next. Each beat commits to one specific event that happens, not a list of alternatives and not a choice someone faces. After a beat, someone should know, want, risk, owe, or have available something they did not before. Setup is not foreshadowing: a reminder, a mood, or the same emotion shown again does not count, and neither does moving paperwork, schedules, or equipment without consequence. An arrival, a document, or a discovery is fine when it changes something. Two strong beats are better than four padded ones. Stop short of the turning point itself: the payoff happens once setup is complete, not inside a beat.';
 
 // ─── Player agency and grounding (shared) ────────────────────────────────────
 // The prompt used to forbid writing for {{user}} five different ways and never
@@ -44,8 +50,14 @@ export const BEAT_PROGRESSION_RULE = 'Build setup as a causal sequence: each bea
 // the beats", so relationship journeys became an NPC alone with props. The
 // permission is the point of this rule; the last sentence keeps it from
 // turning into "{{user}} agreed" one beat later.
+//
+// The actor test was added after GLM 5.3 wrote player-performed beats ("Alex
+// discovers the discrepancy herself", "Alex admits at a meal…"). A ban on
+// writing for {{user}} did not stop those; a check on who performs each beat
+// is one the model can apply sentence by sentence. The model is told who
+// {{user}} is by the <player_character> block (generation.js).
 
-export const PLAYER_AGENCY_RULE = '{{user}} belongs to the player. Never write {{user}}\'s actions, words, thoughts, feelings, or choices, and never suggest what {{user}} should do. NPCs may still initiate with {{user}}: ask questions, make offers or demands, disclose information, set boundaries, or try to influence them. That is often the strongest kind of beat. Describe the NPC\'s move and what is at stake, leave {{user}}\'s response and the outcome open, and never write a later beat that assumes {{user}} accepted, agreed, attended, or complied.';
+export const PLAYER_AGENCY_RULE = '{{user}} is the player\'s character (named in <player_character> when given) and belongs to the player. Never write {{user}}\'s actions, words, thoughts, feelings, discoveries, or choices, and never suggest what {{user}} should do. Someone other than {{user}} performs every beat: if a beat needs {{user}} to do, notice, admit, or decide something, rewrite it as what an NPC does or what the world puts in front of {{user}}. NPCs may still initiate with {{user}}: ask questions, make offers or demands, disclose information, set boundaries, or try to influence them. That is often the strongest kind of beat. Describe the NPC\'s move and what is at stake, leave {{user}}\'s response and the outcome open, and never write a later beat that assumes {{user}} accepted, agreed, attended, or complied.';
 
 // Testers saw two unrelated threads merged because they sat near each other in
 // the context, and a character given a skill their canon says they lack.
@@ -93,7 +105,7 @@ Two examples of the format, from unrelated stories. Do not reuse their events or
   2. A carpenter hired to check the beams finds them sound and points out that the notice was signed by an inspector who retired last spring.
   3. The dockmaster moves the hearing up a week, before anyone can find the retired inspector.
 
-- The Spare Room — Mira wants to stop being the one her brother calls in every crisis, and his plan to move in "just for a month" makes it urgent; it builds toward Mira telling him what she will and won't keep doing for him, which could strain them or let them finally deal with each other as equals.
+- The Spare Room — Mira wants to stop being her brother's rescuer, and his plan to move in "just for a month" makes it urgent; it builds toward Mira telling him what she will and won't do, which could end with him leaving angry or her giving him a key on her terms.
   1. Mira's brother asks {{user}} to help talk her round, saying she always listens to them.
   2. Mira finds out he went to {{user}} before asking her, and calls off the dinner where she had planned to say yes.
   3. Her brother arrives with his bags a week early, before she has given him an answer.

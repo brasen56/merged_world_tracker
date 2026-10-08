@@ -19,7 +19,7 @@ import {
     newArcId, newBeatId, sanitizeArc, setArcsWithHistory, state,
     incrementPhase7Metrics, recordPhase7Request,
 } from './data.js';
-import { assessNewcomerEvidence, describeCastPolicyRequest, getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
+import { assessNewcomerEvidence, buildPlayerCharacterBlock, describeCastPolicyRequest, getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
 import { buildArcDiff, captureArcRevision, materialArcShape } from './proposals.js';
 
@@ -56,6 +56,8 @@ export function buildTargetedUserPrompt(operation, arc, characterContext = {}, c
         `Operation: ${TARGETED_OPERATION_INSTRUCTIONS[operation]}`,
         wrapTag('selected_arc', arcContext(arc)),
     ];
+    const player = buildPlayerCharacterBlock();
+    if (player) blocks.push(player);
     const recent = getRecentMessagesForPlan();
     if (recent) blocks.push(wrapTag('recent_stable_messages', recent));
     const world = getWorldStateFactual().trim();
