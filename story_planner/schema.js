@@ -174,7 +174,7 @@ export const AUTHOR_CONTEXT_FIELD_KEYS = Object.freeze(['public_profile', 'agend
 export const AUTHOR_CONTEXT_BUDGETS = Object.freeze([
     { key: 'standard', label: 'Standard', chars: 12000 },
     { key: 'expanded', label: 'Expanded', chars: 24000 },
-    { key: 'large', label: 'Large', chars: 48000 },
+    { key: 'large', label: 'Large', chars: 96000 },
 ]);
 export function sanitizeAuthorContextSelection(value) {
     const raw = isObject(value) ? value : {};

@@ -6,8 +6,8 @@ import { getRegistry, resolveRegistryKey } from './registry.js';
 import { getStances } from './relationships.js';
 import { USER_STANCES, RELATIONSHIP_BLOCK_START, RELATIONSHIP_BLOCK_END } from './state.js';
 
-export const SAFE_CHARACTER_CONTEXT_MAX_RECORDS = 6;
-export const SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS = 700;
+export const SAFE_CHARACTER_CONTEXT_MAX_RECORDS = 60;
+export const SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS = 7000;
 export const SAFE_CHARACTER_CONTEXT_MAX_TOTAL_CHARS = SAFE_CHARACTER_CONTEXT_MAX_RECORDS * SAFE_CHARACTER_CONTEXT_MAX_RECORD_CHARS + (SAFE_CHARACTER_CONTEXT_MAX_RECORDS - 1) * 2;
 export const SAFE_CHARACTER_CONTEXT_PUBLIC_FIELD_COUNT = 5;
 
@@ -346,7 +346,7 @@ export const AUTHOR_MAX_CHARS = 12000;
 export const AUTHOR_CONTEXT_BUDGET_PRESETS = Object.freeze([
     { key: 'standard', label: 'Standard', chars: AUTHOR_MAX_CHARS },
     { key: 'expanded', label: 'Expanded', chars: 24000 },
-    { key: 'large', label: 'Large', chars: 48000 },
+    { key: 'large', label: 'Large', chars: 96000 },
 ]);
 const AUTHOR_BUDGET_CHARS = new Map(AUTHOR_CONTEXT_BUDGET_PRESETS.map(preset => [preset.key, preset.chars]));
 
