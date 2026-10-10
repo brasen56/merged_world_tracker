@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { buildSafeCharacterContext, registerSafeCharacterContextProvider } from '../core/character_context.js';
-import { sanitizeCharacterContextSelection, sanitizeStoryPalette, validateStoryPlannerData, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH } from '../story_planner/schema.js';
+import { sanitizeCharacterContextSelection, sanitizeStoryPalette, validateStoryPlannerData, MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH, STORY_PALETTE_EMPHASES } from '../story_planner/schema.js';
 import { buildUserPrompt, generatePlan } from '../story_planner/generation.js';
 import { buildTargetedUserPrompt, generateTargetedProposal } from '../story_planner/targeted.js';
 import { getCharacterContextSelection, makeArc, setArcs, setPlanData, state } from '../story_planner/data.js';
@@ -448,6 +448,8 @@ describe('Story Planner Phase 6 — palette and safe character grounding', () =>
         expect(document.querySelector('#sp-character-context-ids').getAttribute('aria-label')).toBeTruthy();
         const chipGroup = document.querySelector('[role="group"][aria-label="Story palette emphasis"]');
         expect(chipGroup).not.toBeNull();
-        expect(chipGroup.querySelectorAll('input[name="sp-palette-emphasis"]').length).toBe(8);
+        // Derived from the vocabulary constant (world pressure joined the
+        // list) so this pin cannot drift from STORY_PALETTE_EMPHASES again.
+        expect(chipGroup.querySelectorAll('input[name="sp-palette-emphasis"]').length).toBe(STORY_PALETTE_EMPHASES.length);
     });
 });

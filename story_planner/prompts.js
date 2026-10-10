@@ -77,9 +77,9 @@ export const STORY_GROUNDING_RULE = 'Stay inside established canon. Keep existin
 // setting can actually produce — grounding works for this lens, not against
 // it).
 
-export const WORLD_PRESSURE_RULE = 'A world complication is the setting acting on the story, not anyone\'s scheme: weather and seasons, natural events, scarcity and supply, infrastructure and utilities, money and markets, law and institutions, illness, public mood, or a distant event that reaches this place. If the pressure traces back to something a person wants, it is not a world complication; leave it out. Read the recent story for the routine that has set in — the same place, the same activity loop, the comfortable rhythm — and propose complications that break that routine, not the story\'s premise. Every complication must be one the established setting can actually produce: derive it from the place, season, economy, or dependencies already in the context, never from a genre the story has not claimed. It earns its place by changing what someone can do, keep, reach, afford, or safely assume — name what it threatens, takes away, forces, or reorders. Scale it to the escalation preference, if one is given: a restrained story gets a delayed shipment or a rent increase, not a catastrophe.';
+export const WORLD_PRESSURE_RULE = 'A world complication is the setting acting on the story: weather and seasons, natural events, scarcity and abundance, infrastructure and utilities, money and markets, law and institutions, public celebrations, discoveries, illness, public mood, or a distant event that reaches this place. The initiating development must be general: an external condition, or a decision by an institution or group that applies to everyone it reaches — a toll, a ration, a festival, a new law. A plan by a particular person or group to get something from particular people is a scheme, not a world development, even when the cast is not its target; leave it out. Characters may pursue their own interests in response. Read the recent story for the routine that has set in — the same place, the same activity loop, the comfortable rhythm — and propose developments that break that routine, not the story\'s premise. Developments may be adverse, beneficial, or mixed: an opening route, a bumper harvest, a public celebration, or a discovery can make the world active without a crisis. Do not turn every opportunity into a hidden threat or require a hardship quota. Every development must be one the established setting can actually produce: derive it from the place, season, economy, or dependencies already in the context, never from a genre the story has not claimed. It earns its place by changing what someone can do, keep, reach, afford, or safely assume — name what it opens, enables, threatens, takes away, or reorders. Scale it to the escalation preference, if one is given: a restrained story gets a closed road or a small windfall, not a catastrophe or a fortune.';
 
-export const ARC_DESTINATION_RULE_WORLD = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences (under 50 words), its description names the routine or stability the complication presses on, the specific external force that makes it newly consequential now, and the disruption it builds toward — a loss, scarcity, danger, deadline, or forced change that could go more than one way — and what concretely could be gained or lost. Name the disruption but do not stage it: leave the details and the outcome to the scene. "Tension rises", "times get harder", "things become difficult", "must choose between X and Y", or "whether X or Y is the question" say what a scene would mean, not what happens in it. A small complication that changes real options beats a spectacle that changes nothing.';
+export const ARC_DESTINATION_RULE_WORLD = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences (under 50 words), its description names the routine or expectations the development changes, the specific external condition or systemic change that makes it newly consequential now, and the playable opening or disruption it builds toward — an arrival, discovery, public event, new access, offer, deadline, shortage, or changed arrangement that could go more than one way — and what concretely could be gained, lost, or made possible. Name the opening or disruption but do not stage it: leave the details and the outcome to the scene. "Tension rises", "times get harder", "things become difficult", "must choose between X and Y", or "whether X or Y is the question" say what a scene would mean, not what happens in it. A beneficial development needs consequential options, not an invented danger to justify it. A small development that changes real options beats a spectacle that changes nothing.';
 
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
@@ -121,14 +121,16 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
     // world-pressure lens the examples are world-driven instead — the same
     // copy-protection argument says a lens asking for complications must not
     // show two NPC schemes, and the two world examples must not share one
-    // shape either: one is a household countdown (access lost, reserves spent
-    // to cope, workaround closed), while the other builds to an allocation
-    // meeting the cast can act in and includes a beat where the world CREATES
-    // an option (first-come registration) rather than taking one away. Two
-    // "a resource runs out, someone pays, it gets worse" ladders would teach
-    // exactly that ladder.
+    // shape either: one builds to a community allocation meeting under
+    // scarcity, while the other is a household-scale opportunity (a new ferry
+    // route) with a real cost attached. Opportunity must be a valid initiating
+    // event, not just a workaround midway through a hardship ladder — but a
+    // stakeless one ("a nice market opens") resolves itself on arrival, so the
+    // example shows a limited, time-bound window that can go either way. The
+    // two also differ in setting and scale and share no posted-notice beats,
+    // which an earlier pair had in common.
     const beatActorRule = worldPressure
-        ? 'A beat must be something a narrator can actually perform in a single scene — the world moves: something fails, runs short, arrives, is discovered, or stops working the way everyone assumed. People may react and adapt inside a beat, but the pressure is never anyone\'s scheme.'
+        ? 'A beat must be something a narrator can actually perform in a single scene — the world moves: something arrives, opens, flourishes, is discovered, fails, runs short, or changes how ordinary life works. People and institutions may act, react, and adapt inside a beat, but the initiating development applies to everyone it reaches, never a plan aimed at particular people.'
         : 'A beat must be something a narrator can actually perform in a single scene — someone asks, offers, refuses, or reveals something; something arrives or is discovered; a deadline moves.';
     const examples = worldPressure
         ? `- The Long Dry — The valley's farms depend on a shared water rotation, but this year's thin snowpack cannot sustain it; the arc builds toward the emergency allocation meeting where the valley must rewrite the rotation, and the farm that planted late could come away with no summer water at all.
@@ -136,10 +138,10 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
   2. The watermaster's clerk posts a rationing notice on the canal-house door: households that register their fields before the deadline keep first draw when the summer cuts come.
   3. The canal keeper's posted marks show the reservoir lower than any year in living memory, and meeting notices go up along the whole canal.
 
-- The Washed-Out Crossing — Mira's household relies on the footbridge to reach town, but overnight floodwater has carried it away; the arc builds toward their stored medicine running out before access is restored, putting her brother's treatment and the household's savings at risk.
-  1. The morning courier returns with Mira's undelivered medicine parcel because the bridge has washed away.
-  2. Mira pays for a delivery by the ridge road, using the money reserved for the household's fuel.
-  3. A landslip closes the ridge road before the replacement parcel arrives, stranding it on the town side.`
+- The Night Ferry — A new pre-dawn ferry puts the island bakery, which has only sold to its village, within reach of the mainland market; it builds toward a trial stall there, where a good Saturday could win a standing café order and a slow one could make the crossing a loss.
+  1. A mainland café owner riding the ferry's first run buys the bakery's last loaves on the dock and asks whether there is more where those came from.
+  2. The mainland dock market's manager hears about the loaves and offers the bakery a stall for three Saturdays, the first one rent-free.
+  3. The week before the first Saturday, the ferry adds a freight charge for crated goods, and the bakery's trays count as crates.`
         : `- The Harbor Lease — The dockmaster wants the guild's warehouse back before the autumn fleet arrives, and a damning inspection report gives her the grounds; it builds toward a hearing before the harbor council where the guild must answer the report, and losing it could cost them the warehouse.
   1. The dockmaster's clerk posts an inspection notice on the warehouse door, citing rot no one on the crew has seen.
   2. A carpenter hired to check the beams finds them sound and points out that the notice was signed by an inspector who retired last spring.
@@ -163,7 +165,7 @@ ${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are 
     // pull every arc back toward a person's wants, so it is replaced by the
     // world-pressure rule itself.
     const introRule = worldPressure
-        ? 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay. This request asks for complications the world itself imposes — the setting acting on the characters, not anyone\'s scheme.'
+        ? 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay. This request asks for developments driven by the setting — the setting acting on the characters, not a plan aimed at particular people. The world can open opportunities as well as create difficulties.'
         : 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.';
     const castDevelopmentRule = worldPressure
         ? `- ${WORLD_PRESSURE_RULE}`

@@ -201,7 +201,7 @@ export function buildReadOnlyContinuityProjection(arcs) {
 export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy) {
     const lines = [];
     if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
-    if (palette.emphases.includes('world pressure')) lines.push('World pressure means complications imposed by the setting — weather, scarcity, infrastructure, money, institutions, or illness — that change someone\'s concrete options, rather than a character\'s scheme.');
+    if (palette.emphases.includes('world pressure')) lines.push('World pressure means complications imposed by the setting — adverse, beneficial, or mixed developments in weather, supply and abundance, infrastructure, markets, institutions, public events, or discoveries — that change someone\'s concrete options. Decisions that apply to everyone they reach qualify, such as a toll, a ration, or a festival; a plan aimed at particular people does not, even when the cast is not its target. Opportunities need not conceal a threat.');
     if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
     lines.push('Cast novelty and plot escalation are separate choices: a newcomer need not raise the stakes, and escalation need not add a newcomer. Keep any addition genre-appropriate and useful to the requested arc; friends, clients, witnesses, colleagues, relatives, and other non-antagonist roles are valid.');
     lines.push('A character already evidenced in the story is established even without a Knowledge record. Registry absence is not proof that someone is new.');
@@ -426,7 +426,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
             // The lens rides the application-owned envelope (never a custom
             // template) so it cannot be silently dropped the way a token could.
             ...(request.lens === 'world-pressure'
-                ? ['Focus: world complications — the setting itself acting on the story, not anyone\'s scheme. Break the routine the recent story has settled into.',
+                ? ['Focus: world complications — the setting itself acting on the story through external conditions or general changes that apply to everyone they reach, not a plan aimed at particular people. Institutions and groups may create those conditions. Break the routine with adverse, beneficial, or mixed developments; opportunities need not conceal a threat.',
                     'If proposing a newcomer, have them arrive because of the complication or help someone adapt to it; their scheme must not be the source of the pressure.']
                 : []),
             `Selected sections: ${labels.join(', ')}.`,
