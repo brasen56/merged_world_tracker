@@ -84,7 +84,7 @@ export function buildSystemPrompt(requestSpec = null, settings = getSettings()) 
     // owned. Custom system prompts remain supported by the legacy full-plan path.
     if (!requestSpec) return custom || STORY_PLAN_SYSTEM_PROMPT;
     const request = sanitizeStoryPlanRequest(requestSpec);
-    return buildStoryPlanSystemPrompt(request.sectionKeys);
+    return buildStoryPlanSystemPrompt(request.sectionKeys, request.lens);
 }
 
 // Bounded, but wide enough to cover a legal plan (getArcCount caps at 30). For
@@ -201,6 +201,7 @@ export function buildReadOnlyContinuityProjection(arcs) {
 export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy) {
     const lines = [];
     if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
+    if (palette.emphases.includes('world pressure')) lines.push('World pressure means complications imposed by the setting — weather, scarcity, infrastructure, money, institutions, or illness — that change someone\'s concrete options, rather than a character\'s scheme.');
     if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
     lines.push('Cast novelty and plot escalation are separate choices: a newcomer need not raise the stakes, and escalation need not add a newcomer. Keep any addition genre-appropriate and useful to the requested arc; friends, clients, witnesses, colleagues, relatives, and other non-antagonist roles are valid.');
     lines.push('A character already evidenced in the story is established even without a Knowledge record. Registry absence is not proof that someone is new.');
@@ -374,7 +375,10 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
             ? 'Selected mode: every Character Journey primary must use a [SELECTED] handle, and each selected handle must be primary at least once before any repeat.'
             : 'Any mode: every Character Journey primary may use any captured handle.',
         'Every Character Journey bullet must begin with exactly one [SUBJECT:sN] marker and may add one [SUPPORT:sN,sN] marker. Do not put these markers on other sections.',
-        'A Journey puts a value, relationship, fear, habit, or obligation under pressure from a specific person, problem, or opportunity, and builds toward an encounter the subject has to respond to. Resistance, relapse, deterioration, repair, or no resolution are all valid outcomes. The pressure can come from another character or from the subject\'s relationship with {{user}}, and the subject may act toward {{user}}; never decide what {{user}} thinks, chooses, or does.',
+        'A Journey puts a value, relationship, fear, habit, or obligation under pressure from a specific person, problem, or opportunity, and builds toward an encounter the subject has to respond to. Resistance, relapse, deterioration, repair, or no resolution are all valid outcomes.',
+        request.lens === 'world-pressure'
+            ? 'Under this focus, the pressure on the Journey subject comes from the world complication, not another character\'s scheme; the subject may act toward {{user}} in response, but never decide what {{user}} thinks, chooses, or does.'
+            : 'The pressure can come from another character or from the subject\'s relationship with {{user}}, and the subject may act toward {{user}}; never decide what {{user}} thinks, chooses, or does.',
         ...targetOwnership,
         '</journey_subjects>',
     ].join('\n') : '';
@@ -419,6 +423,12 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         const scopeBlock = [
             '<application_request>',
             `Operation: ${request.operation === 'add' ? 'Add ideas' : 'Refresh selected arcs'}.`,
+            // The lens rides the application-owned envelope (never a custom
+            // template) so it cannot be silently dropped the way a token could.
+            ...(request.lens === 'world-pressure'
+                ? ['Focus: world complications — the setting itself acting on the story, not anyone\'s scheme. Break the routine the recent story has settled into.',
+                    'If proposing a newcomer, have them arrive because of the complication or help someone adapt to it; their scheme must not be the source of the pressure.']
+                : []),
             `Selected sections: ${labels.join(', ')}.`,
             operationText,
             'Return only arcs in the selected sections. Never use another section as a fallback.',

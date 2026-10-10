@@ -44,7 +44,7 @@ import {
     getStoryPlanRequestPreferences,
 } from './data.js';
 import { buildAuthorCharacterContext, buildSafeCharacterContext, listSafeCharacterContextCandidates } from '../core/character_context.js';
-import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, sanitizeAuthorContextSelection, AUTHOR_CONTEXT_BUDGETS, AUTHOR_CONTEXT_FIELD_KEYS, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS } from './schema.js';
+import { sanitizeStoryPlanRequest, sanitizeStoryPlanRequestPreferences, sanitizeAuthorContextSelection, AUTHOR_CONTEXT_BUDGETS, AUTHOR_CONTEXT_FIELD_KEYS, getStoryPlanRequestError, MAX_CHARACTER_CONTEXT_IDS, MAX_STORY_PLAN_REQUEST_IDS, STORY_PALETTE_EMPHASES, STORY_PLAN_LENS_LABELS } from './schema.js';
 import { applyPlanInjection, getArcsForInjection, buildInjectionBody, getInjectedTokenCount, getInjectionHeader } from './injection.js';
 import { describeCastPolicyRequest, generatePlan, MAX_JOURNEY_SUBJECT_CANDIDATES } from './generation.js';
 import { applyScopedPlanProposal, buildArcDiff, previewScopedApply } from './proposals.js';
@@ -603,9 +603,10 @@ function requestSummary(request) {
             ? ` Selected Journey subjects: ${request.subjectEntityIds.length}.`
             : ' Journey subjects: any tracked character.'
         : '';
+    const lensNote = request.lens === 'world-pressure' ? ' Focus: world complications.' : '';
     return request.operation === 'add'
-        ? `Add up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects} Use the selected public context.`
-        : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects} Use the selected public context.`;
+        ? `Add up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects}${lensNote} Use the selected public context.`
+        : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects}${lensNote} Use the selected public context.`;
 }
 
 const CHARACTER_COVERAGE_LABELS = Object.freeze({
@@ -928,6 +929,14 @@ export function openGenerateDialog() {
                 <legend class="mwt-label">Sections</legend>
                 <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap">${sectionChecks}</div>
             </fieldset>
+            <fieldset style="border:0;padding:0;margin:12px 0 0">
+                <legend class="mwt-label">Planning lens (Add ideas only)</legend>
+                <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap">
+                    <label class="sp-mode-label" for="sp-generate-lens-open"><input id="sp-generate-lens-open" type="radio" name="sp-generate-lens" value="open" ${preferences.lens !== 'world-pressure' ? 'checked' : ''}> ${STORY_PLAN_LENS_LABELS.open}</label>
+                    <label class="sp-mode-label" for="sp-generate-lens-world"><input id="sp-generate-lens-world" type="radio" name="sp-generate-lens" value="world-pressure" ${preferences.lens === 'world-pressure' ? 'checked' : ''}> ${STORY_PLAN_LENS_LABELS['world-pressure']}</label>
+                </div>
+                <p class="mwt-text-dim mwt-text-sm">Open brainstorm plans whatever the story needs. World complications ask the setting itself to act — weather, scarcity, infrastructure, money, institutions — to break the routine the story has settled into. Complication arcs still land in the sections above by how soon they can be used; setup beats change someone's concrete options or cost them something as the disruption develops. The lens applies only to Add ideas; Refresh preserves existing arc premises.</p>
+            </fieldset>
             <div class="mwt-settings-grid mwt-mt-8">
                 <label class="mwt-label" for="sp-generate-count">Requested count</label>
                 <input id="sp-generate-count" class="mwt-input" type="number" min="1" max="30" value="${preferences.requestedCount || getArcCount()}" style="max-width:100px">
@@ -1029,11 +1038,12 @@ export function openGenerateDialog() {
     });
     const getRequest = () => {
         const operation = modal.querySelector('input[name="sp-generate-operation"]:checked')?.value || 'add';
+        const lens = modal.querySelector('input[name="sp-generate-lens"]:checked')?.value || 'open';
         const sectionKeys = [...modal.querySelectorAll('input[name="sp-generate-section"]:checked')].map(input => input.value);
         const targetArcIds = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')].map(input => input.value);
         const subjectMode = modal.querySelector('input[name="sp-generate-subject-mode"]:checked')?.value || 'any';
         const subjectEntityIds = [...modal.querySelectorAll('input[name="sp-generate-subject"]:checked')].map(input => input.value);
-        return sanitizeStoryPlanRequest({ operation, sectionKeys, subjectMode, subjectEntityIds, requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: modal.querySelector('#sp-generate-cast-policy')?.value, targetArcIds });
+        return sanitizeStoryPlanRequest({ operation, lens, sectionKeys, subjectMode, subjectEntityIds, requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: modal.querySelector('#sp-generate-cast-policy')?.value, targetArcIds });
     };
     // Once the user has touched the target list, their selection is
     // authoritative — including an empty one. Falling back to the saved
@@ -1088,6 +1098,9 @@ export function openGenerateDialog() {
         if (contextSummary) contextSummary.textContent = `Public context: ${requestContext.mode === 'off' ? 'off' : requestContext.mode === 'active' ? `active cast${requestContext.excludedEntityIds.length ? `, ${requestContext.excludedEntityIds.length} omitted for this request` : ''}` : `${requestContext.entityIds.length} selected character${requestContext.entityIds.length === 1 ? '' : 's'} for this request`}. Existing context settings are unchanged by this dialog.`;
         const count = modal.querySelector('#sp-generate-count');
         if (count) count.disabled = request.operation !== 'add';
+        modal.querySelectorAll('input[name="sp-generate-lens"]').forEach(input => {
+            input.disabled = request.operation !== 'add';
+        });
         const targets = modal.querySelector('#sp-generate-targets');
         if (targets) targets.hidden = request.operation !== 'refresh';
         const subjects = modal.querySelector('#sp-generate-subjects');
@@ -1115,7 +1128,7 @@ export function openGenerateDialog() {
         syncSummary();
     });
     modal.querySelectorAll('input[name="sp-generate-section"]').forEach(input => input.addEventListener('change', refresh));
-    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"], #sp-generate-count, #sp-generate-cast-policy').forEach(input => input.addEventListener('change', refresh));
+    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-lens"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"], #sp-generate-count, #sp-generate-cast-policy').forEach(input => input.addEventListener('change', refresh));
     modal.querySelector('#sp-generate-cancel')?.addEventListener('click', () => hideModal(GENERATE_MODAL_ID));
     modal.querySelector('#sp-generate-legacy')?.addEventListener('click', async () => {
         hideModal(GENERATE_MODAL_ID);
@@ -1140,7 +1153,17 @@ export function openGenerateDialog() {
         }
         // Persisted only once the request is valid: remembering a rejected
         // request reopens the dialog in the state that could not be submitted.
-        setPlanData({ storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences(request) });
+        // The lens and count come from the form, not the canonical request:
+        // Refresh flattens the lens and nulls the count, and saving the
+        // cleaned-up request would reset both preferences after a Refresh
+        // submit.
+        setPlanData({
+            storyPlanRequestPreferences: sanitizeStoryPlanRequestPreferences({
+                ...request,
+                lens: modal.querySelector('input[name="sp-generate-lens"]:checked')?.value || 'open',
+                requestedCount: modal.querySelector('#sp-generate-count')?.value,
+            }),
+        });
         try {
             const authorSelection = readAuthorSelection();
             if (authorSelection.entityIds.some(id => !authorSelection.npcFields[id]?.length)) {
@@ -1288,7 +1311,7 @@ export function render() {
                 <div class="mwt-label">Story Palette</div>
                 <div>
                     <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap" role="group" aria-label="Story palette emphasis">
-                        ${['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation'].map((value, index) => `<label class="sp-mode-label" for="sp-palette-emphasis-${index}"><input id="sp-palette-emphasis-${index}" type="checkbox" name="sp-palette-emphasis" value="${value}" ${palette.emphases.includes(value) ? 'checked' : ''}> ${escapeHtml(value)}</label>`).join('')}
+                        ${STORY_PALETTE_EMPHASES.map((value, index) => `<label class="sp-mode-label" for="sp-palette-emphasis-${index}"><input id="sp-palette-emphasis-${index}" type="checkbox" name="sp-palette-emphasis" value="${value}" ${palette.emphases.includes(value) ? 'checked' : ''}> ${escapeHtml(value)}</label>`).join('')}
                     </div>
                     <label class="mwt-text-sm" for="sp-palette-escalation">Escalation: <select id="sp-palette-escalation" class="sp-enforcement"><option value="restrained" ${palette.escalation === 'restrained' ? 'selected' : ''}>Restrained</option><option value="balanced" ${palette.escalation === 'balanced' ? 'selected' : ''}>Balanced</option><option value="escalating" ${palette.escalation === 'escalating' ? 'selected' : ''}>Escalating</option></select></label>
                     <label class="mwt-text-sm" for="sp-palette-cast-policy" style="margin-left:8px">Cast policy: <select id="sp-palette-cast-policy" class="sp-enforcement"><option value="existing-only" ${palette.castPolicy === 'existing-only' ? 'selected' : ''}>Established cast only</option><option value="allowed" ${palette.castPolicy === 'allowed' ? 'selected' : ''}>New characters allowed</option><option value="propose" ${palette.castPolicy === 'propose' ? 'selected' : ''}>Actively propose new characters</option></select></label>

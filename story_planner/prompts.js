@@ -63,9 +63,27 @@ export const PLAYER_AGENCY_RULE = '{{user}} is the player\'s character (named in
 // the context, and a character given a skill their canon says they lack.
 export const STORY_GROUNDING_RULE = 'Stay inside established canon. Keep existing relationships between people, projects, and obligations as the story has them, and never invent past events or a character\'s skills, history, or relationships. Two threads that appear near each other in the context are not connected unless the story says so. A new connection or fact must arrive through a future event in the arc, not be asserted as existing history.';
 
+// ─── World-pressure lens (scoped planning lens) ──────────────────────────────
+//
+// The base prompt frames every idea as something a person wants or unsettles:
+// the destination rule's encounter list is interpersonal (confrontation,
+// revelation, offer, admission), the cast rule asks for threads and cast, and
+// both worked examples are someone's scheme. "Let the world itself act on the
+// characters" — weather, scarcity, infrastructure, money, institutions — has
+// no lane in that framing, so a scoped request can carry the world-pressure
+// lens. The lens swaps those framings; PLAYER_AGENCY and STORY_GROUNDING
+// apply unchanged (the world puts things in front of {{user}} without ever
+// deciding their reaction, and a complication must be one the established
+// setting can actually produce — grounding works for this lens, not against
+// it).
+
+export const WORLD_PRESSURE_RULE = 'A world complication is the setting acting on the story, not anyone\'s scheme: weather and seasons, natural events, scarcity and supply, infrastructure and utilities, money and markets, law and institutions, illness, public mood, or a distant event that reaches this place. If the pressure traces back to something a person wants, it is not a world complication; leave it out. Read the recent story for the routine that has set in — the same place, the same activity loop, the comfortable rhythm — and propose complications that break that routine, not the story\'s premise. Every complication must be one the established setting can actually produce: derive it from the place, season, economy, or dependencies already in the context, never from a genre the story has not claimed. It earns its place by changing what someone can do, keep, reach, afford, or safely assume — name what it threatens, takes away, forces, or reorders. Scale it to the escalation preference, if one is given: a restrained story gets a delayed shipment or a rent increase, not a catastrophe.';
+
+export const ARC_DESTINATION_RULE_WORLD = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences (under 50 words), its description names the routine or stability the complication presses on, the specific external force that makes it newly consequential now, and the disruption it builds toward — a loss, scarcity, danger, deadline, or forced change that could go more than one way — and what concretely could be gained or lost. Name the disruption but do not stage it: leave the details and the outcome to the scene. "Tension rises", "times get harder", "things become difficult", "must choose between X and Y", or "whether X or Y is the question" say what a scene would mean, not what happens in it. A small complication that changes real options beats a spectacle that changes nothing.';
+
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
-export function buildStoryPlanSystemPrompt(sectionKeys = null) {
+export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
     const selected = Array.isArray(sectionKeys)
         ? SECTIONS.filter(section => sectionKeys.includes(section.key))
         : SECTIONS;
@@ -80,27 +98,49 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null) {
     // strict-heading validator then rejects as out of scope.
     const has = key => sections.some(section => section.key === key);
     const hooksOnly = has('immediate') && sections.length === 1;
+    // World-pressure lens: swap the NPC-centric framings (destination
+    // language, beat actor, worked examples, cast-development rule) while
+    // every structural rule — agency, grounding, beats, format, headings —
+    // stays exactly as the open lens has it.
+    const worldPressure = lens === 'world-pressure';
     const sortRule = has('immediate') || has('horizon')
         ? `- Sort ideas by how soon the story could use them.${has('immediate') ? ' Immediate Hooks must be genuinely usable in the very next scene with no setup;' : ''}${has('horizon') ? ' Horizon Arcs are the ones the story still has to build toward.' : ''}`
         : '- Sort ideas by how soon the story could use them.';
     // Hooks need no setup and have no turning point to build toward, so a
     // Hooks-only request keeps the plain one-line description.
+    const destinationRule = worldPressure ? ARC_DESTINATION_RULE_WORLD : ARC_DESTINATION_RULE;
     const bulletRule = hooksOnly
         ? 'Each bullet is a short arc name, an em-dash, then 1-2 sentences naming the central shift it introduces.'
-        : `Each bullet is a short arc name, an em-dash, then its description. ${ARC_DESTINATION_RULE}${has('immediate') ? ' An Immediate Hook can simply name a live opening the next scene can use.' : ''}`;
+        : `Each bullet is a short arc name, an em-dash, then its description. ${destinationRule}${has('immediate') ? ' An Immediate Hook can simply name a live opening the next scene can use.' : ''}`;
     // The worked examples are invented and deliberately unlike each other (an
     // external plot, a quiet relationship) so no single beat shape gets copied.
     // The previous single example's beats (a servant mentions something, a
     // shipment arrives with paperwork, an agent turns up) reappeared almost
     // verbatim in tester plans. The second example shows an NPC acting toward
-    // {{user}} without a later beat assuming the answer.
-    const beatsRule = hooksOnly
-        ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
-        : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: concrete, in-scene events that build toward the arc's turning point. A beat must be something a narrator can actually perform in a single scene — someone asks, offers, refuses, or reveals something; something arrives or is discovered; a deadline moves. ${BEAT_PROGRESSION_RULE}
+    // {{user}} without a later beat assuming the answer. Under the
+    // world-pressure lens the examples are world-driven instead — the same
+    // copy-protection argument says a lens asking for complications must not
+    // show two NPC schemes, and the two world examples must not share one
+    // shape either: one is a household countdown (access lost, reserves spent
+    // to cope, workaround closed), while the other builds to an allocation
+    // meeting the cast can act in and includes a beat where the world CREATES
+    // an option (first-come registration) rather than taking one away. Two
+    // "a resource runs out, someone pays, it gets worse" ladders would teach
+    // exactly that ladder.
+    const beatActorRule = worldPressure
+        ? 'A beat must be something a narrator can actually perform in a single scene — the world moves: something fails, runs short, arrives, is discovered, or stops working the way everyone assumed. People may react and adapt inside a beat, but the pressure is never anyone\'s scheme.'
+        : 'A beat must be something a narrator can actually perform in a single scene — someone asks, offers, refuses, or reveals something; something arrives or is discovered; a deadline moves.';
+    const examples = worldPressure
+        ? `- The Long Dry — The valley's farms depend on a shared water rotation, but this year's thin snowpack cannot sustain it; the arc builds toward the emergency allocation meeting where the valley must rewrite the rotation, and the farm that planted late could come away with no summer water at all.
+  1. Low river flow makes the watermaster cancel the spring flush, leaving one farm's seedbeds too dry to sow.
+  2. The watermaster's clerk posts a rationing notice on the canal-house door: households that register their fields before the deadline keep first draw when the summer cuts come.
+  3. The canal keeper's posted marks show the reservoir lower than any year in living memory, and meeting notices go up along the whole canal.
 
-Two examples of the format, from unrelated stories. Do not reuse their events or beat patterns.
-
-- The Harbor Lease — The dockmaster wants the guild's warehouse back before the autumn fleet arrives, and a damning inspection report gives her the grounds; it builds toward a hearing before the harbor council where the guild must answer the report, and losing it could cost them the warehouse.
+- The Washed-Out Crossing — Mira's household relies on the footbridge to reach town, but overnight floodwater has carried it away; the arc builds toward their stored medicine running out before access is restored, putting her brother's treatment and the household's savings at risk.
+  1. The morning courier returns with Mira's undelivered medicine parcel because the bridge has washed away.
+  2. Mira pays for a delivery by the ridge road, using the money reserved for the household's fuel.
+  3. A landslip closes the ridge road before the replacement parcel arrives, stranding it on the town side.`
+        : `- The Harbor Lease — The dockmaster wants the guild's warehouse back before the autumn fleet arrives, and a damning inspection report gives her the grounds; it builds toward a hearing before the harbor council where the guild must answer the report, and losing it could cost them the warehouse.
   1. The dockmaster's clerk posts an inspection notice on the warehouse door, citing rot no one on the crew has seen.
   2. A carpenter hired to check the beams finds them sound and points out that the notice was signed by an inspector who retired last spring.
   3. The dockmaster moves the hearing up a week, before anyone can find the retired inspector.
@@ -108,10 +148,28 @@ Two examples of the format, from unrelated stories. Do not reuse their events or
 - The Spare Room — Mira wants to stop being her brother's rescuer, and his plan to move in "just for a month" makes it urgent; it builds toward Mira telling him what she will and won't do, which could end with him leaving angry or her giving him a key on her terms.
   1. Mira's brother asks {{user}} to help talk her round, saying she always listens to them.
   2. Mira finds out he went to {{user}} before asking her, and calls off the dinner where she had planned to say yes.
-  3. Her brother arrives with his bags a week early, before she has given him an answer.
+  3. Her brother arrives with his bags a week early, before she has given him an answer.`;
+    const beatsRule = hooksOnly
+        ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
+        : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: concrete, in-scene events that build toward the arc's turning point. ${beatActorRule} ${BEAT_PROGRESSION_RULE}
+
+Two examples of the format, from unrelated stories. Do not reuse their events or beat patterns.
+
+${examples}
 ${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are already usable as-is.' : ''}`;
 
-    return `You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.
+    // The intro and the cast-development rule are the two remaining NPC-centric
+    // framings. Under the lens, "develop established threads and cast" would
+    // pull every arc back toward a person's wants, so it is replaced by the
+    // world-pressure rule itself.
+    const introRule = worldPressure
+        ? 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay. This request asks for complications the world itself imposes — the setting acting on the characters, not anyone\'s scheme.'
+        : 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.';
+    const castDevelopmentRule = worldPressure
+        ? `- ${WORLD_PRESSURE_RULE}`
+        : '- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.';
+
+    return `${introRule}
 
 ABSOLUTE RULES:
 - Output ONLY the story plan document. Never continue the roleplay or write any part of it as a scene. Summarizing what an NPC asks, offers, or reveals is planning, not dialogue.
@@ -120,7 +178,7 @@ ${sortRule}
 - Treat every arc as a hypothesis: describe attempts, pressures, complications, and possible outcomes, and never claim an uncertain outcome succeeds.
 - ${PLAYER_AGENCY_RULE}
 - ${STORY_GROUNDING_RULE}
-- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.
+${castDevelopmentRule}
 - If you are shown a previous plan, an arc's name is its identifier: reproduce the name of any arc you carry forward EXACTLY as written, and never copy a [BRACKETED] annotation into a name. Renaming an arc loses its tracked progress and duplicates it.
 - The previous plan may put a tracker marker such as [ARC:…] in front of an arc's name. When you carry that arc forward, copy its marker exactly at the start of the bullet, before the name and outside any bold. Never put a marker on a new arc, on a beat, or on a different arc.
 - Be punchy and plot-focused.

@@ -60,11 +60,22 @@ export const MAX_CHARACTER_CONTEXT_ENTITY_ID_LENGTH = 120;
 export const MAX_CHARACTER_CONTEXT_IDS = 24;
 export const MAX_ARC_PARTICIPANT_IDS = 24;
 export const STORY_PLANNER_METRIC_COUNTER_MAX = 1_000_000_000;
-export const STORY_PALETTE_EMPHASES = Object.freeze(['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation']);
+export const STORY_PALETTE_EMPHASES = Object.freeze(['conflict', 'mystery', 'discovery', 'consequences', 'relationships', 'character growth', 'quiet moments', 'repair/reconciliation', 'world pressure']);
 export const STORY_PALETTE_ESCALATIONS = Object.freeze(['restrained', 'balanced', 'escalating']);
 export const CHARACTER_CONTEXT_MODES = Object.freeze(['off', 'selected', 'active']);
 export const STORY_PLAN_OPERATIONS = Object.freeze(['add', 'refresh']);
 export const STORY_PLAN_CAST_POLICIES = Object.freeze(['existing-only', 'allowed', 'propose']);
+// Planning lens (scoped generation). 'open' is the default brainstorm;
+// 'world-pressure' asks the setting itself to act on the story (weather,
+// scarcity, infrastructure, money, institutions) instead of another
+// character's scheme. Labels are UI-facing and live with the vocabulary so
+// the Generate dialog and any future quick action cannot disagree about what
+// a lens is called — the same reason SECTIONS owns its labels.
+export const STORY_PLAN_LENSES = Object.freeze(['open', 'world-pressure']);
+export const STORY_PLAN_LENS_LABELS = Object.freeze({
+    open: 'Open brainstorm',
+    'world-pressure': 'World complications',
+});
 export const MAX_STORY_PLAN_REQUEST_COUNT = 30;
 export const MAX_STORY_PLAN_REQUEST_IDS = 30;
 
@@ -90,6 +101,12 @@ export function sanitizeStoryPlanRequestPreferences(value) {
         subjectMode: request.subjectMode,
         subjectEntityIds: request.subjectEntityIds,
         castPolicy: request.castPolicy,
+        // Like requestedCount above, the lens is read from the input rather
+        // than the canonical request: a Refresh request flattens the lens to
+        // 'open' (the model must never be steered while premises are
+        // preserved), but the saved preference should reopen the dialog where
+        // the user left it.
+        lens: STORY_PLAN_LENSES.includes(raw.lens) ? raw.lens : 'open',
     };
 }
 
@@ -111,6 +128,8 @@ export function sanitizeStoryPlanRequest(value, { sectionKeys = SECTION_KEYS } =
         : [])].slice(0, MAX_STORY_PLAN_REQUEST_IDS);
     const operation = STORY_PLAN_OPERATIONS.includes(raw.operation) ? raw.operation : 'add';
     const castPolicy = STORY_PLAN_CAST_POLICIES.includes(raw.castPolicy) ? raw.castPolicy : 'allowed';
+    // Refresh preserves an existing arc's premise; a lens only steers new ideas.
+    const lens = operation === 'add' && STORY_PLAN_LENSES.includes(raw.lens) ? raw.lens : 'open';
     const subjectMode = raw.subjectMode === 'selected' || (raw.subjectMode == null && subjectEntityIds.length)
         ? 'selected'
         : 'any';
@@ -125,6 +144,7 @@ export function sanitizeStoryPlanRequest(value, { sectionKeys = SECTION_KEYS } =
             : null,
         targetArcIds,
         castPolicy,
+        lens,
     };
 }
 
