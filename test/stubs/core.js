@@ -200,6 +200,7 @@ export function getRecentMessages({
     maxChars = 500000,
     filterSystem = false,
     strip = false,
+    stripAffordances = false,
     preserveOffScreen = true,
     excludeLast = 0,
     stableHistory = false,
@@ -215,7 +216,7 @@ export function getRecentMessages({
         const msg = slice[i];
         const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
         let text = String(msg?.mes || '').trim();
-        if (strip) text = stripNonNarrative(text, { preserveOffScreen });
+        if (strip) text = stripNonNarrative(text, { preserveOffScreen, stripAffordances });
         if (!text) continue;
         const line = `${name}: ${text}`;
         if (total + line.length > maxChars) break;

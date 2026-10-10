@@ -51,12 +51,30 @@
  *   module blocks (the actor/witness-sealed log). Consumers whose prompts
  *   carry no partition rules for that block (Knowledge) must pass false so a
  *   sealed event can never be recorded as knowledge an NPC never learned.
+ * @param {boolean} [opts.stripAffordances=false] — remove the preset's numbered
+ *   suggestion div immediately after an in-story timestamp (Interiority only).
  * @returns {string} stripped text
  */
-export function stripNonNarrative(text, { preserveOffScreen = true } = {}) {
+export function stripNonNarrative(text, { preserveOffScreen = true, stripAffordances = false } = {}) {
     if (!text || typeof text !== 'string') return text || '';
 
     let out = text;
+
+    // The personal v5 preset puts an unlabelled, numbered affordance div
+    // immediately after the end timestamp. These are possible USER choices,
+    // not witnessed events or NPC plans. Match before removing details/GFX so
+    // unrelated divs cannot become adjacent to the timestamp by accident.
+    // Never scan past a closing div or remove the timestamp itself.
+    if (stripAffordances) {
+        out = out.replace(/(\[In-story time:[^\]\r\n]*\])\s*<div\b[^>]*>((?:(?!<\/?div\b)[\s\S])*?)<\/div\s*>/gi,
+            (block, timestamp, body) => {
+                const suggestions = body.split(/<br\s*\/?\s*>|\r?\n/i)
+                    .map(line => line.trim()).filter(Boolean);
+                return suggestions.length === 4
+                    && suggestions.every((line, index) => line.startsWith(`${index + 1}. `))
+                    ? timestamp : block;
+            });
+    }
 
     // 1. Remove <details>…</details> blocks (non-greedy, case-insensitive).
     //    Preset trackers and old chatter live inside these collapsible blocks.

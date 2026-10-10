@@ -2038,6 +2038,7 @@ function getStrippedRecentMessages(windowSize) {
         maxChars: 100000,
         filterSystem: true,
         strip: true,
+        stripAffordances: true,
     }) || '';
 }
 

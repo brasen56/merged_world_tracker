@@ -88,6 +88,8 @@ export function getStableHistoryEnd(chat = getChat()) {
  * @param {number} [opts.excludeLast=0] — trailing messages to skip (in-flight/swipe safety)
  * @param {boolean} [opts.stableHistory=false] — use the global settled-history cutoff
  * @param {boolean} [opts.strip=false] — strip non-narrative blocks from each message
+ * @param {boolean} [opts.stripAffordances=false] — also strip timestamp-adjacent
+ *   numbered suggestion divs when strip is enabled (Interiority only)
  * @param {boolean} [opts.preserveOffScreen=true] — when stripping, keep Off-Screen
  *   Events module blocks (the actor/witness-sealed log). Consumers without
  *   partition rules for that block (Knowledge) must pass false.
@@ -98,6 +100,7 @@ export function getRecentMessages({
     maxChars = 500000,
     filterSystem = false,
     strip = false,
+    stripAffordances = false,
     preserveOffScreen = true,
     excludeLast = 0,
     stableHistory = false,
@@ -118,7 +121,7 @@ export function getRecentMessages({
         const msg = slice[i];
         const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
         let text = String(msg?.mes || '').trim();
-        if (strip) text = stripNonNarrative(text, { preserveOffScreen });
+        if (strip) text = stripNonNarrative(text, { preserveOffScreen, stripAffordances });
         if (!text) continue;
         const line = `${name}: ${text}`;
         if (total + line.length > maxChars) break;
