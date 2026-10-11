@@ -653,7 +653,7 @@ function renderModal() {
                 Chronicle.applyInjection?.();
                 StoryPlanner.applyPlanInjection?.();
                 Interiority.applyIntentionsInjection?.();
-                if (getSettings().injectionMasterOff) clearAmbientInjection();
+                if (getSettings().injectionMasterOff) clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'panic-settings-save' });
             } catch { /* modules may not be initialized yet */ }
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });

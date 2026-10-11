@@ -821,7 +821,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     // ⚙️ button → flip the global panic switch
                     const nowOff = s.injectionMasterOff !== true;
                     saveSettings({ [cfg.masterKey]: nowOff });
-                    if (nowOff) clearAmbientInjection();
+                    if (nowOff) clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'panic-floating-button' });
                     try {
                         WorldState.applyWorldStateInjection?.();
                         Chronicle.applyInjection?.();

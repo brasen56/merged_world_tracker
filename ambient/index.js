@@ -31,7 +31,6 @@ export function onGenerationStarted(type = 'normal', _options = {}, dryRun = fal
         if (clearReason) {
             const diagnostics = { kind: 'ambient-conditions', clearReason, generationType: type };
             clearAmbientInjection(diagnostics);
-            record({ module: 'ambient', event: 'ambient_injection_cleared', level: 'debug', detail: diagnostics });
             return false;
         }
         const meta = getChatMeta();

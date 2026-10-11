@@ -1,5 +1,6 @@
 import { applyExtensionPromptInjection } from '../core/injection.js';
 import { getGlobalSettings } from '../core/settings.js';
+import { record } from '../core/diagnostics.js';
 
 export const EXTENSION_PROMPT_KEY = 'mwt_ambient_injection';
 
@@ -30,5 +31,6 @@ export function applyAmbientInjection(ambient, diagnostics) {
 }
 
 export function clearAmbientInjection(diagnostics = { kind: 'ambient-conditions', clearReason: 'explicit-clear' }) {
+    record({ module: 'ambient', event: 'ambient_injection_cleared', level: 'debug', detail: { ...diagnostics } });
     return applyAmbientInjection(null, diagnostics);
 }

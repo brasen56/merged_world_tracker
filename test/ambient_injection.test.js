@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { onGenerationStarted, onChatChanged } from '../ambient/index.js';
-import { EXTENSION_PROMPT_KEY, buildInjectionBody } from '../ambient/injection.js';
+import { EXTENSION_PROMPT_KEY, buildInjectionBody, clearAmbientInjection } from '../ambient/injection.js';
 import { getInjectedSnapshot, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { resetBudgetInjections, _resetBudgetEnforcementState, _setBudgetSettingsReader } from '../core/budget.js';
 import { collectBudgetSnapshot, renderBudgetSnapshot } from '../budget/panel.js';
@@ -12,6 +12,7 @@ const tag = (hour = '12:00 PM', day = 4) => `[In-story time: ${hour}, Thursday, 
 let ctx;
 let prompts;
 const snapshot = () => getInjectedSnapshot(EXTENSION_PROMPT_KEY);
+const ambientEvents = event => getEvents({ module: 'ambient' }).filter(entry => entry.event === event);
 
 beforeEach(() => {
     vi.stubGlobal('localStorage', { getItem: () => null });
@@ -73,7 +74,7 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         expect(snapshot()).toMatchObject({ enabled: false, diagnostics: {
             clearReason: 'configuration-incomplete', generationType: 'normal', outerBudgetAction: 'clear',
         } });
-        expect(getEvents({ module: 'ambient', event: 'ambient_injection_cleared' })[0].detail)
+        expect(ambientEvents('ambient_injection_cleared')[0].detail)
             .toMatchObject({ clearReason: 'configuration-incomplete' });
     });
 
@@ -194,14 +195,14 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         onGenerationStarted('normal');
         ctx.chat[0].mes = tag('06:00 PM');
         onGenerationStarted('normal');
-        expect(getEvents({ module: 'ambient' })).toHaveLength(0);
+        expect(ambientEvents('ambient_time_jump')).toHaveLength(0);
         ctx.chat[0].mes = tag('06:00 PM', 5);
         onGenerationStarted('normal');
         ctx.chat.push({ mes: tag('11:00 PM', 20) });
         onGenerationStarted('swipe');
         ctx.chat[0].mes = tag();
         onGenerationStarted('swipe');
-        const events = getEvents({ module: 'ambient', event: 'ambient_time_jump' });
+        const events = ambientEvents('ambient_time_jump');
         expect(events).toHaveLength(2);
         expect(events.map(event => event.detail.deltaHours)).toEqual([-30, 24]);
     });
@@ -215,13 +216,27 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         bumpEpoch();
         ctx.chat[0].mes = tag();
         onGenerationStarted('normal');
-        expect(getEvents({ module: 'ambient' })).toHaveLength(0);
+        expect(ambientEvents('ambient_time_jump')).toHaveLength(0);
     });
 
     test('missing host is harmless and does not create a transient seed', () => {
         delete globalThis.SillyTavern;
         expect(() => onGenerationStarted('normal')).not.toThrow();
         expect(ctx.chatMetadata.mwt_ambient.seed).toBeUndefined();
+    });
+
+    test.each(['panic-settings-save', 'panic-floating-button', 'panic-slash-command'])('direct %s cleanup records its origin in both snapshot and event history', clearReason => {
+        onGenerationStarted('normal');
+        clearAmbientInjection({ kind: 'ambient-conditions', clearReason });
+        expect(snapshot()).toMatchObject({ enabled: false, payload: '', diagnostics: { clearReason } });
+        expect(ambientEvents('ambient_injection_cleared')[0].detail)
+            .toMatchObject({ clearReason });
+    });
+
+    test('generation-triggered clears emit exactly one clear event', () => {
+        const before = ambientEvents('ambient_injection_cleared').length;
+        onGenerationStarted('quiet');
+        expect(ambientEvents('ambient_injection_cleared')).toHaveLength(before + 1);
     });
 
     test('formatter does not promote next-band forecast into a within-hour claim', () => {

@@ -143,7 +143,7 @@ ctx.chatMetadata.mwt_ambient = {
 ctx.saveMetadataDebounced?.();
 ```
 
-Setting only `enabled: true` is insufficient: explicit climate and hemisphere are required. After a generation, `MWT.diagnostics.injection('mwt_ambient_injection')` shows the **latest slot state**, not a history of narrator prompts. A subsequent quiet/background generation deliberately clears it. Cleared snapshots include `diagnostics.clearReason` and generation-triggered clears include `diagnostics.generationType`; `MWT.diagnostics.events({ module: 'ambient', event: 'ambient_injection_cleared' })` records the reasons in the event ring. Included generations also record their generation type beside the exact payload.
+Setting only `enabled: true` is insufficient: explicit climate and hemisphere are required. After a generation, `MWT.diagnostics.injection('mwt_ambient_injection')` shows the **latest slot state**, not a history of narrator prompts. A subsequent quiet/background generation deliberately clears it. Cleared snapshots include `diagnostics.clearReason` and generation-triggered clears include `diagnostics.generationType`; `MWT.diagnostics.events({ module: 'ambient' }).filter(entry => entry.event === 'ambient_injection_cleared')` reads every clear's reason from the event ring (the events accessor does not support an `event` filter argument). Panic activation identifies its origin as `panic-settings-save`, `panic-floating-button`, or `panic-slash-command`. Included generations also record their generation type beside the exact payload. The global panic switch overrides chat-local `enabled: true`.
 
 ### Phase 3 — User surface
 
