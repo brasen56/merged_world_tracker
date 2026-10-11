@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v1)
 
-**Status:** Phases 1–2 implemented; user surface and planner integration remain pending (Phases 3–4, see §6).
+**Status:** Phases 1–3 implemented; planner integration remains pending (Phase 4, see §6). Live SillyTavern smoke testing remains required.
 **Written:** 2026-10-11, folding `WEATHER_MODULE_PROPOSAL.md` and `WEATHER_MODULE_RESPONSE.md` into one design. Those two docs remain the discussion record; this doc is what we build from.
 **Naming:** the module is **Ambient Conditions**, not Weather. The name states the contract: conditions nobody in the story can change (§4.6). Weather is v1's only condition family; the name leaves room for calendar items later without inviting incidents in.
 
@@ -149,6 +149,15 @@ Setting only `enabled: true` is insufficient: explicit climate and hemisphere ar
 
 - Settings (climate picker, hemisphere, manual season, variability), first-enable ask with dismiss path, pin with expiry, `/wt-ambient` (+ alias), dashboard mirror, optional `reseed`.
 - Exit criteria: settings persist per chat; the ask appears exactly once unless dismissed with default; a pinned condition overrides rolls and expires at its bound; `/wt-ambient` output matches the injected line.
+
+Implemented user surface:
+
+- **Settings → Ambient Conditions (this chat)** saves independently of the global Save Settings button. First enable exposes an inline climate/hemisphere ask before enabling injection. The explicit **Temperate, don’t ask again (Northern hemisphere)** action configures and enables the chat; custom setup also suppresses subsequent asks. An unanswered setup remains available without creating weather or silently choosing a climate. A seed is created on successful enable and inherited by branches.
+- **Pin conditions** selects all five qualitative channels. Pinning intentionally overrides climate gates (an explicit author override), with expiry options **Until unpinned**, **Next band**, **Next dawn**, or an explicit Gregorian **story date/time**. Dated expiry requires a usable calendar clock; relative expiry also works with the message-count fallback. Pin bounds use story hours, start-inclusive/end-exclusive. Forecast applies the same interval at the next band; it returns to generated conditions if that band lies beyond expiry.
+- Pins store their starting clock source; timestamp and World State calendars are compatible, but synthetic message-count clocks are not comparable to calendar clocks. An incompatible pin is inactive rather than assigned a fabricated expiry. Expired pins remain stored so rewinding inside their interval restores the override. **Unpin** removes them explicitly.
+- **Overview** has a read-only Ambient card showing current conditions, one-band forecast, panic/off state, and pin activity/start/expiry. It never creates a seed or writes metadata. Its Open button links to the Ambient Settings section.
+- **`/wt-ambient`** (alias **`/wt-weather`**) returns the same unwrapped body used by injection, including current conditions, one-band forecast and guard copy. **`/wt-ambient reseed`** changes only the seed and preserves settings/pins. Disabled, incomplete or panic-blocked configurations report their state rather than presenting conditions as active. Commands describe the current clock, not a historical prompt; swipe generation still uses the preceding clock, and budget enforcement can shorten/drop the registered payload.
+- Changes clear the old registered injection; included generations recompute through the existing seam. Settings handlers reject stale chat/epoch scopes. Tests in `test/ambient_surface.test.js` cover setup, chat isolation, pin UI and interval/forecast semantics, reseed/alias/body parity, dashboard read-only status and panic gates.
 
 ### Phase 4 — Planner integration
 

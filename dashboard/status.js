@@ -21,6 +21,7 @@ import { collectBudgetSnapshot as readBudgetSnapshot } from '../budget/panel.js'
 import { getCoordinatorSnapshot as readCoordinatorSnapshot } from '../core/coordinator.js';
 import { collectHealthSnapshot as readHealthSnapshot } from '../diagnostics_panel/health.js';
 import { collectQuarantineStatus as readQuarantineStatus } from '../backup/recovery.js';
+import { getAmbientStatus as readAmbientStatus } from '../core/ambient_state.js';
 
 /** Convert any thrown value into the JSON-safe error text used by a cell. */
 function errorMessage(error) {
@@ -54,7 +55,7 @@ function collectCell(read) {
  * own.
  *
  * @param {object} [deps] injectable read-only accessors
- * @returns {object} ten independently guarded Overview cells
+ * @returns {object} independently guarded Overview cells, including Ambient Conditions
  */
 export function collectOverviewSnapshot({
     getDocumentStatus = readDocumentStatus,
@@ -68,6 +69,7 @@ export function collectOverviewSnapshot({
     collectHealthSnapshot = readHealthSnapshot,
     getDeletedIntentions = readDeletedIntentions,
     collectQuarantineStatus = readQuarantineStatus,
+    getAmbientStatus = readAmbientStatus,
 } = {}) {
     return {
         worldState: collectCell(() => getDocumentStatus()),
@@ -83,5 +85,6 @@ export function collectOverviewSnapshot({
         health: collectCell(() => collectHealthSnapshot()),
         deletedIntentions: collectCell(() => getDeletedIntentions()),
         quarantine: collectCell(() => collectQuarantineStatus()),
+        ambient: collectCell(() => getAmbientStatus()),
     };
 }

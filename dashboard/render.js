@@ -9,6 +9,8 @@
  */
 
 import { escapeHtml } from '../core/diff.js';
+import { AMBIENT_HOUR_MS } from '../core/ambient_time.js';
+import { isAmbientPin } from '../core/ambient_pin.js';
 import { collectOverviewSnapshot } from './status.js';
 import {
     applyPrunePlan,
@@ -22,6 +24,16 @@ import { setControlBusy } from '../core/ui.js';
 import { assertSameScope, captureScope } from '../core/scope.js';
 
 const EMOJI = '<span aria-hidden="true">';
+
+function ambientBody(value) {
+    const describe = conditions => Object.entries(conditions).map(([key, text]) => `${key}: ${text}`).join(', ');
+    const bound = (hours, source) => source === 'message-count' ? `synthetic story hour ${hours}`
+        : new Date(hours * AMBIENT_HOUR_MS).toISOString().slice(0, 16).replace('T', ' ');
+    const pin = isAmbientPin(value?.pin) ? value.pin : null;
+    return `<p>${escapeHtml(value?.state || 'off')}</p>${value?.ambient
+        ? `<p>${escapeHtml(describe(value.ambient.conditions))}</p><p>Next ${escapeHtml(value.ambient.forecast.band.name)}: ${escapeHtml(describe(value.ambient.forecast.conditions))}</p>` : ''}
+        ${pin ? `<p>Pin ${value.ambient?.pinned ? 'active' : 'inactive (outside interval or clock source changed)'}; from ${escapeHtml(bound(pin.startHours, pin.source))}; ${pin.endHours === null ? 'until unpinned' : `expires ${escapeHtml(bound(pin.endHours, pin.source))}`}.</p>` : ''}`;
+}
 
 function cellValue(cell, fallback = null) {
     return cell?.ok ? cell.value : fallback;
@@ -242,6 +254,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
             <button type="button" id="mwt-overview-refresh" class="mwt-btn" title="Refresh Overview">🔄 Refresh</button>
         </div>
         <div class="mwt-overview-grid">
+            ${snapshot.ambient ? renderCell('ambient', 'Ambient Conditions', ambientBody, { icon: '🌦️', tab: 'settings', target: 'ambient-settings' }) : ''}
             ${renderCell('worldState', 'World State', () => worldBody, { icon: '🌍', tab: 'world-state' })}
             ${snapshot.staging?.ok ? renderKnowledge() : errorCard('Knowledge', snapshot.staging)}
             ${renderCell('beats', 'Story Planner', () => `${countText(plannerActive, 'active arc')} · ${countText(plannerInjected, 'injected arc')} · ${countText(plannerFocused, 'focused arc')} · ${countText(plannerReady, 'ready arc')} · ${countText(plannerParked, 'parked arc')} · ${countText(awaiting, 'beat')} awaiting · ${countText(overdue, 'beat')} overdue · progress check ${plannerLastCheck ? `${countText(plannerLastProposals, 'proposal')} last run` : 'never run'}`, { icon: '🗺️', tab: 'story-planner', target: 'beats', empty: !plannerActive && !plannerParked })}
@@ -328,6 +341,10 @@ export function wireOverviewPane(root, {
             const target = button.dataset.overviewTarget;
             if (target === 'generation-coordinator') {
                 const disclosure = root.querySelector('#mwt-settings-generation-coordinator');
+                disclosure?.setAttribute('open', '');
+                disclosure?.scrollIntoView?.({ block: 'start' });
+            } else if (target === 'ambient-settings') {
+                const disclosure = root.querySelector('#mwt-ambient-settings');
                 disclosure?.setAttribute('open', '');
                 disclosure?.scrollIntoView?.({ block: 'start' });
             } else if (target === 'health' || target === 'integrity') {

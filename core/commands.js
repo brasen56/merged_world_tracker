@@ -18,7 +18,7 @@ import { clearAmbientInjection } from '../ambient/injection.js';
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
 export function createCommands({ registerSlashCommand, macroRegistry, modules, resetFloatPositions, saveSettings }) {
-    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
 
@@ -29,6 +29,11 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
         }
 
         try {
+            registerSlashCommand('wt-ambient', (args) => {
+                try { return Ambient?.ambientCommand?.(args) ?? 'Ambient Conditions not available.'; }
+                catch (error) { return `Error: ${error.message}`; }
+            }, ['wt-weather'], 'Show current ambient conditions and one-band forecast; optional reseed subcommand');
+
             // /wt-refresh — Trigger world state refresh
             registerSlashCommand('wt-refresh', async (_args, _command) => {
                 try {
