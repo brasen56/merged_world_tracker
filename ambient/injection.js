@@ -4,7 +4,7 @@ import { record } from '../core/diagnostics.js';
 
 export const EXTENSION_PROMPT_KEY = 'mwt_ambient_injection';
 
-function describeConditions(conditions) {
+export function describeConditions(conditions) {
     const precipitation = conditions.precipitation === 'none' ? 'no precipitation' : conditions.precipitation;
     return `${conditions.sky}, ${conditions.temperature}, ${conditions.air} air; ${precipitation}. Wind ${conditions.wind}.`;
 }

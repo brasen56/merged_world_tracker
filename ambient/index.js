@@ -1,13 +1,11 @@
 /** Per-generation orchestration. Conditions are never persisted, only the seed. */
 import { getContextSafe, getChatMeta } from '../core/context.js';
-import { patchChatMeta, getCurrentWorldState } from '../core/metadata.js';
 import { getEpoch } from '../core/scope.js';
 import { injectionAllowed } from '../core/settings.js';
 import { record } from '../core/diagnostics.js';
-import { resolveAmbientTime } from '../core/ambient_time.js';
-import { generateAmbientConditions } from '../core/ambient_generator.js';
-import { getSettings, isConfigured, SETTINGS_KEY } from './settings.js';
-import { applyAmbientInjection, clearAmbientInjection } from './injection.js';
+import { readAmbientConditions } from '../core/ambient_state.js';
+import { getSettings, isConfigured, ensureSeed } from './settings.js';
+import { applyAmbientInjection, clearAmbientInjection, buildInjectionBody } from './injection.js';
 
 export const TIME_JUMP_THRESHOLD_HOURS = 6;
 let previousClock = null;
@@ -34,13 +32,7 @@ export function onGenerationStarted(type = 'normal', _options = {}, dryRun = fal
             return false;
         }
         const meta = getChatMeta();
-        const time = resolveAmbientTime({ messages: ctx.chat, worldState: getCurrentWorldState(), type });
-        let seed = meta[SETTINGS_KEY]?.seed;
-        if (!Number.isFinite(seed)) {
-            seed = Math.floor(Math.random() * 4294967296);
-            patchChatMeta(SETTINGS_KEY, { seed });
-        }
-        const ambient = generateAmbientConditions({ ...settings, seed, time });
+        const { time, ambient } = readAmbientConditions(settings, ensureSeed(), type);
         const epoch = getEpoch();
         // Compare only clocks from the same metadata object, epoch and source.
         // Changing fallback source is not a story jump (synthetic hours have no date).
@@ -56,11 +48,22 @@ export function onGenerationStarted(type = 'normal', _options = {}, dryRun = fal
         previousClock = { meta, epoch, hours: time.hours, source: time.source };
         return applyAmbientInjection(ambient, {
             kind: 'ambient-conditions', generationType: type, timeSource: time.source, storyHours: time.hours,
-            messageIndex: time.messageIndex ?? null, band: ambient.band.name, season: ambient.season,
+            messageIndex: time.messageIndex ?? null, band: ambient.band.name, season: ambient.season, pinned: ambient.pinned,
         });
     } catch (err) {
         clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'injection-failed', generationType: type });
         record({ module: 'ambient', event: 'ambient_injection_failed', level: 'warn', detail: { message: String(err?.message || err) } });
         return false;
     }
+}
+
+export function ambientCommand(args = '') {
+    const action = String(args).trim().toLowerCase();
+    if (action && action !== 'reseed') return 'Usage: /wt-ambient [reseed] (alias: /wt-weather).';
+    const settings = getSettings();
+    if (!settings.enabled || !isConfigured(settings)) return 'Ambient Conditions is off or needs setup. Open Settings → Ambient Conditions.';
+    if (!injectionAllowed('Ambient')) return 'Ambient Conditions injection is blocked by the global panic switch.';
+    const { ambient } = readAmbientConditions(settings, ensureSeed(action === 'reseed'));
+    if (action === 'reseed') clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'reseed' });
+    return buildInjectionBody(ambient);
 }

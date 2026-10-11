@@ -16,6 +16,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Ambient Conditions Phase 1: pure time and condition-generation core.**
+  Two dependency-free `core/` helpers (`core/ambient_time.js`,
+  `core/ambient_generator.js`) compute qualitative conditions as a pure
+  function of seed, story time and climate — no SillyTavern imports, no
+  injection, no UI. The time parser accepts the canonical `[In-story time:]`
+  tag and World State scene dates (English month or `YYYY-MM-DD`, 12/24-hour
+  clocks), fails closed on `Unknown`, qualitative or fantasy-month input,
+  supports renamed Gregorian months through an optional month-name list, and
+  uses UTC-shaped arithmetic independent of the machine timezone.
+  `resolveAmbientTime` is the pure fallback ladder — timestamp tag, World
+  State scene date, then one synthetic hour per included message, which
+  never infers a season from a fabricated date — and excludes the replaced
+  message when swiping. `generateAmbientConditions` (climate required, no
+  silent default) returns band, season, conditions and exactly one next-band
+  forecast across five qualitative channels (sky, temperature, air,
+  precipitation, wind) and five climate presets (temperate, desert,
+  tropical, arctic, mediterranean), with climate bounds making impossible
+  weather unreachable by construction — the desert never snows. Fixed
+  daytime bands (dawn 05:00 through night 21:00, night spanning midnight
+  without a re-roll) keep a threshold value from flickering inside a band,
+  and the variability slider (0–1) changes how often conditions change —
+  anchor spacing 48–12 h, fast-layer weight 0.05–0.25, convex blend —
+  never which conditions can exist. Determinism (mulberry32 + string hash),
+  10k-sample climate gating, band quantization and forecast parity are
+  pinned in `test/ambient_time.test.js` and `test/ambient_generator.test.js`.
+
 - **Ambient Conditions Phase 2: per-generation narrator injection.** Explicitly
   configured chats receive deterministic qualitative conditions and a one-band
   forecast on normal, swipe and continue generations. Swipes skip the replaced
@@ -24,8 +50,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The shared injection seam handles boundaries, budget caps and exact-payload
   diagnostics; Ambient Conditions now appears in the Budget tab/console.
   Clock jumps over six story hours are logged. Chat changes and panic activation
-  clear stale ambient context. Setup UI, pins, commands, dashboard and planner
-  integration remain deferred to Phases 3–4; no silent climate is selected.
+  clear stale ambient context. Planner integration remains deferred to
+  Phase 4; no silent climate is selected.
+
+- **Ambient Conditions Phase 3: per-chat setup UI, pins, commands and
+  dashboard.** Settings gains an "Ambient Conditions (this chat)" section
+  that saves independently of the global Save Settings button: climate
+  picker, hemisphere, manual season and a variability slider. First enable
+  asks for climate and hemisphere inline before injecting anything — no
+  silent climate default — with a "Temperate, don't ask again (Northern
+  hemisphere)" dismiss action; a custom setup also suppresses later asks,
+  and an unanswered setup stays available without creating weather. A seed
+  is created on successful enable and inherited by branches. **Pin
+  conditions** selects all five qualitative channels and intentionally
+  overrides climate gates, with expiry in story time: until unpinned, next
+  band, next dawn, or an explicit story date/time (dated expiry requires a
+  usable calendar clock; a message-count pin is inactive rather than given
+  a fabricated expiry). Pin bounds are start-inclusive/end-exclusive, the
+  forecast applies the same interval at the next band, expired pins remain
+  stored so rewinding inside their interval restores the override, and
+  Unpin removes them. The Overview dashboard gains a read-only Ambient card
+  — current conditions, one-band forecast, panic/off state, pin activity
+  and expiry — that never creates a seed or writes metadata. `/wt-ambient`
+  (alias `/wt-weather`) returns the same unwrapped body the injection uses,
+  and `/wt-ambient reseed` changes only the seed, preserving settings and
+  pins; disabled, incomplete or panic-blocked chats report their state
+  rather than presenting conditions as active. Setting changes clear the
+  old registered injection, and handlers reject stale chat/epoch scopes.
+  Coverage lives in `test/ambient_surface.test.js`: setup, chat isolation,
+  pin interval and forecast semantics, reseed/alias/body parity, read-only
+  dashboard status and panic gates. Planner integration remains deferred
+  to Phase 4.
 
 ## [2.11.6]
 

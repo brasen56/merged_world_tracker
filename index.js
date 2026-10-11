@@ -10,6 +10,7 @@
 
 import { getContextSafe } from './core/context.js';
 import * as Ambient from './ambient/index.js';
+import { renderAmbientSettings, wireAmbientSettings } from './ambient/render.js';
 import { clearAmbientInjection } from './ambient/injection.js';
 import { bumpEpoch } from './core/scope.js';
 // Generation coordinator (TODO §1 / PI §P1): the central cross-module job
@@ -435,6 +436,7 @@ function renderSettingsTab() {
             <strong>Module-specific settings</strong> are available in each tab's ⚙ Settings button.
             Use "Sync to Modules" above to push the global API URL/Key/Model to all modules at once.
         </p>
+        ${renderAmbientSettings()}
         ${renderBackupPanel()}
     `;
 }
@@ -511,6 +513,7 @@ function renderModal() {
     // Wire the Backup/Restore control (lives in the Settings tab). The body is
     // rebuilt on every open, so rebind each render like the module wire-events.
     wireBackupEvents(modal);
+    wireAmbientSettings(modal);
 
     // Part 5 (§5.4): wire the paused-store banner's actions — the module's
     // OWN tab owns Retry and the recovery export (never the read-only
@@ -703,7 +706,7 @@ function openMwtModal(tabId) {
 
 // ─── Shared module registry (used by the message-event routers below) ───────
 
-const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority };
+const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient };
 
 // Part 6 (§5.4/§7.5): the out-of-band resume seam. When a paused store
 // resumes through Retry or the privileged §7.5 preparation — long after
