@@ -14,7 +14,7 @@ let previousClock = null;
 
 export function onChatChanged() {
     previousClock = null;
-    clearAmbientInjection();
+    clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'chat-changed' });
 }
 
 /** ST emits (type, options, dryRun); dry runs must leave the slot untouched. */
@@ -23,9 +23,15 @@ export function onGenerationStarted(type = 'normal', _options = {}, dryRun = fal
     try {
         const ctx = getContextSafe();
         const settings = getSettings();
-        if (!['normal', 'swipe', 'continue'].includes(type) || !ctx
-            || !settings.enabled || !isConfigured(settings) || !injectionAllowed('Ambient')) {
-            clearAmbientInjection();
+        const clearReason = !['normal', 'swipe', 'continue'].includes(type) ? 'generation-type-excluded'
+            : !ctx ? 'host-unavailable'
+                : !settings.enabled ? 'module-disabled'
+                    : !isConfigured(settings) ? 'configuration-incomplete'
+                        : !injectionAllowed('Ambient') ? 'global-gate-blocked' : null;
+        if (clearReason) {
+            const diagnostics = { kind: 'ambient-conditions', clearReason, generationType: type };
+            clearAmbientInjection(diagnostics);
+            record({ module: 'ambient', event: 'ambient_injection_cleared', level: 'debug', detail: diagnostics });
             return false;
         }
         const meta = getChatMeta();
@@ -50,11 +56,11 @@ export function onGenerationStarted(type = 'normal', _options = {}, dryRun = fal
         }
         previousClock = { meta, epoch, hours: time.hours, source: time.source };
         return applyAmbientInjection(ambient, {
-            kind: 'ambient-conditions', timeSource: time.source, storyHours: time.hours,
+            kind: 'ambient-conditions', generationType: type, timeSource: time.source, storyHours: time.hours,
             messageIndex: time.messageIndex ?? null, band: ambient.band.name, season: ambient.season,
         });
     } catch (err) {
-        clearAmbientInjection();
+        clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'injection-failed', generationType: type });
         record({ module: 'ambient', event: 'ambient_injection_failed', level: 'warn', detail: { message: String(err?.message || err) } });
         return false;
     }

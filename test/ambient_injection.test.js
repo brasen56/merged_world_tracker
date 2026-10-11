@@ -67,6 +67,25 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         expect(snapshot().diagnostics.messageIndex).toBe(0);
     });
 
+    test('enabled alone reports incomplete configuration instead of an unexplained empty slot', () => {
+        ctx.chatMetadata.mwt_ambient = { enabled: true };
+        onGenerationStarted('normal');
+        expect(snapshot()).toMatchObject({ enabled: false, diagnostics: {
+            clearReason: 'configuration-incomplete', generationType: 'normal', outerBudgetAction: 'clear',
+        } });
+        expect(getEvents({ module: 'ambient', event: 'ambient_injection_cleared' })[0].detail)
+            .toMatchObject({ clearReason: 'configuration-incomplete' });
+    });
+
+    test('a quiet generation after a narrator generation identifies why the latest snapshot is empty', () => {
+        onGenerationStarted('normal');
+        expect(snapshot()).toMatchObject({ enabled: true, diagnostics: { generationType: 'normal' } });
+        onGenerationStarted('quiet');
+        expect(snapshot()).toMatchObject({ enabled: false, payload: '', diagnostics: {
+            clearReason: 'generation-type-excluded', generationType: 'quiet',
+        } });
+    });
+
     test.each(['quiet', 'impersonate', 'unknown'])('%s clears active and desired context without creating a seed', type => {
         onGenerationStarted(type);
         expect(ctx.chatMetadata.mwt_ambient.seed).toBeUndefined();

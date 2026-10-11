@@ -29,6 +29,6 @@ export function applyAmbientInjection(ambient, diagnostics) {
     });
 }
 
-export function clearAmbientInjection() {
-    return applyAmbientInjection(null);
+export function clearAmbientInjection(diagnostics = { kind: 'ambient-conditions', clearReason: 'explicit-clear' }) {
+    return applyAmbientInjection(null, diagnostics);
 }
