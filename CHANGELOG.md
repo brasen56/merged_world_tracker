@@ -12,6 +12,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+
+- **Story Planner: world-pressure planning lens for scoped generation.** The
+  Generate dialog gains an Add-only "Planning lens" choice — Open brainstorm (default,
+  unchanged) or World complications. The lens asks the setting itself to act
+  on the story — weather and seasons, scarcity and supply, infrastructure and
+  utilities, money and markets, law and institutions, illness, public mood —
+  instead of another character's scheme, to break the routine the recent story
+  has settled into (`story_planner/prompts.js`, `story_planner/schema.js`,
+  `story_planner/render.js`):
+  - Only the NPC-centric prompt framings swap under the lens: the destination
+    rule names the routine pressed on and the disruption built toward and
+    rejects abstract either/or choices, the beat-actor sentence becomes
+    world-driven, and the cast-development rule is replaced by the
+    world-pressure rule. The two worked examples take deliberately different
+    shapes — a community allocation meeting under scarcity, and a
+    household-scale opportunity (a new ferry route opening a market, with a
+    freight cost attached) — in different settings, so no single beat pattern
+    or setting gets copied. Agency, grounding, beat progression,
+    headings, and validation are identical to the open lens; a request without
+    a lens produces exactly the previous prompt.
+  - The boundary is general versus targeted: external conditions and
+    decisions that apply to everyone they reach (a toll, a ration, a festival,
+    a new law) qualify even when institutions make them; a plan aimed at
+    particular people is a scheme and is excluded, even when the cast is not
+    its target. Developments may be adverse, beneficial, or mixed, and an
+    opportunity need not conceal a threat or become a hardship arc. The
+    destination rule, beat guidance, request envelope, and palette definition
+    all make room for changes that open concrete options.
+  - Character Journeys take their pressure from the complication, and
+    newcomers may arrive because of it rather than cause it through a scheme.
+  - Complication arcs land in the existing sections by how soon they can be
+    used — a storm next scene is an Immediate Hook, a slow shortage is a
+    Horizon Arc whose beats change concrete options or impose costs — so review, merge, NOW: steps, and
+    enforcement are unchanged. Refresh disables and ignores the Add-only lens
+    so existing premises are not silently rewritten, while the saved lens and
+    Add count survive a Refresh submit.
+  - The lens rides the application-owned `<application_request>` envelope
+    (never a custom-template token), persists in the manual request
+    preferences exactly like cast policy, and is announced in the dialog and
+    review summaries ("Focus: world complications.").
+  - "world pressure" joins the Story Palette emphases for the legacy and
+    automatic whole-plan path — defined in the prompt only when selected, with
+    escalation guidance applied only when a preference is given — and the
+    settings emphasis chips now derive from `STORY_PALETTE_EMPHASES` instead
+    of a hand-copied list.
+  - `test/story_planner_world_pressure.test.js` pins the vocabulary,
+    sanitizers, both prompt variants, request routing, and the dialog control,
+    plus real mocked-API Add/retry/review/Apply and Refresh dispatch flows.
+
+### Fixed
+
+- `test/story_planner_author_context.test.js` still pinned the 'large'
+  author-context budget at the old 48000-character ceiling after it was raised
+  to 96000; both pins now match the shipped presets (pre-existing failures,
+  not caused by the lens change).
+
 ## [2.11.5]
 
 ### Changed
