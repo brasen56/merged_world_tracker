@@ -6,6 +6,8 @@
  * (SillyTavern 1.12+).
  */
 
+import { clearAmbientInjection } from '../ambient/injection.js';
+
 /**
  * Create the command/macro subsystem.
  *
@@ -173,6 +175,7 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                 // injecting — the UI panic switch and the command disagreed.
                 if (typeof saveSettings === 'function') {
                     saveSettings({ injectionMasterOff: !enabled });
+                    if (!enabled) clearAmbientInjection();
                     // Re-apply injection state immediately so the toggle takes
                     // effect without requiring a new message.
                     try {

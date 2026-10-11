@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v1)
 
-**Status:** Phase 1 pure helpers implemented; runtime integration and user surface remain pending (Phases 2–4, see §6).
+**Status:** Phases 1–2 implemented; user surface and planner integration remain pending (Phases 3–4, see §6).
 **Written:** 2026-10-11, folding `WEATHER_MODULE_PROPOSAL.md` and `WEATHER_MODULE_RESPONSE.md` into one design. Those two docs remain the discussion record; this doc is what we build from.
 **Naming:** the module is **Ambient Conditions**, not Weather. The name states the contract: conditions nobody in the story can change (§4.6). Weather is v1's only condition family; the name leaves room for calendar items later without inviting incidents in.
 
@@ -68,7 +68,7 @@ in time, keep conditions vague; they will be supplied next turn.
 
 One line through the standard seam — `wrapInTag('mwt_ambient', ...)` via `core/injection.js` — inheriting budget enforcement and boundary escaping. Prompt key `mwt_ambient_injection`. Recorded in diagnostics; a detected time jump above a threshold is logged to the diagnostics console (the moment the contract is softest, per D6).
 
-**Generation-type matrix** (quiet/continue/impersonate/dry-run entries are proposed defaults pending sign-off, §8):
+**Generation-type matrix** (adopted for Phase 2; live host confirmation remains in §8):
 
 | Type | Inject | Notes |
 |------|--------|-------|
@@ -111,7 +111,7 @@ The rule: **can nobody in the story change it?** If yes, it's ambient and fits a
 Implemented API / tuning choices:
 
 - `parseAmbientTimestamp(text)` returns `{ hours, year, month, day, hour, minute }` or `null`. Story hours use UTC-shaped Gregorian arithmetic, independent of the machine's timezone. `parseAmbientDateTime(date, time)` also accepts explicit World State dates (English month or `YYYY-MM-DD`) and 12/24-hour clocks; ambiguous/qualitative input fails closed. An optional twelve-entry `monthNames` list supports renamed Gregorian months, not different calendar lengths.
-- `resolveAmbientTime({ messages, worldState, type })` is the pure fallback ladder; `worldState` may be Markdown or a parsed scene. Swipe excludes the last message from scanning and count time. Fallback is one synthetic hour per included message (configurable `hoursPerMessage`), with `month: null` so it never infers a season from a fabricated calendar date. Runtime wiring remains Phase 2.
+- `resolveAmbientTime({ messages, worldState, type })` is the pure fallback ladder; `worldState` may be Markdown or a parsed scene. Swipe excludes the last message from scanning and count time. Fallback is one synthetic hour per included message (configurable `hoursPerMessage`), with `month: null` so it never infers a season from a fabricated calendar date. Runtime wiring is implemented in Phase 2 below.
 - `generateAmbientConditions({ seed, time, climate, hemisphere, manualSeason, variability })` returns `{ band, season, conditions, forecast }`. `time` accepts numeric Gregorian story hours or the resolver result. Climate is required; other defaults are north, spring, and variability `0.5`. Seed is supplied by the caller; no metadata ownership or random seed creation is introduced here.
 - Qualitative channels are sky, temperature, air, precipitation, and wind. All five presets are implemented: temperate, desert, tropical, arctic, mediterranean. Climate bounds make impossible precipitation unreachable without a condition allowlist; the desert preset is dry-only in this first tuning.
 - Bands start at dawn 05:00, morning 08:00, afternoon 12:00, evening 18:00, night 21:00. Night spans midnight through 05:00 without a re-roll. Forecast is exactly the next band (not necessarily within one hour).
@@ -122,6 +122,26 @@ Implemented API / tuning choices:
 
 - `GENERATION_STARTED` wiring (D3): time scan with swipe-skip and the fallback ladder, generation-type gating per the §3.3 matrix, injection through the budget seam, diagnostics recording + time-jump log.
 - Exit criteria: line present on normal and swipe gens; stable across swipes of the same message; absent on quiet gens; block visible in the budget console; time-skip line present in the injected copy.
+
+**Implemented (2026-10-11):**
+
+- `ambient/index.js` runs from the existing `GENERATION_STARTED(type, options, dryRun)` hook. Normal/swipe/continue recompute, quiet/impersonate/unknown types clear both registered and desired budget context, and dry runs leave the slot untouched. Chat changes clear ambient context; panic activation clears it immediately through the Settings, floating button, and `/wt-inject off` paths.
+- The chat-local `mwt_ambient` record holds `{ enabled, climate, hemisphere, manualSeason, variability, seed }`. Until Phase 3 supplies the setup UI, enablement requires explicit `enabled: true`, a valid climate, and explicit `north`/`south` hemisphere. No automatic enablement or silent climate fallback is introduced. Manual season and variability default to spring and `0.5`; a seed is created and saved only on the first included, configured generation. Existing seeds (including zero) are retained across renames and inherited branch metadata.
+- `ambient/injection.js` sends self-explaining qualitative current conditions and exactly one named-band forecast through the shared wrapper/budget/diagnostics seam, respecting the global structural-boundaries toggle. Placement is system role at depth 1. The perceptual relevance, anti-repetition, and time-skip guard copy is included without requiring a preset. Forecast wording intentionally avoids the draft's unsupported "within the hour" claim.
+- Ambient Conditions is a budget-managed module (default priority 2, uncapped), visible in the Budget tab and `MWT.budget` console snapshots. Exact registered payloads are available through `MWT.diagnostics.injection('mwt_ambient_injection')`, including clock source, story hours, selected band and season. Clock movement strictly greater than six story hours in either direction records `ambient_time_jump`; source transitions and chat/epoch changes are not treated as jumps. This comparison is in-memory only, not stored weather state.
+- Integration coverage: `test/ambient_injection.test.js` drives the real injection and budget seam, including the generation matrix, stable swipes, fallback ladder, seed persistence/branch inheritance, caps, diagnostics, panic gates and chat cleanup. Live host prompt placement still needs a SillyTavern smoke test.
+
+For Phase 2 developer smoke testing before the UI exists, explicitly configure the active chat in the browser console, then run a normal generation:
+
+```js
+const ctx = SillyTavern.getContext();
+ctx.chatMetadata.mwt_ambient = {
+    ...ctx.chatMetadata.mwt_ambient,
+    enabled: true, climate: 'temperate', hemisphere: 'north',
+    manualSeason: 'spring', variability: 0.5,
+};
+ctx.saveMetadataDebounced?.();
+```
 
 ### Phase 3 — User surface
 
@@ -142,5 +162,5 @@ Per-region weather (world state `Location` is room-level and model-written — s
 ## 8. Open items (small, non-blocking)
 
 1. **Noise anchor spacing default** — Phase 1 implements 30 h at variability `0.5`; further aesthetic tuning can follow story testing without changing the pure API.
-2. **Generation-type matrix entries** for continue/impersonate/dry-run — proposed in §3.3; confirm or amend at Phase 2.
+2. **Generation-type matrix entries** — Phase 2 adopts §3.3 as written; confirm live behavior during the SillyTavern smoke test.
 3. **First-enable ask copy** — modal vs inline settings banner; must include the dismiss path either way.

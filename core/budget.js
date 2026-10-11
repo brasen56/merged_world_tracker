@@ -51,7 +51,7 @@ import { record, recordInjection, getAllInjectedSnapshots, clearInjections } fro
 export const BUDGET_METADATA_KEY = 'mwt_context_budget';
 
 /**
- * The five modules the budget knows about, in drop-order tie-break order.
+ * The modules the budget knows about, in drop-order tie-break order.
  *
  * `priority` semantics: LOWER number = kept longest. The defaults encode the
  * TODO §2 suggestion — current World State and triggered intentions first,
@@ -71,6 +71,7 @@ export const BUDGET_MODULE_SPECS = Object.freeze([
     Object.freeze({ id: 'interiority', label: '💭 Interiority', key: 'mwt_interiority_injection', mechanism: 'extension-prompt', defaultPriority: 1 }),
     Object.freeze({ id: 'chronicle', label: '📜 Chronicle', key: 'session_chronicle_injection', mechanism: 'extension-prompt', defaultPriority: 2 }),
     Object.freeze({ id: 'story_planner', label: '🗺️ Story Planner', key: 'mwt_story_plan_injection', mechanism: 'extension-prompt', defaultPriority: 3 }),
+    Object.freeze({ id: 'ambient', label: '🌦️ Ambient Conditions', key: 'mwt_ambient_injection', mechanism: 'extension-prompt', defaultPriority: 2 }),
     Object.freeze({ id: 'knowledge', label: '🧠 Knowledge', key: null, mechanism: 'lorebook', defaultPriority: 4, advisory: true }),
 ]);
 
@@ -95,6 +96,7 @@ export const DEFAULT_BUDGET_SETTINGS = Object.freeze({
         interiority: Object.freeze({ priority: 1, softCap: 0, hardCap: 0 }),
         chronicle: Object.freeze({ priority: 2, softCap: 0, hardCap: 0 }),
         story_planner: Object.freeze({ priority: 3, softCap: 0, hardCap: 0 }),
+        ambient: Object.freeze({ priority: 2, softCap: 0, hardCap: 0 }),
         knowledge: Object.freeze({ priority: 4, softCap: 0, hardCap: 0 }),
     }),
 });

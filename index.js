@@ -9,6 +9,8 @@
 // ─── Core imports ────────────────────────────────────────────────────────────
 
 import { getContextSafe } from './core/context.js';
+import * as Ambient from './ambient/index.js';
+import { clearAmbientInjection } from './ambient/injection.js';
 import { bumpEpoch } from './core/scope.js';
 // Generation coordinator (TODO §1 / PI §P1): the central cross-module job
 // queue both API transports submit through. Same direct-import rule as the
@@ -651,6 +653,7 @@ function renderModal() {
                 Chronicle.applyInjection?.();
                 StoryPlanner.applyPlanInjection?.();
                 Interiority.applyIntentionsInjection?.();
+                if (getSettings().injectionMasterOff) clearAmbientInjection();
             } catch { /* modules may not be initialized yet */ }
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });
@@ -758,6 +761,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
         // injections purely on handler order. After this, each module sees an
         // empty `others` map and registers only the new chat's payloads.
         resetBudgetInjections();
+        Ambient.onChatChanged();
         // Part 6 (§7.4/§5.4): a module paused by the runtime gate does NOT run
         // its chat-change hydration. Its onChatChanged() would restore
         // counters and bookkeeping from the BLOCKED store value and hold them
@@ -838,7 +842,8 @@ function onAnyEvent(names, handler) {
 const depthTerminalEvent = event_types?.GENERATION_ENDED ? 'GENERATION_ENDED' : 'GENERATION_STOPPED';
 console.log(`[MWT] Generation-depth terminal event: ${depthTerminalEvent}`);
 
-onAnyEvent(['GENERATION_STARTED'], () => {
+onAnyEvent(['GENERATION_STARTED'], (type, options, dryRun) => {
+    Ambient.onGenerationStarted(type, options, dryRun);
     Chronicle.onGenerationStarted();
     // TODO §1 — the optional "hold background tracker jobs while the user is
     // generating" policy (Settings tab, default off). Depth-counted inside

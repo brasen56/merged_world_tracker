@@ -8,6 +8,7 @@
  */
 
 import { escapeHtml } from './diff.js';
+import { clearAmbientInjection } from '../ambient/injection.js';
 import { getContextSafe } from './context.js';
 import { notify } from './notifications.js';
 import { recordSchemaEvent, schemaEventForSeverity } from './schema_status.js';
@@ -820,6 +821,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     // ⚙️ button → flip the global panic switch
                     const nowOff = s.injectionMasterOff !== true;
                     saveSettings({ [cfg.masterKey]: nowOff });
+                    if (nowOff) clearAmbientInjection();
                     try {
                         WorldState.applyWorldStateInjection?.();
                         Chronicle.applyInjection?.();

@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+
+- **Ambient Conditions Phase 2: per-generation narrator injection.** Explicitly
+  configured chats receive deterministic qualitative conditions and a one-band
+  forecast on normal, swipe and continue generations. Swipes skip the replaced
+  message's clock; quiet/impersonate generations clear the slot and dry runs
+  preserve it. A random chat-metadata seed survives renames and branch copies.
+  The shared injection seam handles boundaries, budget caps and exact-payload
+  diagnostics; Ambient Conditions now appears in the Budget tab/console.
+  Clock jumps over six story hours are logged. Chat changes and panic activation
+  clear stale ambient context. Setup UI, pins, commands, dashboard and planner
+  integration remain deferred to Phases 3–4; no silent climate is selected.
+
 ## [2.11.6]
 
 ### Added
