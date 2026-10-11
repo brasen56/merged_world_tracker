@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.11.6]
 
 ### Added
 
@@ -63,13 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `test/story_planner_world_pressure.test.js` pins the vocabulary,
     sanitizers, both prompt variants, request routing, and the dialog control,
     plus real mocked-API Add/retry/review/Apply and Refresh dispatch flows.
-
-### Fixed
-
-- `test/story_planner_author_context.test.js` still pinned the 'large'
-  author-context budget at the old 48000-character ceiling after it was raised
-  to 96000; both pins now match the shipped presets (pre-existing failures,
-  not caused by the lens change).
 
 ## [2.11.5]
 

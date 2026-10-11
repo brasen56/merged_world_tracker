@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v1)
 
-**Status:** Agreed design, pre-implementation. Work begins when the co-author is free; Phase 1 is startable solo before that (see §6).
+**Status:** Phase 1 pure helpers implemented; runtime integration and user surface remain pending (Phases 2–4, see §6).
 **Written:** 2026-10-11, folding `WEATHER_MODULE_PROPOSAL.md` and `WEATHER_MODULE_RESPONSE.md` into one design. Those two docs remain the discussion record; this doc is what we build from.
 **Naming:** the module is **Ambient Conditions**, not Weather. The name states the contract: conditions nobody in the story can change (§4.6). Weather is v1's only condition family; the name leaves room for calendar items later without inviting incidents in.
 
@@ -108,6 +108,16 @@ The rule: **can nobody in the story change it?** If yes, it's ambient and fits a
 - Unit tests (vitest): parser accepts the canonical tag; returns no-time for `Unknown`/"Evening"/fantasy months; determinism (same seed+time → same conditions); climate gating (desert never snows across 10k sampled times); band quantization (no flicker within a band); forecast equals one band ahead; variability slider changes change-frequency, not the possible set.
 - No ST dependencies, no injection, no UI. This is the reviewable pure-logic core; nothing here blocks on design sign-off of §8 items.
 
+Implemented API / tuning choices:
+
+- `parseAmbientTimestamp(text)` returns `{ hours, year, month, day, hour, minute }` or `null`. Story hours use UTC-shaped Gregorian arithmetic, independent of the machine's timezone. `parseAmbientDateTime(date, time)` also accepts explicit World State dates (English month or `YYYY-MM-DD`) and 12/24-hour clocks; ambiguous/qualitative input fails closed. An optional twelve-entry `monthNames` list supports renamed Gregorian months, not different calendar lengths.
+- `resolveAmbientTime({ messages, worldState, type })` is the pure fallback ladder; `worldState` may be Markdown or a parsed scene. Swipe excludes the last message from scanning and count time. Fallback is one synthetic hour per included message (configurable `hoursPerMessage`), with `month: null` so it never infers a season from a fabricated calendar date. Runtime wiring remains Phase 2.
+- `generateAmbientConditions({ seed, time, climate, hemisphere, manualSeason, variability })` returns `{ band, season, conditions, forecast }`. `time` accepts numeric Gregorian story hours or the resolver result. Climate is required; other defaults are north, spring, and variability `0.5`. Seed is supplied by the caller; no metadata ownership or random seed creation is introduced here.
+- Qualitative channels are sky, temperature, air, precipitation, and wind. All five presets are implemented: temperate, desert, tropical, arctic, mediterranean. Climate bounds make impossible precipitation unreachable without a condition allowlist; the desert preset is dry-only in this first tuning.
+- Bands start at dawn 05:00, morning 08:00, afternoon 12:00, evening 18:00, night 21:00. Night spans midnight through 05:00 without a re-roll. Forecast is exactly the next band (not necessarily within one hour).
+- Variability is `0–1`: slow anchor spacing is `48–12 h` (30 h at the default), and the fast-layer weight is `0.05–0.25`. A convex blend preserves channel bounds at every slider value. Tests verify increased change frequency and matching observed qualitative value sets at the slider endpoints.
+- Tests live in `test/ambient_time.test.js` and `test/ambient_generator.test.js`; helpers are imported directly, not through the ST-dependent core barrel.
+
 ### Phase 2 — Per-generation injection
 
 - `GENERATION_STARTED` wiring (D3): time scan with swipe-skip and the fallback ladder, generation-type gating per the §3.3 matrix, injection through the budget seam, diagnostics recording + time-jump log.
@@ -131,6 +141,6 @@ Per-region weather (world state `Location` is room-level and model-written — s
 
 ## 8. Open items (small, non-blocking)
 
-1. **Noise anchor spacing default** — proposed ~30 h (response suggests 24–36 h). Tune during Phase 1 with the test suite as arbiter.
+1. **Noise anchor spacing default** — Phase 1 implements 30 h at variability `0.5`; further aesthetic tuning can follow story testing without changing the pure API.
 2. **Generation-type matrix entries** for continue/impersonate/dry-run — proposed in §3.3; confirm or amend at Phase 2.
 3. **First-enable ask copy** — modal vs inline settings banner; must include the dismiss path either way.
