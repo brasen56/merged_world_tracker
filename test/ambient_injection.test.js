@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { onGenerationStarted, onChatChanged } from '../ambient/index.js';
+import { onGenerationStarted, onChatChanged, prepareGeneration, generationInterceptor, ambientCommand } from '../ambient/index.js';
 import { EXTENSION_PROMPT_KEY, buildInjectionBody, clearAmbientInjection } from '../ambient/injection.js';
 import { getInjectedSnapshot, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { resetBudgetInjections, _resetBudgetEnforcementState, _setBudgetSettingsReader } from '../core/budget.js';
@@ -13,6 +13,21 @@ let ctx;
 let prompts;
 const snapshot = () => getInjectedSnapshot(EXTENSION_PROMPT_KEY);
 const ambientEvents = event => getEvents({ module: 'ambient' }).filter(entry => entry.event === event);
+
+// Mirrors ST 1.19 Generate() at interceptor time: a normal send has inserted
+// pending input and regenerate has deleted the trailing reply (script.js:4454,
+// :4409), but a swiped reply is still in the raw chat. The interceptor argument
+// is ST's prompt copy: hidden (is_system) messages dropped, the swiped reply
+// popped (:4497) and prompt-only regex applied, imitated here by a rewrite.
+function hostGenerate(type, pendingInput = null) {
+    prepareGeneration(type, {}, false);
+    if (pendingInput !== null) ctx.chat.push({ mes: pendingInput, is_user: true });
+    if (type === 'regenerate' && ctx.chat.length && !ctx.chat.at(-1).is_user) ctx.chat.pop();
+    const promptCopy = ctx.chat.filter(message => !message.is_system)
+        .map(message => ({ ...message, mes: 'prompt-only rewrite' }));
+    if (type === 'swipe') promptCopy.pop();
+    return generationInterceptor(promptCopy, 4096, vi.fn(), type);
+}
 
 beforeEach(() => {
     vi.stubGlobal('localStorage', { getItem: () => null });
@@ -56,16 +71,86 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         expect(text).not.toMatch(/°|within the hour/);
     });
 
-    test('normal and repeated swipes agree despite the replaced message jumping ahead', () => {
+    test.each(['swipe', 'regenerate'])('normal and repeated %s requests agree despite the replaced message jumping ahead', type => {
         onGenerationStarted('normal');
         const initial = snapshot().payload;
         ctx.chat.push({ mes: tag('11:00 PM', 9) });
-        onGenerationStarted('swipe');
+        onGenerationStarted(type);
         expect(snapshot().payload).toBe(initial);
         ctx.chat[1].mes = tag('06:00 AM', 20);
-        onGenerationStarted('swipe');
+        onGenerationStarted(type);
         expect(snapshot().payload).toBe(initial);
         expect(snapshot().diagnostics.messageIndex).toBe(0);
+    });
+
+    test.each(['swipe', 'regenerate'])('%s keeps the clock from before the replaced reply, across user insertion', type => {
+        ctx.chat = Array.from({ length: 4 }, () => ({ mes: 'No timestamp', is_user: false }));
+        prepareGeneration('normal', {}, false);
+        expect(ctx.chatMetadata.mwt_ambient.seed).toBeUndefined();
+        expect(snapshot().enabled).toBe(false);
+        expect(hostGenerate('normal', 'Pending user input')).toBe(true);
+        const initial = snapshot().payload;
+        expect(snapshot().diagnostics).toMatchObject({ storyHours: 5, band: 'dawn', timeSource: 'message-count' });
+        ctx.chat.push({ mes: tag('11:00 PM', 20), is_user: false });
+        for (const replacement of [tag('06:00 AM', 21), tag('09:00 PM', 25)]) {
+            expect(hostGenerate(type)).toBe(true);
+            expect(snapshot().payload).toBe(initial);
+            expect(snapshot().diagnostics).toMatchObject({ generationType: type, storyHours: 5, band: 'dawn' });
+            // The new reply lands where the replaced one was.
+            if (type === 'regenerate') ctx.chat.push({ mes: replacement, is_user: false });
+            else ctx.chat.at(-1).mes = replacement;
+        }
+        expect(ctx.chat).toHaveLength(6);
+        expect(ambientEvents('ambient_time_jump')).toHaveLength(0);
+    });
+
+    test('the clock includes a timestamp in pending user input but not in a replaced reply', () => {
+        ctx.chat = [{ mes: tag('01:00 PM'), is_user: false }];
+        hostGenerate('normal', tag('06:00 PM'));
+        const initial = snapshot().payload;
+        expect(snapshot().diagnostics).toMatchObject({ messageIndex: 1, band: 'evening' });
+        ctx.chat.push({ mes: tag('11:00 PM', 20), is_user: false });
+        hostGenerate('swipe');
+        expect(snapshot().payload).toBe(initial);
+        hostGenerate('regenerate');
+        expect(snapshot().payload).toBe(initial);
+        ctx.chat.push({ mes: tag('11:00 PM', 20), is_user: false });
+        hostGenerate('continue');
+        expect(snapshot().diagnostics.messageIndex).toBe(2);
+    });
+
+    test('hidden messages and prompt-only rewrites cannot pull the injected clock away from the chat', () => {
+        // /hide sets is_system, which ST's prompt copy drops; story time is the chat's.
+        ctx.chat = Array.from({ length: 30 }, (_, index) => ({ mes: 'No timestamp', is_user: index % 2 === 1, is_system: index < 20 }));
+        hostGenerate('normal', 'Next input');
+        expect(snapshot().diagnostics).toMatchObject({ timeSource: 'message-count', storyHours: 31 });
+        expect(snapshot().payload).toContain(ambientCommand());
+        const initial = snapshot().payload;
+        // Hiding more must not rewind the clock (or log a jump).
+        for (const message of ctx.chat.slice(20, 28)) message.is_system = true;
+        ctx.chat.push({ mes: 'Reply being swiped', is_user: false });
+        hostGenerate('swipe');
+        expect(snapshot().payload).toBe(initial);
+        expect(ambientEvents('ambient_time_jump')).toHaveLength(0);
+        // A tag in a hidden message still sets the clock.
+        ctx.chat[3].mes = tag('09:00 PM');
+        hostGenerate('swipe');
+        expect(snapshot().diagnostics).toMatchObject({ timeSource: 'timestamp', messageIndex: 3, band: 'night' });
+    });
+
+    test('early dry runs leave the slot untouched and excluded interceptors do not seed', () => {
+        prepareGeneration('quiet');
+        generationInterceptor(ctx.chat, 4096, vi.fn(), 'quiet');
+        expect(ctx.chatMetadata.mwt_ambient.seed).toBeUndefined();
+        onGenerationStarted('normal');
+        const prior = snapshot();
+        ctx.setExtensionPrompt.mockClear();
+        ctx.saveMetadataDebounced.mockClear();
+        prepareGeneration('normal', {}, true);
+        prepareGeneration('quiet', {}, true);
+        expect(snapshot()).toEqual(prior);
+        expect(ctx.setExtensionPrompt).not.toHaveBeenCalled();
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
     });
 
     test('enabled alone reports incomplete configuration instead of an unexplained empty slot', () => {
@@ -74,8 +159,9 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         expect(snapshot()).toMatchObject({ enabled: false, diagnostics: {
             clearReason: 'configuration-incomplete', generationType: 'normal', outerBudgetAction: 'clear',
         } });
-        expect(ambientEvents('ambient_injection_cleared')[0].detail)
-            .toMatchObject({ clearReason: 'configuration-incomplete' });
+        // Nothing was registered, so the no-op clear stays out of the shared
+        // event ring; the snapshot above already explains the empty slot.
+        expect(ambientEvents('ambient_injection_cleared')).toHaveLength(0);
     });
 
     test('a quiet generation after a narrator generation identifies why the latest snapshot is empty', () => {
@@ -233,10 +319,21 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
             .toMatchObject({ clearReason });
     });
 
-    test('generation-triggered clears emit exactly one clear event', () => {
-        const before = ambientEvents('ambient_injection_cleared').length;
+    test('clears are silent until something registers, then exactly one event per generation cycle', () => {
+        // Two clears with nothing registered — the early event and the
+        // interceptor — must not spend ring-buffer entries for users who
+        // never enable the module. The snapshot still keeps the last reason.
+        prepareGeneration('normal', {}, false);
         onGenerationStarted('quiet');
-        expect(ambientEvents('ambient_injection_cleared')).toHaveLength(before + 1);
+        expect(ambientEvents('ambient_injection_cleared')).toHaveLength(0);
+        expect(snapshot().diagnostics).toMatchObject({ clearReason: 'generation-type-excluded' });
+        // Once registered, one full generation cycle (early clear + interceptor
+        // reapply) emits exactly one clear event — never two.
+        expect(onGenerationStarted('normal')).toBe(true);
+        expect(hostGenerate('normal')).toBe(true);
+        const events = ambientEvents('ambient_injection_cleared');
+        expect(events).toHaveLength(1);
+        expect(events[0].detail).toMatchObject({ clearReason: 'prompt-history-pending', generationType: 'normal' });
     });
 
     test('formatter does not promote next-band forecast into a within-hour claim', () => {
@@ -249,7 +346,10 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
     test('root wires the existing generation event with all host arguments and chat cleanup', () => {
         const root = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
         expect(root).toContain("onAnyEvent(['GENERATION_STARTED'], (type, options, dryRun) => {");
-        expect(root).toContain('Ambient.onGenerationStarted(type, options, dryRun);');
+        expect(root).toContain('Ambient.prepareGeneration(type, options, dryRun);');
+        expect(root).toContain('globalThis.mwtAmbientGenerationInterceptor = Ambient.generationInterceptor;');
+        const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+        expect(manifest.generate_interceptor).toBe('mwtAmbientGenerationInterceptor');
         expect(root).toMatch(/resetBudgetInjections\(\);\s+Ambient\.onChatChanged\(\);/);
     });
 });

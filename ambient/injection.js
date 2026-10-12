@@ -1,6 +1,6 @@
 import { applyExtensionPromptInjection } from '../core/injection.js';
 import { getGlobalSettings } from '../core/settings.js';
-import { record } from '../core/diagnostics.js';
+import { getInjectedSnapshot, record } from '../core/diagnostics.js';
 
 export const EXTENSION_PROMPT_KEY = 'mwt_ambient_injection';
 
@@ -31,6 +31,15 @@ export function applyAmbientInjection(ambient, diagnostics) {
 }
 
 export function clearAmbientInjection(diagnostics = { kind: 'ambient-conditions', clearReason: 'explicit-clear' }) {
-    record({ module: 'ambient', event: 'ambient_injection_cleared', level: 'debug', detail: { ...diagnostics } });
+    // Record the clear event ONLY when something was actually registered.
+    // Both the early GENERATION_STARTED clear and the interceptor's clear
+    // land here every generation — including for users who never enable the
+    // module — so unconditional events spent two of the 200 shared ring
+    // entries per generation and crowded out every other module's history.
+    // A no-op clear needs no event: the per-key snapshot written by the
+    // apply below keeps the latest clearReason either way.
+    if (getInjectedSnapshot(EXTENSION_PROMPT_KEY)?.enabled) {
+        record({ module: 'ambient', event: 'ambient_injection_cleared', level: 'debug', detail: { ...diagnostics } });
+    }
     return applyAmbientInjection(null, diagnostics);
 }

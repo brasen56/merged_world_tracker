@@ -845,8 +845,13 @@ function onAnyEvent(names, handler) {
 const depthTerminalEvent = event_types?.GENERATION_ENDED ? 'GENERATION_ENDED' : 'GENERATION_STOPPED';
 console.log(`[MWT] Generation-depth terminal event: ${depthTerminalEvent}`);
 
+// ST invokes this after inserting pending input and deleting a regenerated
+// reply, before collecting extension prompts. Never resolve ambient time in the
+// early event.
+globalThis.mwtAmbientGenerationInterceptor = Ambient.generationInterceptor;
+
 onAnyEvent(['GENERATION_STARTED'], (type, options, dryRun) => {
-    Ambient.onGenerationStarted(type, options, dryRun);
+    Ambient.prepareGeneration(type, options, dryRun);
     Chronicle.onGenerationStarted();
     // TODO §1 — the optional "hold background tracker jobs while the user is
     // generating" policy (Settings tab, default off). Depth-counted inside

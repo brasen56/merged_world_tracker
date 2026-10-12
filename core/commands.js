@@ -28,9 +28,12 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
             return;
         }
 
+        // ST calls each handler as callback(namedArgs, value): the first argument
+        // is an object of named arguments; the text typed after the command is
+        // the second. Reading the first as text breaks the command live.
         try {
-            registerSlashCommand('wt-ambient', (args) => {
-                try { return Ambient?.ambientCommand?.(args) ?? 'Ambient Conditions not available.'; }
+            registerSlashCommand('wt-ambient', (_args, command) => {
+                try { return Ambient?.ambientCommand?.(command) ?? 'Ambient Conditions not available.'; }
                 catch (error) { return `Error: ${error.message}`; }
             }, ['wt-weather'], 'Show current ambient conditions and one-band forecast; optional reseed subcommand');
 
@@ -91,12 +94,12 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
             // The point of this command is that marking a beat planted should
             // not require opening the modal: the user notices the setup land in
             // the narration and confirms it right where they are reading.
-            registerSlashCommand('wt-beat', async (args, _command) => {
+            registerSlashCommand('wt-beat', async (_args, command) => {
                 try {
                     if (typeof StoryPlanner.listBeats !== 'function') {
                         return 'Story Planner not available.';
                     }
-                    const arg = (args || '').toString().trim();
+                    const arg = String(command ?? '').trim();
 
                     if (arg.toLowerCase() === 'resolve' || arg.toLowerCase().startsWith('resolve ')) {
                         const ref = arg.length > 7 ? arg.slice(8).trim() : '';
@@ -156,8 +159,8 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
             // injectionMasterOff. Now calls all five modules that inject AND
             // sets the master flag so Interiority/Knowledge are gated too —
             // matching the right-click panic switch on the ⚙️ floating button.
-            registerSlashCommand('wt-inject', async (args, _command) => {
-                const mode = (args || '').trim().toLowerCase();
+            registerSlashCommand('wt-inject', async (_args, command) => {
+                const mode = String(command ?? '').trim().toLowerCase();
                 if (mode !== 'on' && mode !== 'off') {
                     return 'Usage: /wt-inject on|off';
                 }

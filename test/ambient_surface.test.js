@@ -34,6 +34,57 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('variability feedback updates live without saving and resets with explicit defaults', () => {
+        mount();
+        expect(el('variability-value').textContent).toBe('50% — balanced (default)');
+        expect(el('variability').getAttribute('aria-describedby')).toBe('mwt-a-variability-help');
+        expect(el('variability-help').textContent).toContain('not its severity');
+        ctx.saveMetadataDebounced.mockClear();
+        for (const [value, text] of [['0', '0% — slower changes'], ['1', '100% — faster changes']]) {
+            el('variability').value = value;
+            el('variability').dispatchEvent(new Event('input', { bubbles: true }));
+            expect(el('variability-value').textContent).toBe(text);
+            expect(el('variability').getAttribute('aria-valuetext')).toBe(text);
+        }
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+        expect(getSettings().variability).toBe(0.5);
+        click('dismiss');
+        expect(el('variability-value').textContent).toBe('50% — balanced (default)');
+        expect(el('variability').getAttribute('aria-valuetext')).toBe('50% — balanced (default)');
+        el('variability').value = '0.8'; click('save'); mount();
+        expect(el('variability-value').textContent).toBe('80% — faster changes');
+    });
+
+    test('Overview exposes the exact resolved clock, stale tag source and next band boundary', () => {
+        saveSettings(config);
+        ctx.chat[0].mes = '[In-story time: 11:37 PM, Thursday, June 4, 2026]';
+        ctx.chat.push({ mes: 'A later message without a usable timestamp' });
+        ctx.saveMetadataDebounced.mockClear();
+        document.body.innerHTML = renderOverviewSnapshot({ ambient: { ok: true, value: getAmbientStatus() } });
+        expect(document.body.textContent).toContain('Story clock used: 2026-06-04 23:37');
+        expect(document.body.textContent).toContain('latest usable In-story time tag (message #0, 1 message ago)');
+        expect(document.body.textContent).toContain('Current night:');
+        expect(document.body.textContent).toContain('Next dawn (2026-06-05 05:00)');
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+    });
+
+    test('Overview labels World State and synthetic clock fallbacks without fabricating calendar dates', () => {
+        saveSettings(config);
+        ctx.chat = [{ mes: 'No clock' }];
+        ctx.chatMetadata.world_state_tracker_metadata = { text: '## Current Scene\nDate: June 4, 2026\nTime: 12:00 PM' };
+        document.body.innerHTML = renderOverviewSnapshot({ ambient: { ok: true, value: getAmbientStatus() } });
+        expect(document.body.textContent).toContain('Story clock used: 2026-06-04 12:00');
+        expect(document.body.textContent).toContain('Source: World State Current Scene');
+        delete ctx.chatMetadata.world_state_tracker_metadata;
+        ctx.saveMetadataDebounced.mockClear();
+        document.body.innerHTML = renderOverviewSnapshot({ ambient: { ok: true, value: getAmbientStatus() } });
+        expect(document.body.textContent).toContain('Story clock used: synthetic story hour 1');
+        expect(document.body.textContent).toContain('message-count fallback; no usable story date/time');
+        expect(document.body.textContent).toContain('Next dawn (synthetic story hour 5)');
+        expect(document.body.textContent).not.toContain('1970-');
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+    });
+
     test('first enable asks once without injecting; dismiss explicitly configures and persists defaults', () => {
         mount(); expect(el('setup').hidden).toBe(true);
         click('enabled');
@@ -112,16 +163,32 @@ describe('Ambient Phase 3 user surface', () => {
         createCommands({ registerSlashCommand: register, modules: { WorldState: {}, Chronicle: {}, Knowledge: {}, StoryPlanner: {}, Interiority: {}, Ambient: { ambientCommand } } }).setupSlashCommands();
         const registration = register.mock.calls.find(([name]) => name === 'wt-ambient');
         expect(registration[2]).toEqual(['wt-weather']);
-        expect(registration[1]('')).toBe(ambientCommand());
+        expect(registration[1]({}, '')).toBe(ambientCommand());
+        expect(registration[1]({ ignored: 'reseed' })).toBe(ambientCommand());
         const seed = ensureSeed();
         const inherited = structuredClone(ctx.chatMetadata);
         vi.spyOn(Math, 'random').mockReturnValue(seed === 0 ? 0.5 : 0);
-        const output = ambientCommand('reseed');
+        const output = registration[1]({}, 'reseed');
         expect(ensureSeed()).not.toBe(seed);
         expect(getSettings().pin).toEqual(pin);
         expect(output).toBe(buildInjectionBody(readAmbientConditions(getSettings(), ensureSeed()).ambient));
         ctx.chatMetadata = inherited; onChatChanged(); expect(ensureSeed()).toBe(seed);
-        expect(ambientCommand('bad')).toContain('Usage');
+        expect(registration[1]({}, 'bad')).toContain('Usage');
+    });
+
+    test('/wt-inject reads the typed value the way ST passes it and clears the ambient line', async () => {
+        saveSettings(config); onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').enabled).toBe(true);
+        const register = vi.fn();
+        const saved = [];
+        createCommands({ registerSlashCommand: register, saveSettings: patch => saved.push(patch),
+            modules: { WorldState: {}, Chronicle: {}, Knowledge: {}, StoryPlanner: {}, Interiority: {}, Ambient: { ambientCommand } } }).setupSlashCommands();
+        const inject = register.mock.calls.find(([name]) => name === 'wt-inject')[1];
+        // ST passes (namedArgs, value); the named-args object is never the text.
+        await expect(inject({ _scope: {} }, 'off')).resolves.toBe('Injection off for all modules.');
+        expect(saved).toEqual([{ injectionMasterOff: true }]);
+        expect(getInjectedSnapshot('mwt_ambient_injection')).toMatchObject({ enabled: false, diagnostics: { clearReason: 'panic-slash-command' } });
+        await expect(inject({}, 'sideways')).resolves.toBe('Usage: /wt-inject on|off');
     });
 
     test('generation expires pins at the exact bound; swipes and rewinds restore the original interval', () => {

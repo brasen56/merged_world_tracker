@@ -264,8 +264,9 @@ describe('Phase 0 — overdue Ready lifecycle', () => {
             modules: { WorldState: {}, Chronicle: {}, Knowledge: {}, StoryPlanner, Interiority: {} },
         }).setupSlashCommands();
 
-        await expect(beatCommand('')).resolves.toContain(`R1. [Ready, ${getNudgeTurns()} turns] ${ready.title}`);
-        await expect(beatCommand('resolve R1')).resolves.toBe(`"${ready.title}" — resolved.`);
+        // ST's calling convention: (namedArgs, value).
+        await expect(beatCommand({}, '')).resolves.toContain(`R1. [Ready, ${getNudgeTurns()} turns] ${ready.title}`);
+        await expect(beatCommand({}, 'resolve R1')).resolves.toBe(`"${ready.title}" — resolved.`);
         expect(getArcs()[0].status).toBe('resolved');
         expect(getArcs()[0].beats.every(beat => beat.state === 'planted')).toBe(true);
     });

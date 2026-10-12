@@ -38,15 +38,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a re-roll) keep a threshold value from flickering inside a band,
   and the variability slider (0–1) changes how often conditions change —
   anchor spacing 48–12 h, fast-layer weight 0.05–0.25, convex blend —
-  never which conditions can exist. Determinism (mulberry32 + string hash),
-  10k-sample climate gating, band quantization and forecast parity are
-  pinned in `test/ambient_time.test.js` and `test/ambient_generator.test.js`.
+  never which conditions can exist. The daily temperature term reads the
+  band midpoint, not the band start, so warmth is monotonic across the day
+  (afternoon peak, night trough) — a start-hour read instead tied evening
+  (18:00) to afternoon (12:00) and scored the 21:00–05:00 night band at its
+  21:00 start, warmer than morning; noise and season still read the band
+  start, so band quantization and flicker-freedom are unchanged and only
+  rendered temperatures shift slightly. Determinism (mulberry32 + string
+  hash), 10k-sample climate gating, band quantization, band-order
+  monotonicity and forecast parity are pinned in `test/ambient_time.test.js`
+  and `test/ambient_generator.test.js`.
 
 - **Ambient Conditions Phase 2: per-generation narrator injection.** Explicitly
   configured chats receive deterministic qualitative conditions and a one-band
-  forecast on normal, swipe and continue generations. Swipes skip the replaced
-  message's clock; quiet/impersonate generations clear the slot and dry runs
-  preserve it. A random chat-metadata seed survives renames and branch copies.
+  forecast on normal, swipe, regenerate and continue generations, computed in
+  a generation interceptor once SillyTavern has added the pending user message
+  and removed a regenerated reply. The clock comes from the chat itself, so
+  hidden messages and prompt-only regex scripts don't change it. Swipes and
+  regenerates keep the clock from before the replaced reply; quiet/impersonate
+  generations clear the slot and dry runs preserve it. A random chat-metadata seed survives renames and branch copies.
   The shared injection seam handles boundaries, budget caps and exact-payload
   diagnostics; Ambient Conditions now appears in the Budget tab/console.
   Clock jumps over six story hours are logged. Chat changes and panic activation
@@ -81,6 +91,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pin interval and forecast semantics, reseed/alias/body parity, read-only
   dashboard status and panic gates. Planner integration remains deferred
   to Phase 4.
+
+- **Ambient Conditions: variability feedback in the settings surface.** The
+  variability slider now carries a live readout — a percentage labelled
+  "slower changes" below 50%, "faster changes" above it and "balanced
+  (default)" at it — mirrored into the slider's `aria-valuetext`, with a
+  visible "Slower (0%) → Faster (100%)" endpoint hint. The help text
+  explains what the value does and, just as importantly, what it doesn't:
+  it controls how often weather changes as story time advances, not its
+  severity or which conditions the climate allows; 0% means slower changes,
+  not frozen weather; conditions stay stable within each time band (dawn,
+  morning, afternoon, evening, night); and the value applies on the next
+  "Save Ambient Settings", not the moment the slider moves.
+
+- **Ambient Conditions: the Overview card shows the story clock it used.**
+  The read-only Ambient card now reports the resolved story clock behind the
+  current conditions and where it came from: the latest usable
+  `[In-story time:]` tag with SillyTavern's `#N` message number and how many
+  messages have arrived since, so a stale tag stands out at a glance; the
+  World State Current Scene date/time; or the message-count fallback spelled
+  out as synthetic hours and never formatted as a calendar date. The current
+  band is named, and the one-band forecast carries its start date/time. This
+  is the current read-only calculation — not the last injected prompt, and
+  not an independently ticking weather clock — making stale tags and
+  fallbacks visible without claiming an authoritative time beyond the
+  resolver's inputs.
+
+### Fixed
+
+- **`/wt-inject on|off`, `/wt-beat` and `/wt-ambient` ignored what you typed.**
+  SillyTavern calls a command as `(namedArgs, value)`, and all three handlers
+  read the named-arguments object as the text. `/wt-inject` failed on every
+  use, so the panic command never turned injection off, `/wt-beat` never saw
+  a beat number or `resolve R1`, and `/wt-ambient` always answered with its
+  usage line, so the conditions report and `reseed` never ran. All three now
+  read the typed value. The tests called the handlers with the text first,
+  which is why they passed; they now call them the way SillyTavern does.
 
 ## [2.11.6]
 

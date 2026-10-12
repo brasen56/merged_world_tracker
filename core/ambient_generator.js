@@ -106,7 +106,9 @@ function evaluate(seedTime, hasCalendar, config) {
     const band = quantizeAmbientTime(seedTime);
     const climate = AMBIENT_CLIMATES[config.climate];
     const season = seasonAt(band.startHours, hasCalendar, config);
-    const hour = ((band.startHours % 24) + 24) % 24;
+    // Daily warmth reads the band midpoint, not its start: night spans 21:00–05:00,
+    // so a start-hour read scored it warmer than morning and tied evening to afternoon.
+    const hour = (((band.startHours + band.nextHours) / 2 % 24) + 24) % 24;
     // At midpoint variability, anchors are 30h apart; range is 48h–12h.
     const spacing = 48 - 36 * config.variability;
     const fastWeight = 0.05 + 0.2 * config.variability;

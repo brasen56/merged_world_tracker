@@ -294,7 +294,7 @@ describe('CORE-02 — /wt-inject command contract', () => {
         expect(capturedHandler).not.toBeNull();
 
         // Invoke the /wt-inject off handler.
-        return capturedHandler('off').then(result => {
+        return capturedHandler({}, 'off').then(result => {
             expect(result).toContain('off');
             expect(savedPatches.length).toBeGreaterThanOrEqual(1);
             expect(savedPatches[0].injectionMasterOff).toBe(true);
@@ -327,7 +327,7 @@ describe('CORE-02 — /wt-inject command contract', () => {
         });
         cmds.setupSlashCommands();
 
-        return capturedHandler('on').then(result => {
+        return capturedHandler({}, 'on').then(result => {
             expect(result).toContain('on');
             expect(savedPatches.length).toBeGreaterThanOrEqual(1);
             expect(savedPatches[0].injectionMasterOff).toBe(false);

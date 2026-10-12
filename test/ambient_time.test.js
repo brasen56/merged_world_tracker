@@ -58,10 +58,21 @@ describe('ambient source ladder', () => {
         expect(resolveAmbientTime({ messages, worldState })).toMatchObject({ source: 'timestamp', hour: 16, messageIndex: 1 });
     });
 
-    test('skips the old swipe clock without mutating messages', () => {
+    test.each(['swipe', 'regenerate'])('skips the old %s clock without mutating messages', type => {
         const messages = Object.freeze([Object.freeze({ mes: tag('01:00 PM') }), Object.freeze({ mes: tag('04:00 PM') })]);
-        expect(resolveAmbientTime({ messages, type: 'swipe' })).toMatchObject({ source: 'timestamp', hour: 13, messageIndex: 0 });
+        // The replaced message is not counted as newer than the tag either.
+        expect(resolveAmbientTime({ messages, type })).toMatchObject({ source: 'timestamp', hour: 13, messageIndex: 0, messagesAfter: 0 });
+        expect(resolveAmbientTime({ messages })).toMatchObject({ messageIndex: 1, messagesAfter: 0 });
+        expect(resolveAmbientTime({ messages: [...messages, { mes: 'later' }, { mes: 'later' }] })).toMatchObject({ messageIndex: 1, messagesAfter: 2 });
         expect(resolveAmbientTime({ messages, type: 'continue' }).hour).toBe(16);
+    });
+
+    test('regenerate retains a trailing user message when the host already removed the reply', () => {
+        const messages = Object.freeze([Object.freeze({ mes: 'Earlier reply', is_user: false }),
+            Object.freeze({ mes: tag('04:00 PM'), is_user: true })]);
+        expect(resolveAmbientTime({ messages, type: 'regenerate' })).toMatchObject({ hour: 16, messageIndex: 1 });
+        expect(resolveAmbientTime({ messages: [{ mes: 'Input', is_user: true }], type: 'regenerate' }).hours).toBe(1);
+        expect(resolveAmbientTime({ messages: [], type: 'regenerate' }).hours).toBe(0);
     });
 
     test('tries the scene date/time, including a pre-parsed scene', () => {
@@ -73,6 +84,7 @@ describe('ambient source ladder', () => {
         const messages = ['hello', 'world'];
         expect(resolveAmbientTime({ messages, worldState: { date: 'Frostfall 4, 2026', time: 'Evening' } })).toEqual({ hours: 2, month: null, source: 'message-count' });
         expect(resolveAmbientTime({ messages, type: 'swipe', hoursPerMessage: 3 }).hours).toBe(3);
+        expect(resolveAmbientTime({ messages, type: 'regenerate', hoursPerMessage: 3 }).hours).toBe(3);
         expect(resolveAmbientTime({ messages: [], type: 'swipe' }).hours).toBe(0);
         expect(resolveAmbientTime({ messages: null }).hours).toBe(0);
         expect(() => resolveAmbientTime({ hoursPerMessage: 0 })).toThrow(RangeError);

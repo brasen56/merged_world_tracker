@@ -74,17 +74,18 @@ export function parseAmbientTimestamp(text, options = {}) {
 
 /**
  * Pure source ladder. Callers supply the chat and World State document/scene.
- * Swipe excludes the replaced message from BOTH tag scanning and count time.
+ * Swipe/regenerate exclude a trailing replaced reply from tags and count time.
  * Count time uses one synthetic hour per included message by default, with no
  * inferred month: the generator must use the supplied manual season instead.
  */
 export function resolveAmbientTime({ messages = [], worldState = '', type = 'normal', hoursPerMessage = 1, monthNames = AMBIENT_MONTHS } = {}) {
     if (!Number.isFinite(hoursPerMessage) || hoursPerMessage <= 0) throw new RangeError('hoursPerMessage must be positive and finite.');
     const chat = Array.isArray(messages) ? messages : [];
-    const count = Math.max(0, chat.length - (type === 'swipe' ? 1 : 0));
+    const replacingReply = type === 'swipe' || (type === 'regenerate' && chat.at(-1)?.is_user !== true);
+    const count = Math.max(0, chat.length - (replacingReply ? 1 : 0));
     for (let index = count - 1; index >= 0; index--) {
         const parsed = parseAmbientTimestamp(typeof chat[index] === 'string' ? chat[index] : chat[index]?.mes, { monthNames });
-        if (parsed) return { ...parsed, source: 'timestamp', messageIndex: index };
+        if (parsed) return { ...parsed, source: 'timestamp', messageIndex: index, messagesAfter: count - 1 - index };
     }
     const scene = typeof worldState === 'string' ? readCurrentScene(worldState) : worldState;
     const parsed = parseAmbientDateTime(scene?.date, scene?.time, { monthNames });

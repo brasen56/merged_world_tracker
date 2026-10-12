@@ -4,6 +4,7 @@
   "requires": [],
   "optional": [],
   "js": "index.js",
+  "generate_interceptor": "mwtAmbientGenerationInterceptor",
   "css": "style.css",
   "author": "Brasen",
   "version": "2.11.6",

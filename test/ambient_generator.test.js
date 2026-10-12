@@ -25,6 +25,25 @@ describe('ambient bands and forecast', () => {
         expect(quantizeAmbientTime(-1)).toEqual(quantizeAmbientTime(0));
     });
 
+    test('daily warmth is monotonic across bands: afternoon peak, night trough', () => {
+        // Band means over many days isolate the daily term — the only input
+        // that differs systematically by band — from per-band noise draws,
+        // since same-day bands share most of their noise.
+        const score = { freezing: 0, cold: 1, cool: 2, mild: 3, warm: 4, hot: 5 };
+        const day = offset => Date.UTC(2026, 0, 1 + offset) / 3600000;
+        const samples = Object.fromEntries(AMBIENT_BANDS.map(({ name }) => [name, []]));
+        for (let index = 0; index < 500; index++) {
+            for (const { name, hour } of AMBIENT_BANDS) {
+                samples[name].push(score[generate(day(index) + hour, { climate: 'desert', seed: index }).conditions.temperature]);
+            }
+        }
+        const mean = name => samples[name].reduce((total, value) => total + value, 0) / samples[name].length;
+        expect(mean('night')).toBeLessThan(mean('dawn'));
+        expect(mean('dawn')).toBeLessThan(mean('morning'));
+        expect(mean('morning')).toBeLessThan(mean('evening'));
+        expect(mean('evening')).toBeLessThan(mean('afternoon'));
+    });
+
     test('forecast is exactly the next band, even across month/year/season boundaries', () => {
         for (const time of [hours(2, 28, 22), hours(12, 31, 22), hours(6, 4, 12), -10]) {
             for (const climate of Object.keys(AMBIENT_CLIMATES)) {
@@ -55,14 +74,20 @@ describe('ambient climate and deterministic noise', () => {
     });
 
     test('warm climates cannot snow, while temperate and arctic can', () => {
+        // Collect and assert once: 75k expect() calls inside the loop made this
+        // the slowest test in the suite and timed it out under load.
         const observed = Object.fromEntries(Object.keys(AMBIENT_CLIMATES).map(climate => [climate, new Set()]));
+        const outsideVocabulary = [];
         for (const climate of Object.keys(observed)) {
             for (let index = 0; index < 3000; index++) {
                 const result = generate(hours(1, 1) + index * 13, { climate });
                 observed[climate].add(result.conditions.precipitation);
-                for (const [key, value] of Object.entries(result.conditions)) expect(AMBIENT_VOCABULARY[key]).toContain(value);
+                for (const [key, value] of Object.entries(result.conditions)) {
+                    if (!AMBIENT_VOCABULARY[key].includes(value)) outsideVocabulary.push(`${climate} ${key}=${value}`);
+                }
             }
         }
+        expect(outsideVocabulary).toEqual([]);
         for (const climate of ['desert', 'tropical', 'mediterranean']) {
             expect([...observed[climate]].some(value => /snow|blizzard/.test(value))).toBe(false);
         }

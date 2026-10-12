@@ -15,8 +15,13 @@ function select(id, label, values, selected, blank = false) {
         ${entries.map(([value, name]) => `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}</select>`;
 }
 
+function variabilityText(value) {
+    return `${Math.round(value * 100)}% — ${value < 0.5 ? 'slower changes' : value > 0.5 ? 'faster changes' : 'balanced (default)'}`;
+}
+
 export function renderAmbientSettings() {
     const s = getSettings();
+    const variability = Number.isFinite(s.variability) ? s.variability : 0.5;
     return `<details class="mwt-settings-disclosure" id="mwt-ambient-settings" open>
         <summary><span aria-hidden="true">🌦️</span> Ambient Conditions (this chat)</summary>
         <p>Code decides the weather; narration renders it when relevant. These controls save separately from global settings.</p>
@@ -29,8 +34,13 @@ export function renderAmbientSettings() {
             ${select('mwt-a-climate', 'Climate', Object.fromEntries(Object.entries(AMBIENT_CLIMATES).map(([key, preset]) => [key, preset.label])), s.climate, true)}
             ${select('mwt-a-hemisphere', 'Hemisphere', { north: 'Northern', south: 'Southern' }, s.hemisphere, true)}
             ${select('mwt-a-season', 'Manual season (when no calendar is usable)', AMBIENT_SEASONS, s.manualSeason)}
-            <label for="mwt-a-variability">Variability (change frequency)</label>
-            <input id="mwt-a-variability" type="range" min="0" max="1" step="0.05" value="${Number.isFinite(s.variability) ? s.variability : 0.5}">
+            <label class="mwt-label" for="mwt-a-variability">Variability (change frequency)</label>
+            <div>
+                <input id="mwt-a-variability" type="range" min="0" max="1" step="0.05" value="${variability}" aria-describedby="mwt-a-variability-help" aria-valuetext="${variabilityText(variability)}">
+                <div class="mwt-text-dim mwt-text-sm">Slower (0%) → Faster (100%)</div>
+                <output id="mwt-a-variability-value" for="mwt-a-variability">${variabilityText(variability)}</output>
+                <p class="mwt-text-dim mwt-text-sm" id="mwt-a-variability-help">Controls how often weather changes as story time advances, not its severity or which conditions your climate allows. 0% means slower changes, not frozen weather; 50% is the default. Conditions stay stable within each time band (dawn, morning, afternoon, evening, night). Changes take effect after Save Ambient Settings.</p>
+            </div>
         </div>
         <button type="button" class="mwt-btn" id="mwt-a-save">Save Ambient Settings</button>
         <details><summary>Pin conditions</summary>
@@ -55,6 +65,12 @@ export function wireAmbientSettings(root) {
     const meta = getChatMeta();
     const epoch = getEpoch();
     const el = id => panel.querySelector(`#mwt-a-${id}`);
+    const updateVariability = () => {
+        const text = variabilityText(Number(el('variability').value));
+        el('variability-value').textContent = text;
+        el('variability').setAttribute('aria-valuetext', text);
+    };
+    el('variability').addEventListener('input', updateVariability);
     const run = action => {
         try {
             if (getChatMeta() !== meta || getEpoch() !== epoch) throw new Error('Chat changed. Reopen Settings.');
@@ -80,6 +96,7 @@ export function wireAmbientSettings(root) {
         el('enabled').checked = true;
         el('climate').value = 'temperate'; el('hemisphere').value = 'north';
         el('season').value = 'spring'; el('variability').value = '0.5';
+        updateVariability();
         el('setup').hidden = true;
         invalidate('Temperate / Northern hemisphere saved. Setup will not ask again.');
     }));

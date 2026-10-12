@@ -30,8 +30,16 @@ function ambientBody(value) {
     const bound = (hours, source) => source === 'message-count' ? `synthetic story hour ${hours}`
         : new Date(hours * AMBIENT_HOUR_MS).toISOString().slice(0, 16).replace('T', ' ');
     const pin = isAmbientPin(value?.pin) ? value.pin : null;
+    const time = value?.time;
+    // ST numbers messages from #0. A tag many messages back means the clock is stuck.
+    const after = time?.messagesAfter;
+    const age = after === 0 ? 'the newest message' : `${after} message${after === 1 ? '' : 's'} ago`;
+    const source = time?.source === 'timestamp' ? `latest usable In-story time tag (message #${time.messageIndex}, ${age})`
+        : time?.source === 'world-state' ? 'World State Current Scene'
+            : 'message-count fallback; no usable story date/time (1 synthetic hour per message)';
+    const clock = time ? `<p>Story clock used: ${escapeHtml(bound(time.hours, time.source))}.<br>Source: ${escapeHtml(source)}.</p>` : '';
     return `<p>${escapeHtml(value?.state || 'off')}</p>${value?.ambient
-        ? `<p>${escapeHtml(describe(value.ambient.conditions))}</p><p>Next ${escapeHtml(value.ambient.forecast.band.name)}: ${escapeHtml(describe(value.ambient.forecast.conditions))}</p>` : ''}
+        ? `${clock}<p>Current ${escapeHtml(value.ambient.band.name)}: ${escapeHtml(describe(value.ambient.conditions))}</p><p>Next ${escapeHtml(value.ambient.forecast.band.name)}${time ? ` (${escapeHtml(bound(value.ambient.forecast.band.startHours, time.source))})` : ''}: ${escapeHtml(describe(value.ambient.forecast.conditions))}</p>` : ''}
         ${pin ? `<p>Pin ${value.ambient?.pinned ? 'active' : 'inactive (outside interval or clock source changed)'}; from ${escapeHtml(bound(pin.startHours, pin.source))}; ${pin.endHours === null ? 'until unpinned' : `expires ${escapeHtml(bound(pin.endHours, pin.source))}`}.</p>` : ''}`;
 }
 
