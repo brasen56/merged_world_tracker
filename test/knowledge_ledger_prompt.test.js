@@ -15,9 +15,19 @@
  * users curate the lorebooks for stale references themselves. These tests
  * pin that contract so a prompt refactor cannot quietly drop it (same
  * pattern as test/world_time_parity.test.js).
+ *
+ * Enrich's new_knowledge is APPENDED to the ledger (runNpcEnrich →
+ * buildUpdatedDossierContent → appendLedgerLines). Its prompt once asked for
+ * the whole ledger ("existing ledger + new"), so every Enrich re-appended a
+ * reworded copy of it. The last block pins the prompt and the merger to the
+ * same append contract, so they cannot drift apart again.
  */
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
+import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
+import { state } from '../knowledge/state.js';
+import { saveSettings } from '../knowledge/settings.js';
+import { buildUpdatedDossierContent, runNpcEnrich } from '../knowledge/lorebook.js';
 import {
     SCAN_SYSTEM_PROMPT,
     NPC_UPDATE_PROMPT,
@@ -58,10 +68,128 @@ describe('Knowledge Ledger stores established facts only', () => {
         }
     });
 
-    test("enrichment drops the NPC's own plan-shaped ledger lines when consolidating", () => {
-        // Enrich rewrites the whole ledger from existing content + history;
-        // it is the one prompt that can CLEAN legacy pollution, so it must
-        // not carry the NPC's own plan-shaped lines forward.
-        expect(DOSSIER_ENRICH_PROMPT).toContain("DROP this NPC's own plan-shaped lines");
+    test('enrichment asks only for facts the ledger does not already hold', () => {
+        // runNpcEnrich APPENDS new_knowledge (pinned below). The prompt used to
+        // ask for "existing ledger + new" and to DROP plan-shaped lines "when
+        // consolidating" — a rewrite the merger never performed, so each
+        // Enrich re-appended a reworded copy of the ledger and the drop did
+        // nothing. Enrich does not consolidate; condensing the ledger is a
+        // separate, reviewed action (docs/KNOWLEDGE_CONCISION_SCOPE.md).
+        expect(DOSSIER_ENRICH_PROMPT).toContain('Do not restate a fact already shown in their Knowledge Ledger');
+        expect(DOSSIER_ENRICH_PROMPT).toContain('new_knowledge is ADDED to the end of it');
+        expect(DOSSIER_ENRICH_PROMPT).not.toMatch(/existing ledger \+ new/i);
+        expect(DOSSIER_ENRICH_PROMPT).not.toMatch(/consolidat/i);
+        const factLine = DOSSIER_ENRICH_PROMPT.split('\n').find(l => l.includes('"fact"'));
+        expect(factLine).toContain('NOT already in their Knowledge Ledger');
+    });
+});
+
+// ─── Enrich: the prompt and the merger agree on APPEND ───────────────────────
+
+const NPC = 'Mara Voss';
+
+const LEDGER = [
+    '- Met the informant at the docks via witness — Day 3',
+    '- Learned the Kestrel was scuttled, not wrecked via told — Day 5',
+];
+
+const ENTRY = [
+    '[Dossier] Mara Voss | Human | weathered harbourmaster',
+    'Tone: brisk',
+    'Perceived as: unflappable',
+    'Role: Harbourmaster of Dusk Quay',
+    'Current Agenda: Root out the smugglers using her quay.',
+    '',
+    'Knowledge Ledger:',
+    ...LEDGER,
+].join('\n');
+
+const NEW_FACT = { fact: 'Saw the smugglers unload at the north wharf', source: 'witness', date: 'Day 7' };
+const NEW_FACT_LINE = '- Saw the smugglers unload at the north wharf via witness — Day 7';
+
+/** LEDGER's own facts, as a model restating the whole ledger returns them. */
+const RESTATED = [
+    { fact: 'Met the informant at the docks', source: 'witness', date: 'Day 3' },
+    { fact: 'Learned the Kestrel was scuttled, not wrecked', source: 'told', date: 'Day 5' },
+];
+
+/** The ledger section's item lines, in order. */
+function ledgerLines(content) {
+    const lines = content.split('\n');
+    const headerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));
+    if (headerIdx === -1) return null;
+    const out = [];
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+        const t = lines[i].trim();
+        if (t === '') continue;
+        if (!t.startsWith('- ')) break;
+        out.push(t);
+    }
+    return out;
+}
+
+describe('Enrich new_knowledge is appended to the ledger, never a rewrite', () => {
+    test('existing ledger lines survive verbatim and in order; new facts land after them', () => {
+        const merged = buildUpdatedDossierContent(ENTRY, { role: 'Acting port warden' }, [NEW_FACT]);
+        expect(ledgerLines(merged)).toEqual([...LEDGER, NEW_FACT_LINE]);
+        expect(merged).toContain('Role: Acting port warden');
+    });
+
+    test('the merger does not dedupe: a restated ledger is appended in full', () => {
+        // THE BUG, at the merger: this is what every Enrich did while the
+        // prompt asked for "existing ledger + new". If the merger ever starts
+        // replacing or deduping the ledger, DOSSIER_ENRICH_PROMPT's
+        // new_knowledge rule must change in the same commit.
+        const merged = buildUpdatedDossierContent(ENTRY, {}, RESTATED);
+        expect(ledgerLines(merged)).toEqual([...LEDGER, ...LEDGER]);
+    });
+
+    test('an empty new_knowledge leaves the ledger untouched', () => {
+        expect(ledgerLines(buildUpdatedDossierContent(ENTRY, {}, []))).toEqual(LEDGER);
+    });
+
+    describe('runNpcEnrich', () => {
+        let apiCalls;
+
+        beforeEach(() => {
+            resetCoreStubs();
+            saveSettings({ connectionProfileId: 'test-profile', scope: 'global' });
+            const books = new Map([['Knowledge Tracker', { entries: { 7: { uid: 7, comment: NPC, content: ENTRY } } }]]);
+            state.wiScript = {
+                async loadWorldInfo(name) { return books.has(name) ? structuredClone(books.get(name)) : null; },
+                async saveWorldInfo() {},
+            };
+            // 6 messages: the stub's stable-history window drops the trailing 2.
+            setFakeChat([
+                { is_user: true, mes: 'The harbour bells ring at dusk.' },
+                { is_user: false, mes: 'Mara Voss studies the cargo manifest with narrowed eyes.' },
+                { is_user: true, mes: 'We watch the north wharf from the roof.' },
+                { is_user: false, mes: 'Mara sees the smugglers unload crates at the north wharf.' },
+                { is_user: true, mes: 'We leave before dawn.' },
+                { is_user: false, mes: 'The watchers take their positions silently.' },
+            ]);
+            apiCalls = [];
+            setFakeApi(req => {
+                apiCalls.push(req);
+                return JSON.stringify({ fields: { agenda: 'Catch the smugglers at the north wharf.' }, new_knowledge: [NEW_FACT] });
+            });
+            vi.spyOn(console, 'warn').mockImplementation(() => {});
+        });
+
+        afterEach(() => {
+            state.wiScript = null;
+            vi.restoreAllMocks();
+        });
+
+        test('shows the model the ledger it must not restate, then appends only what it returns', async () => {
+            const result = await runNpcEnrich(NPC, 7);
+
+            expect(apiCalls).toHaveLength(1);
+            expect(apiCalls[0].systemPrompt).toBe(DOSSIER_ENRICH_PROMPT);
+            for (const line of LEDGER) expect(apiCalls[0].userContent).toContain(line);
+
+            expect(ledgerLines(result.merged)).toEqual([...LEDGER, NEW_FACT_LINE]);
+            expect(result.merged).toContain('Current Agenda: Catch the smugglers at the north wharf.');
+        });
     });
 });

@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.12.1]
+
+### Fixed
+
+- **Knowledge Tracker: Enrich (Dossier) re-added the whole Knowledge Ledger.**
+  The Enrich prompt asked the model for the ledger "from existing ledger +
+  new", as if its answer would replace the ledger, but Enrich adds its facts
+  to the end of the existing ledger. Each Enrich could therefore append a
+  reworded copy of every fact already there, which is one way NPC entries
+  grew so large in long chats. Its instruction to drop the NPC's own plans
+  "when consolidating the existing ledger" also did nothing, because Enrich
+  never consolidates. The prompt now asks only for facts the ledger does not
+  already hold, using the same "do not restate" rule as the scan. Existing
+  entries are not rewritten, so ledgers that already contain duplicates keep
+  them until you edit them. New tests pin the prompt and the merge to the
+  same append behaviour.
+
 ## [2.12.0]
 
 ### Added
