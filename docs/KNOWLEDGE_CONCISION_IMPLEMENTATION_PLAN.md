@@ -1,6 +1,6 @@
 # Knowledge Tracker — concision implementation phases
 
-**Status:** Proposed implementation plan; no phases implemented by this document.  
+**Status:** Proposed implementation plan; Phase 0 recorded 2026-10-16 (see §7). No feature phase implemented yet.  
 **Date:** 2026-10-16  
 **Source:** `c:/Users/brase/Desktop/extensions_wip/merged_world_tracker/docs/KNOWLEDGE_CONCISION_SCOPE.md`, including the co-author response.  
 **Area:** Knowledge generation, single-NPC cleanup review, persistence, and recovery.
@@ -152,6 +152,15 @@ Work:
 **Exit gate:** Baseline fixtures, writer inventory, and these decisions are
 recorded in this document or a named decision record. No recovery/capacity choice
 is left implicit for the implementation author.
+
+*Recorded 2026-10-16:* the writer inventory lives in
+`docs/KNOWLEDGE_CONCISION_WRITER_INVENTORY.md` (flows, validation seams S1–S7,
+gaps, and the walk points a recovery container must skip); the decisions live in
+`docs/KNOWLEDGE_CONCISION_DECISIONS.md` (D1 recovery storage, D2 retention,
+D3 backup, D4 field bounds + request capacity, D5 field-refresh reuse / Phase 6
+release role, D6 supported ledger formats and refusals); the fixtures live in
+`test/fixtures/knowledge_concision.js` with their baseline suite
+`test/knowledge_concision_fixtures.test.js`.
 
 ### Phase 1 — Shared prevention contract
 
@@ -401,7 +410,7 @@ Lock authority changes. No store migration rewrites existing NPC prose.
 
 ## 7. Implementation tracking
 
-- [ ] Phase 0 — baselines and decisions recorded
+- [x] Phase 0 — baselines and decisions recorded
 - [ ] Phase 1 — prevention contract and regression coverage
 - [ ] Phase 2 — pure ledger proposals and validation
 - [ ] Phase 3 — durable recovery and guarded apply/restore
@@ -412,3 +421,20 @@ Lock authority changes. No store migration rewrites existing NPC prose.
 When a phase lands, record its date, changed seams, automated results, remaining
 manual QA, and any accepted deviation here. Do not mark a phase complete solely
 because its prompt or UI exists.
+
+### Phase 0 record — 2026-10-16
+
+- **Changed seams:** none in runtime code. Added `test/fixtures/knowledge_concision.js`
+  (role scenarios, ledger coverage corpus, format/boundary documents, deterministic
+  representative-size builders), `test/knowledge_concision_fixtures.test.js`
+  (32 baseline tests), `docs/KNOWLEDGE_CONCISION_WRITER_INVENTORY.md` (flows,
+  seams S1–S7, gaps, recovery walk points), and
+  `docs/KNOWLEDGE_CONCISION_DECISIONS.md` (D1–D6).
+- **Automated results:** `npm test` 3558/3558 passed (151 files, including the
+  new suite); `npm run lint` clean.
+- **Remaining manual QA:** none required — no runtime behavior changed.
+- **Accepted deviations:** none.
+- **Baseline capture to change deliberately later:** `appendLedgerLines` inserts
+  LF lines into CRLF entries today; the fixtures suite pins this as the
+  pre-Phase-2 baseline (D6 requires the cleanup patcher to preserve line endings,
+  Phase 1 may leave ordinary append behavior unchanged).
