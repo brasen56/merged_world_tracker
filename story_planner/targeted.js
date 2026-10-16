@@ -22,6 +22,7 @@ import {
 import { assessNewcomerEvidence, buildPlayerCharacterBlock, describeCastPolicyRequest, getRecentMessagesForPlan, storyPaletteProjection } from './generation.js';
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
 import { buildArcDiff, captureArcRevision, materialArcShape } from './proposals.js';
+import { buildAmbientPlannerContext } from '../core/ambient_prompt.js';
 
 export const TARGETED_OPERATIONS = Object.freeze(['rework', 'develop', 'alternate', 'setup']);
 
@@ -62,6 +63,8 @@ export function buildTargetedUserPrompt(operation, arc, characterContext = {}, c
     if (recent) blocks.push(wrapTag('recent_stable_messages', recent));
     const world = getWorldStateFactual().trim();
     if (world) blocks.push(wrapTag('factual_world_state', world));
+    const ambientContext = buildAmbientPlannerContext();
+    if (ambientContext) blocks.push(wrapTag('ambient_conditions', ambientContext));
     const chronicle = getLatestChronicleEntry().trim();
     if (chronicle) blocks.push(wrapTag('latest_chronicle', chronicle));
     const direction = cleanText(guidance, 2000) || getDirectionHint().trim();

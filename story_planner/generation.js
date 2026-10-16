@@ -31,6 +31,7 @@ import {
 } from './data.js';
 import { applyPlanInjection } from './injection.js';
 import { captureTargetRevisions, findChangedProposalTargets } from './proposals.js';
+import { buildAmbientPlannerContext } from '../core/ambient_prompt.js';
 
 // ─── Message scan helper ─────────────────────────────────────────────────────
 
@@ -440,6 +441,10 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     // predates the block still says who {{user}} is.
     const playerBlock = buildPlayerCharacterBlock();
     if (playerBlock) out = `${playerBlock}\n\n${out}`;
+    // Application-owned context must survive custom templates and remain before
+    // the closing output instruction. Never seed or register narrator injection.
+    const ambientContext = buildAmbientPlannerContext();
+    if (ambientContext) out = `${wrapTag('ambient_conditions', ambientContext)}\n\n${out}`;
 
     if (reminderReason) {
         const reminder = `[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;

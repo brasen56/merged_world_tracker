@@ -1,13 +1,11 @@
 import { applyExtensionPromptInjection } from '../core/injection.js';
 import { getGlobalSettings } from '../core/settings.js';
 import { getInjectedSnapshot, record } from '../core/diagnostics.js';
+import { describeConditions } from '../core/ambient_prompt.js';
+
+export { describeConditions } from '../core/ambient_prompt.js';
 
 export const EXTENSION_PROMPT_KEY = 'mwt_ambient_injection';
-
-export function describeConditions(conditions) {
-    const precipitation = conditions.precipitation === 'none' ? 'no precipitation' : conditions.precipitation;
-    return `${conditions.sky}, ${conditions.temperature}, ${conditions.air} air; ${precipitation}. Wind ${conditions.wind}.`;
-}
 
 export function buildInjectionBody(ambient) {
     return `Stage direction, not narration. Ambient conditions (authoritative): ${describeConditions(ambient.conditions)} `

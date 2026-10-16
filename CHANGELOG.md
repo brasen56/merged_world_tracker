@@ -12,110 +12,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.12.0]
 
 ### Added
 
-- **Ambient Conditions Phase 1: pure time and condition-generation core.**
-  Two dependency-free `core/` helpers (`core/ambient_time.js`,
-  `core/ambient_generator.js`) compute qualitative conditions as a pure
-  function of seed, story time and climate — no SillyTavern imports, no
-  injection, no UI. The time parser accepts the canonical `[In-story time:]`
-  tag and World State scene dates (English month or `YYYY-MM-DD`, 12/24-hour
-  clocks), fails closed on `Unknown`, qualitative or fantasy-month input,
-  supports renamed Gregorian months through an optional month-name list, and
-  uses UTC-shaped arithmetic independent of the machine timezone.
-  `resolveAmbientTime` is the pure fallback ladder — timestamp tag, World
-  State scene date, then one synthetic hour per included message, which
-  never infers a season from a fabricated date — and excludes the replaced
-  message when swiping. `generateAmbientConditions` (climate required, no
-  silent default) returns band, season, conditions and exactly one next-band
-  forecast across five qualitative channels (sky, temperature, air,
-  precipitation, wind) and five climate presets (temperate, desert,
-  tropical, arctic, mediterranean), with climate bounds making impossible
-  weather unreachable by construction — the desert never snows. Fixed
-  daytime bands (dawn 05:00 through night 21:00, night spanning midnight
-  without a re-roll) keep a threshold value from flickering inside a band,
-  and the variability slider (0–1) changes how often conditions change —
-  anchor spacing 48–12 h, fast-layer weight 0.05–0.25, convex blend —
-  never which conditions can exist. The daily temperature term reads the
-  band midpoint, not the band start, so warmth is monotonic across the day
-  (afternoon peak, night trough) — a start-hour read instead tied evening
-  (18:00) to afternoon (12:00) and scored the 21:00–05:00 night band at its
-  21:00 start, warmer than morning; noise and season still read the band
-  start, so band quantization and flicker-freedom are unchanged and only
-  rendered temperatures shift slightly. Determinism (mulberry32 + string
-  hash), 10k-sample climate gating, band quantization, band-order
-  monotonicity and forecast parity are pinned in `test/ambient_time.test.js`
-  and `test/ambient_generator.test.js`.
-
-- **Ambient Conditions Phase 2: per-generation narrator injection.** Explicitly
-  configured chats receive deterministic qualitative conditions and a one-band
-  forecast on normal, swipe, regenerate and continue generations, computed in
-  a generation interceptor once SillyTavern has added the pending user message
-  and removed a regenerated reply. The clock comes from the chat itself, so
-  hidden messages and prompt-only regex scripts don't change it. Swipes and
-  regenerates keep the clock from before the replaced reply; quiet/impersonate
-  generations clear the slot and dry runs preserve it. A random chat-metadata seed survives renames and branch copies.
-  The shared injection seam handles boundaries, budget caps and exact-payload
-  diagnostics; Ambient Conditions now appears in the Budget tab/console.
-  Clock jumps over six story hours are logged. Chat changes and panic activation
-  clear stale ambient context. Planner integration remains deferred to
-  Phase 4; no silent climate is selected.
-
-- **Ambient Conditions Phase 3: per-chat setup UI, pins, commands and
-  dashboard.** Settings gains an "Ambient Conditions (this chat)" section
-  that saves independently of the global Save Settings button: climate
-  picker, hemisphere, manual season and a variability slider. First enable
-  asks for climate and hemisphere inline before injecting anything — no
-  silent climate default — with a "Temperate, don't ask again (Northern
-  hemisphere)" dismiss action; a custom setup also suppresses later asks,
-  and an unanswered setup stays available without creating weather. A seed
-  is created on successful enable and inherited by branches. **Pin
-  conditions** selects all five qualitative channels and intentionally
-  overrides climate gates, with expiry in story time: until unpinned, next
-  band, next dawn, or an explicit story date/time (dated expiry requires a
-  usable calendar clock; a message-count pin is inactive rather than given
-  a fabricated expiry). Pin bounds are start-inclusive/end-exclusive, the
-  forecast applies the same interval at the next band, expired pins remain
-  stored so rewinding inside their interval restores the override, and
-  Unpin removes them. The Overview dashboard gains a read-only Ambient card
-  — current conditions, one-band forecast, panic/off state, pin activity
-  and expiry — that never creates a seed or writes metadata. `/wt-ambient`
-  (alias `/wt-weather`) returns the same unwrapped body the injection uses,
-  and `/wt-ambient reseed` changes only the seed, preserving settings and
-  pins; disabled, incomplete or panic-blocked chats report their state
-  rather than presenting conditions as active. Setting changes clear the
-  old registered injection, and handlers reject stale chat/epoch scopes.
-  Coverage lives in `test/ambient_surface.test.js`: setup, chat isolation,
-  pin interval and forecast semantics, reseed/alias/body parity, read-only
-  dashboard status and panic gates. Planner integration remains deferred
-  to Phase 4.
-
-- **Ambient Conditions: variability feedback in the settings surface.** The
-  variability slider now carries a live readout — a percentage labelled
-  "slower changes" below 50%, "faster changes" above it and "balanced
-  (default)" at it — mirrored into the slider's `aria-valuetext`, with a
-  visible "Slower (0%) → Faster (100%)" endpoint hint. The help text
-  explains what the value does and, just as importantly, what it doesn't:
-  it controls how often weather changes as story time advances, not its
-  severity or which conditions the climate allows; 0% means slower changes,
-  not frozen weather; conditions stay stable within each time band (dawn,
-  morning, afternoon, evening, night); and the value applies on the next
-  "Save Ambient Settings", not the moment the slider moves.
-
-- **Ambient Conditions: the Overview card shows the story clock it used.**
-  The read-only Ambient card now reports the resolved story clock behind the
-  current conditions and where it came from: the latest usable
-  `[In-story time:]` tag with SillyTavern's `#N` message number and how many
-  messages have arrived since, so a stale tag stands out at a glance; the
-  World State Current Scene date/time; or the message-count fallback spelled
-  out as synthetic hours and never formatted as a calendar date. The current
-  band is named, and the one-band forecast carries its start date/time. This
-  is the current read-only calculation — not the last injected prompt, and
-  not an independently ticking weather clock — making stale tags and
-  fallbacks visible without claiming an authoritative time beyond the
-  resolver's inputs.
+- **Ambient Conditions: opt-in, deterministic weather for chats and the Story
+  Planner.** Qualitative conditions — sky, temperature, air, precipitation and
+  wind, plus a one-band forecast — are a pure function of the chat's seed,
+  story time and climate, so the same story moment always produces the same
+  weather. Five climate presets (temperate, desert, tropical, arctic,
+  mediterranean) bound what can exist: impossible weather is unreachable by
+  construction — the desert never snows.
+  - The story clock comes from the chat itself — the latest usable
+    `[In-story time:]` tag or the World State Current Scene date, else one
+    synthetic hour per message, a fallback never dressed up as a calendar
+    date. Conditions hold steady within each time band (dawn, morning,
+    afternoon, evening, night), warmth follows the day (afternoon peak, night
+    trough), and clock jumps over six story hours are logged.
+  - Configured chats are injected on normal, swipe, regenerate and continue
+    generations. Hidden messages and prompt-only regex scripts don't shift
+    the clock; swipes and regenerates keep the clock from before the
+    replaced reply; quiet/impersonate generations clear the slot. A random
+    per-chat seed survives renames and branch copies, Ambient Conditions
+    appears in the Budget tab and diagnostics console, and chat switches or
+    panic activation clear stale context.
+  - Settings gains an "Ambient Conditions (this chat)" section — climate,
+    hemisphere, manual season and a variability slider with a live readout
+    (slower, balanced, faster) — that saves independently of the global
+    Save Settings button. First enable asks for climate and hemisphere
+    inline rather than silently defaulting, with a "Temperate, don't ask
+    again" dismiss; an unanswered setup creates no weather. The slider
+    changes how often weather changes as story time advances — never its
+    severity or what the climate allows.
+  - **Pin conditions** overrides all five channels — intentionally bypassing
+    climate gates — with an expiry in story time: until unpinned, next band,
+    next dawn, or an explicit story date/time (dated expiry needs a usable
+    calendar clock). Expired pins remain stored, so rewinding inside their
+    interval restores the override; Unpin removes them.
+  - `/wt-ambient` (alias `/wt-weather`) reports the same conditions body the
+    injection uses, and `/wt-ambient reseed` changes only the seed,
+    preserving settings and pins. Disabled, incomplete or panic-blocked
+    chats report their state rather than presenting weather as active.
+  - The Overview dashboard gains a read-only Ambient card: current
+    conditions, one-band forecast, panic/off state and pin expiry — plus the
+    resolved story clock behind them and where it came from (the latest
+    usable `[In-story time:]` tag with its message number, the World State
+    scene date, or the spelled-out message-count fallback), so a stale tag
+    stands out at a glance.
+  - The Story Planner takes its weather from here: full-plan, scoped
+    Add/Refresh and targeted requests receive the authoritative current
+    conditions and forecast, active pins included, and are told to build
+    consequences rather than invent conflicting weather or fix weather
+    beyond the forecast; the World-complications lens defers the same way,
+    and the context survives custom full-plan templates. Weather is omitted
+    when the module is off, incomplete, unseeded or panic-blocked, and
+    invalid climate/hemisphere/season/variability settings are rejected
+    before conditions are calculated.
 
 ### Fixed
 

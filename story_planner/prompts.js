@@ -168,7 +168,7 @@ ${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are 
         ? 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay. This request asks for developments driven by the setting — the setting acting on the characters, not a plan aimed at particular people. The world can open opportunities as well as create difficulties.'
         : 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.';
     const castDevelopmentRule = worldPressure
-        ? `- ${WORLD_PRESSURE_RULE}`
+        ? `- ${WORLD_PRESSURE_RULE} When an Ambient Conditions block is supplied, weather comes from that module: build on its stated conditions and one-band forecast, rather than inventing new weather.`
         : '- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.';
 
     return `${introRule}

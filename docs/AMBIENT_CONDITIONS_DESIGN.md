@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v1)
 
-**Status:** Phases 1–3 implemented; planner integration remains pending (Phase 4, see §6). Live SillyTavern smoke testing remains required.
+**Status:** Phases 1–4 implemented (see §6). Live SillyTavern smoke testing, including planner weather compliance, remains required.
 **Written:** 2026-10-11, folding `WEATHER_MODULE_PROPOSAL.md` and `WEATHER_MODULE_RESPONSE.md` into one design. Those two docs remain the discussion record; this doc is what we build from.
 **Naming:** the module is **Ambient Conditions**, not Weather. The name states the contract: conditions nobody in the story can change (§4.6). Weather is v1's only condition family; the name leaves room for calendar items later without inviting incidents in.
 
@@ -165,6 +165,13 @@ Implemented user surface:
 
 - Planner context includes current conditions + one-step forecast; lens sentence added (D11).
 - Exit criteria: with the module on, planner output builds on stated conditions rather than inventing conflicting weather.
+
+**Implemented (2026-10-12):**
+
+- `core/ambient_prompt.js` supplies a shared read-only planner projection: current qualitative conditions and exactly one next-band forecast from the same clock, generator and pin interval used by injection and the Overview. It shares condition wording with narrator injection, never creates a seed, writes metadata or registers an extension prompt, and omits conditions when off, incompletely configured, unseeded or globally blocked. The shared status reader validates climate, hemisphere, season and variability before calculation.
+- Full-plan (including custom templates), scoped Add/Refresh and all targeted operations receive an application-owned `ambient_conditions` block before their closing output instructions. This is the current raw-chat clock, not the planner's separately truncated stable narrative history or a historical injected payload. The block identifies Ambient Conditions as authoritative over stale weather in story/World State/plan text, permits consequences and playable incidents, prohibits conflicting or arc-pinned weather, and leaves weather beyond the single forecast band or after a skip unspecified.
+- The World complications lens explicitly defers weather ownership to the supplied Ambient Conditions block; without an active block its existing world-pressure behavior remains available. Refresh remains Open and preserves its existing target/ownership contract.
+- `test/ambient_planner.test.js` covers prompt routes/custom-template inclusion, projection parity, pins/expiry/rewind, message-count fallback, chat changes, incomplete settings and global gates, and read-only behavior. Automated tests verify request context and rules, not model obedience: live SillyTavern generation must still confirm the exit criterion against an actual model.
 
 Dependencies: 2 needs 1; 3 needs 2; 4 needs 1 and ships after 3 for UX coherence.
 
