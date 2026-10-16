@@ -59,6 +59,7 @@ test('capture observations and cursor are one checked evidence commit', () => {
 });
 
 import { reconcileImportedUid } from '../knowledge/reconcile.js';
+import { validateFields, validateKnowledgeList } from '../knowledge/field_contract.js';
 import {
     _clearCacheForTests, hydrateBook, peekStore, readField, resetStoreCache, writeField,
 } from '../knowledge/store.js';
@@ -92,6 +93,10 @@ describe('Module 3 review — regression probes', () => {
             DOSSIER_ENRICH_PROMPT: '', ktFetchFromApi: async () => '{}', normaliseOutput: x => x,
             parseJsonLenient: () => ({ fields: { canon_lock: 'Replaced canon', personality: 'Replaced profile' } }),
             applyFieldOwnership: (name, fields) => name === 'Mara' ? { ...fields, personality: null } : fields,
+            // Phase 1: runNpcEnrich validates through the shared field
+            // contract at seam S4 — the real implementation, not a pass-through
+            // stub, so this probe also covers ownership surviving validation.
+            validateFields, validateKnowledgeList,
             buildUpdatedDossierContent: (text, fields) => { forwarded = fields; return text; } };
         load('lorebook.js', 'export async function runNpcEnrich(', '// ─── Dossier per-field refresh', c);
         await c.runNpcEnrich('Mara', 1);

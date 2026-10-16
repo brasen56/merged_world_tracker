@@ -1,6 +1,6 @@
 # Knowledge Tracker — concision implementation phases
 
-**Status:** Proposed implementation plan; Phase 0 recorded 2026-10-16 (see §7). No feature phase implemented yet.  
+**Status:** Proposed implementation plan; Phases 0–1 recorded 2026-10-16 (see §7).  
 **Date:** 2026-10-16  
 **Source:** `c:/Users/brase/Desktop/extensions_wip/merged_world_tracker/docs/KNOWLEDGE_CONCISION_SCOPE.md`, including the co-author response.  
 **Area:** Knowledge generation, single-NPC cleanup review, persistence, and recovery.
@@ -411,7 +411,7 @@ Lock authority changes. No store migration rewrites existing NPC prose.
 ## 7. Implementation tracking
 
 - [x] Phase 0 — baselines and decisions recorded
-- [ ] Phase 1 — prevention contract and regression coverage
+- [x] Phase 1 — prevention contract and regression coverage (2026-10-16; configured-model sample QA pending — see record)
 - [ ] Phase 2 — pure ledger proposals and validation
 - [ ] Phase 3 — durable recovery and guarded apply/restore
 - [ ] Phase 4 — explicit ledger review UI
@@ -438,3 +438,50 @@ because its prompt or UI exists.
   LF lines into CRLF entries today; the fixtures suite pins this as the
   pre-Phase-2 baseline (D6 requires the cleanup patcher to preserve line endings,
   Phase 1 may leave ordinary append behavior unchanged).
+
+### Phase 1 record — 2026-10-16
+
+- **Changed seams:** new pure module `knowledge/field_contract.js` (D4a bounds
+  table, whole-value validation, and the FIELD CONTRACT prompt block rendered
+  from the same definitions — one source for prompts and enforcement). Wired at
+  the Phase 0 seams: S1 `buildStagingItems` (knowledge/staging.js), S2 the
+  `enrichStagingItem` merge dispatch plus the create→update promotion
+  (knowledge/lorebook.js; writer-inventory gap 3, the missing promotion
+  ownership filter, closed), S3 `runNpcUpdate`, S4 `runNpcEnrich`, S5
+  `runDossierFieldRefresh`, and S6 backstops inside
+  `buildUpdatedDossierContent`/`buildUpdatedMajorContent`/
+  `buildUpdatedMinorContent`/`appendLedgerLines`. Prompts (knowledge/prompts.js):
+  scene-duty Role wording removed ("established occupation, enduring
+  responsibility, or primary story function" replaces it), fill-missing
+  instructions bounded by grounded unknowns, and the shared contract block
+  embedded in all six model-facing prompts. Ledger line rendering is now
+  single-owner (`formatLedgerLine`; the three inlined templates removed —
+  writer-inventory gap 4's rendering half; create inputs are validated at S1).
+- **Behavior:** invalid values are dropped whole with a field-specific reason
+  (`contractRejections` on staged items and returned results, plus a scan
+  summary note) — never sliced; existing entries keep their old value, creates
+  fall back to the unknown/empty convention, valid sibling updates are
+  retained. Retries remain the callers' existing two-attempt loops; the
+  contract adds no model calls. Growth/secret ownership, Canon Lock authority
+  (unchanged: still writable via scan/update/enrich, as inventoried), and
+  legacy plan-shaped ledger lines are untouched. User-edited staging text is
+  intentionally NOT contract-checked — the editor is the user's authority, and
+  the S7 write sites pass it verbatim.
+- **Automated results:** `npm test` 3613/3613 passed (152 files); `npm run
+  lint` clean. New `test/knowledge_field_contract.test.js` (37 tests: bounds
+  table vs D4a, whole-value rejection, fixtures interplay, prompt-block
+  single-source). Extended `test/knowledge_scan_ledger.test.js` (+5: S1
+  update/create/knowledge cleaning, S1+S2 end-to-end, promotion ownership
+  regression), `test/knowledge_ledger_prompt.test.js` (+5: contract block in
+  all six prompts, Role wording, grounded unknowns, S4 enrich behavior with
+  the append-only contract intact), `test/dossier_field_refresh.test.js`
+  (+3: S5 behavior and prompt). The module-3 review probe's extracted-source
+  context now supplies the real contract functions. All pre-existing suites —
+  including the v2.12.1 append-only enrichment pins — remain green.
+- **Remaining manual QA:** the exit gate's configured-model half — sample
+  scan/update/enrich runs with a configured model demonstrating the
+  enduring-Role and concise-capture behavior (prompt-string assertions are
+  pinned by tests; model fidelity is not automatable here). Suggested check:
+  run one scan over a scene matching the Phase 0 role scenarios and inspect
+  Role/Current Agenda output before relying on prevention in the wild.
+- **Accepted deviations:** none.

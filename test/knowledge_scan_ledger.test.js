@@ -377,3 +377,88 @@ describe('growth-owned personality is not overwritten by a scan', () => {
         expect(item.mergedContent).toContain('Personality: Newly observed prose.');
     });
 });
+
+// ─── Phase 1: the shared field contract at the scan seams ───────────────────
+
+describe('Phase 1 field contract — scan seams (S1/S2)', () => {
+    test('S1: an update drops contract-invalid fields whole, keeps valid ones, surfaces reasons', () => {
+        seed(DOSSIER);
+        const record = updateMajorRecord({
+            fields: { tone: 'clipped', perceived_as: null, descriptor: null, role: 'x'.repeat(401) },
+        });
+        const [item] = buildStagingItems(scanResult({ update_major: [record] }));
+
+        expect(item.fields.role).toBeNull();
+        expect(item.fields.tone).toBe('clipped');
+        expect(item.contractRejections.map(r => r.field)).toEqual(['role']);
+        expect(item.contractRejections[0].reason).toContain('401');
+    });
+
+    test('S1: invalid knowledge items are dropped before staging; valid ones survive', () => {
+        seed(DOSSIER);
+        const record = updateMajorRecord({
+            new_knowledge: [FACT, { fact: '' }, { fact: 'multi\nline fact' }],
+        });
+        const [item] = buildStagingItems(scanResult({ update_major: [record] }));
+
+        expect(item.newKnowledge).toEqual([FACT]);
+        expect(item.contractRejections.map(r => r.field)).toEqual(['new_knowledge[1]', 'new_knowledge[2]']);
+    });
+
+    test('S1: a create with an invalid flat field falls back to the unknown convention', () => {
+        seed(DOSSIER); // registry holds only NPC; "Fresh Face" is genuinely new
+        const [item] = buildStagingItems(scanResult({
+            dossierMode: true,
+            new_major: [{
+                name: 'Fresh Face', species: 'Human', tone: 'bright', descriptor: 'new dockhand',
+                first_seen: 'the night ferry, Day 9', role: 'chock duty\nand photo-hanging',
+                initial_knowledge: [],
+            }],
+        }));
+        expect(item.action).toBe('create');
+        // The Role line is OMITTED entirely (the create-side unknown
+        // convention) — not written with the multiline value, not sliced.
+        expect(item.proposedContent).not.toContain('Role:');
+        expect(item.proposedContent).not.toContain('chock duty');
+        expect(item.proposedContent).toContain('Tone: bright');
+        expect(item.contractRejections.map(r => r.field)).toEqual(['role']);
+    });
+
+    test('S1+S2 end to end: the existing entry keeps the invalid field\'s old value', async () => {
+        const [item] = await stageFrom(scanResult({
+            update_major: [updateMajorRecord({
+                fields: { tone: null, perceived_as: null, descriptor: null, agenda: 'y'.repeat(401) },
+            })],
+        }), DOSSIER);
+
+        expect(item.mergedContent).toContain('Current Agenda: Root out the smugglers using her quay.');
+        expect(item.mergedContent).not.toContain('y'.repeat(401));
+        expect(item.contractRejections.map(r => r.field)).toContain('agenda');
+    });
+
+    test('writer-inventory gap 3: create→update promotion applies Growth ownership', async () => {
+        // The registry LOST the pointer but the entry survived: the scan
+        // returns a new_major, buildStagingItems stages a create, and
+        // enrichStagingItem promotes it to an update. The promotion used to
+        // merge scan fields WITHOUT applyFieldOwnership — the one path that
+        // could overwrite a growth-owned Personality line.
+        enrolInGrowth(NPC);
+        _setCacheForTests('Knowledge Tracker', { registry: {} }); // pointer lost, entry alive
+        wiFake.books.set('Knowledge Tracker', {
+            entries: { 7: { uid: 7, comment: NPC, key: [NPC], content: DOSSIER } },
+        });
+
+        const [item] = buildStagingItems(scanResult({
+            new_major: [{
+                name: NPC, species: 'Human', tone: 'clipped', descriptor: 'weathered harbourmaster',
+                first_seen: 'Dusk Quay, Day 1', personality: 'Model-invented personality prose.',
+                role: 'Harbourmaster of Dusk Quay', initial_knowledge: [],
+            }],
+        }));
+        expect(item.action).toBe('create'); // staged as a create…
+        await enrichStagingItem(item);
+        expect(item.action).toBe('update'); // …then promoted against the real entry
+        expect(item.mergedContent).toContain('Personality: Paternal but rigid;');
+        expect(item.mergedContent).not.toContain('Model-invented personality prose.');
+    });
+});

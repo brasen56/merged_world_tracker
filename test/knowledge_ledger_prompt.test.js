@@ -34,7 +34,9 @@ import {
     DOSSIER_SCAN_SYSTEM_PROMPT,
     DOSSIER_UPDATE_PROMPT,
     DOSSIER_ENRICH_PROMPT,
+    DOSSIER_FIELD_REFRESH_PROMPT,
 } from '../knowledge/prompts.js';
+import { contractPromptBlock } from '../knowledge/field_contract.js';
 
 const PROMPTS_WITH_LEDGER_RULE = [
     ['SCAN_SYSTEM_PROMPT', SCAN_SYSTEM_PROMPT],
@@ -191,5 +193,60 @@ describe('Enrich new_knowledge is appended to the ledger, never a rewrite', () =
             expect(ledgerLines(result.merged)).toEqual([...LEDGER, NEW_FACT_LINE]);
             expect(result.merged).toContain('Current Agenda: Catch the smugglers at the north wharf.');
         });
+
+        test('Phase 1 seam S4: contract-invalid values keep the old line; append-only still holds', async () => {
+            setFakeApi(() => JSON.stringify({
+                fields: { agenda: 'one\ntwo', tone: 'brisk and dry' },
+                new_knowledge: [NEW_FACT, { fact: '' }],
+            }));
+            const result = await runNpcEnrich(NPC, 7);
+
+            // The invalid agenda is dropped whole → the existing line survives;
+            // the valid tone update beside it still applies.
+            expect(result.merged).toContain('Current Agenda: Root out the smugglers using her quay.');
+            expect(result.merged).toContain('Tone: brisk and dry');
+            // The append-only contract holds; the invalid knowledge item is gone.
+            expect(ledgerLines(result.merged)).toEqual([...LEDGER, NEW_FACT_LINE]);
+            // Every rejection is surfaced with a field-specific reason.
+            expect(result.contractRejections).toEqual([
+                { field: 'agenda', reason: expect.stringContaining('line break') },
+                { field: 'new_knowledge[1]', reason: expect.stringContaining('fact') },
+            ]);
+        });
+    });
+});
+
+// ─── Phase 1: the shared field contract in every prompt ─────────────────────
+
+describe('Phase 1 shared field contract across prompts', () => {
+    test.each([
+        ['SCAN_SYSTEM_PROMPT', SCAN_SYSTEM_PROMPT, 'compact'],
+        ['NPC_UPDATE_PROMPT', NPC_UPDATE_PROMPT, 'compact'],
+        ['DOSSIER_SCAN_SYSTEM_PROMPT', DOSSIER_SCAN_SYSTEM_PROMPT, 'dossier'],
+        ['DOSSIER_UPDATE_PROMPT', DOSSIER_UPDATE_PROMPT, 'dossier'],
+        ['DOSSIER_ENRICH_PROMPT', DOSSIER_ENRICH_PROMPT, 'dossier'],
+        ['DOSSIER_FIELD_REFRESH_PROMPT', DOSSIER_FIELD_REFRESH_PROMPT, 'dossier'],
+    ])('%s embeds the shared FIELD CONTRACT block verbatim (one source)', (_name, prompt, mode) => {
+        expect(prompt).toContain(contractPromptBlock({ mode }));
+    });
+
+    test('scene-duty Role wording is gone; the enduring-role rule replaced it', () => {
+        for (const prompt of [DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_ENRICH_PROMPT]) {
+            expect(prompt).not.toContain('current job or function in the scene');
+        }
+        expect(DOSSIER_SCAN_SYSTEM_PROMPT).toContain('established occupation, enduring responsibility, or primary story function');
+        expect(DOSSIER_ENRICH_PROMPT).toContain('established occupation, enduring responsibility, or primary story function');
+    });
+
+    test('fill-missing instructions are bounded by grounded unknowns', () => {
+        expect(DOSSIER_SCAN_SYSTEM_PROMPT).toContain('FILL MISSING FIELDS WITH GROUNDED VALUES ONLY');
+        expect(DOSSIER_SCAN_SYSTEM_PROMPT).toContain('rather than inventing');
+        expect(DOSSIER_UPDATE_PROMPT).toContain('FILL MISSING FIELDS WITH GROUNDED VALUES ONLY');
+        expect(DOSSIER_UPDATE_PROMPT).toContain('keep it unknown rather than inventing detail');
+        expect(DOSSIER_ENRICH_PROMPT).toContain('keep it unknown rather than fabricating');
+    });
+
+    test('the update prompt asks for meaningful change, not incidental churn', () => {
+        expect(DOSSIER_UPDATE_PROMPT).toContain('changed meaningfully');
     });
 });

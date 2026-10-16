@@ -28,6 +28,7 @@ import {
     fieldsFromScanRecord,
 } from './lorebook.js';
 import { applyFieldOwnership } from './field_ownership.js';
+import { validateScanRecord } from './field_contract.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
@@ -121,6 +122,22 @@ export function buildStagingItems(scanResult) {
     // Dossier mode is determined by the scan result flag (set in runScan).
     const dossierMode = scanResult.dossierMode === true;
 
+    // Phase 1 seam S1: every scan record is validated against the shared
+    // field contract BEFORE any formatter, merger, or staging consumer sees
+    // it. Invalid field values and knowledge items are dropped whole (never
+    // sliced); per-record reasons ride on the item as `contractRejections`
+    // and a summary note is surfaced with the scan notes below.
+    const contractRejections = new Map(); // cleaned data object → rejections
+    const clean = (raw) => {
+        const { data, rejections } = validateScanRecord(raw);
+        if (rejections.length > 0) contractRejections.set(data, rejections);
+        return data;
+    };
+    const attach = (item) => {
+        const rejections = contractRejections.get(item.data);
+        return rejections ? { ...item, contractRejections: rejections } : item;
+    };
+
     // CANONICAL-IDENTITY BOUNDARY (every category runs it now, including new_*).
     // The scan prompt tells the model an update name must match a tracked name
     // exactly, so when messages say "Sophie Simpson" and the registry says
@@ -176,31 +193,34 @@ export function buildStagingItems(scanResult) {
         };
     };
 
-    scanResult.new_minor.forEach(data => {
+    scanResult.new_minor.forEach(raw => {
+        const data = clean(raw);
         const known = canonical(data.name);
         if (known) {
             reclassifiedCount++;
             const item = reclassified(data, known, 'minor');
             if (item.typeFromRegistry) typeKeptCount++;
-            items.push(item);
+            items.push(attach(item));
             return;
         }
         const proposed = formatMinorEntry(data);
-        items.push({ id: makeId(), type: 'minor', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name] });
+        items.push(attach({ id: makeId(), type: 'minor', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name] }));
     });
-    scanResult.new_major.forEach(data => {
+    scanResult.new_major.forEach(raw => {
+        const data = clean(raw);
         const known = canonical(data.name);
         if (known) {
             reclassifiedCount++;
             const item = reclassified(data, known, 'major');
             if (item.typeFromRegistry) typeKeptCount++;
-            items.push(item);
+            items.push(attach(item));
             return;
         }
         const proposed = dossierMode ? formatDossierEntry(data) : formatMajorEntry(data);
-        items.push({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name], dossierMode });
+        items.push(attach({ id: makeId(), type: 'major', action: 'create', name: data.name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords: [data.name], dossierMode }));
     });
-    scanResult.update_minor.forEach(data => {
+    scanResult.update_minor.forEach(raw => {
+        const data = clean(raw);
         // KNOWLEDGE-03: Resolve the name through resolveRegistryKey so "Mara"
         // matches "Mara Vance" instead of creating a false orphan.
         const regKey = resolveRegistryKey(registry, data.name);
@@ -225,16 +245,17 @@ export function buildStagingItems(scanResult) {
                     ? synthesizeDossierFromUpdate(name, owned, knowledgeFromRecord(data))
                     : synthesizeMajorFromUpdate(name, owned, knowledgeFromRecord(data)))
                 : synthesizeMinorFromUpdate(name, owned);
-            items.push({ id: makeId(), type, action: 'create', name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords, synthesized: true, ...(type === 'major' ? { dossierMode } : {}) });
+            items.push(attach({ id: makeId(), type, action: 'create', name, data, proposedContent: proposed, mergedContent: proposed, existingContent: null, keywords, synthesized: true, ...(type === 'major' ? { dossierMode } : {}) }));
             return;
         }
         if (type !== 'minor') typeKeptCount++;
         // item.name is the CANONICAL key, not the model's spelling — accepting
         // re-labels the entry consistently and passes writeToLorebook's
         // KNOWLEDGE-01 comment check instead of detaching a valid uid.
-        items.push({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: applyFieldOwnership(regKey, data.fields), ...(type === 'major' ? { newKnowledge: knowledgeFromRecord(data), dossierMode } : {}) });
+        items.push(attach({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: applyFieldOwnership(regKey, data.fields), ...(type === 'major' ? { newKnowledge: knowledgeFromRecord(data), dossierMode } : {}) }));
     });
-    scanResult.update_major.forEach(data => {
+    scanResult.update_major.forEach(raw => {
+        const data = clean(raw);
         // KNOWLEDGE-03: Resolve the name through resolveRegistryKey so "Mara"
         // matches "Mara Vance" instead of creating a false orphan.
         const regKey = resolveRegistryKey(registry, data.name);
@@ -251,16 +272,21 @@ export function buildStagingItems(scanResult) {
                     ? synthesizeDossierFromUpdate(name, owned, knowledgeFromRecord(data))
                     : synthesizeMajorFromUpdate(name, owned, knowledgeFromRecord(data)))
                 : synthesizeMinorFromUpdate(name, owned);
-            items.push({ id: makeId(), type, action: 'create', name, data, proposedContent: syn, mergedContent: syn, existingContent: null, keywords, synthesized: true, ...(type === 'major' ? { dossierMode } : {}) });
+            items.push(attach({ id: makeId(), type, action: 'create', name, data, proposedContent: syn, mergedContent: syn, existingContent: null, keywords, synthesized: true, ...(type === 'major' ? { dossierMode } : {}) }));
             return;
         }
         if (type !== 'major') typeKeptCount++;
-        items.push({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: applyFieldOwnership(regKey, data.fields), ...(type === 'major' ? { newKnowledge: knowledgeFromRecord(data), dossierMode } : {}) });
+        items.push(attach({ id: makeId(), type, action: 'update', name: regKey, data, proposedContent: '(Fetch to see changes)', existingContent: null, keywords, uid: reg.uid, fields: applyFieldOwnership(regKey, data.fields), ...(type === 'major' ? { newKnowledge: knowledgeFromRecord(data), dossierMode } : {}) }));
     });
     const notes = [];
     if (reclassifiedCount > 0) notes.push(`${reclassifiedCount} proposal(s) reclassified — the NPC is already tracked under another spelling.`);
     if (misclassifiedCount > 0) notes.push(`${misclassifiedCount} misclassified entries converted to new proposals.`);
     if (typeKeptCount > 0) notes.push(`${typeKeptCount} kept their tracked minor/major type — use ↑/↓ to change it deliberately.`);
+    if (contractRejections.size > 0) {
+        const flat = [...contractRejections.values()].flat();
+        const examples = flat.slice(0, 3).map(r => `${r.field} (${r.reason})`).join('; ');
+        notes.push(`Field contract: ${flat.length} invalid model value(s) dropped whole — ${examples}${flat.length > 3 ? `; +${flat.length - 3} more` : ''}.`);
+    }
     if (notes.length > 0) ktSetStatus(notes.join(' '), 'info');
     return items;
 }

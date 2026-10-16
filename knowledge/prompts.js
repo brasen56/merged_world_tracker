@@ -2,7 +2,14 @@
  * knowledge/prompts.js — Knowledge Tracker prompt templates.
  *
  * Extracted from index.js so the main module is easier to skim.
+ *
+ * The FIELD CONTRACT block appended to every model-facing prompt comes from
+ * knowledge/field_contract.js — the same definitions the code enforces at the
+ * merge seams, so prompt guidance and validation cannot drift apart
+ * (docs/KNOWLEDGE_CONCISION_IMPLEMENTATION_PLAN.md Phase 1).
  */
+
+import { contractPromptBlock } from './field_contract.js';
 
 export const SCAN_SYSTEM_PROMPT = `You are a scanner for an ongoing roleplay. Your sole job is to output a single JSON object listing NPCs found in recent messages.
 
@@ -36,7 +43,9 @@ Classification guide:
 - Only include NPCs who actually appeared or were meaningfully referenced.
 - For update entries: only include NPCs whose information actually changed.
 - RECORD WHAT THEY LEARNED: for every update_major, fill new_knowledge with the concrete facts that NPC learned or now knows from these messages — established facts only, per the ledger rule above. Return [] only when nothing new was actually established for them.
-- If no NPCs qualify for a category, use an empty array [].`;
+- If no NPCs qualify for a category, use an empty array [].
+
+${contractPromptBlock({ mode: 'compact' })}`;
 
 export const STATE_UPDATE_PROMPT = `You are a state tracker for an ongoing roleplay. Your sole job is to output an updated version of the entry inside <current_entry>.
 
@@ -71,7 +80,9 @@ OUTPUT FORMAT:
   "new_knowledge": [
     { "fact": "concrete new fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
-}`;
+}
+
+${contractPromptBlock({ mode: 'compact' })}`;
 
 // ─── Dossier Mode prompts ────────────────────────────────────────────────────
 // Used when Knowledge Tracker Dossier Mode is ON. Produces richer NPC entries
@@ -98,7 +109,7 @@ OUTPUT FORMAT:
       "perceived_as": "how they present",
       "descriptor": "3-5 word physical/role descriptor",
       "first_seen": "location and in-world date/time",
-      "role": "current job or function in the scene",
+      "role": "established occupation, enduring responsibility, or primary story function",
       "where_to_find": "default location / when they appear",
       "appearance": "2-3 sentences: build, face, hair, distinguishing marks, how they carry themselves",
       "voice": "how they speak: cadence, accent, verbal tics, topics they dodge",
@@ -146,11 +157,13 @@ Classification guide:
 - Only include NPCs who actually appeared or were meaningfully referenced.
 - For update entries: only include NPCs whose information actually changed.
 - SECRETS ARE NOT PERMANENT: a disclosed, resolved, or obsolete secret is a change worth an update_major. If a Tier's premise hinges on an in-world event that has clearly passed (compare against current in-world dates), retire that Tier rather than carrying it forward.
-- CRITICAL — FILL MISSING FIELDS: If the "Already Tracked NPCs" section includes an entry's current content (inside <existing_entry> tags) and a dossier field is MISSING or EMPTY, FILL IT IN by inferring from the messages and established facts. Only output null for a field that already has a real value and has genuinely not changed.
+- CRITICAL — FILL MISSING FIELDS WITH GROUNDED VALUES ONLY: If the "Already Tracked NPCs" section includes an entry's current content (inside <existing_entry> tags) and a dossier field is MISSING or EMPTY, fill it only when the messages and established facts support a value. A grounded unknown is correct, not a gap: when nothing establishes a field (for example no occupation is ever established), leave it as an empty string "" rather than inventing one. Only output null for a field that already has a real value and has genuinely not changed.
 - <existing_entry> IS ABBREVIATED: long values are clipped with "…" and only the most recent Knowledge Ledger lines are shown. A clipped value is PRESENT, not missing — never rewrite a field just because it looks cut off, and treat a field as missing only when its label has no value at all.
 - RECORD WHAT THEY LEARNED: for every update_major, fill new_knowledge with the concrete facts that NPC learned or now knows from these messages — established facts only, per the ledger rule above. Do not restate a fact already shown in their Knowledge Ledger. Return [] only when nothing new was actually established for them.
 - For new_major, leave a field as an empty string "" rather than inventing if truly unknown — but prefer concrete inference from the scene.
-- If no NPCs qualify for a category, use an empty array [].`;
+- If no NPCs qualify for a category, use an empty array [].
+
+${contractPromptBlock({ mode: 'dossier' })}`;
 
 // ─── Scan cast rule ──────────────────────────────────────────────────────────
 //
@@ -192,7 +205,7 @@ ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Do NOT invent information not established in the messages.
 - The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER write this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to" DO something) into new_knowledge; record such an event only after it happens. Facts about OTHER people's promises are established facts and are allowed. The NPC's own future plans are tracked by a different system.
-- FILL MISSING FIELDS: If a dossier field is MISSING or EMPTY in <current_entry>, infer it from the messages and established facts and provide a value. Only output null for a field that already has a real value and has genuinely not changed.
+- FILL MISSING FIELDS WITH GROUNDED VALUES ONLY: If a dossier field is MISSING or EMPTY in <current_entry>, fill it only when the messages and established facts support a value; when nothing establishes it, keep it unknown rather than inventing detail. Only output null for a field that already has a real value and has genuinely not changed.
 - If no new information exists AND all fields are already filled, return null fields.
 
 OUTPUT FORMAT:
@@ -201,7 +214,7 @@ OUTPUT FORMAT:
     "tone": "updated communication style if it changed, else null",
     "perceived_as": "updated perception if it changed, else null",
     "descriptor": "updated descriptor if appearance/role changed, else null",
-    "role": "updated role if it changed, else null (FILL if currently missing/empty)",
+    "role": "updated role if it changed meaningfully, else null (FILL if currently missing/empty)",
     "where_to_find": "updated location if it changed, else null (FILL if currently missing/empty)",
     "appearance": "updated appearance if it changed, else null (FILL if currently missing/empty)",
     "voice": "updated voice if it changed, else null (FILL if currently missing/empty)",
@@ -215,7 +228,9 @@ OUTPUT FORMAT:
   "new_knowledge": [
     { "fact": "concrete new fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
-}`;
+}
+
+${contractPromptBlock({ mode: 'dossier' })}`;
 
 // ─── Dossier Enrichment prompt ───────────────────────────────────────────────
 // Used by the "Enrich (Dossier)" action to fill in ALL missing dossier fields
@@ -233,8 +248,7 @@ export const DOSSIER_ENRICH_PROMPT = `You are a character writer for an ongoing 
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Preserve every fact already in <current_entry> — do not drop or contradict established canon.
-- Fill in EVERY dossier field below. Draw concrete inferences from the messages, world state, and the NPC's established behavior.
-- Do NOT invent facts that contradict the messages. If a field is truly unknowable, give your best grounded inference based on what IS established.
+- Fill in EVERY dossier field below. Draw concrete inferences from the messages, world state, and the NPC's established behavior. If a field is genuinely unknowable even from the full history, keep it unknown rather than fabricating a profession, status, or history nothing supports.
 - The existing Knowledge Ledger in <current_entry> is kept as is, and new_knowledge is ADDED to the end of it. List ONLY facts not already represented there. Do not restate a fact already shown in their Knowledge Ledger, even reworded. Return [] when nothing new was established.
 - The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER add this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to") to new_knowledge; record an event only after it happens. Facts about OTHER people's promises are established facts and are allowed. Future plans are tracked by a different system.
 
@@ -244,7 +258,7 @@ OUTPUT FORMAT:
     "tone": "2-3 word communication style",
     "perceived_as": "how they present",
     "descriptor": "3-5 word physical/role descriptor",
-    "role": "current job or function in the scene",
+    "role": "established occupation, enduring responsibility, or primary story function",
     "where_to_find": "default location / when they appear",
     "appearance": "2-3 sentences: build, face, hair, distinguishing marks, how they carry themselves",
     "voice": "how they speak: cadence, accent, verbal tics, topics they dodge",
@@ -258,7 +272,9 @@ OUTPUT FORMAT:
   "new_knowledge": [
     { "fact": "concrete established fact this NPC knows that is NOT already in their Knowledge Ledger (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
-}`;
+}
+
+${contractPromptBlock({ mode: 'dossier' })}`;
 
 // ─── Dossier per-field refresh prompt ─────────────────────────────────────────
 // Used by the "🎯 Fields" action (TODO §3 "Per-field / partial dossier refresh").
@@ -281,7 +297,9 @@ OUTPUT FORMAT:
   "fields": {
     "<only the keys listed in <refresh_fields>>": "the reconciled value, or null if genuinely unknowable"
   }
-}`;
+}
+
+${contractPromptBlock({ mode: 'dossier' })}`;
 
 // ─── NPC Growth Profile prompts ──────────────────────────────────────────────
 // Implements the evidence-driven personality system from NPC_GROWTH_BLUEPRINT.md.

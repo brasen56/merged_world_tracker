@@ -24,6 +24,7 @@ import {
 import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { applyFieldOwnership } from './field_ownership.js';
+import { validateFields, validateFieldValue, validateKnowledgeList } from './field_contract.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
@@ -628,7 +629,7 @@ export function formatMajorEntry(data) {
         `Tone: ${data.tone || 'unknown'}`, `Perceived as: ${data.perceived_as || 'unknown'}`,
         `First seen: ${data.first_seen || 'unknown'}`, '', 'Knowledge Ledger:'];
     const knowledge = data.initial_knowledge || data.new_knowledge || [];
-    if (knowledge.length > 0) knowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
+    if (knowledge.length > 0) knowledge.forEach(k => lines.push(formatLedgerLine(k)));
     else lines.push('- (no entries yet)');
     return lines.join('\n');
 }
@@ -689,7 +690,17 @@ function ledgerItemIndices(lines, headerIdx) {
  */
 export function appendLedgerLines(lines, newKnowledge) {
     if (!newKnowledge?.length) return lines;
-    const formatted = newKnowledge.map(formatLedgerLine);
+    // Phase 1 seam S6 backstop: the seams S1–S5 pre-validate, but every
+    // ledger append funnels through here, so an invalid item from any future
+    // caller is dropped whole with a surfaced reason rather than corrupting
+    // the section.
+    const { items: safeKnowledge, rejected } = validateKnowledgeList(newKnowledge);
+    if (rejected.length > 0) {
+        console.warn('[MWT:Knowledge] field contract dropped invalid ledger items:',
+            rejected.map(r => `[${r.index}] ${r.reason}`).join('; '));
+    }
+    if (!safeKnowledge.length) return lines;
+    const formatted = safeKnowledge.map(formatLedgerLine);
     const headerIdx = lines.findIndex(l => LEDGER_HEADER_RE.test(l.trim()));
     // No section yet — start one at the end of the entry.
     if (headerIdx === -1) return [...lines, '', 'Knowledge Ledger:', ...formatted];
@@ -708,23 +719,36 @@ export function appendLedgerLines(lines, newKnowledge) {
 }
 
 export function buildUpdatedMinorContent(existingContent, fields) {
+    // Phase 1 seam S6 backstop: invalid field values never reach the entry —
+    // they are nulled (the merge skips null, keeping the existing line).
+    const { fields: safeFields, rejected } = validateFields(fields);
+    if (rejected.length > 0) {
+        console.warn('[MWT:Knowledge] field contract dropped invalid values:',
+            rejected.map(r => `${r.key} (${r.reason})`).join('; '));
+    }
     const lines = existingContent.split('\n');
     const headerIdx = findHeaderLineIdx(lines);
     return lines.map((line, idx) => {
-        if (fields.tone != null && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
-        if (fields.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
-        if (fields.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = fields.descriptor; return parts.join(' | '); }
+        if (safeFields.tone != null && line.startsWith('Tone:')) return `Tone: ${safeFields.tone}`;
+        if (safeFields.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${safeFields.perceived_as}`;
+        if (safeFields.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = safeFields.descriptor; return parts.join(' | '); }
         return line;
     }).join('\n');
 }
 
 export function buildUpdatedMajorContent(existingContent, fields, newKnowledge) {
+    // Phase 1 seam S6 backstop — see buildUpdatedMinorContent.
+    const { fields: safeFields, rejected } = validateFields(fields);
+    if (rejected.length > 0) {
+        console.warn('[MWT:Knowledge] field contract dropped invalid values:',
+            rejected.map(r => `${r.key} (${r.reason})`).join('; '));
+    }
     let lines = existingContent.split('\n');
     const headerIdx = findHeaderLineIdx(lines);
     lines = lines.map((line, idx) => {
-        if (fields?.tone != null && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
-        if (fields?.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
-        if (fields?.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = fields.descriptor; return parts.join(' | '); }
+        if (safeFields?.tone != null && line.startsWith('Tone:')) return `Tone: ${safeFields.tone}`;
+        if (safeFields?.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${safeFields.perceived_as}`;
+        if (safeFields?.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = safeFields.descriptor; return parts.join(' | '); }
         return line;
     });
     return appendLedgerLines(lines, newKnowledge).join('\n');
@@ -738,7 +762,7 @@ export function synthesizeMinorFromUpdate(name, fields) {
 export function synthesizeMajorFromUpdate(name, fields, newKnowledge) {
     const lines = [`${name} | unknown | ${fields?.descriptor || 'unknown'}`, `Tone: ${fields?.tone || 'unknown'}`,
         `Perceived as: ${fields?.perceived_as || 'unknown'}`, `First seen: unknown`, '', 'Knowledge Ledger:'];
-    if (newKnowledge?.length > 0) newKnowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
+    if (newKnowledge?.length > 0) newKnowledge.forEach(k => lines.push(formatLedgerLine(k)));
     else lines.push('- (no entries yet)');
     return lines.join('\n');
 }
@@ -813,7 +837,11 @@ export async function enrichStagingItem(item) {
             item.uid = found.uid;
             item.action = 'update';
             item.adoptedUid = found.uid;
-            item.fields = item.fields || fieldsFromScanRecord(item.data, item.type);
+            // Phase 1 (writer-inventory gap 3): the promotion synthesizes
+            // fields the same way buildStagingItems does, so it applies the
+            // same Growth ownership filter — this used to be the one path
+            // where scan fields reached a merge without it.
+            item.fields = item.fields || applyFieldOwnership(item.name, fieldsFromScanRecord(item.data, item.type));
             item.newKnowledge = item.newKnowledge
                 || item.data?.initial_knowledge || item.data?.new_knowledge || [];
             item.existingContent = null;
@@ -830,6 +858,26 @@ export async function enrichStagingItem(item) {
     const existing = await loadEntryContent(item.uid, item.name);
     if (existing !== null) {
         item.existingContent = existing;
+        // Phase 1 seam S2: the shared field contract runs at the merge
+        // dispatch — every path into a merger (scan staging, create→update
+        // promotion, future callers) is validated here, so an invalid model
+        // value can never reach a formatter. Ownership is re-applied for the
+        // same reason. Invalid values are dropped whole with surfaced
+        // reasons; valid unrelated updates are retained.
+        const owned = applyFieldOwnership(item.name, item.fields || {});
+        const { fields: safeFields, rejected } = validateFields(owned);
+        const { items: safeKnowledge, rejected: knowledgeRejected } = validateKnowledgeList(item.newKnowledge || []);
+        if (rejected.length + knowledgeRejected.length > 0) {
+            item.contractRejections = [
+                ...(item.contractRejections || []),
+                ...rejected.map(r => ({ field: r.key, reason: r.reason })),
+                ...knowledgeRejected.map(r => ({ field: `new_knowledge[${r.index}]`, reason: r.reason })),
+            ];
+            console.warn(`[MWT:Knowledge] field contract dropped values for "${item.name}":`,
+                item.contractRejections.map(r => `${r.field} (${r.reason})`).join('; '));
+        }
+        item.fields = safeFields;
+        item.newKnowledge = safeKnowledge;
         if (item.type === 'minor') {
             item.mergedContent = buildUpdatedMinorContent(existing, item.fields || {});
         } else if (item.type === 'major') {
@@ -929,7 +977,7 @@ export function formatDossierEntry(data) {
     }
     lines.push('', 'Knowledge Ledger:');
     const knowledge = data.initial_knowledge || data.new_knowledge || [];
-    if (knowledge.length > 0) knowledge.forEach(k => lines.push(`- ${k.fact} via ${k.source || 'unknown'}${k.date ? ' — ' + k.date : ''}`));
+    if (knowledge.length > 0) knowledge.forEach(k => lines.push(formatLedgerLine(k)));
     else lines.push('- (no entries yet)');
     return lines.join('\n');
 }
@@ -983,24 +1031,33 @@ export function extractDossierFieldValues(content) {
  * content. Only non-null fields are replaced; unknown fields are ignored.
  */
 export function buildUpdatedDossierContent(existingContent, fields, newKnowledge) {
+    // Phase 1 seam S6 backstop: one more validation pass at the universal
+    // dossier choke point, so no future caller can merge an invalid model
+    // value even if it bypasses seams S1–S5. Rejection keeps the existing
+    // line (the merge below skips null) — values are never sliced.
+    const { fields: safeFields, rejected } = validateFields(fields);
+    if (rejected.length > 0) {
+        console.warn('[MWT:Knowledge] field contract dropped invalid values:',
+            rejected.map(r => `${r.key} (${r.reason})`).join('; '));
+    }
     let lines = existingContent.split('\n');
     const headerIdx = findHeaderLineIdx(lines);
 
     lines = lines.map((line, idx) => {
-        if (fields?.tone != null && line.startsWith('Tone:')) return `Tone: ${fields.tone}`;
-        if (fields?.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${fields.perceived_as}`;
-        if (fields?.descriptor != null && idx === headerIdx && headerIdx !== -1) {
+        if (safeFields?.tone != null && line.startsWith('Tone:')) return `Tone: ${safeFields.tone}`;
+        if (safeFields?.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${safeFields.perceived_as}`;
+        if (safeFields?.descriptor != null && idx === headerIdx && headerIdx !== -1) {
             const parts = line.split('|').map(p => p.trim());
             // Preserve the dossier marker if present
             const markerMatch = parts[0].match(/^\[Dossier\]\s*(.*)$/);
             parts[0] = markerMatch ? `${DOSSIER_MARKER} ${markerMatch[1]}` : parts[0];
-            parts[2] = fields.descriptor;
+            parts[2] = safeFields.descriptor;
             return parts.join(' | ');
         }
         // Dossier fields — match by label prefix
         for (const f of DOSSIER_FIELDS) {
-            if (fields?.[f.key] != null && line.startsWith(`${f.label}:`)) {
-                return `${f.label}: ${stringifyDossierValue(fields[f.key])}`;
+            if (safeFields?.[f.key] != null && line.startsWith(`${f.label}:`)) {
+                return `${f.label}: ${stringifyDossierValue(safeFields[f.key])}`;
             }
         }
         return line;
@@ -1020,7 +1077,7 @@ export function buildUpdatedDossierContent(existingContent, fields, newKnowledge
     const ledgerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('knowledge ledger:'));
     let insertIdx = ledgerIdx !== -1 ? ledgerIdx : lines.length;
     for (const f of DOSSIER_FIELDS) {
-        const rawVal = fields?.[f.key];
+        const rawVal = safeFields?.[f.key];
         if (rawVal == null) continue;
         const val = stringifyDossierValue(rawVal);
         if (!val) continue;
@@ -1370,10 +1427,28 @@ export async function runNpcUpdate(name, uid) {
             result.fields.personality = null;
         }
 
+        // Phase 1 seam S3: the shared field contract — invalid values are
+        // dropped whole (the existing entry keeps its old line), valid
+        // unrelated updates are retained, and every rejection is surfaced
+        // with a field-specific reason on the returned result.
+        const { fields: safeFields, rejected: fieldRejections } = validateFields(result.fields || {});
+        const { items: safeKnowledge, rejected: knowledgeRejections } = validateKnowledgeList(result.new_knowledge || []);
+        const contractRejections = [
+            ...fieldRejections.map(r => ({ field: r.key, reason: r.reason })),
+            ...knowledgeRejections.map(r => ({ field: `new_knowledge[${r.index}]`, reason: r.reason })),
+        ];
+        if (contractRejections.length > 0) {
+            console.warn(`[MWT:Knowledge] field contract dropped values for "${name}":`,
+                contractRejections.map(r => `${r.field} (${r.reason})`).join('; '));
+        }
+
         const merged = useDossier
-            ? buildUpdatedDossierContent(currentContent, result.fields || {}, result.new_knowledge || [])
-            : buildUpdatedMajorContent(currentContent, result.fields || {}, result.new_knowledge || []);
-        return { currentContent, merged, fields: result.fields || {}, newKnowledge: result.new_knowledge || [], dossierMode: useDossier };
+            ? buildUpdatedDossierContent(currentContent, safeFields, safeKnowledge)
+            : buildUpdatedMajorContent(currentContent, safeFields, safeKnowledge);
+        return {
+            currentContent, merged, fields: safeFields, newKnowledge: safeKnowledge, dossierMode: useDossier,
+            ...(contractRejections.length > 0 ? { contractRejections } : {}),
+        };
     }
 }
 
@@ -1445,14 +1520,29 @@ export async function runNpcEnrich(name, uid) {
         // dossier merger which will replace existing fields and add missing ones.
         // new_knowledge is APPENDED to the ledger, never a replacement — the
         // prompt asks for new facts only (see DOSSIER_ENRICH_PROMPT).
-        const fields = applyFieldOwnership(name, result.fields || {});
-        const merged = buildUpdatedDossierContent(currentContent, fields, result.new_knowledge || []);
+        //
+        // Phase 1 seam S4: the shared field contract runs beside the ownership
+        // filter — invalid values are dropped whole with surfaced reasons, so
+        // an overlong or malformed model value can never reach the entry.
+        const owned = applyFieldOwnership(name, result.fields || {});
+        const { fields: safeFields, rejected: fieldRejections } = validateFields(owned);
+        const { items: safeKnowledge, rejected: knowledgeRejections } = validateKnowledgeList(result.new_knowledge || []);
+        const contractRejections = [
+            ...fieldRejections.map(r => ({ field: r.key, reason: r.reason })),
+            ...knowledgeRejections.map(r => ({ field: `new_knowledge[${r.index}]`, reason: r.reason })),
+        ];
+        if (contractRejections.length > 0) {
+            console.warn(`[MWT:Knowledge] field contract dropped values for "${name}":`,
+                contractRejections.map(r => `${r.field} (${r.reason})`).join('; '));
+        }
+        const merged = buildUpdatedDossierContent(currentContent, safeFields, safeKnowledge);
         return {
             currentContent,
             merged,
-            fields,
-            newKnowledge: result.new_knowledge || [],
+            fields: safeFields,
+            newKnowledge: safeKnowledge,
             dossierMode: true,
+            ...(contractRejections.length > 0 ? { contractRejections } : {}),
         };
     }
 }
@@ -1596,16 +1686,35 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
         // any unrequested field has those values discarded here, before the
         // merge. An empty string counts as "no value" (null) so a lazy blank
         // answer cannot wipe an existing line.
+        //
+        // Phase 1 seam S5: the shared field contract — an invalid value is
+        // dropped (null keeps the existing line) with a surfaced reason;
+        // valid values for other requested fields are retained.
         const src = (result.fields && typeof result.fields === 'object' && !Array.isArray(result.fields))
             ? result.fields
             : {};
         const fields = {};
+        const contractRejections = [];
         for (const key of requested) {
             const v = src[key];
-            fields[key] = (v === undefined || v === null || v === '') ? null : v;
+            if (v === undefined || v === null || v === '') { fields[key] = null; continue; }
+            const check = validateFieldValue(key, v);
+            if (!check.ok) {
+                fields[key] = null;
+                contractRejections.push({ field: key, reason: check.reason });
+            } else {
+                fields[key] = check.value;
+            }
+        }
+        if (contractRejections.length > 0) {
+            console.warn(`[MWT:Knowledge] field contract dropped values for "${name}":`,
+                contractRejections.map(r => `${r.field} (${r.reason})`).join('; '));
         }
         const merged = buildUpdatedDossierContent(currentContent, fields, []);
-        return { currentContent, merged, fields, requestedFields: requested, skippedFields: skipped, dossierMode: true };
+        return {
+            currentContent, merged, fields, requestedFields: requested, skippedFields: skipped, dossierMode: true,
+            ...(contractRejections.length > 0 ? { contractRejections } : {}),
+        };
     }
 }
 

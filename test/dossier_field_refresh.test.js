@@ -20,6 +20,7 @@ import {
     extractDossierFieldValues, DOSSIER_FIELDS,
 } from '../knowledge/lorebook.js';
 import { DOSSIER_FIELD_REFRESH_PROMPT } from '../knowledge/prompts.js';
+import { contractPromptBlock } from '../knowledge/field_contract.js';
 import {
     recordDossierFieldRefresh, deleteDossierFieldStatus,
     getDossierFieldStatusMap, getDossierFieldStaleness,
@@ -421,6 +422,40 @@ describe('dossier field-status watermarks', () => {
         expect(getDossierFieldStaleness(NPC, 'agenda', 10).known).toBe(false);
         // at-only stamp: known, no msgIdx → stale (cannot prove freshness).
         expect(getDossierFieldStaleness(NPC, 'secrets', 10)).toMatchObject({ known: true, stale: true, msgsSince: null });
+    });
+});
+
+// ─── Phase 1: the shared field contract at seam S5 ──────────────────────────
+
+describe('Phase 1 field contract — refresh (seam S5)', () => {
+    test('the refresh prompt embeds the shared FIELD CONTRACT block (one source)', () => {
+        expect(DOSSIER_FIELD_REFRESH_PROMPT).toContain(contractPromptBlock({ mode: 'dossier' }));
+    });
+
+    test('contract-invalid values are dropped whole; valid sibling fields still apply', async () => {
+        setFakeApi(() => JSON.stringify({
+            fields: { role: 'harbourmaster\nand smuggler-hunter', agenda: 'Reviewing the quay ledgers.' },
+        }));
+        const result = await runDossierFieldRefresh(NPC, 7, ['role', 'agenda']);
+
+        // Invalid role → null → the existing line is preserved; the valid
+        // agenda update beside it still applies.
+        expect(result.fields.role).toBeNull();
+        expect(result.fields.agenda).toBe('Reviewing the quay ledgers.');
+        expect(result.merged).toContain('Role: Harbourmaster of Dusk Quay');
+        expect(result.merged).toContain('Current Agenda: Reviewing the quay ledgers.');
+        expect(result.contractRejections).toEqual([
+            { field: 'role', reason: expect.stringContaining('line break') },
+        ]);
+    });
+
+    test('an overlong refresh value keeps the old line and names the bound', async () => {
+        setFakeApi(() => JSON.stringify({ fields: { background: 'z'.repeat(1201) } }));
+        const result = await runDossierFieldRefresh(NPC, 7, ['background']);
+
+        expect(result.fields.background).toBeNull();
+        expect(result.merged).toContain('Background: Former navy quartermaster.');
+        expect(result.contractRejections[0].reason).toContain('1201');
     });
 });
 
