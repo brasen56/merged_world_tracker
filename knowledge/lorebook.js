@@ -1443,6 +1443,8 @@ export async function runNpcEnrich(name, uid) {
 
         // Build the complete dossier content from the enrich result. We use the
         // dossier merger which will replace existing fields and add missing ones.
+        // new_knowledge is APPENDED to the ledger, never a replacement — the
+        // prompt asks for new facts only (see DOSSIER_ENRICH_PROMPT).
         const fields = applyFieldOwnership(name, result.fields || {});
         const merged = buildUpdatedDossierContent(currentContent, fields, result.new_knowledge || []);
         return {

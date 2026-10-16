@@ -220,6 +220,13 @@ OUTPUT FORMAT:
 // ─── Dossier Enrichment prompt ───────────────────────────────────────────────
 // Used by the "Enrich (Dossier)" action to fill in ALL missing dossier fields
 // for a single NPC, drawing on full chat history + the existing entry content.
+//
+// new_knowledge is APPENDED to the existing ledger (runNpcEnrich →
+// buildUpdatedDossierContent → appendLedgerLines), never a replacement, so it
+// must carry only facts the ledger does not already hold. Asking for the whole
+// ledger here re-appends a reworded copy of it on every Enrich. Condensing the
+// ledger is a separate, reviewed action (docs/KNOWLEDGE_CONCISION_SCOPE.md).
+// test/knowledge_ledger_prompt.test.js pins both halves of this contract.
 
 export const DOSSIER_ENRICH_PROMPT = `You are a character writer for an ongoing roleplay. Your job is to produce a COMPLETE, RICH dossier for a specific NPC by combining their existing tracked entry with everything established in the story so far.
 
@@ -228,7 +235,8 @@ ABSOLUTE RULES:
 - Preserve every fact already in <current_entry> — do not drop or contradict established canon.
 - Fill in EVERY dossier field below. Draw concrete inferences from the messages, world state, and the NPC's established behavior.
 - Do NOT invent facts that contradict the messages. If a field is truly unknowable, give your best grounded inference based on what IS established.
-- The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER add this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to") to new_knowledge, and when consolidating the existing ledger, DROP this NPC's own plan-shaped lines instead of carrying them forward; record an event only after it happens. Facts about OTHER people's promises are established facts and stay. Future plans are tracked by a different system.
+- The existing Knowledge Ledger in <current_entry> is kept as is, and new_knowledge is ADDED to the end of it. List ONLY facts not already represented there. Do not restate a fact already shown in their Knowledge Ledger, even reworded. Return [] when nothing new was established.
+- The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER add this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to") to new_knowledge; record an event only after it happens. Facts about OTHER people's promises are established facts and are allowed. Future plans are tracked by a different system.
 
 OUTPUT FORMAT:
 {
@@ -247,8 +255,8 @@ OUTPUT FORMAT:
     "secrets": "A SINGLE STRING: tiered secrets. Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
     "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons"
   },
-    "new_knowledge": [
-    { "fact": "concrete established fact this NPC knows (from existing ledger + new; past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
+  "new_knowledge": [
+    { "fact": "concrete established fact this NPC knows that is NOT already in their Knowledge Ledger (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }
   ]
 }`;
 
