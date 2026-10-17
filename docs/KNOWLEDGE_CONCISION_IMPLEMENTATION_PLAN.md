@@ -1,6 +1,6 @@
 # Knowledge Tracker — concision implementation phases
 
-**Status:** Proposed implementation plan; Phases 0, 1, and 3 recorded 2026-10-16 (see §7).  
+**Status:** Implementation plan; Phases 0, 1, 2, and 3 recorded 2026-10-16 (see §7).
 **Date:** 2026-10-16  
 **Source:** `c:/Users/brase/Desktop/extensions_wip/merged_world_tracker/docs/KNOWLEDGE_CONCISION_SCOPE.md`, including the co-author response.  
 **Area:** Knowledge generation, single-NPC cleanup review, persistence, and recovery.
@@ -412,8 +412,7 @@ Lock authority changes. No store migration rewrites existing NPC prose.
 
 - [x] Phase 0 — baselines and decisions recorded
 - [x] Phase 1 — prevention contract and regression coverage (2026-10-16; configured-model sample QA pending — see record)
-- [ ] Phase 2 — pure ledger proposals and validation
-- [ ] Phase 3 — durable recovery and guarded apply/restore
+- [x] Phase 2 — pure ledger proposals and validation (2026-10-16; orchestration and UI remain Phase 4 — see record)
 - [x] Phase 3 — durable recovery and guarded apply/restore (2026-10-16; unified-backup wiring and reviewed UI remain — see record)
 - [ ] Phase 4 — explicit ledger review UI
 - [ ] Phase 5 — representative-size/model/host validation and initial release
@@ -564,3 +563,48 @@ because its prompt or UI exists.
   shape gained `application-pending`/`restored` statuses, verbatim
   `approvedReplacement`, and `restore-safeguard` action types — recorded as
   an amendment in the decision record.
+
+### Phase 2 — Pure ledger proposals and validation (2026-10-17)
+
+- **Implemented:** `knowledge/ledger_cleanup.js`, a host-independent module
+  implementing D6 boundary refusal and slice-based ledger-body patching. It
+  preserves headings, non-ledger content, managed relationship blocks, and the
+  final newline convention. Exact-original round trips also retain mixed line
+  endings, indentation, and inter-item blank lines. Offsets are slice-compatible
+  JavaScript string offsets, not UTF-8 byte offsets.
+- **Proposal contract:** v1 contains `version`, `reviewId`, `records` (each with
+  `id`, single-line content `text`, `sourceIds`, and specificity/explanation
+  `notes`), advisory `pruningSuggestions` (exact `sourceIds` and `reason`), and
+  overall `notes`. Every source has exactly one record owner or an explicit
+  user removal. Splitting ownership is unsupported in v1 and refused. Model
+  JSON cannot carry approved removals; those live in separate user decisions.
+  Parsing accepts strict JSON or one whole JSON code fence, never repair.
+- **Review decisions:** mapped text editing, keep-original, explicit removal,
+  and restore decisions all revalidate coverage. Keeping one member of a merge
+  restores the entire ownership group in source order, avoiding sibling loss.
+  Partial removal requires keeping originals first. All-removed ledgers render
+  the ordinary empty placeholder. Full-text mapping inference is not offered.
+- **Detail warnings:** numbers/codes/dates, alphanumeric identifiers, and Unicode
+  capitalized candidate-name tokens are compared lexically (sentence-start
+  false positives are intentional). Warnings recompute after edits. Every merge
+  additionally requests semantic review of provenance, attribution, uncertainty,
+  chronology, and corrections; lexical preservation is not equivalence proof.
+  Legacy intent/commitment lines remain represented with advisory flags.
+- **Phase 3 integration:** `validateLedgerReplacement` adapts the final validation
+  hook, requiring the exact captured revision and validated ledger-only patch.
+  `ledgerSpan` supplies restore's real span extractor. Commit tests now use it
+  instead of their former stub; an integration test proves unrelated-field
+  changes fail before writes and newer unrelated edits survive apply/restore.
+  No changes to the production commit/recovery services were necessary.
+- **Validation:** `npm test` passed **3721/3721 tests in 156 files**; targeted
+  Phase 2/3 suites passed 73/73; `npm run lint` and `git diff --check` clean.
+  The new pure suite includes 38 tests covering the Phase 0 boundary corpus,
+  strict/truncated output, ownership failures, explicit decisions, gate-code
+  loss and edited warnings, untrusted injection text, and a representative-size
+  exact round trip.
+- **Phase 4 obligations:** generate a fresh review ID for every request (including
+  regeneration against unchanged content); supply user-removal decisions only
+  from explicit review controls; display warnings and specificity notes; wire
+  the final-validation adapter and restore extractor into reviewed UI actions.
+  No model calls, automatic cleanup, Apply UI, or generic acceptance path were
+  added. Semantic equivalence still requires human review, not this validator.

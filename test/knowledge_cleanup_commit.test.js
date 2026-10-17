@@ -26,6 +26,10 @@ import { getCleanupRecord, updateCleanupRecord, readCleanupRecoveryContainer } f
 import {
     captureCleanupTarget, applyCleanup, reconcileCleanupOutcome, restoreCleanup,
 } from '../knowledge/cleanup_commit.js';
+import {
+    ledgerSpan, captureLedgerReview, originalLedgerProposal,
+    patchLedgerProposal, validateLedgerReplacement,
+} from '../knowledge/ledger_cleanup.js';
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -53,21 +57,6 @@ const REPLACEMENT = [
     'Knowledge Ledger:',
     '- smugglers use the north wharf and hold guild keys via told/witness — Day 5-7',
 ].join('\n');
-
-/** The ledger-section span extractor a Phase 4 caller would supply. */
-function ledgerSpan(content) {
-    const lines = String(content).split('\n');
-    const headerIdx = lines.findIndex(l => /^knowledge ledger:/i.test(l.trim()));
-    if (headerIdx === -1) return null;
-    let endIdx = lines.length;
-    for (let i = headerIdx + 1; i < lines.length; i++) {
-        const t = lines[i].trim();
-        if (t === '') continue;
-        if (!t.startsWith('- ')) { endIdx = i; break; }
-    }
-    const offset = (idx) => lines.slice(0, idx).reduce((n, l) => n + l.length + 1, 0);
-    return { start: offset(headerIdx), end: offset(endIdx) };
-}
 
 function makeFakeWorldInfo() {
     const books = new Map();
@@ -143,6 +132,21 @@ afterEach(() => {
 // ─── Capture ─────────────────────────────────────────────────────────────────
 
 describe('captureCleanupTarget', () => {
+    test('Phase 2 final validator gates apply and the real ledger span restores safely', async () => {
+        const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
+        const review = captureLedgerReview(capture.originalContent, 'integration-review');
+        const proposal = originalLedgerProposal(review);
+        proposal.records = [{ id: 'merged', text: 'smugglers use the north wharf and hold guild keys via told/witness — Day 5-7', sourceIds: review.sources.map(s => s.id), notes: 'Preserve both observations.' }];
+        const { replacement } = patchLedgerProposal(review, proposal);
+        const validate = input => validateLedgerReplacement(review, proposal, undefined, input);
+        await expect(apply({ capture, replacement: replacement.replace('Tone: brisk', 'Tone: changed'), validate })).resolves.toMatchObject({ ok: false, code: 'validation-failed' });
+        expect(wiFake.saveCalls).toBe(0);
+        await expect(apply({ capture, replacement, validate })).resolves.toMatchObject({ ok: true });
+        entry7().content = entry7().content.replace('Tone: brisk', 'Tone: newer unrelated work');
+        await expect(restoreCleanup({ actionId: 'act-1', spanOf: ledgerSpan })).resolves.toMatchObject({ ok: true });
+        expect(entry7().content).toBe(ORIGINAL.replace('Tone: brisk', 'Tone: newer unrelated work'));
+    });
+
     test('binds identity, scope, entity id, and the exact original bytes', async () => {
         const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
         expect(capture.name).toBe(NPC);
