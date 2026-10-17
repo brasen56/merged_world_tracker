@@ -1,6 +1,6 @@
 # Knowledge Tracker — concision implementation phases
 
-**Status:** Proposed implementation plan; Phases 0–1 recorded 2026-10-16 (see §7).  
+**Status:** Proposed implementation plan; Phases 0, 1, and 3 recorded 2026-10-16 (see §7).  
 **Date:** 2026-10-16  
 **Source:** `c:/Users/brase/Desktop/extensions_wip/merged_world_tracker/docs/KNOWLEDGE_CONCISION_SCOPE.md`, including the co-author response.  
 **Area:** Knowledge generation, single-NPC cleanup review, persistence, and recovery.
@@ -414,6 +414,7 @@ Lock authority changes. No store migration rewrites existing NPC prose.
 - [x] Phase 1 — prevention contract and regression coverage (2026-10-16; configured-model sample QA pending — see record)
 - [ ] Phase 2 — pure ledger proposals and validation
 - [ ] Phase 3 — durable recovery and guarded apply/restore
+- [x] Phase 3 — durable recovery and guarded apply/restore (2026-10-16; unified-backup wiring and reviewed UI remain — see record)
 - [ ] Phase 4 — explicit ledger review UI
 - [ ] Phase 5 — representative-size/model/host validation and initial release
 - [ ] Phase 6 — selected-field cleanup and its independent release gate
@@ -508,3 +509,58 @@ because its prompt or UI exists.
   with displaced-detail notes remains Phase 6 — these are prevention fixes,
   not that mode.
 - **Accepted deviations:** none.
+
+### Phase 3 record — 2026-10-16
+
+- **Changed seams:** new `knowledge/cleanup_recovery.js` (the D1 container:
+  sentinel entry `[MWT:cleanup-recovery]` with the store entry's non-injecting
+  flag pattern re-asserted every write; persist-and-verify on every write;
+  versioned schema refusing future containers untouched; records this build
+  cannot validate are preserved on disk and reported, never dropped;
+  listing/usage with estimated sizes, explicit deletion, labeled
+  export/import with current-wins) and `knowledge/cleanup_commit.js`
+  (capture with strict identity/entity/scope/uniqueness bindings; guarded
+  apply — full re-verification, recovery persist-and-verify BEFORE the
+  target mutation, destination re-check after that async step, write through
+  the ordinary writeToLorebook path preserving unrelated entries and the
+  embedded store, post-save reload verification, fail-closed statuses,
+  duplicate-apply refusal with reload-based reconciliation of uncertain
+  outcomes; span-aware restore — only the cleanup-owned span is compared and
+  rewritten via a caller-supplied span extractor, newer unrelated edits
+  survive, touched-span changes conflict with an export offer, and a
+  restore-safeguard record captures pre-restore content). The recovery
+  sentinel is skipped at the Phase 0 walk points (writeToLorebook's stale-uid
+  guard, relabel, listKnowledgeEntries audit, staging export/import walks,
+  both reconcile walks, backup liveness). `window.MWT.cleanupRecovery`
+  exposes list/usage/export/import/delete until the Phase 4 UI lands.
+  `pushHistory` remains unused by recovery, as D1 requires.
+- **Automated results:** `npm test` 3666/3666 passed (155 files); `npm run
+  lint` clean. New suites: `test/knowledge_cleanup_recovery.test.js` (16
+  tests: non-injecting creation + self-repair, reload survival, fail-closed
+  saves including the silent-write-loss case, status transitions, listing
+  with invalid-record preservation, future-version refusal, export/import
+  round trip with current-wins) and `test/knowledge_cleanup_commit.test.js`
+  (21 tests covering the exit gate: storage failure during recovery
+  persistence blocks mutation; failure during target save preserves recovery
+  with status failed; stale source, deleted destination, scope switch,
+  rename/merge identity and entity-id mismatches, ambiguous duplicate
+  entries — all refuse with zero writes; the caller validation hook gates
+  before persistence; concurrent-writer outcome-uncertain then reconciles to
+  applied, and reconcile marks failed when the replacement never landed;
+  duplicate Apply refused; restore preserves newer unrelated edits outside
+  the span byte-for-byte, conflicts on touched spans with an export offer,
+  and captures a restore safeguard).
+- **Remaining work:** D3 unified-backup envelope wiring (collect/data/validate
+  + commit merge + round-trip test — the container's own export/import round
+  trip IS tested; envelope inclusion lands with Phase 4/5 where the release
+  gate demands it); the reviewed recovery listing/restore UI (Phase 4 — the
+  console surface keeps the controls reachable meanwhile). Host smoke of the
+  console surface is the only manual QA suggested.
+- **Accepted deviations:** Phase 3 landed before Phase 2 (co-author call, to
+  keep this phase's scope tight): the commit service's boundary/coverage
+  verification is an injected `validate` hook and span-aware restore takes
+  its span extractor as a parameter (both exercised in tests with a
+  ledger-span stub), so Phase 2's parser slots in without rework. D1's record
+  shape gained `application-pending`/`restored` statuses, verbatim
+  `approvedReplacement`, and `restore-safeguard` action types — recorded as
+  an amendment in the decision record.

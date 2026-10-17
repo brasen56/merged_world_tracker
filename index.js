@@ -1011,6 +1011,7 @@ try {
     const scopeApi = await import('./knowledge/scope.js');
     const storeApi = await import('./knowledge/store.js');
     const ktSettingsApi = await import('./knowledge/settings.js');
+    const cleanupRecoveryApi = await import('./knowledge/cleanup_recovery.js');
 
     /**
      * Warn when cleared NPCs still have a profile entry in the NPC Profiles
@@ -1102,6 +1103,31 @@ try {
 
     // ── Lorebook scope diagnostics ──────────────────────────────────────────
     //
+    // Phase 3 (knowledge cleanup) recovery surface: durable pre-cleanup
+    // originals. The reviewed recovery UI arrives in Phase 4; this console
+    // surface keeps listing/export/import/retention reachable meanwhile —
+    // recovery survives review close and host reload either way (it lives in
+    // the lorebook).
+    window.MWT.cleanupRecovery = {
+        list: async () => {
+            const result = await cleanupRecoveryApi.listCleanupRecovery();
+            if (!result.ok) { console.error(`[MWT] Cleanup recovery container unreadable: ${result.reason}`); return result; }
+            console.table(result.records.map(r => ({
+                actionId: r.actionId, entity: r.entityName, uid: r.entryUid, type: r.actionType,
+                status: r.status, created: r.createdAt, estTokens: r.estimatedTokens,
+            })));
+            for (const issue of result.issues || []) {
+                console.warn(`[MWT] Unreadable recovery record ${issue.actionId} (${issue.reason}) — preserved on disk, never silently dropped.`);
+            }
+            return result;
+        },
+        usage: () => cleanupRecoveryApi.cleanupRecoveryUsage(),
+        export: (actionIds) => cleanupRecoveryApi.exportCleanupRecovery(actionIds),
+        import: (payload) => cleanupRecoveryApi.importCleanupRecovery(payload),
+        // Explicit deletion only (D2): recovery is never silently evicted.
+        delete: (actionIds) => cleanupRecoveryApi.deleteCleanupRecords(actionIds),
+    };
+
     // The scope resolver reads SillyTavern context fields whose names vary
     // across ST versions and forks. Every read is defensive and falls back to
     // the global lorebooks, which is safe but SILENT — so this exists to make

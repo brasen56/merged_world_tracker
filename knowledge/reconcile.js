@@ -8,14 +8,20 @@
 
 import { normalizeRegistryName, isUnambiguousNpcAlias, resolvesToSameRegistryRecord } from './registry.js';
 import { isStoreEntry } from './store.js';
+import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
 import { TRACKER_SENTINEL } from './state.js';
+
+/** Module-owned entries (store, cleanup recovery) are never NPC destinations. */
+function isModuleEntry(entry) {
+    return isStoreEntry(entry) || isCleanupRecoveryEntry(entry);
+}
 
 /** Find a destination entry by its stable user-visible label. */
 export function findDestinationEntryUid(entries, name, { kind = 'npc' } = {}) {
     const expected = normalizeRegistryName(name);
     if (!expected) return null;
     for (const [key, entry] of Object.entries(entries || {})) {
-        if (isStoreEntry(entry)) continue;
+        if (isModuleEntry(entry)) continue;
         let label = entry?.comment;
         if (kind === 'state') {
             const comment = String(label || '').trim();
@@ -73,7 +79,7 @@ export function findEntryUidByNpcIdentity(entries, name) {
     const labels = Object.values(entries || {}).map(entry => String(entry?.comment ?? '').trim());
     const matches = [];
     for (const [key, entry] of Object.entries(entries || {})) {
-        if (isStoreEntry(entry)) continue;
+        if (isModuleEntry(entry)) continue;
         const label = String(entry?.comment ?? '').trim();
         if (!label) continue;
         // Registry-proven ("The Vixen" for "Mara" after a rename) is evidence,

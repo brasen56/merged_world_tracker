@@ -61,6 +61,7 @@ import {
     withStoreLock,
     _writeFieldDirect,
 } from '../knowledge/store.js';
+import { isCleanupRecoveryEntry } from '../knowledge/cleanup_recovery.js';
 import { getLorebookName, getStateLorebookName } from '../knowledge/scope.js';
 import { state as knowledgeState } from '../knowledge/state.js';
 import { findDestinationEntryUid } from '../knowledge/reconcile.js';
@@ -204,7 +205,9 @@ function identityMatches(a, b) {
 }
 
 function hasLiveDestinationUid(entries, uid) {
-    return uid !== null && uid !== undefined && entries?.[uid] && !isStoreEntry(entries[uid]);
+    if (uid !== null && uid !== undefined && entries?.[uid] && !isStoreEntry(entries[uid])
+        && !isCleanupRecoveryEntry(entries[uid])) return true;
+    return false;
 }
 
 /**

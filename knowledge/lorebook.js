@@ -28,6 +28,7 @@ import { validateFields, validateFieldValue, validateKnowledgeList } from './fie
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
+import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
 import { findEntryUidByNpcIdentity } from './reconcile.js';
 import { validateHistoryRecords } from '../schema/secondary.js';
 // Part 7 diagnostics wiring: direct import (not the barrel) so the REAL
@@ -206,7 +207,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
         // silently overwrite it. The store entry is the unambiguous case —
         // never let an NPC be written over the module's own bookkeeping.
         if (existingUid !== null && existingUid !== undefined
-            && isStoreEntry(entries[existingUid])) {
+            && (isStoreEntry(entries[existingUid]) || isCleanupRecoveryEntry(entries[existingUid]))) {
             console.warn(
                 `[MWT:Knowledge] Registry uid ${existingUid} for "${name}" points at the ` +
                 `${STORE_SENTINEL} entry in "${book}" — the uid is stale. Creating a new entry instead.`
@@ -341,8 +342,8 @@ export async function relabelLorebookEntry(bookName, uid, newLabel, expectedName
         const wi = await state.wiScript.loadWorldInfo(bookName);
         const entry = wi?.entries?.[uid];
         if (!entry) return { success: false, error: `UID ${uid} not found in "${bookName}".` };
-        if (isStoreEntry(entry)) {
-            return { success: false, error: `UID ${uid} is the ${STORE_SENTINEL} entry — refusing to relabel module bookkeeping.` };
+        if (isStoreEntry(entry) || isCleanupRecoveryEntry(entry)) {
+            return { success: false, error: `UID ${uid} is module bookkeeping (${STORE_SENTINEL} or ${'[MWT:cleanup-recovery]'}) — refusing to relabel it.` };
         }
         if (expectedName !== null && expectedName !== undefined) {
             const comment = entry.comment || '';
@@ -424,7 +425,7 @@ export async function listKnowledgeEntries() {
         const wi = await state.wiScript.loadWorldInfo(getLorebookName());
         const entries = wi?.entries || {};
         return Object.keys(entries)
-            .filter(k => !isStoreEntry(entries[k]))
+            .filter(k => !isStoreEntry(entries[k]) && !isCleanupRecoveryEntry(entries[k]))
             .map(k => {
                 const e = entries[k];
                 const content = String(e?.content || '');

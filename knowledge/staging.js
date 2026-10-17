@@ -31,6 +31,7 @@ import { applyFieldOwnership } from './field_ownership.js';
 import { validateScanRecord } from './field_contract.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
+import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
 import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema } from './schema.js';
 import { makeQuarantineItem } from '../core/quarantine.js';
@@ -400,7 +401,7 @@ export function mergeScanResults(newItems, removeNotification) {
 // ─── NPC Export / Import ─────────────────────────────────────────────────────
 
 function identicalImportEntry(entries, name, content) {
-    const matches = Object.values(entries || {}).filter(entry => !isStoreEntry(entry)
+    const matches = Object.values(entries || {}).filter(entry => !isStoreEntry(entry) && !isCleanupRecoveryEntry(entry)
         && normalizeRegistryName(entry?.comment) === normalizeRegistryName(name));
     // Do not guess which of several conflicting physical entries is ours.
     if (matches.length !== 1 || typeof content !== 'string'
@@ -789,7 +790,7 @@ export async function reconcileRegistry() {
         const uid = Number(entry?.uid ?? uidStr);
         if (!Number.isFinite(uid)) continue;
         entryByUid.set(uid, entry);
-        if (isStoreEntry(entry)) continue;
+        if (isStoreEntry(entry) || isCleanupRecoveryEntry(entry)) continue;
         const label = String(entry?.comment || '').trim();
         if (!label || playerSet.has(label.toLowerCase())) continue;
         npcEntries.push({

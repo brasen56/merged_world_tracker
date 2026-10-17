@@ -23,15 +23,27 @@
 - **Real — serialization coupling:** `applyStoreToWorldInfo` re-serializes the store entry's entire JSON on EVERY book save (knowledge/store.js:1143–1157); a store field would re-stringify every recovery original on every save even when recovery is unchanged. The sentinel's content is rewritten only by recovery writes.
 - **NOT a distinction — persistence payload:** book saves are whole-book (`saveWorldInfo` posts the entire world-info object), so recovery bytes ride every save of that book whichever entry holds them, and the book file grows by the recovery originals. That cost is inherent to in-book storage, is disclosed here, and is why D2's controls (size surfacing, explicit deletion, quota-exhaustion-blocks-new-cleanup) exist. "Rewritten only by recovery writes" therefore means *content updates and serialization happen only on recovery writes* — not fewer book saves.
 
-**Schema versioning:** the container content is JSON `{ version: 1, records: [...] }` with its own container version, refused untouched when a future version is encountered — the embedded quarantine container's exact pattern (`STORE_QUARANTINE_FIELD`, knowledge/store.js:966; future-version refusal knowledge/store.js:968–998). Record shape (Phase 3 implements, listed here so it is not left implicit):
+**Schema versioning:** the container content is JSON `{ version: 1, records: [...] }` with its own container version, refused untouched when a future version is encountered — the embedded quarantine container's exact pattern (`STORE_QUARANTINE_FIELD`, knowledge/store.js:966; future-version refusal knowledge/store.js:968–998). Record shape (implemented in `knowledge/cleanup_recovery.js`, Phase 3):
 
 ```
 actionId, createdAt, bookName, scopeKey, entityName (canonical registry key),
-entityStableId, entryUid, actionType: 'ledger-condensation' | 'field-cleanup',
-status: 'original-saved' | 'applied' | 'failed' | 'outcome-uncertain',
-originalContent (exact bytes, line endings included), replacementFingerprint,
-appliedAt?
+entityId (stable id, knowledge/identity.js), entryUid,
+actionType: 'ledger-condensation' | 'field-cleanup' | 'restore-safeguard',
+status: 'original-saved' | 'application-pending' | 'applied' | 'failed'
+       | 'outcome-uncertain' | 'restored',
+originalContent (exact bytes, line endings included),
+approvedReplacement (exact bytes — restore needs them for span comparison),
+replacementFingerprint, appliedAt?, restoredAt?, failedReason?
 ```
+
+*Amendment (2026-10-16, at Phase 3 implementation):* the status list gains
+`application-pending` (between recovery persist and the target write, per the
+plan's Phase 3 wording) and `restored` (a record whose original was written
+back by a successful restore — it is no longer restorable again, only
+exportable/deletable); records also carry `approvedReplacement` verbatim, not
+just its fingerprint, because span-aware conflict detection compares the
+applied span's exact text; and `restore-safeguard` action types capture
+pre-restore content so a restore itself is undoable.
 
 **Verified persistence and failure behavior:** persist-and-verify before mutating the target — write the container through the awaited book save, re-load the book, and verify the original is present byte-for-byte; any failure blocks Apply and leaves the live entry unchanged. The patterns to copy are the store's hydration commit under `withStoreLock` (knowledge/store.js:158, :197, commit at :616–672) and the backup restore transaction (`beginStoreTransaction` + capture/rollback, knowledge/store.js:1074–1102, backup/index.js:407–486). `pushHistory` is explicitly rejected as recovery: ≤50 snapshots, quota errors swallowed (knowledge/lorebook.js:93–103; plan §3).
 
