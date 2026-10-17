@@ -46,6 +46,21 @@ const PROMPTS_WITH_LEDGER_RULE = [
     ['DOSSIER_ENRICH_PROMPT', DOSSIER_ENRICH_PROMPT],
 ];
 
+describe('every capture prompt describes a ledger source the same short way', () => {
+    // "how they know it" invited narrative provenance ("via His own commitment
+    // on the bed after …") that bloats every ledger line it touches.
+    test.each([
+        ['SCAN_SYSTEM_PROMPT', SCAN_SYSTEM_PROMPT],
+        ['NPC_UPDATE_PROMPT', NPC_UPDATE_PROMPT],
+        ['DOSSIER_SCAN_SYSTEM_PROMPT', DOSSIER_SCAN_SYSTEM_PROMPT],
+        ['DOSSIER_UPDATE_PROMPT', DOSSIER_UPDATE_PROMPT],
+        ['DOSSIER_ENRICH_PROMPT', DOSSIER_ENRICH_PROMPT],
+    ])('%s uses the witness/told/document/rumor/institutional source list', (_name, prompt) => {
+        expect(prompt).not.toContain('how they know it');
+        expect(prompt).toContain('"source": "witness/told/document/rumor/institutional"');
+    });
+});
+
 describe('Knowledge Ledger stores established facts only', () => {
     test.each(PROMPTS_WITH_LEDGER_RULE)("%s forbids the tracked NPC's own unresolved plans", (_name, prompt) => {
         expect(prompt).toContain('ESTABLISHED FACTS ONLY');

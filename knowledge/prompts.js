@@ -24,13 +24,13 @@ OUTPUT FORMAT:
     { "name": "Full Name", "species": "Human/Elf/etc", "tone": "2-3 word communication style", "perceived_as": "how they present", "descriptor": "3-5 word physical/role descriptor", "first_seen": "location and in-world date/time" }
   ],
   "new_major": [
-    { "name": "Full Name", "species": "Human/Elf/etc", "tone": "2-3 word communication style", "perceived_as": "how they present", "descriptor": "3-5 word physical/role descriptor", "first_seen": "location and in-world date/time", "initial_knowledge": [{ "fact": "concrete established fact (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date" }] }
+    { "name": "Full Name", "species": "Human/Elf/etc", "tone": "2-3 word communication style", "perceived_as": "how they present", "descriptor": "3-5 word physical/role descriptor", "first_seen": "location and in-world date/time", "initial_knowledge": [{ "fact": "concrete established fact (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date" }] }
   ],
   "update_minor": [
     { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" } }
   ],
   "update_major": [
-    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date if known" }] }
+    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }] }
   ]
 }
 
@@ -119,7 +119,7 @@ OUTPUT FORMAT:
       "agenda": "their main agenda in the story right now",
       "secrets": "A SINGLE STRING: tiered secrets the NPC guards (never narrate unless disclosed). Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
       "canon_lock": "A SINGLE STRING: 3-5 immutable facts that must never change across appearances, separated by semicolons",
-      "initial_knowledge": [{ "fact": "concrete established fact (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date" }]
+      "initial_knowledge": [{ "fact": "concrete established fact (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date" }]
     }
   ],
   "update_minor": [
@@ -143,7 +143,7 @@ OUTPUT FORMAT:
         "secrets": "Revise the tiered secrets string when: a NEW secret surfaces; a secret is DISCLOSED in narration (remove it — once known it is no longer a secret; fold any lasting consequence into background); or a secret's premise has RESOLVED or become obsolete because the in-world event it hinges on has passed (drop it). Also re-tier a secret if story pressure changed how buried it is. Else null (FILL if currently missing/empty).",
         "canon_lock": "updated value or null if unchanged"
       },
-      "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "how they know it", "date": "in-world date if known" }]
+      "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }]
     }
   ]
 }
@@ -527,7 +527,8 @@ ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences, no commentary.
 - Work ONLY from the lines in <ledger_sources>; each starts with its source label in brackets ([s1], [s2], ...). In your JSON, refer to a source by its NUMBER as a plain integer: [s3] is 3. You see no dossier, no chat, and no other context about this NPC — never draw on outside knowledge of the character.
 - Every source number must appear EXACTLY ONCE: either in "keep" (the line stays exactly as written) or in the "s" list of one "changed" record. Never leave a number out, never list one twice, never use a number that is not in <ledger_sources>. You cannot delete anything: deletion is a separate human decision. If a line looks redundant or obsolete, still account for it (keep it, or merge it into the record it duplicates) and optionally list it in "pruningSuggestions".
-- Keep lines verbatim by default. Put a line in "changed" only to merge it with lines about the same fact or event, or when a correction requires rewording. Never rewrite a line just to tidy its wording — an unchanged line belongs in "keep".
+- Keep a line as written unless changing it clearly helps. A line belongs in "changed" when you merge it with lines about the same fact or event, reword it to state a correction, or shorten it by at least about a third without losing any fact, name, number, code, or date. Never rewrite a line for a smaller saving or just to tidy its wording — leave it in "keep".
+- When shortening, cut filler, not facts: drop restated context, stacked qualifiers, and narration, and prefer plain shorter wording. Keep the date part exactly as written. The provenance after "via" says how the fact is known: shorten a long narrative to the kind of source and, when it matters, who — for example "via witness", "via told by Ezra", "via his own word" — but keep anything that changes how reliable the fact is.
 - Condensing is not concluding. Do not invent facts, strengthen claims, resolve ambiguities, or add interpretation the sources do not state.
 - Preserve distinctions that matter: who did, knew, or said what (attribution); how something is known (provenance: witness/told/document/rumor); how certain it is (rumor vs established); when it happened (dates, chronology); and corrections — when a later line corrects an earlier one and you merge them, state the corrected fact and say in that record's "n" note that it corrects the earlier claim.
 - Merge conservatively. Combine lines only when they are about the same underlying fact or event AND none of the distinctions above would be blurred. When unsure, keep the lines — "keep" is always acceptable.
@@ -541,7 +542,8 @@ OUTPUT FORMAT ("version" is always 2; "reviewId" must echo the exact id from <re
   "reviewId": "<the exact review id>",
   "keep": [3, 4, 6],
   "changed": [
-    { "s": [1, 2, 5], "t": "one condensed ledger line without the leading dash", "n": "what was merged and what detail was dropped or weakened, if any" }
+    { "s": [1, 2, 5], "t": "one condensed ledger line without the leading dash", "n": "what was merged and what detail was dropped or weakened, if any" },
+    { "s": [7], "t": "one long line shortened by about a third, every fact kept" }
   ],
   "pruningSuggestions": [
     { "s": [6], "r": "duplicates source 1 (<the shared fact>)" }
@@ -551,7 +553,7 @@ OUTPUT FORMAT ("version" is always 2; "reviewId" must echo the exact id from <re
 
 Guidance:
 - Always include both "keep" and "changed", even when one of them is empty. List numbers in ascending order so coverage is easy to check.
-- A changed record usually merges several sources. A single-source changed record is only for a line that must be reworded, for example to state a correction. "n" may be omitted when there is nothing to note.
-- Output grows with every changed record; lines left in "keep" cost almost nothing. Change only what condensing actually requires.
+- A changed record either merges several sources or shortens or rewords one. A single-source changed record must be clearly shorter than its line — about a third or more — unless it states a correction. "n" may be omitted when there is nothing to note.
+- Output grows with every changed record; lines left in "keep" cost almost nothing. Change a line only for a real saving.
 - "pruningSuggestions" are advisory only — they never remove content, and a human reviews every one. A suggested source still appears in "keep" or "changed". A suggestion's "r" must name the matching source number and the shared fact; a bare "duplicate" claim is not useful.
 - If nothing can be safely condensed, put every source number in "keep", leave "changed" empty, and return an empty "pruningSuggestions" array.`;

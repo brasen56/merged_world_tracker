@@ -339,6 +339,16 @@ describe('the model request', () => {
         await expect(requestLedgerProposal({ capture })).rejects.toBe(error);
         expect(api).toHaveBeenCalledTimes(1);
     });
+    test('the cleanup prompt allows shortening one line by a third, never for a smaller saving', () => {
+        expect(LEDGER_CLEANUP_PROMPT).toContain('shorten it by at least about a third without losing any fact, name, number, code, or date');
+        expect(LEDGER_CLEANUP_PROMPT).toContain('Never rewrite a line for a smaller saving or just to tidy its wording');
+        expect(LEDGER_CLEANUP_PROMPT).toContain('Keep the date part exactly as written');
+        expect(LEDGER_CLEANUP_PROMPT).toContain('"via told by Ezra"');
+        // The old rule that blocked single-line shortening is gone.
+        expect(LEDGER_CLEANUP_PROMPT).not.toContain('Keep lines verbatim by default');
+        expect(LEDGER_CLEANUP_PROMPT).not.toContain('only for a line that must be reworded');
+    });
+
     test('payload minimization: only the ledger lines, source ids, and NPC name are sent', async () => {
         useGoodApi();
         await openReview();
@@ -782,7 +792,7 @@ describe('the source-aware review', () => {
         await consentAndGenerate();
         const records = body().querySelectorAll('.kt-condense-record');
         expect(records).toHaveLength(2);
-        expect(records[0].querySelector('h4').textContent).toContain('covers 2 sources');
+        expect(records[0].querySelector('h4').textContent).toContain('merges 2 lines (1, 2)');
         expect(records[0].querySelector('.kt-condense-record-notes').textContent).toContain('Merged the two wharf observations');
         const sources = records[0].querySelectorAll('.kt-condense-source-text');
         expect(sources).toHaveLength(2);
@@ -851,9 +861,88 @@ describe('the source-aware review', () => {
         await consentAndGenerate();
         body().querySelector('.kt-condense-keep').click();
         await vi.waitFor(() => expect(body().querySelectorAll('.kt-condense-record')).toHaveLength(3));
+        // All three lines are now kept as written, in source order, and the
+        // kept group opened so the restored lines are visible.
+        expect(body().querySelectorAll('.kt-condense-record--kept')).toHaveLength(3);
+        expect(body().querySelector('.kt-condense-kept').open).toBe(true);
         const first = body().querySelector('.kt-condense-record');
         expect(first.querySelector('.kt-condense-text').value).toBe('smugglers use the north wharf via told — Day 5');
-        expect(first.querySelectorAll('.kt-condense-source-text')).toHaveLength(1);
+        expect(body().querySelector('.kt-condense-changed-title').textContent).toContain('none — every line is kept as written');
+    });
+
+    /** One shortened line (source 1) and two lines kept as written. */
+    function useShorteningApi() {
+        setFakeApi(request => {
+            apiRequests.push(request);
+            const reviewId = /<review_id>([^<]+)<\/review_id>/.exec(request.userContent)?.[1] || '';
+            return JSON.stringify({
+                version: 2, reviewId, keep: [2, 3],
+                changed: [{ s: [1], t: 'smugglers use north wharf via told — Day 5' }],
+                pruningSuggestions: [], notes: '',
+            });
+        });
+    }
+
+    test('changed records come first with their size change; kept lines collapse into one group', async () => {
+        useShorteningApi();
+        await openReview();
+        await consentAndGenerate();
+        expect(body().querySelector('.kt-condense-changed-title').textContent).toBe('Changed: 1 record covering 1 line');
+        const changedCard = body().querySelector('.kt-condense-record:not(.kt-condense-record--kept)');
+        expect(changedCard.querySelector('h4').textContent).toContain('shortens line 1');
+        expect(changedCard.querySelector('.kt-condense-record-size').textContent).toBe('46 → 42 chars (−9%)');
+        const keptGroup = body().querySelector('.kt-condense-kept');
+        expect(keptGroup.open).toBe(false);
+        expect(keptGroup.querySelector('summary').textContent).toContain('Kept as written: 2 lines');
+        const keptCards = keptGroup.querySelectorAll('.kt-condense-record--kept');
+        expect(keptCards).toHaveLength(2);
+        // A kept line has nothing to warn about and no "keep originals" action.
+        for (const card of keptCards) {
+            expect(card.querySelector('.kt-condense-keep')).toBeNull();
+            expect(card.querySelector('.kt-condense-record-warnings')).toBeNull();
+            expect(card.querySelector('.kt-condense-remove-src')).toBeTruthy();
+        }
+        expect(body().querySelector('.kt-condense-counts').textContent).toContain('1 changed, 2 kept as written');
+    });
+
+    test('editing a kept line shows its feedback on that card only, then moves it to the changed group', async () => {
+        useShorteningApi();
+        await openReview();
+        await consentAndGenerate();
+        const changedSize = () => body().querySelector('.kt-condense-record:not(.kt-condense-record--kept) .kt-condense-record-size').textContent;
+        const before = changedSize();
+        const [line2, line3] = body().querySelectorAll('.kt-condense-record--kept');
+        const area = line3.querySelector('.kt-condense-text');
+        area.value = 'gate code 7314 via document — Day 7';
+        area.dispatchEvent(new Event('change', { bubbles: true }));
+        await vi.waitFor(() => expect(line3.querySelector('.kt-condense-record-size')).toBeTruthy());
+        // Blur-time refresh: matched by record, not by position.
+        expect(line2.querySelector('.kt-condense-record-feedback').textContent.trim()).toBe('');
+        expect(changedSize()).toBe(before);
+        expect(area.isConnected).toBe(true); // not moved while the user may still be tabbing
+        // The next full render regroups it.
+        body().querySelector('.kt-condense-restore-all').click();
+        body().querySelector('.kt-condense-restore-all').click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-changed-title').textContent).toContain('none'));
+    });
+
+    test('the kept group stays open across decisions once the user opens it', async () => {
+        useShorteningApi();
+        await openReview();
+        await consentAndGenerate();
+        const keptGroup = body().querySelector('.kt-condense-kept');
+        keptGroup.open = true;
+        keptGroup.dispatchEvent(new Event('toggle'));
+        // Removing a kept line re-renders the review; focus goes to the new
+        // removal's Undo (outside the group), so only the remembered state can reopen it.
+        const line3 = body().querySelectorAll('.kt-condense-record--kept')[1];
+        line3.querySelector('.kt-condense-remove-src').click();
+        body().querySelector('.kt-condense-reason-input').value = 'superseded';
+        body().querySelector('.kt-condense-remove-confirm').click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-removals')).toBeTruthy());
+        expect(body().querySelectorAll('.kt-condense-record--kept')).toHaveLength(1);
+        expect(body().querySelector('.kt-condense-kept').open).toBe(true);
+        expect(document.activeElement.matches('.kt-condense-removal-undo')).toBe(true);
     });
 
     test('keyboard focus stays on a live review control after each decision re-renders', async () => {

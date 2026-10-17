@@ -162,7 +162,33 @@ describe('edited warnings and final commit adapter', () => {
         expect(review.sources.map(s => s.text)).toEqual(renderLedgerLines(LEDGER_COVERAGE_RECORDS));
         expect(proposal.records).toHaveLength(LEDGER_COVERAGE_RECORDS.length);
         expect(patchLedgerProposal(review, proposal).replacement).toBe(document);
-        expect(validateLedgerProposal(review, proposal).warnings.some(w => w.kind === 'legacy-intent')).toBe(true);
+        // Every record is an exact original: nothing changed, so nothing warns.
+        expect(validateLedgerProposal(review, proposal).warnings).toEqual([]);
+    });
+    test('different spellings of one number are retained; a really dropped number is shown as written', () => {
+        const kept = ledgerDetailWarnings(
+            [{ id: 'a', text: '- non-exclusive $75–100K/yr over 3–6 years via told — August 10, 2000' }],
+            'non-exclusive $75,000–$100,000/yr over 3–6 years via told — August 10, 2000',
+        );
+        expect(kept.filter(w => w.kind === 'detail-not-retained')).toEqual([]);
+        const dropped = ledgerDetailWarnings(
+            [{ id: 'b', text: '- APEX won Old Chem — a $50,000 award posted on the dock via witness — August 10, 2000' }],
+            'APEX won Old Chem at $49,800 posted on the dock via witness — August 10, 2000',
+        );
+        expect(dropped.filter(w => w.kind === 'detail-not-retained')).toEqual([{ kind: 'detail-not-retained', detail: '50,000' }]);
+        expect(ledgerDetailWarnings([{ id: 'c', text: '- budget 1.5K via told — Day 2' }], 'budget 1,500 via told — Day 2')
+            .filter(w => w.kind === 'detail-not-retained')).toEqual([]);
+    });
+    test('legacy-intent warns only on changed lines and names the phrase it matched', () => {
+        const document = ['Name | Human | clerk', 'Knowledge Ledger:', '- He agreed to take a winter leave via his own word — Day 7', '- Alex knows engines via witness — Day 2'].join('\n');
+        const review = captureLedgerReview(document, 'intent');
+        const verbatim = originalLedgerProposal(review);
+        expect(validateLedgerProposal(review, verbatim).warnings).toEqual([]);
+        const shortened = editLedgerRecord(review, verbatim, verbatim.records[0].id, 'He agreed to a winter leave via his own word — Day 7');
+        const intent = validateLedgerProposal(review, shortened).warnings.filter(w => w.kind === 'legacy-intent');
+        expect(intent).toHaveLength(1);
+        expect(intent[0]).toMatchObject({ phrase: 'agreed to', sourceId: review.sources[0].id });
+        expect(intent[0].message).toContain('("agreed to")');
     });
     test('final hook refuses unrelated edits and invalid edited drafts', () => {
         const review = capture();

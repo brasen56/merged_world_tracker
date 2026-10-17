@@ -2913,6 +2913,46 @@ h4.kt-npc-name {
     font-size: 13px;
 }
 
+/* Changed records first; lines kept as written collapse into one group. */
+.kt-condense-section-title {
+    margin: 4px 0 0;
+    font-size: 13px;
+}
+
+.kt-condense-kept {
+    border: 1px dashed var(--mwt-border);
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+
+.kt-condense-kept-summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+}
+
+.kt-condense-kept-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.kt-condense-record--kept {
+    padding: 6px 10px;
+    background: transparent;
+}
+
+.kt-condense-record--kept .kt-condense-record-actions {
+    margin-top: 4px;
+}
+
+.kt-condense-record-size {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--mwt-text-dim);
+}
+
 .kt-condense-record-coverage {
     color: var(--mwt-text-dim);
     font-weight: 400;

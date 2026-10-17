@@ -108,23 +108,55 @@ function checkReview(review) {
 }
 
 /**
+ * Spellings of one number compare equal: thousands separators ("50,000"),
+ * K suffixes ("100K") and K ranges ("75-100K" means 75K-100K). `surfaces`
+ * keeps the first written form of each normalized number for display.
+ */
+function normalizeDetailNumbers(text, surfaces = null) {
+    const thousands = value => String(Math.round(parseFloat(value) * 1000));
+    const remember = (normalized, surface) => {
+        if (surfaces && !surfaces.has(normalized)) surfaces.set(normalized, surface);
+        return normalized;
+    };
+    return text
+        .replace(/(\d+(?:\.\d+)?)(\s*[-\u2013\u2014]\s*)(\d+(?:\.\d+)?)[kK]\b/g,
+            (_m, low, dash, high) => `${remember(thousands(low), `${low}K`)}${dash}${remember(thousands(high), `${high}K`)}`)
+        .replace(/(\d+(?:\.\d+)?)[kK]\b/g, (match, value) => remember(thousands(value), match))
+        .replace(/(?<![\d.])\d{1,3}(?:,\d{3})+(?!\d)/g, match => remember(match.replace(/,/g, ''), match));
+}
+
+const LEGACY_INTENT = /\b(?:plans? to|will meet|agreed to|intend(?:s)? to)\b/i;
+
+/**
  * Advisory lexical heuristic, NOT semantic equivalence. Numbers include codes,
- * decimals, dates and alphanumeric identifiers. Candidate names are Unicode
- * capitalized words (including sentence starts: deliberate false positives).
- * Uncertainty, provenance, attribution, chronology and corrections additionally
- * receive a review reminder on every merge; lexical preservation proves none
- * of those. Legacy intent/commitment lines are flagged, never deleted.
+ * decimals, dates and alphanumeric identifiers, compared after number-spelling
+ * normalization. Candidate names are Unicode capitalized words (including
+ * sentence starts: deliberate false positives). Uncertainty, provenance,
+ * attribution, chronology and corrections additionally receive a review
+ * reminder on every merge; lexical preservation proves none of those. Legacy
+ * intent/commitment lines are flagged, never deleted. Callers skip lines kept
+ * exactly as written: an unchanged line cannot lose a detail or a plan.
  */
 export function ledgerDetailWarnings(sources, text) {
-    const original = sources.map(source => source.text).join('\n');
+    const surfaces = new Map();
+    const original = normalizeDetailNumbers(sources.map(source => source.text).join('\n'), surfaces);
     const tokens = new Set(original.match(/[\p{L}\p{N}_]+(?:[./:-][\p{L}\p{N}_]+)*/gu) || []);
-    const retained = new Set((text.match(/[\p{L}\p{N}_]+(?:[./:-][\p{L}\p{N}_]+)*/gu) || []).map(token => token.toLocaleLowerCase()));
+    const retained = new Set((normalizeDetailNumbers(text).match(/[\p{L}\p{N}_]+(?:[./:-][\p{L}\p{N}_]+)*/gu) || []).map(token => token.toLocaleLowerCase()));
     const missing = [...tokens].filter(token => (/\p{N}/u.test(token) || /^\p{Lu}/u.test(token)) && !retained.has(token.toLocaleLowerCase()));
-    const warnings = missing.map(detail => ({ kind: 'detail-not-retained', detail }));
+    const warnings = missing.map(token => ({
+        kind: 'detail-not-retained',
+        detail: token.replace(/\d+(?:\.\d+)?/g, number => surfaces.get(number) ?? number),
+    }));
     if (sources.length > 1) warnings.push({ kind: 'semantic-review', message: 'Check attribution, provenance, uncertainty, chronology and corrections; source coverage is not proof of equivalence. Keep originals separate if a safe merge is unsupported.' });
     for (const source of sources) {
-        if (/\b(?:plans? to|will meet|agreed to|intend(?:s)? to)\b/i.test(source.text)) {
-            warnings.push({ kind: 'legacy-intent', sourceId: source.id, message: 'Legacy intent/commitment remains represented; this flag does not authorize deletion.' });
+        const intent = LEGACY_INTENT.exec(source.text);
+        if (intent) {
+            warnings.push({
+                kind: 'legacy-intent',
+                sourceId: source.id,
+                phrase: intent[0],
+                message: `This line records a plan or commitment ("${intent[0]}"). Check the new text still states it as unresolved, not as something that happened. This flag never authorizes deletion.`,
+            });
         }
     }
     return warnings;
@@ -170,7 +202,8 @@ export function validateLedgerProposal(review, proposal, decisions = { removals:
         if (structure) return fail(`Invalid ledger record: ${structure}.`);
         if (record.text.trim() === '(no entries yet)') return fail('An empty-ledger placeholder cannot represent source coverage. Use explicit removals instead.');
         if (!exact && record.text.length > LEDGER_ITEM_LIMITS.fact) return fail(`Ledger record exceeds the ${LEDGER_ITEM_LIMITS.fact}-character bound.`);
-        for (const warning of ledgerDetailWarnings(sources, record.text)) warnings.push({ recordId: record.id, ...warning });
+        // A line kept exactly as written changed nothing, so it has nothing to warn about.
+        if (!exact) for (const warning of ledgerDetailWarnings(sources, record.text)) warnings.push({ recordId: record.id, ...warning });
     }
     for (const suggestion of proposal.pruningSuggestions) {
         if (!exactKeys(suggestion, ['sourceIds', 'reason']) || !Array.isArray(suggestion.sourceIds) || !suggestion.sourceIds.length ||

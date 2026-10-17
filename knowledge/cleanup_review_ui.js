@@ -230,6 +230,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
         decisions: { removals: [] },
         controller: null,
         saving: null, // 'Apply' | 'Undo' while that write is pending
+        keptOpen: false, // the "kept as written" group stays as the user left it across re-renders
         applied: null,
         restored: false,
         confirming: false,
@@ -494,20 +495,43 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 </li>`;
         };
 
-        const recordCards = session.proposal.records.map((record, index) => {
+        const lineNo = id => (byId.get(id)?.order ?? 0) + 1;
+        const plainText = source => source.text.replace(/^\s*- /, '');
+        // Same test the validator uses: one source, text identical to its line.
+        const isKept = record => record.sourceIds.length === 1
+            && byId.has(record.sourceIds[0]) && plainText(byId.get(record.sourceIds[0])) === record.text;
+        const indexed = session.proposal.records.map((record, index) => ({ record, index }));
+        const changed = indexed.filter(({ record }) => !isKept(record));
+        const kept = indexed.filter(({ record }) => isKept(record));
+        const changedLineCount = changed.reduce((sum, { record }) => sum + record.sourceIds.length, 0);
+
+        // Live feedback: size change and warnings. Keyed by record id so a
+        // blur-time refresh lands on the right card even if grouping moved.
+        const recordFeedback = record => {
+            if (isKept(record)) return '';
             const warns = warningsFor(record.id);
             const detailWarns = warns.filter(w => w.kind === 'detail-not-retained');
             const semantic = warns.filter(w => w.kind === 'semantic-review' || w.kind === 'legacy-intent');
+            const before = record.sourceIds.reduce((sum, id) => sum + (byId.has(id) ? plainText(byId.get(id)).length : 0), 0);
+            const after = record.text.length;
+            const delta = before ? Math.round(((after - before) / before) * 100) : 0;
+            return `
+                    <p class="kt-condense-record-size">${fmt(before)} → ${fmt(after)} chars (${delta <= 0 ? `−${Math.abs(delta)}` : `+${delta}`}%)</p>
+                    ${detailWarns.length ? `<ul class="kt-condense-record-warnings">${detailWarns.map(w => `<li>⚠ detail not retained: <code>${escapeHtml(w.detail)}</code></li>`).join('')}</ul>` : ''}
+                    ${semantic.length ? `<ul class="kt-condense-record-warnings kt-condense-record-warnings--semantic">${semantic.map(w => `<li>⚠ ${escapeHtml(w.message)}</li>`).join('')}</ul>` : ''}`;
+        };
+
+        const changedCards = changed.map(({ record, index }, position) => {
+            const what = record.sourceIds.length > 1
+                ? `merges ${record.sourceIds.length} lines (${record.sourceIds.map(lineNo).join(', ')})`
+                : `${record.text.length < plainText(byId.get(record.sourceIds[0]) || { text: '' }).length ? 'shortens' : 'rewrites'} line ${lineNo(record.sourceIds[0])}`;
             return `
                 <article class="kt-condense-record" data-record="${escapeHtml(record.id)}">
-                    <h4 class="kt-condense-record-title">Record ${index + 1} <span class="kt-condense-record-coverage">— covers ${record.sourceIds.length} source${record.sourceIds.length !== 1 ? 's' : ''}</span></h4>
+                    <h4 class="kt-condense-record-title">Changed record ${position + 1} <span class="kt-condense-record-coverage">— ${escapeHtml(what)}</span></h4>
                     <label class="kt-condense-label" for="kt-condense-text-${index}">Condensed text (one line — editing keeps the source mapping)</label>
                     <textarea id="kt-condense-text-${index}" class="kt-condense-text" data-record="${escapeHtml(record.id)}" rows="2">${escapeHtml(record.text)}</textarea>
                     ${record.notes ? `<p class="kt-condense-record-notes">Merge note: ${escapeHtml(record.notes)}</p>` : ''}
-                    <div class="kt-condense-record-feedback">
-                    ${detailWarns.length ? `<ul class="kt-condense-record-warnings">${detailWarns.map(w => `<li>⚠ detail not retained: <code>${escapeHtml(w.detail)}</code></li>`).join('')}</ul>` : ''}
-                    ${semantic.length ? `<ul class="kt-condense-record-warnings kt-condense-record-warnings--semantic">${semantic.map(w => `<li>⚠ ${escapeHtml(w.message)}</li>`).join('')}</ul>` : ''}
-                    </div>
+                    <div class="kt-condense-record-feedback" data-record="${escapeHtml(record.id)}">${recordFeedback(record)}</div>
                     <details class="kt-condense-sources">
                         <summary>Originals (${record.sourceIds.length})</summary>
                         <ul class="kt-condense-source-list">${record.sourceIds.map(renderSourceRow).join('')}</ul>
@@ -517,6 +541,32 @@ function openReviewModalShell(name, { capture, eligibility }) {
                     </div>
                 </article>`;
         }).join('');
+
+        const keptCards = kept.map(({ record, index }) => {
+            const sourceId = record.sourceIds[0];
+            const removed = session.decisions.removals.some(r => r.sourceId === sourceId);
+            return `
+                <article class="kt-condense-record kt-condense-record--kept" data-record="${escapeHtml(record.id)}">
+                    <label class="kt-condense-label" for="kt-condense-text-${index}">Line ${lineNo(sourceId)} — kept as written (edit it to change it)</label>
+                    <textarea id="kt-condense-text-${index}" class="kt-condense-text" data-record="${escapeHtml(record.id)}" rows="2">${escapeHtml(record.text)}</textarea>
+                    <div class="kt-condense-record-feedback" data-record="${escapeHtml(record.id)}"></div>
+                    <div class="kt-condense-record-actions">
+                        ${removed ? '' : `<button class="mwt-btn kt-condense-remove-src" data-source="${escapeHtml(sourceId)}">Remove…</button>`}
+                    </div>
+                </article>`;
+        }).join('');
+
+        const changedTitle = changed.length
+            ? `Changed: ${fmt(changed.length)} record${changed.length !== 1 ? 's' : ''} covering ${fmt(changedLineCount)} line${changedLineCount !== 1 ? 's' : ''}`
+            : 'Changed: none — every line is kept as written';
+        const keptSummary = `Kept as written: ${fmt(kept.length)} line${kept.length !== 1 ? 's' : ''} (unchanged — open to edit or remove one)`;
+        const recordSections = `
+            <h4 class="kt-condense-section-title kt-condense-changed-title">${escapeHtml(changedTitle)}</h4>
+            ${changedCards}
+            <details class="kt-condense-kept"${session.keptOpen ? ' open' : ''}${kept.length ? '' : ' hidden'}>
+                <summary class="kt-condense-kept-summary">${escapeHtml(keptSummary)}</summary>
+                <div class="kt-condense-kept-list">${keptCards}</div>
+            </details>`;
 
         const removalList = session.decisions.removals.length ? `
             <section class="kt-condense-removals">
@@ -555,7 +605,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
             <section class="kt-condense-confirm" role="alertdialog" aria-label="Apply confirmation">
                 <h4>Apply this condensation?</h4>
                 <ul>
-                    <li>${fmt(session.review.sources.length)} ledger sources → <strong>${fmt(session.proposal.records.length)} records</strong>${model.removalCount ? `, ${model.removalCount} source${model.removalCount !== 1 ? 's' : ''} removed by you (reasons recorded)` : ''}.</li>
+                    <li>${fmt(session.review.sources.length)} ledger sources → <strong>${fmt(session.proposal.records.length)} records</strong> (${fmt(changed.length)} changed, ${fmt(kept.length)} kept as written)${model.removalCount ? `, ${model.removalCount} source${model.removalCount !== 1 ? 's' : ''} removed by you (reasons recorded)` : ''}.</li>
                     <li>Ledger ${fmt(model.originalChars)} → ${fmt(model.proposedChars)} chars · whole entry ${fmt(model.wholeOriginalChars)} → ${fmt(model.wholeProposedChars)} chars (token counts are estimates).</li>
                     <li>The exact original is saved to cleanup recovery <strong>before</strong> the entry is touched; restore is span-aware and preserves unrelated edits.</li>
                     <li>Every non-ledger byte of the entry stays identical.</li>
@@ -570,18 +620,18 @@ function openReviewModalShell(name, { capture, eligibility }) {
 
         const reviewHtml = `
             <div class="kt-condense-summary">
-                <div class="kt-condense-counts"><strong>${fmt(session.review.sources.length)} sources → ${fmt(session.proposal.records.length)} records</strong>${model.removalCount ? ` (${fmt(model.removalCount)} removed by you)` : ''}</div>
+                <div class="kt-condense-counts"><strong>${fmt(session.review.sources.length)} sources → ${fmt(session.proposal.records.length)} records</strong> · ${fmt(changed.length)} changed, ${fmt(kept.length)} kept as written${model.removalCount ? ` (${fmt(model.removalCount)} removed by you)` : ''}</div>
                 <div class="kt-condense-sizes">
                     Ledger ${fmt(model.originalChars)} → ${fmt(model.proposedChars)} chars (~${fmt(model.originalTokens)} → ~${fmt(model.proposedTokens)} tokens est.) · whole entry ${fmt(model.wholeOriginalChars)} → ${fmt(model.wholeProposedChars)} chars
                     <span class="kt-condense-est-note">token counts are estimates, not measurements</span>
                 </div>
-                ${model.warnings.length ? `<div class="kt-condense-summary-warnings">⚠ ${fmt(model.warnings.length)} advisory warning${model.warnings.length !== 1 ? 's' : ''} — see the records below</div>` : ''}
+                ${model.warnings.length ? `<div class="kt-condense-summary-warnings">⚠ ${fmt(model.warnings.length)} advisory warning${model.warnings.length !== 1 ? 's' : ''} — see the changed records below</div>` : ''}
                 ${model.valid && !model.changed ? '<div class="kt-condense-summary-warnings">The current decisions reproduce the original ledger exactly — there is nothing to apply.</div>' : ''}
                 ${!model.valid ? `<div class="kt-condense-summary-warnings kt-condense-summary-warnings--error">The current draft does not validate: ${escapeHtml(model.patch.reason || 'unknown reason')}</div>` : ''}
             </div>
             ${session.proposal.notes ? `<p class="kt-condense-model-notes">Model notes: ${escapeHtml(session.proposal.notes)}</p>` : ''}
             ${diffBlock}
-            <div class="kt-condense-records">${recordCards}</div>
+            <div class="kt-condense-records">${recordSections}</div>
             ${removalList}
             ${suggestions}
             ${confirmBlock}
@@ -600,10 +650,18 @@ function openReviewModalShell(name, { capture, eligibility }) {
             // keyboard or pointer target. Refresh only non-interactive feedback.
             const template = document.createElement('template');
             template.innerHTML = reviewHtml;
-            for (const selector of ['.kt-condense-summary', '.kt-condense-diff-body', '.kt-condense-record-feedback']) {
-                const updates = template.content.querySelectorAll(selector);
-                content().querySelectorAll(selector).forEach((node, i) => { node.innerHTML = updates[i].innerHTML; });
+            for (const selector of ['.kt-condense-summary', '.kt-condense-diff-body', '.kt-condense-changed-title', '.kt-condense-kept-summary']) {
+                const update = template.content.querySelector(selector);
+                const node = content().querySelector(selector);
+                if (update && node) node.innerHTML = update.innerHTML;
             }
+            // Per-record feedback by record id: an edit can move a record
+            // between the changed and kept groups in the fresh markup, so a
+            // positional match would paste one card's warnings onto another.
+            content().querySelectorAll('.kt-condense-record-feedback').forEach(node => {
+                const update = template.content.querySelector(`.kt-condense-record-feedback${attrSel('data-record', node.dataset.record)}`);
+                node.innerHTML = update ? update.innerHTML : '';
+            });
             content().querySelector('.kt-condense-confirm')?.remove();
             let applyBtn = content().querySelector('.kt-condense-apply');
             if (!applyBtn) {
@@ -622,6 +680,10 @@ function openReviewModalShell(name, { capture, eligibility }) {
         wireReviewEvents();
         if (focusSelector) {
             const target = content().querySelector(focusSelector);
+            // A focus target inside the collapsed kept group (e.g. after
+            // "Keep originals") opens it, so focus never lands on a hidden control.
+            const collapsed = target?.closest('details.kt-condense-kept:not([open])');
+            if (collapsed) { collapsed.open = true; session.keptOpen = true; }
             target?.focus();
             if (target?.setSelectionRange && typeof target.value === 'string') {
                 try { target.setSelectionRange(target.value.length, target.value.length); } catch { /* non-text inputs */ }
@@ -737,8 +799,13 @@ function openReviewModalShell(name, { capture, eligibility }) {
         content().querySelectorAll('.kt-condense-remove-src').forEach(btn => {
             btn.addEventListener('click', () => {
                 const sourceId = btn.dataset.source;
-                openRemovalBox(btn.closest('.kt-condense-source'), [sourceId], '', 'Remove source', btn);
+                // Changed cards list sources; a kept line's card is its own anchor.
+                openRemovalBox(btn.closest('.kt-condense-source') || btn.closest('.kt-condense-record'), [sourceId], '', 'Remove source', btn);
             });
+        });
+
+        content().querySelector('.kt-condense-kept')?.addEventListener('toggle', event => {
+            session.keptOpen = event.currentTarget.open;
         });
 
         content().querySelectorAll('.kt-condense-suggest-remove').forEach(btn => {
