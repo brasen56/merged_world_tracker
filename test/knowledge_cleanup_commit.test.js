@@ -20,6 +20,7 @@ import { resetCoreStubs } from './stubs/core.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 import { state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
+import * as knowledgeScope from '../knowledge/scope.js';
 import { _setCacheForTests, _clearCacheForTests, isStoreEntry } from '../knowledge/store.js';
 import { getCleanupRecord, updateCleanupRecord, readCleanupRecoveryContainer } from '../knowledge/cleanup_recovery.js';
 import {
@@ -74,6 +75,8 @@ function makeFakeWorldInfo() {
     const fake = {
         books,
         failSaveAt: null,          // saveWorldInfo throws on this call number
+        failSavesFrom: null,
+        afterSave: null,
         tamperAfterSave: null,     // after this save count, reads see a concurrent edit
         get saveCalls() { return saveCalls; },
         async loadWorldInfo(name) {
@@ -85,9 +88,10 @@ function makeFakeWorldInfo() {
         },
         async saveWorldInfo(name, wi, immediately = false) {
             saveCalls++;
-            if (fake.failSaveAt === saveCalls) throw new Error('disk unavailable');
+            if (fake.failSaveAt === saveCalls || (fake.failSavesFrom !== null && saveCalls >= fake.failSavesFrom)) throw new Error('disk unavailable');
             if (!immediately) return;
             books.set(name, structuredClone(wi));
+            fake.afterSave?.(saveCalls, name);
         },
         async createNewWorldInfo(name) { books.set(name, { entries: {} }); return true; },
     };
@@ -284,6 +288,51 @@ describe('applyCleanup', () => {
 
 // ─── Restore ─────────────────────────────────────────────────────────────────
 
+describe('cleanup persistence race guards', () => {
+    test.each([
+        ['scope-changed', () => bumpEpoch()],
+        ['book-changed', () => vi.spyOn(knowledgeScope, 'getLorebookName').mockReturnValue('Another Knowledge Book')],
+        ['identity-mismatch', () => { entry7().comment = 'Someone Else'; }],
+        ['entity-changed', () => {
+            _setCacheForTests(BOOK, { registry: { [NPC]: { uid: 7, entityId: 'ent-new', keywords: [NPC] } } });
+        }],
+        ['destination-ambiguous', () => {
+            wiFake.books.get(BOOK).entries[99] = { ...entry7(), uid: 99 };
+        }],
+    ])('Apply refuses %s introduced during original persistence', async (code, change) => {
+        const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
+        wiFake.afterSave = (count) => { if (count === 1) change(); };
+        const result = await apply({ capture });
+        expect(result).toMatchObject({ ok: false, code });
+        expect(entry7().content).toBe(ORIGINAL);
+        expect((await getCleanupRecord('act-1', BOOK)).status).toBe('failed');
+    });
+
+    test('persistent status-save failure returns uncertain and pending reconciles after recovery', async () => {
+        const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
+        wiFake.failSavesFrom = 4;
+        await expect(apply({ capture })).resolves.toMatchObject({ ok: false, code: 'outcome-uncertain' });
+        expect(entry7().content).toBe(REPLACEMENT);
+        expect((await getCleanupRecord('act-1')).status).toBe('application-pending');
+        await expect(reconcileCleanupOutcome('act-1')).resolves.toMatchObject({ status: 'outcome-uncertain' });
+        wiFake.failSavesFrom = null;
+        await expect(reconcileCleanupOutcome('act-1')).resolves.toEqual({ status: 'applied' });
+        await expect(apply({ capture })).resolves.toMatchObject({ code: 'duplicate' });
+    });
+
+    test.each([
+        ['replacement', REPLACEMENT, 'applied'],
+        ['original', ORIGINAL, 'failed'],
+        ['other edit', 'new manual content', 'outcome-uncertain'],
+    ])('pending record reconciles against %s bytes after reload', async (_label, content, status) => {
+        const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
+        await apply({ capture });
+        await updateCleanupRecord('act-1', { status: 'application-pending' });
+        entry7().content = content;
+        await expect(reconcileCleanupOutcome('act-1')).resolves.toMatchObject({ status });
+    });
+});
+
 describe('restoreCleanup', () => {
     async function appliedCapture() {
         const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
@@ -291,6 +340,34 @@ describe('restoreCleanup', () => {
         expect(result.ok).toBe(true);
         return capture;
     }
+
+    test('preserves an outside-span edit made while saving the safeguard and safeguards the latest version', async () => {
+        await appliedCapture();
+        const nextSave = wiFake.saveCalls + 1;
+        wiFake.afterSave = (count) => {
+            if (count === nextSave) entry7().content = entry7().content.replace('Tone: brisk', 'Tone: NEW MANUAL EDIT');
+        };
+        const result = await restoreCleanup({ actionId: 'act-1', spanOf: ledgerSpan });
+        expect(result.ok).toBe(true);
+        expect(entry7().content).toBe(ORIGINAL.replace('Tone: brisk', 'Tone: NEW MANUAL EDIT'));
+        const read = await readCleanupRecoveryContainer(BOOK);
+        const safeguards = Object.values(read.records).filter(r => r.actionType === 'restore-safeguard');
+        expect(safeguards.some(r => r.originalContent === REPLACEMENT.replace('Tone: brisk', 'Tone: NEW MANUAL EDIT'))).toBe(true);
+    });
+
+    test.each(['span-conflict', 'scope-changed', 'destination-ambiguous'])('Restore refuses %s introduced during safeguard persistence', async (code) => {
+        await appliedCapture();
+        const nextSave = wiFake.saveCalls + 1;
+        wiFake.afterSave = (count) => {
+            if (count !== nextSave) return;
+            if (code === 'scope-changed') bumpEpoch();
+            else if (code === 'destination-ambiguous') wiFake.books.get(BOOK).entries[99] = { ...entry7(), uid: 99 };
+            else entry7().content += '\n- new ledger edit';
+        };
+        await expect(restoreCleanup({ actionId: 'act-1', spanOf: ledgerSpan })).resolves.toMatchObject({ ok: false, code });
+        expect(entry7().content).toBe(code === 'span-conflict' ? `${REPLACEMENT}\n- new ledger edit` : REPLACEMENT);
+        expect((await getCleanupRecord('act-1')).status).toBe('applied');
+    });
 
     test('restores only the cleanup-owned span; newer unrelated edits survive', async () => {
         await appliedCapture();

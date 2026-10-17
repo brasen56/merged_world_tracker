@@ -153,22 +153,6 @@ function parseRawContainer(rawContent) {
     }
 }
 
-/**
- * Records already on disk that the caller is not rewriting AND that fail
- * current shape validation — preserved verbatim so a module write can never
- * silently drop them.
- */
-function preservedUnvalidated(existingRaw, validated) {
-    const raw = existingRaw?.records;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-    const keep = {};
-    for (const [actionId, record] of Object.entries(raw)) {
-        if (validated[actionId]) continue;
-        if (!validateCleanupRecordShape({ ...record, actionId }).ok) keep[actionId] = record;
-    }
-    return keep;
-}
-
 // ─── Container I/O (all persist-and-verify, all under the store lock) ───────
 
 async function loadBook(wiScript, bookName) {
@@ -220,6 +204,11 @@ export async function readCleanupRecoveryContainer(bookName = getLorebookName())
  *   container is byte-identical to what is already stored (default true)
  */
 export async function writeCleanupRecoveryContainer(bookName, records, { skipUnchanged = true } = {}) {
+    return withStoreLock(() => writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUnchanged }));
+}
+
+// Caller must hold withStoreLock across its complete read/modify/write transaction.
+async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUnchanged = true, deleted = [] } = {}) {
     if (!bookName) throw new Error('cleanup recovery: no Knowledge book resolved');
     if (!state.wiScript) throw new Error('cleanup recovery: world-info.js not loaded');
     const validated = {};
@@ -229,69 +218,68 @@ export async function writeCleanupRecoveryContainer(bookName, records, { skipUnc
         validated[actionId] = record;
     }
 
-    return withStoreLock(async () => {
-        const wi = await loadBook(state.wiScript, bookName);
-        let entry = findContainerEntry(wi);
+    const wi = await loadBook(state.wiScript, bookName);
+    let entry = findContainerEntry(wi);
 
-        // Never overwrite a container this build cannot understand (the
-        // embedded quarantine container's rule: no downgrade, no rewrite).
-        const existingRaw = parseRawContainer(entry?.content);
-        if (existingRaw !== null && Number.isInteger(existingRaw.version)
-            && existingRaw.version > CLEANUP_RECOVERY_VERSION) {
-            throw new Error(`cleanup recovery: container version ${existingRaw.version} is newer than this build supports (${CLEANUP_RECOVERY_VERSION}) — refusing to overwrite. Upgrade MWT.`);
-        }
-        // Preserve records already on disk that this build cannot validate:
-        // they are reported by the listing, never silently dropped by a write.
-        const merged = { ...preservedUnvalidated(existingRaw, validated), ...validated };
-        const content = JSON.stringify({ version: CLEANUP_RECOVERY_VERSION, records: merged });
+    // Never overwrite a container this build cannot understand (the
+    // embedded quarantine container's rule: no downgrade, no rewrite).
+    const existingRaw = parseRawContainer(entry?.content);
+    if (existingRaw !== null && Number.isInteger(existingRaw.version)
+        && existingRaw.version > CLEANUP_RECOVERY_VERSION) {
+        throw new Error(`cleanup recovery: container version ${existingRaw.version} is newer than this build supports (${CLEANUP_RECOVERY_VERSION}) — refusing to overwrite. Upgrade MWT.`);
+    }
+    // Missing records are not deletions. Preserve all existing records, including
+    // unreadable ones; only an explicit deletion removes a record.
+    const merged = { ...existingRaw?.records, ...validated };
+    for (const actionId of deleted) delete merged[actionId];
+    const content = JSON.stringify({ version: CLEANUP_RECOVERY_VERSION, records: merged });
 
-        if (entry && skipUnchanged && entry.content === content) return { unchanged: true };
+    if (entry && skipUnchanged && entry.content === content) return { unchanged: true };
 
-        if (!entry) {
-            const uids = Object.keys(wi.entries).map(Number).filter(n => Number.isInteger(n));
-            const newUid = uids.length > 0 ? Math.max(...uids) + 1 : 0;
-            entry = {
-                uid: newUid,
-                // Structurally non-injecting, mirroring the [MWT:store] entry:
-                // no keywords, disabled, and the only two flags that bypass
-                // keyword matching (constant, vectorized) hard-false.
-                key: [], keysecondary: [], comment: CLEANUP_RECOVERY_COMMENT, content,
-                enabled: false, disable: true, constant: false, selective: false,
-                order: 100, position: 0, addMemo: true,
-                group: '', groupOverride: false, groupWeight: 100,
-                sticky: null, cooldown: null, delay: null,
-                probability: 100, useProbability: true, depth: 4,
-                selectiveLogic: 0, excludeRecursion: true, preventRecursion: true,
-                delayUntilRecursion: false, scanDepth: null, caseSensitive: null,
-                matchWholeWords: null, useGroupScoring: null, automationId: '',
-                role: null, vectorized: false, displayIndex: newUid,
-            };
-            wi.entries[newUid] = entry;
-        } else {
-            entry.content = content;
-            // Re-assert the non-injecting flags on EVERY write — a user edit
-            // or a lossy host import may have flipped them live.
-            entry.key = [];
-            entry.keysecondary = [];
-            entry.constant = false;
-            entry.vectorized = false;
-            entry.disable = true;
-            entry.enabled = false;
-            entry.comment = CLEANUP_RECOVERY_COMMENT;
-        }
-        applyStoreToWorldInfo(bookName, wi);
-        await saveBookNow(state.wiScript, bookName, wi);
-        markStoreClean(bookName);
+    if (!entry) {
+        const uids = Object.keys(wi.entries).map(Number).filter(n => Number.isInteger(n));
+        const newUid = uids.length > 0 ? Math.max(...uids) + 1 : 0;
+        entry = {
+            uid: newUid,
+            // Structurally non-injecting, mirroring the [MWT:store] entry:
+            // no keywords, disabled, and the only two flags that bypass
+            // keyword matching (constant, vectorized) hard-false.
+            key: [], keysecondary: [], comment: CLEANUP_RECOVERY_COMMENT, content,
+            enabled: false, disable: true, constant: false, selective: false,
+            order: 100, position: 0, addMemo: true,
+            group: '', groupOverride: false, groupWeight: 100,
+            sticky: null, cooldown: null, delay: null,
+            probability: 100, useProbability: true, depth: 4,
+            selectiveLogic: 0, excludeRecursion: true, preventRecursion: true,
+            delayUntilRecursion: false, scanDepth: null, caseSensitive: null,
+            matchWholeWords: null, useGroupScoring: null, automationId: '',
+            role: null, vectorized: false, displayIndex: newUid,
+        };
+        wi.entries[newUid] = entry;
+    } else {
+        entry.content = content;
+        // Re-assert the non-injecting flags on EVERY write — a user edit
+        // or a lossy host import may have flipped them live.
+        entry.key = [];
+        entry.keysecondary = [];
+        entry.constant = false;
+        entry.vectorized = false;
+        entry.disable = true;
+        entry.enabled = false;
+        entry.comment = CLEANUP_RECOVERY_COMMENT;
+    }
+    applyStoreToWorldInfo(bookName, wi);
+    await saveBookNow(state.wiScript, bookName, wi);
+    markStoreClean(bookName);
 
-        // VERIFY: reload and byte-compare. An awaited save that cannot be
-        // read back has NOT satisfied the persistence contract.
-        const reloaded = await state.wiScript.loadWorldInfo(bookName);
-        const verified = findContainerEntry(reloaded || {});
-        if (!verified || verified.content !== content) {
-            throw new Error('cleanup recovery: persistence could not be verified (reload mismatch)');
-        }
-        return { unchanged: false };
-    });
+    // VERIFY: reload and byte-compare. An awaited save that cannot be
+    // read back has NOT satisfied the persistence contract.
+    const reloaded = await state.wiScript.loadWorldInfo(bookName);
+    const verified = findContainerEntry(reloaded || {});
+    if (!verified || verified.content !== content) {
+        throw new Error('cleanup recovery: persistence could not be verified (reload mismatch)');
+    }
+    return { unchanged: false };
 }
 
 // ─── Record lifecycle ────────────────────────────────────────────────────────
@@ -307,11 +295,13 @@ export async function writeCleanupRecoveryContainer(bookName, records, { skipUnc
 export async function saveCleanupOriginal(record) {
     const bookName = record?.bookName || getLorebookName();
     if (!bookName) throw new Error('cleanup recovery: no Knowledge book resolved');
-    const read = await readCleanupRecoveryContainer(bookName);
-    if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing to save`);
-    const records = { ...read.records, [record.actionId]: { ...record, bookName } };
-    await writeCleanupRecoveryContainer(bookName, records);
-    return { actionId: record.actionId };
+    return withStoreLock(async () => {
+        const read = await readCleanupRecoveryContainer(bookName);
+        if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing to save`);
+        const records = { ...read.records, [record.actionId]: { ...record, bookName } };
+        await writeCleanupRecoveryContainerUnlocked(bookName, records);
+        return { actionId: record.actionId };
+    });
 }
 
 /**
@@ -319,22 +309,23 @@ export async function saveCleanupOriginal(record) {
  * @param {string} actionId
  * @param {object} patch — merged over the stored record
  */
-export async function updateCleanupRecord(actionId, patch) {
-    const bookName = getLorebookName();
-    const read = await readCleanupRecoveryContainer(bookName);
-    if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing update`);
-    const existing = read.records[actionId];
-    if (!existing) throw new Error(`cleanup recovery: no record "${actionId}" to update`);
-    const next = { ...existing, ...patch };
-    const check = validateCleanupRecordShape(next);
-    if (!check.ok) throw new Error(`cleanup recovery: patch would invalidate "${actionId}" — ${check.reason}`);
-    await writeCleanupRecoveryContainer(bookName, { ...read.records, [actionId]: next });
-    return next;
+export async function updateCleanupRecord(actionId, patch, bookName = getLorebookName()) {
+    return withStoreLock(async () => {
+        const read = await readCleanupRecoveryContainer(bookName);
+        if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing update`);
+        const existing = read.records[actionId];
+        if (!existing) throw new Error(`cleanup recovery: no record "${actionId}" to update`);
+        const next = { ...existing, ...patch };
+        const check = validateCleanupRecordShape(next);
+        if (!check.ok) throw new Error(`cleanup recovery: patch would invalidate "${actionId}" — ${check.reason}`);
+        await writeCleanupRecoveryContainerUnlocked(bookName, { ...read.records, [actionId]: next });
+        return next;
+    });
 }
 
 /** Fetch one record (or null). */
-export async function getCleanupRecord(actionId) {
-    const read = await readCleanupRecoveryContainer();
+export async function getCleanupRecord(actionId, bookName = getLorebookName()) {
+    const read = await readCleanupRecoveryContainer(bookName);
     if (!read.ok) return null;
     return read.records[actionId] ?? null;
 }
@@ -378,19 +369,21 @@ export async function cleanupRecoveryUsage() {
  */
 export async function deleteCleanupRecords(actionIds) {
     const bookName = getLorebookName();
-    const read = await readCleanupRecoveryContainer(bookName);
-    if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing to delete`);
-    const wanted = new Set(Array.isArray(actionIds) ? actionIds : [actionIds]);
-    const records = {};
-    const deleted = [];
-    const missing = [];
-    for (const [actionId, record] of Object.entries(read.records)) {
-        if (wanted.has(actionId)) deleted.push(actionId);
-        else records[actionId] = record;
-    }
-    for (const actionId of wanted) if (!deleted.includes(actionId)) missing.push(actionId);
-    if (deleted.length > 0) await writeCleanupRecoveryContainer(bookName, records);
-    return { deleted, missing };
+    return withStoreLock(async () => {
+        const read = await readCleanupRecoveryContainer(bookName);
+        if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing to delete`);
+        const wanted = new Set(Array.isArray(actionIds) ? actionIds : [actionIds]);
+        const records = {};
+        const deleted = [];
+        const missing = [];
+        for (const [actionId, record] of Object.entries(read.records)) {
+            if (wanted.has(actionId)) deleted.push(actionId);
+            else records[actionId] = record;
+        }
+        for (const actionId of wanted) if (!deleted.includes(actionId)) missing.push(actionId);
+        if (deleted.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, records, { deleted });
+        return { deleted, missing };
+    });
 }
 
 // ─── Export / import (D2/D3: a labeled, versioned, validated round trip) ─────
@@ -436,23 +429,25 @@ export async function importCleanupRecovery(payload) {
         throw new Error(`cleanup recovery import: unsupported version ${payload.version} (expected ${CLEANUP_RECOVERY_VERSION})`);
     }
     const bookName = getLorebookName();
-    const read = await readCleanupRecoveryContainer(bookName);
-    if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing import`);
-    const records = { ...read.records };
-    const added = [];
-    const kept = [];
-    const rejected = [];
-    for (const [actionId, record] of Object.entries(payload.records || {})) {
-        const candidate = { ...record, actionId, bookName };
-        const check = validateCleanupRecordShape(candidate);
-        if (!check.ok) { rejected.push(`${actionId} (${check.reason})`); continue; }
-        if (records[actionId]) kept.push(actionId);
-        else added.push(actionId);
-        // Current-wins: an existing record is never overwritten by an import.
-        if (!records[actionId]) records[actionId] = candidate;
-    }
-    if (added.length > 0) await writeCleanupRecoveryContainer(bookName, records);
-    return { added, kept, rejected };
+    return withStoreLock(async () => {
+        const read = await readCleanupRecoveryContainer(bookName);
+        if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing import`);
+        const records = { ...read.records };
+        const added = [];
+        const kept = [];
+        const rejected = [];
+        for (const [actionId, record] of Object.entries(payload.records || {})) {
+            const candidate = { ...record, actionId, bookName };
+            const check = validateCleanupRecordShape(candidate);
+            if (!check.ok) { rejected.push(`${actionId} (${check.reason})`); continue; }
+            if (records[actionId]) kept.push(actionId);
+            else added.push(actionId);
+            // Current-wins: an existing record is never overwritten by an import.
+            if (!records[actionId]) records[actionId] = candidate;
+        }
+        if (added.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, records);
+        return { added, kept, rejected };
+    });
 }
 
 /** The scope key stamped onto records captured in the current chat scope. */

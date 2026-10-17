@@ -179,11 +179,11 @@ export async function writeStateTracker(uid, name, content) {
     } catch (err) { return { success: false, error: err.message }; }
 }
 
-export async function writeToLorebook(name, content, keywords, existingUid) {
+export async function writeToLorebook(name, content, keywords, existingUid, { bookName } = {}) {
     if (!state.wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
     // Resolve the book ONCE. Calling the resolver per save could target two
     // different books within a single write if the scope changed mid-flight.
-    const book = getLorebookName();
+    const book = bookName ?? getLorebookName();
     if (!book) return { success: false, error: 'Knowledge lorebook name collision — no book was written.' };
     try {
         let wi = await state.wiScript.loadWorldInfo(book);
@@ -278,7 +278,7 @@ export async function writeToLorebook(name, content, keywords, existingUid) {
         }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
-            pushHistory(existingUid, previousContent);
+            pushHistory(existingUid, previousContent, book);
             entries[existingUid].content = content;
             entries[existingUid].key = keywords;
             entries[existingUid].comment = name;

@@ -102,6 +102,35 @@ afterEach(() => {
 // ─── Container creation and structure ────────────────────────────────────────
 
 describe('cleanup recovery container', () => {
+    test('parallel original saves preserve every record', async () => {
+        await Promise.all(['parallel-a', 'parallel-b', 'parallel-c'].map(id => saveCleanupOriginal(makeRecord(id))));
+        const read = await readCleanupRecoveryContainer(BOOK);
+        expect(Object.keys(read.records).sort()).toEqual(['parallel-a', 'parallel-b', 'parallel-c']);
+    });
+
+    test('parallel patches to the same record merge without losing fields', async () => {
+        await saveCleanupOriginal(makeRecord('act-1'));
+        await Promise.all([
+            updateCleanupRecord('act-1', { status: 'application-pending' }),
+            updateCleanupRecord('act-1', { failedReason: 'diagnostic' }),
+        ]);
+        expect(await getCleanupRecord('act-1')).toMatchObject({ status: 'application-pending', failedReason: 'diagnostic' });
+    });
+
+    test('concurrent save, import, patch, and explicit deletion preserve unrelated records', async () => {
+        await saveCleanupOriginal(makeRecord('keep'));
+        await saveCleanupOriginal(makeRecord('delete'));
+        await Promise.all([
+            saveCleanupOriginal(makeRecord('new')),
+            importCleanupRecovery({ type: CLEANUP_RECOVERY_EXPORT_TYPE, version: 1, records: { imported: makeRecord('imported') } }),
+            updateCleanupRecord('keep', { status: 'application-pending' }),
+            deleteCleanupRecords(['delete']),
+        ]);
+        const read = await readCleanupRecoveryContainer(BOOK);
+        expect(Object.keys(read.records).sort()).toEqual(['imported', 'keep', 'new']);
+        expect(read.records.keep.status).toBe('application-pending');
+    });
+
     test('first save creates the sentinel entry, structurally non-injecting', async () => {
         await saveCleanupOriginal(makeRecord('act-1'));
 

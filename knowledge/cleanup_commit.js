@@ -68,9 +68,8 @@ function labelMatches(entry, name) {
     return normalizeRegistryName(comment) === normalizeRegistryName(name);
 }
 
-async function loadBookEntries() {
+async function loadBookEntries(bookName = getLorebookName()) {
     if (!state.wiScript) throw new Error('world-info.js not loaded');
-    const bookName = getLorebookName();
     if (!bookName) throw new Error('Knowledge lorebook name collision — no book resolved');
     const wi = await state.wiScript.loadWorldInfo(bookName);
     return { bookName, entries: wi?.entries || {} };
@@ -131,6 +130,35 @@ function refusal(code, message, extra = {}) {
     return { ok: false, code, error: message, ...extra };
 }
 
+// Synchronous checks are repeated after each asynchronous destination reload.
+function checkCapturedDestination(capture, entries) {
+    const scope = scopeStillCurrent(capture.scopeToken);
+    if (!scope.ok || currentCleanupScopeKey() !== capture.scopeKey) return refusal('scope-changed', 'Cleanup refused: the chat scope changed during persistence.');
+    if (getLorebookName() !== capture.bookName) return refusal('book-changed', 'Cleanup refused: the resolved Knowledge book changed during persistence.');
+    try {
+        assertHydrated(capture.bookName, `write cleanup for "${capture.name}"`);
+    } catch (err) {
+        return refusal('store-not-hydrated', err.message);
+    }
+    const entry = entries[capture.uid];
+    if (!entry) return refusal('destination-missing', 'Cleanup destination no longer exists.');
+    if (!labelMatches(entry, capture.name)) return refusal('identity-mismatch', 'Cleanup destination identity changed.');
+    if (getEntityId(capture.name) !== capture.entityId) return refusal('entity-changed', 'Cleanup entity identity changed.');
+    const identity = findEntryUidByNpcIdentity(entries, capture.name);
+    if (!identity || identity.uid !== capture.uid || identity.duplicates > 1) return refusal('destination-ambiguous', 'Cleanup destination is no longer unique.');
+    return null;
+}
+
+async function tryUpdateCleanupRecord(actionId, patch, bookName) {
+    try {
+        await updateCleanupRecord(actionId, patch, bookName);
+        return true;
+    } catch (err) {
+        console.warn('[MWT:Knowledge] cleanup status could not be persisted:', err?.message || err);
+        return false;
+    }
+}
+
 /**
  * Apply a reviewed cleanup replacement under full re-verification.
  *
@@ -186,10 +214,10 @@ export async function applyCleanup({ capture, replacement, actionId, actionType 
     //    the source check would otherwise misread as staleness. An uncertain
     //    prior attempt is reconciled by reloading first — a retry must not
     //    duplicate the operation.
-    const prior = await getCleanupRecord(actionId);
+    const prior = await getCleanupRecord(actionId, bookName);
     if (prior) {
-        if (prior.status === 'outcome-uncertain') {
-            const reconciled = await reconcileCleanupOutcome(actionId, { replacement });
+        if (['outcome-uncertain', 'application-pending'].includes(prior.status)) {
+            const reconciled = await reconcileCleanupOutcome(actionId, { replacement, bookName });
             if (reconciled.status === 'applied') {
                 return refusal('duplicate', 'Cleanup was already applied (a previous attempt reported an uncertain outcome; re-verification confirmed it landed).');
             }
@@ -240,7 +268,7 @@ export async function applyCleanup({ capture, replacement, actionId, actionType 
     };
     try {
         await saveCleanupOriginal(record);
-        await updateCleanupRecord(actionId, { status: 'application-pending' });
+        await updateCleanupRecord(actionId, { status: 'application-pending' }, bookName);
     } catch (err) {
         return refusal('recovery-persist-failed', `Cleanup refused: the recovery original could not be saved and verified — nothing was changed. (${err.message})`);
     }
@@ -249,52 +277,57 @@ export async function applyCleanup({ capture, replacement, actionId, actionType 
     //    persistence: the source must still be byte-identical right before
     //    the write. This is the explicit guard→write interval (see header).
     try {
-        const recheck = await loadBookEntries();
+        const recheck = await loadBookEntries(bookName);
+        const guard = checkCapturedDestination(capture, recheck.entries);
+        if (guard) {
+            await tryUpdateCleanupRecord(actionId, { status: 'failed', failedReason: guard.code }, bookName);
+            return guard;
+        }
         const reEntry = recheck.entries[uid];
         if (!reEntry || !labelMatches(reEntry, name) || (reEntry.content || '') !== capture.originalContent) {
-            await updateCleanupRecord(actionId, { status: 'failed', failedReason: 'source-changed-during-persist' });
+            await tryUpdateCleanupRecord(actionId, { status: 'failed', failedReason: 'source-changed-during-persist' }, bookName);
             return refusal('source-changed-during-persist', 'Cleanup refused: the entry changed while the recovery original was being saved.');
         }
     } catch (err) {
-        await updateCleanupRecord(actionId, { status: 'failed', failedReason: `recheck-failed: ${err.message}` });
+        await tryUpdateCleanupRecord(actionId, { status: 'failed', failedReason: `recheck-failed: ${err.message}` }, bookName);
         return refusal('recheck-failed', err.message);
     }
 
     // 8. Write through the ordinary guarded writer: latest book, identity
     //    checks, store folded, awaited save. Unrelated entries and the
     //    embedded store are preserved (no generation-time snapshot).
-    const write = await writeToLorebook(name, replacement, capture.keywords, uid);
+    const write = await writeToLorebook(name, replacement, capture.keywords, uid, { bookName });
     if (!write.success) {
-        await updateCleanupRecord(actionId, { status: 'failed', failedReason: write.error });
+        await tryUpdateCleanupRecord(actionId, { status: 'failed', failedReason: write.error }, bookName);
         return refusal('target-save-failed', `Cleanup apply failed while saving: ${write.error}. The recovery original is preserved.`);
     }
 
     // 9. Post-save verification: reload and compare. Ambiguity is reconciled
     //    by reloading (once more) — never by assuming success.
     try {
-        const verified = await readEntryContentStrict(uid, name);
+        const verified = await readEntryContentStrict(uid, name, bookName);
         if (verified === replacement) {
-            await updateCleanupRecord(actionId, { status: 'applied', appliedAt: new Date().toISOString() });
+            await updateCleanupRecord(actionId, { status: 'applied', appliedAt: new Date().toISOString() }, bookName);
             return { ok: true, actionId, uid: write.uid ?? uid };
         }
-        const retry = await readEntryContentStrict(uid, name);
+        const retry = await readEntryContentStrict(uid, name, bookName);
         if (retry === replacement) {
-            await updateCleanupRecord(actionId, { status: 'applied', appliedAt: new Date().toISOString() });
+            await updateCleanupRecord(actionId, { status: 'applied', appliedAt: new Date().toISOString() }, bookName);
             return { ok: true, actionId, uid: write.uid ?? uid };
         }
         await updateCleanupRecord(actionId, {
             status: 'outcome-uncertain',
             failedReason: `post-save verification saw unexpected content (fingerprint ${fingerprintContent(retry)})`,
-        });
+        }, bookName);
         return refusal('outcome-uncertain', 'Cleanup outcome uncertain: the save reported success but the reloaded entry does not match the replacement. The recovery original is preserved; reconcile from the recovery view.');
     } catch (err) {
-        await updateCleanupRecord(actionId, { status: 'outcome-uncertain', failedReason: `post-save verify failed: ${err.message}` });
+        await tryUpdateCleanupRecord(actionId, { status: 'outcome-uncertain', failedReason: `post-save verify failed: ${err.message}` }, bookName);
         return refusal('outcome-uncertain', `Cleanup outcome uncertain: the entry could not be re-read after saving (${err.message}). The recovery original is preserved.`);
     }
 }
 
-async function readEntryContentStrict(uid, name) {
-    const { entries } = await loadBookEntries();
+async function readEntryContentStrict(uid, name, bookName = getLorebookName()) {
+    const { entries } = await loadBookEntries(bookName);
     const entry = entries[uid];
     if (!entry) throw new Error(`entry uid ${uid} disappeared`);
     if (!labelMatches(entry, name)) throw new Error(`entry uid ${uid} is no longer labelled "${name}"`);
@@ -302,28 +335,28 @@ async function readEntryContentStrict(uid, name) {
 }
 
 /**
- * Reconcile an 'outcome-uncertain' record by reloading the entry: if the
+ * Reconcile a pending or outcome-uncertain record by reloading the entry: if the
  * replacement landed, mark applied; if the original is still there, mark
  * failed; otherwise stay uncertain and say so.
  * @returns {Promise<{status: string, detail?: string}>}
  */
-export async function reconcileCleanupOutcome(actionId, { replacement } = {}) {
-    const record = await getCleanupRecord(actionId);
+export async function reconcileCleanupOutcome(actionId, { replacement, bookName = getLorebookName() } = {}) {
+    const record = await getCleanupRecord(actionId, bookName);
     if (!record) return { status: 'unknown', detail: 'no such record' };
-    if (record.status !== 'outcome-uncertain') return { status: record.status };
+    if (!['outcome-uncertain', 'application-pending'].includes(record.status)) return { status: record.status };
     let content;
     try {
-        content = await readEntryContentStrict(record.entryUid, record.entityName);
+        content = await readEntryContentStrict(record.entryUid, record.entityName, bookName);
     } catch (err) {
         return { status: 'outcome-uncertain', detail: err.message };
     }
     const expected = typeof replacement === 'string' ? replacement : record.approvedReplacement;
     if (expected != null && content === expected) {
-        await updateCleanupRecord(actionId, { status: 'applied', appliedAt: new Date().toISOString() });
+        if (!await tryUpdateCleanupRecord(actionId, { status: 'applied', appliedAt: new Date().toISOString() }, bookName)) return { status: 'outcome-uncertain', detail: 'replacement landed but status could not be persisted' };
         return { status: 'applied' };
     }
     if (content === record.originalContent) {
-        await updateCleanupRecord(actionId, { status: 'failed', failedReason: 'reconciled: replacement never landed' });
+        if (!await tryUpdateCleanupRecord(actionId, { status: 'failed', failedReason: 'reconciled: replacement never landed' }, bookName)) return { status: 'outcome-uncertain', detail: 'status could not be persisted' };
         return { status: 'failed' };
     }
     return { status: 'outcome-uncertain', detail: 'entry holds neither the replacement nor the original — manual reconciliation needed' };
@@ -349,8 +382,10 @@ export async function reconcileCleanupOutcome(actionId, { replacement } = {}) {
  */
 export async function restoreCleanup({ actionId, spanOf }) {
     const spanOfContent = typeof spanOf === 'function' ? spanOf : wholeContentSpan;
+    const scopeToken = captureScope();
+    const bookName = getLorebookName();
 
-    const record = await getCleanupRecord(actionId);
+    const record = await getCleanupRecord(actionId, bookName);
     if (!record) return refusal('unknown-action', `No recovery record "${actionId}".`);
     if (record.status !== 'applied') {
         return refusal('not-applied', `Recovery record "${actionId}" is ${record.status} — only applied cleanups can be restored.`);
@@ -361,7 +396,6 @@ export async function restoreCleanup({ actionId, spanOf }) {
     if (scopeKeyNow !== record.scopeKey) {
         return refusal('scope-changed', `Restore refused: the current chat scope does not match the one this cleanup ran in ("${record.scopeKey}" → "${scopeKeyNow}"). Switch back to the originating chat.`);
     }
-    const bookName = getLorebookName();
     if (bookName !== record.bookName) {
         return refusal('book-changed', `Restore refused: the resolved Knowledge book changed ("${record.bookName}" → "${bookName}").`);
     }
@@ -374,11 +408,11 @@ export async function restoreCleanup({ actionId, spanOf }) {
     // Destination identity (deletion / rename / merge all refuse).
     let entries;
     try {
-        ({ entries } = await loadBookEntries());
+        ({ entries } = await loadBookEntries(bookName));
     } catch (err) {
         return refusal('load-failed', err.message);
     }
-    const entry = entries[record.entryUid];
+    let entry = entries[record.entryUid];
     const conflictPayload = { actionId, record: { ...record, originalContent: undefined }, exportable: true };
     if (!entry) {
         return refusal('destination-missing', `Restore refused: entry uid ${record.entryUid} for "${record.entityName}" no longer exists. The recovery original can be exported instead.`, { conflict: conflictPayload });
@@ -393,8 +427,8 @@ export async function restoreCleanup({ actionId, spanOf }) {
 
     // Span comparison: current vs what was applied. Equal → safe to put the
     // original span back; different → touched-field conflict, refuse.
-    const current = entry.content || '';
-    const currentSpan = spanOfContent(current);
+    let current = entry.content || '';
+    let currentSpan = spanOfContent(current);
     const originalSpan = spanOfContent(record.originalContent);
     const appliedSpan = spanOfContent(record.approvedReplacement);
     if (!currentSpan || !originalSpan || !appliedSpan) {
@@ -406,35 +440,65 @@ export async function restoreCleanup({ actionId, spanOf }) {
 
     // Safeguard: capture the pre-restore content as its own recovery record
     // BEFORE writing. Failure refuses the restore write (fail closed).
-    try {
-        await saveCleanupOriginal({
-            actionId: `${actionId}#restore-${Date.now()}`,
-            createdAt: new Date().toISOString(),
-            bookName,
-            scopeKey: record.scopeKey,
-            entityName: record.entityName,
-            entityId: record.entityId,
-            entryUid: record.entryUid,
-            actionType: 'restore-safeguard',
-            status: 'original-saved',
-            originalContent: current,
-        });
-    } catch (err) {
-        return refusal('safeguard-failed', `Restore refused: the pre-restore safeguard could not be saved and verified — nothing was changed. (${err.message})`);
+    const capture = {
+        scopeToken, scopeKey: record.scopeKey, bookName,
+        name: record.entityName, uid: record.entryUid, entityId: record.entityId,
+    };
+    let safeguarded = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            await saveCleanupOriginal({
+                actionId: `${actionId}#restore-${Date.now()}-${attempt}`,
+                createdAt: new Date().toISOString(),
+                bookName,
+                scopeKey: record.scopeKey,
+                entityName: record.entityName,
+                entityId: record.entityId,
+                entryUid: record.entryUid,
+                actionType: 'restore-safeguard',
+                status: 'original-saved',
+                originalContent: current,
+            });
+        } catch (err) {
+            return refusal('safeguard-failed', `Restore refused: the pre-restore safeguard could not be saved and verified — nothing was changed. (${err.message})`);
+        }
+        let latest;
+        try {
+            latest = await loadBookEntries(bookName);
+        } catch (err) {
+            return refusal('load-failed', err.message);
+        }
+        const guard = checkCapturedDestination(capture, latest.entries);
+        if (guard) return { ...guard, conflict: conflictPayload };
+        entry = latest.entries[record.entryUid];
+        const latestContent = entry.content || '';
+        const latestSpan = spanOfContent(latestContent);
+        if (!latestSpan || latestContent.slice(latestSpan.start, latestSpan.end) !== record.approvedReplacement.slice(appliedSpan.start, appliedSpan.end)) {
+            return refusal('span-conflict', 'Restore refused: cleanup-touched content changed while saving the safeguard.', { conflict: conflictPayload });
+        }
+        if (latestContent === current) {
+            currentSpan = latestSpan;
+            safeguarded = true;
+            break;
+        }
+        // Outside-span work survives, but must itself be durably safeguarded first.
+        current = latestContent;
+        currentSpan = latestSpan;
     }
+    if (!safeguarded) return refusal('source-changed-during-persist', 'Restore refused: the entry kept changing while safeguards were saved. Retry when editing has stopped.');
 
     const originalSpanText = record.originalContent.slice(originalSpan.start, originalSpan.end);
     const restored = current.slice(0, currentSpan.start) + originalSpanText + current.slice(currentSpan.end);
     const keywords = Array.isArray(entry.key) ? entry.key : [record.entityName];
-    const write = await writeToLorebook(record.entityName, restored, keywords, record.entryUid);
+    const write = await writeToLorebook(record.entityName, restored, keywords, record.entryUid, { bookName });
     if (!write.success) {
         return refusal('restore-save-failed', `Restore failed while saving: ${write.error}. The recovery original and the pre-restore safeguard are preserved.`);
     }
 
     try {
-        const verified = await readEntryContentStrict(record.entryUid, record.entityName);
+        const verified = await readEntryContentStrict(record.entryUid, record.entityName, bookName);
         if (verified === restored) {
-            await updateCleanupRecord(actionId, { status: 'restored', restoredAt: new Date().toISOString() });
+            await updateCleanupRecord(actionId, { status: 'restored', restoredAt: new Date().toISOString() }, bookName);
             return { ok: true, restoredContent: restored };
         }
         // Restore wrote but verification is ambiguous: keep the record
