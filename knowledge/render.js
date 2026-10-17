@@ -68,11 +68,17 @@ import { decorateModalShell, setStatus } from '../core/modal.js';
 // (plan §4.4); prefersReducedMotion: gates the one JS-driven smooth scroll
 // (plan §4.5).
 import { setControlBusy, prefersReducedMotion } from '../core/ui.js';
+import { acceptedRefreshFields, contractRejectionSummary } from './field_contract.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function sortEntries(obj, key) {
     return Object.entries(obj).sort((a, b) => String(a[1][key] || a[0]).localeCompare(String(b[1][key] || b[0])));
+}
+
+function setContractStatus(message, rejections = [], level = 'success') {
+    const summary = contractRejectionSummary(rejections);
+    ktSetStatus(summary ? `${message} ${summary}` : message, summary ? 'warning' : level);
 }
 
 // ─── Accept / reject staging item ────────────────────────────────────────────
@@ -116,9 +122,9 @@ async function handleAccept(item, text, keywords, _el) {
             // is bookkeeping only — it must never fail the accept itself.
             try {
                 if (Array.isArray(item.refreshFields) && item.refreshFields.length > 0) {
-                    recordDossierFieldRefresh(regKey, item.refreshFields);
+                    recordDossierFieldRefresh(regKey, acceptedRefreshFields(item.refreshFields, item.contractRejections));
                 } else if (item.dossierMode === true && item.fields && typeof item.fields === 'object' && !Array.isArray(item.fields)) {
-                    const rewritten = DOSSIER_FIELDS.map(f => f.key).filter(k => item.fields[k] != null);
+                    const rewritten = acceptedRefreshFields(DOSSIER_FIELDS.map(f => f.key).filter(k => item.fields[k] != null), item.contractRejections);
                     if (rewritten.length > 0) recordDossierFieldRefresh(regKey, rewritten);
                 }
             } catch (stampErr) {
@@ -264,7 +270,7 @@ export function renderNpcsSubTab() {
             // Enrich non-edited update proposals; edited ones keep their text.
             await Promise.all(added.filter(it => it.action === 'update' && !it.edited).map(it => enrichStagingItem(it)));
             added.forEach(item => addNotificationEntry(item));
-            ktSetStatus(`Scan complete — ${added.length} proposal(s).`, 'success');
+            setContractStatus(`Scan complete — ${added.length} proposal(s).`, newItems.flatMap(item => item.contractRejections || []));
             notify('Knowledge Tracker', `Scan found ${added.length} proposal(s).`, added.length ? 'info' : 'success');
         } catch (err) {
             // Coordinator cancellation (TODO §1): an intentional stop (chat
@@ -398,6 +404,7 @@ function renderDetailForItem(item) {
     // so heading navigation lands on the detail pane too.
     return `<div class="kt-detail-inner">
         <h4 class="kt-detail-name">${escapeHtml(item.name)}</h4>
+        ${item.contractRejections?.length ? `<div class="kt-detail-section kt-contract-rejections"><div class="kt-detail-label">Rejected model values (not applied or re-verified)</div><ul>${item.contractRejections.map(r => `<li>${escapeHtml(r.field)}: ${escapeHtml(r.reason)}</li>`).join('')}</ul></div>` : ''}
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
         <div class="kt-detail-section"><label class="kt-detail-label" for="kt-proposal-editor">Proposed</label><textarea class="kt-detail-editor" id="kt-proposal-editor">${escapeHtml(editorContent)}</textarea></div>
@@ -586,7 +593,7 @@ function wireNpcListEvents(el, _type) {
                 setControlBusy(btn, true); btn.textContent = '⏳…';
                 const result = await runNpcUpdate(name, reg.uid);
                 const hasChanges = Object.values(result.fields).some(v => v !== null) || result.newKnowledge.length > 0;
-                if (!hasChanges) { ktSetStatus(`No new info for "${name}".`, 'info'); return; }
+                if (!hasChanges) { setContractStatus(`No new info for "${name}".`, result.contractRejections, 'info'); return; }
                 // runNpcUpdate already computed the major/dossier merge (result.merged)
                 // and flagged result.dossierMode. Minor entries need their own merge.
                 const useDossier = result.dossierMode === true;
@@ -599,13 +606,14 @@ function wireNpcListEvents(el, _type) {
                     mergedContent, keywords: reg.keywords || [name], uid: reg.uid,
                     fields: result.fields, newKnowledge: npcType === 'major' ? (result.newKnowledge || []) : [],
                     dossierMode: useDossier,
+                    contractRejections: result.contractRejections || [],
                 });
                 const stagedItem = state.stagingItems[state.stagingItems.length - 1];
                 state.activeItemId = stagedItem.id;
                 state.activeSubTab = 'staging';
                 addNotificationEntry(stagedItem);
                 renderNpcsSubTab();
-                ktSetStatus(`Update for "${name}" staged.`, 'success');
+                setContractStatus(`Update for "${name}" staged.`, result.contractRejections);
             } catch (err) {
                 // Coordinator cancellation (TODO §1): quiet discard — the
                 // finally restores the button, no failure status.
@@ -640,16 +648,16 @@ function wireNpcListEvents(el, _type) {
                     keywords: reg.keywords || [name], uid: reg.uid,
                     fields: result.fields, newKnowledge: result.newKnowledge || [],
                     dossierMode: true,
-                    // Enrich rewrites EVERY dossier field — accept should stamp
-                    // all of them fresh (TODO §3 staleness watermarks).
-                    refreshFields: DOSSIER_FIELDS.map(f => f.key),
+                    contractRejections: result.contractRejections || [],
+                    // Invalid proposals preserve the old value, not its freshness.
+                    refreshFields: acceptedRefreshFields(DOSSIER_FIELDS.map(f => f.key), result.contractRejections),
                 });
                 const stagedItem = state.stagingItems[state.stagingItems.length - 1];
                 state.activeItemId = stagedItem.id;
                 state.activeSubTab = 'staging';
                 addNotificationEntry(stagedItem);
                 renderNpcsSubTab();
-                ktSetStatus(`Dossier enrichment for "${name}" staged for review.`, 'success');
+                setContractStatus(`Dossier enrichment for "${name}" staged for review.`, result.contractRejections);
             } catch (err) {
                 // Coordinator cancellation (TODO §1): quiet discard — the
                 // finally restores the button, no failure status.
@@ -2145,10 +2153,9 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
             // merge is the no-change signal and takes the re-verify path.
             const hasChanges = result.merged !== result.currentContent;
             if (!hasChanges) {
-                // Nothing new — but the selected fields were still re-examined,
-                // so stamp them fresh rather than leaving them flagged stale.
-                try { recordDossierFieldRefresh(name, result.requestedFields); } catch { /* bookkeeping */ }
-                ktSetStatus(`No new info for the selected fields of "${name}" — marked re-verified.`, 'info');
+                const verified = acceptedRefreshFields(result.requestedFields, result.contractRejections);
+                try { if (verified.length) recordDossierFieldRefresh(name, verified); } catch { /* bookkeeping */ }
+                setContractStatus(`No new info for the selected fields of "${name}" — ${verified.length ? `${verified.length} field(s) marked re-verified` : 'no fields marked re-verified'}.`, result.contractRejections, 'info');
                 cleanup();
                 return;
             }
@@ -2161,8 +2168,9 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
                 keywords: reg.keywords || [name], uid: reg.uid,
                 fields: result.fields, newKnowledge: [],
                 dossierMode: true,
-                // What the user asked to refresh — accept stamps these watermarks.
-                refreshFields: result.requestedFields,
+                contractRejections: result.contractRejections || [],
+                // Only successfully examined fields receive watermarks on accept.
+                refreshFields: acceptedRefreshFields(result.requestedFields, result.contractRejections),
             });
             const stagedItem = state.stagingItems[state.stagingItems.length - 1];
             state.activeItemId = stagedItem.id;
@@ -2170,9 +2178,9 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
             addNotificationEntry(stagedItem);
             renderNpcsSubTab();
             if (result.skippedFields.length > 0) {
-                ktSetStatus(`Field refresh for "${name}" staged (${result.skippedFields.length} field(s) skipped as locked).`, 'info');
+                setContractStatus(`Field refresh for "${name}" staged (${result.skippedFields.length} field(s) skipped as locked).`, result.contractRejections, 'info');
             } else {
-                ktSetStatus(`Field refresh for "${name}" staged for review.`, 'success');
+                setContractStatus(`Field refresh for "${name}" staged for review.`, result.contractRejections);
             }
             cleanup();
         } catch (err) {

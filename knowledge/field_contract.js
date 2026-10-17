@@ -129,6 +129,27 @@ function previewStructured(value) {
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
+function structuralRejection(text) {
+    if (/[\r\n]/.test(text)) return 'contains a line break (entry values are single-line)';
+    const lower = text.toLowerCase();
+    if (lower.includes('knowledge ledger:')) return 'contains a "Knowledge Ledger:" heading (section injection)';
+    if (lower.includes('<!-- mwt:relationships:')) return 'contains a managed relationship block marker';
+    if (lower.includes('[dossier]')) return 'contains the [Dossier] header marker (section injection)';
+    return null;
+}
+
+/** Fields rejected by validation must never receive a freshness watermark. */
+export function acceptedRefreshFields(fields, rejections = []) {
+    const rejected = new Set(rejections.map(r => r.field));
+    return fields.filter(key => !rejected.has(key));
+}
+
+/** Plain text for live status messages; HTML callers must escape it. */
+export function contractRejectionSummary(rejections = []) {
+    if (!rejections.length) return '';
+    return `Field contract: ${rejections.length} invalid model value(s) dropped whole — ${rejections.map(r => `${r.field} (${r.reason})`).join('; ')}. Rejected fields were not re-verified.`;
+}
+
 /**
  * Validate one field value against the contract.
  *
@@ -154,25 +175,16 @@ export function validateFieldValue(key, value) {
         if (preview.length > def.maxChars) {
             return { ok: false, reason: `structured value coerces to ${preview.length} characters (max ${def.maxChars})` };
         }
+        const reason = structuralRejection(preview);
+        if (reason) return { ok: false, reason };
         return { ok: true, value };
     }
 
     // Leading/trailing whitespace is normalization, not content slicing.
     const trimmed = value.trim();
     if (trimmed === '') return { ok: true, value: null };
-    if (/[\r\n]/.test(trimmed)) {
-        return { ok: false, reason: 'contains a line break (fields are single-line in the entry format)' };
-    }
-    const lower = trimmed.toLowerCase();
-    if (lower.includes('knowledge ledger:')) {
-        return { ok: false, reason: 'contains a "Knowledge Ledger:" heading (section injection)' };
-    }
-    if (lower.includes('<!-- mwt:relationships:')) {
-        return { ok: false, reason: 'contains a managed relationship block marker' };
-    }
-    if (lower.startsWith('[dossier]')) {
-        return { ok: false, reason: 'contains the [Dossier] header marker (section injection)' };
-    }
+    const reason = structuralRejection(trimmed);
+    if (reason) return { ok: false, reason };
     if (trimmed.length > def.maxChars) {
         return { ok: false, reason: `${trimmed.length} characters exceeds the ${def.maxChars}-character bound` };
     }
@@ -216,13 +228,10 @@ function validateKnowledgeItem(item) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
         return { ok: false, reason: 'not an object' };
     }
-    const fact = typeof item.fact === 'string' ? item.fact.trim() : '';
-    if (!fact) return { ok: false, reason: 'empty or non-string fact' };
-    if (/[\r\n]/.test(fact)) return { ok: false, reason: 'fact contains a line break' };
-    const lower = fact.toLowerCase();
-    if (lower.includes('knowledge ledger:') || lower.includes('<!-- mwt:relationships:')) {
-        return { ok: false, reason: 'fact contains a structural marker' };
-    }
+    const fact = typeof item.fact === 'string' ? item.fact : '';
+    if (!fact.trim()) return { ok: false, reason: 'empty or non-string fact' };
+    const reason = structuralRejection(fact);
+    if (reason) return { ok: false, reason: `fact ${reason}` };
     if (fact.length > LEDGER_ITEM_LIMITS.fact) {
         return { ok: false, reason: `fact is ${fact.length} characters (max ${LEDGER_ITEM_LIMITS.fact})` };
     }
@@ -230,6 +239,8 @@ function validateKnowledgeItem(item) {
         const v = item[part];
         if (v === undefined || v === null || v === '') continue;
         if (typeof v !== 'string') return { ok: false, reason: `non-string ${part}` };
+        const partReason = structuralRejection(v);
+        if (partReason) return { ok: false, reason: `${part} ${partReason}` };
         if (v.length > LEDGER_ITEM_LIMITS[part]) {
             return { ok: false, reason: `${part} is ${v.length} characters (max ${LEDGER_ITEM_LIMITS[part]})` };
         }
