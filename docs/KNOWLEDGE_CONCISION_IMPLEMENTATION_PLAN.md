@@ -493,4 +493,18 @@ because its prompt or UI exists.
   interaction events to new_knowledge; the Phase 0 fixtures gained a
   `readOnPcDrift` scenario preserving the reported line verbatim. Pinned by
   tests in the fixtures, field-contract, and ledger-prompt suites.
+- **Follow-up 2 (2026-10-16, after user model QA):** two anchoring failures
+  on already-drifted entries. (1) Enrich regurgitated a drifted Read on PC at
+  442 characters — over the D4a bound, so the contract dropped it and the
+  drift was stuck (blanking the field first worked around it). Enrich's
+  preservation rule now reads "Preserve FACTS, not drift": drifted field text
+  is rewritten to the contract value, with the events it accumulated staying
+  established via the ledger. (2) The per-field refresh's "echo the existing
+  value" instruction laundered drift and could stamp it re-verified; the
+  contract now explicitly outranks the echo for contract-violating existing
+  values. The shared block gained an overshoot rule ("invalid however
+  factual"), and the rejection summary names the escape hatch (hand-edit the
+  staged proposal, or blank the field and re-run). Reviewed field cleanup
+  with displaced-detail notes remains Phase 6 — these are prevention fixes,
+  not that mode.
 - **Accepted deviations:** none.

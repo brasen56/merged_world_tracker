@@ -149,7 +149,8 @@ export function acceptedRefreshFields(fields, rejections = []) {
 /** Plain text for live status messages; HTML callers must escape it. */
 export function contractRejectionSummary(rejections = []) {
     if (!rejections.length) return '';
-    return `Field contract: ${rejections.length} invalid model value(s) dropped whole — ${rejections.map(r => `${r.field} (${r.reason})`).join('; ')}. Rejected fields were not re-verified.`;
+    return `Field contract: ${rejections.length} invalid model value(s) dropped whole — ${rejections.map(r => `${r.field} (${r.reason})`).join('; ')}. `
+        + 'Rejected fields were not re-verified; edit them by hand in the staged proposal, or blank them in the entry and re-run to regenerate.';
 }
 
 /**
@@ -336,6 +337,7 @@ export function contractPromptBlock({ mode = 'dossier' } = {}) {
         'FIELD CONTRACT (applies to every field you output):',
         "- Update a field only when there is a MEANINGFUL change in that field's subject; otherwise output null.",
         "- Give the field's CURRENT CONCISE VALUE, not its old value plus a new event clause — fields are compact references, not event logs.",
+        '- A value that overshoots its shape — an event log, an interaction log, a transcript, a wall of appended clauses — is invalid however factual it is: if it does not fit the shape, it does not belong in the field.',
         '- Preserve an unknown, missing, or empty value rather than inventing detail the established facts do not support.',
     ];
     for (const key of keys) {

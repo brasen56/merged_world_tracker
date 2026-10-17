@@ -301,4 +301,17 @@ describe('Phase 1 shared field contract across prompts', () => {
             expect(prompt).toContain('Not: an interaction log, relationship milestones, or what the player did and felt');
         }
     });
+
+    test('existing drift is neither preserved by Enrich nor echoed by refresh', () => {
+        // Enrich anchors on <current_entry>; without this rule it faithfully
+        // regurgitates a drifted field (reported: a 442-char Read on PC
+        // interaction log, dropped by the bound, leaving the drift stuck).
+        expect(DOSSIER_ENRICH_PROMPT).toContain('Preserve FACTS, not drift');
+        expect(DOSSIER_ENRICH_PROMPT).toContain('never by keeping the drifted field text');
+        // Refresh used to instruct "echo the existing value" — which launders
+        // drift (and can stamp it re-verified). The contract now outranks the
+        // echo for contract-violating existing values.
+        expect(DOSSIER_FIELD_REFRESH_PROMPT).toContain('UNLESS the existing value violates the FIELD CONTRACT');
+        expect(DOSSIER_FIELD_REFRESH_PROMPT).toContain('then do NOT echo it; replace it with the field\'s current concise value');
+    });
 });

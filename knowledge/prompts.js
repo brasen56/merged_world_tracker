@@ -250,6 +250,7 @@ export const DOSSIER_ENRICH_PROMPT = `You are a character writer for an ongoing 
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Preserve every fact already in <current_entry> — do not drop or contradict established canon.
+- Preserve FACTS, not drift: a field that has grown into an event log, interaction log, or task list is rewritten to its current concise value per the FIELD CONTRACT below — the events it accumulated stay established through the Knowledge Ledger (add any missing ones to new_knowledge), never by keeping the drifted field text.
 - Fill in EVERY dossier field below. Draw concrete inferences from the messages, world state, and the NPC's established behavior. If a field is genuinely unknowable even from the full history, keep it unknown rather than fabricating a profession, status, or history nothing supports.
 - The existing Knowledge Ledger in <current_entry> is kept as is, and new_knowledge is ADDED to the end of it. List ONLY facts not already represented there. Do not restate a fact already shown in their Knowledge Ledger, even reworded. Return [] when nothing new was established.
 - The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER add this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to") to new_knowledge; record an event only after it happens. Facts about OTHER people's promises are established facts and are allowed. Future plans are tracked by a different system.
@@ -291,7 +292,7 @@ ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences.
 - Output ONLY the field keys listed in <refresh_fields>. Any other key in your output is discarded — especially "canon_lock" (user-authored canon, never model-updated) and "personality" (owned by the Growth profile system when not listed).
 - Do NOT invent information not established in the messages or already present in <current_entry>.
-- For each listed field: output the current best value — the existing value reconciled with anything newer in the messages. If the messages add nothing new, echo the existing value (or fill it in if it is missing or empty). Use null ONLY if the field is genuinely unknowable.
+- For each listed field: output the current best value — the existing value reconciled with anything newer in the messages. If the messages add nothing new, echo the existing value (or fill it in if it is missing or empty) — UNLESS the existing value violates the FIELD CONTRACT below (an event log, an interaction log, a task list, or anything past its shape): then do NOT echo it; replace it with the field's current concise value per the contract. Use null ONLY if the field is genuinely unknowable.
 - Secrets follow the tiered format already in the entry: add NEW secrets, drop secrets DISCLOSED in narration or made obsolete by events, and re-tier when story pressure changed how buried a secret is.
 
 OUTPUT FORMAT:

@@ -260,6 +260,9 @@ describe('contractPromptBlock', () => {
         }
         expect(block).toContain('MEANINGFUL change');
         expect(block).toContain('CURRENT CONCISE VALUE');
+        // The overshoot rule: shape violations are invalid however factual —
+        // pinned after a model returned a 442-char Read on PC interaction log.
+        expect(block).toContain('overshoots its shape');
         expect(block).toContain('durable takeaways');
         // Role guidance states the stable-until-meaningful-change rule and
         // names the relationship allowance, per scope §3.1.
