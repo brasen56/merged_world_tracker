@@ -1,11 +1,25 @@
 # 🌍 Merged World Tracker
 
-**A unified SillyTavern extension combining World State tracking, Session Chronicle, NPC Knowledge management, Story Planning, and NPC Interiority into a single modular system.**
+**A unified SillyTavern extension combining World State tracking, Session Chronicle, NPC Knowledge management, Story Planning, NPC Interiority, and deterministic Ambient Conditions into a single modular system.**
+
+---
+
+## 🆕 What's New
+
+A short list of the latest changes, so you don't have to read the whole document to spot them. The complete version-by-version history lives in [CHANGELOG.md](CHANGELOG.md).
+
+- **🧹 Knowledge: Ledger Condense review** *(added in v2.13.0)* — a consent-first, model-assisted cleanup for oversized Knowledge Ledgers: per-record condensation reviewed beside the exact originals, reason-required removals, advisory-only pruning suggestions, a two-step Apply, span-aware undo, and a recovery manager. Never automatic, never triggered by a size threshold. v2.13.0 also shares one field contract across Knowledge generation so new captures stop drifting (Role keeps the enduring role; Read on PC is a stance, not an interaction log).
+- **🌦️ Ambient Conditions module** *(added in v2.12.0)* — opt-in, deterministic weather with **no LLM calls**: code computes qualitative conditions (sky, temperature, air, precipitation, wind) plus a one-band forecast from a per-chat seed, the in-story clock, and your chosen climate, and the narrator renders them instead of inventing its own. Five climate presets make impossible weather unreachable by construction — the desert never snows. Injected on normal, swipe, regenerate, and continue generations, shown on the Overview dashboard, and fed to the Story Planner. See [Features → Ambient Conditions](#-ambient-conditions).
+- **🗺️ Story Planner: world-pressure planning lens** *(added in v2.11.6)* — scoped **Add** requests can choose a *World complications* lens that asks the setting itself to act on the story (weather and seasons, scarcity, infrastructure, markets, law, illness, public mood) instead of another character's scheme. With Ambient Conditions enabled, the lens defers weather ownership to that module.
+- **🗺️ Story Planner V3** *(v2.9.0 – v2.11.x)* — scoped Add/Refresh that touches only the sections you choose, Character Journeys with chosen subjects and stable ownership, an explicit cast policy (no accidental new characters), opt-in private author context for planning with dossier material, and story-quality prompts built around dramatic questions and causally progressing beats.
+
+> Design and planning documents for shipped and in-progress work are indexed in the [`docs/` directory](docs/README.md).
 
 ---
 
 ## 📋 Table of Contents
 
+- [🆕 What's New](#-whats-new)
 - [Overview](#overview)
 - [Features](#features)
   - [🌍 World State Tracker](#-world-state-tracker)
@@ -13,6 +27,7 @@
   - [🧠 Knowledge Tracker](#-knowledge-tracker)
   - [🗺️ Story Planner](#-story-planner)
   - [💭 Interiority](#-interiority)
+  - [🌦️ Ambient Conditions](#-ambient-conditions)
   - [Shared Core](#shared-core)
   - [🏠 Overview](#-overview)
   - [🩺 Diagnostics](#-diagnostics)
@@ -36,6 +51,7 @@
   - [Knowledge Tracker](#knowledge-tracker)
   - [Story Planner](#story-planner)
   - [Interiority](#interiority-1)
+  - [Ambient Conditions](#ambient-conditions)
 - [Architecture](#architecture)
 - [API Compatibility](#api-compatibility)
 - [Theme Support](#theme-support)
@@ -48,9 +64,9 @@
 
 ## Overview
 
-Merged World Tracker (MWT) is a modular SillyTavern extension that brings five powerful RP assistance tools under one roof. Each module shares a common core for API calls, diff computation, settings management, and UI — while remaining independently configurable.
+Merged World Tracker (MWT) is a modular SillyTavern extension that brings six powerful RP assistance tools under one roof. Each module shares a common core for API calls, diff computation, settings management, and UI — while remaining independently configurable.
 
-Instead of juggling multiple standalone extensions, MWT provides a single tabbed interface with floating quick-access buttons, unified API settings (with per-module overrides), and cross-module integration (e.g., chronicle entries can sync time/location back to the world state, the Story Planner draws on the current world state and latest chronicle entry for context, and Interiority reads NPC Knowledge Ledgers to ground each character's private thoughts in what they actually know).
+Instead of juggling multiple standalone extensions, MWT provides a single tabbed interface with floating quick-access buttons, unified API settings (with per-module overrides), and cross-module integration (e.g., chronicle entries can sync time/location back to the world state, the Story Planner draws on the current world state and latest chronicle entry for context, and Interiority reads NPC Knowledge Ledgers to ground each character's private thoughts in what they actually know, while Ambient Conditions supplies deterministic weather that the narrator renders and the Story Planner builds on).
 
 ### What It Does
 
@@ -61,8 +77,9 @@ Instead of juggling multiple standalone extensions, MWT provides a single tabbed
 | **🧠 Knowledge** | Scans for NPCs, tracks their knowledge and relationships, and manages state entries via lorebooks |
 | **🗺️ Story Planner** | Brainstorms structured plot arcs across five timeline sections — with scoped Add/Refresh, chosen journey subjects, an explicit cast policy, and opt-in private author context — managed as editable cards with selective injection: inspiration the AI can draw on, not a fixed roadmap |
 | **💭 Interiority** | Generates out-of-band NPC private thoughts and a persistent hidden-intentions ledger — with priority, expiry, and per-NPC privacy controls — that drives on-screen actions without leaking secrets to the narrator |
+| **🌦️ Ambient Conditions** | Deterministic, LLM-free weather: code computes qualitative conditions and a one-band forecast from a per-chat seed, the in-story clock, and your climate, and injects one authoritative line the narrator renders rather than invents |
 
-All five modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output.
+Five of the six modules use an LLM API (OpenAI-compatible or SillyTavern Connection Manager) to analyze your RP and produce structured, validated output. The exception is Ambient Conditions — it is fully deterministic and needs no API at all.
 
 ---
 
@@ -149,6 +166,8 @@ Scans your RP for NPCs, classifies them, tracks their knowledge and relationship
 - **NPC Merging** — Merge duplicate NPC entries into one
 - **📋 Dossier Mode** *(Knowledge settings, off by default)* — Scans produce richer major-NPC entries: Role, Where to Find, Appearance, Voice, Background, Personality, Read on PC, Current Agenda, Secrets, and a Canon Lock for fields you hand-curate
 - **🎯 Per-Field Dossier Refresh** — Major NPCs in Dossier Mode have a **🎯 Fields** button that opens a per-field picker showing each section's current value and a staleness chip (a per-field watermark tracks when it was last examined; a field counts as stale after 30 messages). **Select stale** bulk-checks everything stale; **Refresh selected** asks the model to re-derive *only* the chosen fields — everything else is preserved verbatim, Canon-Locked fields are skipped, and the merged result goes through the normal staging review
+- **🧹 Ledger Condense Review** — Every non-orphan NPC card has a **🧹 Condense** button that opens a consent-first cleanup for oversized Knowledge Ledgers: the resolved model and payload size are disclosed up front (with a consent gate before anything is sent), then a reviewed proposal shows each condensed record beside its expandable exact original for per-record editing. Every original stays represented until you explicitly remove it — removals require a reason, the model's pruning suggestions stay advisory, size deltas are labeled estimates — and Apply is a separate two-step confirm backed by span-aware undo and a recovery manager (list / restore / export / import / delete)
+- **Concision that never runs itself** — Neither cleanup path triggers automatically, on upgrade, or when an entry crosses a size threshold; the ledger review sends only the ledger and minimal identity context to the model, never the whole chat. Ordinary generation now follows field-shape discipline so ledgers stop ballooning in the first place (the Enrich prompt's whole-ledger re-append was fixed in v2.12.1)
 - **Relationship Tracking** — Define and track relationships between NPCs (ally, enemy, friend, rival, family, etc.)
 - **🕘 Relationship Recent Changes** — Automatic extraction and manual edits alike are logged to a session-scoped Recent Changes panel on the Relationships tab (newest first, 🤖 auto / ✍️ you origin badges, ages, clear log). The completion toast names *who* changed and *to what*, not just counts. Per-NPC stance rows collapse behind a "Stances toward {{user}} (N)" header so a large cast doesn't push the graph and edge list off-screen
 - **Relationship Graph View** — Visual force-directed node/edge graph with color-coded relationship types, draggable nodes, pan/zoom, and a list-view toggle
@@ -188,6 +207,7 @@ Acts as a "Story Architect" that brainstorms a menu of future plot possibilities
 - **Scoped Add/Refresh** — The **🎲 Generate Plan** dialog sends only what you asked for: choose **Add ideas** or **Refresh selected arcs**, check just the sections to touch (everything else is carried forward unchanged), set a requested count (1–30) for Add, or pick the exact active arcs to refresh. Review shows how many arcs are new, refreshed, and carried forward — nothing is saved until you choose **Apply changes**
 - **Journey Subjects & Stable Ownership** — Character Journeys can be planned for **any tracked character** or a **selected** list (up to 30 candidates). Each journey carries a **primary subject** (its owner) and optional **supporting participants**; ownership survives Knowledge rename/merge and is never guessed from prose — only you can assign or change it. Subject selection assigns ownership only; it does not add dossier fields to the context
 - **Cast Policy** — Three explicit policies: **Established cast only** (the model may not introduce new characters), **New characters allowed**, or **Actively propose new characters** (an Add request must include a newcomer arc with a concrete on-screen entrance beat). Proposed newcomers stay hypothetical until the story itself establishes them, and what the planner proposed stays separate from what the narrator actually introduced. Manual scoped requests pick their policy in the dialog; the Story Palette policy governs legacy full-plan, targeted, and automatic generation
+- **World-Pressure Planning Lens** — Scoped **Add** requests can choose a *Planning lens*: **Open brainstorm** (the default) or **World complications**. The complications lens asks the setting itself to act on the story — weather and seasons, scarcity and supply, infrastructure and utilities, money and markets, law and institutions, illness, public mood — instead of another character's scheme, to break the routine the recent story has settled into. Developments may be adverse, beneficial, or mixed; an opportunity doesn't have to conceal a threat; Character Journeys can take their pressure from the complication; and complication arcs land in the existing sections by how soon they can be used. Refresh ignores the Add-only lens, so existing premises are never silently rewritten. With Ambient Conditions enabled, the lens defers weather ownership to that module
 - **Opt-in Private Author Context** — Plan with what only the author knows. A collapsed per-chat picker in the Generate dialog offers major-NPC dossier field groups — public profile, agenda, secrets, Knowledge Ledger, read on PC, and Canon Lock — chosen per NPC (up to 24), with the consent stated plainly: selected private fields are **sent to the configured planning model**. A **private author-context budget** (Standard 12,000 / Expanded 24,000 / Large 48,000 characters, saved per chat) caps this additional planning context — not the model's whole context window — and a pre-generation coverage preview reports exactly how many ledger entries each NPC would contribute before anything is sent. Private context rides only reviewed scoped requests, is budgeted to whole records (never clipped mid-entry, shared fairly across NPCs), fails closed when a dossier cannot be read exactly, keeps Canon Lock's refusal when it cannot fit, and the review banner plus per-arc author editor let you scrub every narrator-facing field before Apply
 - **Story-Quality Prompts** — Each arc is asked for what it wants or unsettles, what puts it under pressure, and the concrete turning point it builds toward; every setup beat must change the situation, and the turning point stays out of the beats so a **Ready** arc still has a payoff to deliver. Quiet arcs may turn on an admission, a boundary, or a changed relationship instead of escalation
 - **Targeted Arc Development** — Rework remaining setup, develop one arc, suggest an alternate route, or generate setup beats through a reviewable proposal that touches only the selected arc after scope/revision checks
@@ -230,9 +250,24 @@ Generates NPC private thoughts and a persistent **intentions ledger** in a separ
 - **Rollback on Swipe/Edit/Delete** — Ledger snapshots per message make it trivial to revert state when messages change; lifecycle history and evidence boundaries roll back with the ledger
 - **Manual Ledger Editing** — Add, edit, or delete intentions directly in the UI
 
+### 🌦️ Ambient Conditions
+
+Deterministic, opt-in weather (and, later, other ambient facts nobody in the story can change). **Code decides the conditions; the narrator model only renders them** — no model calls, no API key, no extra cost.
+
+- **Code decides, the model renders** — Conditions are a pure function of the chat's seed, the in-story clock, and your climate. The same story moment always produces the same weather on every regeneration and every branch, because nothing is stored except the seed — nothing to refresh, nothing to go stale, nothing to desync across branches
+- **Climate gates what can exist** — Five presets (temperate, desert, tropical, arctic, mediterranean) plus hemisphere and a manual season make impossible weather unreachable by construction rather than merely discouraged: the desert never snows. The **variability** slider (slower / balanced / faster) changes how *often* weather changes as story time advances — never how extreme it is or what the climate allows
+- **A story clock with honest fallbacks** — The latest usable `[In-story time:]` tag, else the World State Current Scene date, else one synthetic hour per message (a fallback never dressed up as a calendar date). Conditions hold steady within each time band (dawn, morning, afternoon, evening, night), warmth follows the day (afternoon peak, night trough), and clock jumps over six story hours are logged
+- **One authoritative line per generation** — Normal, swipe, regenerate, and continue generations are injected; quiet and impersonate generations are not. Swipes and regenerations keep the clock from *before* the replaced reply, hidden messages and prompt-only regex can't shift the clock, and on a time skip the model is told to keep conditions vague until the next turn supplies real ones
+- **Qualitative, never numeric** — "overcast, cool, damp; rain likely within the hour", not "14°C". The forecast cap is one band ahead: the module truthfully knows the future (it's deterministic), but a longer horizon would invite the model to fast-forward your story
+- **Pins with story-time expiry** — Lock "thunderstorm tonight" until unpinned, next band, next dawn, or a story date/time. Pins can even override climate restrictions, and expired pins remain stored, so rewinding inside their interval restores the override
+- **First enable asks, never assumes** — Enabling inlines a climate + hemisphere question instead of silently defaulting ("Temperate, don't ask again" is the dismiss path); an unanswered setup creates no weather at all
+- **Visible where you already look** — A read-only Ambient card on the 🏠 Overview dashboard (conditions, forecast, pin status and bound, off/panic state), `/wt-ambient` (alias `/wt-weather`) in chat, and listings in the Budget tab and diagnostics console
+- **Story Planner integration** — Every planner request (full-plan, scoped Add/Refresh, targeted operations — custom templates included) receives the current conditions and one-band forecast, active pins included, and is told to build on them; the world-pressure planning lens defers weather ownership to the module rather than inventing conflicting weather
+- **Safe by construction** — The per-chat seed survives renames and branch copies (branch off for a different weather fate, or `/wt-ambient reseed` to reroll just this branch); the panic switch and chat switches gate it like every other module; and player-fixable incidents (a clearable rockslide) stay in World Pressures territory instead of becoming weather
+
 ### Shared Core
 
-All five modules share a common infrastructure:
+All six modules share a common infrastructure:
 
 - **Unified API Layer** — OpenAI-compatible API *or* SillyTavern Connection Manager profiles, with retry logic, error recovery, reasoning-content fallback, and custom headers support
 - **Settings Management** — Global defaults with per-module overrides; settings stored in SillyTavern's `extension_settings` with localStorage fallback and legacy key migration
@@ -248,7 +283,7 @@ All five modules share a common infrastructure:
 
 The **🏠 Overview** tab is the MWT modal's landing view: one page showing everything waiting on you in this chat, with a deep link from every signal straight to the module that owns it. The status cards only observe; the maintenance actions below (🔎 Findings previews and 🧰 Tools) change data only through a preview → confirm modal. The pane follows the open-and-read refresh model (re-open the modal or press 🔄 Refresh).
 
-- **Status cards** — World State staleness (messages since refresh, delta counts), Knowledge (pending staging items, unread growth evidence), Story Planner (awaiting / overdue beats), Interiority (active / dormant intentions, deleted-intention records), Budget (injected tokens vs context limit, observe / enforce), Coordinator (running / queued jobs, a "background HELD" flag while background work is paused), one compact health line per module, and quarantined record counts. Every card carries a one-click **Open …** button into the relevant tab
+- **Status cards** — World State staleness (messages since refresh, delta counts), Knowledge (pending staging items, unread growth evidence), Story Planner (awaiting / overdue beats), Interiority (active / dormant intentions, deleted-intention records), Ambient (current conditions, one-band forecast, pin status, off/panic state), Budget (injected tokens vs context limit, observe / enforce), Coordinator (running / queued jobs, a "background HELD" flag while background work is paused), one compact health line per module, and quarantined record counts. Every card carries a one-click **Open …** button into the relevant tab
 - **Guarded cells** — each card's data source is independently guarded, so a broken subsystem renders its own "Unavailable" card instead of blanking the pane
 - **🔎 Findings** — a maintenance section that appears only when an audit finds something: duplicate NPC profiles, profile relink candidates, and NPC identity-audit guidance (its cleanup is manual by design — the finding prints the steps). Duplicate and relink findings offer a **Preview …** button: preview → consequence-stated confirm → apply, where the apply step **re-plans from scratch** and refuses with "review a fresh preview" if the chat or the profile book changed since the preview. Unnamed and tied-size duplicate groups need human judgment, so they are listed as review items and never auto-applied. Relink points each profile at its largest candidate entry (newest on ties), and its preview shows how many **other candidates** each link had — anything above 0 means duplicates worth reviewing first. Hidden entirely while the audits run clean
 - **🧰 Tools** — a collapsed disclosure holding the two deliberate destructive actions: **Clear all evidence** (names every affected NPC, warns which generated profiles would be left unbacked and that rebuilding evidence costs API calls, and re-checks the NPC list at confirm) and **Clear deleted intentions** (warns those intentions may be proposed again). On hosts that don't expose a chat id, both refuse with an explanation and point at their console twins
@@ -272,7 +307,7 @@ Everything the tab shows (and more) is also available via the `MWT.diagnostics.*
 
 ### 📊 Budget
 
-The **📊 Budget** tab shows the estimated prompt tokens MWT has registered and lets you set per-chat limits for World State, Chronicle, Story Planner, and Interiority. Its settings are stored in the current chat's metadata, so changing a cap does not affect other chats.
+The **📊 Budget** tab shows the estimated prompt tokens MWT has registered and lets you set per-chat limits for World State, Chronicle, Story Planner, Interiority, and Ambient Conditions. Its settings are stored in the current chat's metadata, so changing a cap does not affect other chats.
 
 - **Observe mode is the default.** It does not change injection applies; the table and Diagnostics Log show what enforcement *would* do. On a chat change, MWT still clears stale injection snapshots before the new chat's modules re-apply, preventing old-chat context from influencing the new allocation.
 - **Enforce budget** applies limits at the shared injection seam. A **soft cap** truncates a payload with a visible `[…truncated ~N tokens]` marker while preserving closed wrapper tags. A **hard cap** drops that module's injection. The **global hard cap** protects higher-priority context by dropping lower-priority content first.
@@ -294,10 +329,14 @@ MWT integrates with SillyTavern's STscript system for power-user automation and 
 | `/wt-snapshot` | Generate a Chronicle snapshot |
 | `/wt-scan` | Run a Knowledge NPC scan |
 | `/wt-plan` | Open scoped Story Planner generation; review before applying |
+| `/wt-beat` | List due Story Planner setup beats; `/wt-beat 2` marks one planted, `/wt-beat resolve R1` resolves a Ready arc |
 | `/wt-thoughts` | Generate Interiority for the current/last AI message |
-| `/wt-inject on\|off` | Toggle injection for World State and Chronicle |
+| `/wt-ambient` | Show current Ambient Conditions and the one-band forecast (alias `/wt-weather`); `/wt-ambient reseed` rolls a new seed for this chat/branch |
+| `/wt-inject on\|off` | Toggle injection for **all** MWT modules at once (mirrors the right-click panic switch) |
+| `/wt-state` | Output the current world state text (pipeable) |
+| `/wt-reset-buttons` | Reset the floating buttons to their default positions |
 
-> **Note:** `/wt-inject` toggles World State and Chronicle injection only. Knowledge Tracker uses lorebook keywords (not extension prompts), and Story Planner/Interiority injection are toggled from their own Settings panels.
+> **Note:** `/wt-inject` toggles injection for every MWT module — Interiority and Knowledge are gated through the same master injection flag as the rest. Knowledge Tracker's lorebook entries are additionally keyword-activated by SillyTavern's own World Info.
 
 **Macros** (SillyTavern 1.12+):
 
@@ -507,6 +546,7 @@ For example, with Auto-Refresh set to `10` and Full Refresh Every set to `5`, MW
 7. The **Relationships** tab has a force-directed graph view (default) and a list view — toggle with the Graph/List button. Drag nodes, scroll to zoom, and click a node to open that NPC. The 🕘 **Recent Changes** collapsible logs every relationship mutation this session — auto-extractions and your manual edits alike
 8. The **State Trackers** tab shows registered state tracker entries that can be updated via LLM
 9. Enable **Auto-Trigger** in module settings to run state tracker scans automatically every N messages (with a cooldown to avoid re-updating recently changed trackers)
+10. When a ledger has grown unwieldy, use the **🧹 Condense** button on that NPC's card — the consent-first, reviewed condensation workflow in the feature list above. It only ever runs when you ask for it
 
 > **Seeing a `[MWT:store]` entry in your lorebook?** That's MWT's registry for that book — a disabled, keyword-less entry that costs 0 tokens and is never sent to the AI. Full explanation in [Data Storage](#the-mwtstore-entry--what-it-is-and-why-its-there).
 
@@ -529,6 +569,7 @@ For example, with Auto-Refresh set to `10` and Full Refresh Every set to `5`, MW
    - Choose **Add ideas** or **Refresh selected arcs**, and check only the sections to touch — unchecked sections are carried forward unchanged
    - Set a **requested count** (1–30) for Add, or pick the exact active arcs to refresh (a Character Journey arc needs an assigned, available primary subject first)
    - Pick this request's **cast policy** — *Established cast only*, *New characters allowed*, or *Actively propose new characters*
+   - For **Add ideas**, optionally pick a **Planning lens** — *Open brainstorm* (default) or *World complications*, which asks the setting itself (weather, scarcity, infrastructure, markets, law, public mood) to pressure the story instead of another character's scheme
    - With Character Journeys checked, choose **Any tracked character** or **Selected characters** as the journey subjects
    - Optionally expand **Opt-in private NPC author context (this chat)** to plan with private major-NPC dossier fields (see the Features list above). Left collapsed, the request carries public context only. Inside the section, the **private author-context budget** (Standard 12,000 / Expanded 24,000 / Large 48,000 characters) caps the additional private planning context — not the model's whole context window; larger presets send more dossier material and still have to fit alongside the rest of the request and the response allowance. The **coverage before generation** preview, computed on-device, reports per NPC how many Knowledge Ledger entries would be included and what to change to fit more
    - Prefer the classic full rebuild? Use **Regenerate the whole plan** — it follows the Story Palette cast policy and honors custom templates
@@ -577,6 +618,15 @@ Regeneration is continuity-aware and identity-safe: active arcs carry request-lo
 11. In the chat, click the 💭 icon on any AI message to expand/collapse that message's thought blocks — each NPC's private reaction and thought is displayed there
 12. Thoughts are never injected into the prompt and never appear in chat history — only the flat, mechanical ledger lines reach the narrator
 
+### Ambient Conditions
+
+1. Open the **⚙️ Settings** tab and find the **🌦️ Ambient Conditions (this chat)** section — its controls save independently of the global **Save Settings** button
+2. Check **Enable Ambient Conditions** and answer the one-time climate + hemisphere question (or pick **Temperate, don't ask again**). Set a manual season if your story is mid-season, and tune **variability** to taste
+3. That's the whole setup — every normal, swipe, regenerate, and continue generation now carries one authoritative ambient line. Check the **🏠 Overview** card or run `/wt-ambient` (alias `/wt-weather`) to see the current conditions and one-band forecast
+4. Open **Pin conditions** to hold a specific state ("thunderstorm tonight") — per-channel picks with an expiry in story time (until unpinned, next band, next dawn, or a story date/time). Pins override even climate restrictions; **Unpin** removes them
+5. Branches inherit the parent chat's seed — same story moment, same weather. Run `/wt-ambient reseed` on a branch that deserves a different fate
+6. With the module on, Story Planner requests automatically receive the current conditions and are told to build on them — no extra setup
+
 ---
 
 ## Architecture
@@ -588,6 +638,11 @@ merged_world_tracker/
 ├── style.css             # All styles (dark + light theme, responsive breakpoints)
 ├── core/                 # Shared infrastructure
 │   ├── index.js          # Barrel re-exports for all core modules
+│   ├── ambient_generator.js # Deterministic conditions engine — seed + clock + climate → qualitative weather, forecast
+│   ├── ambient_pin.js    # Condition pins with story-time expiry + rewind support
+│   ├── ambient_prompt.js # Shared read-only ambient projection for Story Planner context
+│   ├── ambient_state.js  # Per-chat ambient settings/seed state
+│   ├── ambient_time.js   # In-story time parsing + fallback ladder (tag → World State date → message count)
 │   ├── api.js            # OpenAI-compatible + Connection Profile API client with retry
 │   ├── budget.js         # Context/token budget engine — per-module soft/hard caps, global cap, drop-order planning
 │   ├── commands.js       # Slash command and macro registration
@@ -664,7 +719,7 @@ merged_world_tracker/
 │   ├── injection.js      # Prompt injection (depth, structural boundaries, header)
 │   ├── generation.js     # LLM plan generation with chat-switch guards
 │   └── render.js         # UI rendering, toolbar/stats, settings panel, event wiring
-└── interiority/          # Interiority module (NPC thoughts & hidden intentions)
+├── interiority/          # Interiority module (NPC thoughts & hidden intentions)
     ├── index.js          # Orchestrator — public API, event wiring, work queue
     ├── data.js           # Constants, chat-metadata storage, settings, ledger helpers
     ├── lifecycle.js      # Lifecycle history, cross-turn closure dedup, evidence boundaries, per-NPC controls
@@ -673,10 +728,15 @@ merged_world_tracker/
     ├── generation.js     # Context assembly, batched/strict API calls, validation
     ├── injection.js      # <mwt_npc_intentions> extension-prompt injection
     ├── schema.js         # Store descriptor + record validators
-    └── render.js         # Settings UI + per-message thought block rendering
+    ├── render.js         # Settings UI + per-message thought block rendering
+└── ambient/             # 🌦️ Ambient Conditions module (deterministic weather; engine lives in core/)
+    ├── index.js          # Orchestrator — public API, generation interceptor, /wt-ambient command
+    ├── injection.js      # <mwt_ambient> injection through the shared seam
+    ├── settings.js       # Per-chat ambient settings + seed access
+    └── render.js         # Inline settings section (this chat)
 ```
 
-The tree above lists the five user-facing modules; five more support directories keep the data-safety layer, the Overview dashboard, the Budget panel, and diagnostics running (see [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained), [🏠 Overview](#-overview), [📊 Budget](#-budget), and [🩺 Diagnostics](#-diagnostics)):
+The tree above lists the six user-facing modules; five more support directories keep the data-safety layer, the Overview dashboard, the Budget panel, and diagnostics running (see [Data safety in MWT 2.0](#data-safety-in-mwt-20--validation-migrations-and-quarantine-explained), [🏠 Overview](#-overview), [📊 Budget](#-budget), and [🩺 Diagnostics](#-diagnostics)):
 
 ```
 ├── schema/               # Schema validation & migrations engine
@@ -750,6 +810,7 @@ Tested with:
 - **Knowledge** scans work well with lower temperatures (0.1–0.3) for consistent JSON output
 - **Story Planner** benefits from a higher temperature (default `0.6`) for creative, varied arc suggestions
 - **Interiority** runs well on small/cheap models (default `0.4` temp) — the task is closer to a knowledge scan than narration, and output is validated before applying
+- **🌦️ Ambient Conditions** needs no model at all — conditions are computed locally from the story clock, so it works even with no API configured
 - For models with extended thinking (e.g., DeepSeek R1, o1), the API layer automatically recovers from empty content by falling back to `reasoning_content`
 
 ---
@@ -763,6 +824,7 @@ MWT supports both **dark** and **light** SillyTavern themes. CSS variables autom
 ## Data Storage
 
 - **Chat data** (world state text, chronicle entries, growth evidence store, story plan text, interiority ledger + lifecycle history + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
+- **Ambient Conditions** stores only a random seed and its per-chat settings in chat metadata — the conditions themselves are never stored or refreshed; they are recomputed from (seed, in-story clock, climate) at prompt-build time
 - **Lorebook bookkeeping** (NPC registry, state tracker registry, relationships) lives inside the Knowledge Tracker and State Tracker lorebooks themselves, in a single disabled entry titled `[MWT:store]` — see [the section below](#the-mwtstore-entry--what-it-is-and-why-its-there) for exactly what it is and why it can never reach your prompt
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback — validated and version-stamped as of 2.0 (a bad record repairs itself; your values are never silently deleted)
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID — malformed records are filtered from the view as of 2.0 and the list heals itself on the next edit

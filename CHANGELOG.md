@@ -12,6 +12,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.13.0]
+
+### Added
+
+- **Knowledge Tracker: 🧹 Condense — a consent-first, reviewed cleanup for
+  oversized Knowledge Ledgers.** In a long chat a ledger can become a second
+  transcript: duplicate observations, overlapping rewordings, retellings of
+  what the fields already say. Every NPC card now has a **🧹 Condense**
+  button for exactly that — one model proposal (at most two billable
+  attempts), then a source-mapped review. Nothing about it is automatic: it
+  never runs on upgrade, on a schedule, or because an entry crossed a size
+  threshold, and it is separate from Enrich and the Fields refresh.
+  - **Disclosure before cost.** The modal explains what it will do, then
+    discloses the resolved model/profile, exactly what is transmitted — the
+    ledger lines and the NPC's name, never other dossier fields, the chat
+    itself, or recovery originals — and size estimates for the whole request
+    and expected response against known context limits, with an honest
+    warning where a provider's capacity is unknown. A known-excess envelope
+    is refused up front, never clipped. Generation waits for an explicit
+    consent checkbox, is cancellable in flight, and its result is parsed
+    strictly — truncated or repaired cleanup JSON is rejected rather than
+    previewed as if it were valid.
+  - **Review, not a diff to trust.** Each proposed condensed record appears
+    beside its expandable exact originals and can be edited in place while
+    keeping its source mapping. Every original stays represented until you
+    explicitly remove it: removals require a typed reason, the model's
+    pruning suggestions stay advisory (their "Remove…" action only prefills
+    the reason), and keeping one member of a merge restores the whole group
+    in source order. Detail-loss warnings — numbers, codes, dates,
+    identifiers and candidate names, compared with digit-group
+    normalization so `7314` and `7,314` match — recompute after every edit,
+    alongside advisory notes on provenance, attribution, uncertainty,
+    chronology and corrections. Size deltas are labelled estimates; there is
+    no promised compression percentage.
+  - **Apply is separate and recoverable.** A two-step Apply revalidates the
+    exact captured source, identity, scope and full source coverage before
+    anything is written, then replaces only the ledger span — every
+    non-ledger byte, including managed relationship blocks, stays unchanged
+    — and cleanup proposals can never enter auto-approval or a generic
+    accept-all path. The exact pre-cleanup original is persisted and
+    verified in a dedicated non-injecting recovery container *before* the
+    entry is touched, so a storage failure blocks Apply instead of losing
+    data. Afterwards a span-aware undo restores the originals while
+    preserving newer unrelated edits, and a conflict on a span you have
+    since edited is refused with an export offer rather than overwritten. A
+    recovery manager — list, usage, restore, export, import, delete, each
+    with its consequences stated — is reachable from every review state,
+    not only the console, and recovery records travel inside the unified
+    versioned backup.
+  - If the source went stale or a save failed, the review keeps your edited
+    draft — exportable, and regenerable against a changed source with a
+    fresh disclosure and consent — rather than discarding your work, and
+    switching chats detaches the review so it can never target the new
+    chat.
+
+### Changed
+
+- **Knowledge generation now shares one field contract, so new captures stop
+  drifting.** Descriptor, Tone, Perceived as, and every dossier field a
+  model can write are bounded and validated by a single shared contract
+  that renders the prompt guidance and enforces the result from the same
+  definitions, wired through the scan's staging and enrichment merge, the
+  create→update promotion, single-NPC update, Enrich, the Fields refresh,
+  and the final write backstops. A value that breaks the contract is
+  dropped whole with a field-specific reason — never silently sliced —
+  existing entries keep their old value, and new entries fall back to their
+  unknown/empty convention; user-edited review text is deliberately exempt,
+  because the editor is your authority. The v2.12.1 append-only enrichment
+  behaviour is pinned and unchanged.
+  - **Role means the enduring thing.** The scene-duty wording is gone: Role
+    asks for an established occupation, enduring responsibility, or primary
+    story function — today's chores belong in the ledger, not Role — and a
+    missing answer stays a grounded unknown instead of an invented
+    profession. Ledger lines render through one shared formatter, and field
+    updates ask for a meaningful change rather than appended event clauses.
+  - **Read on PC is a stance, not a log.** The model was filling Read on PC
+    with interaction logs — every kiss, confession and reaction — instead of
+    the NPC's attitude toward the player. The contract now describes it as a
+    stance, excludes what the player did and felt, and the scan and update
+    prompts redirect interaction events to new knowledge.
+
+### Fixed
+
+- **Enrich and Fields could preserve — or re-verify — already-drifted field
+  text.** Enrich's "preserve the existing value" rule regurgitated drifted
+  text verbatim, and once drift grew past the contract's size bound it was
+  stuck there (blanking the field first was the only workaround); the
+  per-field refresh's "echo the existing value" instruction could launder
+  the same drift and stamp it freshly re-verified. The contract now
+  explicitly outranks both: drifted text is rewritten to the contract value
+  with the events it accumulated staying established through the ledger, an
+  overshoot is invalid however factual, and the rejection summary names the
+  escape hatch (hand-edit the staged proposal, or blank the field and
+  re-run). Reviewed cleanup of individual stored fields remains future
+  work — this release condenses ledgers.
+
 ## [2.12.1]
 
 ### Fixed
