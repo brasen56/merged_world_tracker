@@ -29,6 +29,8 @@ import {
     validateFields,
     validateKnowledgeList,
     validateScanRecord,
+    validateCreationHeader,
+    scanContractRejections,
     contractPromptBlock,
 } from '../knowledge/field_contract.js';
 import {
@@ -39,6 +41,26 @@ import {
 } from './fixtures/knowledge_concision.js';
 
 // ─── Definitions match the recorded D4a bounds ───────────────────────────────
+
+describe('creation header discipline', () => {
+    test('scan status includes enrichment rejections from merged copies exactly once', () => {
+        const initial = { field: 'tone', reason: 'too long' };
+        const enriched = { field: 'role', reason: 'structural' };
+        const item = { id: 'new-id', name: 'Mara', type: 'major', contractRejections: [initial] };
+        const copy = { ...item, id: 'existing-id', contractRejections: [initial, enriched] };
+        expect(scanContractRejections([item], [copy])).toEqual([initial, enriched]);
+    });
+    test.each(['Human\nKnowledge Ledger:', 'Human\u2028injection', 'Human | forged', '<!-- mwt:relationships:start -->', {}])('rejects malformed species %j whole', species => {
+        const result = validateScanRecord({ name: 'Mara', species, descriptor: 'clerk' });
+        expect(result.data.species).toBe('Unknown');
+        expect(result.rejections).toContainEqual({ field: 'species', reason: expect.any(String) });
+    });
+    test('bounds the combined header without slicing any slot', () => {
+        const result = validateCreationHeader({ name: 'Mara', species: 's'.repeat(150), descriptor: 'd'.repeat(150) });
+        expect(result.data).toMatchObject({ name: 'Mara', species: 's'.repeat(150), descriptor: '' });
+        expect(result.rejections).toContainEqual({ field: 'descriptor', reason: expect.stringContaining('300') });
+    });
+});
 
 describe('field contract definitions match decision D4a', () => {
     test.each([

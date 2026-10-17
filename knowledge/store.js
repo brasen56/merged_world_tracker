@@ -1265,7 +1265,37 @@ export function markStoreClean(bookName) {
  * @returns {Promise<void>}
  */
 export async function saveBookNow(wi$, bookName, wi) {
-    return wi$.saveWorldInfo(bookName, wi, true);
+    await wi$.saveWorldInfo(bookName, wi, true);
+    refreshWorldInfoEditor(wi$, bookName);
+}
+
+/**
+ * Re-render ST's World Info editor when — and only when — it is showing this
+ * book. The editor holds its own copy of the book and saves that WHOLE copy on
+ * its next edit, so without a refresh every MWT write since the editor loaded
+ * (entries, the [MWT:store] entry, cleanup recovery) would be reverted by the
+ * user's next keystroke there. ST's reloadEditor re-reads through
+ * `worldInfoCache`, which every MWT save has already updated.
+ *
+ * The explicit selection check is load-bearing: ST's reloadEditor compares
+ * `Number(select.value)`, and the "--- Pick to Edit ---" placeholder's value
+ * is '' → 0, so with NOTHING selected it would open `world_names[0]` if that
+ * happened to be this book. Forks without reloadEditor/world_names skip.
+ *
+ * @param {object} wi$ — ST's world-info module
+ * @param {string} bookName
+ */
+export function refreshWorldInfoEditor(wi$, bookName) {
+    if (typeof wi$?.reloadEditor !== 'function' || !Array.isArray(wi$.world_names)) return;
+    const selected = globalThis.document?.getElementById?.('world_editor_select')?.value;
+    if (typeof selected !== 'string' || selected === '') return;
+    if (Number(selected) !== wi$.world_names.indexOf(bookName)) return;
+    try {
+        wi$.reloadEditor(bookName);
+    } catch (err) {
+        // Display refresh only — the save itself already succeeded.
+        console.warn('[MWT:Knowledge] World Info editor refresh failed:', err?.message || err);
+    }
 }
 
 /**

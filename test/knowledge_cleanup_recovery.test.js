@@ -19,6 +19,7 @@
 import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 
 import { resetCoreStubs } from './stubs/core.js';
+import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 import { state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
 import { _setCacheForTests, _clearCacheForTests } from '../knowledge/store.js';
@@ -89,6 +90,7 @@ beforeEach(() => {
     _setCacheForTests(BOOK, { registry: { [NPC]: { uid: 7, type: 'major', keywords: [NPC], info: { entityId: 'ent-1' } } } });
     wiFake = makeFakeWorldInfo();
     state.wiScript = wiFake;
+    installCleanupFetch(wiFake);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
 });
@@ -97,11 +99,24 @@ afterEach(() => {
     _clearCacheForTests();
     state.wiScript = null;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
 });
 
 // ─── Container creation and structure ────────────────────────────────────────
 
 describe('cleanup recovery container', () => {
+    test('unreadable records can be exported verbatim and explicitly deleted', async () => {
+        await saveCleanupOriginal(makeRecord('valid'));
+        const container = findContainer(wiFake.books.get(BOOK));
+        const raw = JSON.parse(container.content);
+        raw.records.broken = { originalContent: 'recover me', future: 99 };
+        raw.records.other = null;
+        container.content = JSON.stringify(raw);
+        const exported = await exportCleanupRecovery(['broken', 'other']);
+        expect(exported.records).toEqual({ broken: raw.records.broken, other: null });
+        expect(await deleteCleanupRecords(['broken'])).toEqual({ deleted: ['broken'], missing: [] });
+        expect((await exportCleanupRecovery()).records).toEqual({ valid: raw.records.valid, other: null });
+    });
     test('parallel original saves preserve every record', async () => {
         await Promise.all(['parallel-a', 'parallel-b', 'parallel-c'].map(id => saveCleanupOriginal(makeRecord(id))));
         const read = await readCleanupRecoveryContainer(BOOK);
@@ -191,6 +206,7 @@ describe('cleanup recovery persistence is fail-closed', () => {
     test('a save that throws rejects the whole operation — nothing half-written', async () => {
         wiFake = makeFakeWorldInfo({ failSave: 1 });
         state.wiScript = wiFake;
+        installCleanupFetch(wiFake);
         await expect(saveCleanupOriginal(makeRecord('act-1'))).rejects.toThrow(/disk unavailable|verify/i);
         const wi = wiFake.books.get(BOOK);
         expect(findContainer(wi)).toBeNull();
@@ -200,6 +216,7 @@ describe('cleanup recovery persistence is fail-closed', () => {
         // ST's classic silent loss: save "succeeds", the disk never changed.
         wiFake = makeFakeWorldInfo({ loseWrite: true });
         state.wiScript = wiFake;
+        installCleanupFetch(wiFake);
         await expect(saveCleanupOriginal(makeRecord('act-1'))).rejects.toThrow(/verified/i);
     });
 
@@ -213,6 +230,29 @@ describe('cleanup recovery persistence is fail-closed', () => {
 // ─── Status transitions, listing, retention ──────────────────────────────────
 
 describe('cleanup recovery records', () => {
+    test('replaceStatuses: an advanced record is never reset; a failed one may be replaced', async () => {
+        await saveCleanupOriginal(makeRecord('act-1', { status: 'applied' }));
+        await expect(saveCleanupOriginal(makeRecord('act-1'), { replaceStatuses: ['failed'] }))
+            .rejects.toMatchObject({ code: 'cleanup-record-exists', status: 'applied' });
+        expect((await getCleanupRecord('act-1')).status).toBe('applied');
+
+        await updateCleanupRecord('act-1', { status: 'failed' });
+        await saveCleanupOriginal(makeRecord('act-1'), { replaceStatuses: ['failed'] });
+        expect((await getCleanupRecord('act-1')).status).toBe('original-saved');
+    });
+
+    test('replaceStatuses: an unreadable record with the same action id is never overwritten', async () => {
+        await saveCleanupOriginal(makeRecord('act-1'));
+        const container = findContainer(wiFake.books.get(BOOK));
+        const parsed = JSON.parse(container.content);
+        parsed.records['act-1'].status = 'future-status';
+        container.content = JSON.stringify(parsed);
+
+        await expect(saveCleanupOriginal(makeRecord('act-1'), { replaceStatuses: ['failed'] }))
+            .rejects.toMatchObject({ code: 'cleanup-record-exists', status: 'unreadable' });
+        expect(JSON.parse(findContainer(wiFake.books.get(BOOK)).content).records['act-1'].status).toBe('future-status');
+    });
+
     test('status transitions persist and validate', async () => {
         await saveCleanupOriginal(makeRecord('act-1'));
         await updateCleanupRecord('act-1', { status: 'application-pending' });
@@ -293,6 +333,21 @@ describe('cleanup recovery records', () => {
 // ─── Export / import round trip ──────────────────────────────────────────────
 
 describe('cleanup recovery export/import', () => {
+    test('import preserves unreadable local records on collisions, including when adding another record', async () => {
+        await saveCleanupOriginal(makeRecord('unreadable'));
+        const container = findContainer(wiFake.books.get(BOOK));
+        const parsed = JSON.parse(container.content);
+        const unreadable = { ...parsed.records.unreadable, status: 'future-status', originalContent: 'LOCAL ORIGINAL' };
+        parsed.records.unreadable = unreadable;
+        container.content = JSON.stringify(parsed);
+        const result = await importCleanupRecovery({
+            type: CLEANUP_RECOVERY_EXPORT_TYPE, version: 1,
+            records: { unreadable: makeRecord('unreadable'), added: makeRecord('added') },
+        });
+        expect(result).toMatchObject({ kept: ['unreadable'], added: ['added'] });
+        expect(JSON.parse(findContainer(wiFake.books.get(BOOK)).content).records.unreadable).toEqual(unreadable);
+    });
+
     test('export → delete → import restores the records (validated, re-stamped)', async () => {
         await saveCleanupOriginal(makeRecord('act-1'));
         await saveCleanupOriginal(makeRecord('act-2'));

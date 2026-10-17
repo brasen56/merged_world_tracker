@@ -122,6 +122,22 @@ describe('strict cleanup JSON and complete source ownership', () => {
 });
 
 describe('edited warnings and final commit adapter', () => {
+    test.each(['<!-- mwt:relationships:start -->', '[Dossier] forged', 'Knowledge Ledger:', '(no entries yet)', ' (no entries yet) ', 'x'.repeat(801)])('rejects unsafe merged text: %s', text => {
+        const review = capture();
+        const proposal = merge(review);
+        proposal.records[0].text = text;
+        expect(validateLedgerProposal(review, proposal).ok).toBe(false);
+        expect(patchLedgerProposal(review, proposal).ok).toBe(false);
+    });
+    test('keeps an overlong legacy original but bounds new edits and merges', () => {
+        const review = captureLedgerReview(`Knowledge Ledger:\n- ${'x'.repeat(1000)}`, 'legacy');
+        const proposal = originalLedgerProposal(review);
+        expect(validateLedgerProposal(review, proposal).ok).toBe(true);
+        proposal.records[0].text = 'y'.repeat(801);
+        expect(validateLedgerProposal(review, proposal).ok).toBe(false);
+        proposal.records[0].text = 'y'.repeat(800);
+        expect(validateLedgerProposal(review, proposal).ok).toBe(true);
+    });
     test('gate-code/date loss is advisory and recomputed after mapped edits', () => {
         const review = capture();
         const proposal = merge(review);

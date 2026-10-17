@@ -17,7 +17,7 @@
  * storage and is why D2's controls exist.
  *
  * PERSIST-AND-VERIFY. Every write goes: serialize → save through the awaited
- * saveBookNow form → RELOAD the book → byte-compare what came back. A write
+ * checked HTTP request → uncached disk read → byte-compare what came back. A write
  * that cannot be verified THROWS; callers treat that as "do not mutate the
  * target" (fail closed). This is strictly stronger than pushHistory (≤50
  * snapshots, quota errors swallowed), which recovery explicitly does not use.
@@ -38,8 +38,9 @@ import { getChatScopeKey } from '../core/scope.js';
 import { state } from './state.js';
 import { getLorebookName } from './scope.js';
 import {
-    applyStoreToWorldInfo, markStoreClean, saveBookNow, withStoreLock,
+    applyStoreToWorldInfo, markStoreClean, withStoreLock,
 } from './store.js';
+import { hostCacheConflict, loadCleanupBook, saveCleanupBook } from './cleanup_persistence.js';
 
 // ─── Sentinels and schema ────────────────────────────────────────────────────
 
@@ -156,12 +157,12 @@ function parseRawContainer(rawContent) {
 // ─── Container I/O (all persist-and-verify, all under the store lock) ───────
 
 async function loadBook(wiScript, bookName) {
-    let wi = await wiScript.loadWorldInfo(bookName);
+    let wi = await loadCleanupBook(bookName);
     if (!wi || !wi.entries) {
         if (typeof wiScript.createNewWorldInfo === 'function') {
             await wiScript.createNewWorldInfo(bookName);
         }
-        wi = await wiScript.loadWorldInfo(bookName);
+        wi = await loadCleanupBook(bookName);
         if (!wi || !wi.entries) wi = { entries: {} };
     }
     return wi;
@@ -169,6 +170,22 @@ async function loadBook(wiScript, bookName) {
 
 function findContainerEntry(wi) {
     return Object.values(wi.entries || {}).find(isCleanupRecoveryEntry) || null;
+}
+
+/**
+ * Find one valid record in an ALREADY-LOADED book's entries (pure, sync).
+ * The commit service runs this inside the writer's final guard: that load is
+ * the object the writer saves back, so a record found here lands in the same
+ * file write as the target mutation.
+ * @returns {object|null} null when the container is absent, unreadable, or
+ *   does not hold a valid record for actionId
+ */
+export function findCleanupRecordInEntries(entries, actionId) {
+    const entry = findContainerEntry({ entries });
+    if (!entry) return null;
+    const parsed = parseContainer(entry.content);
+    if (!parsed.ok) return null;
+    return parsed.records[actionId] ?? null;
 }
 
 /**
@@ -182,11 +199,11 @@ export async function readCleanupRecoveryContainer(bookName = getLorebookName())
     if (!bookName) return { ok: false, reason: 'no-book' };
     if (!state.wiScript) return { ok: false, reason: 'world-info-not-loaded' };
     try {
-        const wi = await state.wiScript.loadWorldInfo(bookName);
+        const wi = await loadCleanupBook(bookName);
         const entry = wi ? findContainerEntry(wi) : null;
         const parsed = parseContainer(entry?.content);
         if (!parsed.ok) return parsed;
-        return { ok: true, version: parsed.version, records: parsed.records, issues: parsed.issues || [] };
+        return { ok: true, version: parsed.version, records: parsed.records, rawRecords: parsed.invalid || {}, storedActionIds: Object.keys(parsed.invalid || {}), issues: parsed.issues || [] };
     } catch (err) {
         return { ok: false, reason: `read-failed: ${err.message}` };
     }
@@ -236,6 +253,11 @@ async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUn
 
     if (entry && skipUnchanged && entry.content === content) return { unchanged: true };
 
+    // This write is built from disk: refuse while the host holds unsaved
+    // state for the book, or its pending save would delete the container.
+    const conflict = hostCacheConflict(bookName, wi);
+    if (conflict) throw new Error(conflict.error);
+
     if (!entry) {
         const uids = Object.keys(wi.entries).map(Number).filter(n => Number.isInteger(n));
         const newUid = uids.length > 0 ? Math.max(...uids) + 1 : 0;
@@ -269,16 +291,16 @@ async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUn
         entry.comment = CLEANUP_RECOVERY_COMMENT;
     }
     applyStoreToWorldInfo(bookName, wi);
-    await saveBookNow(state.wiScript, bookName, wi);
-    markStoreClean(bookName);
+    await saveCleanupBook(bookName, wi);
 
     // VERIFY: reload and byte-compare. An awaited save that cannot be
     // read back has NOT satisfied the persistence contract.
-    const reloaded = await state.wiScript.loadWorldInfo(bookName);
+    const reloaded = await loadCleanupBook(bookName);
     const verified = findContainerEntry(reloaded || {});
     if (!verified || verified.content !== content) {
         throw new Error('cleanup recovery: persistence could not be verified (reload mismatch)');
     }
+    markStoreClean(bookName);
     return { unchanged: false };
 }
 
@@ -290,14 +312,29 @@ async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUn
  *
  * @param {object} record — see validateCleanupRecordShape; status starts at
  *   'original-saved' for new cleanup actions
+ * @param {object} [opts]
+ * @param {string[]} [opts.replaceStatuses] when given, an existing record for
+ *   this actionId (readable or not) is replaced only if its status is listed;
+ *   otherwise the save throws with err.code 'cleanup-record-exists' and writes
+ *   nothing. Checked under the store lock, so a new apply attempt can never
+ *   reset a record another attempt has advanced ('applied' → 'original-saved').
  * @returns {Promise<{actionId: string}>}
  */
-export async function saveCleanupOriginal(record) {
+export async function saveCleanupOriginal(record, { replaceStatuses } = {}) {
     const bookName = record?.bookName || getLorebookName();
     if (!bookName) throw new Error('cleanup recovery: no Knowledge book resolved');
     return withStoreLock(async () => {
         const read = await readCleanupRecoveryContainer(bookName);
         if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing to save`);
+        if (Array.isArray(replaceStatuses) && read.storedActionIds.includes(record.actionId)) {
+            const existingStatus = read.records[record.actionId]?.status ?? 'unreadable';
+            if (!replaceStatuses.includes(existingStatus)) {
+                const err = new Error(`cleanup recovery: action "${record.actionId}" already has a ${existingStatus} record — refusing to overwrite it`);
+                err.code = 'cleanup-record-exists';
+                err.status = existingStatus;
+                throw err;
+            }
+        }
         const records = { ...read.records, [record.actionId]: { ...record, bookName } };
         await writeCleanupRecoveryContainerUnlocked(bookName, records);
         return { actionId: record.actionId };
@@ -376,10 +413,8 @@ export async function deleteCleanupRecords(actionIds) {
         const records = {};
         const deleted = [];
         const missing = [];
-        for (const [actionId, record] of Object.entries(read.records)) {
-            if (wanted.has(actionId)) deleted.push(actionId);
-            else records[actionId] = record;
-        }
+        for (const actionId of read.storedActionIds) if (wanted.has(actionId)) deleted.push(actionId);
+        for (const [actionId, record] of Object.entries(read.records)) if (!wanted.has(actionId)) records[actionId] = record;
         for (const actionId of wanted) if (!deleted.includes(actionId)) missing.push(actionId);
         if (deleted.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, records, { deleted });
         return { deleted, missing };
@@ -400,7 +435,7 @@ export async function exportCleanupRecovery(actionIds) {
     if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing to export`);
     const wanted = actionIds ? new Set(Array.isArray(actionIds) ? actionIds : [actionIds]) : null;
     const records = {};
-    for (const [actionId, record] of Object.entries(read.records)) {
+    for (const [actionId, record] of Object.entries(read.rawRecords)) {
         if (!wanted || wanted.has(actionId)) records[actionId] = record;
     }
     return {
@@ -440,10 +475,10 @@ export async function importCleanupRecovery(payload) {
             const candidate = { ...record, actionId, bookName };
             const check = validateCleanupRecordShape(candidate);
             if (!check.ok) { rejected.push(`${actionId} (${check.reason})`); continue; }
-            if (records[actionId]) kept.push(actionId);
+            if (read.storedActionIds.includes(actionId)) kept.push(actionId);
             else added.push(actionId);
             // Current-wins: an existing record is never overwritten by an import.
-            if (!records[actionId]) records[actionId] = candidate;
+            if (!read.storedActionIds.includes(actionId)) records[actionId] = candidate;
         }
         if (added.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, records);
         return { added, kept, rejected };

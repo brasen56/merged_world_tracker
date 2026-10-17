@@ -12,6 +12,8 @@
  * approve removals. Revalidate after every decision and again before commit.
  */
 
+import { structuralRejection, LEDGER_ITEM_LIMITS } from './field_contract.js';
+
 export const LEDGER_PROPOSAL_VERSION = 1;
 const fail = (reason) => ({ ok: false, reason });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -162,6 +164,12 @@ export function validateLedgerProposal(review, proposal, decisions = { removals:
             owners.set(sourceId, record.id);
             sources.push(byId.get(sourceId));
         }
+        // Exact legacy originals may be kept without forcing a lossy rewrite.
+        const exact = sources.length === 1 && sources[0].text.replace(/^\s*- /, '') === record.text;
+        const structure = structuralRejection(record.text);
+        if (structure) return fail(`Invalid ledger record: ${structure}.`);
+        if (record.text.trim() === '(no entries yet)') return fail('An empty-ledger placeholder cannot represent source coverage. Use explicit removals instead.');
+        if (!exact && record.text.length > LEDGER_ITEM_LIMITS.fact) return fail(`Ledger record exceeds the ${LEDGER_ITEM_LIMITS.fact}-character bound.`);
         for (const warning of ledgerDetailWarnings(sources, record.text)) warnings.push({ recordId: record.id, ...warning });
     }
     for (const suggestion of proposal.pruningSuggestions) {

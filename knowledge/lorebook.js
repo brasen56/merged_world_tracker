@@ -24,11 +24,12 @@ import {
 import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.js';
 import { hasEvidenceFile } from './evidence.js';
 import { applyFieldOwnership } from './field_ownership.js';
-import { validateFields, validateFieldValue, validateKnowledgeList } from './field_contract.js';
+import { validateFields, validateFieldValue, validateKnowledgeList, validateCreationHeader } from './field_contract.js';
 import { stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
 import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
+import { hostCacheConflict, loadCleanupBook, saveCleanupBook } from './cleanup_persistence.js';
 import { findEntryUidByNpcIdentity } from './reconcile.js';
 import { validateHistoryRecords } from '../schema/secondary.js';
 // Part 7 diagnostics wiring: direct import (not the barrel) so the REAL
@@ -179,14 +180,21 @@ export async function writeStateTracker(uid, name, content) {
     } catch (err) { return { success: false, error: err.message }; }
 }
 
-export async function writeToLorebook(name, content, keywords, existingUid, { bookName } = {}) {
+export async function writeToLorebook(name, content, keywords, existingUid, { bookName, beforeWrite } = {}) {
     if (!state.wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
     // Resolve the book ONCE. Calling the resolver per save could target two
     // different books within a single write if the scope changed mid-flight.
     const book = bookName ?? getLorebookName();
     if (!book) return { success: false, error: 'Knowledge lorebook name collision — no book was written.' };
     try {
-        let wi = await state.wiScript.loadWorldInfo(book);
+        let wi = beforeWrite ? await loadCleanupBook(book) : await state.wiScript.loadWorldInfo(book);
+        // Cleanup guards run synchronously against the final loaded object,
+        // before any mutation, history push, auto-create, or awaited save.
+        // Unsaved host state comes first: this write is built from disk.
+        if (beforeWrite) {
+            const guard = hostCacheConflict(book, wi) || beforeWrite(wi?.entries || {});
+            if (guard) return { success: false, error: guard.error, refusal: guard };
+        }
         // Auto-create the lorebook if it doesn't exist yet.
         // createNewWorldInfo returns a boolean on the Aikobots v4 fork (and some
         // ST versions), not the world-info object. Always re-load after creating
@@ -280,10 +288,12 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
             const previousContent = entries[existingUid].content || '';
             pushHistory(existingUid, previousContent, book);
             entries[existingUid].content = content;
-            entries[existingUid].key = keywords;
+            // Cleanup owns content, not keywords edited during review.
+            if (!beforeWrite) entries[existingUid].key = keywords;
             entries[existingUid].comment = name;
             applyStoreToWorldInfo(book, wi);
-            await saveBookNow(state.wiScript, book, wi);
+            if (beforeWrite) await saveCleanupBook(book, wi);
+            else await saveBookNow(state.wiScript, book, wi);
             markStoreClean(book);
             return { success: true, uid: existingUid };
         } else {
@@ -620,12 +630,14 @@ export async function deleteProfileEntries(uids) {
 // ─── Entry formatters ────────────────────────────────────────────────────────
 
 export function formatMinorEntry(data) {
+    data = validateCreationHeader(data).data;
     return [`${data.name || 'Unknown'} | ${data.species || 'Unknown'} | ${data.descriptor || ''}`,
         `Tone: ${data.tone || 'unknown'}`, `Perceived as: ${data.perceived_as || 'unknown'}`,
         `First seen: ${data.first_seen || 'unknown'}`].join('\n');
 }
 
 export function formatMajorEntry(data) {
+    data = validateCreationHeader(data).data;
     const lines = [`${data.name || 'Unknown'} | ${data.species || 'Unknown'} | ${data.descriptor || ''}`,
         `Tone: ${data.tone || 'unknown'}`, `Perceived as: ${data.perceived_as || 'unknown'}`,
         `First seen: ${data.first_seen || 'unknown'}`, '', 'Knowledge Ledger:'];
@@ -966,6 +978,7 @@ export function stringifyDossierValue(val) {
 }
 
 export function formatDossierEntry(data) {
+    data = validateCreationHeader(data).data;
     const lines = [
         `${DOSSIER_MARKER} ${data.name || 'Unknown'} | ${data.species || 'Unknown'} | ${data.descriptor || ''}`,
         `Tone: ${data.tone || 'unknown'}`,

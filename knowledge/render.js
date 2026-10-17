@@ -68,7 +68,7 @@ import { decorateModalShell, setStatus } from '../core/modal.js';
 // (plan §4.4); prefersReducedMotion: gates the one JS-driven smooth scroll
 // (plan §4.5).
 import { setControlBusy, prefersReducedMotion } from '../core/ui.js';
-import { acceptedRefreshFields, contractRejectionSummary } from './field_contract.js';
+import { acceptedRefreshFields, contractRejectionSummary, scanContractRejections } from './field_contract.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -270,7 +270,7 @@ export function renderNpcsSubTab() {
             // Enrich non-edited update proposals; edited ones keep their text.
             await Promise.all(added.filter(it => it.action === 'update' && !it.edited).map(it => enrichStagingItem(it)));
             added.forEach(item => addNotificationEntry(item));
-            setContractStatus(`Scan complete — ${added.length} proposal(s).`, newItems.flatMap(item => item.contractRejections || []));
+            setContractStatus(`Scan complete — ${added.length} proposal(s).`, scanContractRejections(newItems, added));
             notify('Knowledge Tracker', `Scan found ${added.length} proposal(s).`, added.length ? 'info' : 'success');
         } catch (err) {
             // Coordinator cancellation (TODO §1): an intentional stop (chat

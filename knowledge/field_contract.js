@@ -131,13 +131,39 @@ function previewStructured(value) {
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
-function structuralRejection(text) {
-    if (/[\r\n]/.test(text)) return 'contains a line break (entry values are single-line)';
+export function structuralRejection(text) {
+    if (/[\r\n\u2028\u2029]/.test(text)) return 'contains a line break (entry values are single-line)';
     const lower = text.toLowerCase();
     if (lower.includes('knowledge ledger:')) return 'contains a "Knowledge Ledger:" heading (section injection)';
     if (lower.includes('<!-- mwt:relationships:')) return 'contains a managed relationship block marker';
     if (lower.includes('[dossier]')) return 'contains the [Dossier] header marker (section injection)';
     return null;
+}
+
+/** Creation headers have three single-line slots and a combined D4a bound. */
+export function validateCreationHeader(data) {
+    const out = { ...data };
+    const rejections = [];
+    const defaults = { name: 'Unknown', species: 'Unknown', descriptor: '' };
+    for (const key of Object.keys(defaults)) {
+        const value = data[key];
+        if (value == null || value === '') { out[key] = defaults[key]; continue; }
+        const text = ['string', 'number', 'boolean'].includes(typeof value) ? String(value).trim() : null;
+        const reason = text === null ? 'header slot must be plain text'
+            : structuralRejection(text) || (text.includes('|') ? 'header slot contains a separator' : null);
+        if (reason) {
+            out[key] = defaults[key];
+            rejections.push({ field: key, reason });
+        } else out[key] = text || defaults[key];
+    }
+    const render = () => `${out.name} | ${out.species} | ${out.descriptor}`;
+    for (const key of ['descriptor', 'species', 'name']) {
+        if (render().length <= 300) break;
+        if (out[key] === defaults[key]) continue;
+        out[key] = defaults[key];
+        rejections.push({ field: key, reason: 'header exceeds the 300-character bound' });
+    }
+    return { data: out, rejections };
 }
 
 /** Fields rejected by validation must never receive a freshness watermark. */
@@ -151,6 +177,13 @@ export function contractRejectionSummary(rejections = []) {
     if (!rejections.length) return '';
     return `Field contract: ${rejections.length} invalid model value(s) dropped whole — ${rejections.map(r => `${r.field} (${r.reason})`).join('; ')}. `
         + 'Rejected fields were not re-verified; edit them by hand in the staged proposal, or blank them in the entry and re-run to regenerate.';
+}
+
+/** Enrichment mutates merged staging copies, not necessarily the scan items.
+ * Prefer those copies while retaining rejections from proposals not staged. */
+export function scanContractRejections(newItems, added) {
+    const items = new Map([...newItems, ...added].map(item => [`${item.type}:${item.name}`, item]));
+    return [...items.values()].flatMap(item => item.contractRejections || []);
 }
 
 /**
@@ -274,7 +307,7 @@ export function validateKnowledgeList(items) {
  * Clean one scan record (new_* or update_*) against the contract before any
  * formatter, merger, or staging consumer sees it — Phase 0 seam S1. Flat
  * creation fields, nested `fields`, and both knowledge lists are validated;
- * identity fields (name/species) are not contract fields and pass through.
+ * Creation header slots are checked separately, including their combined bound.
  *
  * @param {object} data a scan record
  * @returns {{data: object, rejections: Array<{field: string, reason: string}>}}
@@ -312,6 +345,11 @@ export function validateScanRecord(data) {
         } else if (check.value !== data[def.key]) {
             set(def.key, check.value);
         }
+    }
+    const header = validateCreationHeader(out || data);
+    if (header.rejections.length) {
+        out = header.data;
+        rejections.push(...header.rejections);
     }
     return { data: out || data, rejections };
 }
