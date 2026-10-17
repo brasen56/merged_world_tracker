@@ -115,7 +115,7 @@ OUTPUT FORMAT:
       "voice": "how they speak: cadence, accent, verbal tics, topics they dodge",
       "background": "3-5 sentences: origin, how they got here, the event that shaped them",
       "personality": "2-3 defining traits shown as behavior, a core flaw, a core fear, a tell",
-      "read_on_pc": "what this NPC currently thinks of the player character",
+      "read_on_pc": "their current assessment of the player character — a stance, not a log of interactions",
       "agenda": "their main agenda in the story right now",
       "secrets": "A SINGLE STRING: tiered secrets the NPC guards (never narrate unless disclosed). Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
       "canon_lock": "A SINGLE STRING: 3-5 immutable facts that must never change across appearances, separated by semicolons",
@@ -138,7 +138,7 @@ OUTPUT FORMAT:
         "voice": "updated value or null if unchanged",
         "background": "updated value or null if unchanged",
         "personality": "updated value or null if unchanged",
-        "read_on_pc": "updated value or null if unchanged",
+        "read_on_pc": "current assessment of the player character if it shifted, else null — a stance, not a log of interactions",
         "agenda": "updated value or null if unchanged",
         "secrets": "Revise the tiered secrets string when: a NEW secret surfaces; a secret is DISCLOSED in narration (remove it — once known it is no longer a secret; fold any lasting consequence into background); or a secret's premise has RESOLVED or become obsolete because the in-world event it hinges on has passed (drop it). Also re-tier a secret if story pressure changed how buried it is. Else null (FILL if currently missing/empty).",
         "canon_lock": "updated value or null if unchanged"
@@ -159,6 +159,7 @@ Classification guide:
 - SECRETS ARE NOT PERMANENT: a disclosed, resolved, or obsolete secret is a change worth an update_major. If a Tier's premise hinges on an in-world event that has clearly passed (compare against current in-world dates), retire that Tier rather than carrying it forward.
 - CRITICAL — FILL MISSING FIELDS WITH GROUNDED VALUES ONLY: If the "Already Tracked NPCs" section includes an entry's current content (inside <existing_entry> tags) and a dossier field is MISSING or EMPTY, fill it only when the messages and established facts support a value. A grounded unknown is correct, not a gap: when nothing establishes a field (for example no occupation is ever established), leave it as an empty string "" rather than inventing one. Only output null for a field that already has a real value and has genuinely not changed.
 - <existing_entry> IS ABBREVIATED: long values are clipped with "…" and only the most recent Knowledge Ledger lines are shown. A clipped value is PRESENT, not missing — never rewrite a field just because it looks cut off, and treat a field as missing only when its label has no value at all.
+- Read on PC is the NPC's CURRENT assessment of the player character — a stance, not an interaction log. What happened between them (a kiss, a confession, a deal, the player's reaction) is new_knowledge, not a Read on PC clause; write only how the NPC now regards the player.
 - RECORD WHAT THEY LEARNED: for every update_major, fill new_knowledge with the concrete facts that NPC learned or now knows from these messages — established facts only, per the ledger rule above. Do not restate a fact already shown in their Knowledge Ledger. Return [] only when nothing new was actually established for them.
 - For new_major, leave a field as an empty string "" rather than inventing if truly unknown — but prefer concrete inference from the scene.
 - If no NPCs qualify for a category, use an empty array [].
@@ -206,6 +207,7 @@ ABSOLUTE RULES:
 - Do NOT invent information not established in the messages.
 - The Knowledge Ledger records ESTABLISHED FACTS ONLY — things that already happened or are true now. NEVER write this NPC's OWN unresolved plans or commitments ("plans to", "will", "intends to", "agrees to" DO something) into new_knowledge; record such an event only after it happens. Facts about OTHER people's promises are established facts and are allowed. The NPC's own future plans are tracked by a different system.
 - FILL MISSING FIELDS WITH GROUNDED VALUES ONLY: If a dossier field is MISSING or EMPTY in <current_entry>, fill it only when the messages and established facts support a value; when nothing establishes it, keep it unknown rather than inventing detail. Only output null for a field that already has a real value and has genuinely not changed.
+- Read on PC is the NPC's CURRENT assessment of the player character — a stance, not an interaction log. What happened between them (a kiss, a confession, a deal, the player's reaction) is new_knowledge, not a Read on PC clause; write only how the NPC now regards the player.
 - If no new information exists AND all fields are already filled, return null fields.
 
 OUTPUT FORMAT:
@@ -220,7 +222,7 @@ OUTPUT FORMAT:
     "voice": "updated voice if it changed, else null (FILL if currently missing/empty)",
     "background": "updated background if new facts emerged, else null (FILL if currently missing/empty)",
     "personality": "updated personality if it changed, else null (FILL if currently missing/empty)",
-    "read_on_pc": "updated read on PC if it shifted, else null (FILL if currently missing/empty)",
+    "read_on_pc": "current assessment of the player character if it shifted, else null (FILL if currently missing/empty) — a stance, not a log of interactions",
     "agenda": "updated agenda if it changed, else null (FILL if currently missing/empty)",
     "secrets": "Revise the tiered secrets string when: a NEW secret surfaces; a secret is DISCLOSED in narration (remove it — once known it is no longer a secret; fold any lasting consequence into background); or a secret's premise has RESOLVED or become obsolete because the in-world event it hinges on has passed (drop it). Also re-tier a secret if story pressure changed how buried it is. Else null (FILL if currently missing/empty).",
     "canon_lock": "updated canon lock if a new immutable fact was established, else null (FILL if currently missing/empty)"
@@ -264,7 +266,7 @@ OUTPUT FORMAT:
     "voice": "how they speak: cadence, accent, verbal tics, topics they dodge",
     "background": "3-5 sentences: origin, how they got here, the event that shaped them",
     "personality": "2-3 defining traits shown as behavior, a core flaw, a core fear, a tell",
-    "read_on_pc": "what this NPC currently thinks of the player character",
+    "read_on_pc": "their current assessment of the player character — a stance, not a log of interactions",
     "agenda": "their main agenda in the story right now",
     "secrets": "A SINGLE STRING: tiered secrets. Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
     "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons"

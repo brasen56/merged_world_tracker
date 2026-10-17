@@ -74,10 +74,11 @@ function ledgerSectionStats(content) {
 // ─── Role scenarios ──────────────────────────────────────────────────────────
 
 describe('knowledge concision Phase 0 — role scenarios', () => {
-    test('the registry carries exactly the five plan-mandated scenarios', () => {
+    test('the registry carries exactly the plan-mandated scenarios', () => {
         expect(Object.keys(ROLE_SCENARIOS).sort()).toEqual([
             'enduringRelationshipRole',
             'mayorTransition',
+            'readOnPcDrift',
             'reportedRoleDrift',
             'temporaryTasks',
             'unknownRolePreserved',
@@ -101,6 +102,16 @@ describe('knowledge concision Phase 0 — role scenarios', () => {
         expect(entryContent).toContain(
             'Role: Alex\'s boyfriend; Braun transmittal sent; co-signer of the amended weekend law; ' +
             'chock duty and photo-hanging at today\'s Kovach unload'
+        );
+    });
+
+    test('the reported Read on PC line is preserved verbatim in the readOnPcDrift entry', () => {
+        const { entryContent } = ROLE_SCENARIOS.readOnPcDrift;
+        // The exact reported string (doubled space included) — the drift-repro
+        // anchor for the interaction-log failure mode.
+        expect(entryContent).toContain(
+            'Read on PC: Kissed Alex for the fourth time; confessed the full wants list and the ugly fog-keeping detail aloud; ' +
+            'Alex agreed to all terms without hesitation; Alex  went red to the collar from the kiss'
         );
     });
 

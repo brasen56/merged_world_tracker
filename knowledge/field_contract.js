@@ -77,7 +77,9 @@ export const FIELD_CONTRACT = Object.freeze([
     }),
     Object.freeze({
         key: 'read_on_pc', label: 'Read on PC', maxChars: 400,
-        belongs: 'current assessment of the player character', notBelongs: 'the full relationship history', shape: '1-2 short sentences',
+        belongs: 'their current stance toward and assessment of the player character',
+        notBelongs: 'an interaction log, relationship milestones, or what the player did and felt',
+        shape: '1-2 short sentences',
     }),
     Object.freeze({
         key: 'agenda', label: 'Current Agenda', maxChars: 400,

@@ -484,4 +484,13 @@ because its prompt or UI exists.
   pinned by tests; model fidelity is not automatable here). Suggested check:
   run one scan over a scene matching the Phase 0 role scenarios and inspect
   Role/Current Agenda output before relying on prevention in the wild.
+- **Follow-up (2026-10-16, after user model QA):** the same drift pattern was
+  reported on Read on PC (an interaction log of kisses/confessions/reactions
+  instead of the NPC's stance). Tightened in the same pass: the contract's
+  Read on PC guidance now excludes interaction logs and what the player did
+  and felt; every `read_on_pc` descriptor says "a stance, not a log of
+  interactions"; the scan and update prompts carry a pointed rule redirecting
+  interaction events to new_knowledge; the Phase 0 fixtures gained a
+  `readOnPcDrift` scenario preserving the reported line verbatim. Pinned by
+  tests in the fixtures, field-contract, and ledger-prompt suites.
 - **Accepted deviations:** none.

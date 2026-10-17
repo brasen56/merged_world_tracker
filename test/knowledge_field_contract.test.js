@@ -240,7 +240,11 @@ describe('validateScanRecord', () => {
         for (const [id] of Object.entries(ROLE_SCENARIOS)) {
             const { data, rejections } = validateScanRecord(cloneRoleScenario(id).scanUpdate);
             expect(rejections, `scenario ${id}`).toEqual([]);
-            expect(data.fields.role, `scenario ${id} keeps its (drifted but structurally valid) role`).toBeTruthy();
+            // Each scenario keeps at least one (drifted but structurally
+            // valid) field value — Role for the Role scenarios, Read on PC
+            // for readOnPcDrift. Passing the bounds is the point: semantic
+            // scope is the prompt contract's job, not the size bound's.
+            expect(Object.values(data.fields).some(v => v !== null), `scenario ${id} exercises a field`).toBe(true);
         }
     });
 });
@@ -260,6 +264,9 @@ describe('contractPromptBlock', () => {
         // Role guidance states the stable-until-meaningful-change rule and
         // names the relationship allowance, per scope §3.1.
         expect(block).toContain('Role: established occupation, enduring responsibility, or primary story function');
+        // Read on PC excludes the interaction-log failure mode (reported
+        // 2026-10-16): events with the player are ledger facts, not a stance.
+        expect(block).toContain('Not: an interaction log, relationship milestones, or what the player did and felt');
     });
 
     test('compact mode covers only the compact-format fields', () => {

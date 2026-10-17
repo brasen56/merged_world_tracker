@@ -282,4 +282,23 @@ describe('Phase 1 shared field contract across prompts', () => {
     test('the update prompt asks for meaningful change, not incidental churn', () => {
         expect(DOSSIER_UPDATE_PROMPT).toContain('changed meaningfully');
     });
+
+    test('Read on PC is a stance, not an interaction log, across the drift-prone prompts', () => {
+        // The pointed rule names the reported failure vocabulary (a kiss, a
+        // confession, a deal, the player's reaction) and redirects the events
+        // to new_knowledge.
+        for (const prompt of [DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT]) {
+            expect(prompt).toContain('a stance, not an interaction log');
+            expect(prompt).toContain('is new_knowledge, not a Read on PC clause');
+        }
+        // Every read_on_pc descriptor says it too…
+        for (const prompt of [DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT]) {
+            expect(prompt).toContain('a stance, not a log of interactions');
+        }
+        // …and the shared contract block carries the exclusion into every
+        // dossier-mode prompt, including the per-field refresh.
+        for (const prompt of [DOSSIER_SCAN_SYSTEM_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT, DOSSIER_FIELD_REFRESH_PROMPT]) {
+            expect(prompt).toContain('Not: an interaction log, relationship milestones, or what the player did and felt');
+        }
+    });
 });

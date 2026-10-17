@@ -4,9 +4,9 @@
  *
  * Three fixture families matching the plan's Phase 0 work items:
  *
- *   1. Field-discipline scenarios — the reported Role example, an unknown
- *      Role, an enduring relationship role, a mayoral transition, and
- *      temporary tasks that must not change Role or inflate Current Agenda.
+ *   1. Field-discipline scenarios — the reported Role and Read on PC examples,
+ *      an unknown Role, an enduring relationship role, a mayoral transition,
+ *      and temporary tasks that must not change Role or inflate Current Agenda.
  *   2. Ledger coverage records — duplicates and overlaps, all five
  *      provenance classes, rumor, a correction pair, meaningful dates,
  *      another person's promise, legacy own-plan lines, the gate code 7314,
@@ -113,6 +113,13 @@ export const REPORTED_ROLE_LINE =
     'Alex\'s boyfriend; Braun transmittal sent; co-signer of the amended weekend law; ' +
     'chock duty and photo-hanging at today\'s Kovach unload';
 
+/** The reported Read on PC line, verbatim (doubled space included) from user
+ * reporting 2026-10-16 — the same drift pattern aimed at Read on PC: events
+ * involving the player instead of the NPC's assessment of the player. */
+export const REPORTED_READ_ON_PC_LINE =
+    'Kissed Alex for the fourth time; confessed the full wants list and the ugly fog-keeping detail aloud; ' +
+    'Alex agreed to all terms without hesitation; Alex  went red to the collar from the kiss';
+
 const REPORTED_ROLE_ENTRY_FIELDS = [
     ['Role', REPORTED_ROLE_LINE],
     ['Where to Find', 'The harbour office on Customs Row, weekdays'],
@@ -165,6 +172,37 @@ export const ROLE_SCENARIOS = Object.freeze({
         }),
         intent: 'Stored example of Role drift (the reported case); the scan offers a FRESH drift instance. '
             + 'Prevention must not reproduce the pattern, and must not rewrite the stored value either.',
+    }),
+
+    /** The same drift pattern aimed at Read on PC: a log of interactions with
+     * the player (and the player's reactions), not the NPC's stance. */
+    readOnPcDrift: Object.freeze({
+        npc: 'Ezra Blackwell',
+        entryContent: buildDossierDocument({
+            fields: [
+                ['Role', 'Alex\'s boyfriend'],
+                ['Read on PC', REPORTED_READ_ON_PC_LINE],
+                ['Current Agenda', 'Saving for the chandlery lease renewal'],
+            ],
+            records: ENDURING_RELATIONSHIP_LEDGER,
+        }),
+        scanUpdate: Object.freeze({
+            name: 'Ezra Blackwell',
+            fields: Object.freeze({
+                tone: null,
+                perceived_as: null,
+                descriptor: null,
+                role: null,
+                // Fresh drift: interaction events and the player's reaction —
+                // none of it the NPC's assessment of the player.
+                read_on_pc: 'Held Alex through the fog-bell ringing; Alex whispered the harbour secret against his collar; Alex squeezed his hand at the gate',
+            }),
+            new_knowledge: Object.freeze([
+                Object.freeze({ fact: 'kissed Alex at the fog-bell ringing, the fourth time', source: 'witness', date: 'Day 216' }),
+            ]),
+        }),
+        intent: 'Read on PC holds the NPC\'s current stance toward the player, never an interaction log — '
+            + 'the events belong in the ledger as facts, and only the resulting view belongs here.',
     }),
 
     /** No established role: preserve the unknown/missing convention, invent nothing. */
