@@ -3,8 +3,8 @@
  * (docs/KNOWLEDGE_CONCISION_IMPLEMENTATION_PLAN.md §Phase 4).
  *
  * Two modals live here:
- *   1. The "Condense knowledge" review modal — disclosure/consent → one
- *      cancellable model request → source-aware review of the proposal →
+ *   1. The "Condense knowledge" review modal — disclosure/consent → a
+ *      cancellable proposal request (up to two attempts) → source-aware review →
  *      two-step explicit Apply through the Phase 3 commit service → undo.
  *      It is deliberately separate from Enrich / Fields / staging: proposals
  *      never enter auto-approval or bulk acceptance, and nothing is written
@@ -37,7 +37,8 @@ import {
     saveCleanupDraft,
     getCleanupDraft,
     stashPreviousCleanupDraft,
-    getPreviousCleanupDraft,
+    getPreviousCleanupDrafts,
+    PREVIOUS_DRAFT_LIMIT,
     clearCleanupDraft,
     exportCleanupDraftPayload,
     applyReviewedLedgerCleanup,
@@ -80,7 +81,6 @@ const APPLY_REFUSAL_MESSAGES = {
     'destination-missing': 'The destination entry no longer exists. Your draft is retained — export it if you still need it.',
     'identity-mismatch': 'The destination entry now belongs to a different NPC (rename or merge?). Your draft is retained.',
     'entity-changed': 'The NPC was renamed or merged since the proposal was generated. Your draft is retained.',
-    'duplicate': 'This cleanup was already applied — nothing was written twice.',
     'stale-source': 'The entry changed after the proposal was generated (a background update or manual edit). Your edited draft is retained — export it, or regenerate against the new content.',
     'validation-failed': 'The final draft failed validation and was NOT applied',
     'destination-ambiguous': 'The NPC no longer resolves to exactly one entry — resolve duplicates first. Your draft is retained.',
@@ -127,6 +127,11 @@ function armButton(btn, armedLabel, onConfirm) {
 
 function applyRefusalMessage(result) {
     if (!result) return 'The apply failed.';
+    // A confirmed-applied duplicate is turned into success upstream, so any
+    // duplicate that reaches here is NOT proof the entry changed.
+    if (result.code === 'duplicate') {
+        return `This draft already has a recovery record${result.status ? ` (status: ${result.status})` : ''}, so nothing was written again. Open Recovery records… to check it. Your draft is retained.`;
+    }
     const mapped = APPLY_REFUSAL_MESSAGES[result.code];
     if (mapped) return mapped.endsWith('.') || mapped.endsWith('?') ? mapped : `${mapped}.`;
     return `Apply refused (${result.code || 'unknown'}): ${result.error || 'no reason given'}.`;
@@ -191,6 +196,9 @@ function openReviewModalShell(name, { capture, eligibility }) {
 
     // Blocking close while a request is in flight keeps the cancel path the
     // only way out of "generating" — the controller belongs to this session.
+    // A pending Apply/Undo blocks close too: it cannot be cancelled, and a
+    // closed modal would hide its outcome (a reopened one could also lose
+    // edits to the old Apply's draft clear). A scope change still detaches.
     decorateModalShell(modal, {
         title: `Condense knowledge — ${name}`,
         closeOnBackdrop: false,
@@ -202,6 +210,10 @@ function openReviewModalShell(name, { capture, eligibility }) {
             }
             if (session.controller) {
                 setStatus(modal, 'A request is in flight — cancel it before closing.', 'warning');
+                return false;
+            }
+            if (session.saving) {
+                setStatus(modal, `${session.saving} is still saving — wait for its result before closing.`, 'warning');
                 return false;
             }
             return true;
@@ -217,7 +229,9 @@ function openReviewModalShell(name, { capture, eligibility }) {
         proposal: null,
         decisions: { removals: [] },
         controller: null,
+        saving: null, // 'Apply' | 'Undo' while that write is pending
         applied: null,
+        restored: false,
         confirming: false,
     };
     const content = () => modal.querySelector('.kt-condense-content');
@@ -260,7 +274,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
         const draft = getCleanupDraft(capture);
         const draftResumable = !!draft && draft.review.original === capture.originalContent;
         const draftStale = !!draft && !draftResumable;
-        const previous = getPreviousCleanupDraft(capture);
+        const previous = getPreviousCleanupDrafts(capture);
 
         // Profile modes keep the model name inside the profile; the stable
         // `source` string (not `mode`, which the test stub reports uniformly)
@@ -274,20 +288,21 @@ function openReviewModalShell(name, { capture, eligibility }) {
             : 'unknown on this build — not provider-verified';
 
         content().innerHTML = `
-            <p class="kt-condense-hint">One reviewed model call proposes condensed ledger records. Nothing is written to the entry until you review the mapping and explicitly apply it — the exact original is saved to recovery first.</p>
+            <p class="kt-condense-hint">A reviewed model request proposes condensed ledger records, with up to two attempts. Nothing is written to the entry until you review the mapping and explicitly apply it — the exact original is saved to recovery first.</p>
             <dl class="kt-condense-disclosure">
                 <dt>Model / profile</dt><dd>${modelLine} via ${CONFIG_SOURCE_LABELS[model.source] ? escapeHtml(CONFIG_SOURCE_LABELS[model.source]) : escapeHtml(model.source)}</dd>
                 <dt>Data transmitted</dt><dd>Only this NPC's <strong>name</strong> and their <strong>${fmt(estimate?.sourceCount || 0)} Knowledge Ledger lines</strong> — no chat messages, no dossier fields, no recovery originals.</dd>
                 <dt>Sizes (estimates)</dt><dd>Ledger ${fmt(estimate?.ledgerChars)} chars / ~${fmt(estimate?.ledgerTokens)} tokens · whole entry ${fmt(estimate?.entryChars)} chars / ~${fmt(estimate?.entryTokens)} tokens · request ~${fmt(estimate?.inputTokens)} tokens in</dd>
                 <dt>Output allowance</dt><dd>${fmt(model.maxTokens)} tokens (Knowledge Max Tokens)</dd>
+                <dt>Response size (estimates)</dt><dd>at least ~${fmt(estimate?.minimumOutputTokens)} tokens (every line kept verbatim) · ~${fmt(estimate?.rewriteAllOutputTokens)} if every line were rewritten — the real size depends on how much the model changes</dd>
                 <dt>Context limit</dt><dd>${contextLine}</dd>
-                <dt>Cost / privacy</dt><dd>One paid request to the configured endpoint — the ledger text leaves this machine through that provider.</dd>
+                <dt>Cost / privacy</dt><dd>Up to two billable requests per generation or regeneration: one initial attempt and one automatic retry after malformed output, validation failure, or a retryable request error. Each attempt sends the ledger text to the configured provider.</dd>
             </dl>
             ${budget.ok ? '' : `<div class="kt-condense-refusal" role="alert"><strong>Request refused before sending:</strong> ${escapeHtml(budget.reason)} <span class="kt-condense-suggestion">${escapeHtml(budget.suggestion || '')}</span></div>`}
             ${budget.ok && budget.warnings?.length ? `<ul class="kt-condense-warnings">${budget.warnings.map(w => `<li>⚠ ${escapeHtml(w)}</li>`).join('')}</ul>` : ''}
             ${draftResumable ? `
                 <div class="kt-condense-draft-offer">
-                    <strong>A retained review draft exists for this NPC</strong> (saved ${escapeHtml(draft.savedAt)}), and the entry has not changed since.
+                    <strong>A retained review draft exists for this NPC</strong> (saved ${escapeHtml(draft.savedAt)}), and the entry has not changed since. Requesting a new proposal instead keeps it below for export.
                     <div class="kt-condense-draft-actions">
                         <button class="mwt-btn kt-condense-resume">Resume previous draft</button>
                         <button class="mwt-btn kt-condense-draft-export" data-which="current">Export draft</button>
@@ -300,7 +315,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
                         <button class="mwt-btn kt-condense-draft-export" data-which="current">Export stale draft</button>
                     </div>
                 </div>` : ''}
-            ${previous ? `<p class="kt-condense-prev-draft">A pre-regeneration draft was retained — <button class="mwt-btn kt-condense-draft-export" data-which="previous">export it</button>.</p>` : ''}
+            ${previous.length ? `<p class="kt-condense-prev-draft">${previous.length === 1 ? 'A replaced draft was retained' : `${previous.length} replaced drafts were retained`} (the ${PREVIOUS_DRAFT_LIMIT} most recent stay exportable until reload) — ${previous.map((d, i) => `<button class="mwt-btn kt-condense-draft-export" data-which="previous" data-index="${i}">Export draft saved ${escapeHtml(d.savedAt)}</button>`).join(' ')}</p>` : ''}
             <div class="kt-condense-consent">
                 <label for="kt-condense-consent">
                     <input type="checkbox" id="kt-condense-consent" class="kt-condense-consent-box" ${keepConsent ? 'checked' : ''} />
@@ -323,7 +338,9 @@ function openReviewModalShell(name, { capture, eligibility }) {
 
         content().querySelectorAll('.kt-condense-draft-export').forEach(btn => btn.addEventListener('click', () => {
             const which = btn.dataset.which === 'previous' ? 'previous' : 'current';
-            const entry = which === 'previous' ? getPreviousCleanupDraft(capture) : getCleanupDraft(capture);
+            const entry = which === 'previous'
+                ? getPreviousCleanupDrafts(capture)[Number(btn.dataset.index) || 0]
+                : getCleanupDraft(capture);
             if (!entry) { setStatus(modal, 'No draft to export.', 'warning'); return; }
             try {
                 downloadJson(`mwt-cleanup-draft-${safeFilePart(name)}-${fileStamp()}.json`, exportCleanupDraftPayload(entry));
@@ -403,8 +420,10 @@ function openReviewModalShell(name, { capture, eligibility }) {
             const result = await requestLedgerProposal({ capture, signal: session.controller.signal });
             if (!scopeStillCurrent(session.scope).ok || !modal.isConnected) { modal._closeModal?.(); return; }
             // Keep the active draft intact through cancellation/error. Only a
-            // successfully generated replacement demotes it to export-only.
-            if (session.review) stashPreviousCleanupDraft(capture);
+            // successfully generated replacement demotes it to export-only —
+            // including a retained draft this session never resumed (a fresh
+            // request from the disclosure must not overwrite it).
+            stashPreviousCleanupDraft(capture);
             session.review = result.review;
             session.proposal = result.proposal;
             session.decisions = { removals: [] };
@@ -610,8 +629,21 @@ function openReviewModalShell(name, { capture, eligibility }) {
         }
     }
 
+    /**
+     * Selector for a control of the record that now owns `sourceId` — its
+     * edit box, or its "Keep originals" button. Decisions re-render the whole
+     * review, so focus is re-anchored by source, not by the removed node.
+     */
+    function recordControlFor(sourceId, control = 'text') {
+        const index = session.proposal.records.findIndex(r => r.sourceIds.includes(sourceId));
+        if (index < 0) return null;
+        return control === 'keep'
+            ? `.kt-condense-keep${attrSel('data-record', session.proposal.records[index].id)}`
+            : `#kt-condense-text-${index}`;
+    }
+
     /** The one open inline removal control at a time. */
-    function openRemovalBox(anchor, sourceIds, prefilledReason, confirmLabel) {
+    function openRemovalBox(anchor, sourceIds, prefilledReason, confirmLabel, returnFocus = null) {
         if (!anchor) return;
         content().querySelector('.kt-condense-remove-box')?.remove();
         const box = document.createElement('div');
@@ -626,7 +658,10 @@ function openReviewModalShell(name, { capture, eligibility }) {
             </div>`;
         anchor.after(box);
         box.querySelector('.kt-condense-reason-input').focus();
-        box.querySelector('.kt-condense-remove-cancel').addEventListener('click', () => box.remove());
+        box.querySelector('.kt-condense-remove-cancel').addEventListener('click', () => {
+            box.remove();
+            if (returnFocus?.isConnected) returnFocus.focus();
+        });
         box.querySelector('.kt-condense-remove-confirm').addEventListener('click', () => {
             const reason = box.querySelector('.kt-condense-reason-input').value.trim();
             if (!reason) {
@@ -634,20 +669,28 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 box.querySelector('.kt-condense-reason-input').focus();
                 return;
             }
+            // Success lands on the new removal's Undo; a refusal (part of a
+            // merged record) lands on that record's "Keep originals" fix.
             applyDecision(() => removeLedgerSources(session.review, session.proposal, sourceIds, reason, session.decisions),
-                `Removed ${sourceIds.length === 1 ? 'source' : `${sourceIds.length} sources`} with a recorded reason. Coverage recomputed.`);
+                `Removed ${sourceIds.length === 1 ? 'source' : `${sourceIds.length} sources`} with a recorded reason. Coverage recomputed.`,
+                ok => (ok ? `.kt-condense-removal-undo${attrSel('data-source', sourceIds[0])}` : recordControlFor(sourceIds[0], 'keep')));
         });
     }
 
-    /** Run a Phase 2 decision, persist the draft, and re-render. */
+    /**
+     * Run a Phase 2 decision, persist the draft, and re-render. `focusSelector`
+     * may be a function of the outcome (true = applied) so focus lands on a
+     * control that exists after the re-render instead of falling to <body>.
+     */
     function applyDecision(fn, successMessage, focusSelector = null, feedbackOnly = false) {
+        const focusFor = ok => (typeof focusSelector === 'function' ? focusSelector(ok) : focusSelector);
         try {
             const outcome = fn();
             session.proposal = outcome.proposal ?? session.proposal;
             session.decisions = outcome.decisions ?? session.decisions;
             session.confirming = false;
             saveCleanupDraft(capture, { review: session.review, proposal: session.proposal, decisions: session.decisions });
-            renderReview(focusSelector, feedbackOnly);
+            renderReview(focusFor(true), feedbackOnly);
             if (successMessage) setStatus(modal, successMessage, 'success', 4000);
         } catch (err) {
             setStatus(modal, err.message, 'error');
@@ -659,7 +702,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
                     if (record) area.value = record.text;
                 });
             }
-            renderReview(focusSelector, feedbackOnly);
+            renderReview(focusFor(false), feedbackOnly);
         }
     }
 
@@ -686,6 +729,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 applyDecision(
                     () => keepLedgerOriginals(session.review, session.proposal, [...record.sourceIds], session.decisions),
                     `Originals restored for all ${record.sourceIds.length} source${record.sourceIds.length !== 1 ? 's' : ''} of this record.`,
+                    () => recordControlFor(record.sourceIds[0]),
                 );
             });
         });
@@ -693,7 +737,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
         content().querySelectorAll('.kt-condense-remove-src').forEach(btn => {
             btn.addEventListener('click', () => {
                 const sourceId = btn.dataset.source;
-                openRemovalBox(btn.closest('.kt-condense-source'), [sourceId], '', 'Remove source');
+                openRemovalBox(btn.closest('.kt-condense-source'), [sourceId], '', 'Remove source', btn);
             });
         });
 
@@ -703,7 +747,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 if (!suggestion) return;
                 // The model's reason only PREFILLS the control — the removal is
                 // still an explicit user decision with a user-confirmed reason.
-                openRemovalBox(btn.closest('.kt-condense-suggestion'), [...suggestion.sourceIds], suggestion.reason, 'Remove sources');
+                openRemovalBox(btn.closest('.kt-condense-suggestion'), [...suggestion.sourceIds], suggestion.reason, 'Remove sources', btn);
             });
         });
 
@@ -713,6 +757,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 applyDecision(
                     () => keepLedgerOriginals(session.review, session.proposal, [sourceId], session.decisions),
                     'Removal undone — the exact original is represented again.',
+                    () => recordControlFor(sourceId),
                 );
             });
         });
@@ -723,7 +768,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 session.decisions = { removals: [] };
                 session.confirming = false;
                 saveCleanupDraft(capture, { review: session.review, proposal: session.proposal, decisions: session.decisions });
-                renderReview();
+                renderReview('.kt-condense-restore-all');
                 setStatus(modal, 'Every source now maps to its exact original line — nothing to apply.', 'info');
             });
         });
@@ -770,7 +815,18 @@ function openReviewModalShell(name, { capture, eligibility }) {
             const btn = event.currentTarget;
             if (btn.disabled) return;
             setControlBusy(btn, true); btn.textContent = '⏳ Applying…';
+            // Freeze the submitted draft, including editors, removals, regeneration,
+            // and Back. Failure renders fresh enabled controls with the draft intact.
+            const pendingControls = document.createElement('fieldset');
+            pendingControls.disabled = true;
+            pendingControls.style.cssText = 'border:0;margin:0;padding:0;min-width:0';
+            pendingControls.append(...content().childNodes);
+            content().append(pendingControls);
+            session.saving = 'Apply';
             setStatus(modal, 'Saving the recovery original and applying the reviewed condensation…', 'info');
+            // After a refusal the confirm step is still open: land on its
+            // non-destructive Back button, never on a retry the Enter key repeats.
+            const refusalFocus = () => (session.confirming ? '.kt-condense-confirm-back' : '.kt-condense-apply');
             try {
                 const result = await applyReviewedLedgerCleanup({
                     capture,
@@ -784,18 +840,20 @@ function openReviewModalShell(name, { capture, eligibility }) {
                     session.applied = result;
                     session.confirming = false;
                     renderApplied();
+                    content().querySelector('.kt-condense-close')?.focus();
                     setStatus(modal, `Applied: ${session.review.sources.length} sources → ${session.proposal.records.length} records. Recovery record saved — you can undo from here.`, 'success');
                     refreshNpcList(modal, name);
                     return;
                 }
                 console.warn('[MWT:Knowledge] ledger cleanup apply refused:', result?.code, result?.error);
-                renderReview();
+                renderReview(refusalFocus());
                 setStatus(modal, applyRefusalMessage(result), 'error');
             } catch (err) {
                 if (!scopeStillCurrent(session.scope).ok || !modal.isConnected) { modal._closeModal?.(); return; }
-                renderReview();
+                renderReview(refusalFocus());
                 setStatus(modal, `Apply failed unexpectedly: ${err.message}`, 'error');
             } finally {
+                session.saving = null;
                 if (btn.isConnected) { setControlBusy(btn, false); btn.textContent = 'Apply changes'; }
             }
         });
@@ -820,7 +878,9 @@ function openReviewModalShell(name, { capture, eligibility }) {
         content().querySelector('.kt-condense-close').addEventListener('click', () => modal._closeModal?.());
         content().querySelector('.kt-condense-undo').addEventListener('click', async (event) => {
             const btn = event.currentTarget;
+            if (btn.disabled || session.restored) return;
             setControlBusy(btn, true); btn.textContent = '⏳ Restoring…';
+            session.saving = 'Undo';
             setStatus(modal, 'Restoring the original ledger span…', 'info');
             try {
                 const result = await restoreReviewedLedgerCleanup(actionId);
@@ -831,6 +891,12 @@ function openReviewModalShell(name, { capture, eligibility }) {
                     refreshNpcList(modal, name);
                     return;
                 }
+                if (result?.code === 'not-applied' && result.status === 'restored') {
+                    // Restored elsewhere (e.g. Recovery records…) since this view rendered.
+                    setStatus(modal, 'This cleanup was already restored — the original ledger is back in place. Nothing was written.', 'info');
+                    renderAppliedRestored();
+                    return;
+                }
                 setStatus(modal, result?.conflict
                     ? `Restore refused: ${result.error} Export the recovery record to reconcile manually.`
                     : `Restore refused: ${result.error || result.code}`, 'error');
@@ -839,16 +905,23 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 if (!scopeStillCurrent(session.scope).ok || !modal.isConnected) { modal._closeModal?.(); return; }
                 setStatus(modal, `Restore failed: ${err.message}`, 'error');
             } finally {
+                session.saving = null;
                 if (btn.isConnected) { setControlBusy(btn, false); btn.innerHTML = 'Undo — restore the original ledger'; }
             }
         });
     }
 
+    /** The undo is spent: retire its button so it cannot be re-run. */
     function renderAppliedRestored() {
-        const note = document.createElement('p');
-        note.className = 'kt-condense-restored-note';
-        note.textContent = '↩ The original ledger was put back; a restore-safeguard recovery record captured the condensed text first.';
-        content().querySelector('.kt-condense-applied')?.append(note);
+        session.restored = true;
+        content().querySelector('.kt-condense-undo')?.remove();
+        if (!content().querySelector('.kt-condense-restored-note')) {
+            const note = document.createElement('p');
+            note.className = 'kt-condense-restored-note';
+            note.textContent = '↩ The original ledger was put back; a restore-safeguard recovery record captured the condensed text first.';
+            content().querySelector('.kt-condense-applied')?.append(note);
+        }
+        content().querySelector('.kt-condense-close')?.focus();
     }
 
     function offerConflictExport(conflict) {

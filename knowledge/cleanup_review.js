@@ -6,9 +6,11 @@
  *   - eligibility + identity-bound capture (captureCleanupTarget + parseLedger),
  *   - the request budget (input/response envelope estimates, known-excess
  *     refusals, honest "unknown" capacity disclosure — never clipping),
- *   - the model request itself (ledger + NPC name ONLY in the payload, manual
+ *   - the model request itself (ledger + NPC name ONLY in the payload, `[sN]`
+ *     source labels out and a compact keep-list response back, manual
  *     trigger, cancellable via signal, strict parseLedgerProposal — never the
- *     lenient repair path — and validateLedgerProposal before any preview),
+ *     lenient repair path — then expandKeepListProposal and
+ *     validateLedgerProposal before any preview),
  *   - in-memory review drafts that survive modal close and scope sweeps while
  *     remaining bound to their origin (they are UI state, never prompt context),
  *   - apply/restore wrappers wiring validateLedgerReplacement and ledgerSpan
@@ -30,6 +32,7 @@ import {
     captureLedgerReview,
     parseLedgerProposal,
     validateLedgerProposal,
+    LEDGER_PROPOSAL_VERSION,
     patchLedgerProposal,
     validateLedgerReplacement,
     ledgerSpan,
@@ -45,24 +48,137 @@ export function newReviewId() {
     return `lr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// ─── The wire form: [sN] labels out, a keep-list response back ──────────────
+
+/**
+ * The model sees `s1`..`sN` (source order, 1-based) instead of the full
+ * `${reviewId}:source:N` ids: on a long ledger the full ids alone cost
+ * thousands of tokens on both sides of the request. Staleness binding is
+ * unchanged — the response still echoes <review_id>, and validation runs on
+ * full ids after expandKeepListProposal.
+ */
+export function shortSourceId(index) {
+    return `s${index + 1}`;
+}
+
+/**
+ * Version of the RESPONSE wire format below. It is not the proposal schema
+ * version: expandKeepListProposal always produces a LEDGER_PROPOSAL_VERSION
+ * proposal for the unchanged Phase 2 validator.
+ */
+export const CLEANUP_WIRE_VERSION = 2;
+
+const WIRE_KEYS = ['version', 'reviewId', 'keep', 'changed', 'pruningSuggestions', 'notes'];
+const CHANGED_KEYS = ['s', 't', 'n'];
+const SUGGESTION_KEYS = ['s', 'r'];
+
+/**
+ * Translate the model's compact keep-list response into the Phase 2 proposal
+ * shape, so validateLedgerProposal judges it unchanged. The wire form:
+ *
+ *   { "version": 2, "reviewId": "…", "keep": [3, 4],
+ *     "changed": [{ "s": [1, 2], "t": "merged text", "n": "optional note" }],
+ *     "pruningSuggestions": [{ "s": [4], "r": "reason" }], "notes": "…" }
+ *
+ * Sources are integers matching the `[sN]` request labels. Each `keep` number
+ * becomes an exact-original record (as originalLedgerProposal builds it), so a
+ * mostly-unchanged ledger costs a few tokens per line instead of a record per
+ * line. "keep" and "changed" are both required: coverage stays explicit — a
+ * source missing from both still fails the validator's coverage check, never
+ * an implicit keep. Only integers in range for THIS review translate; unknown,
+ * non-integer, out-of-range or repeated numbers, unknown fields, and shapes
+ * that cannot be translated fail closed — nothing is guessed or dropped. Text,
+ * notes, reasons and the review id pass through for the validator to judge.
+ * Records are ordered by their earliest source.
+ */
+export function expandKeepListProposal(review, wire) {
+    const refuse = reason => ({ ok: false, reason });
+    const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const shown = value => (typeof value === 'string' ? `"${value.slice(0, 40)}"` : typeof value === 'number' ? String(value) : 'a non-number value');
+    const unknownKey = (value, keys) => Object.keys(value).find(key => !keys.includes(key));
+    if (!isObject(wire)) return refuse('The proposal must be a JSON object.');
+    const extra = unknownKey(wire, WIRE_KEYS);
+    if (extra !== undefined) return refuse(`The proposal has an unknown field (${shown(extra)}); nothing is guessed.`);
+    if (wire.version !== CLEANUP_WIRE_VERSION) return refuse(`Unsupported proposal format version (expected ${CLEANUP_WIRE_VERSION}).`);
+    if (!Array.isArray(wire.keep) || !Array.isArray(wire.changed)) return refuse('"keep" and "changed" must both be arrays; coverage is never implicit.');
+    if (Object.hasOwn(wire, 'pruningSuggestions') && !Array.isArray(wire.pruningSuggestions)) return refuse('"pruningSuggestions" must be an array.');
+
+    const sourceOf = n => (Number.isInteger(n) && n >= 1 && n <= review.sources.length ? review.sources[n - 1] : null);
+    const unknownNumber = n => refuse(`The proposal references an unknown source number (${shown(n)}); source numbers are never guessed.`);
+    const listed = new Set();
+    const placed = [];
+    const own = n => {
+        const source = sourceOf(n);
+        if (!source) return unknownNumber(n);
+        if (listed.has(n)) return refuse(`Source ${n} is listed more than once across "keep" and "changed"; each source must appear exactly once.`);
+        listed.add(n);
+        return { ok: true, source };
+    };
+
+    for (const n of wire.keep) {
+        const owned = own(n);
+        if (!owned.ok) return owned;
+        const { source } = owned;
+        placed.push({ order: source.order, record: { id: `original:${source.id}`, text: source.text.replace(/^\s*- /, ''), sourceIds: [source.id], notes: '' } });
+    }
+    for (const [index, entry] of wire.changed.entries()) {
+        if (!isObject(entry)) return refuse('Every "changed" record must be an object.');
+        const extraKey = unknownKey(entry, CHANGED_KEYS);
+        if (extraKey !== undefined) return refuse(`A "changed" record has an unknown field (${shown(extraKey)}); nothing is guessed.`);
+        if (!Array.isArray(entry.s) || !entry.s.length) return refuse('Every "changed" record needs a non-empty "s" array of source numbers.');
+        const sources = [];
+        for (const n of entry.s) {
+            const owned = own(n);
+            if (!owned.ok) return owned;
+            sources.push(owned.source);
+        }
+        placed.push({
+            order: Math.min(...sources.map(source => source.order)),
+            record: { id: `r${index + 1}`, text: entry.t, sourceIds: sources.map(source => source.id), notes: Object.hasOwn(entry, 'n') ? entry.n : '' },
+        });
+    }
+    const pruningSuggestions = [];
+    for (const entry of wire.pruningSuggestions || []) {
+        if (!isObject(entry)) return refuse('Every pruning suggestion must be an object.');
+        const extraKey = unknownKey(entry, SUGGESTION_KEYS);
+        if (extraKey !== undefined) return refuse(`A pruning suggestion has an unknown field (${shown(extraKey)}); nothing is guessed.`);
+        if (!Array.isArray(entry.s) || !entry.s.length) return refuse('Every pruning suggestion needs a non-empty "s" array of source numbers.');
+        const bad = entry.s.findIndex(n => !sourceOf(n));
+        if (bad >= 0) return unknownNumber(entry.s[bad]);
+        // Repeats inside one suggestion translate one-to-one; the validator refuses them.
+        pruningSuggestions.push({ sourceIds: entry.s.map(n => sourceOf(n).id), reason: entry.r });
+    }
+    placed.sort((a, b) => a.order - b.order);
+    return {
+        ok: true,
+        proposal: {
+            version: LEDGER_PROPOSAL_VERSION,
+            reviewId: wire.reviewId,
+            records: placed.map(item => item.record),
+            pruningSuggestions,
+            notes: Object.hasOwn(wire, 'notes') ? wire.notes : '',
+        },
+    };
+}
+
 // ─── Payload construction (the minimization seam) ────────────────────────────
 
 /**
  * Build the model request's user content. Deliberately minimal: the NPC name,
- * the review id the proposal must echo, and the numbered ledger lines. No
- * dossier fields, no chat messages, no world state, no recovery originals —
- * the disclosure panel describes exactly this payload.
+ * the review id the proposal must echo, and the ledger lines under their
+ * short source ids. No dossier fields, no chat messages, no world state, no
+ * recovery originals — the disclosure panel describes exactly this payload.
  */
 export function buildLedgerCleanupUserContent(name, review) {
     return [
         `<entity>${name}</entity>`,
         `<review_id>${review.reviewId}</review_id>`,
         '<ledger_sources>',
-        ...review.sources.map(source => `[${source.id}] ${source.text}`),
+        ...review.sources.map((source, index) => `[${shortSourceId(index)}] ${source.text}`),
         '</ledger_sources>',
         '',
         '='.repeat(60),
-        `Condense ${name}'s Knowledge Ledger into the reviewed proposal JSON. Every source id above must be mapped. Output only JSON.`,
+        `Condense ${name}'s Knowledge Ledger into the reviewed proposal JSON. Every source number above must appear exactly once, in "keep" or in one "changed" record. Output only JSON.`,
     ].join('\n');
 }
 
@@ -88,25 +204,29 @@ export function cleanupModelDisclosure() {
     };
 }
 
-/** Fixed JSON scaffolding every valid proposal carries regardless of content. */
-const ENVELOPE_STATIC = '{"version":1,"reviewId":"","records":[],"pruningSuggestions":[],"notes":""}';
-const RECORD_STATIC = '{"id":"r1","text":"x","sourceIds":[],"notes":""}';
-
 /**
- * Lower bound on the response a VALID complete proposal needs for this review.
- * Every source id must appear in exactly one record's sourceIds and every
- * record needs non-empty single-line text; only the mapping itself is
- * mandatory, so record text is floored at one character. `oneRecord` is the
- * mathematical floor (a single record owning everything is schema-valid);
- * `perSource` (each source in its own minimal record) is the realistic
- * planning floor for a model that actually condenses.
+ * The response sizes that bracket a keep-list proposal for this review, as
+ * real compact wire JSON (the form the model answers in):
+ *   - `keepAll` is the smallest complete answer — every source number in
+ *     "keep", nothing changed. Every source must be listed, so this is the
+ *     mandatory floor.
+ *   - `rewriteAll` puts every source in its own "changed" record at its
+ *     original wording: what the output costs if the model rewrites the whole
+ *     ledger. It is a planning figure, not a ceiling — longer text or notes
+ *     cost more, merges and kept lines cost less.
+ * Real output lands between the two, depending on how much the model changes;
+ * there is no fixed per-source record cost.
+ *
+ * Real strings, not a character count: a live tokenizer packs a run of one
+ * repeated character far tighter than numbers and JSON punctuation, so
+ * estimating a placeholder of the same length under-fires the known-excess
+ * refusal.
  */
 export function minimumProposalEnvelope(review) {
-    const idChars = review.sources.reduce((sum, source) => sum + source.id.length + 3, 0);
-    const staticChars = ENVELOPE_STATIC.length + RECORD_STATIC.length;
+    const wire = (keep, changed) => JSON.stringify({ version: CLEANUP_WIRE_VERSION, reviewId: review.reviewId, keep, changed });
     return {
-        oneRecordChars: staticChars + idChars + review.reviewId.length,
-        perSourceChars: staticChars + idChars + review.reviewId.length + (RECORD_STATIC.length + 2) * Math.max(0, review.sources.length - 1),
+        keepAll: wire(review.sources.map((_source, index) => index + 1), []),
+        rewriteAll: wire([], review.sources.map((source, index) => ({ s: [index + 1], t: source.text.replace(/^\s*- /, '') }))),
     };
 }
 
@@ -131,8 +251,10 @@ export function estimateCleanupRequest({ review, userContent }) {
         entryTokens: estimateTokens(review.original),
         sourceCount: review.sources.length,
         outputAllowance: disclosure.maxTokens,
-        minimumOutputTokens: estimateTokens('x'.repeat(envelope.oneRecordChars)),
-        planningOutputTokens: estimateTokens('x'.repeat(envelope.perSourceChars)),
+        // Keep-all floor and full-rewrite planning figure; the real response
+        // lands between them depending on how much the model changes.
+        minimumOutputTokens: estimateTokens(envelope.keepAll),
+        rewriteAllOutputTokens: estimateTokens(envelope.rewriteAll),
         // The active chat preset and Budget override describe chat generation,
         // not the independently resolved Knowledge endpoint. Neither transport
         // currently exposes a verified context capacity for that endpoint.
@@ -143,10 +265,11 @@ export function estimateCleanupRequest({ review, userContent }) {
 
 /**
  * Known-excess refusals (fail closed, never clip). Two cases are genuinely
- * KNOWN: the input plus the mathematically minimal response cannot fit a known
- * context limit, or the minimal response envelope alone cannot fit the output
- * allowance. Everything riskier (a realistic condensation not fitting) is a
- * disclosed warning instead — the request may still legitimately succeed.
+ * KNOWN: the input plus the keep-all response cannot fit a known context
+ * limit, or the keep-all response alone cannot fit the output allowance.
+ * Everything riskier (a proposal that rewrites much of the ledger not
+ * fitting) is a disclosed warning instead — how big the response gets depends
+ * on how much the model changes, so the request may still legitimately succeed.
  */
 export function checkCleanupBudget(estimate) {
     if (!estimate) return { ok: false, code: 'bad-request', reason: 'No request estimate available.', suggestion: '' };
@@ -163,7 +286,7 @@ export function checkCleanupBudget(estimate) {
         return {
             ok: false,
             code: 'output-envelope-exceeds-allowance',
-            reason: `Even the bare mapping of all ${estimate.sourceCount} sources (ids + JSON structure, before any condensed text) exceeds the ${estimate.outputAllowance.toLocaleString()}-token output allowance.`,
+            reason: `Even the smallest complete answer — keeping all ${estimate.sourceCount} lines verbatim, ~${estimate.minimumOutputTokens.toLocaleString()} tokens of source numbers and JSON structure — exceeds the ${estimate.outputAllowance.toLocaleString()}-token output allowance.`,
             suggestion: 'Raise Max Tokens in Knowledge Tracker settings, or condense after splitting the ledger manually.',
         };
     }
@@ -173,18 +296,18 @@ export function checkCleanupBudget(estimate) {
             return {
                 ok: false,
                 code: 'input-exceeds-context',
-                reason: `The request (~${estimate.inputTokens.toLocaleString()} tokens) plus the minimal mapped response does not fit the known context limit of ${limit.toLocaleString()} tokens (${estimate.contextLimit.source}).`,
+                reason: `The request (~${estimate.inputTokens.toLocaleString()} tokens) plus the smallest complete answer (every line kept verbatim) does not fit the known context limit of ${limit.toLocaleString()} tokens (${estimate.contextLimit.source}).`,
                 suggestion: 'Use a model/profile with a larger context limit, or split the ledger manually.',
             };
         }
-        if (estimate.inputTokens + estimate.planningOutputTokens > limit) {
-            warnings.push(`The request plus a realistic proposal may exceed the ${limit.toLocaleString()}-token context limit (${estimate.contextLimit.source}) — the model may refuse or truncate.`);
+        if (estimate.inputTokens + estimate.rewriteAllOutputTokens > limit) {
+            warnings.push(`The request plus a proposal that rewrites much of the ledger may exceed the ${limit.toLocaleString()}-token context limit (${estimate.contextLimit.source}) — the model may refuse or truncate.`);
         }
     } else {
         warnings.push('The resolved Knowledge endpoint context capacity is unknown and not provider-verified; the active chat context limit and Budget override do not establish its capacity.');
     }
-    if (estimate.ledgerTokens > estimate.outputAllowance) {
-        warnings.push(`The ledger (~${estimate.ledgerTokens.toLocaleString()} tokens) is larger than the ${estimate.outputAllowance.toLocaleString()}-token output allowance. A complete mapped proposal may not fit — expect a truncation refusal rather than a clipped result.`);
+    if (estimate.rewriteAllOutputTokens > estimate.outputAllowance) {
+        warnings.push(`Keeping every line verbatim needs ~${estimate.minimumOutputTokens.toLocaleString()} output tokens, within the ${estimate.outputAllowance.toLocaleString()}-token allowance, but output grows with every line the model merges or rewrites — rewriting all of them would need ~${estimate.rewriteAllOutputTokens.toLocaleString()}. If the model changes a large share of the ledger, expect a truncation refusal rather than a clipped result.`);
     }
     return { ok: true, warnings };
 }
@@ -202,10 +325,10 @@ export async function prepareLedgerCleanup({ name, uid }) {
     return { capture, eligibility: parseLedger(capture.originalContent) };
 }
 
-// A throwaway id shaped like newReviewId()'s output (same length class) so the
-// source-id character accounting in the envelope estimate matches the real
-// request without minting a real review.
-const ESTIMATE_REVIEW_ID = 'lr-0000000000000-00000000';
+// A throwaway id shaped like newReviewId()'s output (same length and mixed
+// base36 characters, so a live tokenizer counts it like a real one) for the
+// <review_id> line and its echo, without minting a real review.
+const ESTIMATE_REVIEW_ID = 'lr-mgv0k3x9-q7f2m8zt';
 
 /**
  * Estimate the request envelope + budget verdict for the disclosure panel,
@@ -226,8 +349,9 @@ export function estimateLedgerCleanup(capture) {
 
 /**
  * Request one condensation proposal. Strict end to end: parseLedgerProposal
- * (no repair, no preamble stripping), then validateLedgerProposal — an
- * invalid or incomplete proposal never reaches a preview. Bounded to the
+ * (no repair, no preamble stripping), then keep-list translation and
+ * validateLedgerProposal — an invalid or incomplete proposal never reaches a
+ * preview, and the returned proposal carries full review ids. Bounded to the
  * shared 2-attempt convention; cancellation is rethrown, never retried.
  */
 export async function requestLedgerProposal({ capture, signal } = {}) {
@@ -275,14 +399,18 @@ export async function requestLedgerProposal({ capture, signal } = {}) {
             if (attempt < 2) continue;
             throw new Error(`${parsed.reason} No preview is shown for incomplete output.`);
         }
-        const validation = validateLedgerProposal(review, parsed.proposal);
+        // The keep-list wire form back to a full-id Phase 2 proposal first; an
+        // untranslatable response is a validation failure like any other
+        // (same retry, same refusal).
+        const expanded = expandKeepListProposal(review, parsed.proposal);
+        const validation = expanded.ok ? validateLedgerProposal(review, expanded.proposal) : expanded;
         if (!validation.ok) {
             lastError = new Error(validation.reason);
             console.warn(`[MWT:Knowledge] ledger cleanup proposal failed validation (attempt ${attempt}): ${validation.reason}`);
             if (attempt < 2) continue;
             throw new Error(`The proposal failed validation and was discarded: ${validation.reason}`);
         }
-        return { review, proposal: parsed.proposal, warnings: validation.warnings };
+        return { review, proposal: expanded.proposal, warnings: validation.warnings };
     }
     /* c8 ignore next -- the loop always returns or throws */
     throw new Error(lastError?.message || 'The ledger cleanup request did not produce a proposal.');
@@ -291,7 +419,10 @@ export async function requestLedgerProposal({ capture, signal } = {}) {
 // ─── Review drafts (in-memory, origin-bound, never prompt context) ──────────
 
 const cleanupDrafts = new Map();
+/** Export-only drafts replaced by a newer proposal, newest first per origin. */
 const previousCleanupDrafts = new Map();
+/** How many replaced drafts stay exportable per origin (the UI states it). */
+export const PREVIOUS_DRAFT_LIMIT = 5;
 
 /** Drafts are keyed by scope + book + name + uid: bound to their origin. */
 function draftKey(capture) {
@@ -315,19 +446,31 @@ export function getCleanupDraft(capture) {
     return cleanupDrafts.get(draftKey(capture)) || null;
 }
 
-/** Move the current draft to the export-only slot (before a regeneration). */
+/**
+ * Move the current draft to the export-only list before a new proposal
+ * replaces it. A no-op without a current draft. Earlier replaced drafts are
+ * kept too (up to PREVIOUS_DRAFT_LIMIT), so a second regeneration cannot
+ * silently drop the edits saved in the first.
+ */
 export function stashPreviousCleanupDraft(capture) {
     const key = draftKey(capture);
     const current = cleanupDrafts.get(key);
     if (current) {
-        previousCleanupDrafts.set(key, current);
+        const earlier = previousCleanupDrafts.get(key) || [];
+        previousCleanupDrafts.set(key, [current, ...earlier].slice(0, PREVIOUS_DRAFT_LIMIT));
         cleanupDrafts.delete(key);
     }
     return current;
 }
 
+/** The newest replaced draft for this origin, or null. */
 export function getPreviousCleanupDraft(capture) {
-    return previousCleanupDrafts.get(draftKey(capture)) || null;
+    return getPreviousCleanupDrafts(capture)[0] || null;
+}
+
+/** Every replaced draft still exportable for this origin, newest first. */
+export function getPreviousCleanupDrafts(capture) {
+    return previousCleanupDrafts.get(draftKey(capture)) || [];
 }
 
 /** A consumed draft (successful apply) no longer offers to resume; the
@@ -335,6 +478,12 @@ export function getPreviousCleanupDraft(capture) {
 export function clearCleanupDraft(capture) {
     cleanupDrafts.delete(draftKey(capture));
     previousCleanupDrafts.delete(draftKey(capture));
+}
+
+/** Test seam: drop every retained draft (the store is module-level state). */
+export function _resetCleanupDraftsForTests() {
+    cleanupDrafts.clear();
+    previousCleanupDrafts.clear();
 }
 
 export const CLEANUP_DRAFT_EXPORT_TYPE = 'mwt-cleanup-review-draft';
@@ -388,6 +537,10 @@ export async function applyReviewedLedgerCleanup({ capture, review, proposal, de
         const record = await getCleanupRecord(actionId, capture.bookName);
         if (record?.status === 'applied' && record.approvedReplacement === patch.replacement) {
             result = { ok: true, actionId, uid: capture.uid, reconciled: true };
+        } else {
+            // Not confirmed applied: carry the stored status so the UI never
+            // claims a write that did not happen.
+            result = { ...result, status: record?.status ?? result.status ?? null };
         }
     }
     return result?.ok === true ? { ...result, replacement: patch.replacement, warnings: patch.warnings } : result;

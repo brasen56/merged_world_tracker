@@ -68,6 +68,15 @@ import {
  */
 const applyInFlight = new Set();
 
+/**
+ * Prior statuses a retry of the same action may replace. Both mean the target
+ * was never written: 'original-saved' is the record a crash or failed
+ * 'application-pending' update leaves behind, and the status always advances
+ * to 'application-pending' before the target write. A running attempt for the
+ * same id is excluded by applyInFlight, not by this list.
+ */
+const RETRYABLE_PRIOR_STATUSES = ['failed', 'original-saved'];
+
 // ─── Shared guards ──────────────────────────────────────────────────────────
 
 /**
@@ -265,8 +274,8 @@ async function applyCleanupOnce({ capture, replacement, actionId, actionType = '
             if (reconciled.status !== 'failed') {
                 return refusal('outcome-uncertain', 'A previous attempt for this action left an uncertain outcome that could not be reconciled — reload the chat and retry.');
             }
-        } else if (prior.status !== 'failed') {
-            return refusal('duplicate', `Cleanup refused: action "${actionId}" is already ${prior.status}.`);
+        } else if (!RETRYABLE_PRIOR_STATUSES.includes(prior.status)) {
+            return refusal('duplicate', `Cleanup refused: action "${actionId}" is already ${prior.status}.`, { status: prior.status });
         }
         if (prior.originalContent !== capture.originalContent) {
             return refusal('stale-source', 'Cleanup refused: this action id was captured against different source content.');
@@ -308,13 +317,14 @@ async function applyCleanupOnce({ capture, replacement, actionId, actionType = '
         replacementFingerprint: fingerprintContent(replacement),
     };
     try {
-        // Only an absent or failed record may be replaced: an attempt that
-        // advanced (pending, applied, …) is never reset by a newer one.
-        await saveCleanupOriginal(record, { replaceStatuses: ['failed'] });
+        // Only an absent or never-written (failed / original-saved) record may
+        // be replaced: an attempt that advanced (pending, applied, …) is never
+        // reset by a newer one.
+        await saveCleanupOriginal(record, { replaceStatuses: RETRYABLE_PRIOR_STATUSES });
         await updateCleanupRecord(actionId, { status: 'application-pending' }, bookName);
     } catch (err) {
         if (err?.code === 'cleanup-record-exists') {
-            return refusal('duplicate', `Cleanup refused: action "${actionId}" already has a ${err.status} recovery record.`);
+            return refusal('duplicate', `Cleanup refused: action "${actionId}" already has a ${err.status} recovery record.`, { status: err.status });
         }
         return refusal('recovery-persist-failed', `Cleanup refused: the recovery original could not be saved and verified — nothing was changed. (${err.message})`);
     }
@@ -502,7 +512,7 @@ export async function restoreCleanup({ actionId, spanOf }) {
     if (reconciledRestore?.status === 'restored') return { ok: true, restoredContent: reconciledRestore.restoredContent, reconciled: true };
     if (reconciledRestore?.status === 'outcome-uncertain') return refusal('restore-uncertain', `Restore outcome uncertain: ${reconciledRestore.detail}. Export the recovery records before resolving manually.`);
     if (record.status !== 'applied') {
-        return refusal('not-applied', `Recovery record "${actionId}" is ${record.status} — only applied cleanups can be restored.`);
+        return refusal('not-applied', `Recovery record "${actionId}" is ${record.status} — only applied cleanups can be restored.`, { status: record.status });
     }
 
     // Scope and book bindings.

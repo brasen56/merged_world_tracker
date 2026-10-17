@@ -515,38 +515,43 @@ Guidance:
 // reviewed "Condense" workflow (knowledge/cleanup_review.js): the request
 // carries the ledger lines and the NPC name — nothing else (no dossier fields,
 // no chat, no recovery originals) — and the response is parsed STRICTLY by
-// parseLedgerProposal (never the lenient repair path). The proposal it
-// describes is validated by validateLedgerProposal before a human ever sees a
-// preview; the model cannot delete anything (pruning is advisory, removals are
-// separate explicit user decisions).
+// parseLedgerProposal (never the lenient repair path). The compact keep-list
+// response it describes is translated by expandKeepListProposal and validated
+// by validateLedgerProposal before a human ever sees a preview; the model
+// cannot delete anything (pruning is advisory, removals are separate explicit
+// user decisions).
 
-export const LEDGER_CLEANUP_PROMPT = `You are a continuity editor for an ongoing roleplay. The user has opened one NPC's Knowledge Ledger for REVIEWED condensation. Your job is to propose condensed ledger records that map every original line, so a human can review the condensation before anything changes.
+export const LEDGER_CLEANUP_PROMPT = `You are a continuity editor for an ongoing roleplay. The user has opened one NPC's Knowledge Ledger for REVIEWED condensation. Your job is to propose a condensation that accounts for every original line, so a human can review it before anything changes.
 
 ABSOLUTE RULES:
 - Output ONLY valid JSON. Nothing before or after it. No code fences, no commentary.
-- Work ONLY from the numbered lines in <ledger_sources>. You see no dossier, no chat, and no other context about this NPC — never draw on outside knowledge of the character.
-- Every source line must be mapped to EXACTLY ONE proposed record. You cannot delete anything: deletion is a separate human decision. If a line looks redundant or obsolete, still map it (usually into the record it duplicates) and optionally list it in "pruningSuggestions".
+- Work ONLY from the lines in <ledger_sources>; each starts with its source label in brackets ([s1], [s2], ...). In your JSON, refer to a source by its NUMBER as a plain integer: [s3] is 3. You see no dossier, no chat, and no other context about this NPC — never draw on outside knowledge of the character.
+- Every source number must appear EXACTLY ONCE: either in "keep" (the line stays exactly as written) or in the "s" list of one "changed" record. Never leave a number out, never list one twice, never use a number that is not in <ledger_sources>. You cannot delete anything: deletion is a separate human decision. If a line looks redundant or obsolete, still account for it (keep it, or merge it into the record it duplicates) and optionally list it in "pruningSuggestions".
+- Keep lines verbatim by default. Put a line in "changed" only to merge it with lines about the same fact or event, or when a correction requires rewording. Never rewrite a line just to tidy its wording — an unchanged line belongs in "keep".
 - Condensing is not concluding. Do not invent facts, strengthen claims, resolve ambiguities, or add interpretation the sources do not state.
-- Preserve distinctions that matter: who did, knew, or said what (attribution); how something is known (provenance: witness/told/document/rumor); how certain it is (rumor vs established); when it happened (dates, chronology); and corrections — when a later line corrects an earlier one, state the corrected fact and keep in "notes" that it corrects the earlier claim.
-- Merge conservatively. Combine lines only when they are about the same underlying fact or event AND none of the distinctions above would be blurred. When unsure, keep records separate — separate records are always acceptable.
-- Retain concrete details: numbers, codes, dates, names, and identifiers. If a merged record deliberately drops a detail, say so in that record's "notes". Never drop a code, date, or name silently.
-- Lines recording the NPC's own unresolved plans or commitments ("plans to", "will", "agreed to") are legacy entries: keep them represented in a record (you may tidy the wording), never convert them into established facts, and never drop them.
-- Record text is ONE line: no line breaks, no leading "- ", at most ${LEDGER_ITEM_LIMITS.fact} characters, typically one sentence — the shortest text that keeps every retained detail.
+- Preserve distinctions that matter: who did, knew, or said what (attribution); how something is known (provenance: witness/told/document/rumor); how certain it is (rumor vs established); when it happened (dates, chronology); and corrections — when a later line corrects an earlier one and you merge them, state the corrected fact and say in that record's "n" note that it corrects the earlier claim.
+- Merge conservatively. Combine lines only when they are about the same underlying fact or event AND none of the distinctions above would be blurred. When unsure, keep the lines — "keep" is always acceptable.
+- Retain concrete details: numbers, codes, dates, names, and identifiers. If a changed record deliberately drops a detail, say so in its "n" note. Never drop a code, date, or name silently.
+- Lines recording the NPC's own unresolved plans or commitments ("plans to", "will", "agreed to") are legacy entries: keep them represented — in "keep", or in a changed record that still states them as unresolved plans — never convert them into established facts, and never drop them.
+- A changed record's "t" text is ONE line: no line breaks, no leading "- ", at most ${LEDGER_ITEM_LIMITS.fact} characters, typically one sentence — the shortest text that keeps every retained detail.
 
-OUTPUT FORMAT ("version" is always 1; "reviewId" must echo the exact id from <review_id>):
+OUTPUT FORMAT ("version" is always 2; "reviewId" must echo the exact id from <review_id>; source numbers are plain integers, never strings):
 {
-  "version": 1,
+  "version": 2,
   "reviewId": "<the exact review id>",
-  "records": [
-    { "id": "r1", "text": "one condensed ledger line without the leading dash", "sourceIds": ["<every source id this record covers>"], "notes": "what was merged and what detail was dropped or weakened, if any (may be empty)" }
+  "keep": [3, 4, 6],
+  "changed": [
+    { "s": [1, 2, 5], "t": "one condensed ledger line without the leading dash", "n": "what was merged and what detail was dropped or weakened, if any" }
   ],
   "pruningSuggestions": [
-    { "sourceIds": ["<source id>"], "reason": "duplicates source <matching source id> (<the shared fact>)" }
+    { "s": [6], "r": "duplicates source 1 (<the shared fact>)" }
   ],
   "notes": "overall summary of the condensation approach (may be empty)"
 }
 
 Guidance:
-- A record may own one source (kept as-is or tidied) or several (merged). Order records by their earliest source.
-- "pruningSuggestions" are advisory only — they never remove content, and a human reviews every one. A suggestion must identify the matching source id and the shared fact; a bare "duplicate" claim is not useful.
-- If nothing can be safely condensed, map every source to its own record with tidied wording and return an empty "pruningSuggestions" array.`;
+- Always include both "keep" and "changed", even when one of them is empty. List numbers in ascending order so coverage is easy to check.
+- A changed record usually merges several sources. A single-source changed record is only for a line that must be reworded, for example to state a correction. "n" may be omitted when there is nothing to note.
+- Output grows with every changed record; lines left in "keep" cost almost nothing. Change only what condensing actually requires.
+- "pruningSuggestions" are advisory only — they never remove content, and a human reviews every one. A suggested source still appears in "keep" or "changed". A suggestion's "r" must name the matching source number and the shared fact; a bare "duplicate" claim is not useful.
+- If nothing can be safely condensed, put every source number in "keep", leave "changed" empty, and return an empty "pruningSuggestions" array.`;

@@ -28,10 +28,17 @@ import { _setCacheForTests, _clearCacheForTests, withStoreLock } from '../knowle
 import { renderNpcsSubTab } from '../knowledge/render.js';
 import { openLedgerCleanupReviewModal, openCleanupRecoveryModal } from '../knowledge/cleanup_review_ui.js';
 import { onChatChanged } from '../knowledge/index.js';
-import { listCleanupRecovery, exportCleanupRecovery, getCleanupRecord, importCleanupRecovery } from '../knowledge/cleanup_recovery.js';
+import { listCleanupRecovery, exportCleanupRecovery, getCleanupRecord, importCleanupRecovery, updateCleanupRecord } from '../knowledge/cleanup_recovery.js';
 import { getLorebookName } from '../knowledge/scope.js';
 import { LEDGER_CLEANUP_PROMPT } from '../knowledge/prompts.js';
-import { prepareLedgerCleanup, saveCleanupDraft, getCleanupDraft, clearCleanupDraft, requestLedgerProposal } from '../knowledge/cleanup_review.js';
+import {
+    prepareLedgerCleanup, saveCleanupDraft, getCleanupDraft, clearCleanupDraft, requestLedgerProposal,
+    restoreReviewedLedgerCleanup, PREVIOUS_DRAFT_LIMIT, _resetCleanupDraftsForTests,
+    buildLedgerCleanupUserContent, minimumProposalEnvelope, estimateCleanupRequest, estimateLedgerCleanup,
+    checkCleanupBudget, expandKeepListProposal, CLEANUP_WIRE_VERSION,
+} from '../knowledge/cleanup_review.js';
+import { captureLedgerReview, validateLedgerProposal, originalLedgerProposal, patchLedgerProposal } from '../knowledge/ledger_cleanup.js';
+import { estimateTokens } from '../core/context.js';
 import { buildBackupEnvelope } from '../backup/data.js';
 
 // ─── Harness (mirrors test/knowledge_cleanup_commit.test.js) ─────────────────
@@ -101,30 +108,25 @@ const body = () => modalEl()?.querySelector('.kt-condense-content');
 const statusText = () => modalEl()?.querySelector('.mwt-status')?.textContent || '';
 const ktStatusText = () => contentEl?.querySelector('#kt-status')?.textContent || '';
 
-/** Build a valid proposal v1 from the request's own review payload: the
- *  first two sources merge, every further source maps to an exact-original
- *  record, and (with 3+ sources) one advisory pruning suggestion is included. */
+/** The source numbers ([sN] labels) a request payload carries, in order. */
+const sourceNumbers = userContent => [...userContent.matchAll(/^\[s(\d+)\] /gm)].map(m => Number(m[1]));
+
+/** Build a valid keep-list response from the request's own payload: the
+ *  first two sources merge, every further source is kept verbatim, and (with
+ *  3+ sources) one advisory pruning suggestion is included. */
 function condensedProposalJson(userContent) {
     const reviewId = /<review_id>([^<]+)<\/review_id>/.exec(userContent)?.[1] || '';
-    const ids = [...userContent.matchAll(/^\[([^\]]+)\] /gm)].map(m => m[1]);
-    const lineOf = (id) => {
-        const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const m = new RegExp(`^\\[${escaped}\\] (.*)$`, 'm').exec(userContent);
-        return m ? m[1].replace(/^-\s*/, '').trim() : 'kept original';
-    };
-    const records = [];
-    if (ids.length >= 2) {
-        records.push({ id: 'r1', text: 'smugglers use the north wharf and were seen with guild keys there via told/witness — Day 5-7', sourceIds: [ids[0], ids[1]], notes: 'Merged the two wharf observations.' });
-    }
-    for (const id of (ids.length >= 2 ? ids.slice(2) : ids)) {
-        records.push({ id: `r${records.length + 1}`, text: lineOf(id), sourceIds: [id], notes: '' });
-    }
+    const numbers = sourceNumbers(userContent);
+    const merge = numbers.length >= 2;
     return JSON.stringify({
-        version: 1,
+        version: 2,
         reviewId,
-        records,
-        pruningSuggestions: ids[2]
-            ? [{ sourceIds: [ids[2]], reason: `duplicates the wharf record (${ids[0]}): the gate code came from the same document drop` }]
+        keep: merge ? numbers.slice(2) : numbers,
+        changed: merge
+            ? [{ s: [1, 2], t: 'smugglers use the north wharf and were seen with guild keys there via told/witness — Day 5-7', n: 'Merged the two wharf observations.' }]
+            : [],
+        pruningSuggestions: numbers.length >= 3
+            ? [{ s: [3], r: 'duplicates the wharf record (source 1): the gate code came from the same document drop' }]
             : [],
         notes: 'Two wharf lines merged; everything else kept verbatim.',
     });
@@ -138,6 +140,22 @@ function useGoodApi() {
 }
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+/** Hold every world-info save until the returned release() is called. A
+ *  failing test that never releases is released by afterEach, so its held
+ *  write cannot keep the store lock and stall every later test. */
+let releaseHeldSaves = null;
+function holdSaves() {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const save = wiFake.saveWorldInfo.bind(wiFake);
+    vi.spyOn(wiFake, 'saveWorldInfo').mockImplementation(async (...args) => {
+        await gate;
+        return save(...args);
+    });
+    releaseHeldSaves = () => release();
+    return releaseHeldSaves;
+}
 
 async function openReview({ npcContent = ORIGINAL } = {}) {
     seedBook({ npcContent });
@@ -156,6 +174,7 @@ beforeEach(() => {
     resetCoreStubs();
     _resetEpoch();
     _clearCacheForTests();
+    _resetCleanupDraftsForTests();
     saveSettings({ scope: 'global', connectionProfileId: 'test-profile' });
     _setCacheForTests(BOOK, { registry: {
         [NPC]: { uid: 7, type: 'major', keywords: [NPC], entityId: 'ent-1' },
@@ -178,6 +197,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    releaseHeldSaves?.();
+    releaseHeldSaves = null;
     document.body.innerHTML = '';
     releaseManagedInert();
     state.wiScript = null;
@@ -243,6 +264,17 @@ describe('explicit invocation and disclosure', () => {
         expect(text).toContain('no chat messages, no dossier fields');
         expect(text).toContain('8,000 tokens'); // maxTokens default
         expect(text).toContain('unknown on this build'); // honest context limit
+        expect(text).toContain('Up to two billable requests per generation or regeneration');
+        expect(text).toContain('one automatic retry');
+        expect(text).not.toContain('One paid request');
+    });
+
+    test('the Condense button discloses the two-attempt bound too', () => {
+        seedBook();
+        renderNpcsSubTab();
+        const title = contentEl.querySelector('.kt-npc-condense').title;
+        expect(title).toContain('up to two billable attempts');
+        expect(title).not.toContain('one model call');
     });
 
     test('consent gates the request; an unchecked box sends nothing', async () => {
@@ -317,7 +349,10 @@ describe('the model request', () => {
         expect(trigger).toBe('manual');
         expect(userContent).toContain('smugglers use the north wharf');
         expect(userContent).toContain('the gate code is 7314');
-        expect(userContent).toMatch(/\[lr-[a-z0-9-]+:source:\d+\]/);
+        // Short wire ids only; the review id travels once, for the echo.
+        expect([...userContent.matchAll(/^\[([^\]]+)\] /gm)].map(m => m[1])).toEqual(['s1', 's2', 's3']);
+        expect(userContent).not.toContain(':source:');
+        expect(userContent).toMatch(/<review_id>lr-[a-z0-9-]+<\/review_id>/);
         expect(userContent).toContain(`<entity>${NPC}</entity>`);
         // No dossier fields, no chat, no other entries.
         expect(userContent).not.toContain('SENTINEL-APPEARANCE');
@@ -330,7 +365,7 @@ describe('the model request', () => {
     test('prose-wrapped or truncated JSON never becomes a preview (strict parse, bounded retries)', async () => {
         setFakeApi(request => {
             apiRequests.push(request);
-            return 'Here is your proposal:\n{"version":1,"reviewId":"lr-';
+            return 'Here is your proposal:\n{"version":2,"reviewId":"lr-';
         });
         await openReview();
         body().querySelector('.kt-condense-consent-box').click();
@@ -389,6 +424,352 @@ describe('the model request', () => {
         await flush();
         expect(modalEl()).toBeNull();
         expect(document.activeElement).toBe(btn);
+    });
+});
+
+// ─── The keep-list response wire format and its output floor (Phase 5 prep) ──
+
+const PROBE_REVIEW_ID = 'lr-mgv0k3x9-q7f2m8zt';
+
+/** A representative long ledger: 680 distinct ~100-character lines, roughly
+ *  15,000 tokens under the chars/4.5 heuristic (the Phase 5 target size). */
+function longLedgerContent(lines = 680) {
+    const items = Array.from({ length: lines }, (_, i) =>
+        `- Mara logged manifest ${1000 + i} at berth ${(i % 40) + 1} via document — courier swore it came from Dusk Quay, Day ${(i % 90) + 1}`);
+    return ['[Dossier] Mara Voss | Human | weathered harbourmaster', '', 'Knowledge Ledger:', ...items].join('\n');
+}
+
+/** A fake live tokenizer that compresses repeated characters: every maximal
+ *  run of one character is a single token. A run of 'x' is ONE token at any
+ *  length, while numbers and JSON punctuation cost roughly a token per character. */
+function installRunLengthTokenizer() {
+    const runs = vi.fn(text => text.match(/(.)\1*/gsu)?.length ?? 0);
+    setFakeContextExtras({ getTokenCount: runs });
+    vi.stubGlobal('SillyTavern', { getContext: getContextSafe });
+    return runs;
+}
+
+/** Answer each request with build(sourceNumbers, reviewId) spread over an
+ *  empty keep-list response, read off the payload. */
+function proposalApi(build) {
+    setFakeApi(request => {
+        apiRequests.push(request);
+        const reviewId = /<review_id>([^<]+)<\/review_id>/.exec(request.userContent)?.[1] || '';
+        return JSON.stringify({ version: 2, reviewId, keep: [], changed: [], ...build(sourceNumbers(request.userContent), reviewId) });
+    });
+}
+
+async function requestFor(npcContent) {
+    seedBook({ npcContent });
+    const { capture } = await prepareLedgerCleanup({ name: NPC, uid: 7 });
+    return requestLedgerProposal({ capture });
+}
+
+describe('the keep-list response wire format', () => {
+    test('round trip: [sN] labels out, keep numbers and changed records back, full ids validated', async () => {
+        useGoodApi();
+        const { review, proposal } = await requestFor(ORIGINAL);
+        expect(apiRequests).toHaveLength(1);
+        const { userContent } = apiRequests[0];
+        expect(userContent).toContain(`<review_id>${review.reviewId}</review_id>`);
+        for (const source of review.sources) expect(userContent).not.toContain(source.id);
+        // The returned proposal is the unchanged Phase 2 shape over full ids.
+        const [s1, s2, s3] = review.sources.map(source => source.id);
+        expect(proposal).toEqual({
+            version: 1,
+            reviewId: review.reviewId,
+            records: [
+                { id: 'r1', text: 'smugglers use the north wharf and were seen with guild keys there via told/witness — Day 5-7', sourceIds: [s1, s2], notes: 'Merged the two wharf observations.' },
+                { id: `original:${s3}`, text: 'the gate code is 7314 via document — Day 7', sourceIds: [s3], notes: '' },
+            ],
+            pruningSuggestions: [{ sourceIds: [s3], reason: 'duplicates the wharf record (source 1): the gate code came from the same document drop' }],
+            notes: 'Two wharf lines merged; everything else kept verbatim.',
+        });
+        expect(validateLedgerProposal(review, proposal)).toMatchObject({ ok: true });
+    });
+
+    test('a ~15k-token, 680-source review round-trips merges, a reword, keeps and pruning in source order', async () => {
+        const changedNumbers = [1, 2, 10, 11, 12, 680];
+        proposalApi(numbers => ({
+            keep: numbers.filter(n => !changedNumbers.includes(n)),
+            changed: [
+                { s: [680], t: 'Mara logged manifest 1679 at berth 40 via document — courier swore it came from Dusk Quay, Day 50 (later corrected)', n: 'reworded to state the correction' },
+                { s: [12, 10, 11], t: 'Mara logged manifests 1009-1011 at berths 10-12 via document — courier swore they came from Dusk Quay, Days 10-12' },
+                { s: [1, 2], t: 'Mara logged manifests 1000-1001 at berths 1-2 via document — courier swore they came from Dusk Quay, Days 1-2', n: 'merged two manifests' },
+            ],
+            pruningSuggestions: [{ s: [12], r: 'duplicates source 10 (same courier)' }],
+        }));
+        const { review, proposal } = await requestFor(longLedgerContent());
+        expect(apiRequests).toHaveLength(1);
+        expect(apiRequests[0].userContent).toContain('[s680] - Mara logged manifest 1679');
+        const id = n => review.sources[n - 1].id;
+        expect(proposal.records).toHaveLength(680 - changedNumbers.length + 3);
+        // Every source is owned exactly once, and records run in earliest-source order.
+        const owned = proposal.records.flatMap(record => record.sourceIds);
+        expect(owned).toHaveLength(680);
+        expect(new Set(owned)).toEqual(new Set(review.sources.map(source => source.id)));
+        const firstOrder = record => Math.min(...record.sourceIds.map(sourceId => review.sources.findIndex(source => source.id === sourceId)));
+        const orders = proposal.records.map(firstOrder);
+        expect(orders).toEqual([...orders].sort((a, b) => a - b));
+        expect(proposal.records[0]).toEqual({ id: 'r3', text: expect.stringContaining('manifests 1000-1001'), sourceIds: [id(1), id(2)], notes: 'merged two manifests' });
+        expect(proposal.records[1]).toEqual({ id: `original:${id(3)}`, text: review.sources[2].text.slice(2), sourceIds: [id(3)], notes: '' });
+        expect(proposal.records[8]).toMatchObject({ id: 'r2', sourceIds: [id(12), id(10), id(11)], notes: '' });
+        expect(proposal.records.at(-1)).toMatchObject({ id: 'r1', sourceIds: [id(680)], notes: 'reworded to state the correction' });
+        expect(proposal.pruningSuggestions).toEqual([{ sourceIds: [id(12)], reason: 'duplicates source 10 (same courier)' }]);
+        expect(validateLedgerProposal(review, proposal)).toMatchObject({ ok: true });
+        const patch = patchLedgerProposal(review, proposal, { removals: [] });
+        expect(patch.ok).toBe(true);
+        expect(patch.replacement).toContain('- Mara logged manifest 1500 at berth 21');
+        expect(patch.replacement).toContain('(later corrected)');
+    });
+
+    test.each([
+        ['an out-of-range number', numbers => ({ keep: [...numbers, 4] }), 'unknown source number (4)'],
+        ['source number zero', numbers => ({ keep: [0, ...numbers] }), 'unknown source number (0)'],
+        ['a non-integer number', () => ({ keep: [1, 2], changed: [{ s: [2.5], t: 'reworded' }] }), 'unknown source number (2.5)'],
+        ['a numeric string', () => ({ keep: ['1', 2, 3] }), 'unknown source number ("1")'],
+        ['an [sN] label instead of its number', () => ({ keep: [1, 2, 's3'] }), 'unknown source number ("s3")'],
+        ['a null number', () => ({ keep: [1, 2, null] }), 'unknown source number (a non-number value)'],
+        ['an unknown pruning number', numbers => ({ keep: numbers, pruningSuggestions: [{ s: [9], r: 'duplicates source 1' }] }), 'unknown source number (9)'],
+        ['a number kept twice', numbers => ({ keep: [...numbers, 2] }), 'Source 2 is listed more than once'],
+        ['a kept number that is also changed', numbers => ({ keep: numbers, changed: [{ s: [3], t: 'reworded' }] }), 'Source 3 is listed more than once'],
+        ['a number repeated inside one record', () => ({ keep: [1], changed: [{ s: [2, 2, 3], t: 'merged' }] }), 'Source 2 is listed more than once'],
+        ['an omitted source', () => ({ keep: [1, 2] }), 'Missing source coverage'],
+        ['an empty answer', () => ({}), 'Missing source coverage'],
+        ['a missing keep list', numbers => ({ keep: undefined, changed: [{ s: numbers, t: 'everything at once' }] }), 'coverage is never implicit'],
+        ['a missing changed list', numbers => ({ keep: numbers, changed: undefined }), 'coverage is never implicit'],
+        ['the old object-per-record format', (numbers, reviewId) => ({
+            version: 1, keep: undefined, changed: undefined, reviewId,
+            records: numbers.map(n => ({ id: `r${n}`, text: 'kept', sourceIds: [`s${n}`], notes: '' })),
+        }), 'unknown field ("records")'],
+        ['a wrong format version', numbers => ({ version: 1, keep: numbers }), 'Unsupported proposal format version'],
+        ['an unknown record field', () => ({ keep: [3], changed: [{ s: [1, 2], t: 'merged', sourceIds: ['s1', 's2'] }] }), 'unknown field ("sourceIds")'],
+        ['an unknown suggestion field', numbers => ({ keep: numbers, pruningSuggestions: [{ s: [3], r: 'duplicates source 1', reason: 'again' }] }), 'unknown field ("reason")'],
+        ['a non-object record', numbers => ({ keep: numbers, changed: ['merged'] }), 'must be an object'],
+        ['a scalar "s"', () => ({ keep: [1, 2], changed: [{ s: 3, t: 'reworded' }] }), 'non-empty "s" array'],
+        ['an empty "s"', numbers => ({ keep: numbers, changed: [{ s: [], t: 'orphan text' }] }), 'non-empty "s" array'],
+        ['a non-array pruning list', numbers => ({ keep: numbers, pruningSuggestions: {} }), '"pruningSuggestions" must be an array'],
+        ['a stale review id', numbers => ({ reviewId: 'lr-stale', keep: numbers }), 'stale review ID'],
+        ['multiline record text', () => ({ keep: [3], changed: [{ s: [1, 2], t: 'line one\nline two' }] }), 'multiline/structural text'],
+        ['a missing record text', () => ({ keep: [3], changed: [{ s: [1, 2] }] }), 'Malformed record'],
+        ['a non-string record note', () => ({ keep: [3], changed: [{ s: [1, 2], t: 'merged', n: 5 }] }), 'Malformed record'],
+        ['a non-string overall note', numbers => ({ keep: numbers, notes: null }), 'Invalid proposal schema'],
+        ['an empty pruning reason', numbers => ({ keep: numbers, pruningSuggestions: [{ s: [3], r: '' }] }), 'Malformed advisory pruning suggestion'],
+        ['a repeated pruning number', numbers => ({ keep: numbers, pruningSuggestions: [{ s: [3, 3], r: 'duplicates source 1' }] }), 'Malformed advisory pruning suggestion'],
+    ])('%s fails validation on both attempts and is never guessed', async (_label, build, reason) => {
+        proposalApi(build);
+        seedBook();
+        const { capture } = await prepareLedgerCleanup({ name: NPC, uid: 7 });
+        const failure = requestLedgerProposal({ capture });
+        await expect(failure).rejects.toThrow('The proposal failed validation and was discarded');
+        await expect(failure).rejects.toThrow(reason);
+        expect(apiRequests).toHaveLength(2); // the shared 2-attempt bound, unchanged
+        expect(entry7().content).toBe(ORIGINAL);
+    });
+
+    const MIXED_LEDGER = [
+        '[Dossier] Mara Voss | Human | weathered harbourmaster',
+        '',
+        'Knowledge Ledger:',
+        '- smugglers use the north wharf via told — Day 5',
+        '',
+        '  - an indented line via witness — Day 6',
+        '- Mara plans to meet the courier via told — Day 8',
+        '',
+        'Trailing section: untouched',
+    ].join('\r\n');
+
+    test.each([
+        ['a mixed CRLF ledger, ascending', MIXED_LEDGER, numbers => numbers],
+        ['a mixed CRLF ledger, any order', MIXED_LEDGER, numbers => [...numbers].reverse()],
+        ['the 680-source ledger', longLedgerContent(), numbers => numbers],
+    ])('a keep-only response reproduces the original ledger byte for byte (%s)', async (_label, content, order) => {
+        proposalApi(numbers => ({ keep: order(numbers) }));
+        const { review, proposal } = await requestFor(content);
+        expect(proposal).toEqual(originalLedgerProposal(review));
+        expect(patchLedgerProposal(review, proposal, { removals: [] })).toMatchObject({ ok: true, replacement: content });
+    });
+
+    test('a keep-only response previews as "nothing to apply"', async () => {
+        proposalApi(numbers => ({ keep: numbers }));
+        await openReview();
+        await consentAndGenerate();
+        expect(body().querySelectorAll('.kt-condense-record')).toHaveLength(3);
+        expect(body().querySelector('.kt-condense-summary').textContent).toContain('nothing to apply');
+        expect(body().querySelector('.kt-condense-apply').disabled).toBe(true);
+        expect(entry7().content).toBe(ORIGINAL);
+    });
+
+    test('truncated keep-list JSON never becomes a preview, wherever it is cut', async () => {
+        seedBook({ npcContent: longLedgerContent(40) });
+        const { capture } = await prepareLedgerCleanup({ name: NPC, uid: 7 });
+        const cuts = [
+            json => json.slice(0, json.indexOf('"keep":[') + 12), // inside the keep list
+            json => json.slice(0, json.indexOf('"changed":[') + 14), // inside a changed record
+            json => json.slice(0, Math.floor(json.length / 2)),
+            json => json.slice(0, -1), // only the closing brace missing
+        ];
+        for (const cut of cuts) {
+            apiRequests.length = 0;
+            setFakeApi(request => {
+                apiRequests.push(request);
+                return cut(condensedProposalJson(request.userContent));
+            });
+            await expect(requestLedgerProposal({ capture })).rejects.toThrow('No preview is shown for incomplete output');
+            expect(apiRequests).toHaveLength(2);
+        }
+        // And through the modal: no records, the disclosure stays.
+        apiRequests.length = 0;
+        setFakeApi(request => {
+            apiRequests.push(request);
+            return condensedProposalJson(request.userContent).slice(0, -1);
+        });
+        await openReview();
+        body().querySelector('.kt-condense-consent-box').click();
+        body().querySelector('.kt-condense-generate').click();
+        await vi.waitFor(() => expect(statusText()).toContain('strict JSON'));
+        expect(apiRequests).toHaveLength(2);
+        expect(body().querySelector('.kt-condense-records')).toBeNull();
+        expect(body().querySelector('.kt-condense-consent-box')).toBeTruthy();
+    });
+
+    test('translation is pure, fills the optional fields, and orders records by earliest source', () => {
+        const review = captureLedgerReview(ORIGINAL, PROBE_REVIEW_ID);
+        const [s1, s2, s3] = review.sources.map(source => source.id);
+        const wire = {
+            version: CLEANUP_WIRE_VERSION, reviewId: PROBE_REVIEW_ID,
+            keep: [2],
+            changed: [{ s: [3, 1], t: 'the gate code 7314 and the north wharf via told/document — Day 5-7' }],
+        };
+        const snapshot = structuredClone(wire);
+        const out = expandKeepListProposal(review, wire);
+        expect(wire).toEqual(snapshot);
+        expect(out).toEqual({
+            ok: true,
+            proposal: {
+                version: 1,
+                reviewId: PROBE_REVIEW_ID,
+                records: [
+                    { id: 'r1', text: 'the gate code 7314 and the north wharf via told/document — Day 5-7', sourceIds: [s3, s1], notes: '' },
+                    { id: `original:${s2}`, text: 'Mara saw guild keys on the north wharf via witness — Day 7', sourceIds: [s2], notes: '' },
+                ],
+                pruningSuggestions: [],
+                notes: '',
+            },
+        });
+        expect(validateLedgerProposal(review, out.proposal)).toMatchObject({ ok: true });
+        // Non-objects never translate, and prototype keys are unknown fields, not lookups.
+        for (const shape of [null, [], 'text', 3]) expect(expandKeepListProposal(review, shape).ok).toBe(false);
+        const proto = JSON.parse(`{"version":2,"reviewId":"${PROBE_REVIEW_ID}","keep":[1,2,3],"changed":[],"__proto__":{}}`);
+        expect(expandKeepListProposal(review, proto)).toMatchObject({ ok: false, reason: expect.stringContaining('"__proto__"') });
+        for (const n of ['__proto__', 'constructor', Infinity, -1, true, [1]]) {
+            expect(expandKeepListProposal(review, { ...snapshot, keep: [n, 2] }).ok).toBe(false);
+        }
+    });
+
+    test('the disclosure figures size the short-label payload actually sent', async () => {
+        useGoodApi();
+        await openReview();
+        const { capture } = await prepareLedgerCleanup({ name: NPC, uid: 7 });
+        const { estimate } = estimateLedgerCleanup(capture);
+        expect(body().textContent).toContain(`request ~${estimate.inputTokens.toLocaleString()} tokens in`);
+        expect(body().textContent).toContain(`at least ~${estimate.minimumOutputTokens.toLocaleString()} tokens (every line kept verbatim)`);
+        expect(body().textContent).toContain(`~${estimate.rewriteAllOutputTokens.toLocaleString()} if every line were rewritten`);
+        expect(body().textContent).toContain('depends on how much the model changes');
+        await consentAndGenerate();
+        const sent = apiRequests[0].userContent;
+        expect(sent).not.toContain(':source:');
+        // Same shape and review-id length as the probe, so the same estimate.
+        expect(Math.abs(estimateTokens(sent) - estimate.userTokens)).toBeLessThanOrEqual(1);
+        expect(estimate.inputTokens).toBe(estimate.systemTokens + estimate.userTokens);
+    });
+
+    test('on a ~15k-token ledger the keep-all floor is small and the rewrite figure tracks the ledger', () => {
+        const review = captureLedgerReview(longLedgerContent(), PROBE_REVIEW_ID);
+        const userContent = buildLedgerCleanupUserContent(NPC, review);
+        const estimate = estimateCleanupRequest({ review, userContent });
+        expect(estimate.sourceCount).toBe(680);
+        expect(estimate.ledgerTokens).toBeGreaterThan(14000);
+        // Input: a 3–7 character [sN] prefix per line, not a ~31-character full
+        // id (~1.1k tokens of mapping overhead instead of ~5.1k).
+        const fullIdContent = userContent.replace(/^\[s(\d+)\]/gm, (_, n) => `[${review.sources[n - 1].id}]`);
+        expect(estimate.userTokens - estimate.ledgerTokens).toBeLessThan(1500);
+        expect(estimateTokens(fullIdContent) - estimateTokens(userContent)).toBeGreaterThan(3500);
+        // Output: keeping every line costs only its number. The old
+        // object-per-record shape needed a whole record per source even with
+        // one-character text, so its floor was many times larger.
+        const oldPerSourceFloor = JSON.stringify({
+            version: 1, reviewId: PROBE_REVIEW_ID, pruningSuggestions: [], notes: '',
+            records: review.sources.map((_source, i) => ({ id: `r${i + 1}`, text: 'x', sourceIds: [`s${i + 1}`], notes: '' })),
+        });
+        expect(estimate.minimumOutputTokens).toBeLessThan(1000);
+        expect(estimateTokens(oldPerSourceFloor)).toBeGreaterThan(estimate.minimumOutputTokens * 8);
+        // Rewriting every line costs about the ledger itself plus a small wrapper per record.
+        expect(estimate.rewriteAllOutputTokens).toBeGreaterThan(estimate.ledgerTokens);
+        expect(estimate.rewriteAllOutputTokens).toBeLessThan(estimate.ledgerTokens * 1.3);
+        // At the default allowance the request goes ahead, with an honest
+        // warning that the output size depends on how much the model changes.
+        const budget = checkCleanupBudget({ ...estimate, outputAllowance: 8000 });
+        expect(budget.ok).toBe(true);
+        expect(budget.warnings.join('\n')).toContain('output grows with every line the model merges or rewrites');
+        // An allowance that covers a full rewrite has nothing to warn about.
+        const roomy = checkCleanupBudget({ ...estimate, outputAllowance: estimate.rewriteAllOutputTokens });
+        expect(roomy.warnings.join('\n')).not.toContain('merges or rewrites');
+    });
+});
+
+describe('the real-JSON output floor', () => {
+    test('the floor and the rewrite figure are complete wire answers that translate, validate, and change nothing', () => {
+        const review = captureLedgerReview(longLedgerContent(25), PROBE_REVIEW_ID);
+        const envelope = minimumProposalEnvelope(review);
+        const numbers = review.sources.map((_source, i) => i + 1);
+        expect(JSON.parse(envelope.keepAll)).toEqual({ version: CLEANUP_WIRE_VERSION, reviewId: PROBE_REVIEW_ID, keep: numbers, changed: [] });
+        expect(JSON.parse(envelope.rewriteAll).changed.map(entry => entry.s)).toEqual(numbers.map(n => [n]));
+        for (const json of [envelope.keepAll, envelope.rewriteAll]) {
+            const expanded = expandKeepListProposal(review, JSON.parse(json));
+            expect(validateLedgerProposal(review, expanded.proposal)).toMatchObject({ ok: true });
+            expect(patchLedgerProposal(review, expanded.proposal, { removals: [] }).replacement).toBe(review.original);
+        }
+        // Under the heuristic the estimate is exactly the wire JSON's size.
+        const estimate = estimateCleanupRequest({ review, userContent: buildLedgerCleanupUserContent(NPC, review) });
+        expect(estimate.minimumOutputTokens).toBe(estimateTokens(envelope.keepAll));
+        expect(estimate.rewriteAllOutputTokens).toBe(estimateTokens(envelope.rewriteAll));
+    });
+
+    test('a compressing live tokenizer counts the real numbers, not a run of placeholder characters', () => {
+        const runs = installRunLengthTokenizer();
+        const sizes = [40, 400].map(lines => {
+            const review = captureLedgerReview(longLedgerContent(lines), PROBE_REVIEW_ID);
+            const envelope = minimumProposalEnvelope(review);
+            const estimate = estimateCleanupRequest({ review, userContent: buildLedgerCleanupUserContent(NPC, review) });
+            expect(runs).toHaveBeenCalledWith(envelope.keepAll);
+            expect(estimate.minimumOutputTokens).toBe(runs(envelope.keepAll));
+            expect(estimate.rewriteAllOutputTokens).toBe(runs(envelope.rewriteAll));
+            // A same-length placeholder would collapse to one token at any size.
+            expect(runs('x'.repeat(envelope.keepAll.length))).toBe(1);
+            return estimate.minimumOutputTokens;
+        });
+        // The floor tracks the keep list: every further number costs at least
+        // two runs (its digits, then a comma), so 360 more sources raise it by
+        // well over seven hundred.
+        expect(sizes[0]).toBeGreaterThan(40 * 2);
+        expect(sizes[1] - sizes[0]).toBeGreaterThan(360 * 2);
+    });
+
+    test('the known-excess refusal fires on the real floor before any request is paid for', async () => {
+        const runs = installRunLengthTokenizer();
+        seedBook();
+        const { capture } = await prepareLedgerCleanup({ name: NPC, uid: 7 });
+        const floor = runs(minimumProposalEnvelope(captureLedgerReview(capture.originalContent, PROBE_REVIEW_ID)).keepAll);
+        // An allowance a one-token placeholder estimate would pass, but that the
+        // real keep-all answer cannot fit.
+        const allowance = Math.floor(floor / 2);
+        expect(allowance).toBeGreaterThan(1);
+        saveSettings({ maxTokens: allowance });
+        useGoodApi();
+        await expect(requestLedgerProposal({ capture })).rejects.toMatchObject({ code: 'output-envelope-exceeds-allowance' });
+        expect(apiRequests).toHaveLength(0);
+        expect(estimateLedgerCleanup(capture).budget).toMatchObject({ ok: false, code: 'output-envelope-exceeds-allowance' });
     });
 });
 
@@ -473,6 +854,46 @@ describe('the source-aware review', () => {
         const first = body().querySelector('.kt-condense-record');
         expect(first.querySelector('.kt-condense-text').value).toBe('smugglers use the north wharf via told — Day 5');
         expect(first.querySelectorAll('.kt-condense-source-text')).toHaveLength(1);
+    });
+
+    test('keyboard focus stays on a live review control after each decision re-renders', async () => {
+        useGoodApi();
+        await openReview();
+        await consentAndGenerate();
+        // A refused partial removal of the merged record lands on its Keep fix.
+        const merged = body().querySelector('.kt-condense-record');
+        merged.querySelector('.kt-condense-remove-src').click();
+        body().querySelector('.kt-condense-reason-input').value = 'just this one';
+        body().querySelector('.kt-condense-remove-confirm').click();
+        await vi.waitFor(() => expect(statusText()).toContain('Keep originals before removing'));
+        expect(document.activeElement).toBe(body().querySelector(`.kt-condense-keep[data-record="${merged.dataset.record}"]`));
+        // Keep originals → the first restored record's edit box.
+        document.activeElement.click();
+        await vi.waitFor(() => expect(body().querySelectorAll('.kt-condense-record')).toHaveLength(3));
+        expect(document.activeElement).toBe(body().querySelector('#kt-condense-text-0'));
+        // Cancelling a removal returns to its Remove button.
+        const single = [...body().querySelectorAll('.kt-condense-record')].find(r => r.textContent.includes('gate code'));
+        const removeBtn = single.querySelector('.kt-condense-remove-src');
+        const sourceId = removeBtn.dataset.source;
+        removeBtn.click();
+        body().querySelector('.kt-condense-remove-cancel').click();
+        expect(document.activeElement).toBe(removeBtn);
+        // A confirmed removal → that removal's Undo button.
+        removeBtn.click();
+        body().querySelector('.kt-condense-reason-input').value = 'obsolete';
+        body().querySelector('.kt-condense-remove-confirm').click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-removals')).toBeTruthy());
+        expect(document.activeElement).toBe(body().querySelector(`.kt-condense-removal-undo[data-source="${sourceId}"]`));
+        // Undoing it → the restored record's edit box.
+        document.activeElement.click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-removals')).toBeNull());
+        expect(document.activeElement.matches('.kt-condense-text')).toBe(true);
+        expect(document.activeElement.closest('.kt-condense-record').textContent).toContain('gate code');
+        // Restore-all (two clicks) keeps focus on its button.
+        body().querySelector('.kt-condense-restore-all').click();
+        body().querySelector('.kt-condense-restore-all').click();
+        await vi.waitFor(() => expect(statusText()).toContain('exact original line'));
+        expect(document.activeElement).toBe(body().querySelector('.kt-condense-restore-all'));
     });
 
     test('removal requires an explicit reason; absence is not consent', async () => {
@@ -570,6 +991,121 @@ describe('apply', () => {
         await vi.waitFor(() => expect(body().querySelector('.kt-condense-confirm')).toBeTruthy());
     }
 
+    test.each(['success', 'failure'])('review controls are frozen during pending Apply (%s)', async outcome => {
+        await toConfirm();
+        let release;
+        const pending = new Promise(resolve => { release = resolve; });
+        const save = wiFake.saveWorldInfo.bind(wiFake);
+        vi.spyOn(wiFake, 'saveWorldInfo').mockImplementation(async (...args) => {
+            await pending;
+            return save(...args);
+        });
+        if (outcome === 'failure') wiFake.failSaveAt = 1;
+        const originalText = body().querySelector('.kt-condense-text').value;
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await flush();
+        for (const control of body().querySelectorAll('textarea, input, button')) {
+            expect(control.matches(':disabled')).toBe(true);
+        }
+        // Even an already armed destructive action and regeneration are blocked.
+        body().querySelector('.kt-condense-restore-all').click();
+        body().querySelector('.kt-condense-restore-all').click();
+        body().querySelector('.kt-condense-regenerate').click();
+        body().querySelector('.kt-condense-confirm-back').click();
+        expect(body().querySelector('.kt-condense-text').value).toBe(originalText);
+        expect(apiRequests).toHaveLength(1);
+        release();
+        if (outcome === 'success') {
+            await vi.waitFor(() => expect(body().querySelector('.kt-condense-applied')).toBeTruthy());
+            expect(entry7().content).toContain(originalText);
+        } else {
+            await vi.waitFor(() => expect(statusText()).toContain('recovery original could not be saved'));
+            const area = body().querySelector('.kt-condense-text');
+            expect(area.matches(':disabled')).toBe(false);
+            expect(area.value).toBe(originalText);
+            area.value = 'A new edit after the failed apply';
+            area.dispatchEvent(new Event('change', { bubbles: true }));
+            expect(body().querySelector('.kt-condense-text').value).toBe(area.value);
+            expect(body().querySelector('.kt-condense-regenerate').matches(':disabled')).toBe(false);
+        }
+    });
+
+    function tryToClose() {
+        modalEl().querySelector('.mwt-modal-close').click();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    }
+
+    test.each(['success', 'failure'])('X and Escape cannot close the modal while Apply is saving (%s)', async outcome => {
+        await toConfirm();
+        const release = holdSaves();
+        if (outcome === 'failure') wiFake.failSaveAt = 1;
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await flush();
+        tryToClose();
+        await flush();
+        expect(modalEl()).toBeTruthy();
+        expect(statusText()).toContain('Apply is still saving');
+        release();
+        if (outcome === 'success') {
+            await vi.waitFor(() => expect(body().querySelector('.kt-condense-applied')).toBeTruthy());
+            expect(document.activeElement).toBe(body().querySelector('.kt-condense-close'));
+        } else {
+            await vi.waitFor(() => expect(statusText()).toContain('recovery original could not be saved'));
+            // The non-destructive Back button, not a retry Enter would repeat.
+            expect(document.activeElement).toBe(body().querySelector('.kt-condense-confirm-back'));
+        }
+        // Once the outcome is shown, closing works again.
+        modalEl().querySelector('.mwt-modal-close').click();
+        await flush();
+        expect(modalEl()).toBeNull();
+    });
+
+    test('a chat switch still detaches a pending Apply, and nothing lands', async () => {
+        await toConfirm();
+        const release = holdSaves();
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await flush();
+        bumpEpoch();
+        onChatChanged();
+        expect(modalEl()).toBeNull();
+        release();
+        await vi.waitFor(async () => expect((await listCleanupRecovery()).records[0]?.status).toBe('failed'));
+        expect(entry7().content).toBe(ORIGINAL);
+    });
+
+    test('X cannot close the modal while Undo is saving; a spent Undo is retired', async () => {
+        await toConfirm();
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-applied')).toBeTruthy());
+        const release = holdSaves();
+        body().querySelector('.kt-condense-undo').click();
+        await flush();
+        tryToClose();
+        await flush();
+        expect(modalEl()).toBeTruthy();
+        expect(statusText()).toContain('Undo is still saving');
+        release();
+        await vi.waitFor(() => expect(statusText()).toContain('Original ledger restored'));
+        expect(entry7().content).toBe(ORIGINAL);
+        expect(body().querySelector('.kt-condense-undo')).toBeNull();
+        expect(body().querySelector('.kt-condense-restored-note')).toBeTruthy();
+        expect(document.activeElement).toBe(body().querySelector('.kt-condense-close'));
+    });
+
+    test('Undo after a restore made elsewhere says so and writes nothing', async () => {
+        await toConfirm();
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-applied')).toBeTruthy());
+        const [record] = (await listCleanupRecovery()).records.filter(r => r.actionType === 'ledger-condensation');
+        await expect(restoreReviewedLedgerCleanup(record.actionId)).resolves.toMatchObject({ ok: true });
+        const savesBefore = wiFake.saveCalls;
+        body().querySelector('.kt-condense-undo').click();
+        await vi.waitFor(() => expect(statusText()).toContain('already restored'));
+        expect(wiFake.saveCalls).toBe(savesBefore);
+        expect(entry7().content).toBe(ORIGINAL);
+        expect(body().querySelector('.kt-condense-undo')).toBeNull();
+    });
+
     test('two-step explicit confirm: no write before the final click; only the ledger changes', async () => {
         await toConfirm();
         expect(entry7().content).toBe(ORIGINAL); // still untouched in the confirm step
@@ -665,6 +1201,36 @@ describe('apply', () => {
         const list = await listCleanupRecovery();
         expect(list.records).toHaveLength(1);
         expect(list.records[0].status).toBe('failed');
+    });
+
+    test('retrying after a failed pending-status save applies instead of claiming a duplicate', async () => {
+        await toConfirm();
+        wiFake.failSaveAt = 2; // recovery save (1) lands; pending-status update (2) fails
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await vi.waitFor(() => expect(statusText()).toContain('recovery original could not be saved'));
+        expect((await listCleanupRecovery()).records.map(r => r.status)).toEqual(['original-saved']);
+        expect(entry7().content).toBe(ORIGINAL);
+        wiFake.failSaveAt = null;
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-applied')).toBeTruthy());
+        expect(entry7().content).not.toBe(ORIGINAL);
+        expect((await listCleanupRecovery()).records.map(r => r.status)).toEqual(['applied']);
+    });
+
+    test('a duplicate refusal that is not confirmed applied never claims the entry changed', async () => {
+        await toConfirm();
+        wiFake.failSaveAt = 2;
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await vi.waitFor(() => expect(statusText()).toContain('recovery original could not be saved'));
+        const [record] = (await listCleanupRecovery()).records;
+        await updateCleanupRecord(record.actionId, { status: 'restored' }, BOOK);
+        wiFake.failSaveAt = null;
+        body().querySelector('.kt-condense-confirm-apply').click();
+        await vi.waitFor(() => expect(statusText()).toContain('nothing was written again'));
+        expect(statusText()).toContain('status: restored');
+        expect(statusText()).not.toContain('already applied');
+        expect(entry7().content).toBe(ORIGINAL);
+        expect(body().querySelector('.kt-condense-records')).toBeTruthy(); // draft retained
     });
 });
 
@@ -814,6 +1380,65 @@ describe('drafts, regeneration, and scope detach', () => {
         body().querySelector('.kt-condense-resume').click();
         await vi.waitFor(() => expect(body().querySelector('.kt-condense-records')).toBeTruthy());
         expect(body().querySelector('.kt-condense-text').value).not.toContain('pre-regeneration');
+    });
+
+    async function editFirstRecord(text) {
+        const area = body().querySelector('.kt-condense-text');
+        area.value = text;
+        area.dispatchEvent(new Event('change', { bubbles: true }));
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-text').value).toBe(text));
+    }
+
+    async function reopen() {
+        modalEl()._closeModal();
+        await openLedgerCleanupReviewModal(NPC, 7);
+        await vi.waitFor(() => expect(modalEl()).toBeTruthy());
+    }
+
+    async function exportPrevious(index) {
+        const before = getFakeDownloadJsonCalls().length;
+        body().querySelector(`.kt-condense-prev-draft .kt-condense-draft-export[data-index="${index}"]`).click();
+        await vi.waitFor(() => expect(getFakeDownloadJsonCalls()).toHaveLength(before + 1));
+        return getFakeDownloadJsonCalls()[before].data;
+    }
+
+    test('a fresh request from the disclosure keeps the unresumed retained draft exportable', async () => {
+        useGoodApi();
+        await openReview();
+        await consentAndGenerate();
+        await editFirstRecord('USER-EDIT merged wharf record via told/witness — Day 5-7');
+        await reopen();
+        expect(body().querySelector('.kt-condense-resume')).toBeTruthy();
+        expect(body().querySelector('.kt-condense-draft-offer').textContent).toContain('keeps it below for export');
+        await consentAndGenerate(); // a new proposal instead of Resume
+        await reopen();
+        const payload = await exportPrevious(0);
+        expect(payload.proposal.records[0].text).toContain('USER-EDIT');
+    });
+
+    test('repeated regenerations keep each replaced draft, up to the stated limit', async () => {
+        useGoodApi();
+        await openReview();
+        await consentAndGenerate();
+        await editFirstRecord('FIRST-EDIT merged wharf record via told/witness — Day 5-7');
+        const regenerate = async () => {
+            const sent = apiRequests.length;
+            body().querySelector('.kt-condense-regenerate').click();
+            await vi.waitFor(() => expect(apiRequests.length).toBe(sent + 1));
+            await vi.waitFor(() => expect(statusText()).toContain('Proposal ready'));
+        };
+        await regenerate();
+        await regenerate();
+        await reopen();
+        expect(body().querySelectorAll('.kt-condense-prev-draft .kt-condense-draft-export')).toHaveLength(2);
+        expect((await exportPrevious(1)).proposal.records[0].text).toContain('FIRST-EDIT');
+        // Beyond the limit only the most recent stay, and the panel says so.
+        body().querySelector('.kt-condense-resume').click();
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-records')).toBeTruthy());
+        for (let i = 0; i < PREVIOUS_DRAFT_LIMIT; i++) await regenerate();
+        await reopen();
+        expect(body().querySelectorAll('.kt-condense-prev-draft .kt-condense-draft-export')).toHaveLength(PREVIOUS_DRAFT_LIMIT);
+        expect(body().querySelector('.kt-condense-prev-draft').textContent).toContain(`the ${PREVIOUS_DRAFT_LIMIT} most recent`);
     });
 
     test('a chat change detaches the open review; the retained draft stays bound to its origin', async () => {
@@ -1007,6 +1632,18 @@ describe('the recovery manager', () => {
         await lock;
         await refused;
         expect(wiFake.saveCalls).toBe(savesBefore);
+    });
+
+    test('a chat switch after the import write lands reports the import as landed', async () => {
+        await appliedReview();
+        const payload = await exportCleanupRecovery();
+        const [[, record]] = Object.entries(payload.records);
+        payload.records = { 'imported-copy': { ...record, actionId: 'imported-copy' } };
+        let saves = 0;
+        wiFake.afterSave = () => { if (++saves === 1) bumpEpoch(); };
+        await expect(importCleanupRecovery(payload)).resolves.toEqual({ added: ['imported-copy'], kept: [], rejected: [] });
+        expect(saves).toBe(1);
+        expect(await getCleanupRecord('imported-copy', BOOK)).toBeTruthy();
     });
 
     test('recovery manager can retry importing recovery directly from a retained backup', async () => {

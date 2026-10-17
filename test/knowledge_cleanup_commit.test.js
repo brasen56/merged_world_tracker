@@ -426,6 +426,26 @@ describe('applyCleanup', () => {
         expect((await getCleanupRecord('act-1')).status).toBe('applied');
     });
 
+    test('a retry replaces the original-saved record a failed pending update left behind', async () => {
+        const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
+        wiFake.failSaveAt = 2; // recovery save (1) lands; the pending-status update (2) fails
+        await expect(apply({ capture })).resolves.toMatchObject({ ok: false, code: 'recovery-persist-failed' });
+        expect((await getCleanupRecord('act-1')).status).toBe('original-saved');
+        expect(entry7().content).toBe(ORIGINAL);
+        wiFake.failSaveAt = null;
+        await expect(apply({ capture })).resolves.toMatchObject({ ok: true, actionId: 'act-1' });
+        expect(entry7().content).toBe(REPLACEMENT);
+        const read = await readCleanupRecoveryContainer(BOOK);
+        expect(Object.keys(read.records)).toEqual(['act-1']);
+        expect(read.records['act-1'].status).toBe('applied');
+    });
+
+    test('a non-retryable duplicate refusal carries the stored status', async () => {
+        const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
+        expect((await apply({ capture })).ok).toBe(true);
+        await expect(apply({ capture })).resolves.toMatchObject({ code: 'duplicate', status: 'applied' });
+    });
+
     test('reconcile marks FAILED when the original never left the entry', async () => {
         const capture = await captureCleanupTarget({ name: NPC, uid: 7 });
         expect((await apply({ capture })).ok).toBe(true);

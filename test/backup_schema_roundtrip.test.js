@@ -32,6 +32,7 @@ import { _render as chronicleRender, state as chronicleState } from '../chronicl
 import { parseWorldStateImport } from '../world_state/data.js';
 import { importNpcs } from '../knowledge/staging.js';
 import { getRegistry } from '../knowledge/registry.js';
+import { saveSettings } from '../knowledge/settings.js';
 import {
     resetCoreStubs,
     setFakeChat,
@@ -40,7 +41,7 @@ import {
     getFakeDownloadJsonCalls,
     setPickTextFileStub,
 } from './stubs/core.js';
-import { _resetEpoch } from '../core/scope.js';
+import { _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
 import {
     V1_CLOSED_ARCS, V1_PROGRESS_ARC, V1_READY_ARC, cloneV1, makeV1PlannerStore,
@@ -752,6 +753,65 @@ describe('D3 — cleanup recovery rides the versioned unified backup', () => {
         const recollected = await collectBackup({ includeKnowledgeStore: true });
         expect(Object.keys(recollected.cleanupRecovery.records).sort()).toEqual(['act-1', 'act-2']);
         expect(recollected.cleanupRecovery.records['act-2']).toEqual(merged['act-2']);
+    });
+
+    test.each(['metadata', 'container-read', 'write-load', 'save', 'verify'])('recovery merge stays scope-bound across %s persistence', async phase => {
+        d3SeedContainer({});
+        const otherBook = 'Other Knowledge Book';
+        saveSettings({ scope: 'chat', bookBindings: {
+            'chat:chat-a': { knowledge: D3_BOOK, state: D3_STATE_BOOK, profiles: 'NPC Profiles' },
+            'chat:chat-b': { knowledge: otherBook, state: 'Other State Book', profiles: 'Other Profiles' },
+        } });
+        wiFake3.books.set(otherBook, { entries: {} });
+        const otherBefore = structuredClone(wiFake3.books.get(otherBook));
+        const switchScope = () => {
+            bumpEpoch();
+            globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'chat-b' }) };
+            setFakeContextExtras({ getCurrentChatId: () => 'chat-b' });
+        };
+        let mergeStarted = false;
+        let reads = 0;
+        setFakeContextExtras({ saveMetadata: async () => {
+            mergeStarted = true;
+            if (phase === 'metadata') switchScope();
+        } });
+        const load = wiFake3.loadWorldInfo.bind(wiFake3);
+        vi.spyOn(wiFake3, 'loadWorldInfo').mockImplementation(async name => {
+            const wi = await load(name);
+            if (mergeStarted && name === D3_BOOK) {
+                reads++;
+                if ((phase === 'container-read' && reads === 1)
+                    || (phase === 'write-load' && reads === 2)
+                    || (phase === 'verify' && reads === 3)) switchScope();
+            }
+            return wi;
+        });
+        const save = wiFake3.saveWorldInfo.bind(wiFake3);
+        const saveSpy = vi.spyOn(wiFake3, 'saveWorldInfo').mockImplementation(async (...args) => {
+            await save(...args);
+            if (phase === 'save') switchScope();
+        });
+        const file = backupFile({
+            knowledgeStore: undefined,
+            cleanupRecovery: { version: 1, records: { imported: d3RecoveryRecord('imported') } },
+        });
+        const restored = await restoreBackup(file, { confirm: true });
+        expect(restored).toMatchObject({ ok: true, committed: true });
+        expect(wiFake3.books.get(otherBook)).toEqual(otherBefore);
+        if (['metadata', 'container-read', 'write-load'].includes(phase)) {
+            // A switch before the write refuses it.
+            expect(restored.cleanupRecovery).toMatchObject({ ok: false });
+            expect(restored.cleanupRecovery.error).toContain('scope or Knowledge book changed');
+            expect(saveSpy).not.toHaveBeenCalled();
+            expect(d3ContainerRecords()).toEqual({});
+        } else {
+            // A switch after the write started cannot redirect it: the merge
+            // landed in the captured book and is reported as landed.
+            expect(restored.cleanupRecovery).toEqual({ added: ['imported'], kept: [], rejected: [] });
+            expect(saveSpy).toHaveBeenCalledTimes(1);
+            expect(saveSpy.mock.calls[0][0]).toBe(D3_BOOK);
+            expect(Object.keys(d3ContainerRecords())).toEqual(['imported']);
+        }
     });
 
     test('a malformed or newer cleanup-recovery container warns but never blocks the restore', async () => {

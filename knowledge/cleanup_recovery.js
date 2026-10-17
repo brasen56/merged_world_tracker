@@ -312,6 +312,9 @@ async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUn
         entry.enabled = false;
         entry.comment = CLEANUP_RECOVERY_COMMENT;
     }
+    // Last scope check before the write. None after it: the save targets the
+    // captured book by name, so a later chat switch does not make it wrong,
+    // and throwing then would report a landed write as refused.
     assertCurrent();
     applyStoreToWorldInfo(bookName, wi);
     await saveCleanupBook(bookName, wi);
@@ -532,10 +535,15 @@ export function currentCleanupScopeKey() {
  *
  * @param {Record<string, object>} records raw records keyed by actionId
  * @param {string} [bookName]
+ * @param {object} [opts]
+ * @param {Function} [opts.assertCurrent] restore scope and destination guard,
+ *   checked until the container write starts (never after it lands)
  * @returns {Promise<{added: string[], kept: string[], rejected: string[]}>}
  */
-export async function mergeCleanupRecoveryRecordsUnlocked(records, bookName = getLorebookName()) {
+export async function mergeCleanupRecoveryRecordsUnlocked(records, bookName = getLorebookName(), { assertCurrent = () => {} } = {}) {
+    assertCurrent();
     const read = await readCleanupRecoveryContainer(bookName);
+    assertCurrent();
     if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing merge`);
     const merged = { ...read.records };
     const added = [];
@@ -551,6 +559,6 @@ export async function mergeCleanupRecoveryRecordsUnlocked(records, bookName = ge
             merged[actionId] = candidate;
         }
     }
-    if (added.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, merged);
+    if (added.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, merged, { assertCurrent });
     return { added, kept, rejected };
 }

@@ -1026,6 +1026,13 @@ function preflightDestinationContainers(meta, { needsQuarantineMerge = true } = 
  * restoreBackupInternal, so flushAll()/resetStoreCache() cannot interleave.
  */
 async function commitRestore(envelope, { makePreview, modes, scope, previewToken, preRestoreBackup, exact = false }) {
+    const cleanupRecoveryBook = getLorebookName();
+    const assertCleanupRecoveryCurrent = () => {
+        const current = assertRestoreScope(scope, exact);
+        if (!current.ok || !cleanupRecoveryBook || getLorebookName() !== cleanupRecoveryBook) {
+            throw new Error('cleanup recovery merge: restore scope or Knowledge book changed — refusing merge');
+        }
+    };
     // Re-plan after the awaited export so a concurrent local update cannot be
     // overwritten by a stale dry run. This is also the plan that is committed.
     const commitPreview = await makePreview(envelope, { modes, scope });
@@ -1267,7 +1274,10 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
     const importedCleanupRecovery = commitPreview.validation?.cleanupRecovery;
     if (importedCleanupRecovery && Object.keys(importedCleanupRecovery.records || {}).length > 0) {
         try {
-            cleanupRecoveryMerge = await mergeCleanupRecoveryRecordsUnlocked(importedCleanupRecovery.records);
+            cleanupRecoveryMerge = await mergeCleanupRecoveryRecordsUnlocked(
+                importedCleanupRecovery.records, cleanupRecoveryBook,
+                { assertCurrent: assertCleanupRecoveryCurrent },
+            );
         } catch (err) {
             cleanupRecoveryMerge = { ok: false, error: err?.message || String(err) };
         }
