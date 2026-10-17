@@ -69,6 +69,10 @@ import { decorateModalShell, setStatus } from '../core/modal.js';
 // (plan §4.5).
 import { setControlBusy, prefersReducedMotion } from '../core/ui.js';
 import { acceptedRefreshFields, contractRejectionSummary, scanContractRejections } from './field_contract.js';
+// Phase 4 (concision plan): the reviewed ledger-condensation UI. Deliberately
+// separate from Enrich/Fields/staging — its proposals never enter the staging
+// auto-approval path, and its writes go through the guarded commit service.
+import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -572,6 +576,7 @@ function renderNpcListContent(type, entries) {
                     ${type === 'minor' ? `<button class="mwt-btn kt-npc-promote" data-name="${escapeHtml(name)}"><span aria-hidden="true">⬆</span> Promote</button>` : ''}
                     ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)"><span aria-hidden="true">📋</span> Enrich</button>` : ''}
                     ${showEnrich ? `<button class="mwt-btn kt-npc-fields" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Refresh individual dossier fields (agenda, appearance, secrets, …)"><span aria-hidden="true">🎯</span> Fields</button>` : ''}
+                    <button class="mwt-btn kt-npc-condense" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Reviewed condensation of the knowledge ledger — one model call, then a source-mapped review; nothing changes until you apply it"><span aria-hidden="true">🧹</span> Condense</button>
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations"><span aria-hidden="true">🌱</span> Growth</button>` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}"><span aria-hidden="true">⬇</span> Demote</button>` : ''}
                     <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}"><span aria-hidden="true">📖</span> View</button>
@@ -678,6 +683,17 @@ function wireNpcListEvents(el, _type) {
             // stack two #kt-dossier-refresh-modal nodes with the same id.
             setControlBusy(btn, true);
             try { await openDossierFieldRefreshModal(btn.dataset.name); }
+            finally { setControlBusy(btn, false); }
+        });
+    });
+
+    el.querySelectorAll('.kt-npc-condense').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            // Same double-click guard: the review modal only exists after an
+            // awaited identity-bound capture, so two rapid clicks would stack
+            // two #kt-ledger-review-modal nodes with the same id.
+            setControlBusy(btn, true);
+            try { await openLedgerCleanupReviewModal(btn.dataset.name, Number(btn.dataset.uid)); }
             finally { setControlBusy(btn, false); }
         });
     });

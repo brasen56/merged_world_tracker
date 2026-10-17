@@ -137,11 +137,14 @@ export function getRecentMessages(count = 50) {
 
 // ─── API fetch (delegates to shared core) ────────────────────────────────────
 
-export async function ktFetchFromApi(systemPrompt, userContent, { retries = 1, trigger = null } = {}) {
+export async function ktFetchFromApi(systemPrompt, userContent, { retries = 1, trigger = null, signal = null } = {}) {
     const resolved = resolveApiCall({ moduleSettings: getSettings() });
     // `trigger` rides down to the coordinator (TODO §1) so auto scans classify
-    // as background work and the api-call telemetry names the cause.
-    return resolved.fetchFn({ systemPrompt, userContent, settings: resolved.settings, retries, trigger });
+    // as background work and the api-call telemetry names the cause. `signal`
+    // (Phase 4: the cleanup review's Cancel button) is composed with the
+    // coordinator's own job signal inside core/api.js — the transport just
+    // consumes the single signal it receives.
+    return resolved.fetchFn({ systemPrompt, userContent, settings: resolved.settings, retries, trigger, signal });
 }
 
 // ─── Lorebook CRUD ───────────────────────────────────────────────────────────

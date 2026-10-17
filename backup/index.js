@@ -61,7 +61,7 @@ import {
     withStoreLock,
     _writeFieldDirect,
 } from '../knowledge/store.js';
-import { isCleanupRecoveryEntry } from '../knowledge/cleanup_recovery.js';
+import { isCleanupRecoveryEntry, mergeCleanupRecoveryRecordsUnlocked } from '../knowledge/cleanup_recovery.js';
 import { getLorebookName, getStateLorebookName } from '../knowledge/scope.js';
 import { state as knowledgeState } from '../knowledge/state.js';
 import { findDestinationEntryUid } from '../knowledge/reconcile.js';
@@ -1252,6 +1252,27 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         };
     }
 
+    // ── D3 (concision plan): cleanup-recovery merge ────────────────────────
+    //
+    // The envelope's cleanup-recovery records merge into the destination
+    // book's container, current-wins by actionId (the same policy as the
+    // recovery manager's import). This runs POST-transaction and best-effort:
+    // the transaction above owns the section data and its rollback, and a
+    // recovery merge failure must not undo a committed restore — the records
+    // stay recoverable inside the backup file (and importable from the
+    // recovery manager), so the result carries a warning instead. Unlocked
+    // merge: commitRestore already runs under withStoreLock, which is a queue
+    // — nesting would deadlock.
+    let cleanupRecoveryMerge;
+    const importedCleanupRecovery = commitPreview.validation?.cleanupRecovery;
+    if (importedCleanupRecovery && Object.keys(importedCleanupRecovery.records || {}).length > 0) {
+        try {
+            cleanupRecoveryMerge = await mergeCleanupRecoveryRecordsUnlocked(importedCleanupRecovery.records);
+        } catch (err) {
+            cleanupRecoveryMerge = { ok: false, error: err?.message || String(err) };
+        }
+    }
+
     // The downloaded envelope is detached from live metadata by collectBackup,
     // so it is also the exact in-memory snapshot used by session-local undo.
     lastRestore = { envelope: preRestoreBackup, modes, identity: scope.identity };
@@ -1260,6 +1281,7 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         committed: true,
         preview: commitPreview,
         preRestoreBackup,
+        ...(cleanupRecoveryMerge !== undefined ? { cleanupRecovery: cleanupRecoveryMerge } : {}),
     };
 }
 

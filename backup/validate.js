@@ -30,6 +30,7 @@ import { BACKUP_TYPE, FORMAT_VERSION } from './data.js';
 import { STORE_SCHEMAS, getStoreSchema } from '../schema/registry.js';
 import { ISSUE_SEVERITIES, prepareStore } from '../core/schema.js';
 import { importQuarantineItems } from '../core/quarantine.js';
+import { CLEANUP_RECOVERY_VERSION } from '../knowledge/cleanup_recovery.js';
 
 /**
  * Adapt a module-schema validation result to the backup summary shape.
@@ -304,6 +305,25 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
             result.warnings.push(`Quarantine recovery data: ${issue.message}`);
         }
         result.recovery = { items: recovery.items };
+    }
+    // Cleanup-recovery container (decision D3, concision plan): the Knowledge
+    // book's durable pre-cleanup originals. Imported tolerantly and it can
+    // never block a restore — refusing a whole backup over bookkeeping would
+    // strand the user's real stores to protect recovery metadata that stays
+    // recoverable in the backup file either way. A container this build
+    // cannot understand (wrong shape, or a newer container version) is warned
+    // about and ignored; per-record shape checks happen at the commit merge.
+    if (envelope.cleanupRecovery !== undefined && envelope.cleanupRecovery !== null) {
+        const container = envelope.cleanupRecovery;
+        const importable = container && typeof container === 'object' && !Array.isArray(container)
+            && Number.isInteger(container.version) && container.version >= 1
+            && container.version <= CLEANUP_RECOVERY_VERSION
+            && container.records && typeof container.records === 'object' && !Array.isArray(container.records);
+        if (importable) {
+            result.cleanupRecovery = { version: container.version, records: container.records };
+        } else {
+            result.warnings.push('Cleanup-recovery container was ignored (unrecognized shape or a newer version); the records stay recoverable inside the backup file.');
+        }
     }
     result.ok = result.errors.length === 0;
     return result;

@@ -414,7 +414,7 @@ Lock authority changes. No store migration rewrites existing NPC prose.
 - [x] Phase 1 — prevention contract and regression coverage (2026-10-16; configured-model sample QA pending — see record)
 - [x] Phase 2 — pure ledger proposals and validation (2026-10-16; orchestration and UI remain Phase 4 — see record)
 - [x] Phase 3 — durable recovery and guarded apply/restore (2026-10-16; unified-backup wiring and reviewed UI remain — see record)
-- [ ] Phase 4 — explicit ledger review UI
+- [x] Phase 4 — explicit ledger review UI (2026-10-17; host-flow QA remains — see record)
 - [ ] Phase 5 — representative-size/model/host validation and initial release
 - [ ] Phase 6 — selected-field cleanup and its independent release gate
 
@@ -608,3 +608,121 @@ because its prompt or UI exists.
   the final-validation adapter and restore extractor into reviewed UI actions.
   No model calls, automatic cleanup, Apply UI, or generic acceptance path were
   added. Semantic equivalence still requires human review, not this validator.
+### Phase 4 record — 2026-10-17
+
+- **Changed seams:** new `knowledge/cleanup_review.js` (fresh review ID for
+  EVERY request including regeneration; the minimal payload builder — ledger
+  lines + NPC name only; resolved model/profile disclosure; full
+  request/response envelope estimates with known-excess refusals — input plus
+  the minimal mapped response vs a known context limit, minimal mapping alone
+  vs the output allowance — and honest unknown-capacity warnings; a strict
+  request runner: manual trigger, 2-attempt bound, cancellable signal,
+  `parseLedgerProposal` (never the lenient repair path) then
+  `validateLedgerProposal` before any preview; an origin-bound in-memory
+  draft store with labeled export payloads and pre-regeneration stashing; and
+  apply/restore wrappers wiring `validateLedgerReplacement` and `ledgerSpan`
+  into the Phase 3 commit service) and new `knowledge/cleanup_review_ui.js`
+  (the review modal — explain → disclose (full disclosure list + consent
+  checkbox gating Generate) → generating (cancellable; Escape blocked) →
+  review (per-record editable text that keeps its mapping and focus,
+  expandable exact originals, detail warnings, keep-originals group restore,
+  reason-required explicit removals, advisory-only pruning suggestions whose
+  "Remove…" merely prefills the reason, restore-all behind a two-click
+  confirm, honest size deltas labeled as estimates, supplementary ledger
+  diff, two-step Apply with a confirm summary) → applied (span-aware undo);
+  per-refusal-code truthful messages that always retain the edited draft;
+  plus the recovery-manager modal — list/usage/restore/export/import/delete
+  with explicit consequences — reachable from every review state, closing the
+  Phase 3 "console command only" gap). Also: `LEDGER_CLEANUP_PROMPT` in
+  `knowledge/prompts.js`; `ktFetchFromApi` threads a `signal` (core/api.js
+  composes it with the coordinator's job signal); a 🧹 Condense button on
+  every non-orphan NPC card (both entry formats carry a ledger) with the
+  Fields-pattern double-click guard; both new modal ids joined the two
+  chat-change sweeps (scope change detaches the review; drafts stay
+  origin-bound); `kt-condense-*` / `kt-crec-*` styles; and the deferred D3
+  backup wiring — a `cleanupRecovery` top-level envelope container
+  (quarantine precedent, no FORMAT_VERSION bump), collected through the host
+  loader with a visible export abort on refused containers, imported
+  tolerantly (warn, never block), counted on the restore plan, and merged
+  current-wins by actionId after the restore transaction via the new
+  `mergeCleanupRecoveryRecordsUnlocked` (unlocked because commitRestore
+  already holds the store lock — withStoreLock is a queue). The Phase 2
+  "Phase 4 obligations" are all discharged: fresh review IDs, user removals
+  only from explicit review controls, warnings and specificity notes
+  displayed, and the final-validation adapter + restore extractor wired into
+  reviewed UI actions.
+- **Automated results:** `npm test` passed **3824/3824 tests in 158 files**;
+  `npm run lint` and `git diff --check` clean. New
+  `test/knowledge_cleanup_review.test.js` (30 jsdom tests driving the real
+  render → click → modal wiring): explicit invocation + double-click guard;
+  capture-refusal surfacing; empty-ledger explain; disclosure contents;
+  consent gate; budget refusal with no request; payload minimization
+  (non-ledger and chat sentinels absent, ledger + source ids + entity name
+  present, exact `LEDGER_CLEANUP_PROMPT`); strict-parse refusals with the
+  bounded retry and recovery; cancel; Escape blocked in flight; Escape close
+  with focus restore; source decisions (edit keeps mapping + focus,
+  keep-originals group restore, reason-required removal, merged-part removal
+  refusal, advisory suggestions never auto-applying, restore-all two-click);
+  escaped rendering of hostile ledger text; two-step apply with no write
+  before the final click and non-ledger bytes unchanged; duplicate confirm =
+  one apply; undo preserving newer unrelated edits; stale-source refusal with
+  draft retention + export + regenerate; truthful recovery-persist and
+  target-save failures (recovery record `failed`, entry unchanged); fresh
+  review ids across regeneration with the pre-regeneration draft exportable;
+  chat-sweep detach with origin-bound resume; recovery manager list, restore,
+  conflict refusal + export, double-confirm delete, and import round trip.
+  Four D3 tests joined `test/backup_schema_roundtrip.test.js` (raw collect +
+  refused-container abort; current-wins restore merge with stable
+  re-collect; tolerant malformed/newer container; rejected records reported,
+  never partially written). Two pre-existing pins were updated deliberately:
+  the paused-chat sweep selector (now includes the two new modal ids) and
+  the backup commit lorebook read count (3 → 4: the export's
+  recovery-container read through the host loader).
+- **Remaining manual QA:** the exit gate's host half — one full Condense in
+  SillyTavern with a configured model (disclosure → proposal → decisions →
+  Apply → undo), a host smoke of the recovery manager, and a host backup
+  export/restore carrying cleanup records. Phase 5's representative-size and
+  host validation subsumes all of this.
+- **Accepted deviations:** (1) The recovery manager surfaces a touched-span
+  restore conflict as a refusal plus per-record export rather than a
+  dedicated one-click conflict export (the applied-state undo path carries
+  the dedicated conflict export); pinned by tests. (2) The backup's
+  container read goes through the host loader (`state.wiScript
+  .loadWorldInfo`), not the uncached cleanup-persistence HTTP layer, matching
+  every other export read; refused/corrupt containers still abort the export
+  visibly per D3. (3) The cleanup-recovery merge on restore runs
+  post-transaction and best-effort with a reported result (a failure warns —
+  the records stay recoverable inside the backup file) rather than inside
+  the guarded transaction, which owns section data and rollback; the tested
+  D3 round trip is unaffected.
+
+#### Phase 4 follow-up fixes — 2026-10-17
+
+- **Scope teardown:** a stale review can close even while its request is in
+  flight; teardown aborts the request. Generation success, cancellation, and
+  error paths check the captured scope before saving or rendering, and the
+  request runner refuses retries after cancellation/scope invalidation. Draft
+  save/read/clear keys use the captured origin's scope key, never the current
+  chat's key. Ordinary user close remains blocked during generation.
+- **Regeneration:** explicitly recaptures the destination. A changed source
+  starts a new review with refreshed eligibility/disclosure and unchecked
+  consent; no request is sent until consent is renewed, and old edits remain
+  exportable rather than being rebased. For unchanged sources, the active
+  draft is only demoted after a replacement proposal succeeds, so cancellation
+  or request failure preserves close/reopen editing continuity.
+- **Backup partial success:** a committed store restore with failed cleanup
+  recovery import keeps its summary open with a persistent warning, disables
+  repeat confirmation, and explains how to retry from the retained backup.
+  The Recovery manager now accepts that backup directly and imports only its
+  validated cleanup-recovery container, not its store sections.
+- **Regression coverage:** unresolved generation/regeneration across chat
+  switches (late success, error, and cancellation); stale completion without
+  a sweep; origin-bound draft save/clear; stale ledger and unrelated-field
+  changes followed by regeneration and successful Apply; cancelled
+  regeneration followed by close/reopen; retained-backup recovery import;
+  and real backup UI warning/success branches. `npm test` passed
+  **3835/3835 tests in 159 files**; `npm run lint` and `git diff --check`
+  passed (only the existing LF/CRLF conversion warnings).
+- **Host exit gate remains outstanding:** these automated results do not
+  replace the required full SillyTavern model/disclosure/review/Apply/undo
+  flow, recovery-manager smoke test, or host backup export/restore check.

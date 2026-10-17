@@ -635,6 +635,24 @@ async function commitRestore() {
     }
 
     if (result.ok && result.committed) {
+        if (result.cleanupRecovery?.ok === false || result.cleanupRecovery?.rejected?.length) {
+            const recovery = result.cleanupRecovery;
+            const detail = recovery.ok === false
+                ? `cleanup recovery records were not imported: ${recovery.error || 'unknown recovery import failure'}`
+                : `cleanup recovery import was incomplete: ${recovery.added?.length || 0} added, ${recovery.kept?.length || 0} kept, ${recovery.rejected.length} rejected. Rejected records: ${recovery.rejected.join('; ')}`;
+            const warning = `Store sections restored, but ${detail}. Keep the original backup file. In Knowledge Tracker, open Recovery records… → Import and select that backup to retry the recovery import. Rejected records may require correction before they can be imported.`;
+            setControlBusy(confirmBtn, false);
+            if (confirmBtn) confirmBtn.disabled = true;
+            // The transaction committed: don't offer the same restore again or
+            // hide its partial-success result behind a transient success toast.
+            state.pendingPreview = null;
+            modal.querySelectorAll('select, input').forEach(control => { control.disabled = true; });
+            modal.querySelector('.mwt-backup-cancel').textContent = 'Close';
+            setStatus(modal, warning, 'warning');
+            setBackupStatus(warning, 'warning');
+            setBusy(false);
+            return;
+        }
         hideModal(SUMMARY_MODAL_ID);
         setBackupStatus(exact ? 'Exact restore complete.' : 'Restore complete.', 'success', 6000);
         setBusy(false);

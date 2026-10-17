@@ -624,3 +624,171 @@ describe('Part 3 — standalone imports route through module schemas', () => {
     });
 });
 
+
+// ─── Cleanup-recovery container (decision D3, concision plan Phase 4) ────────
+
+import { installCleanupFetch } from './stubs/cleanup-fetch.js';
+import { state as knowledgeState } from '../knowledge/state.js';
+import {
+    CLEANUP_RECOVERY_COMMENT,
+    readCleanupRecoveryContainer,
+} from '../knowledge/cleanup_recovery.js';
+import { collectBackup } from '../backup/collect.js';
+import { vi } from 'vitest';
+
+const D3_BOOK = 'Knowledge Tracker';
+const D3_STATE_BOOK = 'State Tracker';
+
+function d3FakeWorldInfo() {
+    const books = new Map();
+    return {
+        books,
+        async loadWorldInfo(name) { return books.has(name) ? structuredClone(books.get(name)) : null; },
+        async saveWorldInfo(name, wi, immediately = false) {
+            if (!immediately) return;
+            books.set(name, structuredClone(wi));
+        },
+        async createNewWorldInfo(name) { books.set(name, { entries: {} }); return true; },
+    };
+}
+
+function d3RecoveryRecord(actionId, over = {}) {
+    return {
+        actionId,
+        createdAt: '2026-10-17T10:00:00.000Z',
+        bookName: D3_BOOK,
+        entityName: 'Mara Voss',
+        entryUid: 7,
+        actionType: 'ledger-condensation',
+        status: 'applied',
+        originalContent: `original ledger for ${actionId}`,
+        approvedReplacement: `condensed ledger for ${actionId}`,
+        scopeKey: 'chat:chat-a',
+        ...over,
+    };
+}
+
+function d3SeedContainer(records, { version = 1 } = {}) {
+    wiFake3.books.set(D3_BOOK, {
+        entries: {
+            7: { uid: 7, comment: 'Mara Voss', key: ['Mara Voss'], content: 'dossier' },
+            500: { uid: 500, comment: CLEANUP_RECOVERY_COMMENT, key: [], content: JSON.stringify({ version, records }) },
+        },
+    });
+}
+
+function d3ContainerRecords() {
+    const wi = wiFake3.books.get(D3_BOOK);
+    const entry = Object.values(wi.entries).find(e => String(e.comment || '').startsWith('[MWT:cleanup-recovery]'));
+    return entry ? JSON.parse(entry.content).records : null;
+}
+
+let wiFake3;
+
+describe('D3 — cleanup recovery rides the versioned unified backup', () => {
+    beforeEach(() => {
+        resetCoreStubs();
+        _resetEpoch();
+        _clearCacheForTests();
+        globalThis.SillyTavern = { getContext: () => ({ getCurrentChatId: () => 'chat-a' }) };
+        setFakeContextExtras({ getCurrentChatId: () => 'chat-a', saveMetadata: async () => {} });
+        setFakeChat([{ mes: 'hello', extra: { mwt_uuid: '3' } }]);
+        _setCacheForTests(D3_BOOK, { registry: {}, relationships: {} });
+        _setCacheForTests(D3_STATE_BOOK, { stateRegistry: {} });
+        wiFake3 = d3FakeWorldInfo();
+        knowledgeState.wiScript = wiFake3;
+        installCleanupFetch(wiFake3);
+    });
+
+    afterEach(() => {
+        _clearCacheForTests();
+        _resetEpoch();
+        knowledgeState.wiScript = null;
+        delete globalThis.SillyTavern;
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+    });
+
+    test('collect carries the container raw; a refused container aborts the export visibly', async () => {
+        d3SeedContainer({ 'act-1': d3RecoveryRecord('act-1') });
+        const envelope = await collectBackup({ includeKnowledgeStore: true });
+        expect(envelope.cleanupRecovery).toBeTruthy();
+        expect(envelope.cleanupRecovery.version).toBe(1);
+        expect(envelope.cleanupRecovery.records['act-1'].originalContent).toBe('original ledger for act-1');
+
+        // A container this build cannot read (future version) must abort the
+        // export — a backup may never silently omit recovery records.
+        d3SeedContainer({}, { version: 99 });
+        await expect(collectBackup({ includeKnowledgeStore: true })).rejects.toThrow(/cleanup-recovery container cannot be read safely/);
+    });
+
+    test('restore merges current-wins by actionId, then re-collect round-trips', async () => {
+        // Destination already holds act-1 (different content — current wins);
+        // the backup adds act-2 and carries act-1 unchanged.
+        d3SeedContainer({ 'act-1': d3RecoveryRecord('act-1', { originalContent: 'NEWER local original' }) });
+        const file = backupFile({
+            knowledgeStore: undefined,
+            cleanupRecovery: {
+                version: 1,
+                records: {
+                    'act-1': d3RecoveryRecord('act-1', { bookName: 'Other Book' }),
+                    'act-2': d3RecoveryRecord('act-2', { status: 'failed', approvedReplacement: undefined }),
+                },
+            },
+        });
+        const restored = await restoreBackup(file, { confirm: true });
+        expect(restored).toMatchObject({ ok: true, committed: true });
+        expect(restored.cleanupRecovery).toMatchObject({ added: ['act-2'], kept: ['act-1'], rejected: [] });
+
+        const merged = d3ContainerRecords();
+        // Current wins: the destination's act-1 is untouched; act-2 was added
+        // and re-stamped for the destination book.
+        expect(merged['act-1'].originalContent).toBe('NEWER local original');
+        expect(merged['act-2'].bookName).toBe(D3_BOOK);
+        expect(merged['act-2'].status).toBe('failed');
+        expect(restored.preview.plan.cleanupRecovery).toMatchObject({ recordCount: 2 });
+
+        // Re-collect: the merge is stable and rides the next export unchanged.
+        const recollected = await collectBackup({ includeKnowledgeStore: true });
+        expect(Object.keys(recollected.cleanupRecovery.records).sort()).toEqual(['act-1', 'act-2']);
+        expect(recollected.cleanupRecovery.records['act-2']).toEqual(merged['act-2']);
+    });
+
+    test('a malformed or newer cleanup-recovery container warns but never blocks the restore', async () => {
+        d3SeedContainer({});
+        const file = backupFile({
+            knowledgeStore: undefined,
+            cleanupRecovery: { version: 99, records: { whatever: true } },
+        });
+        const validation = validateBackupEnvelope(file);
+        expect(validation.ok).toBe(true);
+        expect(validation.cleanupRecovery).toBeUndefined();
+        expect(validation.warnings.some(w => w.includes('Cleanup-recovery container'))).toBe(true);
+
+        const restored = await restoreBackup(file, { confirm: true });
+        expect(restored).toMatchObject({ ok: true, committed: true });
+        expect(restored.cleanupRecovery).toBeUndefined();
+        expect(d3ContainerRecords()).toEqual({});
+    });
+
+    test('a record the destination book cannot hold is reported, never partially written', async () => {
+        d3SeedContainer({});
+        const file = backupFile({
+            knowledgeStore: undefined,
+            cleanupRecovery: {
+                version: 1,
+                records: {
+                    'act-bad': { actionId: 'act-bad' },
+                    'act-good': d3RecoveryRecord('act-good'),
+                },
+            },
+        });
+        const restored = await restoreBackup(file, { confirm: true });
+        expect(restored).toMatchObject({ ok: true, committed: true });
+        expect(restored.cleanupRecovery.added).toEqual(['act-good']);
+        expect(restored.cleanupRecovery.rejected[0]).toContain('act-bad');
+        const merged = d3ContainerRecords();
+        expect(Object.keys(merged)).toEqual(['act-good']);
+        expect((await readCleanupRecoveryContainer(D3_BOOK)).ok).toBe(true);
+    });
+});

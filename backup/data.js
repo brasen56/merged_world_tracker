@@ -99,7 +99,12 @@ function section(data, sectionName, versions) {
  * `knowledgeStore` is optional because its runtime collection is Phase 2a.
  * `quarantine` is the optional chat-local quarantine recovery container
  * (design §5.3): recovery data rides with every backup so a restore can never
- * strand rejected records on the source chat.
+ * strand rejected records on the source chat. `cleanupRecovery` is the
+ * optional Knowledge book's cleanup-recovery container (decision D3, concision
+ * plan): durable pre-cleanup originals ride as their own versioned top-level
+ * container — present only when the book holds records, exactly like
+ * `quarantine`, and carried by unknown-field-tolerant older builds the same
+ * way (no FORMAT_VERSION bump).
  * `sectionVersions` maps each chat-metadata section to the schema version its
  * data is actually at, read from the exporting chat's manifest (missing ⇒
  * legacy 0). Omit it and each section falls back to its store's
@@ -109,6 +114,7 @@ export function buildBackupEnvelope({
     metadata = {},
     knowledgeStore,
     quarantine,
+    cleanupRecovery,
     sectionVersions = null,
     identity = null,
     createdAt = new Date().toISOString(),
@@ -159,9 +165,15 @@ export function buildBackupEnvelope({
     // Quarantine recovery data is NOT a store section (it is subsystem data
     // ABOUT the stores, like the manifest); it rides as its own top-level
     // container and is only present when the chat has quarantined records.
+    // The cleanup-recovery container follows the same precedent (D3): the
+    // Knowledge book's durable pre-cleanup originals, only when non-empty,
+    // carrying their own container version.
     const envelope = { _meta: meta, sections };
     if (quarantine !== undefined && quarantine !== null) {
         envelope.quarantine = cloneBackupData(quarantine);
+    }
+    if (cleanupRecovery !== undefined && cleanupRecovery !== null) {
+        envelope.cleanupRecovery = cloneBackupData(cleanupRecovery);
     }
     return envelope;
 }

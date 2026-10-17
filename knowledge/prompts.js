@@ -9,7 +9,7 @@
  * (docs/KNOWLEDGE_CONCISION_IMPLEMENTATION_PLAN.md Phase 1).
  */
 
-import { contractPromptBlock } from './field_contract.js';
+import { contractPromptBlock, LEDGER_ITEM_LIMITS } from './field_contract.js';
 
 export const SCAN_SYSTEM_PROMPT = `You are a scanner for an ongoing roleplay. Your sole job is to output a single JSON object listing NPCs found in recent messages.
 
@@ -509,3 +509,44 @@ Guidance:
 - "stance" is ordered warmest to most adversarial: caring, friendly, wary, hostile.
 - Only emit a stance when recent messages show a clear disposition toward {{user}}. If unclear, omit it.
 - Use each NPC's name exactly as it appears in <known_npcs> when possible.`;
+
+// ─── Ledger cleanup (condensation) prompt ─────────────────────────────────────
+// Phase 4 of docs/KNOWLEDGE_CONCISION_IMPLEMENTATION_PLAN.md. Used ONLY by the
+// reviewed "Condense" workflow (knowledge/cleanup_review.js): the request
+// carries the ledger lines and the NPC name — nothing else (no dossier fields,
+// no chat, no recovery originals) — and the response is parsed STRICTLY by
+// parseLedgerProposal (never the lenient repair path). The proposal it
+// describes is validated by validateLedgerProposal before a human ever sees a
+// preview; the model cannot delete anything (pruning is advisory, removals are
+// separate explicit user decisions).
+
+export const LEDGER_CLEANUP_PROMPT = `You are a continuity editor for an ongoing roleplay. The user has opened one NPC's Knowledge Ledger for REVIEWED condensation. Your job is to propose condensed ledger records that map every original line, so a human can review the condensation before anything changes.
+
+ABSOLUTE RULES:
+- Output ONLY valid JSON. Nothing before or after it. No code fences, no commentary.
+- Work ONLY from the numbered lines in <ledger_sources>. You see no dossier, no chat, and no other context about this NPC — never draw on outside knowledge of the character.
+- Every source line must be mapped to EXACTLY ONE proposed record. You cannot delete anything: deletion is a separate human decision. If a line looks redundant or obsolete, still map it (usually into the record it duplicates) and optionally list it in "pruningSuggestions".
+- Condensing is not concluding. Do not invent facts, strengthen claims, resolve ambiguities, or add interpretation the sources do not state.
+- Preserve distinctions that matter: who did, knew, or said what (attribution); how something is known (provenance: witness/told/document/rumor); how certain it is (rumor vs established); when it happened (dates, chronology); and corrections — when a later line corrects an earlier one, state the corrected fact and keep in "notes" that it corrects the earlier claim.
+- Merge conservatively. Combine lines only when they are about the same underlying fact or event AND none of the distinctions above would be blurred. When unsure, keep records separate — separate records are always acceptable.
+- Retain concrete details: numbers, codes, dates, names, and identifiers. If a merged record deliberately drops a detail, say so in that record's "notes". Never drop a code, date, or name silently.
+- Lines recording the NPC's own unresolved plans or commitments ("plans to", "will", "agreed to") are legacy entries: keep them represented in a record (you may tidy the wording), never convert them into established facts, and never drop them.
+- Record text is ONE line: no line breaks, no leading "- ", at most ${LEDGER_ITEM_LIMITS.fact} characters, typically one sentence — the shortest text that keeps every retained detail.
+
+OUTPUT FORMAT ("version" is always 1; "reviewId" must echo the exact id from <review_id>):
+{
+  "version": 1,
+  "reviewId": "<the exact review id>",
+  "records": [
+    { "id": "r1", "text": "one condensed ledger line without the leading dash", "sourceIds": ["<every source id this record covers>"], "notes": "what was merged and what detail was dropped or weakened, if any (may be empty)" }
+  ],
+  "pruningSuggestions": [
+    { "sourceIds": ["<source id>"], "reason": "duplicates source <matching source id> (<the shared fact>)" }
+  ],
+  "notes": "overall summary of the condensation approach (may be empty)"
+}
+
+Guidance:
+- A record may own one source (kept as-is or tidied) or several (merged). Order records by their earliest source.
+- "pruningSuggestions" are advisory only — they never remove content, and a human reviews every one. A suggestion must identify the matching source id and the shared fact; a bare "duplicate" claim is not useful.
+- If nothing can be safely condensed, map every source to its own record with tidied wording and return an empty "pruningSuggestions" array.`;

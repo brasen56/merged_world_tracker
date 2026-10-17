@@ -1075,9 +1075,12 @@ describe('unified backup Phase 3 hardening', () => {
             knowledgeStore: { registry: { Mara: { uid: 4 }, Kira: { uid: 5 } }, relationships: {}, stateRegistry: {} },
         }), { confirm: true });
 
-        // Three reads: the user-facing preview resolve, the commit re-plan
-        // resolve, and the one inside flushBook. (Was four pre-fix.)
-        expect(knowledgeState.wiScript.loadWorldInfo).toHaveBeenCalledTimes(3);
+        // Four reads: the user-facing preview resolve, the commit re-plan
+        // resolve, and the one inside flushBook — plus the pre-restore backup
+        // export's cleanup-recovery container read through the host loader
+        // (decision D3, concision plan Phase 4). The redundant fifth pass the
+        // original fix removed stays removed.
+        expect(knowledgeState.wiScript.loadWorldInfo).toHaveBeenCalledTimes(4);
     });
     test('refuses to commit when the confirmed preview no longer matches', async () => {
         // If the plan the user confirmed drifts before the

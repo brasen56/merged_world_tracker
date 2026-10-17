@@ -1104,10 +1104,10 @@ try {
     // ── Lorebook scope diagnostics ──────────────────────────────────────────
     //
     // Phase 3 (knowledge cleanup) recovery surface: durable pre-cleanup
-    // originals. The reviewed recovery UI arrives in Phase 4; this console
-    // surface keeps listing/export/import/retention reachable meanwhile —
-    // recovery survives review close and host reload either way (it lives in
-    // the lorebook).
+    // originals. The reviewed recovery UI (ledger review modal's "Recovery
+    // records…" manager) landed in Phase 4; this console surface stays as the
+    // scriptable/debug half — recovery survives review close and host reload
+    // either way (it lives in the lorebook).
     window.MWT.cleanupRecovery = {
         list: async () => {
             const result = await cleanupRecoveryApi.listCleanupRecovery();

@@ -861,6 +861,12 @@ export function planRestore(envelope, current = {}, {
             // (§3.5): unwritten, unstamped, and left raw. Exact planning reads
             // this so an exact restore preserves the same refusal.
             blockedSections,
+            // D3 (concision plan): the envelope's cleanup-recovery container
+            // rides the commit as a current-wins merge into the destination
+            // book's container — counted here so previews can state it.
+            cleanupRecovery: {
+                recordCount: Object.keys(validation.cleanupRecovery?.records || {}).length,
+            },
         },
     };
 }

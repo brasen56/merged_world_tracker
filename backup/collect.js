@@ -49,6 +49,8 @@ import {
     isFutureManifest,
 } from '../schema/manifest.js';
 import { CHAT_METADATA_SCHEMA_IDS } from '../schema/registry.js';
+import { readCleanupRecoveryContainerFromBook } from '../knowledge/cleanup_recovery.js';
+import { state as knowledgeState } from '../knowledge/state.js';
 
 /**
  * Resolve a human-readable label without assuming one particular ST fork's
@@ -140,6 +142,7 @@ export async function collectBackup({
     }
 
     let knowledgeStore;
+    let cleanupRecovery;
     if (includeKnowledgeStore) {
         const knowledgeBook = getLorebookName();
         const stateBook = getStateLorebookName();
@@ -194,6 +197,39 @@ export async function collectBackup({
         if (storeQuarantine.length > 0) {
             knowledgeStore.quarantine = { version: QUARANTINE_SCHEMA_VERSION, items: storeQuarantine };
         }
+
+        // D3 (concision plan): the Knowledge book's cleanup-recovery container
+        // — the durable pre-cleanup originals — rides with the backup as its
+        // own versioned top-level container (raw records, so unrecognized
+        // fields survive for forward compatibility). Read through the host
+        // loader (the same view every other read uses), not the cleanup
+        // persistence HTTP layer. A REFUSED container (written by a newer
+        // MWT, or corrupt) aborts the export visibly, the same rule as the
+        // quarantine containers above: a backup must never silently omit
+        // recovery records while claiming to carry everything. No world-info
+        // module or no book simply means no container to carry.
+        let cleanupRead = { ok: true, records: {}, rawRecords: {} };
+        if (knowledgeState.wiScript) {
+            try {
+                const wi = await knowledgeState.wiScript.loadWorldInfo(knowledgeBook);
+                cleanupRead = readCleanupRecoveryContainerFromBook(wi);
+            } catch (err) {
+                throw new Error(
+                    `Backup export cancelled because the "${knowledgeBook}" lorebook's cleanup-recovery container `
+                    + `cannot be read safely (read-failed: ${err.message}). The book could not be loaded.`
+                );
+            }
+        }
+        if (!cleanupRead.ok) {
+            throw new Error(
+                `Backup export cancelled because the "${knowledgeBook}" lorebook's cleanup-recovery container `
+                + `cannot be read safely (${cleanupRead.reason}). Upgrade MWT (or repair the container) `
+                + 'before exporting, so the backup cannot silently omit recovery records.'
+            );
+        }
+        if (Object.keys(cleanupRead.rawRecords).length > 0) {
+            cleanupRecovery = { version: cleanupRead.version, records: cleanupRead.rawRecords };
+        }
     }
 
     // Quarantine recovery data (design §5.3, Part 3): a backup must carry
@@ -211,6 +247,7 @@ export async function collectBackup({
         metadata,
         knowledgeStore,
         quarantine,
+        cleanupRecovery,
         sectionVersions,
         identity: resolvedIdentity,
         createdAt: new Date().toISOString(),

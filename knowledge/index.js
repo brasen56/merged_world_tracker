@@ -616,11 +616,15 @@ export function onChatChanged() {
     // still-live handlers (Save to Lorebook, evidence editing) would act on
     // the NEW chat's stores; the identity modal's Rename/Merge/alias handlers
     // close over the previous chat's `key` and would mutate a same-named NPC
-    // in the new chat. All are dropped with the same stroke.
+    // in the new chat. All are dropped with the same stroke. The Phase 4
+    // condense-review and recovery modals join the sweep for the same reason:
+    // an open review cannot target the new chat (its capture, scope token,
+    // and any retained draft stay bound to the originating chat; the draft
+    // itself survives in the in-memory, origin-keyed draft store).
     // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
     // also detaches any document-level Escape listener a removed modal left
     // behind — a bare remove() leaks it.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => {
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal').forEach(m => {
         // Use the shared close path so the modal stack restores body inertness
         // before the old-chat node is discarded. Direct remove() leaves the
         // remaining application inert when this was the topmost dialog.
@@ -669,10 +673,12 @@ export function onChatChangedWhilePaused() {
     // Growth modal displaying the previous chat's evidence/profile with
     // handlers that would edit it against the new chat's stores, and the
     // identity modal's Rename/Merge/alias handlers acting on the previous
-    // chat's `key`; see onChatChanged). _cleanupKeyHandler first (the
-    // core/modal.js convention) so the sweep also detaches any
-    // document-level Escape listener a removed modal left behind.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal').forEach(m => {
+    // chat's `key`; see onChatChanged). The Phase 4 condense-review and
+    // recovery modals join for the same scope-detach reason.
+    // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
+    // also detaches any document-level Escape listener a removed modal left
+    // behind.
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal').forEach(m => {
         if (typeof m._closeModal === 'function') m._closeModal();
         else { m._cleanupKeyHandler?.(); m.remove(); }
     });

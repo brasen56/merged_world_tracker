@@ -223,7 +223,7 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
         pauseStore('knowledgeStore', { reasonCode: 'future-version', message: 'blocked' });
         Knowledge.onChatChangedWhilePaused();
 
-        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal');
+        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal');
         expect(viewModal.remove).toHaveBeenCalled();
         expect(growthModal.remove).toHaveBeenCalled();
         expect(identityModal.remove).toHaveBeenCalled();
@@ -245,7 +245,7 @@ describe('Knowledge.onChatChangedWhilePaused', () => {
 
         Knowledge.onChatChanged();
 
-        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal');
+        expect(querySelectorAll).toHaveBeenCalledWith('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal');
         expect(viewModal.remove).toHaveBeenCalled();
         expect(growthModal.remove).toHaveBeenCalled();
         expect(identityModal.remove).toHaveBeenCalled();

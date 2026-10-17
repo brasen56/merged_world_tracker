@@ -34,7 +34,7 @@
  */
 
 import { estimateTokens } from '../core/context.js';
-import { getChatScopeKey } from '../core/scope.js';
+import { getChatScopeKey, captureScope, scopeStillCurrent } from '../core/scope.js';
 import { state } from './state.js';
 import { getLorebookName } from './scope.js';
 import {
@@ -156,8 +156,9 @@ function parseRawContainer(rawContent) {
 
 // ─── Container I/O (all persist-and-verify, all under the store lock) ───────
 
-async function loadBook(wiScript, bookName) {
+async function loadBook(wiScript, bookName, assertCurrent = () => {}) {
     let wi = await loadCleanupBook(bookName);
+    assertCurrent();
     if (!wi || !wi.entries) {
         if (typeof wiScript.createNewWorldInfo === 'function') {
             await wiScript.createNewWorldInfo(bookName);
@@ -200,13 +201,32 @@ export async function readCleanupRecoveryContainer(bookName = getLorebookName())
     if (!state.wiScript) return { ok: false, reason: 'world-info-not-loaded' };
     try {
         const wi = await loadCleanupBook(bookName);
-        const entry = wi ? findContainerEntry(wi) : null;
-        const parsed = parseContainer(entry?.content);
-        if (!parsed.ok) return parsed;
-        return { ok: true, version: parsed.version, records: parsed.records, rawRecords: parsed.invalid || {}, storedActionIds: Object.keys(parsed.invalid || {}), issues: parsed.issues || [] };
+        return readCleanupRecoveryContainerFromBook(wi);
     } catch (err) {
         return { ok: false, reason: `read-failed: ${err.message}` };
     }
+}
+
+/**
+ * Parse + validate the container out of an ALREADY-LOADED world-info object
+ * (the host loader's view — no uncached HTTP). The unified backup's collector
+ * (decision D3) reads through this seam so the export path has the same data
+ * source as every other read, without the cleanup-persistence HTTP layer.
+ * Same return shape as {@link readCleanupRecoveryContainer}; a null/empty wi
+ * is the normal no-container state.
+ */
+export function readCleanupRecoveryContainerFromBook(wi) {
+    const entry = wi ? findContainerEntry(wi) : null;
+    const parsed = parseContainer(entry?.content);
+    if (!parsed.ok) return parsed;
+    return {
+        ok: true,
+        version: parsed.version,
+        records: parsed.records,
+        rawRecords: parsed.invalid || {},
+        storedActionIds: Object.keys(parsed.invalid || {}),
+        issues: parsed.issues || [],
+    };
 }
 
 /**
@@ -225,7 +245,8 @@ export async function writeCleanupRecoveryContainer(bookName, records, { skipUnc
 }
 
 // Caller must hold withStoreLock across its complete read/modify/write transaction.
-async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUnchanged = true, deleted = [] } = {}) {
+async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUnchanged = true, deleted = [], assertCurrent = () => {} } = {}) {
+    assertCurrent();
     if (!bookName) throw new Error('cleanup recovery: no Knowledge book resolved');
     if (!state.wiScript) throw new Error('cleanup recovery: world-info.js not loaded');
     const validated = {};
@@ -235,7 +256,8 @@ async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUn
         validated[actionId] = record;
     }
 
-    const wi = await loadBook(state.wiScript, bookName);
+    const wi = await loadBook(state.wiScript, bookName, assertCurrent);
+    assertCurrent();
     let entry = findContainerEntry(wi);
 
     // Never overwrite a container this build cannot understand (the
@@ -290,6 +312,7 @@ async function writeCleanupRecoveryContainerUnlocked(bookName, records, { skipUn
         entry.enabled = false;
         entry.comment = CLEANUP_RECOVERY_COMMENT;
     }
+    assertCurrent();
     applyStoreToWorldInfo(bookName, wi);
     await saveCleanupBook(bookName, wi);
 
@@ -454,18 +477,26 @@ export async function exportCleanupRecovery(actionIds) {
  * from another book's export lands where the user imported it.
  *
  * @param {object} payload — parsed JSON from exportCleanupRecovery
+ * @param {object} [options] — destination and scope captured before async UI work
  * @returns {Promise<{added: string[], kept: string[], rejected: string[]}>}
  */
-export async function importCleanupRecovery(payload) {
+export async function importCleanupRecovery(payload, { bookName = getLorebookName(), scopeToken = captureScope() } = {}) {
+    const assertCurrent = () => {
+        if (!scopeStillCurrent(scopeToken).ok || !bookName || getLorebookName() !== bookName) {
+            throw new Error('cleanup recovery import: chat scope or Knowledge book changed — refusing import');
+        }
+    };
+    assertCurrent();
     if (!payload || typeof payload !== 'object' || payload.type !== CLEANUP_RECOVERY_EXPORT_TYPE) {
         throw new Error('cleanup recovery import: not an MWT cleanup-recovery export');
     }
     if (payload.version !== CLEANUP_RECOVERY_VERSION) {
         throw new Error(`cleanup recovery import: unsupported version ${payload.version} (expected ${CLEANUP_RECOVERY_VERSION})`);
     }
-    const bookName = getLorebookName();
     return withStoreLock(async () => {
+        assertCurrent();
         const read = await readCleanupRecoveryContainer(bookName);
+        assertCurrent();
         if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing import`);
         const records = { ...read.records };
         const added = [];
@@ -480,7 +511,7 @@ export async function importCleanupRecovery(payload) {
             // Current-wins: an existing record is never overwritten by an import.
             if (!read.storedActionIds.includes(actionId)) records[actionId] = candidate;
         }
-        if (added.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, records);
+        if (added.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, records, { assertCurrent });
         return { added, kept, rejected };
     });
 }
@@ -488,4 +519,38 @@ export async function importCleanupRecovery(payload) {
 /** The scope key stamped onto records captured in the current chat scope. */
 export function currentCleanupScopeKey() {
     return getChatScopeKey();
+}
+
+/**
+ * D3 (unified backup restore): merge cleanup-recovery records carried by a
+ * backup envelope into the destination book's container, current-wins by
+ * actionId — the same policy as {@link importCleanupRecovery}, minus the
+ * export-envelope checks and WITHOUT taking the store lock (the restore
+ * commit already holds it; withStoreLock is a queue, so nesting would
+ * deadlock). Imported records are re-stamped for the destination book;
+ * rejected shapes are reported, never partially written.
+ *
+ * @param {Record<string, object>} records raw records keyed by actionId
+ * @param {string} [bookName]
+ * @returns {Promise<{added: string[], kept: string[], rejected: string[]}>}
+ */
+export async function mergeCleanupRecoveryRecordsUnlocked(records, bookName = getLorebookName()) {
+    const read = await readCleanupRecoveryContainer(bookName);
+    if (!read.ok) throw new Error(`cleanup recovery: container unreadable (${read.reason}) — refusing merge`);
+    const merged = { ...read.records };
+    const added = [];
+    const kept = [];
+    const rejected = [];
+    for (const [actionId, record] of Object.entries(records || {})) {
+        const candidate = { ...record, actionId, bookName };
+        const check = validateCleanupRecordShape(candidate);
+        if (!check.ok) { rejected.push(`${actionId} (${check.reason})`); continue; }
+        if (read.storedActionIds.includes(actionId)) kept.push(actionId);
+        else {
+            added.push(actionId);
+            merged[actionId] = candidate;
+        }
+    }
+    if (added.length > 0) await writeCleanupRecoveryContainerUnlocked(bookName, merged);
+    return { added, kept, rejected };
 }
