@@ -205,6 +205,27 @@ describe('openGrowthProfileModal scope + singleton guards', () => {
         expect(growthModalCount()).toBe(1);
     });
 
+    test('Targeted Capture previews before running and Cancel discards a preview', async () => {
+        const targeted = await import('../knowledge/targeted_growth.js');
+        const plan = { windows: 1, messages: 2, chars: 300, maxCalls: 1,
+            skipped: 0, unavailable: 0, coverage: {}, scenes: [] };
+        const planning = vi.spyOn(targeted, 'planTargetedCapture').mockResolvedValue(plan);
+        const running = vi.spyOn(targeted, 'runTargetedCapture').mockResolvedValue({ added: 0 });
+        await open();
+        const modal = document.getElementById('kt-growth-modal');
+        const button = modal.querySelector('#kt-growth-targeted');
+        await Promise.all(button.dispatch('click'));
+        expect(planning).toHaveBeenCalledTimes(1);
+        expect(running).not.toHaveBeenCalled();
+        expect(button.textContent).toBe('Run Targeted Capture');
+        expect(modal.querySelector('#kt-growth-targeted-preview').textContent).toContain('At most 1 generation calls');
+        modal.querySelector('#kt-growth-targeted-cancel').dispatch('click');
+        expect(button.textContent).toBe('Targeted Capture');
+        await Promise.all(button.dispatch('click'));
+        expect(planning).toHaveBeenCalledTimes(2);
+        expect(running).not.toHaveBeenCalled();
+    });
+
     test('rapid double-clicks during the opening awaits create a single modal', async () => {
         // Both calls start before the first one's awaits resolve — the
         // in-flight flag, not the DOM check, must collapse them.

@@ -429,6 +429,17 @@ export function validateKnowledgeEvidenceData(data) {
             delete next.meta;
             issues.push(quarantineIssue('evidence-meta-not-object', [name, 'meta'], 'Evidence meta must be an object.', file.meta, `${name}.meta`));
         }
+        if (isObject(file.meta) && file.meta.targetedCoverage !== undefined) {
+            const coverage = file.meta.targetedCoverage;
+            if (!Array.isArray(coverage) || coverage.some(record => !isObject(record)
+                || !['chat', 'npc', 'identity', 'fingerprint'].every(key => isNonEmptyString(record[key]))
+                || !isFiniteNumber(record.processedAt))) {
+                next.meta = { ...file.meta };
+                delete next.meta.targetedCoverage;
+                issues.push(quarantineIssue('targeted-coverage-invalid', [name, 'meta', 'targetedCoverage'],
+                    'Targeted coverage requires chat, NPC, original identity, fingerprint and processing time.', coverage, `${name}.targetedCoverage`));
+            }
+        }
         accepted[name] = next;
     }
     return { data: accepted, issues, stats };
@@ -889,6 +900,7 @@ export const knowledgeEvidenceSchema = defineStoreSchema({
             'consolidated-missing-claim',
             'consolidated-invalid-sources',
             'evidence-meta-not-object',
+            'targeted-coverage-invalid',
         ],
     }),
 });

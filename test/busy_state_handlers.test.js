@@ -281,13 +281,13 @@ describe('A11Y-S3-04: the remaining Knowledge async controls own their busy stat
     test('a failed catch-up restores prior eligibility instead of enabling ineligible actions', () => {
         // Eligibility is snapshotted BEFORE the buttons are marked busy…
         expect(knowledgeRenderSource).toMatch(
-            /const priorDisabled = new Map\(\[btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn\]\s*\.map\(b => \[b, b\?\.disabled \?\? false\]\)\);/,
+            /const priorDisabled = new Map\(\[btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn, targetedAction\]\s*\.map\(b => \[b, b\?\.disabled \?\? false\]\)\);/,
         );
         // …and re-applied when busy clears, so Generate (needs ≥1 observation)
         // and Consolidate (needs ≥2 non-canon raw) cannot come back enabled
         // from a failed run that never re-rendered the modal.
         expect(knowledgeRenderSource).toMatch(
-            /\[captureBtn, regenerateBtn, consolidateBtn, backfillBtn\]\.forEach\(b => \{\s*setControlBusy\(b, false\);\s*if \(b && priorDisabled\.get\(b\)\) b\.disabled = true;\s*\}\);/,
+            /\[captureBtn, regenerateBtn, consolidateBtn, backfillBtn, targetedAction\]\.forEach\(b => \{\s*setControlBusy\(b, false\);\s*if \(b && priorDisabled\.get\(b\)\) b\.disabled = true;\s*\}\);/,
         );
     });
 });

@@ -45,6 +45,7 @@ import {
 // test barrel→stub alias.
 import { scopeStillCurrent } from '../core/scope.js';
 import { getOrCreateReceiptIdentity } from '../core/message_identity.js';
+import { verifyGrowthObservations } from './growth_sources.js';
 // Part 6 (§7.4) pause guard for the Growth profiler's direct entry points.
 // Direct import (not the barrel) so the REAL pause singleton is read even under
 // the test barrel→stub alias — the same rule knowledge/index.js applies to its
@@ -188,7 +189,13 @@ function getIndexedMessageWindow(count = EVIDENCE_MESSAGE_WINDOW) {
         if (ts >= cursor.ts) cursor = { ts, index: i };
     }
     if (cursor.index >= 0) cursor.identity = getOrCreateReceiptIdentity(chat[cursor.index]);
-    return { text: lines.join('\n'), cursor };
+    const sources = [];
+    for (let i = startIdx; i < end; i++) {
+        if (chat[i]?.mes && !chat[i].is_system && !isIlsSummary(chat[i])) {
+            sources.push({ msg: structuredClone(chat[i]), promptIndex: i, liveIndex: i });
+        }
+    }
+    return { text: lines.join('\n'), cursor, sources };
 }
 
 // ─── Canon extraction ────────────────────────────────────────────────────────
@@ -232,7 +239,7 @@ export function extractCanonFromEntry(content) {
  * @param {number|null} uid — lorebook UID (for loading existing context)
  * @returns {Promise<Array<{category:string, claim:string, quote:string, msgIdx:number}>>}
  */
-export async function captureEvidence(name, uid, captureWindow = getIndexedMessageWindow()) {
+export async function captureEvidence(name, uid, captureWindow = getIndexedMessageWindow(), options = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
     const scopeBefore = captureScope();
 
@@ -253,8 +260,10 @@ export async function captureEvidence(name, uid, captureWindow = getIndexedMessa
     }
     if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
 
-    const worldState = getWorldStateFactual();
-    const chronicle = getLatestChronicleEntry();
+    // Targeted callers cap auxiliary context too, not just original-message text.
+    if (options.contextLimit != null) existingContext = existingContext.slice(0, options.contextLimit);
+    const worldState = String(getWorldStateFactual() || '').slice(0, options.contextLimit ?? Infinity);
+    const chronicle = String(getLatestChronicleEntry() || '').slice(0, options.contextLimit ?? Infinity);
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -271,12 +280,14 @@ export async function captureEvidence(name, uid, captureWindow = getIndexedMessa
         `Extract behavioral observations about ${name}. Output only JSON.`,
     ].filter(Boolean).join('\n');
 
-    const raw = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: 1 });
+    const raw = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: options.retries ?? 1, signal: options.signal });
+    if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
     const cleaned = normaliseOutput(raw);
     const result = parseJsonLenient(cleaned);
 
     const observations = Array.isArray(result.observations) ? result.observations : [];
-    const chat = getChat() || [];
+    if (!Array.isArray(result?.observations)) throw new Error('Invalid evidence response: observations array required.');
+    const sources = captureWindow.sources || (getChat() || []).map((msg, i) => ({ msg, promptIndex: i, liveIndex: i }));
 
     // Validate in two stages. First, drop truly unanchored items (no claim or no
     // quote) — inadmissible per the blueprint's anchoring guardrail. Then VERIFY
@@ -284,26 +295,7 @@ export async function captureEvidence(name, uid, captureWindow = getIndexedMessa
     // drop) the ones that aren't, so a paraphrased receipt is visible rather than
     // silently trusted. Flag-not-drop because the normalized match can produce
     // false negatives; the user can eyeball a flagged item via its msgIdx.
-    const admitted = observations.filter(o =>
-        o && typeof o.claim === 'string' && o.claim.trim() &&
-        typeof o.quote === 'string' && o.quote.trim()
-    ).map(o => {
-        const quote = String(o.quote).trim();
-        const citedIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
-        const matchIdx = findQuoteMatch(quote, citedIdx, chat);
-        const verified = matchIdx !== -1;
-        return {
-            category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
-            claim: String(o.claim).trim(),
-            quote,
-            // Snap msgIdx to where the quote actually matched, so the display AND
-            // the store's ts anchor (extractMsgTs → chat[msgIdx].send_date) point
-            // at the real source. If unverified, keep the model's cited index so
-            // the flagged item stays traceable.
-            msgIdx: verified ? matchIdx : citedIdx,
-            verified,
-        };
-    });
+    const admitted = verifyGrowthObservations(observations, sources);
 
     const unverified = admitted.filter(o => !o.verified).length;
     if (unverified > 0) {
@@ -1331,57 +1323,11 @@ export async function runIlsBackfillCapture(name, opts = {}) {
 
     const observations = Array.isArray(result.observations) ? result.observations : [];
 
-    // For backfill, quote verification searches both the live chat and the
-    // expanded window (originals may not be at their cited indices — they came
-    // from inside summaries).
-    const expandedMessages = window.map(e => e.msg);
-    const admitted = observations.filter(o =>
-        o && typeof o.claim === 'string' && o.claim.trim() &&
-        typeof o.quote === 'string' && o.quote.trim()
-    ).map(o => {
-        const quote = String(o.quote).trim();
-        const citedIdx = typeof o.msgIdx === 'number' ? o.msgIdx : null;
-
-        // Try the live chat first (the quote might be from a non-summary msg).
-        const liveIdx = findQuoteMatch(quote, citedIdx, chat);
-        if (liveIdx !== -1) {
-            // Found in live chat — the index is valid, ts will be extracted
-            // from chat[liveIdx].send_date by appendRawObservations.
-            return {
-                category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
-                claim: String(o.claim).trim(),
-                quote,
-                msgIdx: liveIdx,
-                verified: true,
-            };
-        }
-
-        // Not in live chat — search the expanded originals.
-        const expandedIdx = findQuoteMatch(quote, null, expandedMessages);
-        if (expandedIdx !== -1) {
-            // B3 fix: the expanded-array index is meaningless as a live index.
-            // Thread the real ts (entry.ts = the original's send_date, preserved
-            // by ils_compat) and set msgIdx = null — exactly the "msgIdx
-            // null/synthetic under expansion" constraint.
-            return {
-                category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
-                claim: String(o.claim).trim(),
-                quote,
-                msgIdx: null,
-                ts: window[expandedIdx].ts,
-                verified: true,
-            };
-        }
-
-        // Unverified — keep the model's cited index for traceability.
-        return {
-            category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
-            claim: String(o.claim).trim(),
-            quote,
-            msgIdx: citedIdx,
-            verified: false,
-        };
-    });
+    // Only supplied originals may verify; summary containers never own their receipts.
+    const admitted = verifyGrowthObservations(observations, window.map(entry => ({
+        msg: entry.msg, promptIndex: entry.idx, ts: entry.ts,
+        liveIndex: chat[entry.idx] === entry.msg && !isIlsSummary(entry.msg) ? entry.idx : null,
+    })));
 
     // Advance the backfill watermark with the observations in one commit.
     const stats = appendRawObservations(name, admitted, null, maxTs);

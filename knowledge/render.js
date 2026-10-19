@@ -1270,7 +1270,10 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
                 <button class="mwt-btn" id="kt-growth-consolidate" title="Distill raw observations into consolidated claims. Consumed raw entries are archived. Disabled if fewer than 2 non-canon raw observations." ${nonCanonRawCount < 2 ? 'disabled' : ''}><span aria-hidden="true">🔗</span> Consolidate</button>
                 <button class="mwt-btn" id="kt-growth-backfill" title="Expand ILS summary messages back to their originals and capture evidence from the restored text (one-time/bounded)."><span aria-hidden="true">📦</span> Backfill</button>
                 <button class="mwt-btn" id="kt-growth-catchup" title="Continuously read ALL history (summarized + live) until evidence is caught up to the current chat. Fires a notification when done."><span aria-hidden="true">🚀</span> Catch Up</button>
+                <button class="mwt-btn" id="kt-growth-targeted" title="Preview bounded VectFox scenes, then capture from verified originals only. Does not advance Catch Up.">Targeted Capture</button>
+                <button class="mwt-btn" id="kt-growth-targeted-cancel" style="display:none">Cancel Targeted Capture</button>
             </div>
+            <div id="kt-growth-targeted-preview" style="white-space:pre-wrap"></div>
             <div class="kt-growth-catchup-progress" id="kt-growth-catchup-progress" style="display:none"></div>
         </div>
         <div class="kt-growth-evidence">
@@ -1664,6 +1667,62 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         }
     });
 
+    // Separate preview/run action: no capture spend until the second click.
+    let targetedPlan = null;
+    let targetedController = null;
+    const targetedBtn = modal.querySelector('#kt-growth-targeted');
+    const targetedCancel = modal.querySelector('#kt-growth-targeted-cancel');
+    targetedCancel?.addEventListener('click', () => {
+        targetedController?.abort();
+        targetedPlan = null;
+        if (!targetedController) {
+            targetedBtn.textContent = 'Targeted Capture';
+            targetedCancel.style.display = 'none';
+            const output = modal.querySelector('#kt-growth-targeted-preview');
+            if (output) output.textContent = 'Targeted plan cancelled. No capture calls made.';
+        }
+    });
+    targetedBtn?.addEventListener('click', async () => {
+        const output = modal.querySelector('#kt-growth-targeted-preview');
+        const controller = new AbortController();
+        targetedController = controller;
+        const controls = ['#kt-growth-capture', '#kt-growth-regenerate', '#kt-growth-consolidate',
+            '#kt-growth-backfill', '#kt-growth-catchup'].map(selector => modal.querySelector(selector));
+        const prior = controls.map(control => control?.disabled);
+        controls.forEach(control => { if (control) control.disabled = true; });
+        targetedBtn.disabled = true;
+        if (targetedCancel) targetedCancel.style.display = '';
+        // Closing the modal cancels pending work as well as the explicit button.
+        const closed = setInterval(() => {
+            if (!document.getElementById('kt-growth-modal')) controller.abort();
+        }, 200);
+        try {
+            const { planTargetedCapture, runTargetedCapture } = await import('./targeted_growth.js');
+            if (!targetedPlan) {
+                targetedPlan = await planTargetedCapture(name, { signal: controller.signal });
+                if (output) output.textContent = `Planned: ${targetedPlan.windows} window(s), ${targetedPlan.messages} original messages, ${targetedPlan.chars} message characters. At most ${targetedPlan.maxCalls} generation calls, no retries.\n${targetedPlan.skipped} unchanged/overlapping sources skipped; ${targetedPlan.unavailable} unavailable originals. ${targetedPlan.coverage?.partial ? 'Partial archive coverage. ' : ''}${targetedPlan.coverage?.truncated ? 'Archive selection truncated. ' : ''}\n${targetedPlan.scenes.map(scene => `${scene.messages} messages: ${(scene.eventRefs || []).join(', ')}`).join('\n')}\nClick Run Targeted Capture to start; Cancel discards this plan.`;
+                targetedBtn.textContent = 'Run Targeted Capture';
+            } else {
+                const plan = targetedPlan;
+                targetedPlan = null;
+                const result = await runTargetedCapture(plan, { signal: controller.signal,
+                    onProgress: progress => { if (output) output.textContent = `${progress.calls} calls, ${progress.messages} originals processed, +${progress.added} observations.`; } });
+                await refreshGrowthModalContent(modal, name, triggerBtn,
+                    `Targeted Capture: +${result.added} observations (${result.verified} verified), ${result.messages} originals, ${result.calls} calls. Chronological watermarks unchanged. Exact token usage unavailable.`);
+            }
+        } catch (err) {
+            targetedPlan = null;
+            if (output) output.textContent = `${err.message} Earlier successful batches, if any, remain saved; unfinished content is retryable.`;
+        } finally {
+            clearInterval(closed);
+            targetedController = null;
+            targetedBtn.disabled = false;
+            if (!targetedPlan) targetedBtn.textContent = 'Targeted Capture';
+            if (targetedCancel) targetedCancel.style.display = targetedPlan ? '' : 'none';
+            controls.forEach((control, index) => { if (control) control.disabled = prior[index]; });
+        }
+    });
+
     // ── Catch Up (loop backfill + continuous capture until current) ──
     // A user-initiated "read everything until caught up" pass. Loops the
     // bounded backfill (Part B) through all summarized history, then loops
@@ -1679,17 +1738,18 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
         const regenerateBtn = modal.querySelector('#kt-growth-regenerate');
         const consolidateBtn = modal.querySelector('#kt-growth-consolidate');
         const backfillBtn = modal.querySelector('#kt-growth-backfill');
+        const targetedAction = modal.querySelector('#kt-growth-targeted');
         // Snapshot each action's eligibility BEFORE marking everything busy:
         // Generate Profile renders disabled with zero observations and
         // Consolidate with fewer than two non-canon raw ones, and a failed
         // catch-up must not clear busy into an enabled state the evidence
         // rules forbid.
-        const priorDisabled = new Map([btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn]
+        const priorDisabled = new Map([btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn, targetedAction]
             .map(b => [b, b?.disabled ?? false]));
         try {
             // Disable all action buttons for the duration — catch-up is a
             // multi-batch loop and concurrent actions would race the watermarks.
-            [btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => setControlBusy(b, true));
+            [btn, captureBtn, regenerateBtn, consolidateBtn, backfillBtn, targetedAction].forEach(b => setControlBusy(b, true));
             btn.textContent = '⏳ Reading…';
             if (progressEl) {
                 progressEl.style.display = '';
@@ -1761,7 +1821,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             // contract, so restore each action's prior eligibility — a failed
             // catch-up must not make Generate available with zero
             // observations or Consolidate with fewer than two eligible ones.
-            [captureBtn, regenerateBtn, consolidateBtn, backfillBtn].forEach(b => {
+            [captureBtn, regenerateBtn, consolidateBtn, backfillBtn, targetedAction].forEach(b => {
                 setControlBusy(b, false);
                 if (b && priorDisabled.get(b)) b.disabled = true;
             });

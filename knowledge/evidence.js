@@ -693,7 +693,7 @@ function advanceCaptureCursor(meta, { ts, index = null, identity = null }) {
  * @param {Array<{category:string, claim:string, quote:string, msgIdx:number|null, verified?:boolean, ts?:number}>} observations
  * @returns {{added: number, skipped: number}} counts
  */
-export function appendRawObservations(name, observations, cursor = null, backfillTs = null) {
+export function appendRawObservations(name, observations, cursor = null, backfillTs = null, targetedCoverage = []) {
     const file = getEvidenceFile(name);
     const chat = getChat() || [];
     // Dedup against BOTH raw[] and archivedRaw[]. After consolidation moves
@@ -729,6 +729,7 @@ export function appendRawObservations(name, observations, cursor = null, backfil
             capturedAt: Date.now(),
             verified: obs.verified === true,
             canon: false,
+            ...(typeof obs.sourceIdentity === 'string' ? { sourceIdentity: obs.sourceIdentity } : {}),
         });
         added++;
     }
@@ -737,7 +738,11 @@ export function appendRawObservations(name, observations, cursor = null, backfil
     if (Number.isFinite(backfillTs) && (file.meta.lastBackfillTs == null || backfillTs > file.meta.lastBackfillTs)) {
         file.meta.lastBackfillTs = backfillTs;
     }
-    if ((added > 0 || cursor || Number.isFinite(backfillTs)) && !touch(file).ok) throw new Error('Evidence observations could not be saved.');
+    if (targetedCoverage.length) {
+        file.meta.targetedCoverage = [...new Map([...(file.meta.targetedCoverage || []), ...targetedCoverage]
+            .map(record => [JSON.stringify([record.chat, record.npc, record.identity]), record])).values()];
+    }
+    if ((added > 0 || cursor || Number.isFinite(backfillTs) || targetedCoverage.length) && !touch(file).ok) throw new Error('Evidence observations could not be saved.');
     return { added, skipped };
 }
 
