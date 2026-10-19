@@ -5,7 +5,7 @@
  */
 
 import {
-    escapeHtml, renderLineDiff, notify, isCancellation,
+    escapeHtml, renderLineDiff, notify, isCancellation, getUserNames,
 } from '../core/index.js';
 // Direct import (not the barrel): the chat-scope guard must read the REAL
 // core/scope.js epoch/identity state under the test barrel→stub alias — the
@@ -34,7 +34,7 @@ import {
 import {
     loadEntryContent, loadStateTrackerEntry,
     runScan, runStateUpdate, runNpcUpdate, runNpcEnrich,
-    runDossierFieldRefresh, DOSSIER_FIELDS, extractDossierFieldValues, isDossierEntry,
+    runDossierFieldRefresh, sanitizeDossierRefreshFields, DOSSIER_FIELDS, extractDossierFieldValues, isDossierEntry,
     buildUpdatedMinorContent,
     buildPromotedContent, buildDemotedContent,
     enrichStagingItem, writeToLorebook, writeStateTracker,
@@ -69,6 +69,7 @@ import { decorateModalShell, setStatus } from '../core/modal.js';
 // (plan §4.5).
 import { setControlBusy, prefersReducedMotion } from '../core/ui.js';
 import { acceptedRefreshFields, contractRejectionSummary, scanContractRejections } from './field_contract.js';
+import { getVectFoxHistoryStatus, captureHistoryContext, prepareVectFoxHistory, validateVectFoxHistory, historyWriteGuard, historySummary, HISTORY_FIELDS } from './vectfox_history.js';
 // Phase 4 (concision plan): the reviewed ledger-condensation UI. Deliberately
 // separate from Enrich/Fields/staging — its proposals never enter the staging
 // auto-approval path, and its writes go through the guarded commit service.
@@ -94,7 +95,13 @@ async function handleAccept(item, text, keywords, _el) {
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
             bumpStateTrackerTimestamp(item.name);
         } else {
-            const result = await writeToLorebook(item.name, text, keywords, item.uid);
+            let writeOptions;
+            if (item.historyEvidence) {
+                await validateVectFoxHistory(item.historyEvidence);
+                writeOptions = { bookName: item.historyEvidence.context.book,
+                    beforeWrite: entries => historyWriteGuard(item.historyEvidence, item.historyRevision, entries) };
+            }
+            const result = await writeToLorebook(item.name, text, keywords, item.uid, writeOptions);
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
             // KNOWLEDGE-03: If this is an update (item.uid != null), resolve
             // the canonical registry key so the model's spelling doesn't create
@@ -408,6 +415,7 @@ function renderDetailForItem(item) {
     // so heading navigation lands on the detail pane too.
     return `<div class="kt-detail-inner">
         <h4 class="kt-detail-name">${escapeHtml(item.name)}</h4>
+        ${item.historyEvidence ? `<details class="kt-detail-section"><summary>VectFox supporting history — ${escapeHtml(historySummary(item.historyEvidence))}</summary><pre class="kt-detail-current">${escapeHtml(JSON.stringify({ events: item.historyEvidence.events, sources: item.historyEvidence.sourceChecks, coverage: item.historyEvidence.coverage }, null, 2))}</pre></details>` : ''}
         ${item.contractRejections?.length ? `<div class="kt-detail-section kt-contract-rejections"><div class="kt-detail-label">Rejected model values (not applied or re-verified)</div><ul>${item.contractRejections.map(r => `<li>${escapeHtml(r.field)}: ${escapeHtml(r.reason)}</li>`).join('')}</ul></div>` : ''}
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
@@ -2094,6 +2102,16 @@ async function openDossierFieldRefreshModal(name) {
             </div>
             <div class="mwt-modal-body">
                 <p class="kt-dfr-hint">Pick the dossier fields to re-derive from recent messages; everything else is left untouched. A field is flagged stale once ${DOSSIER_STALE_AFTER_MSGS} new messages have arrived since it was last written or re-verified (or when it has never been tracked).</p>
+                <fieldset class="kt-dfr-history">
+                    <legend>Optional historical evidence</legend>
+                    <label for="kt-dfr-history-enabled"><input id="kt-dfr-history-enabled" type="checkbox" class="kt-dfr-history-enabled" /> Include VectFox history</label>
+                    <p class="kt-dfr-history-availability"></p>
+                    <label for="kt-dfr-history-scope">Scope <select id="kt-dfr-history-scope" class="kt-dfr-history-scope"><option value="current_chat">Current chat</option><option value="selected_collections">Explicit same-continuity collections</option></select></label>
+                    <div class="kt-dfr-history-collections" hidden></div>
+                    <p>History supports Background, Role, Where to Find, Read on PC and Current Agenda only. Secrets and other fields keep their existing recent-message behavior. Max 30 events / 24,000 event-data characters; no extra generation call.</p>
+                    <button type="button" class="mwt-btn kt-dfr-history-preview">Preview history selection</button>
+                    <p class="kt-dfr-history-status" role="status" aria-live="polite"></p>
+                </fieldset>
                 <div class="kt-dfr-rows">
                     ${rows.map(r => {
                         const chip = dossierStalenessChip(r.staleness);
@@ -2137,11 +2155,60 @@ async function openDossierFieldRefreshModal(name) {
  */
 function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
     const runBtn = modal.querySelector('.kt-dfr-run');
+    const historyToggle = modal.querySelector('.kt-dfr-history-enabled');
+    const historyScope = modal.querySelector('.kt-dfr-history-scope');
+    const historyCollections = modal.querySelector('.kt-dfr-history-collections');
+    const historyStatus = modal.querySelector('.kt-dfr-history-status');
+    const previewBtn = modal.querySelector('.kt-dfr-history-preview');
+    let preview = null;
+    let previewEpoch = 0;
+    let busy = false;
+    const selectedFields = () => sanitizeDossierRefreshFields(
+        [...modal.querySelectorAll('.kt-dfr-field:checked')].map(cb => cb.dataset.key), name).requested;
+    const connection = getVectFoxHistoryStatus();
+    if (historyToggle) {
+        historyToggle.disabled = !connection.available;
+        modal.querySelector('.kt-dfr-history-availability').textContent = connection.available
+            ? 'VectFox v1 ready. Collections below must belong to the same story continuity.' : `Unavailable: ${connection.reason}. Recent-message refresh is unchanged.`;
+        historyCollections.innerHTML = (connection.status?.available_collections || []).map((c, i) =>
+            `<label for="kt-dfr-history-collection-${i}"><input id="kt-dfr-history-collection-${i}" type="checkbox" value="${escapeHtml(c.registryKey)}" /> ${escapeHtml(c.collectionId)} (${escapeHtml(c.backend || '')})</label>`).join('<br>');
+    }
     const updateRunBtn = () => {
+        preview = null;
+        previewEpoch++;
+        if (historyStatus) historyStatus.textContent = '';
         const selected = modal.querySelectorAll('.kt-dfr-field:checked').length;
         runBtn.textContent = selected > 0 ? `🔄 Refresh selected (${selected})` : '🔄 Refresh selected';
-        runBtn.disabled = selected === 0;
+        runBtn.disabled = busy || selected === 0;
     };
+    historyToggle?.addEventListener('change', updateRunBtn);
+    historyScope?.addEventListener('change', () => {
+        historyCollections.hidden = historyScope.value !== 'selected_collections';
+        updateRunBtn();
+    });
+    historyCollections?.addEventListener('change', updateRunBtn);
+    previewBtn?.addEventListener('click', async () => {
+        if (!historyToggle.checked || busy) return;
+        const fields = selectedFields();
+        if (!fields.some(f => HISTORY_FIELDS.includes(f))) {
+            historyStatus.textContent = 'Select at least one history-supported field.';
+            return;
+        }
+        const epoch = ++previewEpoch;
+        preview = null;
+        setControlBusy(previewBtn, true);
+        try {
+            const scope = historyScope.value === 'current_chat' ? { kind: 'current_chat' }
+                : { kind: 'selected_collections', collections: [...historyCollections.querySelectorAll('input:checked')].map(cb => cb.value) };
+            const result = await prepareVectFoxHistory(captureHistoryContext(name, reg.uid), fields,
+                { scope, playerNames: [...getUserNames()] });
+            if (epoch !== previewEpoch || !modal.isConnected) return;
+            preview = result;
+            historyStatus.textContent = historySummary(result);
+        } catch (err) {
+            if (epoch === previewEpoch) historyStatus.textContent = err.message;
+        } finally { setControlBusy(previewBtn, false); }
+    });
     modal.querySelectorAll('.kt-dfr-field').forEach(cb => cb.addEventListener('change', updateRunBtn));
     modal.querySelector('.kt-dfr-select-stale').addEventListener('click', () => {
         // Bulk "refresh stale fields": check every selectable stale row.
@@ -2161,8 +2228,16 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
         const selected = [...modal.querySelectorAll('.kt-dfr-field:checked')].map(cb => cb.dataset.key);
         if (selected.length === 0) return;
         try {
+            if (historyToggle?.checked && !preview) throw new Error('Preview the history selection before refreshing.');
+            busy = true;
             setControlBusy(runBtn, true); runBtn.textContent = '⏳…';
-            const result = await runDossierFieldRefresh(name, reg.uid, selected);
+            const result = historyToggle?.checked
+                ? await runDossierFieldRefresh(name, reg.uid, selected, { includeHistory: true, history: preview })
+                : await runDossierFieldRefresh(name, reg.uid, selected);
+            if (result.historyEvidence && (!modal.isConnected || !historyToggle.checked
+                || preview !== result.historyEvidence || JSON.stringify(selectedFields()) !== JSON.stringify(result.requestedFields))) {
+                throw new Error('History selection changed or modal closed. Result discarded.');
+            }
             // The field-refresh prompt ECHOES unchanged values instead of
             // returning null (the Update prompt's convention), so "nothing
             // changed" cannot be read off the field values — a byte-identical
@@ -2185,6 +2260,7 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
                 fields: result.fields, newKnowledge: [],
                 dossierMode: true,
                 contractRejections: result.contractRejections || [],
+                ...(result.historyEvidence ? { historyEvidence: result.historyEvidence, historyRevision: result.historyRevision } : {}),
                 // Only successfully examined fields receive watermarks on accept.
                 refreshFields: acceptedRefreshFields(result.requestedFields, result.contractRejections),
             });
@@ -2208,6 +2284,7 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
             } else {
                 ktSetStatus(`Field refresh failed: ${err.message}`, 'error');
             }
+            busy = false;
             setControlBusy(runBtn, false);
             updateRunBtn();
         }

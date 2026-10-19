@@ -35,6 +35,7 @@ import { validateHistoryRecords } from '../schema/secondary.js';
 // Part 7 diagnostics wiring: direct import (not the barrel) so the REAL
 // schema-event surface is used even under the test barrel→stub alias.
 import { recordSchemaEvent, schemaEventForSeverity } from '../core/schema_status.js';
+import { captureHistoryContext, prepareVectFoxHistory, validateVectFoxHistory, assertVectFoxHistory, HISTORY_PROMPT } from './vectfox_history.js';
 
 // ─── World-info import (side-effect) ────────────────────────────────────────
 
@@ -1632,8 +1633,9 @@ export function sanitizeDossierRefreshFields(fieldKeys, name) {
  * @param {string[]|string} fieldKeys - dossier field keys to refresh
  * @returns {Promise<{currentContent:string, merged:string, fields:object, requestedFields:string[], skippedFields:Array<{key:string,reason:string}>, dossierMode:boolean}>}
  */
-export async function runDossierFieldRefresh(name, uid, fieldKeys) {
+export async function runDossierFieldRefresh(name, uid, fieldKeys, options = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
+    const historyContext = options.includeHistory ? captureHistoryContext(name, uid) : null;
     // Label-verified load — same guard as runNpcUpdate: never feed another
     // NPC's dossier in as refresh context.
     const rawContent = await loadEntryContent(uid, name);
@@ -1646,6 +1648,14 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
     if (requested.length === 0) {
         throw new Error('No refreshable dossier fields selected (canon lock is manual-only; personality belongs to 🌱 Growth when a profile exists).');
     }
+    const history = options.includeHistory ? (options.history || await prepareVectFoxHistory(historyContext, requested, {
+        scope: options.scope, playerNames: [...getUserNames()],
+    })) : null;
+    if (history) {
+        if (history.context.name !== name || history.context.uid !== uid
+            || JSON.stringify(history.fields) !== JSON.stringify(requested)) throw new Error('History preview does not match the selected NPC/fields. Preview again.');
+        await validateVectFoxHistory(history);
+    }
     const recentMessages = getRecentMessages();
     const worldState = getWorldStateFactual();
     if (!recentMessages) throw new Error('No recent messages.');
@@ -1654,7 +1664,7 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
     const currentValues = extractDossierFieldValues(currentContent);
     const refreshBlock = {};
     for (const key of requested) refreshBlock[key] = currentValues[key] ?? null;
-    const userContent = [
+    let userContent = [
         `<entity>${name}</entity>`,
         `<current_entry>\n${currentContent}\n</current_entry>`,
         '',
@@ -1671,6 +1681,12 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
         '='.repeat(60),
         `Refresh ONLY the fields listed in <refresh_fields> for ${name}. Output only JSON.`,
     ].filter(Boolean).join('\n');
+    if (history) {
+        // Escape angle brackets in JSON so retrieved text cannot terminate the data block.
+        const json = JSON.stringify({ events: history.events, coverage: history.coverage, selection: history.selection })
+            .replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+        userContent += `\n<history_events>\n${json}\n</history_events>`;
+    }
 
     // Retry loop — mirrors runNpcUpdate / runNpcEnrich's 2-attempt pattern. A
     // truncated response (max_tokens cut off) or a non-object parse gets one
@@ -1682,7 +1698,7 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
             const fetchContent = attempt === 1
                 ? userContent
                 : userContent + `\n\n[REMINDER: Your previous response was truncated or invalid JSON. Output ONLY valid JSON with just the requested field keys, no prose.]`;
-            raw = await ktFetchFromApi(DOSSIER_FIELD_REFRESH_PROMPT, fetchContent);
+            raw = await ktFetchFromApi(history ? DOSSIER_FIELD_REFRESH_PROMPT + HISTORY_PROMPT : DOSSIER_FIELD_REFRESH_PROMPT, fetchContent);
             cleaned = normaliseOutput(raw);
             result = parseJsonLenient(cleaned);
             if (!result || typeof result !== 'object' || Array.isArray(result)) {
@@ -1728,8 +1744,14 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
                 contractRejections.map(r => `${r.field} (${r.reason})`).join('; '));
         }
         const merged = buildUpdatedDossierContent(currentContent, fields, []);
+        if (history) {
+            await validateVectFoxHistory(history);
+            if (await loadEntryContent(uid, name) !== rawContent) throw new Error('Dossier changed during refresh. Refresh again.');
+            assertVectFoxHistory(history);
+        }
         return {
             currentContent, merged, fields, requestedFields: requested, skippedFields: skipped, dossierMode: true,
+            ...(history ? { historyEvidence: history, historyRevision: rawContent } : {}),
             ...(contractRejections.length > 0 ? { contractRejections } : {}),
         };
     }
