@@ -22,7 +22,7 @@
  */
 
 import { escapeHtml, renderLineDiff, downloadJson, pickTextFile, isCancellation } from '../core/index.js';
-import { decorateModalShell, setStatus, setModalOpener } from '../core/modal.js';
+import { createModal, showModal, decorateModalShell, setStatus, setModalOpener } from '../core/modal.js';
 import { setControlBusy } from '../core/ui.js';
 import { BACKUP_TYPE } from '../backup/data.js';
 import { validateBackupEnvelope } from '../backup/validate.js';
@@ -154,25 +154,58 @@ let reviewOpening = false;
 
 /**
  * Open the Condense review for one NPC. Capture refusals (missing/renamed/
- * ambiguous entry) surface as a Knowledge status error before any modal;
+ * ambiguous entry) surface in an explanation popup and the Knowledge status;
  * an ineligible ledger opens the modal in an explain-only state — nothing is
  * ever rewritten to make an entry eligible.
  */
 export async function openLedgerCleanupReviewModal(name, uid) {
     if (document.getElementById(REVIEW_MODAL_ID) || reviewOpening) return;
     reviewOpening = true;
+    const scope = captureScope();
     try {
-        const scope = captureScope();
         const prepared = await prepareLedgerCleanup({ name, uid });
         // A chat switch during the awaited load detaches everything — the
         // sweep closes any open modal, so just drop this open.
         if (!scopeStillCurrent(scope).ok) return;
         openReviewModalShell(name, prepared);
     } catch (err) {
+        if (!scopeStillCurrent(scope).ok) return;
         ktSetStatus(`Condense unavailable for "${name}": ${err.message}`, 'error');
+        openCaptureRefusalModal(name, err);
     } finally {
         reviewOpening = false;
     }
+}
+
+/** Capture can fail before a review exists. Keep the reason visible beside
+ * the clicked entry instead of relying on the status below the NPC list. */
+function openCaptureRefusalModal(name, err) {
+    const note = err.code === 'destination-ambiguous'
+        ? 'An Identity merge combines registry identities but can leave both lorebook entries in place. In World Info, review the matching entries and preserve any unique facts in the surviving entry before removing a redundant one. Use MWT.npcs.auditDuplicates() in the browser console to identify candidates, then close this popup and try Condense again.'
+        : 'Resolve the entry identity or storage issue described above, then close this popup and try Condense again.';
+    const modal = createModal({
+        id: REVIEW_MODAL_ID,
+        title: `Condense knowledge — ${name}`,
+        cssClass: 'kt-condense-modal',
+        closeOnBackdrop: false,
+        destroyOnClose: true,
+        content: `<div class="kt-condense-content">
+            <div class="kt-condense-explain">
+                <h4>This entry cannot be condensed</h4>
+                <p class="kt-condense-explain-reason">${escapeHtml(err.message)}</p>
+                <p>No model request was sent and no entry was changed.</p>
+                <p class="kt-condense-explain-note">${escapeHtml(note)}</p>
+            </div>
+            <div class="kt-condense-actions">
+                <button class="mwt-btn kt-condense-recovery-open">Recovery records…</button>
+                <span style="flex:1"></span>
+                <button class="mwt-btn mwt-btn-primary kt-condense-close">Close</button>
+            </div>
+        </div>`,
+    });
+    modal.querySelector('.kt-condense-close').addEventListener('click', () => modal._closeModal?.());
+    modal.querySelector('.kt-condense-recovery-open').addEventListener('click', () => { openCleanupRecoveryModal(); });
+    if (!showModal(REVIEW_MODAL_ID)) modal._closeModal?.();
 }
 
 function openReviewModalShell(name, { capture, eligibility }) {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { resetCoreStubs, setFakeApi, setFakeChat, getFakeChat, getFakeMeta, setFakeContextExtras } from './stubs/core.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
 import { saveSettings } from '../knowledge/settings.js';
-import { appendRawObservations, getCaptureWatermark, getCaptureCursor, setCaptureWatermark } from '../knowledge/evidence.js';
+import { appendRawObservations, getCaptureWatermark, getCaptureCursor, setCaptureWatermark, getEvidenceFile } from '../knowledge/evidence.js';
 import { getIndexedMessages, runCaptureOnly, runContinuousCapture } from '../knowledge/growth.js';
 
 describe('Growth capture bootstrap → incremental transition', () => {
@@ -19,6 +19,24 @@ describe('Growth capture bootstrap → incremental transition', () => {
     });
 
     afterEach(() => vi.unstubAllGlobals());
+
+    test.each(['edit', 'replace', 'delete', 'swipe'])('bootstrap refuses a source %s during generation without saving evidence or cursor', async change => {
+        setFakeChat([
+            { id: 'source', name: 'Mara', mes: 'I will keep my promise.', send_date: '2026-01-01T00:00:00Z' },
+            { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' },
+        ]);
+        setFakeApi(() => {
+            const chat = getFakeChat();
+            if (change === 'edit') chat[0].mes = 'I changed my mind.';
+            if (change === 'replace') chat[0] = { ...chat[0], mes: 'I changed my mind.' };
+            if (change === 'delete') chat.splice(0, 1);
+            if (change === 'swipe') Object.assign(chat[0], { swipe_id: 1, mes: 'I changed my mind.' });
+            return JSON.stringify({ observations: [{ claim: 'Keeps promises', quote: 'I will keep my promise.', msgIdx: 0 }] });
+        });
+        await expect(runCaptureOnly('Mara')).rejects.toThrow(/source changed/);
+        expect(getEvidenceFile('Mara', false)?.raw || []).toHaveLength(0);
+        expect(getCaptureWatermark('Mara')).toBeNull();
+    });
 
     test('bootstrap scan stamps only the final cursor message, not every scanned message', async () => {
         const saveChatDebounced = vi.fn();

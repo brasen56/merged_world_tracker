@@ -195,7 +195,7 @@ function getIndexedMessageWindow(count = EVIDENCE_MESSAGE_WINDOW) {
             sources.push({ msg: structuredClone(chat[i]), promptIndex: i, liveIndex: i });
         }
     }
-    return { text: lines.join('\n'), cursor, sources };
+    return { text: lines.join('\n'), cursor, sources, liveSources: true };
 }
 
 // ─── Canon extraction ────────────────────────────────────────────────────────
@@ -282,6 +282,14 @@ export async function captureEvidence(name, uid, captureWindow = getIndexedMessa
 
     const raw = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: options.retries ?? 1, signal: options.signal });
     if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
+    if (captureWindow.liveSources) {
+        const chat = getChat() || [];
+        const end = getStableHistoryEnd(chat);
+        if (captureWindow.sources.some(source => source.liveIndex >= end
+            || JSON.stringify(chat[source.liveIndex]) !== JSON.stringify(source.msg))) {
+            throw new Error('Original source changed during capture — result discarded. Retry capture.');
+        }
+    }
     const cleaned = normaliseOutput(raw);
     const result = parseJsonLenient(cleaned);
 

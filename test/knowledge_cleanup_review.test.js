@@ -23,6 +23,8 @@ import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 import { bumpEpoch, _resetEpoch, captureScope } from '../core/scope.js';
 import { releaseManagedInert } from '../core/modal.js';
 import { state } from '../knowledge/state.js';
+import { mergeEntities } from '../knowledge/identity.js';
+import { getRegistry } from '../knowledge/registry.js';
 import { saveSettings } from '../knowledge/settings.js';
 import { _setCacheForTests, _clearCacheForTests, withStoreLock } from '../knowledge/store.js';
 import { renderNpcsSubTab } from '../knowledge/render.js';
@@ -230,14 +232,66 @@ describe('explicit invocation and disclosure', () => {
         expect(apiRequests).toHaveLength(0);
     });
 
-    test('capture refusals surface before any modal and change nothing', async () => {
+    test('capture refusals open an explanation popup and change nothing', async () => {
         seedBook();
         delete wiFake.books.get(BOOK).entries[7];
         renderNpcsSubTab(); // ktSetStatus writes #kt-status inside the sub-tab
         await openLedgerCleanupReviewModal(NPC, 7);
         await flush();
-        expect(modalEl()).toBeNull();
+        expect(body().querySelector('.kt-condense-explain-reason').textContent).toContain('no longer exists');
         expect(ktStatusText()).toContain('no longer exists');
+        expect(body().querySelector('.kt-condense-generate')).toBeNull();
+        expect(apiRequests).toHaveLength(0);
+        expect(wiFake.saveCalls).toBe(0);
+    });
+
+    test('an Identity merge with two lorebook entries explains the refusal; resolving the leftover allows review', async () => {
+        seedBook();
+        const merged = await mergeEntities(NPC, OTHER, { relabelEntries: false, syncBlocks: false });
+        expect(merged).toMatchObject({ ok: true, merged: true, report: { adoptedUid: false } });
+        expect(getRegistry()[NPC].aliases).toContain(OTHER);
+        expect(getRegistry()[OTHER]).toBeUndefined();
+        const originalEntries = structuredClone(wiFake.books.get(BOOK).entries);
+        const saves = wiFake.saveCalls;
+        renderNpcsSubTab();
+        const btn = contentEl.querySelector('.kt-npc-condense');
+        btn.focus();
+        btn.click();
+        btn.click();
+        await vi.waitFor(() => expect(modalEl()).toBeTruthy());
+        expect(body().querySelector('.kt-condense-explain-reason').textContent).toContain('2 candidate(s)');
+        expect(body().querySelector('.kt-condense-explain-note').textContent).toContain('Identity');
+        expect(body().querySelector('.kt-condense-explain-note').textContent).toContain('unique facts');
+        expect(body().querySelector('.kt-condense-generate')).toBeNull();
+        expect(document.querySelectorAll('#kt-ledger-review-modal')).toHaveLength(1);
+        expect(wiFake.books.get(BOOK).entries).toEqual(originalEntries);
+        expect(wiFake.saveCalls).toBe(saves);
+        expect(apiRequests).toHaveLength(0);
+        body().querySelector('.kt-condense-close').click();
+        expect(modalEl()).toBeNull();
+        expect(document.activeElement).toBe(btn);
+        expect(btn.disabled).toBe(false);
+
+        // Simulate the user reconciling the redundant physical entry in World Info.
+        delete wiFake.books.get(BOOK).entries[8];
+        btn.click();
+        await vi.waitFor(() => expect(body()?.querySelector('.kt-condense-consent-box')).toBeTruthy());
+        expect(entry7().content).toBe(ORIGINAL);
+        expect(apiRequests).toHaveLength(0);
+    });
+
+    test('a failed capture after a chat switch opens no popup and reports no error in the incoming chat', async () => {
+        seedBook();
+        renderNpcsSubTab();
+        let rejectLoad;
+        vi.spyOn(wiFake, 'loadWorldInfo').mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectLoad = reject; }));
+        const statusBefore = ktStatusText();
+        const opening = openLedgerCleanupReviewModal(NPC, 7);
+        bumpEpoch();
+        rejectLoad(new Error('old chat read failed'));
+        await opening;
+        expect(modalEl()).toBeNull();
+        expect(ktStatusText()).toBe(statusBefore);
     });
 
     test('an empty ledger opens the explain state — no request, no rewrite', async () => {

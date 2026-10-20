@@ -132,7 +132,7 @@ export async function captureCleanupTarget({ name, uid }) {
     }
     const identity = findEntryUidByNpcIdentity(entries, name);
     if (!identity || identity.uid !== uid || identity.duplicates > 1) {
-        throw new Error(`Cleanup refused: "${name}" does not resolve to exactly one destination entry (found ${identity ? `${identity.duplicates} candidate(s)` : 'none'}). Resolve duplicates first (MWT.npcs.auditDuplicates()).`);
+        throw Object.assign(new Error(`Cleanup refused: "${name}" does not resolve to exactly one destination entry (found ${identity ? `${identity.duplicates} candidate(s)` : 'none'}). Resolve duplicates first (MWT.npcs.auditDuplicates()).`), { code: 'destination-ambiguous' });
     }
 
     return {

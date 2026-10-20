@@ -726,3 +726,24 @@ because its prompt or UI exists.
 - **Host exit gate remains outstanding:** these automated results do not
   replace the required full SillyTavern model/disclosure/review/Apply/undo
   flow, recovery-manager smoke test, or host backup export/restore check.
+
+#### Condense capture-refusal visibility — 2026-10-20
+
+- Reproduced Identity merge → Condense with both identities already pointing
+  at separate lorebook entries. Identity combines the registry records and
+  retains the absorbed name as an alias, but leaves the absorbed lorebook
+  entry in place. Cleanup correctly counts both entries as candidates and
+  refuses capture; previously, only the status below the NPC list explained
+  the refusal, so the click could appear to do nothing.
+- Capture refusals now open an explanation popup as well as updating the
+  Knowledge status. Ambiguous destinations explain the Identity interaction
+  and direct users to the read-only duplicate audit and World Info editor,
+  preserving unique facts before removing redundant entries. Capture still
+  requires one destination; refusals send no model request and make no writes.
+  A failed read after a scope change is discarded without opening a popup or
+  posting an error into the incoming chat.
+- Validation: **234 tests passed** across the cleanup-review, cleanup-commit,
+  entity-identity, and paused-chat-cleanup suites; lint passed. Regression
+  coverage drives the real merge and Condense button, checks duplicate-click
+  handling and focus restoration, and verifies that review opens after the
+  redundant physical entry is resolved. Host QA remains outstanding.

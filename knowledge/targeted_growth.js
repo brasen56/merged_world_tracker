@@ -36,7 +36,9 @@ function check(plan, signal) {
 function sourceRecord(source, context) {
     const id = source.leaf_identity;
     const identity = id?.id != null ? `id:${id.id}` : id?.mesid != null ? `mesid:${id.mesid}`
-        : JSON.stringify(['fallback', source.expanded_index, source.message?.send_date, source.current_fingerprint]);
+        // Verified ID-less sources have already been uniquely resolved by date
+        // and fingerprint. Positions are only locators and can shift between runs.
+        : JSON.stringify(['fallback', source.message?.send_date, source.current_fingerprint]);
     return { chat: source.source_chat_id, npc: context.entityId || `name:${context.name}`,
         identity, fingerprint: source.current_fingerprint, processedAt: Date.now() };
 }

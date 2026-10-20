@@ -40,6 +40,26 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Targeted Growth', () => {
+    test.each([12, 0])('ID-less coverage survives a shifted expanded index (%i)', async shifted => {
+        source.leaf_identity = { id: null, mesid: null };
+        source.expanded_index = 5;
+        await runTargetedCapture(await planTargetedCapture('Mara'));
+        source.expanded_index = shifted;
+        source.visible_index = shifted;
+        expect(await planTargetedCapture('Mara')).toMatchObject({ messages: 0 });
+        expect(calls).toHaveLength(1);
+    });
+
+    test('ID-less coverage distinguishes dated duplicates and changed fingerprints', async () => {
+        source.leaf_identity = { id: null, mesid: null };
+        await runTargetedCapture(await planTargetedCapture('Mara'));
+        source.message.send_date = '2026-01-02T00:00:00Z';
+        expect((await planTargetedCapture('Mara')).messages).toBe(1);
+        source.message.send_date = '2026-01-01T00:00:00Z';
+        source.current_fingerprint = 'sha256:edited';
+        expect((await planTargetedCapture('Mara')).messages).toBe(1);
+    });
+
     test('unmatched targeted quotes retain recovered-original provenance, not the live timestamp', async () => {
         setFakeChat([{ mes: 'Unrelated live message.', send_date: '2026-10-01T00:00:00Z' }]);
         setFakeApi(() => JSON.stringify({ observations: [
