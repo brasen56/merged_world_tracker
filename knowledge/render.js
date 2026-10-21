@@ -74,6 +74,7 @@ import { getVectFoxHistoryStatus, captureHistoryContext, prepareVectFoxHistory, 
 // separate from Enrich/Fields/staging — its proposals never enter the staging
 // auto-approval path, and its writes go through the guarded commit service.
 import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
+import { prepareVectFoxLedger } from './vectfox_ledger.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -416,6 +417,7 @@ function renderDetailForItem(item) {
     return `<div class="kt-detail-inner">
         <h4 class="kt-detail-name">${escapeHtml(item.name)}</h4>
         ${item.historyEvidence ? `<details class="kt-detail-section"><summary>VectFox supporting history — ${escapeHtml(historySummary(item.historyEvidence))}</summary><pre class="kt-detail-current">${escapeHtml(JSON.stringify({ events: item.historyEvidence.events, sources: item.historyEvidence.sourceChecks, coverage: item.historyEvidence.coverage }, null, 2))}</pre></details>` : ''}
+        ${item.vectfoxLedgerDeferred?.length ? `<details class="kt-detail-section"><summary>Deferred VectFox acquisitions (${item.vectfoxLedgerDeferred.length})</summary><pre class="kt-detail-current">${escapeHtml(JSON.stringify(item.vectfoxLedgerDeferred, null, 2))}</pre></details>` : ''}
         ${item.contractRejections?.length ? `<div class="kt-detail-section kt-contract-rejections"><div class="kt-detail-label">Rejected model values (not applied or re-verified)</div><ul>${item.contractRejections.map(r => `<li>${escapeHtml(r.field)}: ${escapeHtml(r.reason)}</li>`).join('')}</ul></div>` : ''}
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
@@ -585,6 +587,7 @@ function renderNpcListContent(type, entries) {
                     ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)"><span aria-hidden="true">📋</span> Enrich</button>` : ''}
                     ${showEnrich ? `<button class="mwt-btn kt-npc-fields" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Refresh individual dossier fields (agenda, appearance, secrets, …)"><span aria-hidden="true">🎯</span> Fields</button>` : ''}
                     <button class="mwt-btn kt-npc-condense" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Reviewed condensation of the knowledge ledger — one model proposal (up to two billable attempts), then a source-mapped review; nothing changes until you apply it"><span aria-hidden="true">🧹</span> Condense</button>
+                    <button class="mwt-btn kt-npc-vectfox-import" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Stage explicit current-chat knowledge acquisitions for review. No generation calls.">Import from VectFox</button>
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations"><span aria-hidden="true">🌱</span> Growth</button>` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}"><span aria-hidden="true">⬇</span> Demote</button>` : ''}
                     <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}"><span aria-hidden="true">📖</span> View</button>
@@ -596,6 +599,31 @@ function renderNpcListContent(type, entries) {
 }
 
 function wireNpcListEvents(el, _type) {
+    el.querySelectorAll('.kt-npc-vectfox-import').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            setControlBusy(btn, true);
+            try {
+                const name = btn.dataset.name;
+                const result = await prepareVectFoxLedger(name, Number(btn.dataset.uid));
+                const limits = `${result.deferred.length} acquisition(s) deferred. ${historySummary(result.historyEvidence)}`;
+                if (!result.items.length) { ktSetStatus(`No new supported knowledge for "${name}". ${limits}`, 'info'); return; }
+                const reg = getRegistry()[name];
+                const item = { id: `vectfox-ledger-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    type: reg.type, action: 'update', name, uid: reg.uid, data: {},
+                    proposedContent: result.merged, mergedContent: result.merged, existingContent: result.currentContent,
+                    keywords: reg.keywords || [name], newKnowledge: result.items,
+                    historyEvidence: result.historyEvidence, historyRevision: result.historyRevision,
+                    vectfoxLedgerDeferred: result.deferred };
+                state.stagingItems.push(item);
+                state.activeItemId = item.id;
+                state.activeSubTab = 'staging';
+                addNotificationEntry(item);
+                renderNpcsSubTab();
+                ktSetStatus(`VectFox ledger proposal staged for "${name}". ${limits}`, 'info');
+            } catch (err) { ktSetStatus(`VectFox import failed: ${err.message}`, 'error'); }
+            finally { setControlBusy(btn, false); }
+        });
+    });
     el.querySelectorAll('.kt-npc-update').forEach(btn => {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
