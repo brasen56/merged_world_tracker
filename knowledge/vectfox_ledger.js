@@ -10,6 +10,10 @@ const normalize = value => value.normalize('NFKC').replace(/\s+/gu, ' ').trim().
 const bases = ['witnessed', 'told', 'document', 'rumor', 'institutional_access', 'other'];
 const statuses = ['fact', 'belief', 'rumor'];
 const quoteText = value => value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
+// Older VectFox releases expose only the raw original. Never interpret an
+// unknown representation version as evidence we understand.
+const evidenceText = source => source?.evidence_narrative == null ? source?.message?.mes
+    : source.evidence_narrative.version === 1 ? source.evidence_narrative.text : null;
 
 /** The text ledger deliberately carries attribution in-band, so export/restore,
  * manual review and existing formatters cannot silently drop epistemic metadata.
@@ -52,8 +56,8 @@ export function mapVectFoxAcquisitions(events, context, sources, content) {
                     && event.source_refs?.[e.source_index]?.ref === e.source_ref
                     && typeof e.quote === 'string' && e.quote.trim()
                     && checks.get(e.source_ref)?.status === 'verified'
-                    && typeof checks.get(e.source_ref)?.message?.mes === 'string'
-                    && quoteText(checks.get(e.source_ref).message.mes).includes(quoteText(e.quote)));
+                    && typeof evidenceText(checks.get(e.source_ref)) === 'string'
+                    && quoteText(evidenceText(checks.get(e.source_ref))).includes(quoteText(e.quote)));
             if (!valid) { deferred.push({ event_ref: event.event_ref, reason: 'Invalid, ambiguous, or unverified acquisition' }); continue; }
             const claim = acquisition.claim.trim();
             const meaning = `[${acquisition.epistemic_status === 'belief' ? 'Claim heard; not established or necessarily believed' : acquisition.epistemic_status}] ${claim}`

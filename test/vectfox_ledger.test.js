@@ -48,6 +48,18 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Phase 4b deterministic mapping', () => {
+    test('checks cleaned quotes against the versioned evidence narrative, not raw markup', () => {
+        const input = event([acquisition('Alex delivered a letter.', {
+            evidence: [{ source_index: 0, source_ref: 'vf:e:source:0', quote: 'Alex delivered a letter.' }],
+        })]);
+        const original = { ...source(), message: { mes: '<b>Alex</b> delivered a letter.' },
+            evidence_narrative: { version: 1, text: 'Alex delivered a letter.' } };
+        expect(mapVectFoxAcquisitions([input], context, [original], content).items).toHaveLength(1);
+        original.evidence_narrative.version = 2;
+        expect(mapVectFoxAcquisitions([input], context, [original], content).items).toHaveLength(0);
+        original.evidence_narrative = { version: 1, text: 'Something else happened.' };
+        expect(mapVectFoxAcquisitions([input], context, [original], content).items).toHaveLength(0);
+    });
     test.each([
         ['sealed letter', [acquisition('Alex delivered a sealed letter.')], ['confession']],
         ['mention-only', [], ['confession']],

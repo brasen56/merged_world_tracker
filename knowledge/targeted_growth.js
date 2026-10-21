@@ -54,39 +54,49 @@ export async function planTargetedCapture(name, { signal } = {}) {
     const plan = { api: value.api, token: value.status.scope_token,
         context: captureHistoryContext(name, info.uid), batches: [], skipped: 0, unavailable: 0, budgetOmitted: 0, chars: 0 };
     check(plan, signal);
-    const result = requireResult(await plan.api.findCandidateWindows({ subjects: [{ name, aliases: plan.context.aliases }],
-        scope: { kind: 'current_chat' }, scope_token: plan.token, max_windows: TARGETED_LIMITS.windows }), plan.token);
-    check(plan, signal);
     const coverage = getEvidenceFile(name, false)?.meta?.targetedCoverage || [];
     const seen = new Set();
     let count = 0;
-    for (const window of (result.windows || []).slice(0, TARGETED_LIMITS.windows)) {
-        const refs = (window.source_refs || []).slice(0, TARGETED_LIMITS.perWindow);
-        const resolved = requireResult(await plan.api.resolveSources({ scope_token: plan.token, sources: refs }), plan.token);
+    let result, offset = 0;
+    // Bound archive reads independently of generation (which remains <=4 calls).
+    for (let page = 0; page < 5000; page++) {
+        result = requireResult(await plan.api.findCandidateWindows({ subjects: [{ name, aliases: plan.context.aliases }],
+            scope: { kind: 'current_chat' }, scope_token: plan.token, max_windows: TARGETED_LIMITS.windows, offset,
+            retain_sources: plan.batches.flatMap(batch => batch.refs) }), plan.token);
         check(plan, signal);
-        if (!Array.isArray(resolved.sources) || resolved.sources.length !== refs.length) throw new Error('Invalid source response.');
-        const sources = [], records = [], usedRefs = [], lines = [];
-        let chars = 0;
-        for (let index = 0; index < resolved.sources.length; index++) {
-            const source = resolved.sources[index];
-            if (source.ref !== (typeof refs[index] === 'string' ? refs[index] : refs[index].ref)) throw new Error('Mismatched source response.');
-            if (source.status !== 'verified' || !source.message || source.message.is_system
-                || !source.source_chat_id || !source.current_fingerprint) { plan.unavailable++; continue; }
-            const record = sourceRecord(source, plan.context);
-            const key = JSON.stringify([record.chat, record.npc, record.identity, record.fingerprint]);
-            if (seen.has(key) || covered(record, coverage)) { plan.skipped++; continue; }
-            seen.add(key);
-            const text = stripNonNarrative(source.message.mes, { preserveOffScreen: false }).trim();
-            const line = `[${sources.length}] ${source.message.name || 'Unknown'}: ${text}`;
-            if (count >= TARGETED_LIMITS.messages || chars + line.length > TARGETED_LIMITS.perWindowChars
-                || plan.chars + line.length > TARGETED_LIMITS.chars) { plan.budgetOmitted++; continue; }
-            sources.push({ msg: structuredClone(source.message), promptIndex: sources.length,
-                liveIndex: source.recovered_ils ? null : source.visible_index, identity: record.identity });
-            records.push(record); usedRefs.push(refs[index]); lines.push(line);
-            chars += line.length; plan.chars += line.length; count++;
+        for (const window of (result.windows || []).slice(0, TARGETED_LIMITS.windows)) {
+            if (plan.batches.length >= TARGETED_LIMITS.calls) break;
+            const refs = (window.source_refs || []).slice(0, TARGETED_LIMITS.perWindow);
+            const resolved = requireResult(await plan.api.resolveSources({ scope_token: plan.token, sources: refs }), plan.token);
+            check(plan, signal);
+            if (!Array.isArray(resolved.sources) || resolved.sources.length !== refs.length) throw new Error('Invalid source response.');
+            const sources = [], records = [], usedRefs = [], lines = [];
+            let chars = 0;
+            for (let index = 0; index < resolved.sources.length; index++) {
+                const source = resolved.sources[index];
+                if (source.ref !== (typeof refs[index] === 'string' ? refs[index] : refs[index].ref)) throw new Error('Mismatched source response.');
+                if (source.status !== 'verified' || !source.message || source.message.is_system
+                    || !source.source_chat_id || !source.current_fingerprint) { plan.unavailable++; continue; }
+                const record = sourceRecord(source, plan.context);
+                const key = JSON.stringify([record.chat, record.npc, record.identity, record.fingerprint]);
+                if (seen.has(key) || covered(record, coverage)) { plan.skipped++; continue; }
+                seen.add(key);
+                const text = stripNonNarrative(source.message.mes, { preserveOffScreen: false }).trim();
+                const line = `[${sources.length}] ${source.message.name || 'Unknown'}: ${text}`;
+                if (count >= TARGETED_LIMITS.messages || chars + line.length > TARGETED_LIMITS.perWindowChars
+                    || plan.chars + line.length > TARGETED_LIMITS.chars) { plan.budgetOmitted++; continue; }
+                sources.push({ msg: structuredClone(source.message), promptIndex: sources.length,
+                    liveIndex: source.recovered_ils ? null : source.visible_index, identity: record.identity });
+                records.push(record); usedRefs.push(refs[index]); lines.push(line);
+                chars += line.length; plan.chars += line.length; count++;
+            }
+            if (sources.length) plan.batches.push({ sources, records, refs: usedRefs, text: lines.join('\n'),
+                eventRefs: window.event_refs, windowRef: window.window_ref });
         }
-        if (sources.length) plan.batches.push({ sources, records, refs: usedRefs, text: lines.join('\n'),
-            eventRefs: window.event_refs, windowRef: window.window_ref });
+        if (plan.batches.length >= TARGETED_LIMITS.calls || count >= TARGETED_LIMITS.messages
+            || plan.chars >= TARGETED_LIMITS.chars || result.next_offset == null) break;
+        if (!Number.isInteger(result.next_offset) || result.next_offset <= offset) throw new Error('Invalid candidate pagination.');
+        offset = result.next_offset;
     }
     plan.coverage = result.coverage;
     const preview = { name, windows: plan.batches.length, messages: count, chars: plan.chars,
@@ -106,6 +116,16 @@ export async function runTargetedCapture(preview, { signal, onProgress } = {}) {
     running.add(name); plans.delete(preview);
     const totals = { added: 0, skipped: 0, verified: 0, calls: 0, messages: 0, inputChars: 0,
         tokenUsage: null, tokenUsageReason: 'The capture provider returns text only; exact token usage is unavailable.' };
+    async function validateSources(batch) {
+        const current = requireResult(await plan.api.resolveSources({ scope_token: plan.token, sources: batch.refs }), plan.token);
+        check(plan, signal);
+        if (current.sources?.length !== batch.records.length || current.sources.some((source, index) =>
+            source.ref !== (typeof batch.refs[index] === 'string' ? batch.refs[index] : batch.refs[index].ref)
+            || source.status !== 'verified' || source.current_fingerprint !== batch.records[index].fingerprint
+            || JSON.stringify(source.message) !== JSON.stringify(batch.sources[index].msg))) {
+            throw new Error('Original source changed during capture. Uncommitted work remains retryable.');
+        }
+    }
     try {
         for (const batch of plan.batches) {
             check(plan, signal);
@@ -118,16 +138,11 @@ export async function runTargetedCapture(preview, { signal, onProgress } = {}) {
                 batch.records = pending.map(index => batch.records[index]);
                 batch.text = batch.sources.map((source, index) => `[${index}] ${source.msg.name || 'Unknown'}: ${stripNonNarrative(source.msg.mes, { preserveOffScreen: false }).trim()}`).join('\n');
             }
+            await validateSources(batch);
             const observations = await captureEvidence(name, plan.context.uid, batch, { retries: 0, signal, contextLimit: 2000 });
             totals.calls++; totals.inputChars += batch.text.length;
             check(plan, signal);
-            const current = requireResult(await plan.api.resolveSources({ scope_token: plan.token, sources: batch.refs }), plan.token);
-            check(plan, signal);
-            if (current.sources?.length !== batch.records.length || current.sources.some((source, index) =>
-                source.status !== 'verified' || source.current_fingerprint !== batch.records[index].fingerprint
-                || JSON.stringify(source.message) !== JSON.stringify(batch.sources[index].msg))) {
-                throw new Error('Original source changed during capture. Uncommitted work remains retryable.');
-            }
+            await validateSources(batch);
             const stats = appendRawObservations(name, observations, null, null, batch.records);
             totals.added += stats.added; totals.skipped += stats.skipped;
             totals.verified += observations.filter(o => o.verified).length;

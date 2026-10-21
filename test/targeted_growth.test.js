@@ -40,6 +40,34 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Targeted Growth', () => {
+    test.each(['invalid_reference', 'changed'])('rejects %s sources before spending a generation call', async kind => {
+        const preview = await planTargetedCapture('Mara');
+        if (kind === 'invalid_reference') api.resolveSources.mockResolvedValue({ ok: false, error: { code: kind } });
+        else source.current_fingerprint = 'edited';
+        await expect(runTargetedCapture(preview)).rejects.toThrow(/invalid_reference|source changed/);
+        expect(calls).toHaveLength(0);
+        expect(getEvidenceFile('Mara', false)?.meta?.targetedCoverage).toBeUndefined();
+    });
+    test('passes the bounded retained plan references to subsequent candidate pages', async () => {
+        api.findCandidateWindows.mockImplementation(async ({ offset }) => ({ ok: true, scope_token: 'token', coverage: {},
+            next_offset: offset === 0 ? 4 : null,
+            windows: [{ window_ref: 'one', event_refs: ['event-a'], source_refs: [{ ref: source.ref }] }] }));
+        await planTargetedCapture('Mara');
+        expect(api.findCandidateWindows.mock.calls[1][0].retain_sources).toEqual([{ ref: source.ref }]);
+    });
+    test('continues past covered and unavailable pages to fresh scenes', async () => {
+        await runTargetedCapture(await planTargetedCapture('Mara'));
+        const fresh = { ...structuredClone(source), ref: 'fresh', leaf_identity: { id: 'fresh' } };
+        api.findCandidateWindows.mockImplementation(async ({ offset }) => ({ ok: true, scope_token: 'token', coverage: {},
+            next_offset: offset < 8 ? offset + 4 : null,
+            windows: [{ window_ref: `page:${offset}`, event_refs: ['event'],
+                source_refs: [{ ref: offset === 0 ? source.ref : offset === 4 ? 'missing' : 'fresh' }] }] }));
+        api.resolveSources.mockImplementation(async ({ sources }) => ({ ok: true, scope_token: 'token', sources: sources.map(ref =>
+            ref.ref === 'fresh' ? fresh : ref.ref === 'missing' ? { ref: 'missing', status: 'missing' } : source) }));
+        const preview = await planTargetedCapture('Mara');
+        expect(preview).toMatchObject({ messages: 1, windows: 1, skipped: 1, unavailable: 1 });
+        expect(api.findCandidateWindows.mock.calls.at(-1)[0].offset).toBe(8);
+    });
     test.each([12, 0])('ID-less coverage survives a shifted expanded index (%i)', async shifted => {
         source.leaf_identity = { id: null, mesid: null };
         source.expanded_index = 5;
