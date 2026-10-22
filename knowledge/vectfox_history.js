@@ -44,11 +44,11 @@ function requireResult(result) {
 }
 
 const hints = {
-    background: /introduc|revel|defin|backstory|consequence/i,
-    role: /faction|state|occupation|responsib|promotion/i,
-    where_to_find: /location|routine|base|residen/i,
-    read_on_pc: /relationship|dialogue|interaction/i,
-    agenda: /goal|conflict|decision|promise/i,
+    background: /^(character_introduction|revelation|discovery|betrayal|death)$/,
+    role: /^(faction_change|character_state_change)$/,
+    where_to_find: /^(character_introduction|character_state_change|dialogue_significant|revelation)$/,
+    read_on_pc: /^(relationship_change|dialogue_significant|betrayal|promise_or_oath)$/,
+    agenda: /^(main_quest_update|side_quest_update|promise_or_oath|combat|betrayal)$/,
 };
 
 function clip(value, max = 900) { return typeof value === 'string' ? value.slice(0, max) : ''; }

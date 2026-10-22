@@ -14,8 +14,7 @@ export function verifyGrowthObservations(observations, sources) {
         const source = sources[index < 0 ? preferred : index];
         const identity = source && (source.identity || (source.msg.id != null ? `id:${source.msg.id}`
             : source.msg.extra?.mesid != null ? `mesid:${source.msg.extra.mesid}`
-                : source.msg.extra?.mwt_uuid ? `uuid:${source.msg.extra.mwt_uuid}`
-                    : JSON.stringify(['original', source.promptIndex, source.msg.send_date, source.msg.name, source.msg.mes])));
+                : source.msg.extra?.mwt_uuid ? `uuid:${source.msg.extra.mwt_uuid}` : null));
         return {
             category: ['trait', 'value', 'speech'].includes(o.category) ? o.category : 'trait',
             claim: o.claim.trim(), quote: o.quote.trim(), verified: index >= 0,

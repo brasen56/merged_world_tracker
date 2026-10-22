@@ -42,7 +42,7 @@ beforeEach(() => {
     state.wiScript = { loadWorldInfo: async () => ({ entries: { 7: structuredClone(entry) } }), saveWorldInfo: saves };
     loadCleanupBook.mockImplementation(async () => ({ entries: { 7: structuredClone(entry) } }));
     hostCacheConflict.mockReturnValue(null);
-    events = [event('early', { event_type: 'introduction', summary: 'Mara was a naval quartermaster.' }),
+    events = [event('early', { event_type: 'character_introduction', summary: 'Mara was a naval quartermaster.' }),
         event('late', { event_type: 'revelation', summary: 'Mara reveals she founded the port.' })];
     sourceStatus = 'verified';
     status = { ready: true, scope_token: 'scope-1', state: 'ready',
@@ -110,6 +110,13 @@ describe('VectFox history compatibility and scope', () => {
 });
 
 describe('bounded field selection', () => {
+    test('Where to Find does not promote temporary location changes above defining history', () => {
+        const selected = selectHistoryEvents([
+            event('home', { event_type: 'character_introduction' }),
+            event('visit', { event_type: 'location_change' }),
+        ], ['where_to_find']);
+        expect(selected.map(item => item.record.event_id)).toEqual(['home', 'visit']);
+    });
     test('preserves actual API chronology fields with bounded strings', () => {
         const selected = selectHistoryEvents([event('dated', {
             DateTime: '2026-10-19T12:00:00Z', scene_time: 'Noon on the final day',

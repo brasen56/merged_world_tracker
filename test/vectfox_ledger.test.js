@@ -60,6 +60,15 @@ describe('Phase 4b deterministic mapping', () => {
         original.evidence_narrative = { version: 1, text: 'Something else happened.' };
         expect(mapVectFoxAcquisitions([input], context, [original], content).items).toHaveLength(0);
     });
+    test('folds curly and straight quotes the same way VectFox validated them', () => {
+        const input = event([acquisition('Alex asked Ranger to keep the letter safe.', {
+            evidence: [{ source_index: 0, source_ref: 'vf:e:source:0', quote: '"Keep it safe," Alex said.' }],
+        })]);
+        const original = { ...source(), evidence_narrative: { version: 1, text: 'Ranger nodded. “Keep it safe,” Alex said.' } };
+        expect(mapVectFoxAcquisitions([input], context, [original], content).items).toHaveLength(1);
+        original.evidence_narrative.text = 'Ranger nodded. “Burn it,” Alex said.';
+        expect(mapVectFoxAcquisitions([input], context, [original], content).items).toHaveLength(0);
+    });
     test.each([
         ['sealed letter', [acquisition('Alex delivered a sealed letter.')], ['confession']],
         ['mention-only', [], ['confession']],
@@ -76,7 +85,12 @@ describe('Phase 4b deterministic mapping', () => {
         for (const item of acquisitions) {
             expect(persisted).toContain(item.claim);
             expect(persisted).toContain(`VectFox (${item.basis})`);
-            expect(persisted).toContain('vf:e:source:0');
+            expect(persisted).not.toContain('vf:e:source:0');
+            expect(persisted).not.toContain('[VectFox evidence:');
+            expect(result.records.find(record => record.acquisition.claim === item.claim)).toMatchObject({
+                ledger_line: expect.stringContaining(item.claim),
+                provenance: [expect.objectContaining({ quote: 'supported acquisition', fingerprint: 'fp' })],
+            });
             if (item.uncertainty) expect(persisted).toContain(item.uncertainty);
         }
     });
@@ -188,7 +202,8 @@ describe('retrieval and guarded acceptance', () => {
         expect(written.success).toBe(true);
         expect(saveCleanupBook).toHaveBeenCalled();
         expect(result.merged).toContain('[fact] Alex delivered a sealed letter.');
-        expect(result.merged).toContain('vf:e:source:0');
+        expect(result.merged).not.toContain('vf:e:source:0');
+        expect(result.records[0].provenance[0]).toMatchObject({ fingerprint: 'fp', quote: 'supported acquisition' });
     });
     test('unavailable capability differs from successful empty history', async () => {
         events = [];

@@ -124,6 +124,12 @@ async function handleAccept(item, text, keywords, _el) {
                 type: item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
                 keywords,
                 lastUpdated: Date.now(),
+                ...(item.vectfoxLedgerProvenance ? { vectfoxLedgerProvenance: {
+                    ...(reg[regKey]?.vectfoxLedgerProvenance || {}),
+                    ...Object.fromEntries(item.vectfoxLedgerProvenance
+                        .filter(record => text.split('\n').some(line => line.trim() === record.ledger_line))
+                        .map(record => [record.ledger_line, record.provenance])),
+                } } : {}),
             };
             saveRegistry(reg);
             // TODO §3 (per-field dossier refresh): stamp per-field watermarks so
@@ -614,6 +620,7 @@ function wireNpcListEvents(el, _type) {
                     keywords: reg.keywords || [name], newKnowledge: result.items,
                     historyEvidence: result.historyEvidence, historyRevision: result.historyRevision,
                     vectfoxLedgerDeferred: result.deferred };
+                item.vectfoxLedgerProvenance = result.records;
                 state.stagingItems.push(item);
                 state.activeItemId = item.id;
                 state.activeSubTab = 'staging';

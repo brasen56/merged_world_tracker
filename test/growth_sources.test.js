@@ -31,7 +31,7 @@ describe('Shared Growth source verification', () => {
             promptIndex: 40, liveIndex: null, ts: 12345 }];
         const result = verifyGrowthObservations([{ claim: 'Keeps promises', quote: 'I will keep my promise.', msgIdx: 40 }], sources);
         expect(result[0]).toMatchObject({ verified: true, msgIdx: null, ts: 12345 });
-        expect(result[0].sourceIdentity).toContain('original');
+        expect(result[0].sourceIdentity).toBeUndefined();
     });
     test('summary text cannot verify and absent quotes stay flagged', () => {
         const sources = [{ msg: { mes: 'I will keep my promise.', extra: { ILS_Data: {} } }, promptIndex: 0 }];

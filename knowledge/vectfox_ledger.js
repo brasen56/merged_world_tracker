@@ -9,14 +9,17 @@ import {
 const normalize = value => value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLowerCase();
 const bases = ['witnessed', 'told', 'document', 'rumor', 'institutional_access', 'other'];
 const statuses = ['fact', 'belief', 'rumor'];
-const quoteText = value => value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
+// Same quote folding as VectFox's acquisition check (core/event-knowledge.js), so
+// a quote VectFox accepted is not deferred here over curly vs straight quotes.
+const quoteText = value => value.normalize('NFKC').replace(/[‘’‚‛]/gu, "'")
+    .replace(/[“”„‟]/gu, '"').replace(/\s+/gu, ' ').trim();
 // Older VectFox releases expose only the raw original. Never interpret an
 // unknown representation version as evidence we understand.
 const evidenceText = source => source?.evidence_narrative == null ? source?.message?.mes
     : source.evidence_narrative.version === 1 ? source.evidence_narrative.text : null;
 
-/** The text ledger deliberately carries attribution in-band, so export/restore,
- * manual review and existing formatters cannot silently drop epistemic metadata.
+/** The text ledger carries epistemic meaning and basis, not session handles.
+ * Durable source receipts live separately in NPC registry metadata.
  * Overlong items are deferred whole, never clipped or promoted to facts.
  */
 export function mapVectFoxAcquisitions(events, context, sources, content) {
@@ -67,14 +70,22 @@ export function mapVectFoxAcquisitions(events, context, sources, content) {
             const key = normalize(meaning);
             if (seen.has(key) || [...seen].some(value => value.startsWith(`${key} [vectfox evidence: `))
                 || (acquisition.epistemic_status === 'fact' && !acquisition.uncertainty.trim() && accepted.has(normalize(claim)))) continue;
-            const item = { fact: `${meaning} [VectFox evidence: ${[...new Set(evidence.map(e => e.source_ref))].join(', ')}]`,
+            const item = { fact: meaning,
                 source: `VectFox (${acquisition.basis})` };
             const checked = validateKnowledgeList([item]);
             if (checked.rejected.length) { deferred.push({ event_ref: event.event_ref, reason: checked.rejected[0].reason }); continue; }
             if (items.length >= 30) { deferred.push({ event_ref: event.event_ref, reason: '30-item proposal limit' }); continue; }
             seen.add(key);
             items.push(item);
-            records.push({ event_ref: event.event_ref, acquisition: structuredClone(acquisition) });
+            records.push({ event_ref: event.event_ref, acquisition: structuredClone(acquisition),
+                ledger_line: `- ${item.fact} via ${item.source}`,
+                provenance: evidence.map(e => {
+                    const source = checks.get(e.source_ref);
+                    return { quote: e.quote, fingerprint: source.current_fingerprint ?? null,
+                        source_chat_id: source.source_chat_id ?? event.source_chat_id ?? null,
+                        leaf_identity: structuredClone(source.leaf_identity ?? null),
+                        send_date: source.message?.send_date ?? null };
+                }) });
         }
     }
     return { items, records, deferred };
