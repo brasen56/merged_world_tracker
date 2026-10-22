@@ -145,16 +145,19 @@ export async function prepareVectFoxHistory(context, fields, { scope = { kind: '
         sourceCount += (event.source_refs || []).length;
         return sourceCount <= 500;
     });
-    const sourceRefs = bounded.flatMap(({ event }) => event.source_refs || []);
-    const resolved = requireResult(await connection.api.resolveSources({ scope_token: token, sources: sourceRefs }));
-    if (resolved.scope_token !== token || resolved.sources?.length !== sourceRefs.length) throw new Error('Invalid source resolution response.');
-    if (resolved.sources.some(s => ['changed', 'missing'].includes(s.status))) {
-        throw new Error('Historical sources changed or are missing. Repair/re-extract those events before using them.');
-    }
+    const requestedRefs = bounded.flatMap(({ event }) => event.source_refs || []);
+    const resolved = requireResult(await connection.api.resolveSources({ scope_token: token, sources: requestedRefs }));
+    if (resolved.scope_token !== token || resolved.sources?.length !== requestedRefs.length
+        || resolved.sources.some((source, index) => source.ref !== requestedRefs[index].ref)) throw new Error('Invalid source resolution response.');
+    const invalidRefs = new Set(resolved.sources.filter(s => ['changed', 'missing'].includes(s.status)).map(s => s.ref));
+    const usable = bounded.filter(({ event }) => !(event.source_refs || []).some(ref => invalidRefs.has(ref.ref)));
+    const sourceRefs = usable.flatMap(({ event }) => event.source_refs || []);
+    const retainedRefs = new Set(sourceRefs.map(ref => ref.ref));
     const history = { context, scope: structuredClone(scope), scope_token: token,
-        fields: fields.slice(), events: bounded.map(s => s.record), sourceRefs,
-        sourceChecks: resolved.sources.map(sourceCheck), coverage: result.coverage,
-        selection: { candidates: result.events.length, selected: bounded.length,
+        fields: fields.slice(), events: usable.map(s => s.record), sourceRefs,
+        sourceChecks: resolved.sources.filter(source => retainedRefs.has(source.ref)).map(sourceCheck), coverage: result.coverage,
+        selection: { candidates: result.events.length, selected: usable.length,
+            excluded_sources: bounded.length - usable.length,
             limited: bounded.length < result.events.length, max_events: HISTORY_MAX_EVENTS, max_chars: HISTORY_MAX_CHARS } };
     await validateVectFoxHistory(history);
     return history;
@@ -200,5 +203,7 @@ export async function validateVectFoxHistory(history) {
 }
 
 export function historySummary(history) {
-    return `${history.scope.kind === 'current_chat' ? 'Current chat' : `Same-continuity collections: ${history.scope.collections.join(', ')}`} · ${history.events.length} selected event(s) from ${history.selection.candidates} retrieved. ${history.selection.limited ? 'Selection limited by fields/budget. ' : ''}${history.coverage?.truncated ? 'Archive retrieval truncated. ' : ''}${history.coverage?.partial ? 'Partial archive coverage. ' : ''}${history.coverage?.sampled ? 'Sampled history. ' : ''}${history.sourceChecks.filter(s => s.status !== 'verified').length} unverified source reference(s).`;
+    const excluded = history.selection.excluded_sources || 0;
+    const exclusionNote = excluded ? `${excluded} event(s) excluded because sources changed or are missing. ` : '';
+    return `${history.scope.kind === 'current_chat' ? 'Current chat' : `Same-continuity collections: ${history.scope.collections.join(', ')}`} · ${history.events.length} selected event(s) from ${history.selection.candidates} retrieved. ${exclusionNote}${history.selection.limited ? 'Selection limited by fields/budget. ' : ''}${history.coverage?.truncated ? 'Archive retrieval truncated. ' : ''}${history.coverage?.partial ? 'Partial archive coverage. ' : ''}${history.coverage?.sampled ? 'Sampled history. ' : ''}${history.sourceChecks.filter(s => s.status !== 'verified').length} unverified source reference(s).`;
 }

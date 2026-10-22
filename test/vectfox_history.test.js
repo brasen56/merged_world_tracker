@@ -191,10 +191,24 @@ describe('refresh and review safety', () => {
         expect(saves).not.toHaveBeenCalled();
     });
 
-    test.each(['changed', 'missing'])('refuses %s sources before generation', async value => {
+    test.each(['changed', 'missing'])('excludes %s sources rather than blocking refresh', async value => {
         sourceStatus = value;
-        await expect(runDossierFieldRefresh(name, 7, ['background'], { includeHistory: true })).rejects.toThrow(/sources changed or are missing/);
-        expect(generation).not.toHaveBeenCalled();
+        const history = await prepare();
+        expect(history.events).toEqual([]);
+        expect(history.sourceRefs).toEqual([]);
+        expect(history.sourceChecks).toEqual([]);
+        expect(historySummary(history)).toContain('2 event(s) excluded because sources changed or are missing');
+        await expect(validateVectFoxHistory(history)).resolves.toBeUndefined();
+    });
+
+    test('keeps valid events and their checks when another event has an invalid source', async () => {
+        api.resolveSources.mockImplementation(async request => ({ ok: true, scope_token: status.scope_token,
+            sources: request.sources.map(ref => ({ ...ref, status: ref.ref === 'source:early' ? 'changed' : 'verified',
+                current_fingerprint: 'fingerprint' })) }));
+        const history = await prepare();
+        expect(history.events).toHaveLength(1);
+        expect(history.sourceRefs.map(ref => ref.ref)).toEqual(['source:late']);
+        expect(history.selection.excluded_sources).toBe(1);
     });
 
     test('revalidates sources and scope before acceptance', async () => {
