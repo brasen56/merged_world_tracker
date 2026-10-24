@@ -12,6 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.13.1]
+
+### Added
+
+- **Chronicle: "Max chat per entry" setting.** The message window an entry
+  is generated from was a fixed 100,000 characters (~25k tokens), larger
+  than many local models' whole context. Chronicle Settings now has a
+  **Max chat per entry** field (characters, 5,000–100,000, default 100,000)
+  so local-model users can lower it. A longer backlog becomes several
+  entries instead of one. Regenerate refuses an entry whose range no longer
+  fits the lowered budget, and the refusal names the setting.
+
+### Fixed
+
+- **Chronicle: local models continued the roleplay instead of writing an
+  entry.** The instructions went first as the system prompt, then the whole
+  message window, with nothing after it, so the last thing the model read
+  was a chat turn. On a long window a small model lost the instructions and
+  kept writing the scene. The empty-response reminder never caught it,
+  because that output wasn't empty. Generate, Regenerate and Consolidate
+  now end their prompt with a closing instruction ("Write the chronicle
+  entry… Begin immediately with `## Summary`… Do NOT continue the
+  roleplay"), the same pattern World State, Knowledge, Story Planner and
+  Interiority already use.
+
 ## [2.13.0]
 
 ### Added

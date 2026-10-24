@@ -20,6 +20,7 @@ import {
     getChronicleData, setChronicleDataChecked, getSnapshots,
     getContentEl, scSetStatus, getMessageCountSinceLastSnapshot,
     showConfirm,
+    getWindowChars, clampWindowChars, WINDOW_CHARS_DEFAULT, WINDOW_CHARS_MIN,
 } from './data.js';
 
 import {
@@ -319,6 +320,7 @@ function showSettingsModal() {
             <label for="sc-sync-ws"><input type="checkbox" id="sc-sync-ws" ${s.syncWorldState !== false ? 'checked' : ''}> Sync World State</label>
         </div>
         <div style="margin-top:8px"><label for="sc-auto-threshold">Auto-snapshot threshold: <input type="number" id="sc-auto-threshold" class="mwt-input" style="width:80px;display:inline-block" value="${s.autoSnapshotThreshold || 40}" min="5" max="500"></label> <span style="font-size:11px;color:var(--mwt-text-dim)">messages between auto-generations</span></div>
+        <div style="margin-top:8px"><label for="sc-window-chars">Max chat per entry: <input type="number" id="sc-window-chars" class="mwt-input" style="width:100px;display:inline-block" value="${getWindowChars(s)}" min="${WINDOW_CHARS_MIN}" max="${WINDOW_CHARS_DEFAULT}" step="1000"></label> <span style="font-size:11px;color:var(--mwt-text-dim)">characters (~4 per token; ${WINDOW_CHARS_DEFAULT} ≈ ${Math.round(WINDOW_CHARS_DEFAULT / 4000)}k tokens). Lower it if your model's context is small; the instructions, World State, and reply need room on top. Longer backlogs become several entries.</span></div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button><button id="sc-cancel-settings" class="mwt-btn">Cancel</button></div>
     </div>`;
     wireApiSettingsFields(el, apiFieldOpts);
@@ -330,6 +332,7 @@ function showSettingsModal() {
             filterOoc: el.querySelector('#sc-filter-ooc')?.checked ?? true,
             autoSnapshot: el.querySelector('#sc-auto-snapshot')?.checked ?? false,
             autoSnapshotThreshold: Number(el.querySelector('#sc-auto-threshold')?.value) || 40,
+            maxWindowChars: clampWindowChars(el.querySelector('#sc-window-chars')?.value),
             syncWorldState: el.querySelector('#sc-sync-ws')?.checked ?? true,
         });
         renderContent();

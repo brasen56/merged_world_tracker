@@ -33,6 +33,12 @@ export const AUTO_SUGGEST_AFTER = 40;
 export const MAX_TRASH_SIZE = 50;
 export const MAX_ENTRY_WORD_COUNT = 2000;
 export const MAX_CHARACTERS = 20;
+// Message-window budget ("Max chat per entry"), in characters. The default is
+// also the ceiling: 100k was the fixed budget before it became a setting, and
+// it is already ~25k tokens. Local models with a small context lower it. The
+// floor keeps a mistyped value from cutting every entry down to a sentence.
+export const WINDOW_CHARS_DEFAULT = 100000;
+export const WINDOW_CHARS_MIN = 5000;
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -59,10 +65,29 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
         filterOoc: true,
         autoSnapshot: false,
         autoSnapshotThreshold: 40,
+        maxWindowChars: WINDOW_CHARS_DEFAULT,
         syncWorldState: true,
     },
     logPrefix: '[MWT:Chronicle]',
 });
+
+/**
+ * Clamp a "Max chat per entry" value into [WINDOW_CHARS_MIN,
+ * WINDOW_CHARS_DEFAULT]; anything non-numeric falls back to the default.
+ *
+ * @param {*} value
+ * @returns {number}
+ */
+export function clampWindowChars(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return WINDOW_CHARS_DEFAULT;
+    return Math.min(WINDOW_CHARS_DEFAULT, Math.max(WINDOW_CHARS_MIN, Math.floor(n)));
+}
+
+/** The message-window budget currently in effect. */
+export function getWindowChars(settings = getSettings()) {
+    return clampWindowChars(settings?.maxWindowChars);
+}
 
 // ─── Shared mutable state ────────────────────────────────────────────────────
 
@@ -478,13 +503,14 @@ export function buildMessageWindow(fromIndex, toIndex, startOffset = 0) {
     if (end <= start) return { text: '', lastMsg: null, fromIndex: start, toIndex: start - 1, toCharOffset: null, complete: true };
     const lines = [];
     let total = 0;
-    // Character budget for the assembled message window.  This is deliberately
+    // Character budget for the assembled message window — the user's "Max chat
+    // per entry" setting (default and ceiling 100k). This is deliberately
     // smaller than the `maxChars = 500000` budget used by core/context.js's
     // getRecentMessages(): chronicle snapshots feed a focused window into a
     // summarisation prompt, whereas getRecentMessages() is used for raw
     // context-building where more history is desirable.  Keeping these
     // independent lets each caller tune its own cost/quality trade-off.
-    const MAX = 100000;
+    const MAX = getWindowChars();
     let coveredEnd = start - 1;
     let lastMsg = null;
     // Character offset into the FIRST message's stripped text where this

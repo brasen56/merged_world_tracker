@@ -22,13 +22,14 @@ import { captureSceneAnchorBaseline, updateSceneAnchor } from '../world_state/sc
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { chronicleSchema } from './schema.js';
 
-import { CHRONICLE_SYSTEM_PROMPT, CONSOLIDATE_SYSTEM_PROMPT } from './prompts.js';
+import { CHRONICLE_SYSTEM_PROMPT, CONSOLIDATE_SYSTEM_PROMPT, CONSOLIDATE_CLOSING, buildChronicleUserContent } from './prompts.js';
 import {
     state, MAX_ENTRY_WORD_COUNT, MAX_TRASH_SIZE,
     getSettings,
     getChronicleData, setChronicleData, setChronicleDataChecked, getSnapshots,
     getCharactersInRange, scSetStatus, getVisibleChronicleView,
     makeAnchor, resolveAnchor, resumeIndexByTime, buildMessageWindow,
+    getWindowChars, WINDOW_CHARS_DEFAULT,
     getReceiptIdentity,
     _render,
 } from './data.js';
@@ -250,8 +251,8 @@ export async function generateSnapshot(isAuto = false) {
         ? resumeAfterLostAnchor(chat, chronicle.lastAnchor, lastCoveredEntry) : index);
     let startOffset = 0;
     // Oversized-message continuation: the newest recorded range may have ended
-    // MID-MESSAGE (toCharOffset — buildMessageWindow cuts a single >100k
-    // message at the budget instead of dropping its tail). chronicle.lastAnchor
+    // MID-MESSAGE (toCharOffset — buildMessageWindow cuts a single message
+    // larger than the window budget instead of dropping its tail). chronicle.lastAnchor
     // is that same boundary message, so when it still resolves AND the recorded
     // range ends at it (the marker belongs to this message, not an older entry
     // whose snapshot was deleted), resume INSIDE it instead of past it;
@@ -317,7 +318,7 @@ export async function generateSnapshot(isAuto = false) {
     const worldDate = scene?.date
         ? `${scene.date.trim()}${scene.time ? ` ${scene.time.trim()}` : ''}`
         : new Date().toLocaleDateString();
-    const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
+    const userContent = buildChronicleUserContent(text, worldState);
 
     try {
         const _scApi1 = resolveApiCall({ moduleSettings: getSettings() });
@@ -478,11 +479,16 @@ export async function regenerateSnapshot(snapshotId) {
     // A window cut inside one oversized message that ends AT `to` is the
     // normal mid-message continuation, which toCharOffset records below.
     if (!complete && coveredTo < to) {
-        scSetStatus(`This entry covers more chat than one regeneration can read (messages ${from}–${to}; only up to ${coveredTo} fits). Edit it by hand, or regenerate the original entries before consolidating.`, 'error');
+        // A lowered "Max chat per entry" can strand entries made under a
+        // larger budget — say how to get them back.
+        const remedy = getWindowChars() < WINDOW_CHARS_DEFAULT
+            ? 'Raise "Max chat per entry" in Chronicle settings, edit it by hand,'
+            : 'Edit it by hand,';
+        scSetStatus(`This entry covers more chat than one regeneration can read (messages ${from}–${to}; only up to ${coveredTo} fits). ${remedy} or regenerate the original entries before consolidating.`, 'error');
         return;
     }
     const worldState = getWorldStateFactual().trim();
-    const userContent = worldState ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}` : `Messages to chronicle:\n${text}`;
+    const userContent = buildChronicleUserContent(text, worldState);
 
     // CHRONICLE-01: Regeneration needs the same scope guard as generation.
     const scopeBefore = captureScope();
@@ -638,7 +644,7 @@ export async function consolidateEntries(ids, baseId = null) {
     const deltaSections = deltas.map((d, i) => `=== SOURCE ENTRY ${i + 1} (chronological order among remaining entries) ===\n${d.text}`).join('\n\n');
     const userContent = `Timeline order (earliest to latest):\n${chronological.map((entry, i) =>
         `${i + 1}. ${entry.id} — ${entry.worldDate || entry.createdAt}${entry.id === base.id ? ' (designated foundation)' : ''}`).join('\n')}\n` +
-        `The timeline endpoint is entry ${chronological.at(-1).id}; take the Time Anchor from that entry, even if it is BASE.\n\n${baseSection}\n\n${deltaSections}`;
+        `The timeline endpoint is entry ${chronological.at(-1).id}; take the Time Anchor from that entry, even if it is BASE.\n\n${baseSection}\n\n${deltaSections}\n\n${CONSOLIDATE_CLOSING}`;
 
     // Pass entries to the preview in base-first order so the preview's
     // index-0-is-BASE labelling matches the actual consolidation intent.
