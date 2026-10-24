@@ -86,8 +86,8 @@ describe('Ambient Phase 4 planner integration', () => {
     });
 
     test('world-pressure lens explicitly defers weather ownership to Ambient Conditions', () => {
-        expect(buildStoryPlanSystemPrompt(['emerging'], 'world-pressure')).toContain('weather comes from that module');
-        expect(buildStoryPlanSystemPrompt(['emerging'], 'open')).not.toContain('weather comes from that module');
+        expect(buildStoryPlanSystemPrompt(['emerging'], 'world-pressure')).toContain('weather and sky conditions come from that module');
+        expect(buildStoryPlanSystemPrompt(['emerging'], 'open')).not.toContain('weather and sky conditions come from that module');
     });
 
     test('pin applies only inside its interval, including forecast expiry and rewind', () => {

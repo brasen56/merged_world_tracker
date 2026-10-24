@@ -34,6 +34,66 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('Phase 5 defaults are read-only, shown in Overview, and not saved by unrelated settings', () => {
+        saveSettings(config);
+        ctx.saveMetadataDebounced.mockClear();
+        const before = JSON.stringify(ctx.chatMetadata);
+        mount();
+        expect(el('latitude').value).toBe('');
+        expect(el('latitude').placeholder).toContain('45°');
+        expect(getSettings().latitude).toBeNull();
+        const status = getAmbientStatus();
+        const overview = renderOverviewSnapshot({ ambient: { ok: true, value: status } });
+        expect(overview).toContain('Latitude 45° (temperate default) — set yours');
+        expect(overview).toContain(status.ambient.daylight.description);
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+        saveSettings({ variability: 0.8 });
+        expect(ctx.chatMetadata.mwt_ambient).not.toHaveProperty('latitude');
+        expect(ctx.chatMetadata.mwt_ambient).not.toHaveProperty('clockAhead');
+    });
+
+    test('Phase 5 controls save explicit latitude and clock offset, and blank restores the derived default', () => {
+        saveSettings(config); mount();
+        el('latitude').value = '60'; el('clock-ahead').value = '1'; click('save');
+        expect(getSettings()).toMatchObject({ latitude: 60, clockAhead: 1 });
+        mount();
+        expect(el('latitude').value).toBe('60');
+        expect(el('clock-ahead').value).toBe('1');
+        el('latitude').value = ''; el('climate').value = 'arctic'; click('save');
+        expect(getAmbientStatus().ambient.daylight).toMatchObject({ latitude: 65, isDefault: true });
+        expect(ctx.chatMetadata.mwt_ambient.latitude).toBeNull();
+    });
+
+    test.each([{ latitude: -1 }, { latitude: 91 }, { latitude: '60' }, { latitude: NaN },
+        { clockAhead: 0.25 }, { clockAhead: 3 }, { clockAhead: -0.5 }, { clockAhead: '1' }])('Phase 5 rejects invalid settings without writes: %j', patch => {
+        saveSettings(config);
+        const before = JSON.stringify(ctx.chatMetadata);
+        expect(() => saveSettings(patch)).toThrow();
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+    });
+
+    test.each(['normal', 'continue', 'regenerate', 'swipe'])('Phase 5 August daylight is shared across %s, command, planner, and Overview', async type => {
+        saveSettings({ ...config, latitude: 60, clockAhead: 1 });
+        ctx.chat = [{ mes: '[In-story time: 05:00 PM, Saturday, August 15, 2026]', is_user: true }];
+        if (type === 'swipe') ctx.chat.push({ mes: '[In-story time: 11:00 PM, Saturday, August 15, 2026]', is_user: false });
+        onGenerationStarted(type);
+        const payload = getInjectedSnapshot('mwt_ambient_injection').payload;
+        const { ambient } = readAmbientConditions(getSettings(), ensureSeed(), type);
+        expect(ambient.daylight.regime).toBe('daylight');
+        expect(payload).toContain(ambient.daylight.description);
+        if (type === 'swipe') {
+            ctx.chat.at(-1).mes = 'A different swiped reply';
+            onGenerationStarted(type);
+            expect(getInjectedSnapshot('mwt_ambient_injection').payload).toBe(payload);
+            ctx.chat.pop();
+        }
+        expect(ambientCommand()).toBe(buildInjectionBody(ambient));
+        expect(renderOverviewSnapshot({ ambient: { ok: true, value: getAmbientStatus() } })).toContain(ambient.daylight.description);
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        expect(buildAmbientPlannerContext()).toContain(ambient.daylight.description);
+    });
+
     test('variability feedback updates live without saving and resets with explicit defaults', () => {
         mount();
         expect(el('variability-value').textContent).toBe('50% — balanced (default)');

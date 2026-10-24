@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v2)
 
-**Status:** Draft for review, revision 2. Nothing here is implemented.
+**Status:** Revision 2. Phase 5 (sun and daylight) implemented; Phases 6–9 remain planned. Optional meteor showers deferred.
 **Written:** 2026-10-23. **Revision 2 (2026-10-24):** folds in `AMBIENT_CONDITIONS_V2_RESPONSE.md` — the sun-time framing, centered phase bins, floored modulo, the southern-hemisphere proxy fix, exact-time evaluation, the moon anchor replacing the moon pin, the calendar panel splitting into its own design doc, and a phase reorder (sun is now Phase 5, moon Phase 6). The response doc and this history remain the discussion record; every formula in revision 1 was re-run and the response's corrections verified independently before folding in. Companion to `AMBIENT_CONDITIONS_DESIGN.md` (v1, Phases 1–4 implemented); that doc stays authoritative for shipped behavior.
 **Decisions continue v1 numbering** (D16+). Phase numbering also continues (v1 shipped Phases 1–4).
 
@@ -108,6 +108,8 @@ The D12 rule survives intact: can nobody in the story change it? Sun/moon/tides 
 Ordering per the response §6: sun first (it is the reported bug), moon second, then the cheap drift check, aftermath, tides; calendar becomes its own doc. Every phase independently shippable.
 
 ### Phase 5 — Sun and daylight
+
+Implemented 2026-10-24: pure solar math and exact-time regimes in `core/ambient_astronomy.js`, read-time climate latitude defaults, optional latitude/clock-ahead settings, half-hour event copy, polar specials, and deterministic latitude-scaled aurora possibilities. Shared projection feeds injection, command, Overview, and planner. Weather bands and weather pins are unchanged. Clock-ahead shifts stated event times only, per the Phase 5 contract; it does not shift the resolved story-hour input. Aurora is a seeded possibility heuristic, not a visibility or geomagnetic forecast. Meteor showers remain deferred.
 
 - Latitude magnitude setting + read-time per-climate default (shown as a default, D18); `clockAhead` optional setting; declination/hour-angle math; three-regime classification at exact time (D22); descriptor vocabulary with half-hour rounding (D20); polar specials; aurora gating (D36); meteor showers last if at all.
 - Tests: the sun-time anchors above (±10 min); polar day/night windows at 68°N including the Dec 1 edge (D21); exact-time swipe stability (swipes of one message yield one descriptor); descriptor-vs-band contradiction present at 55–60°N summer "night" and December afternoon; proxy class tests (manual summer 60° → long-day, winter → short-day, south mirrors north — via |φ|, D27); `clockAhead` shifts stated times only, never internals; default never written to metadata.

@@ -3,6 +3,7 @@ import { getChatMeta, getContextSafe } from '../core/context.js';
 import { patchChatMeta } from '../core/metadata.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS } from '../core/ambient_generator.js';
 import { isAmbientPin } from '../core/ambient_pin.js';
+import { isAmbientClockAhead } from '../core/ambient_astronomy.js';
 
 export const SETTINGS_KEY = 'mwt_ambient';
 
@@ -13,6 +14,8 @@ export function getSettings() {
         enabled: settings.enabled === true,
         climate: settings.climate,
         hemisphere: settings.hemisphere,
+        latitude: settings.latitude ?? null,
+        clockAhead: settings.clockAhead ?? 0,
         manualSeason: settings.manualSeason ?? 'spring',
         variability: settings.variability ?? 0.5,
         setupAsked: settings.setupAsked === true,
@@ -23,6 +26,9 @@ export function getSettings() {
 export function saveSettings(patch) {
     if (!getContextSafe()) throw new Error('No active chat.');
     const next = { ...getSettings(), ...patch };
+    if (Object.hasOwn(patch, 'latitude') && patch.latitude !== null
+        && (!Number.isFinite(patch.latitude) || patch.latitude < 0 || patch.latitude > 90)) throw new Error('Latitude must be a magnitude between 0 and 90, or blank for the climate default.');
+    if (Object.hasOwn(patch, 'clockAhead') && !isAmbientClockAhead(patch.clockAhead)) throw new Error('Clock ahead must be 0–2 hours in half-hour steps.');
     if ((next.enabled || Object.hasOwn(patch, 'climate')) && !isConfigured(next)) throw new Error('Choose a valid climate, hemisphere, season and variability first.');
     if (Object.hasOwn(patch, 'pin') && patch.pin !== null && !isAmbientPin(patch.pin)) throw new Error('Invalid ambient pin.');
     const saved = patchChatMeta(SETTINGS_KEY, patch);

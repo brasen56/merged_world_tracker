@@ -9,6 +9,7 @@ export const EXTENSION_PROMPT_KEY = 'mwt_ambient_injection';
 
 export function buildInjectionBody(ambient) {
     return `Stage direction, not narration. Ambient conditions (authoritative): ${describeConditions(ambient.conditions)} `
+        + (ambient.daylight ? `Daylight: ${ambient.daylight.description} ` : '')
         + `Forecast for the next ${ambient.forecast.band.name} band only: ${describeConditions(ambient.forecast.conditions)} `
         + 'Reference when perceptually relevant; do not re-mention conditions every reply. '
         + 'Conditions shift only as in-story time advances. If this response skips ahead in time, '

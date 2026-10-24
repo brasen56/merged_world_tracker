@@ -5,6 +5,7 @@ import { getEpoch } from '../core/scope.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS, AMBIENT_VOCABULARY } from '../core/ambient_generator.js';
 import { parseAmbientDateTime } from '../core/ambient_time.js';
 import { readAmbientConditions } from '../core/ambient_state.js';
+import { resolveAmbientLatitude } from '../core/ambient_astronomy.js';
 import { getSettings, saveSettings, isConfigured, ensureSeed } from './settings.js';
 import { clearAmbientInjection } from './injection.js';
 
@@ -33,6 +34,11 @@ export function renderAmbientSettings() {
         <div class="mwt-settings-grid">
             ${select('mwt-a-climate', 'Climate', Object.fromEntries(Object.entries(AMBIENT_CLIMATES).map(([key, preset]) => [key, preset.label])), s.climate, true)}
             ${select('mwt-a-hemisphere', 'Hemisphere', { north: 'Northern', south: 'Southern' }, s.hemisphere, true)}
+            <label class="mwt-label" for="mwt-a-latitude">Latitude magnitude (0–90°; hemisphere supplies the sign)</label>
+            <div><input class="mwt-input" id="mwt-a-latitude" type="number" min="0" max="90" step="any" value="${Number.isFinite(s.latitude) ? s.latitude : ''}" placeholder="Climate default: ${resolveAmbientLatitude(s).latitude}°">
+                <p class="mwt-text-dim mwt-text-sm">Leave blank to follow the climate default; no default latitude is saved.</p></div>
+            ${select('mwt-a-clock-ahead', 'Clocks run ahead of the sun by', { '0': '0 hours (sun time)', '0.5': '30 minutes', '1': '1 hour', '1.5': '1 hour 30 minutes', '2': '2 hours' }, String(s.clockAhead))}
+            <p class="mwt-text-dim mwt-text-sm">Offsets stated sky-event times only. No longitude, time-zone or automatic summer-time modeling.</p>
             ${select('mwt-a-season', 'Manual season (when no calendar is usable)', AMBIENT_SEASONS, s.manualSeason)}
             <label class="mwt-label" for="mwt-a-variability">Variability (change frequency)</label>
             <div>
@@ -103,6 +109,8 @@ export function wireAmbientSettings(root) {
     el('save').addEventListener('click', () => run(() => {
         saveSettings({ enabled: el('enabled').checked, climate: el('climate').value,
             hemisphere: el('hemisphere').value, manualSeason: el('season').value,
+            latitude: el('latitude').value.trim() === '' ? null : Number(el('latitude').value),
+            clockAhead: Number(el('clock-ahead').value),
             variability: Number(el('variability').value), setupAsked: true });
         el('setup').hidden = true;
         invalidate('Ambient settings saved for this chat.');
