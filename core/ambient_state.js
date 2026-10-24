@@ -5,10 +5,12 @@ import { getCurrentWorldState } from './metadata.js';
 import { resolveAmbientTime } from './ambient_time.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS, generateAmbientConditions } from './ambient_generator.js';
 import { applyAmbientPin } from './ambient_pin.js';
+import { generateAmbientDaylight } from './ambient_astronomy.js';
 
 export function readAmbientConditions(settings, seed, type = 'normal') {
     const time = resolveAmbientTime({ messages: getContextSafe()?.chat, worldState: getCurrentWorldState(), type });
     const ambient = applyAmbientPin(generateAmbientConditions({ ...settings, seed, time }), settings.pin, time);
+    ambient.daylight = generateAmbientDaylight({ ...settings, seed, time });
     return { time, ambient };
 }
 

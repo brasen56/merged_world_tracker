@@ -40,6 +40,7 @@ function ambientBody(value) {
     const clock = time ? `<p>Story clock used: ${escapeHtml(bound(time.hours, time.source))}.<br>Source: ${escapeHtml(source)}.</p>` : '';
     return `<p>${escapeHtml(value?.state || 'off')}</p>${value?.ambient
         ? `${clock}<p>Current ${escapeHtml(value.ambient.band.name)}: ${escapeHtml(describe(value.ambient.conditions))}</p><p>Next ${escapeHtml(value.ambient.forecast.band.name)}${time ? ` (${escapeHtml(bound(value.ambient.forecast.band.startHours, time.source))})` : ''}: ${escapeHtml(describe(value.ambient.forecast.conditions))}</p>` : ''}
+        ${value?.ambient?.daylight ? `<p>Daylight: ${escapeHtml(value.ambient.daylight.description)}</p><p>Latitude ${escapeHtml(value.ambient.daylight.latitude)}°${value.ambient.daylight.isDefault ? ` (${escapeHtml(value.ambient.daylight.climate)} default) — set yours` : ''}; clocks ahead of sun: ${escapeHtml(value.ambient.daylight.clockAhead)} h.</p>` : ''}
         ${pin ? `<p>Pin ${value.ambient?.pinned ? 'active' : 'inactive (outside interval or clock source changed)'}; from ${escapeHtml(bound(pin.startHours, pin.source))}; ${pin.endHours === null ? 'until unpinned' : `expires ${escapeHtml(bound(pin.endHours, pin.source))}`}.</p>` : ''}`;
 }
 
