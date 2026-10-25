@@ -195,6 +195,7 @@ export const AUTHOR_CONTEXT_BUDGETS = Object.freeze([
     { key: 'standard', label: 'Standard', chars: 12000 },
     { key: 'expanded', label: 'Expanded', chars: 24000 },
     { key: 'large', label: 'Large', chars: 48000 },
+    { key: 'extended', label: 'Extended', chars: 144000 },
 ]);
 export function sanitizeAuthorContextSelection(value) {
     const raw = isObject(value) ? value : {};

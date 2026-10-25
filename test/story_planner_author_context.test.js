@@ -82,13 +82,15 @@ describe('Story Planner private author-context boundary', () => {
         // must not drift: unknown or missing budgets keep the pre-setting
         // ceiling, and there is deliberately no unlimited option.
         expect(AUTHOR_CONTEXT_BUDGETS).toEqual(AUTHOR_CONTEXT_BUDGET_PRESETS);
-        expect(AUTHOR_CONTEXT_BUDGETS.map(preset => preset.key)).toEqual(['standard', 'expanded', 'large']);
+        expect(AUTHOR_CONTEXT_BUDGETS.map(preset => preset.key)).toEqual(['standard', 'expanded', 'large', 'extended']);
         expect(resolveAuthorContextBudgetChars('standard')).toBe(AUTHOR_MAX_CHARS);
         expect(resolveAuthorContextBudgetChars('expanded')).toBe(24000);
         expect(resolveAuthorContextBudgetChars('large')).toBe(48000);
+        expect(resolveAuthorContextBudgetChars('extended')).toBe(144000);
         expect(resolveAuthorContextBudgetChars('unlimited')).toBe(AUTHOR_MAX_CHARS);
         expect(resolveAuthorContextBudgetChars(undefined)).toBe(AUTHOR_MAX_CHARS);
         expect(sanitizeAuthorContextSelection({ entityIds: [], budget: 'large' }).budget).toBe('large');
+        expect(sanitizeAuthorContextSelection({ entityIds: [], budget: 'extended' }).budget).toBe('extended');
         expect(sanitizeAuthorContextSelection({ entityIds: [], budget: 'unlimited' }).budget).toBe('standard');
     });
 
@@ -160,7 +162,7 @@ describe('Story Planner private author-context boundary', () => {
         setFakeContextExtras({ getCurrentChatId: () => 'author-budget-test' });
         vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'author-budget-test' }) });
         setFakeApi(async () => '## Horizon Arcs\n- The Open Door — Public turning point.\n  - Public setup beat.');
-        const budgets = new Map([['standard', 12000], ['expanded', 24000], ['large', 48000]]);
+        const budgets = new Map([['standard', 12000], ['expanded', 24000], ['large', 48000], ['extended', 144000]]);
         registerSafeCharacterContextProvider({
             listCandidates: () => [{ name: 'Mara', entityId: 'm', type: 'major', dossierAvailable: true }],
             buildAuthorContext: async selection => ({
@@ -173,7 +175,7 @@ describe('Story Planner private author-context boundary', () => {
         openGenerateDialog();
         const section = document.querySelector('#sp-generate-author');
         const budget = document.querySelector('#sp-author-budget');
-        expect([...budget.options].map(option => option.value)).toEqual(['standard', 'expanded', 'large']);
+        expect([...budget.options].map(option => option.value)).toEqual(['standard', 'expanded', 'large', 'extended']);
         expect(budget.value).toBe('standard');
         expect(document.querySelector('#sp-author-coverage').textContent).toContain('No private context selected');
         section.querySelector('input[name="sp-author-npc"]').click();
@@ -188,10 +190,17 @@ describe('Story Planner private author-context boundary', () => {
         budget.dispatchEvent(new Event('change'));
         await new Promise(resolve => setTimeout(resolve, 0));
         expect(preview()).toContain('Large budget (48,000 characters)');
+        budget.value = 'extended';
+        budget.dispatchEvent(new Event('change'));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(preview()).toContain('Extended budget (144,000 characters)');
         document.querySelector('#sp-generate-submit').click();
         await new Promise(resolve => setTimeout(resolve, 0));
-        expect(getAuthorContextSelection()).toMatchObject({ entityIds: ['m'], budget: 'large', npcFields: { m: ['knowledge'] } });
+        expect(getAuthorContextSelection()).toMatchObject({ entityIds: ['m'], budget: 'extended', npcFields: { m: ['knowledge'] } });
         hideModal('mwt-sp-scoped-review-modal');
+        hideModal('mwt-sp-generate-modal');
+        openGenerateDialog();
+        expect(document.querySelector('#sp-author-budget').value).toBe('extended');
         hideModal('mwt-sp-generate-modal');
         vi.unstubAllGlobals();
     });
@@ -413,6 +422,35 @@ describe('author context reads dossiers as Knowledge writes them', () => {
         serveEntry(formatDossierEntry({ ...MARA, secrets: 'x'.repeat(13000) }));
         await expect(at()).rejects.toThrow(/Canon Lock cannot be omitted/);
         await expect(at('expanded')).resolves.toMatchObject({ budgetChars: 24000, coverage: [expect.objectContaining({ status: 'complete' })] });
+    });
+
+    test('Extended fits a long-established ledger and still trims whole oldest entries at its ceiling', async () => {
+        const facts = ledgerFacts(120, `learned ${'x'.repeat(900)}`);
+        serveEntry(formatDossierEntry({ ...MARA, initial_knowledge: facts }));
+        const at = budget => buildPlannerAuthorContext({ entityIds: ['mara-id'], npcFields: { 'mara-id': ['secrets', 'canon_lock', 'knowledge'] }, budget });
+
+        const large = await at('large');
+        const extended = await at('extended');
+        expect(large.coverage[0].status).toBe('ledger-trimmed');
+        expect(extended.budgetChars).toBe(144000);
+        expect(extended.chars).toBeGreaterThan(96000);
+        expect(extended.chars).toBeLessThanOrEqual(144000);
+        expect(extended.coverage[0]).toMatchObject({ status: 'complete', fields: 3, ledgerSent: 120, ledgerTotal: 120 });
+
+        const overflowingFacts = ledgerFacts(180, `learned ${'x'.repeat(900)}`);
+        serveEntry(formatDossierEntry({ ...MARA, initial_knowledge: overflowingFacts }));
+        const trimmed = await at('extended');
+        const [coverage] = trimmed.coverage;
+        expect(coverage.status).toBe('ledger-trimmed');
+        expect(coverage.ledgerSent).toBeGreaterThan(120);
+        expect(coverage.ledgerSent).toBeLessThan(180);
+        expect(trimmed.chars).toBeLessThanOrEqual(144000);
+        expect(trimmed.text).toContain('canon_lock: Mara never sold the seal.');
+        expect(trimmed.text.split('\n').filter(line => line.startsWith('- learned')))
+            .toEqual(overflowingFacts.slice(-coverage.ledgerSent).map(({ fact }) => `- ${fact} via witness`));
+
+        serveEntry(formatDossierEntry({ ...MARA, canon_lock: 'x'.repeat(144001) }));
+        await expect(at('extended')).rejects.toThrow(/Canon Lock cannot be omitted/);
     });
 
     test('the review says how much of each ledger was sent', async () => {

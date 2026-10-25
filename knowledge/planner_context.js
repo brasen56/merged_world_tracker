@@ -347,6 +347,7 @@ export const AUTHOR_CONTEXT_BUDGET_PRESETS = Object.freeze([
     { key: 'standard', label: 'Standard', chars: AUTHOR_MAX_CHARS },
     { key: 'expanded', label: 'Expanded', chars: 24000 },
     { key: 'large', label: 'Large', chars: 48000 },
+    { key: 'extended', label: 'Extended', chars: 144000 },
 ]);
 const AUTHOR_BUDGET_CHARS = new Map(AUTHOR_CONTEXT_BUDGET_PRESETS.map(preset => [preset.key, preset.chars]));
 
