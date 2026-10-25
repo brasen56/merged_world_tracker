@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v2)
 
-**Status:** Revision 2. Phase 5 (sun and daylight) implemented; Phases 6–9 remain planned. Optional meteor showers deferred.
+**Status:** Revision 2. Phases 5–6 (sun/daylight and moon) implemented; Phases 7–9 remain planned. Optional meteor showers deferred.
 **Written:** 2026-10-23. **Revision 2 (2026-10-24):** folds in `AMBIENT_CONDITIONS_V2_RESPONSE.md` — the sun-time framing, centered phase bins, floored modulo, the southern-hemisphere proxy fix, exact-time evaluation, the moon anchor replacing the moon pin, the calendar panel splitting into its own design doc, and a phase reorder (sun is now Phase 5, moon Phase 6). The response doc and this history remain the discussion record; every formula in revision 1 was re-run and the response's corrections verified independently before folding in. Companion to `AMBIENT_CONDITIONS_DESIGN.md` (v1, Phases 1–4 implemented); that doc stays authoritative for shipped behavior.
 **Decisions continue v1 numbering** (D16+). Phase numbering also continues (v1 shipped Phases 1–4).
 
@@ -116,6 +116,12 @@ Implemented 2026-10-24: pure solar math and exact-time regimes in `core/ambient_
 - Exit: the motivating bug is dead — at 55–60°N in August, 17:00 reads bright with a stated sunset on every generation type, and a story clock an hour ahead of the sun can say so.
 
 ### Phase 6 — Moon
+
+Implemented 2026-10-24: pure lunar math in `core/ambient_astronomy.js`, shared by injection, Overview, `/wt-ambient`, and planner context. Eight centered bins use floored modulo, including pre-1970 dates. The moon-up heuristic uses exact resolved story time, not weather bands; brightness consumes the already-pinned current weather and is omitted outside true darkness. Calendarless chats omit computed moon facts and show a shared "no calendar clock" notice (including the injection body, preserving command/body parity).
+
+The chat-local `moonEpochOffset` setting stores one epoch shift in hours; null/absent uses the standard epoch. Settings exposes a full-moon story date and explicit time (initially 18:00); clearing the date restores the standard cycle. Re-anchoring rewrites past/future phases coherently, is independent of weather reseeding, and never uses the weather pin slot. The pure `lunarPhaseAt` result is the future tide/lunar-event seam; tide generation and spring/neap output remain Phase 9, not a Phase 6 claim.
+
+Moon-up ignores latitude and terrain, as planned; night brightness is qualitative cloud/precipitation attenuation, not photometry. Phase bins normally agree across scenes in one night, but can legitimately cross a centered bin edge during that night: they are not artificially frozen to a band or a date. Tests cover both cases. Added copy is conditional and concise, but the complete ≤~60-added-token audit remains an integration check as later channels land; no tokenizer-backed budget claim is made here.
 
 - Centered bins, floored modulo, moon-up heuristic, the anchor setting, night brightness gated on darkness regime, injection + Overview + `/wt-ambient` lines, planner block line.
 - Tests: five real eclipse instants (2024-04-08, 2025-03-14, 2025-09-07, 2026-03-03, 2026-08-12) all bin to new/full under centered rounding (four of five fail under floor); pre-1970 story (e.g. 1850-06-01) yields a valid bin, not `undefined`; determinism across 10k sampled times; bins stable within a night; moon-up (first quarter not up at 02:00, last quarter not up at 22:00, full up in the evening); anchor (nights before an anchored full moon wax, after wane; that night's tide is spring); brightness regime gate (new moon + white night ≠ black night); omission under message-count fallback; almanac spot checks ±1 day, away from bin edges.

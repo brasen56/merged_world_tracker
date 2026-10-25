@@ -14,6 +14,7 @@ import {
     getStableHistoryEnd,
     getOrCreateReceiptIdentity,
     sendDateToMs,
+    isUnknownSceneValue,
 } from '../core/index.js';
 
 import { backfillSnapshotIds, chronicleSchema } from './schema.js';
@@ -87,6 +88,49 @@ export function clampWindowChars(value) {
 /** The message-window budget currently in effect. */
 export function getWindowChars(settings = getSettings()) {
     return clampWindowChars(settings?.maxWindowChars);
+}
+
+// ─── In-world date labels ────────────────────────────────────────────────────
+//
+// An entry's worldDate is the IN-WORLD date only. New entries used to fall
+// back to today's real date, which then reached the narrator in the injection
+// header and the consolidation timeline; the display fallback to createdAt
+// would leak a real timestamp the same way. createdAt stays the recording
+// time and is shown beside the label in the panel, never in a prompt.
+
+export const UNKNOWN_WORLD_DATE_LABEL = 'In-world date unknown';
+
+/** The value itself when it establishes an in-world date; '' for missing or "Unknown". */
+export function establishedWorldDate(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text && !isUnknownSceneValue(text) ? text : '';
+}
+
+/** A new entry's worldDate from World State's scene: "Date Time", or '' when no date is established. */
+export function sceneWorldDate(scene) {
+    const date = establishedWorldDate(scene?.date);
+    if (!date) return '';
+    const time = establishedWorldDate(scene?.time);
+    return time ? `${date} ${time}` : date;
+}
+
+/** The label shown for an entry: its in-world date, or UNKNOWN_WORLD_DATE_LABEL. */
+export function entryWorldDateLabel(entry) {
+    return establishedWorldDate(entry?.worldDate) || UNKNOWN_WORLD_DATE_LABEL;
+}
+
+/**
+ * Panel and export text (never prompt text): the in-world date, or the
+ * unknown label plus the recording time so undated entries stay tellable
+ * apart.
+ */
+export function entryDateDisplay(entry) {
+    const worldDate = establishedWorldDate(entry?.worldDate);
+    if (worldDate) return worldDate;
+    const recorded = new Date(entry?.createdAt);
+    const when = Number.isFinite(recorded.getTime())
+        ? recorded.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
+    return when ? `${UNKNOWN_WORLD_DATE_LABEL} · recorded ${when}` : UNKNOWN_WORLD_DATE_LABEL;
 }
 
 // ─── Shared mutable state ────────────────────────────────────────────────────

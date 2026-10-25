@@ -7,7 +7,7 @@
   "generate_interceptor": "mwtAmbientGenerationInterceptor",
   "css": "style.css",
   "author": "Brasen",
-  "version": "2.13.1",
+  "version": "2.13.2",
   "homePage": "https://github.com/brasen56/merged_world_tracker",
   "description": "Unified extension combining World State, Session Chronicle, Knowledge Tracker, Story Planner, Interiority (NPC thoughts & hidden intentions), and Ambient Conditions (deterministic weather) into a single modular system. Automatically tracks world state, chronicles sessions, manages NPC knowledge via lorebooks, brainstorms plot possibilities, generates out-of-band NPC interiority, and injects consistent ambient conditions."
 }

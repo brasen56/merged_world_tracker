@@ -34,6 +34,58 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('Phase 6 anchor controls round-trip, clear, validate and remain chat-local', () => {
+        saveSettings(config); mount();
+        expect(el('moon-date').value).toBe('');
+        expect(el('moon-time').value).toBe('18:00');
+        expect(ctx.chatMetadata.mwt_ambient).not.toHaveProperty('moonEpochOffset');
+        el('moon-date').value = '2026-10-24'; el('moon-time').value = '19:30'; click('save');
+        const stored = getSettings().moonEpochOffset;
+        expect(Number.isFinite(stored)).toBe(true);
+        mount();
+        expect(el('moon-date').value).toBe('2026-10-24');
+        expect(el('moon-time').value).toBe('19:30');
+        el('moon-time').value = ''; click('save');
+        expect(el('status').textContent).toContain('valid full moon');
+        expect(getSettings().moonEpochOffset).toBe(stored);
+        expect(() => saveSettings({ moonEpochOffset: Infinity })).toThrow('Moon anchor');
+        const previous = ctx.chatMetadata;
+        ctx.chatMetadata = {}; mount(); expect(el('moon-date').value).toBe('');
+        ctx.chatMetadata = previous; mount(); el('moon-date').value = ''; click('save');
+        expect(getSettings().moonEpochOffset).toBeNull();
+    });
+
+    test('Phase 6 moon and pinned night brightness agree on every surface without read writes', async () => {
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        const { moonAnchorOffset } = await import('../core/ambient_astronomy.js');
+        const night = parseAmbientDateTime('2026-10-24', '21:00').hours;
+        ctx.chat = [{ mes: '[In-story time: 09:00 PM, Saturday, October 24, 2026]' }];
+        saveSettings({ ...config, moonEpochOffset: moonAnchorOffset(night),
+            pin: { startHours: night, endHours: null, source: 'timestamp', conditions: { ...conditions, sky: 'clear', precipitation: 'none' } } });
+        const status = getAmbientStatus();
+        expect(status.ambient.moon).toMatchObject({ name: 'full', up: true, brightness: 'bright moonlight, shadows cast' });
+        ctx.saveMetadataDebounced.mockClear();
+        const before = JSON.stringify(ctx.chatMetadata);
+        onGenerationStarted();
+        const description = status.ambient.moon.description;
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(description);
+        expect(ambientCommand()).toBe(buildInjectionBody(status.ambient));
+        expect(renderOverviewSnapshot({ ambient: { ok: true, value: status } })).toContain(description);
+        expect(buildAmbientPlannerContext()).toContain(description);
+        ctx.chat.push({ mes: 'A replaced reply' });
+        onGenerationStarted('swipe');
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(description);
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+        ctx.chat = [{ mes: 'No clock' }];
+        const fallback = getAmbientStatus();
+        expect(fallback.ambient.moon).toBeNull();
+        expect(buildInjectionBody(fallback.ambient)).not.toContain('Moon:');
+        expect(buildAmbientPlannerContext()).not.toContain('Moon at');
+        expect(ambientCommand()).toContain('no calendar clock');
+        expect(renderOverviewSnapshot({ ambient: { ok: true, value: fallback } })).toContain('Moon: unavailable — no calendar clock');
+    });
+
     test('Phase 5 defaults are read-only, shown in Overview, and not saved by unrelated settings', () => {
         saveSettings(config);
         ctx.saveMetadataDebounced.mockClear();

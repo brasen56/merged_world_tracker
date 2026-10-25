@@ -117,7 +117,7 @@ describe('Tier 2 Chronicle contracts', () => {
             { id: 'user', is_user: true, mes: 'User' }, { id: 'reply', mes: 'Reply' }]);
         getFakeMeta().session_chronicle_data = { snapshots: [entry('a')] };
         const requests = [];
-        setFakeApi(async request => { requests.push(request); return '## Summary\nRegenerated'; });
+        setFakeApi(async request => { requests.push(request); return '## Summary\nRegenerated\n\n## Time Anchor\nIn-world date and time at end of this period: Day 1'; });
         await regenerateSnapshot('a');
         expect(requests).toHaveLength(1);
         expect(requests[0].userContent).toContain('First marker');

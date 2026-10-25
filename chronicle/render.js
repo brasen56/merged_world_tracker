@@ -21,6 +21,7 @@ import {
     getContentEl, scSetStatus, getMessageCountSinceLastSnapshot,
     showConfirm,
     getWindowChars, clampWindowChars, WINDOW_CHARS_DEFAULT, WINDOW_CHARS_MIN,
+    establishedWorldDate, entryDateDisplay,
 } from './data.js';
 
 import {
@@ -59,7 +60,7 @@ export function showConsolidationPreview(selectedEntries, inputContent, onConfir
     el.innerHTML = `
         <div class="sc-consolidate-preview">
             <p>Review content fed to consolidator. Edit if needed.</p>
-            ${selectedEntries.map((e, i) => `<details ${i === 0 ? 'open' : ''}><summary>${i === 0 ? 'BASE' : `DELTA ${i}`} — ${escapeHtml(e.worldDate || e.createdAt)}</summary><pre>${escapeHtml((e.text || '').slice(0, 2000))}</pre></details>`).join('')}
+            ${selectedEntries.map((e, i) => `<details ${i === 0 ? 'open' : ''}><summary>${i === 0 ? 'BASE' : `DELTA ${i}`} — ${escapeHtml(entryDateDisplay(e))}</summary><pre>${escapeHtml((e.text || '').slice(0, 2000))}</pre></details>`).join('')}
             <textarea id="sc-consolidate-input" class="mwt-textarea" rows="12">${escapeHtml(inputContent)}</textarea>
             <div class="sc-status"><span class="sc-status-text" role="status" aria-live="polite" aria-atomic="true"></span></div>
             <div class="mwt-flex mwt-gap-4"><button id="sc-consolidate-go" class="mwt-btn mwt-btn-primary" ${!hasValidSettings() ? 'disabled' : ''}>Consolidate</button><button id="sc-consolidate-cancel" class="mwt-btn">Cancel</button></div>
@@ -88,7 +89,7 @@ function showEntryEditor(snapshot) {
     const charList = snapshot.characters?.length ? snapshot.characters.join(', ') : 'None';
     el.innerHTML = `
         <div class="sc-editor">
-            <div class="sc-editor-meta"><span>ID: ${escapeHtml(snapshot.id)}</span><span>Created: ${escapeHtml(snapshot.createdAt)}</span><span>World Date: ${escapeHtml(snapshot.worldDate || '—')}</span>${snapshot.manual ? '<span class="sc-badge">Manual</span>' : ''}${snapshot.consolidated ? '<span class="sc-badge">Consolidated</span>' : ''}</div>
+            <div class="sc-editor-meta"><span>ID: ${escapeHtml(snapshot.id)}</span><span>Created: ${escapeHtml(snapshot.createdAt)}</span><span>World Date: ${escapeHtml(establishedWorldDate(snapshot.worldDate) || 'Unknown')}</span>${snapshot.manual ? '<span class="sc-badge">Manual</span>' : ''}${snapshot.consolidated ? '<span class="sc-badge">Consolidated</span>' : ''}</div>
             <div><span>Characters:</span> ${escapeHtml(charList)}</div>
             <div><span>Note:</span> <input type="text" id="sc-note-input" class="mwt-input" value="${escapeHtml(snapshot.note || '')}" placeholder="Add a note..."></div>
             <textarea id="sc-editor-textarea" class="mwt-textarea" rows="20">${escapeHtml(snapshot.text)}</textarea>
@@ -170,7 +171,7 @@ function showTrashModal() {
         el.innerHTML = `<div><p>Trash is empty.</p><button id="sc-back-from-trash" class="mwt-btn">← Back</button></div>`;
     } else {
         el.innerHTML = `<div><h3>Recently Deleted (${deletedBin.length})</h3>
-            ${deletedBin.map(e => `<div style="padding:8px;border-bottom:1px solid var(--mwt-border)"><span>${escapeHtml(e.worldDate || e.createdAt)}</span> <span>${escapeHtml((e.text || '').slice(0, 80))}…</span> <button class="mwt-btn sc-restore-btn" data-id="${escapeHtml(e.id)}">Restore</button></div>`).join('')}
+            ${deletedBin.map(e => `<div style="padding:8px;border-bottom:1px solid var(--mwt-border)"><span>${escapeHtml(entryDateDisplay(e))}</span> <span>${escapeHtml((e.text || '').slice(0, 80))}…</span> <button class="mwt-btn sc-restore-btn" data-id="${escapeHtml(e.id)}">Restore</button></div>`).join('')}
             <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-empty-trash" class="mwt-btn" style="background:var(--mwt-danger)">Empty Trash</button><button id="sc-back-from-trash" class="mwt-btn">← Back</button></div></div>`;
         el.querySelectorAll('.sc-restore-btn').forEach(btn => {
             btn.addEventListener('click', () => { const entry = deletedBin.find(e => e.id === btn.dataset.id); if (entry) restoreDeletedEntry(entry); });
@@ -269,7 +270,7 @@ function showInjectionSelector() {
         <div><label for="sc-inject-mode-recent"><input type="radio" id="sc-inject-mode-recent" name="sc-inject-mode" value="recent" ${currentMode === 'recent' ? 'checked' : ''}> Recent</label><label for="sc-inject-mode-selected"><input type="radio" id="sc-inject-mode-selected" name="sc-inject-mode" value="selected" ${currentMode === 'selected' ? 'checked' : ''}> Selected</label><label for="sc-inject-mode-all"><input type="radio" id="sc-inject-mode-all" name="sc-inject-mode" value="all" ${currentMode === 'all' ? 'checked' : ''}> All</label><label for="sc-inject-mode-range"><input type="radio" id="sc-inject-mode-range" name="sc-inject-mode" value="range" ${currentMode === 'range' ? 'checked' : ''}> Range</label></div>
         <div id="sc-inject-mode-options">
             <div id="sc-recent-options" style="display:${currentMode === 'recent' ? 'block' : 'none'}"><label for="sc-inject-count">Count: <input type="number" id="sc-inject-count" value="${escapeHtml(currentCount)}" min="1" max="${snapshots.length}"></label></div>
-            <div id="sc-selected-options" style="display:${currentMode === 'selected' ? 'block' : 'none'}">${snapshots.map((s, i) => `<label for="sc-inject-select-${i}"><input type="checkbox" id="sc-inject-select-${i}" class="sc-inject-select-cb" data-id="${escapeHtml(s.id)}" ${selectedForInjection.includes(s.id) ? 'checked' : ''}> ${escapeHtml(s.worldDate || s.createdAt)} — ${escapeHtml((s.text || '').slice(0, 50))}</label>`).join('<br>')}</div>
+            <div id="sc-selected-options" style="display:${currentMode === 'selected' ? 'block' : 'none'}">${snapshots.map((s, i) => `<label for="sc-inject-select-${i}"><input type="checkbox" id="sc-inject-select-${i}" class="sc-inject-select-cb" data-id="${escapeHtml(s.id)}" ${selectedForInjection.includes(s.id) ? 'checked' : ''}> ${escapeHtml(entryDateDisplay(s))} —${escapeHtml((s.text || '').slice(0, 50))}</label>`).join('<br>')}</div>
             <div id="sc-range-options" style="display:${currentMode === 'range' ? 'block' : 'none'}"><label for="sc-inject-from">From: <input type="datetime-local" id="sc-inject-from" value="${escapeHtml(fromDate)}"></label><label for="sc-inject-to">To: <input type="datetime-local" id="sc-inject-to" value="${escapeHtml(toDate)}"></label></div>
         </div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-apply-injection" class="mwt-btn mwt-btn-primary">Apply</button><button id="sc-cancel-injection" class="mwt-btn">Cancel</button></div>
@@ -410,7 +411,7 @@ export function renderContent() {
                 ? `<button class="mwt-btn sc-base-toggle" data-id="${escapeHtml(s.id)}" style="font-size:11px;padding:2px 8px;${isBase ? 'background:var(--mwt-accent);color:#fff' : ''}">${isBase ? '★ BASE' : '☆ Set as Base'}</button>`
                 : '';
             return `<div class="${getSnapshotClass(s)}" data-id="${escapeHtml(s.id)}" style="padding:8px;border:1px solid var(--mwt-border);margin:4px 0;cursor:pointer;border-radius:4px">
-                <div style="display:flex;justify-content:space-between;align-items:center"><span>${(state.consolidateMode || state.bulkDeleteMode) ? `<input type="checkbox" class="sc-checkbox" data-id="${escapeHtml(s.id)}" ${state.checkedForMerge.has(s.id) ? 'checked' : ''} style="margin-right:8px">` : ''}<strong>${label}</strong></span><span style="color:var(--mwt-text-dim);display:flex;align-items:center;gap:8px">${escapeHtml(s.worldDate || s.createdAt)}${baseBtn}</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:center"><span>${(state.consolidateMode || state.bulkDeleteMode) ? `<input type="checkbox" class="sc-checkbox" data-id="${escapeHtml(s.id)}" ${state.checkedForMerge.has(s.id) ? 'checked' : ''} style="margin-right:8px">` : ''}<strong>${label}</strong></span><span style="color:var(--mwt-text-dim);display:flex;align-items:center;gap:8px">${escapeHtml(entryDateDisplay(s))}${baseBtn}</span></div>
                 <div style="color:var(--mwt-text-dim);font-size:12px;margin-top:4px">${escapeHtml((s.text || '').slice(0, 120).replace(/\n/g, ' '))}${s.text?.length > 120 ? '…' : ''}</div>
             </div>`;
         }).join('')}</div>

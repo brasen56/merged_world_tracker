@@ -47,8 +47,8 @@ Consolidation rules:
 - Omit this section if none were closed.
 
 ## Time Anchor
-In-world date and time at end of this period: [from the timeline endpoint]
-Location at end of this period: [from the timeline endpoint]
+In-world date and time at end of this period: [from the timeline endpoint: established date and exact or qualitative time, or Unknown]
+Location at end of this period: [from the timeline endpoint: established location, or Unknown]
 
 ---
 
@@ -132,8 +132,8 @@ ABSOLUTE RULES:
 - Omit this section if none were closed.
 
 ## Time Anchor
-In-world date and time at end of this period: [date and time]
-Location at end of this period: [location]
+In-world date and time at end of this period: [established date and exact or qualitative time, or Unknown]
+Location at end of this period: [established location, or Unknown]
 
 ---
 

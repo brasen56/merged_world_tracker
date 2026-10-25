@@ -30,6 +30,7 @@ import {
     getCharactersInRange, scSetStatus, getVisibleChronicleView,
     makeAnchor, resolveAnchor, resumeIndexByTime, buildMessageWindow,
     getWindowChars, WINDOW_CHARS_DEFAULT,
+    establishedWorldDate, sceneWorldDate, entryWorldDateLabel,
     getReceiptIdentity,
     _render,
 } from './data.js';
@@ -117,10 +118,22 @@ function syncWorldStateFromSnapshot(snapshot, {
 
 // ─── Validate output ─────────────────────────────────────────────────────────
 
-function validateSnapshotOutput(text) {
-    if (!text.trim().startsWith('## Summary')) return { valid: false, reason: 'Output does not start with "## Summary".' };
+/**
+ * The structural contract: output that fails it is not an entry at all — most
+ * often a small model that lost the instructions and continued the roleplay.
+ * Generation and regeneration refuse to keep it (requestChronicleEntry);
+ * the heuristic checks in validateSnapshotOutput only flag an entry for review.
+ */
+function checkEntryStructure(text) {
+    if (!text.trim().startsWith('## Summary')) return { ok: false, reason: 'Output does not start with "## Summary".' };
     const sections = text.match(/^##\s/gm);
-    if (!sections || sections.length < 2) return { valid: false, reason: 'Must contain at least two sections.' };
+    if (!sections || sections.length < 2) return { ok: false, reason: 'Must contain at least two sections.' };
+    return { ok: true };
+}
+
+function validateSnapshotOutput(text) {
+    const structure = checkEntryStructure(text);
+    if (!structure.ok) return { valid: false, reason: structure.reason };
     const forbidden = ['narration', 'dialogue', 'roleplay', 'continue'];
     const lower = text.toLowerCase();
     const hit = forbidden.find(w => (lower.match(new RegExp(w, 'g')) || []).length > 2);
@@ -155,6 +168,46 @@ function validateConsolidationOutput(text, baseEntry, deltaEntries) {
 function stripToEntry(text) {
     const i = text.indexOf('## Summary');
     return i > 0 ? text.slice(i).trim() : text;
+}
+
+/**
+ * Request one chronicle entry, holding the output to the structural contract.
+ *
+ * The check used to be advisory: a story continuation failed it, was saved
+ * anyway, advanced the anchor past the messages it never summarized, and got
+ * injected as chronicle history — while the status said "generated". An
+ * empty or non-entry response now gets ONE retry with a reminder naming the
+ * problem; a second failure throws, so nothing is saved and the anchor stays
+ * put for the next attempt.
+ *
+ * @param {string} userContent
+ * @param {object} scopeBefore — captureScope() from before the first call
+ * @param {string} [trigger] — coordinator classification ('auto' | 'manual')
+ * @returns {Promise<string|null>} the entry text, or null if the chat changed
+ * @throws {Error} when both attempts fail the structural contract
+ */
+async function requestChronicleEntry(userContent, scopeBefore, trigger) {
+    let reminder = '';
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const api = resolveApiCall({ moduleSettings: getSettings() });
+        let raw = await api.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + reminder, settings: api.settings, retries: 3, trigger });
+        if (!assertSameScope(scopeBefore).ok) return null;
+        raw = stripToEntry(normaliseOutput(raw));
+        if (!raw.trim()) {
+            if (attempt === 2) throw new Error('Chronicle output was empty.');
+            console.warn('[MWT:Chronicle] Empty response — retrying once with a reminder.');
+            reminder = '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]';
+            continue;
+        }
+        const structure = checkEntryStructure(raw);
+        if (structure.ok) return raw;
+        console.warn(`[MWT:Chronicle] Attempt ${attempt} rejected: ${structure.reason}${attempt === 1 ? ' — retrying once with a reminder' : ''} Preview: "${raw.slice(0, 200)}"`);
+        if (attempt === 2) {
+            throw new Error(`The model did not return a chronicle entry (${structure.reason.replace(/\.$/, '')}). Nothing was saved. Lowering "Max chat per entry" can help small models.`);
+        }
+        reminder = `\n\n[REMINDER: Your last response was rejected — it was not a chronicle entry. ${structure.reason} Output ONLY the entry in the exact format, beginning with "## Summary". Do not continue the roleplay.]`;
+    }
+    return null;
 }
 
 /**
@@ -314,33 +367,27 @@ export async function generateSnapshot(isAuto = false) {
     scSetStatus('Generating chronicle entry…', 'info');
     notify('Session Chronicle', 'Generating chronicle entry…', 'info');
     const worldState = getWorldStateFactual().trim();
+    // Captured with the prompt: the label fallback must describe the same
+    // World State the model was shown.
     const scene = getCurrentWorldStateScene();
-    const worldDate = scene?.date
-        ? `${scene.date.trim()}${scene.time ? ` ${scene.time.trim()}` : ''}`
-        : new Date().toLocaleDateString();
     const userContent = buildChronicleUserContent(text, worldState);
 
     try {
-        const _scApi1 = resolveApiCall({ moduleSettings: getSettings() });
         // Coordinator classification (TODO §1): the message-counter auto
         // snapshot is background work; the Snapshot button is foreground.
-        const _scTrigger = isAuto ? 'auto' : 'manual';
-        let raw = await _scApi1.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi1.settings, retries: 3, trigger: _scTrigger });
-        if (!assertSameScope(scopeBefore).ok) return null;
-        raw = normaliseOutput(raw);
-        raw = stripToEntry(raw);
-        if (!raw.trim()) {
-            if (!assertSameScope(scopeBefore).ok) return null;
-            const _scApi1b = resolveApiCall({ moduleSettings: getSettings() });
-            raw = await _scApi1b.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent: userContent + '\n\n[REMINDER: Your last response was empty. Produce the chronicle entry as specified.]', settings: _scApi1b.settings, retries: 3, trigger: _scTrigger });
-            raw = normaliseOutput(raw);
-            raw = stripToEntry(raw);
-        }
-        if (!assertSameScope(scopeBefore).ok) return null;
-        if (!raw.trim()) throw new Error('Chronicle output was empty.');
+        const raw = await requestChronicleEntry(userContent, scopeBefore, isAuto ? 'auto' : 'manual');
+        if (raw === null) return null;
+        // The entry's own Time Anchor describes the end of ITS period; World
+        // State's scene is "now" and only stands in when the anchor
+        // establishes nothing. Neither established → '' ("In-world date
+        // unknown"), never today's real date.
+        const worldDate = establishedWorldDate(extractSceneAnchor(raw).dateTime) || sceneWorldDate(scene);
 
+        // Past the structural gate, only the heuristic checks can fail. They
+        // can misfire on a real entry, so they flag it for review in the final
+        // status instead of discarding it.
         const validation = validateSnapshotOutput(raw);
-        if (!validation.valid) { console.warn('[MWT:Chronicle] Validation:', validation.reason); scSetStatus(`May need review: ${validation.reason}`, 'error'); }
+        if (!validation.valid) console.warn('[MWT:Chronicle] Validation:', validation.reason);
 
         // CHRONICLE-01/02: Assert scope before any writes. A chat switch during
         // the API call must discard the result to prevent cross-chat
@@ -423,7 +470,8 @@ export async function generateSnapshot(isAuto = false) {
             source: 'generated', scope: scopeBefore,
             expectedRevision: worldStateRevision, baselineStatusSignature: worldStateBaseline,
         });
-        scSetStatus('Chronicle entry generated.', 'success');
+        if (validation.valid) scSetStatus('Chronicle entry generated.', 'success');
+        else scSetStatus(`Chronicle entry generated — review needed: ${validation.reason}`, 'warning');
         return snapshot;
     } catch (err) {
         if (!assertSameScope(scopeBefore).ok) return null;
@@ -500,16 +548,15 @@ export async function regenerateSnapshot(snapshotId) {
     scSetStatus('Regenerating…', 'info');
 
     try {
-        const _scApi2 = resolveApiCall({ moduleSettings: getSettings() });
-        let raw = await _scApi2.fetchFn({ systemPrompt: CHRONICLE_SYSTEM_PROMPT, userContent, settings: _scApi2.settings, retries: 3 });
-        raw = normaliseOutput(raw);
-        raw = stripToEntry(raw);
-        if (!assertSameScope(scopeBefore).ok) return;
-        if (!raw.trim()) throw new Error('Empty output.');
-        // Anchor on the full chronicle label so the captured value is just the
-        // date/time, not the "at end of this period:" prefix.
-        const timeMatch = raw.match(/## Time Anchor[\s\S]*?In-world date and time at end of this period:\s*(.+)/i);
-        const newWorldDate = timeMatch ? timeMatch[1].trim() : snapshot.worldDate;
+        // Same structural gate as generation: a continuation never reaches the
+        // diff preview, where one careless Accept would replace a good entry.
+        const raw = await requestChronicleEntry(userContent, scopeBefore);
+        if (raw === null) return;
+        // The regenerated Time Anchor replaces the label — including an
+        // "Unknown" one, which clears a stale or real-world date. Only an
+        // entry with no anchor line at all keeps its old label.
+        const anchorDateTime = extractSceneAnchor(raw).dateTime;
+        const newWorldDate = anchorDateTime !== undefined ? establishedWorldDate(anchorDateTime) : snapshot.worldDate;
 
         // CHRONICLE-01: Assert scope before showing the diff preview. A chat
         // switch during the API call must discard the result.
@@ -643,7 +690,7 @@ export async function consolidateEntries(ids, baseId = null) {
     const baseSection = `=== BASE ENTRY (designated foundation; not necessarily earliest) ===\n${base.text}`;
     const deltaSections = deltas.map((d, i) => `=== SOURCE ENTRY ${i + 1} (chronological order among remaining entries) ===\n${d.text}`).join('\n\n');
     const userContent = `Timeline order (earliest to latest):\n${chronological.map((entry, i) =>
-        `${i + 1}. ${entry.id} — ${entry.worldDate || entry.createdAt}${entry.id === base.id ? ' (designated foundation)' : ''}`).join('\n')}\n` +
+        `${i + 1}. ${entry.id} — ${entryWorldDateLabel(entry)}${entry.id === base.id ? ' (designated foundation)' : ''}`).join('\n')}\n` +
         `The timeline endpoint is entry ${chronological.at(-1).id}; take the Time Anchor from that entry, even if it is BASE.\n\n${baseSection}\n\n${deltaSections}\n\n${CONSOLIDATE_CLOSING}`;
 
     // Pass entries to the preview in base-first order so the preview's
@@ -777,10 +824,7 @@ export async function consolidateEntries(ids, baseId = null) {
 // ─── Manual entry ────────────────────────────────────────────────────────────
 
 export function createManualEntry() {
-    const scene = getCurrentWorldStateScene();
-    const worldDate = scene?.date
-        ? `${scene.date.trim()}${scene.time ? ` ${scene.time.trim()}` : ''}`
-        : new Date().toLocaleDateString();
+    const worldDate = sceneWorldDate(getCurrentWorldStateScene());
     const entry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt: new Date().toISOString(), worldDate,

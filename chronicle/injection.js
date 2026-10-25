@@ -18,6 +18,7 @@ import { CHRONICLE_INJECTION_HEADER } from './prompts.js';
 import {
     EXTENSION_PROMPT_KEY,
     getChronicleData, getSnapshots,
+    establishedWorldDate,
 } from './data.js';
 
 // ─── Injection settings ──────────────────────────────────────────────────────
@@ -109,7 +110,10 @@ export function buildChronicleInjectionBody(entries = getEntriesForInjection(), 
         .map(s => {
             const num = snapshots.indexOf(s) + 1;
             const charInfo = s.characters?.length ? ` [${s.characters.join(', ')}]` : '';
-            return `### Chronicle Entry ${num} — ${s.worldDate || s.createdAt}${charInfo}\n${s.text}`;
+            // The narrator sees only an established in-world date — never the
+            // recording timestamp, which is real-world time.
+            const worldDate = establishedWorldDate(s.worldDate);
+            return `### Chronicle Entry ${num}${worldDate ? ` — ${worldDate}` : ''}${charInfo}\n${s.text}`;
         }).join('\n\n---\n\n');
 }
 

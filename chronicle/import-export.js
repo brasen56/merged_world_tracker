@@ -10,6 +10,7 @@ import {
     state, SC_VERSION,
     getChronicleData, setChronicleDataChecked, getSnapshots,
     scSetStatus, restoreReceiptBookkeeping,
+    entryDateDisplay,
     _render,
 } from './data.js';
 
@@ -44,7 +45,7 @@ export function exportMarkdown() {
     const snapshots = getSnapshots().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     let md = `# Session Chronicle\n\n*Exported: ${new Date().toLocaleString()}*\n\n---\n\n`;
     snapshots.forEach((s, i) => {
-        md += `## ${s.manual ? 'Manual' : s.consolidated ? 'Consolidated' : `#${i + 1}`}: ${s.worldDate || s.createdAt}\n\n${s.text}\n\n---\n\n`;
+        md += `## ${s.manual ? 'Manual' : s.consolidated ? 'Consolidated' : `#${i + 1}`}: ${entryDateDisplay(s)}\n\n${s.text}\n\n---\n\n`;
     });
     downloadBlob(`chronicle-${new Date().toISOString().slice(0, 10)}.md`, new Blob([md], { type: 'text/markdown' }));
     scSetStatus('Exported as Markdown.', 'success');

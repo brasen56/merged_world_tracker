@@ -12,6 +12,62 @@ export const DAYLIGHT_VOCABULARY = Object.freeze({
 });
 const RAD = Math.PI / 180;
 
+export const LUNAR_MONTH_DAYS = 29.530589;
+// 2000-01-06 18:14 UTC, expressed as UTC-shaped story hours since 1970.
+export const LUNAR_EPOCH_HOURS = 263106 + 14 / 60;
+export const MOON_PHASES = Object.freeze([
+    'new', 'waxing crescent', 'first quarter', 'waxing gibbous',
+    'full', 'waning gibbous', 'last quarter', 'waning crescent',
+]);
+export const NIGHT_BRIGHTNESS = Object.freeze({
+    black: 'black night', stars: 'starlit', faint: 'faint moonlight',
+    moonlit: 'moonlit', bright: 'bright moonlight, shadows cast',
+});
+
+/** One global epoch shift, not an expiring pin. Null restores the real-world epoch. */
+export function moonAnchorOffset(fullMoonHours) {
+    if (!Number.isFinite(fullMoonHours)) throw new RangeError('Full moon story hours must be finite.');
+    return fullMoonHours - LUNAR_EPOCH_HOURS - LUNAR_MONTH_DAYS * 12;
+}
+
+export function isMoonEpochOffset(value) {
+    return Number.isFinite(value)
+        && Number.isFinite(new Date((LUNAR_EPOCH_HOURS + value + LUNAR_MONTH_DAYS * 12) * AMBIENT_HOUR_MS).getTime());
+}
+
+/** Shared anchored phase for moon, and eventually tides and lunar events. */
+export function lunarPhaseAt(hours, moonEpochOffset = 0) {
+    if (!Number.isFinite(hours)) throw new RangeError('Story hours must be finite.');
+    const offset = isMoonEpochOffset(moonEpochOffset) ? moonEpochOffset : 0;
+    const age = flooredMod((hours - LUNAR_EPOCH_HOURS - offset) / 24, LUNAR_MONTH_DAYS);
+    const phase = age / LUNAR_MONTH_DAYS;
+    const bin = flooredMod(Math.round(phase * 8), 8);
+    return { age, phase, bin, name: MOON_PHASES[bin], illumination: (1 - Math.cos(2 * Math.PI * phase)) / 2 };
+}
+
+/** Age-based heuristic only: latitude-dependent rise/set and terrain are not modeled. */
+export function generateAmbientMoon({ time, moonEpochOffset = 0, daylight, conditions = {} }) {
+    const hours = typeof time === 'number' ? time : time?.hours;
+    if (!Number.isFinite(hours)) throw new RangeError('Story hours must be finite.');
+    if (typeof time !== 'number' && (time?.source === 'message-count' || time?.month == null)) return null;
+    const lunar = lunarPhaseAt(hours, moonEpochOffset);
+    const transit = flooredMod(12 + lunar.age * 0.841, 24);
+    const up = Math.abs(flooredMod(hours - transit + 12, 24) - 12) < 6;
+    let brightness = null;
+    if (daylight?.regime === 'darkness') {
+        // Cloud/precipitation attenuation is qualitative, not photometry. Weather
+        // pins have already been applied by the shared projection before this call.
+        const transmission = { clear: 1, 'partly cloudy': 0.6, overcast: 0.08, foggy: 0.02 }[conditions.sky] ?? 0;
+        const precipitation = conditions.precipitation === 'none' ? 1 : 0.3;
+        const light = lunar.illumination * Number(up) * transmission * precipitation;
+        brightness = light >= 0.7 ? NIGHT_BRIGHTNESS.bright : light >= 0.3 ? NIGHT_BRIGHTNESS.moonlit
+            : light >= 0.05 ? NIGHT_BRIGHTNESS.faint
+                : transmission >= 0.6 && conditions.precipitation === 'none' ? NIGHT_BRIGHTNESS.stars : NIGHT_BRIGHTNESS.black;
+    }
+    return { ...lunar, transit, up, brightness,
+        description: `${lunar.name} moon${up ? '' : ' below horizon'}${brightness ? `; ${brightness}` : ''}.` };
+}
+
 export function flooredMod(value, period) {
     return ((value % period) + period) % period;
 }

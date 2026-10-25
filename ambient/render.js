@@ -3,9 +3,9 @@ import { escapeHtml } from '../core/diff.js';
 import { getChatMeta } from '../core/context.js';
 import { getEpoch } from '../core/scope.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS, AMBIENT_VOCABULARY } from '../core/ambient_generator.js';
-import { parseAmbientDateTime } from '../core/ambient_time.js';
+import { AMBIENT_HOUR_MS, parseAmbientDateTime } from '../core/ambient_time.js';
 import { readAmbientConditions } from '../core/ambient_state.js';
-import { resolveAmbientLatitude } from '../core/ambient_astronomy.js';
+import { isMoonEpochOffset, LUNAR_EPOCH_HOURS, LUNAR_MONTH_DAYS, moonAnchorOffset, resolveAmbientLatitude } from '../core/ambient_astronomy.js';
 import { getSettings, saveSettings, isConfigured, ensureSeed } from './settings.js';
 import { clearAmbientInjection } from './injection.js';
 
@@ -23,6 +23,8 @@ function variabilityText(value) {
 export function renderAmbientSettings() {
     const s = getSettings();
     const variability = Number.isFinite(s.variability) ? s.variability : 0.5;
+    const anchor = isMoonEpochOffset(s.moonEpochOffset)
+        ? new Date(Math.round((LUNAR_EPOCH_HOURS + s.moonEpochOffset + LUNAR_MONTH_DAYS * 12) * AMBIENT_HOUR_MS)).toISOString() : '';
     return `<details class="mwt-settings-disclosure" id="mwt-ambient-settings" open>
         <summary><span aria-hidden="true">🌦️</span> Ambient Conditions (this chat)</summary>
         <p>Code decides the weather; narration renders it when relevant. These controls save separately from global settings.</p>
@@ -39,6 +41,11 @@ export function renderAmbientSettings() {
                 <p class="mwt-text-dim mwt-text-sm">Leave blank to follow the climate default; no default latitude is saved.</p></div>
             ${select('mwt-a-clock-ahead', 'Clocks run ahead of the sun by', { '0': '0 hours (sun time)', '0.5': '30 minutes', '1': '1 hour', '1.5': '1 hour 30 minutes', '2': '2 hours' }, String(s.clockAhead))}
             <p class="mwt-text-dim mwt-text-sm">Offsets stated sky-event times only. No longitude, time-zone or automatic summer-time modeling.</p>
+            <label class="mwt-label" for="mwt-a-moon-date">Full moon falls on (story date)</label>
+            <div><input class="mwt-input" id="mwt-a-moon-date" type="date" value="${escapeHtml(anchor.slice(0, 10))}">
+                <label for="mwt-a-moon-time">Story time of full moon</label>
+                <input class="mwt-input" id="mwt-a-moon-time" type="time" value="${anchor ? anchor.slice(11, 16) : '18:00'}">
+                <p class="mwt-text-dim mwt-text-sm">Optional. Blank date restores the real-world moon cycle. Re-anchoring rewrites past and future phases consistently; it is not a weather pin. Moon facts need a calendar clock. Moon-up is approximate and ignores latitude.</p></div>
             ${select('mwt-a-season', 'Manual season (when no calendar is usable)', AMBIENT_SEASONS, s.manualSeason)}
             <label class="mwt-label" for="mwt-a-variability">Variability (change frequency)</label>
             <div>
@@ -107,10 +114,14 @@ export function wireAmbientSettings(root) {
         invalidate('Temperate / Northern hemisphere saved. Setup will not ask again.');
     }));
     el('save').addEventListener('click', () => run(() => {
+        const moonDate = el('moon-date').value.trim();
+        const fullMoon = moonDate ? parseAmbientDateTime(moonDate, el('moon-time').value) : null;
+        if (moonDate && !fullMoon) throw new Error('Enter a valid full moon story date and time.');
         saveSettings({ enabled: el('enabled').checked, climate: el('climate').value,
             hemisphere: el('hemisphere').value, manualSeason: el('season').value,
             latitude: el('latitude').value.trim() === '' ? null : Number(el('latitude').value),
             clockAhead: Number(el('clock-ahead').value),
+            moonEpochOffset: fullMoon ? moonAnchorOffset(fullMoon.hours) : null,
             variability: Number(el('variability').value), setupAsked: true });
         el('setup').hidden = true;
         invalidate('Ambient settings saved for this chat.');

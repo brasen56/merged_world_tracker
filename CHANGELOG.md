@@ -12,6 +12,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.13.2]
+
+### Added
+
+- **Ambient Conditions Phase 6: moon.** Calendar-clock chats now share a
+  deterministic lunar phase, approximate moon-up state, and darkness-only
+  night brightness across injection, Overview, `/wt-ambient`, and planner
+  context. Centered phase bins and floored modulo support pre-1970 stories.
+  Brightness respects current weather pins and never calls a white night
+  black. A chat-local full-moon date/time anchor shifts the entire lunar
+  cycle coherently; clearing it restores the standard epoch. Calendarless
+  chats show an unavailable notice instead of fabricating a moon phase.
+  Moon-up ignores latitude/terrain; tides remain a later phase.
+
+### Fixed
+
+- **Chronicle saved story continuation as a valid entry.** The output check
+  only warned: a response that wasn't an entry at all (typically a small
+  local model continuing the roleplay) was saved anyway. It moved the anchor
+  past messages it never summarized and was injected as chronicle history,
+  while the status said "Chronicle entry generated." Generate and Regenerate
+  now enforce the structural contract (begins with `## Summary`, at least
+  two sections). A failing response gets one retry with a reminder that
+  names the problem. A second failure saves nothing: the anchor stays put,
+  auto-snapshot waits out its usual back-off, and the error says so.
+  Heuristic findings (roleplay markers, quoted lines, "dialogue"-style
+  wording, length) still only flag the entry, since they can misfire on a
+  real one. The flag now stays in the final status ("Chronicle entry
+  generated — review needed: …") instead of being overwritten.
+- **Chronicle labelled undated entries with today's real-world date.** A new
+  entry (generated or manual) fell back to today's date when World State had
+  none. That label reached the narrator in the injection header
+  (`### Chronicle Entry 3 — 10/24/2026`) and the consolidation prompt's
+  timeline. Entries now carry only an in-world date. A generated entry takes
+  it from its own Time Anchor first and World State's scene second; with
+  neither, it has none. Prompts then omit the date (injection) or say
+  "In-world date unknown" (consolidation), and never fall back to the
+  recording timestamp. The panel and Markdown export show
+  "In-world date unknown · recorded …" so undated entries stay tellable
+  apart. Existing entries keep their stored label until regenerated.
+- **Chronicle's "Unknown" could produce a misleading World State scene.**
+  Syncing an `Unknown` Time Anchor replaced the scene's Date and kept its
+  old Time (`Date: Unknown / Time: 14:30`). An Unknown component is now a
+  no-op: `Unknown` keeps Date and Time, `Unknown, Evening` updates only the
+  Time, and Location `Unknown` keeps the Location. `Unspecified` and
+  labelled forms ("Unknown date", "Date and time unknown") count as Unknown
+  instead of raising an ambiguity warning. A new date with no known time
+  ("Day 3", "Day 3, Unknown") now marks a previously known Time `Unknown`
+  instead of pairing the new day with the old clock.
+- **Chronicle invented dates for stories with no time cues.** The Time
+  Anchor placeholders now use World State's wording: "established date and
+  exact or qualitative time, or Unknown" and "established location, or
+  Unknown". No new prompt rules were added.
+
 ## [2.13.1]
 
 ### Added
