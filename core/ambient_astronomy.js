@@ -5,7 +5,7 @@ export const AMBIENT_LATITUDES = Object.freeze({ arctic: 65, temperate: 45, medi
 export const DAYLIGHT_VOCABULARY = Object.freeze({
     daylight: 'daylight', twilight: 'civil twilight', darkness: 'darkness',
     long: 'long summer light, white-night borders', short: 'short winter day',
-    ordinary: 'daylight cycle', golden: 'low sun, golden light',
+    ordinary: 'typical day length', golden: 'low sun, golden light',
     polarDay: 'the sun does not set; daylight through the night',
     polarNight: 'the sun will not rise today', whiteNight: 'no true darkness',
     aurora: 'aurora possible',
@@ -46,13 +46,16 @@ export function lunarPhaseAt(hours, moonEpochOffset = 0) {
 }
 
 /** Age-based heuristic only: latitude-dependent rise/set and terrain are not modeled. */
-export function generateAmbientMoon({ time, moonEpochOffset = 0, daylight, conditions = {} }) {
+export function generateAmbientMoon({ time, moonEpochOffset = 0, clockAhead = 0, daylight, conditions = {} }) {
     const hours = typeof time === 'number' ? time : time?.hours;
     if (!Number.isFinite(hours)) throw new RangeError('Story hours must be finite.');
     if (typeof time !== 'number' && (time?.source === 'message-count' || time?.month == null)) return null;
     const lunar = lunarPhaseAt(hours, moonEpochOffset);
     const transit = flooredMod(12 + lunar.age * 0.841, 24);
-    const up = Math.abs(flooredMod(hours - transit + 12, 24) - 12) < 6;
+    // Transit is sun time: compare the converted story clock against it, so a
+    // clock running ahead of the sun sees the moon rise that much earlier.
+    const offset = isAmbientClockAhead(clockAhead) ? clockAhead : 0;
+    const up = Math.abs(flooredMod(hours - offset - transit + 12, 24) - 12) < 6;
     let brightness = null;
     if (daylight?.regime === 'darkness') {
         // Cloud/precipitation attenuation is qualitative, not photometry. Weather
@@ -116,9 +119,16 @@ export function generateAmbientDaylight({ time, latitude, climate, hemisphere = 
     if (!Number.isFinite(hours)) throw new RangeError('Story hours must be finite.');
     const hasCalendar = typeof time === 'number' || time?.month != null;
     const resolved = resolveAmbientLatitude({ latitude, climate });
+    // All astronomy reads sun time. A story clock that runs ahead of the sun
+    // converts once here; regime, golden hour, next events and the declination
+    // date follow the converted time, and roundSkyTime adds the offset back
+    // for stated clock facts — so a stated sunset can never be in the future
+    // of a regime that already calls the scene dark.
+    const offset = isAmbientClockAhead(clockAhead) ? clockAhead : 0;
+    const sunHours = hours - offset;
     let declination;
     if (hasCalendar) {
-        const date = new Date(hours * AMBIENT_HOUR_MS);
+        const date = new Date(sunHours * AMBIENT_HOUR_MS);
         if (!Number.isFinite(date.getTime())) throw new RangeError('Story date is outside the supported range.');
         const start = new Date(0);
         start.setUTCFullYear(date.getUTCFullYear(), 0, 1);
@@ -132,32 +142,31 @@ export function generateAmbientDaylight({ time, latitude, climate, hemisphere = 
     const signedLatitude = resolved.latitude * (hasCalendar && hemisphere === 'south' ? -1 : 1);
     const sun = solarCrossings(signedLatitude, declination);
     const civil = solarCrossings(signedLatitude, declination, -6);
-    const hour = flooredMod(hours, 24);
+    const sunHour = flooredMod(sunHours, 24);
     const above = interval => interval.state === 'always-above'
-        || (interval.state === 'crosses' && hour >= interval.rise && hour < interval.set);
+        || (interval.state === 'crosses' && sunHour >= interval.rise && sunHour < interval.set);
     const regime = above(sun) ? 'daylight' : above(civil) ? 'twilight' : 'darkness';
     const dayClass = sun.duration >= 17 ? 'long' : sun.duration <= 8 ? 'short' : 'ordinary';
-    const offset = isAmbientClockAhead(clockAhead) ? clockAhead : 0;
     const vocabulary = DAYLIGHT_VOCABULARY;
     const parts = [vocabulary[regime]];
     if (sun.state === 'always-above') parts.push(vocabulary.polarDay);
     else if (sun.state === 'always-below') parts.push(vocabulary.polarNight);
     else {
         parts.push(vocabulary[dayClass]);
-        if (regime === 'daylight' && (hour - sun.rise < 1 || sun.set - hour < 1)) parts.push(vocabulary.golden);
+        if (regime === 'daylight' && (sunHour - sun.rise < 1 || sun.set - sunHour < 1)) parts.push(vocabulary.golden);
         parts.push(`sunset around ${roundSkyTime(sun.set, offset)}`);
     }
     if (civil.state === 'always-above' && sun.state !== 'always-above') parts.push(vocabulary.whiteNight);
     const events = [
         ['civil dawn begins', civil.rise], ['sunrise', sun.rise],
         ['sunset', sun.set], ['civil dusk ends', civil.set],
-    ].filter(([, eventHour]) => eventHour !== null && eventHour > hour).sort((a, b) => a[1] - b[1]);
+    ].filter(([, eventHour]) => eventHour !== null && eventHour > sunHour).sort((a, b) => a[1] - b[1]);
     const next = events[0];
     // Do not forecast tomorrow using today's declination; the next turn recomputes.
     if (next && next[0] !== 'sunset') parts.push(`${next[0]} around ${roundSkyTime(next[1], offset)}`);
-    const aurora = auroraPossible({ seed, hours, latitude: resolved.latitude, regime });
+    const aurora = auroraPossible({ seed, hours: sunHours, latitude: resolved.latitude, regime });
     if (aurora) parts.push(vocabulary.aurora);
-    return { ...resolved, climate, hasCalendar, declination, hour, regime, dayClass,
+    return { ...resolved, climate, hasCalendar, declination, hour: sunHour, regime, dayClass,
         sunrise: sun.rise, sunset: sun.set, civilDawn: civil.rise, civilDusk: civil.set,
         dayLength: sun.duration, polarDay: sun.state === 'always-above', polarNight: sun.state === 'always-below',
         noDarkness: civil.state === 'always-above', clockAhead: offset, aurora,
