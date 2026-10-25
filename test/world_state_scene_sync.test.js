@@ -201,6 +201,31 @@ describe('updateSceneAnchor', () => {
         expect(getWorldStateText()).toContain('Date: Unknown');
     });
 
+    test('an Unknown anchor and location leave a known scene untouched', () => {
+        const known = MINIMAL_SCENE.replace('Date: Unknown', 'Date: June 5, 2026').replace('Late afternoon', '14:30');
+        setWorldStateData({ text: known });
+
+        const outcome = updateSceneAnchor(candidate({
+            dateTime: 'Unknown', location: 'Unknown', expectedRevision: captureRevision(known),
+        }));
+
+        expect(outcome.status).toBe('no-change');
+        expect(getWorldStateText()).toBe(known);
+    });
+
+    test('a new date with an unknown time never pairs with the old clock', () => {
+        const known = MINIMAL_SCENE.replace('Date: Unknown', 'Date: June 5, 2026').replace('Late afternoon', '14:30');
+        setWorldStateData({ text: known });
+
+        const outcome = updateSceneAnchor(candidate({
+            dateTime: 'June 6, 2026, Unknown', expectedRevision: captureRevision(known),
+        }));
+
+        expect(outcome.status).toBe('applied');
+        expect(getWorldStateText()).toContain('Date: June 6, 2026\nTime: Unknown');
+        expect(getWorldStateText()).not.toContain('14:30');
+    });
+
     test('defers while busy and discards after a covering World State commit', () => {
         state.wstIsRefreshing = true;
         expect(updateSceneAnchor(candidate()).status).toBe('deferred');

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
     EMPTY_PRESENT_VALUE,
+    isUnknownSceneValue,
     normalizeGeneratedDocument,
     normalizePresentValue,
     normalizeSceneAnchor,
@@ -87,9 +88,69 @@ describe('normalizeSceneAnchor', () => {
         ['June 4, 2026 2:30pm', { date: 'June 4, 2026', time: '2:30pm' }],
         ['June 4, 2026 14:30', { date: 'June 4, 2026', time: '14:30' }],
         ['June 4, 2026 late afternoon', { date: 'June 4, 2026', time: 'Late afternoon' }],
-        ['Unknown', { date: 'Unknown' }],
     ])('splits an unambiguous Chronicle anchor: %s', (dateTime, patch) => {
         expect(normalizeSceneAnchor({ dateTime }).patch).toEqual(patch);
+    });
+
+    // Unknown is a deliberate no-op: it used to replace Date with "Unknown"
+    // and keep the old Time, producing "Date: Unknown / Time: 14:30".
+    const KNOWN = { date: 'Day 2', time: '14:30', location: 'Harbour office' };
+
+    test.each([
+        'Unknown', 'unknown.', 'Unspecified', 'Unknown date and time', 'Date and time unknown',
+        'Unknown date, unknown time', 'Unknown, Unknown',
+    ])('an anchor that establishes nothing keeps the current Date and Time: %s', dateTime => {
+        const result = normalizeSceneAnchor({ dateTime, current: KNOWN });
+        expect(result).toEqual({ ok: false, patch: {}, warnings: [] });
+    });
+
+    test.each([
+        ['Unknown, Evening', { time: 'Evening' }],
+        ['Unknown date, 14:45', { time: '14:45' }],
+    ])('an unknown date with a known time patches only the Time: %s', (dateTime, patch) => {
+        expect(normalizeSceneAnchor({ dateTime, current: KNOWN }).patch).toEqual(patch);
+    });
+
+    test.each(['Day 3, Unknown', 'Day 3, time unknown', 'Day 3 (time unknown)', 'Day 3'])
+    ('a new date marks the old Time Unknown instead of keeping it: %s', dateTime => {
+        expect(normalizeSceneAnchor({ dateTime, current: KNOWN }).patch).toEqual({ date: 'Day 3', time: 'Unknown' });
+    });
+
+    test('the same date with an unknown time keeps the current Time', () => {
+        expect(normalizeSceneAnchor({ dateTime: 'Day 2, Unknown', current: KNOWN }).patch).toEqual({ date: 'Day 2' });
+    });
+
+    test('a new date leaves the Time alone when there was no known date to be stale against', () => {
+        expect(normalizeSceneAnchor({ dateTime: 'Day 3', current: { date: 'Unknown', time: 'Evening' } }).patch)
+            .toEqual({ date: 'Day 3' });
+        expect(normalizeSceneAnchor({ dateTime: 'Day 3' }).patch).toEqual({ date: 'Day 3' });
+    });
+
+    test.each(['Unknown', 'Unspecified', 'Location unknown.', 'Unknown location'])
+    ('an unknown Location keeps the current Location: %s', location => {
+        expect(normalizeSceneAnchor({ location, current: KNOWN })).toEqual({ ok: false, patch: {}, warnings: [] });
+    });
+
+    test('"Unknown" as part of a real name is not treated as unknown', () => {
+        const result = normalizeSceneAnchor({ dateTime: 'The Unknown', location: 'The Unknown Shore', current: KNOWN });
+        expect(result.patch).toEqual({ location: 'The Unknown Shore' });
+        expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'ambiguous-date-time' }));
+    });
+
+    test('isUnknownSceneValue', () => {
+        expect(['Unknown', ' unknown. ', 'UNSPECIFIED', 'Unknown day', 'Time is unknown'].every(isUnknownSceneValue)).toBe(true);
+        expect(['', 'Day 3', 'The Unknown', 'Unknown, Evening', null].some(isUnknownSceneValue)).toBe(false);
+    });
+
+    test('long model output stays linear-time', () => {
+        const started = Date.now();
+        normalizeSceneAnchor({
+            dateTime: `a${' '.repeat(200000)}b unknown`,
+            location: `x${' '.repeat(200000)}y`,
+            current: { date: `c${' '.repeat(200000)}d`, time: '1:00' },
+        });
+        isUnknownSceneValue(`a${' '.repeat(200000)}b.`);
+        expect(Date.now() - started).toBeLessThan(500);
     });
 
     test('fails closed on ambiguous time prose', () => {

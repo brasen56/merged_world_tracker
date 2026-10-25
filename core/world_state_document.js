@@ -198,6 +198,40 @@ const CLOCK_AT_END_RE = /(?:^|[\s,]+)((?:(?:[01]?\d|2[0-3]):[0-5]\d|(?:1[0-2]|0?
 const INVALID_CLOCK_AT_END_RE = /(?:^|[\s,]+)(?:\d{1,2}:\d{2}(?:\s*[ap]\.?(?:m\.?)?)?|\d{1,2}\s*[ap]\.?(?:m\.?)?)$/i;
 const ANCHOR_TAIL_CHARS = 64;
 const AMBIGUOUS_TIME_PROSE_RE = /\b(?:about|around|approximately|approx\.?|roughly|nearly|circa|after|before)\b/i;
+// "Nothing established" values: Unknown, Unspecified, and labelled forms such
+// as "Unknown date" or "Date and time unknown". They carry no information, so
+// the Chronicle sync never writes one over a value World State already holds.
+const UNKNOWN_WORD = '(?:unknown|unspecified)';
+const UNKNOWN_FIELD = '(?:date\\s+and\\s+time|date\\/time|date|day|time|location)';
+const UNKNOWN_VALUE_RE = new RegExp(`^(?:${UNKNOWN_FIELD}\\s+(?:is\\s+)?)?${UNKNOWN_WORD}(?:\\s+${UNKNOWN_FIELD})?$`, 'i');
+// An established date whose time is unknown: "Day 3, Unknown",
+// "Day 3, time unknown", "Day 3 (time unknown)".
+const TRAILING_UNKNOWN_TIME_RE = new RegExp(`^(.+?)(?:[\\s,]+|\\s*\\()(?:time\\s+(?:is\\s+)?)?${UNKNOWN_WORD}(?:\\s+time)?\\)?$`, 'i');
+// Both patterns backtrack on long whitespace runs, so they only ever see
+// short input — no real Unknown phrasing or date-with-unknown-time is longer.
+const UNKNOWN_VALUE_MAX_CHARS = 64;
+const UNKNOWN_ANCHOR_MAX_CHARS = 160;
+
+function trimTrailing(value, chars) {
+    let end = value.length;
+    while (end > 0 && chars.includes(value[end - 1])) end--;
+    return value.slice(0, end);
+}
+
+/**
+ * True for a scene value that establishes nothing ("Unknown", "Unspecified",
+ * "Unknown date", "Location unknown", …), ignoring trailing periods.
+ *
+ * @param {*} value
+ * @returns {boolean}
+ */
+export function isUnknownSceneValue(value) {
+    const text = trimTrailing(String(value ?? '').trim(), '. ');
+    return text.length <= UNKNOWN_VALUE_MAX_CHARS && UNKNOWN_VALUE_RE.test(text);
+}
+
+const knownSceneValue = value => typeof value === 'string' && !!value.trim() && !isUnknownSceneValue(value);
+const sceneValueKey = value => trimTrailing(value.trim().toLowerCase().split(/\s+/).join(' '), '.,; ');
 
 function looksLikeDate(value) {
     return /\d/.test(value)
@@ -220,14 +254,26 @@ function compactLocationWins(current, offered) {
  * Normalize Chronicle's combined Time Anchor into a safe Current Scene patch.
  * Ambiguous values fail closed: the current Date/Time are retained and a
  * warning is returned instead of manufacturing precision.
+ *
+ * Unknown components are a deliberate no-op, never a write: a chronicle
+ * window without time cues does not make the world's date unknown, so
+ * "Unknown" keeps the current Date and Time, "Unknown, Evening" patches only
+ * the Time, and Location "Unknown" keeps the current Location. The one write
+ * an Unknown can cause: a NEW date marks a known Time "Unknown", because that
+ * time belonged to a different day ("Date: Day 3 / Time: 14:30" from Day 2
+ * would be a fabricated combination).
  */
 export function normalizeSceneAnchor({ dateTime, location, current = {} } = {}) {
     const patch = {};
     const warnings = [];
     const anchor = typeof dateTime === 'string' ? dateTime.trim() : '';
+    const trailingUnknownTime = anchor.length <= UNKNOWN_ANCHOR_MAX_CHARS ? anchor.match(TRAILING_UNKNOWN_TIME_RE) : null;
     if (anchor) {
-        if (/^unknown$/i.test(anchor)) {
-            patch.date = 'Unknown';
+        if (isUnknownSceneValue(anchor)) {
+            // Nothing established — keep the current Date and Time.
+        } else if (trailingUnknownTime && (isUnknownSceneValue(trailingUnknownTime[1]) || looksLikeDate(trailingUnknownTime[1]))) {
+            const date = trailingUnknownTime[1].replace(/[\s,]+$/, '').trim();
+            if (knownSceneValue(date)) patch.date = date;
         } else if (AMBIGUOUS_TIME_PROSE_RE.test(anchor)) {
             warnings.push({ code: 'ambiguous-date-time', message: `Could not safely split approximate Chronicle anchor "${anchor}".` });
         } else {
@@ -241,13 +287,13 @@ export function normalizeSceneAnchor({ dateTime, location, current = {} } = {}) 
                 const time = clock[1].trim();
                 const clockStart = anchor.length - tail.length + clock.index;
                 const date = anchor.slice(0, clockStart).replace(/[\s,]+$/, '').trim();
-                if (date) patch.date = date;
+                if (knownSceneValue(date)) patch.date = date;
                 patch.time = time;
             } else if (INVALID_CLOCK_AT_END_RE.test(tail)) {
                 warnings.push({ code: 'invalid-clock', message: `Chronicle anchor "${anchor}" ends with an invalid or contradictory clock.` });
             } else if (qualitative) {
                 const date = anchor.slice(0, anchor.length - qualitative.length).replace(/[\s,]+$/, '').trim();
-                if (date) patch.date = date;
+                if (knownSceneValue(date)) patch.date = date;
                 patch.time = qualitative[0].toUpperCase() + qualitative.slice(1);
             } else if (looksLikeDate(anchor)) {
                 patch.date = anchor;
@@ -256,11 +302,17 @@ export function normalizeSceneAnchor({ dateTime, location, current = {} } = {}) 
             }
         }
     }
+    if (patch.date && !patch.time && knownSceneValue(current.date) && knownSceneValue(current.time)
+        && sceneValueKey(patch.date) !== sceneValueKey(current.date)) {
+        patch.time = 'Unknown';
+    }
 
     const offeredLocation = typeof location === 'string' ? location.trim() : '';
     if (offeredLocation) {
         if (/\r|\n/.test(offeredLocation)) {
             warnings.push({ code: 'invalid-location', message: 'Chronicle location was not a single line.' });
+        } else if (isUnknownSceneValue(offeredLocation)) {
+            // Nothing established — keep the current Location.
         } else if (!compactLocationWins(current.location, offeredLocation)) {
             patch.location = offeredLocation;
         }

@@ -414,6 +414,7 @@ export {
     normalizePresentValue,
     normalizeGeneratedDocument,
     normalizeSceneAnchor,
+    isUnknownSceneValue,
     patchCurrentScene,
     validateWorldStateDocument,
     projectWorldState,

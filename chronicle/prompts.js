@@ -47,8 +47,8 @@ Consolidation rules:
 - Omit this section if none were closed.
 
 ## Time Anchor
-In-world date and time at end of this period: [from the timeline endpoint]
-Location at end of this period: [from the timeline endpoint]
+In-world date and time at end of this period: [from the timeline endpoint: established date and exact or qualitative time, or Unknown]
+Location at end of this period: [from the timeline endpoint: established location, or Unknown]
 
 ---
 
@@ -57,6 +57,43 @@ Rules:
 - Prefer the final state over the journey.
 - Keep the total entry under 600 words.
 - Omit any section that has no entries rather than leaving it empty.`;
+
+// The system prompt sits ABOVE the source text, so on a long window it can be
+// thousands of tokens back by the time the model starts writing — and for a
+// snapshot the last thing it read is a roleplay turn, which a small local
+// model simply continues. Every other module that sends chat history closes
+// its user turn with a divider + instruction (World State, Knowledge, Story
+// Planner, Interiority); these closings keep Chronicle in line. A closing also
+// survives a backend that trims an oversized prompt from the top.
+const PROMPT_DIVIDER = '='.repeat(60);
+
+export const CHRONICLE_CLOSING = [
+    PROMPT_DIVIDER,
+    'Write the chronicle entry for the messages above now.',
+    'Begin immediately with "## Summary" — no preamble.',
+    'Do NOT continue the roleplay, narrate, or write dialogue.',
+].join('\n');
+
+export const CONSOLIDATE_CLOSING = [
+    PROMPT_DIVIDER,
+    'Write the single consolidated chronicle entry now.',
+    'Begin immediately with "## Summary" — no preamble.',
+].join('\n');
+
+/**
+ * The user turn for a snapshot generation or regeneration: optional World
+ * State reference, the message window, then the closing instruction.
+ *
+ * @param {string} text — the message window (buildMessageWindow().text)
+ * @param {string} [worldState] — factual World State projection, or ''
+ * @returns {string}
+ */
+export function buildChronicleUserContent(text, worldState = '') {
+    const source = worldState
+        ? `Current World State:\n${worldState}\n\nMessages to chronicle:\n${text}`
+        : `Messages to chronicle:\n${text}`;
+    return `${source}\n\n${CHRONICLE_CLOSING}`;
+}
 
 export const CHRONICLE_INJECTION_HEADER = `[Session Chronicle — recent history reference.
 This is a record of what has already happened, in the order it occurred.
@@ -95,8 +132,8 @@ ABSOLUTE RULES:
 - Omit this section if none were closed.
 
 ## Time Anchor
-In-world date and time at end of this period: [date and time]
-Location at end of this period: [location]
+In-world date and time at end of this period: [established date and exact or qualitative time, or Unknown]
+Location at end of this period: [established location, or Unknown]
 
 ---
 

@@ -14,6 +14,7 @@ import {
     getStableHistoryEnd,
     getOrCreateReceiptIdentity,
     sendDateToMs,
+    isUnknownSceneValue,
 } from '../core/index.js';
 
 import { backfillSnapshotIds, chronicleSchema } from './schema.js';
@@ -33,6 +34,12 @@ export const AUTO_SUGGEST_AFTER = 40;
 export const MAX_TRASH_SIZE = 50;
 export const MAX_ENTRY_WORD_COUNT = 2000;
 export const MAX_CHARACTERS = 20;
+// Message-window budget ("Max chat per entry"), in characters. The default is
+// also the ceiling: 100k was the fixed budget before it became a setting, and
+// it is already ~25k tokens. Local models with a small context lower it. The
+// floor keeps a mistyped value from cutting every entry down to a sentence.
+export const WINDOW_CHARS_DEFAULT = 100000;
+export const WINDOW_CHARS_MIN = 5000;
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -59,10 +66,72 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
         filterOoc: true,
         autoSnapshot: false,
         autoSnapshotThreshold: 40,
+        maxWindowChars: WINDOW_CHARS_DEFAULT,
         syncWorldState: true,
     },
     logPrefix: '[MWT:Chronicle]',
 });
+
+/**
+ * Clamp a "Max chat per entry" value into [WINDOW_CHARS_MIN,
+ * WINDOW_CHARS_DEFAULT]; anything non-numeric falls back to the default.
+ *
+ * @param {*} value
+ * @returns {number}
+ */
+export function clampWindowChars(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return WINDOW_CHARS_DEFAULT;
+    return Math.min(WINDOW_CHARS_DEFAULT, Math.max(WINDOW_CHARS_MIN, Math.floor(n)));
+}
+
+/** The message-window budget currently in effect. */
+export function getWindowChars(settings = getSettings()) {
+    return clampWindowChars(settings?.maxWindowChars);
+}
+
+// ─── In-world date labels ────────────────────────────────────────────────────
+//
+// An entry's worldDate is the IN-WORLD date only. New entries used to fall
+// back to today's real date, which then reached the narrator in the injection
+// header and the consolidation timeline; the display fallback to createdAt
+// would leak a real timestamp the same way. createdAt stays the recording
+// time and is shown beside the label in the panel, never in a prompt.
+
+export const UNKNOWN_WORLD_DATE_LABEL = 'In-world date unknown';
+
+/** The value itself when it establishes an in-world date; '' for missing or "Unknown". */
+export function establishedWorldDate(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text && !isUnknownSceneValue(text) ? text : '';
+}
+
+/** A new entry's worldDate from World State's scene: "Date Time", or '' when no date is established. */
+export function sceneWorldDate(scene) {
+    const date = establishedWorldDate(scene?.date);
+    if (!date) return '';
+    const time = establishedWorldDate(scene?.time);
+    return time ? `${date} ${time}` : date;
+}
+
+/** The label shown for an entry: its in-world date, or UNKNOWN_WORLD_DATE_LABEL. */
+export function entryWorldDateLabel(entry) {
+    return establishedWorldDate(entry?.worldDate) || UNKNOWN_WORLD_DATE_LABEL;
+}
+
+/**
+ * Panel and export text (never prompt text): the in-world date, or the
+ * unknown label plus the recording time so undated entries stay tellable
+ * apart.
+ */
+export function entryDateDisplay(entry) {
+    const worldDate = establishedWorldDate(entry?.worldDate);
+    if (worldDate) return worldDate;
+    const recorded = new Date(entry?.createdAt);
+    const when = Number.isFinite(recorded.getTime())
+        ? recorded.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
+    return when ? `${UNKNOWN_WORLD_DATE_LABEL} · recorded ${when}` : UNKNOWN_WORLD_DATE_LABEL;
+}
 
 // ─── Shared mutable state ────────────────────────────────────────────────────
 
@@ -478,13 +547,14 @@ export function buildMessageWindow(fromIndex, toIndex, startOffset = 0) {
     if (end <= start) return { text: '', lastMsg: null, fromIndex: start, toIndex: start - 1, toCharOffset: null, complete: true };
     const lines = [];
     let total = 0;
-    // Character budget for the assembled message window.  This is deliberately
+    // Character budget for the assembled message window — the user's "Max chat
+    // per entry" setting (default and ceiling 100k). This is deliberately
     // smaller than the `maxChars = 500000` budget used by core/context.js's
     // getRecentMessages(): chronicle snapshots feed a focused window into a
     // summarisation prompt, whereas getRecentMessages() is used for raw
     // context-building where more history is desirable.  Keeping these
     // independent lets each caller tune its own cost/quality trade-off.
-    const MAX = 100000;
+    const MAX = getWindowChars();
     let coveredEnd = start - 1;
     let lastMsg = null;
     // Character offset into the FIRST message's stripped text where this
