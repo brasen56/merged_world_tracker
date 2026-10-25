@@ -71,12 +71,21 @@ describe('Phase 6 pure lunar astronomy', () => {
         const moonEpochOffset = hours - LUNAR_EPOCH_HOURS - phase * LUNAR_MONTH_DAYS * 24;
         expect(moon(hours, { moonEpochOffset }).up).toBe(up);
     });
-    test('anchor rewrites past and future coherently and is independent of weather seed or clock offset', () => {
+    test('clockAhead shifts moon-up with the story clock', () => {
+        const twoAm = Math.floor(full / 24) * 24 + 2;
+        const firstQuarter = twoAm - LUNAR_EPOCH_HOURS - 0.25 * LUNAR_MONTH_DAYS * 24;
+        expect(moon(twoAm, { moonEpochOffset: firstQuarter }).up).toBe(false);
+        // The first-quarter moon sets around midnight sun time; a story clock
+        // two hours ahead of the sun still has it above the horizon at 02:00.
+        expect(moon(twoAm, { moonEpochOffset: firstQuarter, clockAhead: 2 }).up).toBe(true);
+    });
+    test('anchor rewrites past and future coherently and is independent of weather seed', () => {
         expect(moon(full)).toMatchObject({ name: 'full', illumination: 1, up: true });
         expect(moon(full - 3 * 24).name).toBe('waxing gibbous');
         expect(moon(full + 3 * 24).name).toBe('waning gibbous');
         expect(lunarPhaseAt(full + LUNAR_MONTH_DAYS * 24, offset).phase).toBeCloseTo(0.5);
-        expect(moon(full, { seed: 999, clockAhead: 2 })).toEqual(moon(full));
+        expect(moon(full, { seed: 999 })).toEqual(moon(full));
+        expect(moon(full, { clockAhead: 2 })).toMatchObject({ name: 'full', illumination: 1, up: true });
         expect(isMoonEpochOffset(offset)).toBe(true);
         expect(isMoonEpochOffset(Infinity)).toBe(false);
         expect(lunarPhaseAt(full, NaN)).toEqual(lunarPhaseAt(full));

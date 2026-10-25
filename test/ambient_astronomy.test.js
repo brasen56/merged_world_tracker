@@ -69,12 +69,30 @@ describe('Phase 5 pure sun-time astronomy', () => {
         expect(at('2026-12-21', '12:00', { latitude: 60, hemisphere: 'south' }).dayClass).toBe('long');
     });
 
-    test('clockAhead shifts stated times only, never astronomy or regime', () => {
-        const original = at('2026-07-15', '21:00', { latitude: 55 });
-        const shifted = at('2026-07-15', '21:00', { latitude: 55, clockAhead: 1 });
-        expect(shifted.description).toContain('sunset around 21:30');
-        expect(shifted.description).toContain('civil dusk ends around 22:30');
-        expect({ ...shifted, description: '', clockAhead: 0 }).toEqual({ ...original, description: '' });
+    test('clockAhead converts the story clock to sun time, not just stated times', () => {
+        const sunTime = at('2026-07-15', '21:00', { latitude: 55 });
+        const oneHourAhead = at('2026-07-15', '21:00', { latitude: 55, clockAhead: 1 });
+        expect(sunTime).toMatchObject({ regime: 'twilight', clockAhead: 0 });
+        expect(sunTime.description).toContain('civil dusk ends around 21:30');
+        // A clock one hour ahead of the sun sees the same 21:00 an hour earlier
+        // in sun time: golden daylight before a 21:30 sunset, not dusk. The
+        // stated time must never sit in the future of the regime it comes from.
+        expect(oneHourAhead).toMatchObject({ regime: 'daylight', clockAhead: 1,
+            dayLength: sunTime.dayLength, declination: sunTime.declination });
+        expect(oneHourAhead.description).toContain('golden');
+        expect(oneHourAhead.description).toContain('sunset around 21:30');
+    });
+
+    test('clockAhead resolves the real-place zone and DST gap end to end', () => {
+        // Live smoke-test repro: 2000-08-24 19:09 at 39.1°N. In sun time the
+        // sun set at 18:39; on a real civil clock ~1 h ahead it sets ~19:39.
+        const clock = parseAmbientDateTime('2000-08-24', '19:09');
+        const sunFrame = generateAmbientDaylight({ ...config, time: clock, latitude: 39.1 });
+        expect(sunFrame.regime).toBe('darkness');
+        expect(sunFrame.description).toContain('sunset around 18:30');
+        const civilFrame = generateAmbientDaylight({ ...config, time: clock, latitude: 39.1, clockAhead: 1 });
+        expect(civilFrame.regime).toBe('daylight');
+        expect(civilFrame.description).toContain('sunset around 19:30');
     });
 
     test('rounding and modulo work before 1970 and across midnight', () => {
