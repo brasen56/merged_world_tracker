@@ -1,8 +1,10 @@
 # Ambient Conditions module design (v2)
 
-**Status:** Revision 2. Phases 5–6 (sun/daylight and moon) implemented; Phases 7–9 remain planned. Optional meteor showers deferred.
+**Status:** Revision 3. Phases 5–6 (sun/daylight and moon) implemented; Phases 7–9 remain planned. Optional meteor showers deferred. Custom ambient phenomena are recorded outside v2: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1).
 **Written:** 2026-10-23. **Revision 2 (2026-10-24):** folds in `AMBIENT_CONDITIONS_V2_RESPONSE.md` — the sun-time framing, centered phase bins, floored modulo, the southern-hemisphere proxy fix, exact-time evaluation, the moon anchor replacing the moon pin, the calendar panel splitting into its own design doc, and a phase reorder (sun is now Phase 5, moon Phase 6). The response doc and this history remain the discussion record; every formula in revision 1 was re-run and the response's corrections verified independently before folding in. Companion to `AMBIENT_CONDITIONS_DESIGN.md` (v1, Phases 1–4 implemented); that doc stays authoritative for shipped behavior.
 **Decisions continue v1 numbering** (D16+). Phase numbering also continues (v1 shipped Phases 1–4).
+
+**Revision 3 (2026-10-25):** records user-requested custom ambient phenomena — frequent meteor showers, month-long eclipses, miasma clouds — as future scope (§3.5.1/D37). These are authored rules, separate from computed astronomy, split by shape: frequency-shaped phenomena reuse the aurora per-night roll and need no calendar; dated ones belong to the calendar design. Effects start additive with one light override, and ending a phenomenon preserves its past. No new v2 implementation phase is added.
 
 ## 1. Goal
 
@@ -37,6 +39,7 @@ Daylight, moon phase, and tides are *more* tractable than weather: they are (or 
 | D34 | Custom astronomy — twin moons, moonless worlds, tinted suns, custom cycle lengths — is **explicitly out of v2**. The epoch moon plus the anchor covers the overwhelming majority; full multi-moon generators are a large surface for very few users. |
 | D35 | Crossings require a calendar clock — a manual season has no "start of season" date to count "first" from. "First" means scanning back to the season's start: up to ~90 days × 5 bands per prompt build, cheap per evaluation but **memoized per (seed, day)**. |
 | D36 | **Aurora** gates on the sun's **darkness regime** (not the night band — at 55°N in July even the night band isn't dark), with the per-night chance **scaled by latitude** (≈0 below ~50°, common by 65°+) instead of a hard cutoff. Heuristic, not physics, and documented as such in code. |
+| D37 | **Custom ambient phenomena come in two shapes, and the shape picks the home.** *Frequency-shaped* phenomena ("meteor showers every few nights", "miasma on calm nights") are an **ambient channel on the aurora pattern** (D36): a per-night start roll keyed on (seed, rule ID, night), random-access over story hours, so they work on any clock, including the message-count fallback, and do not wait on the calendar doc. *Date-shaped* phenomena ("an eclipse from the 3rd of Rotmonth for one month") need real dates and month lengths, so they belong to the **future calendar design**. Both resolve into one effective projection. Effects start **additive** (one short authored clause), with a single override type, **light**; field-level weather overrides amount to a scheduled pin and are deferred. A month-long fantasy eclipse is an authored world rule, not a prediction from the v2 moon model. Ending a phenomenon sets its end to the current story time instead of deleting the rule, so the past survives. Recorded in §3.5.1; neither shape has a v2 phase number. |
 
 ## 3. Target contract
 
@@ -84,6 +87,33 @@ Pure functions over (story hours, seed) plus the anchored moon phase (D28/D29):
 - **In v2:** Gregorian weekday drift detection only (D31) — tag weekday vs computed weekday, Overview badge, diagnostics event. Works for every chat with timestamp tags, ambient enabled or not.
 - **Own design doc, later:** the panel, custom months/lengths/weekdays (the tag regex currently hardcodes English weekday names, `ambient_time.js:10` — generalization includes weekday lists and weekday-less calendars), events with repeats, the midsummer anchor (§8). Founded on `mwt_calendar` staying user-authored and ambient-independent.
 
+#### 3.5.1 Future scope: custom ambient phenomena
+
+User feedback asks for frequent meteor showers, month-long eclipses, and "miasma clouds". These are authored world rules, not another climate preset or a temporary weather pin, and their timing must agree across scenes, swipes, and rewinds. They come in two shapes, and the shape decides where each one lives (D37):
+
+| Shape | Examples | Home | Clock needed |
+| --- | --- | --- | --- |
+| **Frequency**: "how often", no dates | Meteor showers every few nights; miasma rolls in on calm nights | Ambient channel on the aurora pattern (D36); does not wait on the calendar doc | Any clock, including the message-count fallback |
+| **Dated**: starts on a date, lasts an interval, may repeat by date | An eclipse from a chosen date for one calendar month; a miasma season every Rotmonth | Calendar design (dates, month lengths, repeats) | Calendar clock |
+
+| Example | Shape | Ambient effect |
+| --- | --- | --- |
+| Frequent meteor showers | Frequency: per-night chance | Additive sky clause, visible only in darkness and under a clear enough sky at the exact time (D22). This does not depend on the optional real-world shower table in §3.2. |
+| Month-long eclipse | Dated: starts on a chosen date, lasts one month of that calendar's month lengths | The one override type, **light**: daylight copy names the eclipse instead of also claiming ordinary daylight. |
+| Miasma clouds | Frequency (calm nights) or dated (a season or window) | Additive atmospheric clause. Consequences such as illness or evacuation remain story material. |
+
+Contract to settle before implementation:
+
+- **Authorship:** a stable rule ID, name, a concise length-capped clause, shape, and duration in nights. Frequency rules add a per-night chance and optional start gates drawn from facts ambient already computes (darkness regime, sky cover, wind, season). Dated rules add a start/anchor, an end or duration, and a repeat. Dated schedules live with user-authored calendar data (`mwt_calendar`); frequency rules are ambient settings. This is a design direction, not a shipped schema. Ordinary festivals and appointments need no ambient effect.
+- **Frequency determinism:** one start roll per night, keyed `${seed}:${ruleId}:${night}` with aurora's noon-to-noon night index and the same hash-below-chance test (`auroraPossible`). The roll is random-access: no stored counter, no "fired" flag, and no occurrence index, because finding the k-th occurrence at a given time would mean counting every occurrence from an origin. A phenomenon lasting N nights is active on night n if any night in (n−N, n] rolled a start whose start gates held: a bounded look-back, memoized per (seed, rule, night) like D35. Visibility (meteors behind cloud) is evaluated at the exact current time, not stored.
+- **Dated determinism:** evaluate active intervals from the resolved calendar clock, with inclusive starts and exclusive ends; nothing is persisted or advanced on generation. A missing calendar clock gives dated rules an unavailable notice rather than an invented schedule; frequency rules are unaffected.
+- **Editing, starting, and ending:** editing a rule's chance, gates, or schedule rewrites its evaluated past and future, like D30's settings trade. **End it now** sets the rule's end to the current story time. The past stays intact, rewinding before that point restores the phenomenon, and the story can disperse the miasma (§5) without the injection contradicting it. A new rule likewise defaults its start to the current story time, so adding one does not rewrite nights already played. Deleting a rule is the history-rewriting option, and the UI should say so.
+- **Effects and composition:** each active phenomenon contributes one capped clause. The single override type is **light**: the sun channel consults the effective light before choosing daylight descriptors. Downstream darkness gates also read the effective light: night brightness (D24), aurora (D36), and meteor visibility. The computed moon phase and tide cycle are unchanged. Field-level overrides of weather (sky, precipitation, visibility) amount to a scheduled weather pin, with all its overlap and contradiction cost, so they are deferred until additive clauses prove insufficient. Weather pins keep precedence for the fields they cover. Overlapping light overrides need a priority rule. Everything resolves into the one projection shared by injection, Overview, `/wt-ambient`, and planner context.
+- **Bounded output:** active conditions stay present for their full duration, including intervals longer than D32's lookahead. Upcoming dated starts use D32's bounded event lookahead; frequency phenomena are never forecast. Active phenomena need their own count cap and concise summary within the D33 budget. The calendar can display dated schedules independently, while ambient effects obey ambient enablement and injection gates.
+- **Validation:** for frequency rules, evaluating night n directly equals walking up to it, the observed rate over many nights tracks the chance, start gates hold, duration look-back boundaries are exact, and clockless chats work. For dated rules, cover interval boundaries, recurrence across custom month and year lengths, and missing clocks. For both, cover identical output after swiping or rewinding, end-it-now preserving the past, a new rule not rewriting played nights, light overlaps, and pins. The light-override priority and output-cap defaults must be chosen before either shape ships.
+
+This adds authored environmental rules, not custom orbital simulation. Twin moons and custom astronomical cycles remain a separate deferred feature (D34).
+
 ### 3.6 Injection and user surface changes
 
 - `buildInjectionBody` assembles gated channels, e.g.:
@@ -102,6 +132,8 @@ Pure functions over (story hours, seed) plus the anchored moon phase (D28/D29):
 ## 5. Boundary notes (extends v1 §5)
 
 The D12 rule survives intact: can nobody in the story change it? Sun/moon/tides are ambient by definition. A **flooded causeway at spring tide** is an incident — World Pressures and the lens turn ambient inputs into arcs exactly as blizzards already do (v1 §5). Calendar events are a third thing: **user-authored world facts** — not ambient-generated, not story-changeable incidents. Three kinds of line, one boundary rule.
+
+Future authored phenomena follow that same split: the rule establishes "miasma clouds persist through this week"; a disrupted journey or an effort to disperse them belongs to the story. Ambient supplies the active condition, without automatically inventing an incident or arc. When the story does disperse them, the user ends the rule at the current story time (§3.5.1), so the injection stops claiming miasma without rewriting the nights already played.
 
 ## 6. Delivery plan
 
@@ -147,13 +179,13 @@ Moon-up ignores latitude and terrain, as planned; night brightness is qualitativ
 
 ### Calendar panel → its own design doc
 
-Biggest UI piece, ambient-independent, nothing left in the astronomy contract depends on it (D31). The doc starts from the response's midsummer-anchor idea (§8) and the weekday-name generalization. Phase numbering for it resumes when that doc is approved.
+Biggest UI piece, ambient-independent, nothing left in the astronomy contract depends on it (D31). The doc starts from the response's midsummer-anchor idea (§8), the weekday-name generalization, and dated ambient phenomena (§3.5.1/D37). Frequency-shaped phenomena are an ambient channel and do not wait on this doc. Calendar schedules remain usable without ambient; their optional environmental effects integrate through ambient's shared projection. Phase numbering for it resumes when that doc is approved.
 
 Dependencies: 6 needs 5's darkness regime for the brightness gate. 7 is standalone. 8 needs nothing new. 9 needs 6 (moon, anchored).
 
 ## 7. Explicitly out of v2
 
-Twin moons / moonless worlds / custom cycle lengths (D34). Precise moonrise/moonset times (the moon-up heuristic is the v2 answer). Dynamic twilight-following weather bands (D22 keeps weather bands; sky facts went exact-time instead). Per-region weather or per-region latitude (still v1 §7). Real-port tide emulation (D28). DST switchover modeling (D17's offset is season-set by the user). Eclipses (computable from the same cycles; nobody's slow burn needs a Saros). Lorebook/card climate or latitude override; "suggest latitude from card". The calendar panel itself (its own doc).
+Twin moons / moonless worlds / custom cycle lengths (D34). Precise moonrise/moonset times (the moon-up heuristic is the v2 answer). Dynamic twilight-following weather bands (D22 keeps weather bands; sky facts went exact-time instead). Per-region weather or per-region latitude (still v1 §7). Real-port tide emulation (D28). DST switchover modeling (D17's offset is season-set by the user). Computed eclipse prediction (the v2 phase model does not model orbital alignment). Authored fantasy eclipses and other custom ambient phenomena are also outside v2, but recorded: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1/D37). Lorebook/card climate or latitude override; "suggest latitude from card". The calendar panel itself (its own doc).
 
 ## 8. Open items (small, non-blocking)
 
@@ -162,4 +194,4 @@ Twin moons / moonless worlds / custom cycle lengths (D34). Precise moonrise/moon
 3. **`clockAhead` discoverability** — zero by default and invisible unless looked for; the Overview default-latitude nudge (D18) is the current answer, revisit after story testing.
 4. **Tide window width** — ±2 d default is a first tuning; symmetric shape is the commitment, not the number.
 5. **Injection length audit** — measure real token spend of all channels against the ≤ ~60-added budget (D33) once Phases 5–6 land.
-6. **Calendar doc foundations** — the midsummer anchor (declare which day is midsummer; the day-count origin follows, so sun, weather season, and custom calendar agree by construction instead of by warning); authored-event UX; how loudly to surface weekday-name mismatches once custom weekday lists exist.
+6. **Calendar doc foundations** — the midsummer anchor (declare which day is midsummer; the day-count origin follows, so sun, weather season, and custom calendar agree by construction instead of by warning); authored-event UX, including dated phenomena schedules, the light-override priority, and the active-phenomena output cap (§3.5.1); how loudly to surface weekday-name mismatches once custom weekday lists exist.
