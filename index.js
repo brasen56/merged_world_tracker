@@ -10,6 +10,7 @@
 
 import { getContextSafe } from './core/context.js';
 import * as Ambient from './ambient/index.js';
+import { observeWeekdayDrift } from './core/weekday_drift.js';
 import { renderAmbientSettings, wireAmbientSettings } from './ambient/render.js';
 import { clearAmbientInjection } from './ambient/injection.js';
 import { bumpEpoch } from './core/scope.js';
@@ -825,6 +826,12 @@ function onAnyEvent(names, handler) {
         }
     }
 }
+
+// Calendar integrity is always live, including with Ambient, World State, or
+// injection disabled. Observe after receive/edit/swipe/delete and on hydration.
+onAnyEvent(['CHAT_CHANGED', 'MESSAGE_RECEIVED', 'MESSAGE_EDITED', 'MESSAGE_SWIPED',
+    'MESSAGE_DELETED', 'MORE_MESSAGES_LOADED'], observeWeekdayDrift);
+observeWeekdayDrift();
 
 // The user-generation DEPTH must move exactly once per generation. Registering
 // the decrement on BOTH GENERATION_STOPPED and GENERATION_ENDED (builds can

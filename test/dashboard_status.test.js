@@ -18,6 +18,7 @@ const EXPECTED_KEYS = [
     'deletedIntentions',
     'quarantine',
     'ambient',
+    'weekdayDrift',
 ];
 
 function stubDeps(overrides = {}) {
@@ -34,6 +35,7 @@ function stubDeps(overrides = {}) {
         getDeletedIntentions: vi.fn(() => [{ id: 'deleted-1' }]),
         collectQuarantineStatus: vi.fn(() => ({ total: 1, stores: [] })),
         getAmbientStatus: vi.fn(() => ({ state: 'off' })),
+        getWeekdayDriftStatus: vi.fn(() => null),
         ...overrides,
     };
 }
@@ -62,6 +64,7 @@ describe('collectOverviewSnapshot', () => {
             deletedIntentions: { ok: true, value: [{ id: 'deleted-1' }] },
             quarantine: { ok: true, value: { total: 1, stores: [] } },
             ambient: { ok: true, value: { state: 'off' } },
+            weekdayDrift: { ok: true, value: null },
         });
 
         for (const read of Object.values(deps)) expect(read).toHaveBeenCalledOnce();

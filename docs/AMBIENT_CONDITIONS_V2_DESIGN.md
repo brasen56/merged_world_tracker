@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v2)
 
-**Status:** Revision 3. Phases 5–6 (sun/daylight and moon) implemented; Phases 7–9 remain planned. Optional meteor showers deferred. Custom ambient phenomena are recorded outside v2: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1).
+**Status:** Revision 3. Phases 5–7 (sun/daylight, moon, and Gregorian weekday drift) implemented; Phases 8–9 remain planned. Optional meteor showers deferred. Custom ambient phenomena are recorded outside v2: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1).
 **Written:** 2026-10-23. **Revision 2 (2026-10-24):** folds in `AMBIENT_CONDITIONS_V2_RESPONSE.md` — the sun-time framing, centered phase bins, floored modulo, the southern-hemisphere proxy fix, exact-time evaluation, the moon anchor replacing the moon pin, the calendar panel splitting into its own design doc, and a phase reorder (sun is now Phase 5, moon Phase 6). The response doc and this history remain the discussion record; every formula in revision 1 was re-run and the response's corrections verified independently before folding in. Companion to `AMBIENT_CONDITIONS_DESIGN.md` (v1, Phases 1–4 implemented); that doc stays authoritative for shipped behavior.
 **Decisions continue v1 numbering** (D16+). Phase numbering also continues (v1 shipped Phases 1–4).
 
@@ -160,6 +160,10 @@ Moon-up ignores latitude and terrain, as planned; night brightness is qualitativ
 - Exit: two scenes hours apart agree on the moon; a werecreature chat anchors the full moon and the tides and brightness agree with it.
 
 ### Phase 7 — Gregorian weekday drift
+
+Implemented 2026-10-25: the timestamp parser retains the normalized tagged weekday and compares it with the Gregorian date's UTC weekday without altering story hours or the source ladder. A separate read-only Overview status displays a mismatch badge (date, source message, tagged and computed weekdays), independent of Ambient/World State enablement and the panic switch. Matching, absent, and unusable tags remain silent. The latest usable tag is authoritative; older historical mismatches do not keep a badge alive after a matching newer tag.
+
+The always-on observer records `calendar / gregorian_weekday_drift` warnings on chat load and message receive/edit/swipe/delete/hydration. Consecutive observations of the same mismatch are deduplicated within the current chat/operation epoch; fixing and later restoring a mismatch records it again. Overview reads never emit events. No metadata, timestamps, injection, or story facts are rewritten; this is a Gregorian integrity hint, not a custom-calendar implementation.
 
 - Tag weekday vs computed weekday; Overview badge; diagnostics event. No ambient enablement required.
 - Tests: constructed mismatch badges; matches pass silently; no-tag chats unaffected.

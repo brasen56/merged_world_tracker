@@ -8,6 +8,9 @@ export const AMBIENT_MONTHS = Object.freeze([
 export const AMBIENT_HOUR_MS = 3600000;
 
 const WEEKDAY = '(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)';
+export const GREGORIAN_WEEKDAYS = Object.freeze([
+    'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
+]);
 const CLOCK_RE = /^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i;
 
 function parseClock(text) {
@@ -65,9 +68,13 @@ export function parseAmbientTimestamp(text, options = {}) {
     if (typeof text !== 'string') return null;
     const tags = [...text.matchAll(/\[In-story time:\s*([^\]\r\n]*)\]/gi)];
     for (let index = tags.length - 1; index >= 0; index--) {
-        const match = tags[index][1].match(new RegExp(`^(\\d{1,2}:\\d{2}\\s*(?:AM|PM)),\\s*${WEEKDAY},\\s*(.+)$`, 'i'));
-        const parsed = match ? parseAmbientDateTime(match[2], match[1], options) : null;
-        if (parsed) return parsed;
+        const match = tags[index][1].match(new RegExp(`^(\\d{1,2}:\\d{2}\\s*(?:AM|PM)),\\s*(${WEEKDAY}),\\s*(.+)$`, 'i'));
+        const parsed = match ? parseAmbientDateTime(match[3], match[1], options) : null;
+        if (parsed) {
+            const tagged = GREGORIAN_WEEKDAYS.find(day => day.toLowerCase() === match[2].toLowerCase());
+            const computed = GREGORIAN_WEEKDAYS[new Date(parsed.hours * AMBIENT_HOUR_MS).getUTCDay()];
+            return { ...parsed, weekday: { tagged, computed, mismatch: tagged !== computed } };
+        }
     }
     return null;
 }

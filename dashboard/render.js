@@ -215,6 +215,7 @@ function renderHealth(value) {
 /** Render an already collected snapshot. Exported for jsdom and embedding callers. */
 export function renderOverviewSnapshot(snapshot = {}) {
     const world = snapshot.worldState;
+    const drift = cellValue(snapshot.weekdayDrift);
     const worldValue = cellValue(world, {});
     const worldBody = world?.ok
         ? `${escapeHtml(worldValue.kind || 'unknown')} · ${countText(worldValue.msgsSinceRefresh, 'message')} since refresh`
@@ -263,6 +264,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
             <p>Status for this chat. Open a module for details.</p></div>
             <button type="button" id="mwt-overview-refresh" class="mwt-btn" title="Refresh Overview">🔄 Refresh</button>
         </div>
+        ${drift ? `<p class="mwt-overview-weekday-drift" role="status"><strong>Gregorian weekday mismatch</strong>: message #${escapeHtml(drift.messageIndex)} tags ${escapeHtml(drift.date)} as ${escapeHtml(drift.tagged)}; the Gregorian date is ${escapeHtml(drift.computed)}. Story data has not been changed.</p>` : ''}
         <div class="mwt-overview-grid">
             ${snapshot.ambient ? renderCell('ambient', 'Ambient Conditions', ambientBody, { icon: '🌦️', tab: 'settings', target: 'ambient-settings' }) : ''}
             ${renderCell('worldState', 'World State', () => worldBody, { icon: '🌍', tab: 'world-state' })}
