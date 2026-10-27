@@ -15,5 +15,6 @@ export function buildAmbientPlannerContext() {
         + `Current ${ambient.band.name} band: ${describeConditions(ambient.conditions)}\n`
         + (ambient.daylight ? `Daylight at the exact story time: ${ambient.daylight.description}\n` : '')
         + (ambient.moon ? `Moon at the exact story time: ${ambient.moon.description}\n` : '')
+        + (ambient.aftermath ? `Recent: ${ambient.aftermath.description}\n` : '')
         + `Forecast for the next ${ambient.forecast.band.name} band only: ${describeConditions(ambient.forecast.conditions)}`;
 }

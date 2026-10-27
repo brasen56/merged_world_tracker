@@ -11,6 +11,7 @@ export function buildInjectionBody(ambient) {
     return `Stage direction, not narration. Ambient conditions (authoritative): ${describeConditions(ambient.conditions)} `
         + (ambient.daylight ? `Daylight: ${ambient.daylight.description} ` : '')
         + (ambient.moon ? `Moon: ${ambient.moon.description} ` : ambient.moon === null ? 'Moon unavailable — no calendar clock. ' : '')
+        + (ambient.aftermath ? `Recent: ${ambient.aftermath.description} ` : '')
         + `Forecast for the next ${ambient.forecast.band.name} band only: ${describeConditions(ambient.forecast.conditions)} `
         + 'Reference when perceptually relevant; do not re-mention conditions every reply. '
         + 'Conditions shift only as in-story time advances. If this response skips ahead in time, '

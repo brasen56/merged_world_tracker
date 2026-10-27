@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v2)
 
-**Status:** Revision 3. Phases 5–7 (sun/daylight, moon, and Gregorian weekday drift) implemented; Phases 8–9 remain planned. Optional meteor showers deferred. Custom ambient phenomena are recorded outside v2: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1).
+**Status:** Revision 3. Phases 5–8 (sun/daylight, moon, Gregorian weekday drift, and aftermath) implemented; Phase 9 remains planned. Optional meteor showers deferred. Custom ambient phenomena are recorded outside v2: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1).
 **Written:** 2026-10-23. **Revision 2 (2026-10-24):** folds in `AMBIENT_CONDITIONS_V2_RESPONSE.md` — the sun-time framing, centered phase bins, floored modulo, the southern-hemisphere proxy fix, exact-time evaluation, the moon anchor replacing the moon pin, the calendar panel splitting into its own design doc, and a phase reorder (sun is now Phase 5, moon Phase 6). The response doc and this history remain the discussion record; every formula in revision 1 was re-run and the response's corrections verified independently before folding in. Companion to `AMBIENT_CONDITIONS_DESIGN.md` (v1, Phases 1–4 implemented); that doc stays authoritative for shipped behavior.
 **Decisions continue v1 numbering** (D16+). Phase numbering also continues (v1 shipped Phases 1–4).
 
@@ -170,6 +170,10 @@ The always-on observer records `calendar / gregorian_weekday_drift` warnings on 
 - Exit: a model drifting across weekdays gets caught by the badge, without Phase 9.
 
 ### Phase 8 — Aftermath
+
+Implemented 2026-10-26: `core/ambient_aftermath.js` evaluates recent weather and seasonal crossings through the generator and pin public APIs, without metadata writes. The ~24 h window is anchored to the current band's start for stability; pin starts/ends are honored even within bands. The summary names the current run's start when known and retains the latest earlier precipitation episode. Narration owns ground effects, not the summary. All four surfaces (injection/command, Overview, planner) share the projection; settings explain history rewriting.
+
+Crossing thresholds use public qualitative conditions: freezing (≤0°) for autumn frost, snow/heavy snow/blizzard for autumn/winter snow, and a freezing→nonfreezing transition for spring thaw. Each first is counted from its hemisphere-aware meteorological season start, with the previous condition carried into spring. Crossings appear only after their time and until that calendar day's exclusive midnight end, never anticipating a later band. The bounded disposable day cache includes seed, climate, hemisphere, variability and stored pin, so settings changes cannot reuse stale history. Clockless summaries work; seasonal firsts require a calendar clock.
 
 - Trailing-24 h summary clause with "since" phrasing; first frost/snow/thaw crossings (calendar-clock gated, memoized); injection + Overview lines.
 - Tests: summary determinism and band-boundary stability; crossing visible only inside its day-window, rewind restores it; settings-change rewrites history (reseed → new past, and no metadata writes happen); stored pins applied to past bands, expired pins restore on rewind.

@@ -28,6 +28,7 @@ export function renderAmbientSettings() {
     return `<details class="mwt-settings-disclosure" id="mwt-ambient-settings" open>
         <summary><span aria-hidden="true">🌦️</span> Ambient Conditions (this chat)</summary>
         <p>Code decides the weather; narration renders it when relevant. These controls save separately from global settings.</p>
+        <p class="mwt-text-dim mwt-text-sm">Recent weather is recomputed, not logged. Changing the seed, climate, hemisphere, variability, manual season or stored pin rewrites its evaluated history. Rewinding restores stored pins inside their original intervals.</p>
         <label for="mwt-a-enabled"><input type="checkbox" id="mwt-a-enabled" ${s.enabled ? 'checked' : ''}> Enable Ambient Conditions</label>
         <div id="mwt-a-setup" role="status" ${!s.setupAsked || isConfigured(s) ? 'hidden' : ''}>
             Choose the climate and hemisphere before enabling.

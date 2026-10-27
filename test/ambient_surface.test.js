@@ -34,6 +34,36 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('Phase 8 recent history and crossings match injection, command, Overview and planner without writes', async () => {
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        const start = parseAmbientDateTime('2026-09-01', '13:00').hours;
+        ctx.chat = [{ mes: '[In-story time: 01:00 PM, Tuesday, September 1, 2026]' }];
+        saveSettings({ ...config, seed: 12, climate: 'tropical', pin: {
+            startHours: start, endHours: start + 4, source: 'timestamp',
+            conditions: { ...conditions, temperature: 'freezing', precipitation: 'snow' },
+        } });
+        ctx.saveMetadataDebounced.mockClear();
+        const before = JSON.stringify(ctx.chatMetadata);
+        const status = getAmbientStatus();
+        const description = status.ambient.aftermath.description;
+        expect(description).toContain('first frost today afternoon');
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Recent: ${description}`);
+        expect(ambientCommand()).toBe(buildInjectionBody(status.ambient));
+        expect(renderOverviewSnapshot({ ambient: { ok: true, value: status } })).toContain(`Recent: ${description}`);
+        expect(buildAmbientPlannerContext()).toContain(`Recent: ${description}`);
+        ctx.chat.push({ mes: '[In-story time: 01:00 PM, Wednesday, September 2, 2026]' });
+        onGenerationStarted('swipe');
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Recent: ${description}`);
+        ctx.chat.pop();
+        ctx.chat[0].mes = '[In-story time: 01:00 PM, Wednesday, September 2, 2026]';
+        expect(getAmbientStatus().ambient.aftermath.crossings).toEqual([]);
+        ctx.chat[0].mes = '[In-story time: 01:00 PM, Tuesday, September 1, 2026]';
+        expect(getAmbientStatus().ambient.aftermath.description).toBe(description);
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+    });
+
     test('Phase 6 anchor controls round-trip, clear, validate and remain chat-local', () => {
         saveSettings(config); mount();
         expect(el('moon-date').value).toBe('');
