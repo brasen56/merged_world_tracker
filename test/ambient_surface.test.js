@@ -34,6 +34,64 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('Phase 9 coastal settings save, validate and preserve inland defaults', () => {
+        expect(getSettings()).toMatchObject({ coastal: false, tideRange: 'normal' });
+        expect(ctx.chatMetadata.mwt_ambient).toBeUndefined();
+        saveSettings(config);
+        mount();
+        expect(el('coastal').checked).toBe(false);
+        el('coastal').checked = true;
+        el('tide-range').value = 'extreme';
+        click('save');
+        expect(getSettings()).toMatchObject({ coastal: true, tideRange: 'extreme' });
+        expect(el('status').textContent).toContain('saved');
+        mount();
+        expect(el('coastal').checked).toBe(true);
+        expect(el('tide-range').value).toBe('extreme');
+        expect(() => saveSettings({ coastal: 'true' })).toThrow('Coastal');
+        expect(() => saveSettings({ tideRange: 'huge' })).toThrow('Tide range');
+        expect(ctx.chatMetadata.mwt_ambient).toMatchObject({ coastal: true, tideRange: 'extreme' });
+    });
+
+    test('Phase 9 shared tide facts match all surfaces, rewind and swipe without writes', async () => {
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        saveSettings({ ...config, coastal: true, seed: 12 });
+        const status = getAmbientStatus();
+        const description = status.ambient.tide.description;
+        ctx.saveMetadataDebounced.mockClear();
+        const before = JSON.stringify(ctx.chatMetadata);
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Tides: ${description}`);
+        expect(ambientCommand()).toBe(buildInjectionBody(status.ambient));
+        expect(renderOverviewSnapshot({ ambient: { ok: true, value: status } })).toContain(`Tides: ${description}`);
+        expect(buildAmbientPlannerContext()).toContain(`Tides at the exact story time: ${description}`);
+        ctx.chat.push({ mes: '[In-story time: 06:00 PM, Thursday, June 4, 2026]' });
+        onGenerationStarted('swipe');
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Tides: ${description}`);
+        expect(getAmbientStatus().ambient.tide.phase).not.toBe(status.ambient.tide.phase);
+        ctx.chat.pop();
+        expect(getAmbientStatus().ambient.tide).toEqual(status.ambient.tide);
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+        vi.spyOn(Math, 'random').mockReturnValue(0.123);
+        ambientCommand('reseed');
+        expect(getAmbientStatus().ambient.tide.nextHighHours).not.toBe(status.ambient.tide.nextHighHours);
+    });
+
+    test('Phase 9 inland and clockless surfaces omit tide lines entirely', async () => {
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        saveSettings(config);
+        for (const coastal of [false, true]) {
+            saveSettings({ coastal });
+            if (coastal) ctx.chat = [{ mes: 'No calendar clock' }];
+            const status = getAmbientStatus();
+            expect(status.ambient.tide).toBeNull();
+            expect(ambientCommand()).not.toContain('Tides:');
+            expect(renderOverviewSnapshot({ ambient: { ok: true, value: status } })).not.toContain('Tides:');
+            expect(buildAmbientPlannerContext()).not.toContain('Tides at');
+        }
+    });
+
     test('Phase 8 recent history and crossings match injection, command, Overview and planner without writes', async () => {
         const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
         const start = parseAmbientDateTime('2026-09-01', '13:00').hours;

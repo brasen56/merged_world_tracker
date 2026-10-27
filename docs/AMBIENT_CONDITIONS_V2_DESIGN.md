@@ -1,6 +1,6 @@
 # Ambient Conditions module design (v2)
 
-**Status:** Revision 3. Phases 5–8 (sun/daylight, moon, Gregorian weekday drift, and aftermath) implemented; Phase 9 remains planned. Optional meteor showers deferred. Custom ambient phenomena are recorded outside v2: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1).
+**Status:** Revision 3. Phases 5–9 (sun/daylight, moon, Gregorian weekday drift, aftermath, and tides) implemented. Optional meteor showers deferred. Custom ambient phenomena are recorded outside v2: frequency-shaped ones as a future ambient channel, dated ones for the later calendar design (§3.5.1).
 **Written:** 2026-10-23. **Revision 2 (2026-10-24):** folds in `AMBIENT_CONDITIONS_V2_RESPONSE.md` — the sun-time framing, centered phase bins, floored modulo, the southern-hemisphere proxy fix, exact-time evaluation, the moon anchor replacing the moon pin, the calendar panel splitting into its own design doc, and a phase reorder (sun is now Phase 5, moon Phase 6). The response doc and this history remain the discussion record; every formula in revision 1 was re-run and the response's corrections verified independently before folding in. Companion to `AMBIENT_CONDITIONS_DESIGN.md` (v1, Phases 1–4 implemented); that doc stays authoritative for shipped behavior.
 **Decisions continue v1 numbering** (D16+). Phase numbering also continues (v1 shipped Phases 1–4).
 
@@ -180,6 +180,8 @@ Crossing thresholds use public qualitative conditions: freezing (≤0°) for aut
 - Exit: "the ground is still soft from yesterday's rain" is always consistent with the injected history of the last day, across swipes and branches.
 
 ### Phase 9 — Tides
+
+Implemented 2026-10-26: pure 12.4206-hour semidiurnal cycle in `core/ambient_astronomy.js`, with a deterministic seed-derived port offset and the shared moon anchor translating the schedule. Symmetric ±2-day spring/neap windows read the Phase 6 lunar phase directly. High/low slack buckets extend one twenty-fourth of a cycle (about 31 minutes) either side of each extremum; remaining times are falling/rising. Chat-local coastal defaults off, range defaults normal and changes wording only. Injection, `/wt-ambient`, Overview and planner share the exact-time projection; inland and calendarless chats omit the tide line entirely. Next high water is rounded to half-hour story-clock time with a tomorrow qualifier on day rollover (including rounding across midnight). Tide event hours are already on the story-clock axis, so `clockAhead` is not added a second time. Settings describe the fictional-port limitation and reseed/anchor consequences. Tests cover period/offset, negative dates, slack boundaries, anchored lunar windows, range-only wording, calendar gating, random-access determinism, settings validation, reseed, swipe/rewind and all shared surfaces. No real-port accuracy or navigation use is claimed.
 
 - `coastal` + `tideRange` settings; M2 cycle + seed offset + symmetric spring/neap windows; exact-time state; "next high water" forecasts; follows the anchored moon.
 - Tests: period and offset by construction; spring within ±2 d of new/full, neap within ±2 d of quarters (cross-checked against the Phase 6 moon and the anchor); qualitative bucketing; omission when inland or clockless; `reseed` moves the tide schedule with the weather.

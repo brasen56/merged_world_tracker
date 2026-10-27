@@ -48,6 +48,9 @@ export function renderAmbientSettings() {
                 <input class="mwt-input" id="mwt-a-moon-time" type="time" value="${anchor ? anchor.slice(11, 16) : '18:00'}">
                 <p class="mwt-text-dim mwt-text-sm">Optional. Blank date restores the real-world moon cycle. Re-anchoring rewrites past and future phases consistently; it is not a weather pin. Moon facts need a calendar clock. Moon-up is approximate and ignores latitude.</p></div>
             ${select('mwt-a-season', 'Manual season (when no calendar is usable)', AMBIENT_SEASONS, s.manualSeason)}
+            <label for="mwt-a-coastal"><input type="checkbox" id="mwt-a-coastal" ${s.coastal ? 'checked' : ''}> Coastal location (enable tides)</label>
+            <p class="mwt-text-dim mwt-text-sm">Tides need a story calendar clock. Fictional semidiurnal schedule, not real-port or navigation predictions. Re-anchoring the moon shifts tides; reseeding changes both weather and the tide schedule.</p>
+            ${select('mwt-a-tide-range', 'Tidal range (wording only)', { calm: 'Calm — small range', normal: 'Normal — moderate range', extreme: 'Extreme — large range' }, s.tideRange)}
             <label class="mwt-label" for="mwt-a-variability">Variability (change frequency)</label>
             <div>
                 <input id="mwt-a-variability" type="range" min="0" max="1" step="0.05" value="${variability}" aria-describedby="mwt-a-variability-help" aria-valuetext="${variabilityText(variability)}">
@@ -123,6 +126,7 @@ export function wireAmbientSettings(root) {
             latitude: el('latitude').value.trim() === '' ? null : Number(el('latitude').value),
             clockAhead: Number(el('clock-ahead').value),
             moonEpochOffset: fullMoon ? moonAnchorOffset(fullMoon.hours) : null,
+            coastal: el('coastal').checked, tideRange: el('tide-range').value,
             variability: Number(el('variability').value), setupAsked: true });
         el('setup').hidden = true;
         invalidate('Ambient settings saved for this chat.');

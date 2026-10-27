@@ -35,7 +35,7 @@ export function isMoonEpochOffset(value) {
         && Number.isFinite(new Date((LUNAR_EPOCH_HOURS + value + LUNAR_MONTH_DAYS * 12) * AMBIENT_HOUR_MS).getTime());
 }
 
-/** Shared anchored phase for moon, and eventually tides and lunar events. */
+/** Shared anchored phase for moon, tides and future lunar events. */
 export function lunarPhaseAt(hours, moonEpochOffset = 0) {
     if (!Number.isFinite(hours)) throw new RangeError('Story hours must be finite.');
     const offset = isMoonEpochOffset(moonEpochOffset) ? moonEpochOffset : 0;
@@ -73,6 +73,52 @@ export function generateAmbientMoon({ time, moonEpochOffset = 0, clockAhead = 0,
 
 export function flooredMod(value, period) {
     return ((value % period) + period) % period;
+}
+
+export const TIDE_PERIOD_HOURS = 12.4206;
+export const TIDE_WINDOW_DAYS = 2;
+export const TIDE_RANGES = Object.freeze({ calm: 'small tidal range', normal: 'moderate tidal range', extreme: 'large tidal range' });
+export const TIDE_VOCABULARY = Object.freeze({
+    high: 'high water, slack', low: 'low water, slack', rising: 'rising water', falling: 'falling water',
+    spring: 'spring tide', neap: 'neap tide', ordinary: 'between spring and neap',
+});
+
+/** Fixed fictional-port interval, independent of weather channels and host randomness. */
+export function tideOffsetForSeed(seed = 0) {
+    if (!Number.isFinite(seed)) throw new RangeError('Ambient seed must be finite.');
+    const key = `${seed}:tide`;
+    let hash = 2166136261;
+    for (let index = 0; index < key.length; index++) hash = Math.imul(hash ^ key.charCodeAt(index), 16777619);
+    return (hash >>> 0) / 4294967296 * TIDE_PERIOD_HOURS;
+}
+
+/** Internally consistent semidiurnal tides, not real-port or navigation predictions. */
+export function generateAmbientTide({ time, seed = 0, coastal = false, tideRange = 'normal', moonEpochOffset = 0 }) {
+    if (coastal !== true) return null;
+    const hours = typeof time === 'number' ? time : time?.hours;
+    if (!Number.isFinite(hours)) throw new RangeError('Story hours must be finite.');
+    if (typeof time !== 'number' && (time?.source === 'message-count' || time?.month == null)) return null;
+    const anchor = isMoonEpochOffset(moonEpochOffset) ? moonEpochOffset : 0;
+    const offset = tideOffsetForSeed(seed);
+    // Re-anchoring translates the entire schedule, not just its spring/neap label.
+    const origin = LUNAR_EPOCH_HOURS + anchor + offset;
+    const phase = flooredMod(hours - origin, TIDE_PERIOD_HOURS) / TIDE_PERIOD_HOURS;
+    // One twenty-fourth of a cycle is about half an hour around each extremum.
+    const slackWindow = 1 / 24;
+    const state = Math.min(phase, 1 - phase) <= slackWindow ? 'high'
+        : Math.abs(phase - 0.5) <= slackWindow ? 'low' : phase < 0.5 ? 'falling' : 'rising';
+    const lunar = lunarPhaseAt(hours, anchor);
+    const springDistance = Math.min(lunar.phase, Math.abs(lunar.phase - 0.5), 1 - lunar.phase) * LUNAR_MONTH_DAYS;
+    const neapDistance = Math.min(Math.abs(lunar.phase - 0.25), Math.abs(lunar.phase - 0.75)) * LUNAR_MONTH_DAYS;
+    const modulation = springDistance <= TIDE_WINDOW_DAYS ? 'spring' : neapDistance <= TIDE_WINDOW_DAYS ? 'neap' : 'ordinary';
+    const range = Object.hasOwn(TIDE_RANGES, tideRange) ? tideRange : 'normal';
+    const nextHighHours = origin + (Math.floor((hours - origin) / TIDE_PERIOD_HOURS) + 1) * TIDE_PERIOD_HOURS;
+    // Qualify the rounded clock's day too: 23:50 rounds into tomorrow, not 00:00 today.
+    const roundedHigh = Math.round(nextHighHours * 2) / 2;
+    const dayDelta = Math.floor(roundedHigh / 24) - Math.floor(hours / 24);
+    const day = dayDelta === 1 ? ' tomorrow' : dayDelta > 1 ? ` in ${dayDelta} days` : '';
+    return { phase, offset, state, slack: state === 'high' || state === 'low', modulation, range, nextHighHours,
+        description: `${TIDE_VOCABULARY[state]}; ${TIDE_VOCABULARY[modulation]}; ${TIDE_RANGES[range]}; next high water${day} around ${roundSkyTime(nextHighHours)}.` };
 }
 
 /** Invalid optional stored values fall back safely; defaults are never persisted. */

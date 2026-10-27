@@ -5,7 +5,7 @@ import { getCurrentWorldState } from './metadata.js';
 import { resolveAmbientTime } from './ambient_time.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS, generateAmbientConditions } from './ambient_generator.js';
 import { applyAmbientPin } from './ambient_pin.js';
-import { generateAmbientDaylight, generateAmbientMoon } from './ambient_astronomy.js';
+import { generateAmbientDaylight, generateAmbientMoon, generateAmbientTide } from './ambient_astronomy.js';
 import { generateAmbientAftermath } from './ambient_aftermath.js';
 
 export function readAmbientConditions(settings, seed, type = 'normal') {
@@ -13,6 +13,7 @@ export function readAmbientConditions(settings, seed, type = 'normal') {
     const ambient = applyAmbientPin(generateAmbientConditions({ ...settings, seed, time }), settings.pin, time);
     ambient.daylight = generateAmbientDaylight({ ...settings, seed, time });
     ambient.moon = generateAmbientMoon({ ...settings, time, daylight: ambient.daylight, conditions: ambient.conditions });
+    ambient.tide = generateAmbientTide({ ...settings, seed, time });
     ambient.aftermath = generateAmbientAftermath({ ...settings, seed, time });
     return { time, ambient };
 }

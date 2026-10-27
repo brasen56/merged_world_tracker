@@ -3,7 +3,7 @@ import { getChatMeta, getContextSafe } from '../core/context.js';
 import { patchChatMeta } from '../core/metadata.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS } from '../core/ambient_generator.js';
 import { isAmbientPin } from '../core/ambient_pin.js';
-import { isAmbientClockAhead, isMoonEpochOffset } from '../core/ambient_astronomy.js';
+import { isAmbientClockAhead, isMoonEpochOffset, TIDE_RANGES } from '../core/ambient_astronomy.js';
 
 export const SETTINGS_KEY = 'mwt_ambient';
 
@@ -17,6 +17,8 @@ export function getSettings() {
         latitude: settings.latitude ?? null,
         clockAhead: settings.clockAhead ?? 0,
         moonEpochOffset: settings.moonEpochOffset ?? null,
+        coastal: settings.coastal === true,
+        tideRange: Object.hasOwn(TIDE_RANGES, settings.tideRange) ? settings.tideRange : 'normal',
         manualSeason: settings.manualSeason ?? 'spring',
         variability: settings.variability ?? 0.5,
         setupAsked: settings.setupAsked === true,
@@ -27,6 +29,8 @@ export function getSettings() {
 export function saveSettings(patch) {
     if (!getContextSafe()) throw new Error('No active chat.');
     const next = { ...getSettings(), ...patch };
+    if (Object.hasOwn(patch, 'coastal') && typeof patch.coastal !== 'boolean') throw new Error('Coastal must be on or off.');
+    if (Object.hasOwn(patch, 'tideRange') && !Object.hasOwn(TIDE_RANGES, patch.tideRange)) throw new Error('Tide range must be calm, normal or extreme.');
     if (Object.hasOwn(patch, 'latitude') && patch.latitude !== null
         && (!Number.isFinite(patch.latitude) || patch.latitude < 0 || patch.latitude > 90)) throw new Error('Latitude must be a magnitude between 0 and 90, or blank for the climate default.');
     if (Object.hasOwn(patch, 'clockAhead') && !isAmbientClockAhead(patch.clockAhead)) throw new Error('Clock ahead must be 0–2 hours in half-hour steps.');
