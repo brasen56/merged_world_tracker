@@ -4,6 +4,7 @@ import { patchChatMeta } from '../core/metadata.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS } from '../core/ambient_generator.js';
 import { isAmbientPin } from '../core/ambient_pin.js';
 import { isAmbientClockAhead, isMoonEpochOffset, TIDE_RANGES } from '../core/ambient_astronomy.js';
+import { validateFrequencyRules } from '../core/ambient_phenomena.js';
 
 export const SETTINGS_KEY = 'mwt_ambient';
 
@@ -23,12 +24,14 @@ export function getSettings() {
         variability: settings.variability ?? 0.5,
         setupAsked: settings.setupAsked === true,
         pin: settings.pin ?? null,
+        phenomena: settings.phenomena ?? [],
     };
 }
 
 export function saveSettings(patch) {
     if (!getContextSafe()) throw new Error('No active chat.');
     const next = { ...getSettings(), ...patch };
+    if (Object.hasOwn(patch, 'phenomena')) validateFrequencyRules(patch.phenomena);
     if (Object.hasOwn(patch, 'coastal') && typeof patch.coastal !== 'boolean') throw new Error('Coastal must be on or off.');
     if (Object.hasOwn(patch, 'tideRange') && !Object.hasOwn(TIDE_RANGES, patch.tideRange)) throw new Error('Tide range must be calm, normal or extreme.');
     if (Object.hasOwn(patch, 'latitude') && patch.latitude !== null

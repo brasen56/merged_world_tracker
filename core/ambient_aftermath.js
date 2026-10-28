@@ -31,8 +31,10 @@ function sampleHours(start, end, pin) {
 }
 
 function when(hours, day) {
-    const band = quantizeAmbientTime(hours).name;
-    return `${Math.floor(hours / 24) * 24 < day ? 'yesterday' : 'today'} ${band}`;
+    const band = quantizeAmbientTime(hours);
+    // The night band spans midnight, including pin transitions before dawn.
+    if (band.name === 'night' && band.startHours < day) return 'last night';
+    return `${Math.floor(hours / 24) * 24 < day ? 'yesterday' : 'today'} ${band.name}`;
 }
 
 function weather(conditions) {

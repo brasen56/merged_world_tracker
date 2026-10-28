@@ -13,6 +13,7 @@ export function buildInjectionBody(ambient) {
         + (ambient.moon ? `Moon: ${ambient.moon.description} ` : ambient.moon === null ? 'Moon unavailable — no calendar clock. ' : '')
         + (ambient.tide ? `Tides: ${ambient.tide.description} ` : '')
         + (ambient.aftermath ? `Recent: ${ambient.aftermath.description} ` : '')
+        + (ambient.phenomena?.description ? `Phenomena: ${ambient.phenomena.description}. ` : '')
         + `Forecast for the next ${ambient.forecast.band.name} band only: ${describeConditions(ambient.forecast.conditions)} `
         + 'Reference when perceptually relevant; do not re-mention conditions every reply. '
         + 'Conditions shift only as in-story time advances. If this response skips ahead in time, '

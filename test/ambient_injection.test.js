@@ -336,6 +336,15 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         expect(events[0].detail).toMatchObject({ clearReason: 'prompt-history-pending', generationType: 'normal' });
     });
 
+    test('clockless injection states the calendar limitation only once', () => {
+        ctx.chat = [{ mes: 'No clock in this scene.' }];
+        expect(onGenerationStarted('normal')).toBe(true);
+        const text = snapshot().payload;
+        expect(text).toContain('seasonal proxy.');
+        expect(text).toContain('Moon unavailable — no calendar clock.');
+        expect(text.match(/no calendar clock/g)).toHaveLength(1);
+    });
+
     test('formatter does not promote next-band forecast into a within-hour claim', () => {
         const ambient = generateAmbientConditions({ seed: 42, time: { hours: 12, month: null }, climate: 'desert' });
         const body = buildInjectionBody(ambient);

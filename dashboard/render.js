@@ -44,6 +44,8 @@ function ambientBody(value) {
         ${value?.ambient ? `<p>Moon: ${value.ambient.moon ? escapeHtml(value.ambient.moon.description) : 'unavailable — no calendar clock.'}</p>` : ''}
         ${value?.ambient?.tide ? `<p>Tides: ${escapeHtml(value.ambient.tide.description)}</p>` : ''}
         ${value?.ambient?.aftermath ? `<p>Recent: ${escapeHtml(value.ambient.aftermath.description)}</p>` : ''}
+        ${value?.ambient?.phenomena?.description ? `<p>Phenomena: ${escapeHtml(value.ambient.phenomena.description)}</p>` : ''}
+        ${value?.ambient?.phenomena?.omitted ? `<p>${value.ambient.phenomena.omitted} additional visible phenomena omitted (three-clause cap).</p>` : ''}
         ${pin ? `<p>Pin ${value.ambient?.pinned ? 'active' : 'inactive (outside interval or clock source changed)'}; from ${escapeHtml(bound(pin.startHours, pin.source))}; ${pin.endHours === null ? 'until unpinned' : `expires ${escapeHtml(bound(pin.endHours, pin.source))}`}.</p>` : ''}`;
 }
 

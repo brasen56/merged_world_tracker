@@ -89,6 +89,8 @@ Pure functions over (story hours, seed) plus the anchored moon phase (D28/D29):
 
 #### 3.5.1 Future scope: custom ambient phenomena
 
+**Implementation update (2026-10-27):** The frequency-shaped subset is now implemented; see `AMBIENT_PHENOMENA.md` for the settled schema, 21:00 sun-time start sampling, bounds, light priority, and authoring controls. Date-shaped schedules remain deferred. The original design discussion below is retained.
+
 User feedback asks for frequent meteor showers, month-long eclipses, and "miasma clouds". These are authored world rules, not another climate preset or a temporary weather pin, and their timing must agree across scenes, swipes, and rewinds. They come in two shapes, and the shape decides where each one lives (D37):
 
 | Shape | Examples | Home | Clock needed |
@@ -186,6 +188,8 @@ Implemented 2026-10-26: pure 12.4206-hour semidiurnal cycle in `core/ambient_ast
 - `coastal` + `tideRange` settings; M2 cycle + seed offset + symmetric spring/neap windows; exact-time state; "next high water" forecasts; follows the anchored moon.
 - Tests: period and offset by construction; spring within ±2 d of new/full, neap within ±2 d of quarters (cross-checked against the Phase 6 moon and the anchor); qualitative bucketing; omission when inland or clockless; `reseed` moves the tide schedule with the weather.
 - Exit: a coastal story can schedule "we cross at low tide" and the module's tide facts never contradict the plan.
+
+Timing caveat for D24/D28: moon-up compares sun time (`hours - clockAhead`), while tides remain on raw story hours. Changing `clockAhead` therefore shifts the tide-to-moon-up relationship by the same amount (2 h for a 2 h offset), without moving the tide schedule. The intended transit lock is approximate even at zero offset because the moon-up and tide formulas are separate heuristics; a nonzero clock offset adds this further displacement. No explicit moonrise/moonset time is emitted. Revisit the shared time basis before promising synchronized moonlit tide crossings; do not add `clockAhead` to already-story-clock tide forecasts.
 
 ### Calendar panel → its own design doc
 

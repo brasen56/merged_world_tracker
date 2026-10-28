@@ -34,6 +34,70 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('frequency rule controls add, edit, end and delete while preserving past output', () => {
+        saveSettings(config);
+        mount();
+        el('phenomena-kind').value = 'additive';
+        el('phenomena-chance').value = '1';
+        click('phenomena-add');
+        const rule = getSettings().phenomena[0];
+        expect(rule).toMatchObject({ id: 'phenomenon-1', startHours: hours, endHours: null, source: 'timestamp' });
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([]);
+        ctx.chat[0].mes = '[In-story time: 10:00 PM, Thursday, June 4, 2026]';
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([rule.id]);
+        click('phenomena-end');
+        expect(getSettings().phenomena[0].endHours).toBe(hours + 10);
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([]);
+        ctx.chat[0].mes = '[In-story time: 09:00 PM, Thursday, June 4, 2026]';
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([rule.id]);
+        el('phenomena-json').value = JSON.stringify([{ ...rule, chance: 2 }]);
+        click('phenomena-save');
+        expect(el('status').textContent).toContain('Invalid frequency');
+        expect(getSettings().phenomena[0].chance).toBe(1);
+        click('phenomena-delete');
+        expect(getSettings().phenomena).toEqual([]);
+    });
+
+    test('phenomena and effective light share projection across all surfaces without changing moon phase or tides', async () => {
+        saveSettings({ ...config, coastal: true, latitude: 65 });
+        const natural = getAmbientStatus().ambient;
+        saveSettings({ phenomena: [{ id: 'eclipse', shape: 'frequency', name: 'Ash eclipse', clause: 'ash veils the sun',
+            chance: 1, durationNights: 2, startHours: hours - 24, endHours: null, light: 'darkness', priority: 10 }] });
+        const before = JSON.stringify(ctx.chatMetadata);
+        const { ambient } = getAmbientStatus();
+        expect(ambient.daylight.regime).toBe('darkness');
+        expect(ambient.daylight.description).not.toContain('sunset');
+        expect(ambient.moon.phase).toBe(natural.moon.phase);
+        expect(ambient.moon.brightness).not.toBeNull();
+        expect(ambient.tide).toEqual(natural.tide);
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        for (const text of [ambientCommand(), buildAmbientPlannerContext(),
+            renderOverviewSnapshot({ ambient: { ok: true, value: getAmbientStatus() } })]) {
+            expect(text).toContain('ash veils the sun');
+            expect(text).toContain('Ash eclipse');
+        }
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain('ash veils the sun');
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+    });
+
+    test('frequency rules work on fallback clocks and obey module and panic gates', () => {
+        saveSettings(config);
+        ctx.chat = Array.from({ length: 22 }, () => ({ mes: 'No clock' }));
+        saveSettings({ phenomena: [{ id: 'mist', shape: 'frequency', name: 'Mist', clause: 'violet mist gathers',
+            chance: 1, durationNights: 1, startHours: 21, endHours: null, source: 'message-count' }] });
+        expect(ambientCommand()).toContain('violet mist gathers');
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain('violet mist gathers');
+        ctx.extensionSettings.merged_world_tracker.injectionMasterOff = true;
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').enabled).toBe(false);
+        ctx.extensionSettings.merged_world_tracker.injectionMasterOff = false;
+        saveSettings({ enabled: false });
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').enabled).toBe(false);
+    });
+
     test('Phase 9 coastal settings save, validate and preserve inland defaults', () => {
         expect(getSettings()).toMatchObject({ coastal: false, tideRange: 'normal' });
         expect(ctx.chatMetadata.mwt_ambient).toBeUndefined();

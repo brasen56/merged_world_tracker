@@ -5,13 +5,23 @@ import { getCurrentWorldState } from './metadata.js';
 import { resolveAmbientTime } from './ambient_time.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS, generateAmbientConditions } from './ambient_generator.js';
 import { applyAmbientPin } from './ambient_pin.js';
-import { generateAmbientDaylight, generateAmbientMoon, generateAmbientTide } from './ambient_astronomy.js';
+import { auroraPossible, generateAmbientDaylight, generateAmbientMoon, generateAmbientTide } from './ambient_astronomy.js';
 import { generateAmbientAftermath } from './ambient_aftermath.js';
+import { generateAmbientPhenomena } from './ambient_phenomena.js';
 
 export function readAmbientConditions(settings, seed, type = 'normal') {
     const time = resolveAmbientTime({ messages: getContextSafe()?.chat, worldState: getCurrentWorldState(), type });
     const ambient = applyAmbientPin(generateAmbientConditions({ ...settings, seed, time }), settings.pin, time);
     ambient.daylight = generateAmbientDaylight({ ...settings, seed, time });
+    ambient.phenomena = generateAmbientPhenomena({ ...settings, seed, time, daylight: ambient.daylight,
+        conditions: ambient.conditions, season: ambient.season });
+    if (ambient.phenomena.light) {
+        const rule = ambient.phenomena.light;
+        const aurora = auroraPossible({ seed, hours: time.hours - ambient.daylight.clockAhead,
+            latitude: ambient.daylight.latitude, regime: rule.light });
+        ambient.daylight = { ...ambient.daylight, naturalRegime: ambient.daylight.regime, regime: rule.light, aurora,
+            description: `${rule.name}: ${rule.light} (authored light override)${aurora ? '; aurora possible' : ''}.` };
+    }
     ambient.moon = generateAmbientMoon({ ...settings, time, daylight: ambient.daylight, conditions: ambient.conditions });
     ambient.tide = generateAmbientTide({ ...settings, seed, time });
     ambient.aftermath = generateAmbientAftermath({ ...settings, seed, time });

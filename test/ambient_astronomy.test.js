@@ -60,7 +60,8 @@ describe('Phase 5 pure sun-time astronomy', () => {
         const proxy = manualSeason => generateAmbientDaylight({ ...config, time: { hours: 17, month: null }, latitude: 60, hemisphere, manualSeason });
         expect(proxy('summer').dayClass).toBe('long');
         expect(proxy('winter').dayClass).toBe('short');
-        expect(proxy('summer').description).toContain('no calendar clock');
+        expect(proxy('summer').description).toContain('seasonal proxy.');
+        expect(proxy('summer').description).not.toContain('no calendar clock');
         expect(proxy('summer').dayLength).toBe(generateAmbientDaylight({ ...config, time: { hours: 17, month: null }, latitude: 60, manualSeason: 'summer' }).dayLength);
     });
 

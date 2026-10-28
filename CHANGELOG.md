@@ -12,6 +12,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.14.0]
+
+### Added
+
+- **Ambient Conditions v2 — the sky joins the weather as an authoritative
+  fact.** Sun, daylight, tides and the weather's aftermath complete the sky
+  model the 2.13.2 moon phase began. Everything is computed from the chat's
+  seed, the resolved story clock and your settings — the same story moment
+  always produces the same sky, across swipes, regenerations and rewinds,
+  with no new stored state — and injection, `/wt-ambient`, the Overview
+  Ambient card and the Story Planner context share one projection, so the
+  narrator renders "long light past nine" instead of calling an August
+  evening at 60°N dark at 5 PM.
+  - **Daylight follows latitude and the exact story time.** A latitude
+    setting (magnitude 0–90; the existing hemisphere supplies the sign, and
+    each climate shows a default that is never saved) drives
+    refraction-corrected sunrise, sunset and civil twilight, and the exact
+    resolved time is classified as daylight, civil twilight or darkness —
+    weather bands no longer decide how dark it is, so a bright 21:00
+    midsummer evening is never called near-dark and a 16:20 December dusk is
+    never called "low sun". Event facts are stated rounded to the half hour
+    ("sunset around 20:30", "civil dusk ends around 21:30"); polar day,
+    polar night and white nights are first-class; high-latitude dark nights
+    can carry a deterministic, per-night "aurora possible"; and an optional
+    per-chat "clocks run ahead of the sun by" offset (0–2 h in 30-minute
+    steps) keeps stated clock times honest for stories set in real places.
+    Chats without a usable calendar degrade to a seasonal proxy from the
+    manual season. (This landed in the 2.13.2 patch beside the moon; it is
+    recorded here now that v2 is complete.)
+  - **Tides for coastal chats.** An opt-in coastal setting adds a
+    deterministic 12.4-hour semidiurnal schedule with a per-chat port
+    offset derived from the seed. Spring and neap windows track the
+    computed lunar phase, so the 2.13.2 full-moon anchor — or a reseed —
+    shifts the tide schedule with the moon. The exact-time state reads high
+    or low water at slack, or rising/falling between, with a qualitative
+    range (wording only), and forecasts name the next high water rounded to
+    the half hour. Inland and calendarless chats omit the line entirely.
+    It is a fictional-port schedule, not real-port or navigation data.
+  - **Recent weather, consistent with the injected past.** A trailing-day
+    summary ("steady rain yesterday evening, ground still wet") is
+    recomputed from the same generator as the current conditions — nothing
+    is logged, weather pins apply to past bands, and rewinding restores
+    what the rewound skies produced — so ground conditions never contradict
+    the weather the story already narrated. Calendar-clock chats also see
+    seasonal firsts (first frost, first snow, first thaw) inside their
+    day-window. Like the weather itself, changing settings or reseeding
+    rewrites the recomputed past.
+- **Frequency-shaped ambient phenomena (§3.5.1/D37).** Chat-local meteor,
+  miasma and custom rules use deterministic per-night starts, bounded duration
+  look-back, historical start gates and exact-time visibility. Shared output
+  includes additive clauses and priority-resolved light overrides. Settings
+  provide authoring, advanced JSON, history-preserving End now and explicit
+  history-erasing deletion. Works with calendar and message-count clocks;
+  dated schedules remain deferred.
+- **Gregorian weekday drift detection.** Overview flags a mismatch between
+  the latest usable In-story time tag's weekday and its Gregorian date, with
+  a deduplicated diagnostics warning. Works with Ambient Conditions and
+  injection disabled; never changes story data or the clock.
+
+### Changed
+
+- **The optional clock-ahead offset now converts the whole sun-time basis.**
+  In 2.13.2 it shifted only stated event times; now the daylight regime,
+  the golden-hour window, the next-event pick, the aurora night identity and
+  moon-up all read the converted sun time, and stated clock facts re-add the
+  offset — so a stated sunset can never fall after a regime that already
+  calls the scene dark, and a clock running ahead of the sun sees the moon
+  rise that much earlier. Ordinary-day copy is now "typical day length".
+
 ## [2.13.2]
 
 ### Added

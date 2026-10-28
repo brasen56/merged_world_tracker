@@ -60,6 +60,22 @@ export function renderAmbientSettings() {
             </div>
         </div>
         <button type="button" class="mwt-btn" id="mwt-a-save">Save Ambient Settings</button>
+        <details><summary>Frequency-shaped phenomena</summary>
+            <p>One start roll per night at 21:00 sun time. New rules start no earlier than now; duration uses noon-to-noon nights. Works without a calendar. No frequency forecasts.</p>
+            <label for="mwt-a-phenomena-name">Name</label><input class="mwt-input" id="mwt-a-phenomena-name" maxlength="60" value="Meteor shower">
+            <label for="mwt-a-phenomena-clause">Clause (up to 80 characters)</label><input class="mwt-input" id="mwt-a-phenomena-clause" maxlength="80" value="meteors streak across the sky">
+            <label for="mwt-a-phenomena-chance">Start chance per night (0–1)</label><input class="mwt-input" id="mwt-a-phenomena-chance" type="number" min="0" max="1" step="0.05" value="0.3">
+            <label for="mwt-a-phenomena-duration">Duration (1–30 nights)</label><input class="mwt-input" id="mwt-a-phenomena-duration" type="number" min="1" max="30" value="1">
+            ${select('mwt-a-phenomena-kind', 'Effect template', { meteors: 'Meteors (darkness, clear or partly cloudy)', miasma: 'Miasma (starts in calm darkness)', additive: 'Unrestricted additive clause' }, 'meteors')}
+            <button type="button" class="mwt-btn" id="mwt-a-phenomena-add">Add rule now</button>
+            <label for="mwt-a-phenomena-json">Advanced rules (JSON)</label>
+            <textarea class="mwt-input" id="mwt-a-phenomena-json" rows="12">${escapeHtml(JSON.stringify(s.phenomena, null, 2))}</textarea>
+            <p class="mwt-text-dim mwt-text-sm">Maximum 16 rules; three visible clauses are shown. Editing chance, gates or duration rewrites history. IDs must remain stable. Optional startGates/visibilityGates accept arrays for regime, sky, wind and season. Optional light is daylight, twilight or darkness; highest priority (−100 to 100, default 0) wins, then ascending ID. Light applies throughout an active occurrence, independently of visibility. Weather pins still own weather fields. Calendar and message-count intervals are separate clock domains.</p>
+            <button type="button" class="mwt-btn" id="mwt-a-phenomena-save">Save edited rules (rewrites history)</button>
+            <label for="mwt-a-phenomena-id">Rule ID to end or delete</label><input class="mwt-input" id="mwt-a-phenomena-id">
+            <button type="button" class="mwt-btn" id="mwt-a-phenomena-end">End now (preserve past)</button>
+            <button type="button" class="mwt-btn" id="mwt-a-phenomena-delete">Delete rule (erases history)</button>
+        </details>
         <details><summary>Pin conditions</summary>
             <p>Pins override rolls, including climate restrictions. Expiry uses story time, not real time.</p>
             <div class="mwt-settings-grid">
@@ -98,6 +114,39 @@ export function wireAmbientSettings(root) {
         clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'settings-changed' });
         el('status').textContent = message;
     };
+    const saveRules = rules => {
+        saveSettings({ phenomena: rules });
+        el('phenomena-json').value = JSON.stringify(rules, null, 2);
+        invalidate('Phenomena saved for this chat.');
+    };
+    el('phenomena-save').addEventListener('click', () => run(() => saveRules(JSON.parse(el('phenomena-json').value))));
+    el('phenomena-add').addEventListener('click', () => run(() => {
+        const s = getSettings();
+        if (!s.enabled || !isConfigured(s)) throw new Error('Enable and configure Ambient Conditions first.');
+        const { time } = readAmbientConditions(s, ensureSeed());
+        const kind = el('phenomena-kind').value;
+        const ids = new Set(s.phenomena.map(rule => rule.id));
+        let index = 1;
+        while (ids.has(`phenomenon-${index}`)) index++;
+        const rule = { id: `phenomenon-${index}`, shape: 'frequency', name: el('phenomena-name').value.trim(),
+            clause: el('phenomena-clause').value.trim(), chance: Number(el('phenomena-chance').value),
+            durationNights: Number(el('phenomena-duration').value), startHours: time.hours, endHours: null, source: time.source };
+        if (kind === 'meteors') rule.visibilityGates = { regime: ['darkness'], sky: ['clear', 'partly cloudy'] };
+        if (kind === 'miasma') rule.startGates = { regime: ['darkness'], wind: ['calm'] };
+        saveRules([...s.phenomena, rule]);
+        el('phenomena-id').value = rule.id;
+    }));
+    for (const action of ['end', 'delete']) el(`phenomena-${action}`).addEventListener('click', () => run(() => {
+        const s = getSettings();
+        const id = el('phenomena-id').value.trim();
+        const rule = s.phenomena.find(item => item.id === id);
+        if (!rule) throw new Error('Enter an existing rule ID.');
+        if (action === 'delete') { saveRules(s.phenomena.filter(item => item.id !== id)); return; }
+        const { time } = readAmbientConditions(s, ensureSeed());
+        if (rule.source !== undefined && (rule.source === 'message-count') !== (time.source === 'message-count')) throw new Error('Rule belongs to a different clock domain.');
+        if (time.hours < rule.startHours) throw new Error('Cannot end a rule before its start.');
+        saveRules(s.phenomena.map(item => item.id === id ? { ...item, endHours: Math.min(item.endHours ?? Infinity, time.hours) } : item));
+    }));
     el('enabled').addEventListener('change', () => run(() => {
         const s = getSettings();
         if (el('enabled').checked && !isConfigured(s)) {

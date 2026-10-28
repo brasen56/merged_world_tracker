@@ -29,6 +29,21 @@ describe('Phase 8 random-access aftermath', () => {
         expect(read(hours + 30, { pin }).summary).not.toContain('since yesterday evening');
     });
 
+    test.each([
+        [-1, 3, 'last night'],
+        [-1, 12, 'last night'],
+        [1, 3, 'last night'],
+        [1, 12, 'last night'],
+        [4.99, 12, 'last night'],
+        [5, 12, 'today dawn'],
+        [21, 23, 'today night'],
+    ])('night wording for a transition at %s and observation at %s', (start, now, label) => {
+        const day = hoursAt('2026-06-04', '00:00');
+        const pin = pinAt(day + start, null, { ...snow, precipitation: 'blizzard' });
+        expect(read(day + now, { climate: 'tropical', pin }).summary)
+            .toMatch(new RegExp(`^blizzard since ${label}; previously `));
+    });
+
     test('past bands apply an expired stored pin and rewind restores it', () => {
         const hours = hoursAt('2026-06-04');
         const pin = pinAt(hours - 18, hours - 1, { ...dry, precipitation: 'blizzard' });

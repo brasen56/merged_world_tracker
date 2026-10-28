@@ -102,6 +102,8 @@ export function generateAmbientTide({ time, seed = 0, coastal = false, tideRange
     const offset = tideOffsetForSeed(seed);
     // Re-anchoring translates the entire schedule, not just its spring/neap label.
     const origin = LUNAR_EPOCH_HOURS + anchor + offset;
+    // Tides stay on story hours; moon-up uses sun hours (hours - clockAhead).
+    // Changing clockAhead therefore shifts their relative timing, not this schedule.
     const phase = flooredMod(hours - origin, TIDE_PERIOD_HOURS) / TIDE_PERIOD_HOURS;
     // One twenty-fourth of a cycle is about half an hour around each extremum.
     const slackWindow = 1 / 24;
@@ -216,5 +218,5 @@ export function generateAmbientDaylight({ time, latitude, climate, hemisphere = 
         sunrise: sun.rise, sunset: sun.set, civilDawn: civil.rise, civilDusk: civil.set,
         dayLength: sun.duration, polarDay: sun.state === 'always-above', polarNight: sun.state === 'always-below',
         noDarkness: civil.state === 'always-above', clockAhead: offset, aurora,
-        description: `${parts.join('; ')}${hasCalendar ? '' : '; seasonal proxy — no calendar clock'}.` };
+        description: `${parts.join('; ')}${hasCalendar ? '' : '; seasonal proxy'}.` };
 }
