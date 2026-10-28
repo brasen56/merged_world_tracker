@@ -8,9 +8,12 @@ export { describeConditions } from '../core/ambient_prompt.js';
 export const EXTENSION_PROMPT_KEY = 'mwt_ambient_injection';
 
 export function buildInjectionBody(ambient) {
+    // Channels assemble conditionally (D33): a clockless chat omits the moon
+    // line entirely — the Overview keeps the "no calendar clock" explanation,
+    // which the model cannot act on (D33 revision 4).
     return `Stage direction, not narration. Ambient conditions (authoritative): ${describeConditions(ambient.conditions)} `
         + (ambient.daylight ? `Daylight: ${ambient.daylight.description} ` : '')
-        + (ambient.moon ? `Moon: ${ambient.moon.description} ` : ambient.moon === null ? 'Moon unavailable — no calendar clock. ' : '')
+        + (ambient.moon ? `Moon: ${ambient.moon.description} ` : '')
         + (ambient.tide ? `Tides: ${ambient.tide.description} ` : '')
         + (ambient.aftermath ? `Recent: ${ambient.aftermath.description} ` : '')
         + (ambient.phenomena?.description ? `Phenomena: ${ambient.phenomena.description}. ` : '')

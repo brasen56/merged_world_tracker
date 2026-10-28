@@ -75,6 +75,18 @@ describe('Phase 8 random-access aftermath', () => {
         expect(generateAmbientAftermath({ ...options, manualSeason: 'summer' }).summary).not.toBe(result.summary);
     });
 
+    test('steady trailing weather still states its duration; transitions name their start', () => {
+        // Kept on purpose (D33 revision 4): a dry day rules out invented
+        // puddles and a day of rain is soaked ground; the current line alone
+        // says neither. The worst case is a transition, so this costs no budget.
+        const start = hoursAt('2026-06-04', '12:00');
+        expect(read(start, { pin: pinAt(start - 48, null, dry) }).description).toBe('clear throughout the past day.');
+        const wet = { ...dry, sky: 'overcast', precipitation: 'rain' };
+        expect(read(start, { pin: pinAt(start - 48, null, wet) }).description).toBe('rain throughout the past day.');
+        const change = read(start, { pin: pinAt(start - 6, null, wet) });
+        expect(change.description).toMatch(/^rain since today dawn; previously /);
+    });
+
     test('first frost and snow appear only after their crossing, expire at midnight, and restore on rewind', () => {
         const start = hoursAt('2026-09-01', '00:00');
         const pin = pinAt(start + 13, null, snow);

@@ -90,10 +90,24 @@ describe('Phase 5 pure sun-time astronomy', () => {
         const clock = parseAmbientDateTime('2000-08-24', '19:09');
         const sunFrame = generateAmbientDaylight({ ...config, time: clock, latitude: 39.1 });
         expect(sunFrame.regime).toBe('darkness');
-        expect(sunFrame.description).toContain('sunset around 18:30');
+        // Darkness states no hours-stale sunset (D33 revision 4); the next
+        // event would be tomorrow's dawn, which is not forecast from today's
+        // declination, so the regime word can stand alone.
+        expect(sunFrame.description).not.toContain('sunset around');
         const civilFrame = generateAmbientDaylight({ ...config, time: clock, latitude: 39.1, clockAhead: 1 });
         expect(civilFrame.regime).toBe('daylight');
         expect(civilFrame.description).toContain('sunset around 19:30');
+    });
+
+    test('D33 revision 4 trims: ordinary day length and stale sunsets are unstated', () => {
+        expect(at('2026-08-15', '12:00', { latitude: 45 }).description).not.toContain('typical day length');
+        const night = at('2026-12-21', '23:00', { latitude: 55 });
+        expect(night.regime).toBe('darkness');
+        expect(night.description).not.toContain('sunset');
+        expect(night.description).toContain('short winter day');
+        expect(at('2026-08-15', '17:00', { latitude: 45 }).description).toContain('sunset around');
+        expect(at('2026-12-21', '16:00', { latitude: 55 }).regime).toBe('twilight');
+        expect(at('2026-12-21', '16:00', { latitude: 55 }).description).toContain('sunset around');
     });
 
     test('rounding and modulo work before 1970 and across midnight', () => {

@@ -65,6 +65,18 @@ describe('Phase 9 pure tides', () => {
         expect(tide(hours, { moonEpochOffset: NaN })).toEqual(before);
     });
 
+    test('D33 revision 4: ordinary modulation and normal range are the unmarked defaults', () => {
+        // ~3.7 days after the anchored new moon: outside both ±2-day windows.
+        const midCycle = LUNAR_EPOCH_HOURS + LUNAR_MONTH_DAYS * 24 * 0.125;
+        expect(tide(midCycle).modulation).toBe('ordinary');
+        expect(tide(midCycle).description).not.toContain('between spring and neap');
+        expect(tide(midCycle).description).not.toContain('tidal range');
+        expect(tide(midCycle).description).toContain('next high water');
+        expect(tide(LUNAR_EPOCH_HOURS).description).toContain('spring tide');
+        expect(tide(midCycle, { tideRange: 'extreme' }).description).toContain('large tidal range');
+        expect(tide(midCycle, { tideRange: 'calm' }).description).toContain('small tidal range');
+    });
+
     test('range changes wording only; clockAhead does not shift absolute event hours twice', () => {
         const normal = tide(origin + 3);
         for (const range of ['calm', 'normal', 'extreme']) {

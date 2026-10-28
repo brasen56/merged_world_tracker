@@ -19,8 +19,10 @@ export function readAmbientConditions(settings, seed, type = 'normal') {
         const rule = ambient.phenomena.light;
         const aurora = auroraPossible({ seed, hours: time.hours - ambient.daylight.clockAhead,
             latitude: ambient.daylight.latitude, regime: rule.light });
+        // Rule name plus regime; the Phenomena channel carries the authored
+        // clause, so no override provenance is restated here (D33 revision 4).
         ambient.daylight = { ...ambient.daylight, naturalRegime: ambient.daylight.regime, regime: rule.light, aurora,
-            description: `${rule.name}: ${rule.light} (authored light override)${aurora ? '; aurora possible' : ''}.` };
+            description: `${rule.name}: ${rule.light}${aurora ? '; aurora possible' : ''}.` };
     }
     ambient.moon = generateAmbientMoon({ ...settings, time, daylight: ambient.daylight, conditions: ambient.conditions });
     ambient.tide = generateAmbientTide({ ...settings, seed, time });

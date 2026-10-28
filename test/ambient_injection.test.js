@@ -336,13 +336,15 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         expect(events[0].detail).toMatchObject({ clearReason: 'prompt-history-pending', generationType: 'normal' });
     });
 
-    test('clockless injection states the calendar limitation only once', () => {
+    test('clockless injection keeps the seasonal proxy and omits the moon notice', () => {
         ctx.chat = [{ mes: 'No clock in this scene.' }];
         expect(onGenerationStarted('normal')).toBe(true);
         const text = snapshot().payload;
         expect(text).toContain('seasonal proxy.');
-        expect(text).toContain('Moon unavailable — no calendar clock.');
-        expect(text.match(/no calendar clock/g)).toHaveLength(1);
+        // The clockless moon notice is an Overview-only explanation, not a
+        // model-facing fact (D33 revision 4).
+        expect(text).not.toContain('no calendar clock');
+        expect(text).not.toContain('Moon');
     });
 
     test('formatter does not promote next-band forecast into a within-hour claim', () => {

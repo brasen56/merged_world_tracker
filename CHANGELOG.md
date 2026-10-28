@@ -46,12 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     offset derived from the seed. Spring and neap windows track the
     computed lunar phase, so the 2.13.2 full-moon anchor — or a reseed —
     shifts the tide schedule with the moon. The exact-time state reads high
-    or low water at slack, or rising/falling between, with a qualitative
-    range (wording only), and forecasts name the next high water rounded to
-    the half hour. Inland and calendarless chats omit the line entirely.
+    or low water at slack, or rising/falling between; spring and neap tides
+    and a non-default small or large range (wording only) are named when
+    they hold, and forecasts name the next high water rounded to the half
+    hour. Inland and calendarless chats omit the line entirely.
     It is a fictional-port schedule, not real-port or navigation data.
   - **Recent weather, consistent with the injected past.** A trailing-day
-    summary ("steady rain yesterday evening, ground still wet") is
+    summary ("rain since yesterday evening; previously clear", or "clear
+    throughout the past day") is
     recomputed from the same generator as the current conditions — nothing
     is logged, weather pins apply to past bands, and rewinding restores
     what the rewound skies produced — so ground conditions never contradict
@@ -79,7 +81,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moon-up all read the converted sun time, and stated clock facts re-add the
   offset — so a stated sunset can never fall after a regime that already
   calls the scene dark, and a clock running ahead of the sun sees the moon
-  rise that much earlier. Ordinary-day copy is now "typical day length".
+  rise that much earlier.
+- **Shorter daylight and moon lines in the ambient injection.** Part of the
+  v2 token-budget audit (D33 revision 4). Ordinary day lengths are no
+  longer stated (long summer light and short winter days still are), and
+  darkness no longer repeats the day's sunset: before dawn it names civil
+  dawn, and in the evening it states only that it is dark. Chats without a
+  calendar clock no longer inject, or print in `/wt-ambient`, the "Moon
+  unavailable — no calendar clock" notice; the Overview card still shows
+  it. With all of v2 in place, inland chats add at most ~46 tokens to the
+  v1 weather line; coastal chats add up to ~73 at high latitudes, and each
+  authored phenomenon clause adds about 12 more.
 
 ## [2.13.2]
 

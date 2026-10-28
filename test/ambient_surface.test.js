@@ -234,7 +234,11 @@ describe('Ambient Phase 3 user surface', () => {
         expect(fallback.ambient.moon).toBeNull();
         expect(buildInjectionBody(fallback.ambient)).not.toContain('Moon:');
         expect(buildAmbientPlannerContext()).not.toContain('Moon at');
-        expect(ambientCommand()).toContain('no calendar clock');
+        // The notice is a user-surface explanation: the Overview states it,
+        // the token-costed body and the body-identical command do not (D33
+        // revision 4).
+        expect(ambientCommand()).not.toContain('no calendar clock');
+        expect(ambientCommand()).toBe(buildInjectionBody(fallback.ambient));
         expect(renderOverviewSnapshot({ ambient: { ok: true, value: fallback } })).toContain('Moon: unavailable — no calendar clock');
     });
 
