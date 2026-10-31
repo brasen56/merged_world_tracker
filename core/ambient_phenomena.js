@@ -1,6 +1,6 @@
 /** Authored, random-access frequency rules. Disposable caches never record occurrences. */
 import { AMBIENT_SEASONS, AMBIENT_VOCABULARY, generateAmbientConditions } from './ambient_generator.js';
-import { generateAmbientDaylight, isAmbientClockAhead } from './ambient_astronomy.js';
+import { darkerRegime, generateAmbientDaylight, isAmbientClockAhead, REGIME_RANKS } from './ambient_astronomy.js';
 import { applyAmbientPin } from './ambient_pin.js';
 
 export const PHENOMENA_LIMITS = Object.freeze({ rules: 16, nights: 30, clauses: 3, clauseLength: 80 });
@@ -77,8 +77,16 @@ export function generateAmbientPhenomena({ time, phenomena = [], daylight, condi
         }
     }
     active.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    const light = active.find(rule => rule.light !== undefined) ?? null;
-    const facts = { ...conditions, season, regime: light?.light ?? daylight.regime };
+    // Light only ever darkens, so the darkest active override wins outright;
+    // walking the priority-sorted list and replacing only on strictly darker
+    // keeps priority/ID as the tie-break for whose name is shown.
+    let light = null;
+    for (const rule of active) {
+        if (rule.light !== undefined && (light === null || REGIME_RANKS[rule.light] > REGIME_RANKS[light.light])) light = rule;
+    }
+    // The override is also clamped to the natural regime: a night-time rule
+    // cannot lift darkness, leaving moonlight and meteors intact.
+    const facts = { ...conditions, season, regime: light ? darkerRegime(light.light, daylight.regime) : daylight.regime };
     const visible = active.filter(rule => matches(rule.visibilityGates, facts));
     const shown = visible.slice(0, PHENOMENA_LIMITS.clauses);
     return { active: active.map(rule => rule.id), visible: visible.map(rule => rule.id), light,

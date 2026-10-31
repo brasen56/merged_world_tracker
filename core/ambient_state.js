@@ -5,7 +5,7 @@ import { getCurrentWorldState } from './metadata.js';
 import { resolveAmbientTime } from './ambient_time.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS, generateAmbientConditions } from './ambient_generator.js';
 import { applyAmbientPin } from './ambient_pin.js';
-import { auroraPossible, generateAmbientDaylight, generateAmbientMoon, generateAmbientTide } from './ambient_astronomy.js';
+import { auroraPossible, darkerRegime, generateAmbientDaylight, generateAmbientMoon, generateAmbientTide } from './ambient_astronomy.js';
 import { generateAmbientAftermath } from './ambient_aftermath.js';
 import { generateAmbientPhenomena } from './ambient_phenomena.js';
 
@@ -17,12 +17,15 @@ export function readAmbientConditions(settings, seed, type = 'normal') {
         conditions: ambient.conditions, season: ambient.season });
     if (ambient.phenomena.light) {
         const rule = ambient.phenomena.light;
+        // Light only ever darkens: the effective regime is the darker of the
+        // override and the natural one, so night stays night under any rule.
+        const regime = darkerRegime(rule.light, ambient.daylight.regime);
         const aurora = auroraPossible({ seed, hours: time.hours - ambient.daylight.clockAhead,
-            latitude: ambient.daylight.latitude, regime: rule.light });
-        // Rule name plus regime; the Phenomena channel carries the authored
-        // clause, so no override provenance is restated here (D33 revision 4).
-        ambient.daylight = { ...ambient.daylight, naturalRegime: ambient.daylight.regime, regime: rule.light, aurora,
-            description: `${rule.name}: ${rule.light}${aurora ? '; aurora possible' : ''}.` };
+            latitude: ambient.daylight.latitude, regime });
+        // Rule name plus effective regime; the Phenomena channel carries the
+        // authored clause, so no override provenance is restated (D33 rev 4).
+        ambient.daylight = { ...ambient.daylight, naturalRegime: ambient.daylight.regime, regime, aurora,
+            description: `${rule.name}: ${regime}${aurora ? '; aurora possible' : ''}.` };
     }
     ambient.moon = generateAmbientMoon({ ...settings, time, daylight: ambient.daylight, conditions: ambient.conditions });
     ambient.tide = generateAmbientTide({ ...settings, seed, time });

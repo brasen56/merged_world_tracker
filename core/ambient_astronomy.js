@@ -10,6 +10,12 @@ export const DAYLIGHT_VOCABULARY = Object.freeze({
     polarNight: 'the sun will not rise today', whiteNight: 'no true darkness',
     aurora: 'aurora possible',
 });
+export const REGIME_RANKS = Object.freeze({ daylight: 0, twilight: 1, darkness: 2 });
+
+/** An authored light effect can only darken, never brighten: darker wins. */
+export function darkerRegime(a, b) {
+    return (REGIME_RANKS[a] ?? 0) >= (REGIME_RANKS[b] ?? 0) ? a : b;
+}
 const RAD = Math.PI / 180;
 
 export const LUNAR_MONTH_DAYS = 29.530589;

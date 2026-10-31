@@ -70,15 +70,32 @@ describe('frequency-shaped phenomena', () => {
         expect(at(24, [{ ...rule, source: 'timestamp' }]).active).toEqual([]);
     });
 
-    test('light priority is independent of visibility and output cap; effective darkness controls meteors', () => {
+    test('light only darkens: darkest override wins and priority never brightens', () => {
         const rules = [{ ...rule, visibilityGates: { regime: ['darkness'] } },
             { ...rule, id: 'b', light: 'daylight', priority: 1 }, { ...rule, id: 'a', light: 'darkness', priority: 1 },
             { ...rule, id: 'c' }, { ...rule, id: 'd' }];
         expect(at(22, rules, { daylight: { regime: 'daylight' } })).toMatchObject({ light: { id: 'a' }, omitted: 2 });
         expect(at(22, rules).visible).toContain('meteors');
         expect(at(22, rules).description.split('; ')).toHaveLength(3);
+        // Deliberate behavior change (CALENDAR_RESPONSE.md §8.8): a daylight
+        // override no longer lifts the night, so meteors stay visible at 22:00
+        // no matter how high its priority climbs.
         rules[1].priority = 2;
-        expect(at(22, rules).visible).not.toContain('meteors');
+        expect(at(22, rules)).toMatchObject({ light: { id: 'a' } });
+        expect(at(22, rules).visible).toContain('meteors');
+    });
+
+    test('a darker low-priority override beats a lighter high-priority one; ties keep priority order', () => {
+        const rules = [{ ...rule, visibilityGates: { regime: ['darkness'] } },
+            { ...rule, id: 'eclipse', light: 'twilight', priority: 10 },
+            { ...rule, id: 'miasma', light: 'darkness', priority: 0 }];
+        const result = at(22, rules, { daylight: { regime: 'daylight' } });
+        expect(result.light).toMatchObject({ id: 'miasma' });
+        expect(result.visible).toContain('meteors');
+        const tied = [{ ...rule, id: 'b', light: 'darkness', priority: 1 },
+            { ...rule, id: 'a', light: 'darkness', priority: 1 }];
+        expect(at(22, tied, { daylight: { regime: 'daylight' } }).light).toMatchObject({ id: 'a' });
+        expect(at(22, tied, { daylight: { regime: 'daylight' } }).light).not.toMatchObject({ id: 'b' });
     });
 
     test('schema rejects invalid gates, unbounded work, duplicate IDs and unsafe clauses', () => {

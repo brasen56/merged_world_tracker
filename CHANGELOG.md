@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+
+### Changed
+ - ambient_phenomena.test.js:80-81 is a deliberate change (See CALENDAR_RESPONSE.md §8.8 for info)
+
 ## [2.14.0]
 
 ### Added
@@ -64,7 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Frequency-shaped ambient phenomena (§3.5.1/D37).** Chat-local meteor,
   miasma and custom rules use deterministic per-night starts, bounded duration
   look-back, historical start gates and exact-time visibility. Shared output
-  includes additive clauses and priority-resolved light overrides. Settings
+  includes additive clauses and only-darkening light overrides: the effective
+  regime is the darker of the natural one and the override (a rule can never
+  lift the night, so moonlight, aurora and meteors survive), the darkest
+  active override wins, and priority only names the winner on ties. Settings
   provide authoring, advanced JSON, history-preserving End now and explicit
   history-erasing deletion. Works with calendar and message-count clocks;
   dated schedules remain deferred.

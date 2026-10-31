@@ -87,7 +87,7 @@ Pure functions over (story hours, seed) plus the anchored moon phase (D28/D29):
 ### 3.5 Calendar (reduced scope in v2)
 
 - **In v2:** Gregorian weekday drift detection only (D31) — tag weekday vs computed weekday, Overview badge, diagnostics event. Works for every chat with timestamp tags, ambient enabled or not.
-- **Own design doc, later:** the panel, custom months/lengths/weekdays (the tag regex currently hardcodes English weekday names, `ambient_time.js:10` — generalization includes weekday lists and weekday-less calendars), events with repeats, the midsummer anchor (§8). Founded on `mwt_calendar` staying user-authored and ambient-independent.
+- **Own design doc, later** (drafted as `CALENDAR_DESIGN.md`, 2026-10-28): the panel, custom months/lengths/weekdays (the tag regex currently hardcodes English weekday names, `ambient_time.js:10` — generalization includes weekday lists and weekday-less calendars), events with repeats, the midsummer anchor (§8). Founded on `mwt_calendar` staying user-authored and ambient-independent.
 
 #### 3.5.1 Future scope: custom ambient phenomena
 
@@ -193,7 +193,7 @@ Implemented 2026-10-26: pure 12.4206-hour semidiurnal cycle in `core/ambient_ast
 
 Timing caveat for D24/D28: moon-up compares sun time (`hours - clockAhead`), while tides remain on raw story hours. Changing `clockAhead` therefore shifts the tide-to-moon-up relationship by the same amount (2 h for a 2 h offset), without moving the tide schedule. The intended transit lock is approximate even at zero offset because the moon-up and tide formulas are separate heuristics; a nonzero clock offset adds this further displacement. No explicit moonrise/moonset time is emitted. Revisit the shared time basis before promising synchronized moonlit tide crossings; do not add `clockAhead` to already-story-clock tide forecasts.
 
-### Calendar panel → its own design doc
+### Calendar panel → its own design doc (drafted as `CALENDAR_DESIGN.md`, 2026-10-28)
 
 Biggest UI piece, ambient-independent, nothing left in the astronomy contract depends on it (D31). The doc starts from the response's midsummer-anchor idea (§8), the weekday-name generalization, and dated ambient phenomena (§3.5.1/D37). Frequency-shaped phenomena are an ambient channel and do not wait on this doc. Calendar schedules remain usable without ambient; their optional environmental effects integrate through ambient's shared projection. Phase numbering for it resumes when that doc is approved.
 
@@ -210,4 +210,4 @@ Twin moons / moonless worlds / custom cycle lengths (D34). Precise moonrise/moon
 3. **`clockAhead` discoverability** — zero by default and invisible unless looked for; the Overview default-latitude nudge (D18) is the current answer, revisit after story testing.
 4. **Tide window width** — ±2 d default is a first tuning; symmetric shape is the commitment, not the number.
 5. **Injection length audit** — done at revision 4 (2026-10-28): measured with a real BPE tokenizer against a 91-token v1 baseline; the five trims, the reverted sixth, and the swept numbers are recorded in the revision 4 note. Remaining tuning levers if ever needed: the tide line (the longest computed channel) and the phenomena clause cap (count/length), which is authored text.
-6. **Calendar doc foundations** — the midsummer anchor (declare which day is midsummer; the day-count origin follows, so sun, weather season, and custom calendar agree by construction instead of by warning); authored-event UX, including dated phenomena schedules, the light-override priority, and the active-phenomena output cap (§3.5.1); how loudly to surface weekday-name mismatches once custom weekday lists exist.
+6. **Calendar doc foundations** — drafted as `CALENDAR_DESIGN.md` (2026-10-28): the midsummer anchor (declare which day is midsummer; the day-count origin follows, so sun, weather season, and custom calendar agree by construction instead of by warning); authored-event UX, including dated phenomena schedules, the light-override priority, and the active-phenomena output cap (§3.5.1); how loudly to surface weekday-name mismatches once custom weekday lists exist.
