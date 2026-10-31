@@ -21,7 +21,7 @@ export function renderCalendarPanel() {
         <p>Calendar changes rewrite past and future dates consistently. Saves are independent of global Settings.</p>
         <p role="status" id="mwt-c-status">${escapeHtml(status.reason ?? status.state)}</p>
         <p id="mwt-c-preview"></p>
-        <label>Structure <select class="mwt-input" id="mwt-c-structure"><option value="custom">Custom</option><option value="gregorian">Gregorian (events only)</option></select></label>
+        <label>Structure <select class="mwt-input" id="mwt-c-structure"><option value="custom">Custom</option><option value="gregorian">Gregorian (events and phenomena)</option></select></label>
         <div id="mwt-c-custom">
             <h4>Months</h4><p>Reorder rows to move dates with their month. Removing a referenced month is refused.</p>
             <div id="mwt-c-months"></div><button type="button" class="mwt-btn" id="mwt-c-add">Add month</button>
@@ -51,6 +51,27 @@ export function renderCalendarPanel() {
             <button type="button" class="mwt-btn" id="mwt-c-event-new">New event</button>
         </fieldset>
         <p>Lunar events use the calendar day containing the exact anchored phase instant (approximate astronomy, ±1 day near midnight). No date is stored for lunar events; re-anchoring the Ambient moon moves them.</p>
+        <h4>Dated phenomena</h4>
+        <p>Schedules affect Ambient when enabled. Schedule edits rewrite history; End now preserves the played past. All changes are drafts until Save Calendar. Date-based schedules and ends follow re-anchors automatically and need no re-stamping.</p>
+        <div id="mwt-c-phen-list"></div>
+        <label><input type="checkbox" id="mwt-c-phen-delete-confirm"> I understand Delete erases phenomenon history</label>
+        <fieldset><legend>Create / edit dated phenomenon</legend>
+            <label>ID <input class="mwt-input" id="mwt-c-phen-id" maxlength="64"></label>
+            <label>Name <input class="mwt-input" id="mwt-c-phen-name" maxlength="60"></label>
+            <label>Clause <input class="mwt-input" id="mwt-c-phen-clause" maxlength="80"></label>
+            <label>Start year <input type="number" id="mwt-c-phen-year" min="1" max="9999"></label>
+            <label>Start month <input type="number" id="mwt-c-phen-month" min="1" max="24"></label>
+            <label>Start day <input type="number" id="mwt-c-phen-day" min="1" max="40"></label>
+            <label>Duration <input type="number" id="mwt-c-phen-duration" min="1" max="400"></label>
+            <label>Unit <select id="mwt-c-phen-unit"><option value="durationDays">Days (1–400)</option><option value="durationMonths">Calendar months (1–13; destination day clamps)</option></select></label>
+            <label>Repeat <select id="mwt-c-phen-repeat"><option value="none">Once</option><option value="yearly">Yearly</option></select></label>
+            <label>Light (only darkens) <select id="mwt-c-phen-light"><option value="">No override</option><option>daylight</option><option>twilight</option><option>darkness</option></select></label>
+            <label>Priority <input type="number" id="mwt-c-phen-priority" min="-100" max="100"></label>
+            <label>Visibility gates (JSON; regime, sky, wind, season)<textarea class="mwt-input" id="mwt-c-phen-gates" aria-label="Phenomenon visibility gates"></textarea></label>
+            <p>For a daytime eclipse use {"regime":["daylight","twilight"]}; gates affect clauses, not the light override.</p>
+            <button type="button" class="mwt-btn" id="mwt-c-phen-apply">Apply phenomenon to draft</button>
+            <button type="button" class="mwt-btn" id="mwt-c-phen-new">New phenomenon</button>
+        </fieldset>
         <h4>Month grid</h4>
         <button type="button" class="mwt-btn" id="mwt-c-grid-prev">Previous month</button>
         <button type="button" class="mwt-btn" id="mwt-c-grid-next">Next month</button>

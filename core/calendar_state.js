@@ -43,9 +43,9 @@ export function getCalendarStatus(type = 'normal') {
     const body = buildCalendarBody(calendar, time, options);
     const eventsLine = time.month != null && !time.rejection && calendar.eventsLine
         ? projectCalendarEvents(calendar, time.customDate ?? time, options).line : '';
-    const reason = time.rejection ? `Newest timestamp rejected (message #${time.rejection.messageIndex}): ${time.rejection.reason}`
-        : time.month == null ? 'No dated story clock; waiting for a readable timestamp or World State date.'
-            : calendar.structure !== 'custom' ? 'Gregorian calendar: events only; date line is not used.'
+    const reason = time.rejection ? `Newest timestamp rejected (message #${time.rejection.messageIndex}): ${time.rejection.reason}${calendar.phenomena.length ? ' Dated phenomena inactive.' : ''}`
+        : time.month == null ? `No dated story clock; waiting for a readable timestamp or World State date.${calendar.phenomena.length ? ' Dated phenomena inactive.' : ''}`
+            : calendar.structure !== 'custom' ? 'Gregorian calendar: events and dated phenomena; date line is not used.'
                 : !calendar.dateLine ? 'Date line is off; events are independently controlled.' : null;
     const date = time.month != null ? calendarHoursToDate(calendar, time.hours, { hemisphere: getChatMeta('mwt_ambient')?.hemisphere ?? 'north' }) : null;
     return { calendar, time, eventsLine: injectionAllowed('Calendar') ? eventsLine : '', body: injectionAllowed('Calendar') ? body : '',

@@ -1,6 +1,6 @@
-# Frequency-shaped ambient phenomena
+# Authored ambient phenomena
 
-Implemented from §3.5.1/D37. Date-shaped schedules remain deferred to the calendar design.
+Frequency rules implement §3.5.1/D37. Calendar Phase 14 adds date-shaped schedules on both Gregorian and custom calendars.
 
 Open **Settings → Ambient Conditions → Frequency-shaped phenomena**. The form adds meteor, calm-night miasma, or unrestricted additive rules. Advanced JSON supports editing gates and light overrides. Rules belong to chat-local `mwt_ambient.phenomena` settings and are inherited with that metadata.
 
@@ -35,3 +35,12 @@ Open **Settings → Ambient Conditions → Frequency-shaped phenomena**. The for
 ```
 
 Use the form to obtain the correct current start hours and clock source rather than copying this synthetic-clock example into a dated story. Illness, evacuation and other consequences remain narrative material.
+
+## Dated schedules (Calendar tab)
+
+Open **Calendar → Dated phenomena**. Rules live at `mwt_calendar.phenomena`, independently of the events/date-line toggles; Ambient must be enabled to render their environmental consequences. Create or edit a draft, then **Save Calendar**. Gregorian chats need no fantasy-month adoption.
+
+- Use `shape: "dated"`, a calendar `start: {year, month, day}`, exactly one of `durationDays` (1–400) or `durationMonths` (1–13), `repeat: "none" | "yearly"`, and `end: null` initially. IDs, names, clauses, light, priority and visibility gates follow the frequency limits; each storage list permits 16 rules.
+- Starts are inclusive at midnight; duration and End now bounds are exclusive. Calendar-month addition clamps to the destination month's last day (January 31 plus one month ends on February 28/29). Yearly schedules begin in the authored year; February 29 skips non-leap years.
+- **End now** stores a calendar instant, not absolute hours. Rewinding restores earlier activity; re-anchoring and hemisphere changes preserve the same ending date. Date references follow month identity/clamping edits automatically and are not re-stamped. End now never extends an already-ended rule. Schedule edits rewrite history; Delete requires explicit acknowledgement and erases it.
+- Dated rules are inactive without a readable dated clock (Overview explains why). Both shapes share the darkest-wins light override, effective-regime visibility gates, priority/ID order, three visible clauses and omitted count. A twilight eclipse never brightens midnight; gate its clause with `{"regime":["daylight","twilight"]}` to hide it at night. Moon phase and tides are unaffected. No fired/evaluated state is stored.

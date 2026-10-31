@@ -43,7 +43,7 @@ export function isCalendarDate(record, date, { authoring = true } = {}) {
 
 /**
  * Total save-time validation for JSON-shaped input. Returns a fresh normalized
- * record on success, never mutates input. Phenomena remain a Phase 14 slot.
+ * record on success, never mutates input.
  */
 export function validateCalendarRecord(input) {
     const errors = [];
@@ -115,7 +115,65 @@ export function validateCalendarRecord(input) {
             } else if (!isCalendarDate(record, event.date)) fail('Use an existing calendar date in years 1–9999.');
         });
     }
+    if (errors.length === 0 && Array.isArray(record.phenomena)) {
+        if (record.phenomena.length > 16 || new Set(record.phenomena.map(rule => rule?.id)).size !== record.phenomena.length
+            || !record.phenomena.every(rule => isDatedRule(record, rule))) errors.push('Invalid dated phenomena: use unique IDs, safe names/clauses, valid dates, one duration (1–400 days or 1–13 months), and none/yearly repeat (maximum 16 rules).');
+    }
     return { valid: errors.length === 0, errors, record: errors.length === 0 ? record : null };
+}
+
+/** Calendar instants keep End now independent of the absolute-hours anchor. */
+export function isCalendarInstant(record, value) {
+    return isCalendarDate(record, value) && Number.isInteger(value.hour) && value.hour >= 0 && value.hour <= 23
+        && Number.isInteger(value.minute) && value.minute >= 0 && value.minute <= 59
+        && (value.second === undefined || (Number.isFinite(value.second) && value.second >= 0 && value.second < 60));
+}
+
+export function isDatedRule(record, rule) {
+    const gates = { regime: ['daylight', 'twilight', 'darkness'], sky: ['clear', 'partly cloudy', 'overcast', 'foggy'],
+        wind: ['calm', 'light', 'breezy', 'strong'], season: ['winter', 'spring', 'summer', 'autumn'] };
+    const safe = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max && !/[\r\n<>]/.test(value);
+    return object(rule) && rule.shape === 'dated' && typeof rule.id === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(rule.id)
+        && safe(rule.name, 60) && safe(rule.clause, 80) && isCalendarDate(record, rule.start)
+        && ['hour', 'minute', 'second'].every(key => rule.start[key] === undefined || rule.start[key] === 0)
+        && ['none', 'yearly'].includes(rule.repeat)
+        && ((Number.isInteger(rule.durationDays) && rule.durationDays >= 1 && rule.durationDays <= 400 && rule.durationMonths === undefined)
+            || (Number.isInteger(rule.durationMonths) && rule.durationMonths >= 1 && rule.durationMonths <= 13 && rule.durationDays === undefined))
+        && (rule.end === null || (isCalendarInstant(record, rule.end) && calendarDateToHours(record, rule.end) >= calendarDateToHours(record, rule.start)))
+        && (rule.light === undefined || gates.regime.includes(rule.light))
+        && (rule.priority === undefined || (Number.isInteger(rule.priority) && Math.abs(rule.priority) <= 100))
+        && (rule.visibilityGates === undefined || (object(rule.visibilityGates) && Object.entries(rule.visibilityGates).every(([key, values]) =>
+            Object.hasOwn(gates, key) && Array.isArray(values) && values.length > 0 && values.every(value => gates[key].includes(value)))))
+        && rule.startGates === undefined;
+}
+
+/** Add calendar months, clamping the day to the destination month's last day. */
+export function addCalendarMonths(record, date, count) {
+    const months = record.structure === 'gregorian' ? 12 : record.months.length;
+    const index = date.month - 1 + count;
+    const year = date.year + Math.floor(index / months);
+    const month = mod(index, months) + 1;
+    return { year, month, day: Math.min(date.day, calendarMonthLength(record, year, month)) };
+}
+
+/** Random-access intervals, including yearly overlaps in very short calendars. */
+export function datedRuleActive(record, rule, time, options = {}) {
+    if (!record || time?.month == null || time.rejection || !isDatedRule(record, rule)) return false;
+    if (rule.end !== null && time.hours >= calendarDateToHours(record, rule.end, options)) return false;
+    const today = calendarHoursToDate(record, time.hours, options);
+    const yearDays = record.structure === 'gregorian' ? 365 : record.months.reduce((sum, month) => sum + month.days, 0);
+    const lookback = rule.durationDays ? Math.ceil(rule.durationDays / yearDays) : Math.ceil(rule.durationMonths / (record.structure === 'gregorian' ? 12 : record.months.length));
+    const first = rule.repeat === 'yearly' ? Math.max(rule.start.year, today.year - lookback) : rule.start.year;
+    const last = rule.repeat === 'yearly' ? today.year : rule.start.year;
+    for (let year = first; year <= last; year++) {
+        const start = { ...rule.start, year };
+        if (!isCalendarDate(record, start, { authoring: false })) continue;
+        const from = calendarDateToHours(record, start, options);
+        const until = rule.durationDays ? from + rule.durationDays * 24
+            : calendarDateToHours(record, addCalendarMonths(record, start, rule.durationMonths), options);
+        if (time.hours >= from && time.hours < until) return true;
+    }
+    return false;
 }
 
 function requireDate(record, date) {

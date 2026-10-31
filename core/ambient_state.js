@@ -14,7 +14,7 @@ export function readAmbientConditions(settings, seed, type = 'normal') {
         calendar: getChatMeta('mwt_calendar'), hemisphere: settings.hemisphere });
     const ambient = applyAmbientPin(generateAmbientConditions({ ...settings, seed, time }), settings.pin, time);
     ambient.daylight = generateAmbientDaylight({ ...settings, seed, time });
-    ambient.phenomena = generateAmbientPhenomena({ ...settings, seed, time, daylight: ambient.daylight,
+    ambient.phenomena = generateAmbientPhenomena({ ...settings, seed, time, calendar: getChatMeta('mwt_calendar'), daylight: ambient.daylight,
         conditions: ambient.conditions, season: ambient.season });
     if (ambient.phenomena.light) {
         const rule = ambient.phenomena.light;

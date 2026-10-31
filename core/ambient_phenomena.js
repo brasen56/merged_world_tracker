@@ -1,7 +1,9 @@
-/** Authored, random-access frequency rules. Disposable caches never record occurrences. */
+/** Authored, random-access frequency and dated rules. Caches never record occurrences. */
 import { AMBIENT_SEASONS, AMBIENT_VOCABULARY, generateAmbientConditions } from './ambient_generator.js';
 import { darkerRegime, generateAmbientDaylight, isAmbientClockAhead, REGIME_RANKS } from './ambient_astronomy.js';
 import { applyAmbientPin } from './ambient_pin.js';
+import { datedRuleActive } from './calendar_math.js';
+export { isDatedRule } from './calendar_math.js';
 
 export const PHENOMENA_LIMITS = Object.freeze({ rules: 16, nights: 30, clauses: 3, clauseLength: 80 });
 const REGIMES = ['daylight', 'twilight', 'darkness'];
@@ -55,7 +57,7 @@ function factsAt(hours, time, options) {
     return { ...weather.conditions, season: weather.season, regime: daylight.regime };
 }
 
-export function generateAmbientPhenomena({ time, phenomena = [], daylight, conditions, season, ...options }) {
+export function generateAmbientPhenomena({ time, phenomena = [], calendar, daylight, conditions, season, ...options }) {
     const clock = typeof time === 'number' ? { hours: time, month: 1 } : time;
     const offset = isAmbientClockAhead(options.clockAhead) ? options.clockAhead : 0;
     const night = Math.floor((clock.hours - offset - 12) / 24);
@@ -75,6 +77,9 @@ export function generateAmbientPhenomena({ time, phenomena = [], daylight, condi
             }
             if (starts.get(key)) { active.push(rule); break; }
         }
+    }
+    for (const rule of (calendar?.phenomena ?? []).slice(0, PHENOMENA_LIMITS.rules)) {
+        if (datedRuleActive(calendar, rule, clock, options)) active.push(rule);
     }
     active.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     // Light only ever darkens, so the darkest active override wins outright;

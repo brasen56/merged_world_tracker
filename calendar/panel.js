@@ -5,6 +5,7 @@ import { editCalendarMonths, requireCalendarRecord } from '../core/calendar_edit
 import { validateCalendarRecord } from '../core/calendar_math.js';
 import { captureScope, assertSameScope } from '../core/scope.js';
 import { wireCalendarEvents } from './events.js';
+import { wireCalendarPhenomena } from './phenomena.js';
 
 /** DOM-created controls keep every authored string out of HTML interpolation. */
 export function wireCalendarPanel(root) {
@@ -63,7 +64,7 @@ export function wireCalendarPanel(root) {
         return next.record;
     };
     const preview = () => {
-        try { const next = requireCalendarRecord(read()); el('preview').textContent = calendarPreview(next); el('snippet').value = buildPresetSnippet(next); refreshEvents?.(next); }
+        try { const next = requireCalendarRecord(read()); el('preview').textContent = calendarPreview(next); el('snippet').value = buildPresetSnippet(next); refreshEvents?.(next); refreshPhenomena?.(next); }
         catch (error) { el('preview').textContent = error.message; el('snippet').value = ''; el('grid').textContent = 'Month grid unavailable until the calendar is valid.'; }
     };
     const drawRows = () => {
@@ -124,6 +125,7 @@ export function wireCalendarPanel(root) {
     el('export').addEventListener('click', () => run(() => { el('json').value = exportCalendar(); }));
     el('import').addEventListener('click', () => run(() => { confirmed(); load(importCalendar(el('json').value, options())); el('status').textContent = 'Calendar imported and saved.'; }));
     const refreshEvents = wireCalendarEvents(panel, { read: () => requireCalendarRecord(read()), load: record => load(record, true), run });
+    const refreshPhenomena = wireCalendarPhenomena(panel, { read: () => requireCalendarRecord(read()), load: record => load(record, true), run });
     // A new chat may still need an anchor year; keep that draft editable.
     if (validateCalendarRecord(base).valid) load(base);
     else {

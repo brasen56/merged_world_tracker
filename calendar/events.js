@@ -1,4 +1,4 @@
-import { calendarDayIndex, calendarDateFromDayIndex, calendarMonthLength, calendarWeekday, formatCalendarDate } from '../core/calendar_math.js';
+import { calendarDayIndex, calendarDateFromDayIndex, calendarDateToHours, calendarMonthLength, calendarWeekday, datedRuleActive, formatCalendarDate } from '../core/calendar_math.js';
 import { calendarEventOccurrences } from '../core/calendar_events.js';
 import { escapeHtml } from '../core/diff.js';
 import { getChatMeta } from '../core/context.js';
@@ -17,6 +17,10 @@ export function renderCalendarMonth(calendar, date, options = {}) {
     for (let day = 1; day <= length; day++) {
         const index = start + day - 1;
         const names = events.filter(event => event.start <= index && event.end > index).map(({ event }) => escapeHtml(event.name));
+        const cellDate = calendarDateFromDayIndex(calendar, index);
+        for (const rule of calendar.phenomena ?? []) {
+            if (datedRuleActive(calendar, rule, { ...cellDate, hours: calendarDateToHours(calendar, cellDate, options) }, options)) names.push(escapeHtml(rule.name));
+        }
         cells.push(`<td><strong>${day}</strong>${names.map(name => `<div>${name}</div>`).join('')}</td>`);
     }
     while (cells.length % columns) cells.push('<td></td>');
