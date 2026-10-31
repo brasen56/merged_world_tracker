@@ -16,7 +16,7 @@ import {
     buildAuthorCharacterContext, getUserNames,
 } from '../core/index.js';
 
-import { STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT, buildStoryPlanSystemPrompt } from './prompts.js';
+import { ESCALATION_GUIDANCE, STORY_PLAN_SYSTEM_PROMPT, STORY_PLAN_USER_PROMPT, buildStoryPlanSystemPrompt } from './prompts.js';
 import { getSettings, hasValidSettings } from './settings.js';
 // Part 6 (§7.4) pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
@@ -200,11 +200,12 @@ export function buildReadOnlyContinuityProjection(arcs) {
     return included.map(row => row.text).join('\n');
 }
 
-export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy) {
+export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy, lens = 'open') {
     const lines = [];
     if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
     if (palette.emphases.includes('world pressure')) lines.push('World pressure means complications imposed by the setting — adverse, beneficial, or mixed developments in weather, supply and abundance, infrastructure, markets, institutions, public events, or discoveries — that change someone\'s concrete options. Decisions that apply to everyone they reach qualify, such as a toll, a ration, or a festival; a plan aimed at particular people does not, even when the cast is not its target. Opportunities need not conceal a threat.');
-    if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
+    if (lens !== 'world-pressure') lines.push(ESCALATION_GUIDANCE[palette.escalation]);
+    else if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
     lines.push('Cast novelty and plot escalation are separate choices: a newcomer need not raise the stakes, and escalation need not add a newcomer. Keep any addition genre-appropriate and useful to the requested arc; friends, clients, witnesses, colleagues, relatives, and other non-antagonist roles are valid.');
     lines.push('A character already evidenced in the story is established even without a Knowledge record. Registry absence is not proof that someone is new.');
     if (castPolicy === 'existing-only') {
@@ -324,7 +325,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     const ws = getWorldStateFactual().trim();
     const wsBlock = ws
         ? wrapTag('current_world_state',
-            '[The current tracked state of the story. Ground your arcs in these threads, pressures, obligations, and character states.]\n' + ws)
+            '[The current tracked state of the story. Ground your arcs in these threads, pressures, and character states.]\n' + ws)
         : '';
 
     const chron = getLatestChronicleEntry().trim();
@@ -346,7 +347,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         requestSpec: request,
         palette: savedPalette,
     });
-    const palette = storyPaletteProjection(savedPalette, castPolicyContract.policy);
+    const palette = storyPaletteProjection(savedPalette, castPolicyContract.policy, request?.lens);
     const paletteBlock = palette ? wrapTag('story_palette', palette) : '';
     const characterContext = requestContext.characterContext || { text: '' };
     const characterBlock = characterContext.text

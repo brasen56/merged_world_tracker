@@ -1129,6 +1129,58 @@ allowed versus actively-propose," which this phase gives content to.
   Knowledge Ledger facts more than GLM; this is treated as a model difference
   and not acted on.
 
+**Phase 5 follow-up, third trial (2026-10-31)**
+
+- **State:** Implemented; not host verified.
+- **Evidence:** a GLM 5.3 plan (Open lens, Balanced) passed every rule with a
+  letter, a question, and a phone number left where everyone would see it. A
+  co-author's review traced that to no rule requiring a cost. It missed that the
+  prompt recommended the shape: the agency rule listed "ask questions" first and
+  called NPC initiative "often the strongest kind of beat", and the open beat
+  line started "someone asks". A beat aimed at `{{user}}` also has to survive any
+  response, so it is easy to ignore by design.
+- **Direction Hint trial** (GLM 5.3 ×2, Kimi K2.6 ×2, doubao-seed-character ×1;
+  all five recorded arcs are the Old Chem thread, and no no-hint run of that
+  thread was recorded, so this is weak evidence): no recorded arc acted out its
+  payoff, and deadlines did not take over on GLM or Kimi. GLM's beats pushed back
+  (a settlement that requires a release, funding that requires a signed
+  chronology), and the tester reports its quiet arc held up. Kimi failed the
+  quiet arc twice and invented history twice, used about three times GLM's tokens
+  on one generation, and is treated as a model limit, as in the second trial.
+  GLM's "who directed work" slip sat in a pressure beat, so the complication now
+  has to draw on what the story has set up. The results table also carries a note
+  from after the count: a later Ezra-thread run got three facts wrong. The
+  fine-tune counted one invention (who sent the RFI) and leaned on deadlines,
+  which the tester rated well.
+- **Change:** `BEAT_PROGRESSION_RULE` drops "know", adds that learning counts only
+  if it forces a move, and names waiting, hesitating, and repeating a move as
+  non-events. It grew from 118 to 142 words, not the 242 that appending would have
+  given. `ARC_DESTINATION_RULE` adds "the event must be singular". The agency rule
+  and open beat line lead with demands and actions, and the World State wrapper no
+  longer lists obligations. The routine clause reaches the open lens. The Spare
+  Room's last beat stops repeating Harbor Lease's moved-up clock. Rework and
+  Develop ask for a route that pushes back. New `ESCALATION_GUIDANCE` gives every
+  level a line on open and targeted requests, which is where the complication
+  lives. A full request grows by about 190 tokens.
+- **Decisions:** `balanced` now sends text, which reverses the earlier rule that
+  no selection keeps output near the existing behavior; that is the point, because
+  it is the default. The world lens keeps the bare preference and sends nothing for
+  `balanced`, because `BEAT_PROGRESSION_RULE` is shared with it and it bans a
+  hardship quota. It does take the shared beat and agency edits.
+- **Not done:** an irreversible-beat requirement, a flat-arc lint, new emphasis
+  chips, and two-pass generation (§7 gate unchanged). A saved custom full-plan
+  system prompt receives none of this, and a custom user template gets the
+  escalation line only through its `{{storyPalette}}` token.
+- **Automated checks:** nine new wiring tests in
+  `test/story_planner_arc_quality.test.js`. A planted bug (lens dropped from the
+  palette call) failed the suite before being reverted. Full suite green at
+  4,297/4,297; lint clean.
+- **Manual results:** pending. Clear the trial hint, or the request carries the
+  same instructions twice. `restrained` and `escalating` wording is scaled from
+  the tested `balanced` wording and has not been run. Watch for paperwork as the
+  next cheap beat: 9 of the trial's 16 recorded beats arrived on paper and 3
+  happened in the room.
+
 ## 6. Acceptance and test plan
 
 ### 6.1 Deterministic tests

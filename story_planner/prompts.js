@@ -40,9 +40,15 @@ import { MAX_CONTINUITY_BEATS_PER_ARC, SECTIONS } from './data.js';
 // "whether X or Y is the question". The stakes clause asks for something that
 // can be won or lost, and the no-staging clause is limited to the turning
 // point so it cannot be read as permission to leave beats vague.
-export const ARC_DESTINATION_RULE = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences (under 50 words), its description names what someone wants or what is unsettled, the specific person, problem, opportunity, or discovery that makes it newly consequential now, and the encounter it builds toward — a confrontation, revelation, offer, admission, boundary, or decision that could go more than one way — and what concretely could be gained or lost. Name the encounter but do not stage it: leave the setting details, props, and outcome of that encounter to the scene. "Trust is tested", "composure cracks", "must choose between X and Y", or "whether X or Y is the question" say what a scene would mean, not what happens in it. A quiet arc can turn on an admission, a boundary, a discovery, or a changed relationship; it does not need to escalate.';
+export const ARC_DESTINATION_RULE = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences (under 50 words), its description names what someone wants or what is unsettled, the specific person, problem, opportunity, or discovery that makes it newly consequential now, and the encounter it builds toward — a confrontation, revelation, offer, admission, boundary, or decision that could go more than one way — and what concretely could be gained or lost. Name the encounter but do not stage it: leave the setting details, props, and outcome of that encounter to the scene. "Trust is tested", "composure cracks", "must choose between X and Y", or "whether X or Y is the question" say what a scene would mean, not what happens in it. The outcome may stay open, but the event must be singular. A quiet arc can turn on an admission, a boundary, a discovery, or a changed relationship; it does not need to escalate.';
 
-export const BEAT_PROGRESSION_RULE = 'Build setup as a causal sequence: each beat changes the conditions for the next. Each beat commits to one specific event that happens, not a list of alternatives and not a choice someone faces. After a beat, someone should know, want, risk, owe, or have available something they did not before. Setup is not foreshadowing: a reminder, a mood, or the same emotion shown again does not count, and neither does moving paperwork, schedules, or equipment without consequence. An arrival, a document, or a discovery is fine when it changes something. Two strong beats are better than four padded ones. Stop short of the turning point itself: the payoff happens once setup is complete, not inside a beat.';
+// Third trial (GLM 5.3, Kimi K2.6, doubao-seed-character, 2026-10-31): plans
+// passed every rule with letter / question / number-by-the-phone beats. "Know"
+// let a beat count by informing someone, and leaving a number by the phone
+// counted as an event, so learning now has to force a move and non-events are
+// named. The complication itself is in ESCALATION_GUIDANCE, not here, because
+// this rule is shared with the world lens.
+export const BEAT_PROGRESSION_RULE = 'Build setup as a causal sequence: each beat changes the conditions for the next. Each beat commits to one specific event that happens, not a list of alternatives and not a choice someone faces. After a beat, someone should have something new to want, risk, owe, gain, or lose; learning something counts only if it forces someone to move. Setup is not foreshadowing: a reminder, a mood, the same emotion shown again, or the same move made by someone else does not count. Neither does someone waiting, hesitating, or leaving something where it is, or paperwork, schedules, or equipment moving without consequence. An arrival, a document, or a discovery is fine when it changes something. Two strong beats are better than four padded ones. Stop short of the turning point itself: the payoff happens once setup is complete, not inside a beat.';
 
 // ─── Player agency and grounding (shared) ────────────────────────────────────
 // The prompt used to forbid writing for {{user}} five different ways and never
@@ -56,8 +62,13 @@ export const BEAT_PROGRESSION_RULE = 'Build setup as a causal sequence: each bea
 // writing for {{user}} did not stop those; a check on who performs each beat
 // is one the model can apply sentence by sentence. The model is told who
 // {{user}} is by the <player_character> block (generation.js).
+//
+// The rule used to list "ask questions" first and call that "often the
+// strongest kind of beat", which recommended the ask / ask / place plans of the
+// 2026-10-31 trial: a beat that waits on {{user}} is easy to ignore. The
+// permission stays; the praise moved to moves that land without an answer.
 
-export const PLAYER_AGENCY_RULE = '{{user}} is the player\'s character (named in <player_character> when given) and belongs to the player. Never write {{user}}\'s actions, words, thoughts, feelings, discoveries, or choices, and never suggest what {{user}} should do. Someone other than {{user}} performs every beat: if a beat needs {{user}} to do, notice, admit, or decide something, rewrite it as what an NPC does or what the world puts in front of {{user}}. NPCs may still initiate with {{user}}: ask questions, make offers or demands, disclose information, set boundaries, or try to influence them. That is often the strongest kind of beat. Describe the NPC\'s move and what is at stake, leave {{user}}\'s response and the outcome open, and never write a later beat that assumes {{user}} accepted, agreed, attended, or complied.';
+export const PLAYER_AGENCY_RULE = '{{user}} is the player\'s character (named in <player_character> when given) and belongs to the player. Never write {{user}}\'s actions, words, thoughts, feelings, discoveries, or choices, and never suggest what {{user}} should do. Someone other than {{user}} performs every beat: if a beat needs {{user}} to do, notice, admit, or decide something, rewrite it as what an NPC does or what the world puts in front of {{user}}. NPCs may still initiate with {{user}}: make demands or offers, set boundaries, disclose information, try to influence them, or ask questions. The strongest of these change something whether or not {{user}} answers. Describe the NPC\'s move and what is at stake, leave {{user}}\'s response and the outcome open, and never write a later beat that assumes {{user}} accepted, agreed, attended, or complied.';
 
 // Testers saw two unrelated threads merged because they sat near each other in
 // the context, and a character given a skill their canon says they lack.
@@ -80,6 +91,24 @@ export const STORY_GROUNDING_RULE = 'Stay inside established canon. Keep existin
 export const WORLD_PRESSURE_RULE = 'A world complication is the setting acting on the story: weather and seasons, natural events, scarcity and abundance, infrastructure and utilities, money and markets, law and institutions, public celebrations, discoveries, illness, public mood, or a distant event that reaches this place. The initiating development must be general: an external condition, or a decision by an institution or group that applies to everyone it reaches — a toll, a ration, a festival, a new law. A plan by a particular person or group to get something from particular people is a scheme, not a world development, even when the cast is not its target; leave it out. Characters may pursue their own interests in response. Read the recent story for the routine that has set in — the same place, the same activity loop, the comfortable rhythm — and propose developments that break that routine, not the story\'s premise. Developments may be adverse, beneficial, or mixed: an opening route, a bumper harvest, a public celebration, or a discovery can make the world active without a crisis. Do not turn every opportunity into a hidden threat or require a hardship quota. Every development must be one the established setting can actually produce: derive it from the place, season, economy, or dependencies already in the context, never from a genre the story has not claimed. It earns its place by changing what someone can do, keep, reach, afford, or safely assume — name what it opens, enables, threatens, takes away, or reorders. Scale it to the escalation preference, if one is given: a restrained story gets a closed road or a small windfall, not a catastrophe or a fortune.';
 
 export const ARC_DESTINATION_RULE_WORLD = 'An arc proposes a new playable situation, not another illustration of an established trait. In one or two sentences (under 50 words), its description names the routine or expectations the development changes, the specific external condition or systemic change that makes it newly consequential now, and the playable opening or disruption it builds toward — an arrival, discovery, public event, new access, offer, deadline, shortage, or changed arrangement that could go more than one way — and what concretely could be gained, lost, or made possible. Name the opening or disruption but do not stage it: leave the details and the outcome to the scene. "Tension rises", "times get harder", "things become difficult", "must choose between X and Y", or "whether X or Y is the question" say what a scene would mean, not what happens in it. A beneficial development needs consequential options, not an invented danger to justify it. A small development that changes real options beats a spectacle that changes nothing.';
+
+// ─── Escalation guidance (palette, open lens) ────────────────────────────────
+// Escalation used to be one bare word, and `balanced`, the default, sent
+// nothing, so no default request ever asked for a beat that pushes back. The
+// grounding clause is there because a complication needs leverage and models
+// reach into history for it: GLM's slip in the 2026-10-31 trial sat in a
+// pressure beat. The `balanced` wording is the hint that trial tested; the
+// other two are scaled from it and were not trialled. The world lens keeps the
+// bare word (storyPaletteProjection) because it bans a hardship quota.
+
+const COMPLICATION_LIMITS = 'That beat happens whether or not {{user}} responds, does not settle the encounter itself, and draws its pressure from something the story has already set up.';
+const WORKS_AGAINST_DESTINATION = 'In each arc with setup beats, at least one beat should work against the destination: it makes the encounter harder, costlier, or more public, not just nearer.';
+
+export const ESCALATION_GUIDANCE = Object.freeze({
+    restrained: `Escalation preference: restrained. Keep the stakes where the story already has them. An arc with setup beats may include one beat that makes the encounter a little harder, costlier, or more public. ${COMPLICATION_LIMITS}`,
+    balanced: `Escalation preference: balanced. ${WORKS_AGAINST_DESTINATION} In a quiet arc this can be small. ${COMPLICATION_LIMITS}`,
+    escalating: `Escalation preference: escalating. ${WORKS_AGAINST_DESTINATION} Each beat should leave someone with more to lose than the one before. ${COMPLICATION_LIMITS}`,
+});
 
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
@@ -128,10 +157,12 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
     // stakeless one ("a nice market opens") resolves itself on arrival, so the
     // example shows a limited, time-bound window that can go either way. The
     // two also differ in setting and scale and share no posted-notice beats,
-    // which an earlier pair had in common.
+    // which an earlier pair had in common. The Harbor Lease keeps its clock, so
+    // The Spare Room's last beat is a public commitment instead: both used to
+    // end "a week sooner, before anyone can respond".
     const beatActorRule = worldPressure
         ? 'A beat must be something a narrator can actually perform in a single scene — the world moves: something arrives, opens, flourishes, is discovered, fails, runs short, or changes how ordinary life works. People and institutions may act, react, and adapt inside a beat, but the initiating development applies to everyone it reaches, never a plan aimed at particular people.'
-        : 'A beat must be something a narrator can actually perform in a single scene — someone asks, offers, refuses, or reveals something; something arrives or is discovered; a deadline moves.';
+        : 'A beat must be something a narrator can actually perform in a single scene — someone does, demands, refuses, offers, or reveals something; something arrives or is discovered; a deadline moves.';
     const examples = worldPressure
         ? `- The Long Dry — The valley's farms depend on a shared water rotation, but this year's thin snowpack cannot sustain it; the arc builds toward the emergency allocation meeting where the valley must rewrite the rotation, and the farm that planted late could come away with no summer water at all.
   1. Low river flow makes the watermaster cancel the spring flush, leaving one farm's seedbeds too dry to sow.
@@ -150,7 +181,7 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
 - The Spare Room — Mira wants to stop being her brother's rescuer, and his plan to move in "just for a month" makes it urgent; it builds toward Mira telling him what she will and won't do, which could end with him leaving angry or her giving him a key on her terms.
   1. Mira's brother asks {{user}} to help talk her round, saying she always listens to them.
   2. Mira finds out he went to {{user}} before asking her, and calls off the dinner where she had planned to say yes.
-  3. Her brother arrives with his bags a week early, before she has given him an answer.`;
+  3. Her brother gives notice on his flat and tells their mother it is settled, so refusing him now means refusing them both.`;
     const beatsRule = hooksOnly
         ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
         : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: concrete, in-scene events that build toward the arc's turning point. ${beatActorRule} ${BEAT_PROGRESSION_RULE}
@@ -169,7 +200,7 @@ ${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are 
         : 'You are a Story Architect. Your ONLY job is to brainstorm future plot possibilities for an ongoing roleplay.';
     const castDevelopmentRule = worldPressure
         ? `- ${WORLD_PRESSURE_RULE} When an Ambient Conditions block is supplied, weather and sky conditions come from that module: build on its stated conditions, exact-time daylight and one-band weather forecast, rather than inventing conflicting weather or daylight.`
-        : '- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.';
+        : '- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.\n- Read the recent story for the routine that has set in and build arcs that disturb it, not the premise.';
 
     return `${introRule}
 
@@ -249,8 +280,8 @@ ABSOLUTE RULES:
 - Keep the result concise and grounded in the supplied factual context.`;
 
 export const TARGETED_OPERATION_INSTRUCTIONS = Object.freeze({
-    rework: 'Preserve the arc title, description/endpoint, and section exactly. Replace only its pending setup route with a stronger route toward the same endpoint.',
-    develop: 'Develop this arc into a stronger story: sharpen its description so it names what someone wants or what is unsettled, what makes it consequential now, and a concrete turning point, and replace its pending route so each beat changes the situation. You may move it to a better section. Preserve its title and all historical progress.',
+    rework: 'Preserve the arc title, description/endpoint, and section exactly. Replace only its pending setup route with a stronger route toward the same endpoint, in which at least one beat makes the encounter harder, costlier, or more public, not just nearer.',
+    develop: 'Develop this arc into a stronger story: sharpen its description so it names what someone wants or what is unsettled, what makes it consequential now, and a concrete turning point, and replace its pending route so each beat changes the situation and at least one makes the turning point harder, costlier, or more public, not just nearer. You may move it to a better section. Preserve its title and all historical progress.',
     alternate: 'Suggest a genuinely different route as a new sibling arc. Give it a distinct title, description/endpoint, section, and pending route. The source arc will remain unchanged.',
     setup: 'This long-range arc has no setup beats. Preserve its title, description/endpoint, and section exactly and generate a concrete pending setup route toward that endpoint.',
 });

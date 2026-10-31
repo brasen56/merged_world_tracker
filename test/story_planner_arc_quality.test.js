@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 
-import { buildPlayerCharacterBlock, buildSystemPrompt, buildUserPrompt } from '../story_planner/generation.js';
+import { buildPlayerCharacterBlock, buildSystemPrompt, buildUserPrompt, storyPaletteProjection } from '../story_planner/generation.js';
 import { makeArc } from '../story_planner/data.js';
 import { buildTargetedUserPrompt } from '../story_planner/targeted.js';
 import {
     ARC_DESTINATION_RULE,
     BEAT_PROGRESSION_RULE,
+    ESCALATION_GUIDANCE,
     PLAYER_AGENCY_RULE,
     STORY_GROUNDING_RULE,
     STORY_PLAN_SYSTEM_PROMPT,
     TARGETED_ARC_SYSTEM_PROMPT,
     TARGETED_OPERATION_INSTRUCTIONS,
+    buildStoryPlanSystemPrompt,
 } from '../story_planner/prompts.js';
 import { SECTIONS } from '../story_planner/schema.js';
 import { saveSettings } from '../story_planner/settings.js';
@@ -174,5 +176,70 @@ describe('Story Planner — the planning model is told who {{user}} is', () => {
         for (const description of descriptions) {
             expect(description.split(/\s+/).length).toBeLessThan(50);
         }
+    });
+});
+
+// Third trial (2026-10-31): plans passed every rule with beats that cost nothing.
+// Same discipline again: wiring and scope only. Whether beats now push back, and
+// whether quiet arcs stay quiet, is a live-generation question.
+describe('Story Planner — beats that cost something', () => {
+    const palette = escalation => ({ emphases: [], escalation, castPolicy: 'allowed' });
+    const worldRequest = { operation: 'add', sectionKeys: ['emerging'], requestedCount: 1, lens: 'world-pressure' };
+
+    test('a beat counts by what it costs, and non-events are named', () => {
+        expect(BEAT_PROGRESSION_RULE).toContain('learning something counts only if it forces someone to move');
+        expect(BEAT_PROGRESSION_RULE).toContain('someone waiting, hesitating, or leaving something where it is');
+        expect(BEAT_PROGRESSION_RULE).toContain('the same move made by someone else');
+        expect(BEAT_PROGRESSION_RULE).not.toContain('someone should know');
+    });
+
+    test('the prompt no longer recommends asking over acting', () => {
+        expect(PLAYER_AGENCY_RULE).toContain('The strongest of these change something whether or not {{user}} answers');
+        expect(PLAYER_AGENCY_RULE).not.toContain('strongest kind of beat');
+        expect(STORY_PLAN_SYSTEM_PROMPT).not.toContain('someone asks, offers');
+    });
+
+    test('a destination keeps its outcome open but commits to one event', () => {
+        expect(ARC_DESTINATION_RULE).toContain('the event must be singular');
+    });
+
+    test('every escalation level reaches open and targeted requests, the default included', () => {
+        expect(buildUserPrompt('recent')).toContain(ESCALATION_GUIDANCE.balanced);
+        expect(buildTargetedUserPrompt('rework', makeArc({ title: 'Harbour pact', body: 'A pact.', section: 'horizon', beats: ['A manifest arrives.'] })))
+            .toContain(ESCALATION_GUIDANCE.balanced);
+        for (const level of ['restrained', 'balanced', 'escalating']) {
+            expect(storyPaletteProjection(palette(level))).toContain(ESCALATION_GUIDANCE[level]);
+            expect(ESCALATION_GUIDANCE[level]).toContain('whether or not {{user}} responds');
+            expect(ESCALATION_GUIDANCE[level]).toContain('something the story has already set up');
+        }
+    });
+
+    test('the world lens keeps the bare preference, because it bans a hardship quota', () => {
+        const world = buildUserPrompt('recent', '', { requestSpec: worldRequest });
+        expect(world).not.toContain('work against the destination');
+        expect(world).not.toContain('Escalation preference');
+        expect(storyPaletteProjection(palette('restrained'), 'allowed', 'world-pressure')).toContain('Escalation preference: restrained.');
+        expect(storyPaletteProjection(palette('restrained'), 'allowed', 'world-pressure')).not.toContain(ESCALATION_GUIDANCE.restrained);
+    });
+
+    test('a refresh ignores a supplied lens, so it gets the open guidance', () => {
+        expect(buildUserPrompt('recent', '', { requestSpec: { ...worldRequest, operation: 'refresh' } }))
+            .toContain(ESCALATION_GUIDANCE.balanced);
+    });
+
+    test('the routine clause reaches the open lens without doubling up in the world lens', () => {
+        const clause = 'Read the recent story for the routine that has set in and build arcs that disturb it, not the premise.';
+        expect(STORY_PLAN_SYSTEM_PROMPT).toContain(clause);
+        expect(scoped(['immediate'])).toContain(clause);
+        expect(buildStoryPlanSystemPrompt(null, 'world-pressure')).not.toContain(clause);
+    });
+
+    test('the open examples use the moved-up clock once', () => {
+        expect(STORY_PLAN_SYSTEM_PROMPT.match(/a week (?:early|sooner)|up a week/g)).toHaveLength(1);
+    });
+
+    test('Rework and Develop ask for a route that pushes back', () => {
+        expect(TARGETED_OPERATION_INSTRUCTIONS.rework).toContain('harder, costlier, or more public, not just nearer');
+        expect(TARGETED_OPERATION_INSTRUCTIONS.develop).toContain('harder, costlier, or more public, not just nearer');
     });
 });

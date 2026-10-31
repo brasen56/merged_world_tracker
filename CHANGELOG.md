@@ -12,7 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.51.1]
+
+### Changed
+
+- **Story Planner beats now have to cost something.** A plan could pass
+  every rule with a letter, a question and a number left by the phone.
+  A beat now counts by what someone has to want, risk, owe, gain or
+  lose, and learning something counts only if it forces a move. Waiting,
+  hesitating and the same move by someone else no longer count. The
+  Balanced default asks for one beat in each arc that works against its
+  destination, kept small in quiet arcs and scaled for Restrained and
+  Escalating, and that pressure must come from something the story has
+  already set up. Open-lens plans also look for the routine that has set
+  in, and Rework and Develop ask for a route that pushes back. World
+  complications keep their previous escalation behavior.
+  (`story_planner/prompts.js`, `story_planner/generation.js`.)
 
 ## [2.15.0]
 

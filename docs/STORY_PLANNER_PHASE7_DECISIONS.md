@@ -12,7 +12,7 @@ Do not treat an automated test pass as host/model verification of either roadmap
 
 - **Progress checking remains manual.** Phase 7 now records checks, verified proposals, accepted/ignored proposals, no-evidence results, stale results, and request sizes. No opt-in automatic cadence is added until real campaign observations establish a tolerable false-positive/false-negative rate and acceptable API cost.
 - **`activateWhen` remains a human note.** Park/Resume is explicit. Automatic wake evaluation would require a new evidence contract and is not justified by current measurements.
-- **The Story Palette does not silently alter auto-generation defaults.** Auto-generation uses the per-chat palette the user selected; an empty palette remains balanced/current behavior.
+- **The Story Palette does not silently alter auto-generation defaults.** Auto-generation uses the per-chat palette the user selected; an empty palette remains balanced behavior. Since the 2026-10-31 arc-quality trial, balanced sends its own guidance line on the open lens (roadmap V3 §5), so it no longer means a prompt with no escalation text.
 - **Closed-memory ranking remains pin plus recency.** Exact normalized-title recurrence is now suppressed and counted. Broader fuzzy suppression remains deliberately manual because false matches could hide legitimately distinct arcs.
 
 ## Measurements now available
