@@ -3,7 +3,8 @@ import { escapeHtml } from '../core/diff.js';
 import { getChatMeta } from '../core/context.js';
 import { getEpoch } from '../core/scope.js';
 import { AMBIENT_CLIMATES, AMBIENT_SEASONS, AMBIENT_VOCABULARY } from '../core/ambient_generator.js';
-import { AMBIENT_HOUR_MS, parseAmbientDateTime } from '../core/ambient_time.js';
+import { AMBIENT_HOUR_MS } from '../core/ambient_time.js';
+import { parseStoryDateTime, formatStoryDateInput } from '../core/calendar_state.js';
 import { readAmbientConditions } from '../core/ambient_state.js';
 import { isMoonEpochOffset, LUNAR_EPOCH_HOURS, LUNAR_MONTH_DAYS, moonAnchorOffset, resolveAmbientLatitude } from '../core/ambient_astronomy.js';
 import { getSettings, saveSettings, isConfigured, ensureSeed } from './settings.js';
@@ -25,6 +26,8 @@ export function renderAmbientSettings() {
     const variability = Number.isFinite(s.variability) ? s.variability : 0.5;
     const anchor = isMoonEpochOffset(s.moonEpochOffset)
         ? new Date(Math.round((LUNAR_EPOCH_HOURS + s.moonEpochOffset + LUNAR_MONTH_DAYS * 12) * AMBIENT_HOUR_MS)).toISOString() : '';
+    const custom = getChatMeta('mwt_calendar')?.structure === 'custom';
+    const anchorDate = anchor ? formatStoryDateInput(new Date(anchor).getTime() / AMBIENT_HOUR_MS) : '';
     return `<details class="mwt-settings-disclosure" id="mwt-ambient-settings" open>
         <summary><span aria-hidden="true">🌦️</span> Ambient Conditions (this chat)</summary>
         <p>Code decides the weather; narration renders it when relevant. These controls save separately from global settings.</p>
@@ -37,13 +40,14 @@ export function renderAmbientSettings() {
         <div class="mwt-settings-grid">
             ${select('mwt-a-climate', 'Climate', Object.fromEntries(Object.entries(AMBIENT_CLIMATES).map(([key, preset]) => [key, preset.label])), s.climate, true)}
             ${select('mwt-a-hemisphere', 'Hemisphere', { north: 'Northern', south: 'Southern' }, s.hemisphere, true)}
+            ${custom ? '<p>A hemisphere flip repositions every custom date and rewrites evaluated history. Declining re-stamping freezes stored Ambient bounds on their old hours.</p><label><input type="checkbox" id="mwt-a-restamp"> Re-stamp stored pin and frequency bounds by calendar date on hemisphere change</label>' : ''}
             <label class="mwt-label" for="mwt-a-latitude">Latitude magnitude (0–90°; hemisphere supplies the sign)</label>
             <div><input class="mwt-input" id="mwt-a-latitude" type="number" min="0" max="90" step="any" value="${Number.isFinite(s.latitude) ? s.latitude : ''}" placeholder="Climate default: ${resolveAmbientLatitude(s).latitude}°">
                 <p class="mwt-text-dim mwt-text-sm">Leave blank to follow the climate default; no default latitude is saved.</p></div>
             ${select('mwt-a-clock-ahead', 'Clocks run ahead of the sun by', { '0': '0 hours (sun time)', '0.5': '30 minutes', '1': '1 hour', '1.5': '1 hour 30 minutes', '2': '2 hours' }, String(s.clockAhead))}
             <p class="mwt-text-dim mwt-text-sm">Offsets stated sky-event times only. No longitude, time-zone or automatic summer-time modeling.</p>
             <label class="mwt-label" for="mwt-a-moon-date">Full moon falls on (story date)</label>
-            <div><input class="mwt-input" id="mwt-a-moon-date" type="date" value="${escapeHtml(anchor.slice(0, 10))}">
+            <div><input class="mwt-input" id="mwt-a-moon-date" type="${custom ? 'text' : 'date'}" value="${escapeHtml(anchorDate)}">
                 <label for="mwt-a-moon-time">Story time of full moon</label>
                 <input class="mwt-input" id="mwt-a-moon-time" type="time" value="${anchor ? anchor.slice(11, 16) : '18:00'}">
                 <p class="mwt-text-dim mwt-text-sm">Optional. Blank date restores the real-world moon cycle. Re-anchoring rewrites past and future phases consistently; it is not a weather pin. Moon facts need a calendar clock. Moon-up is approximate and ignores latitude.</p></div>
@@ -81,7 +85,7 @@ export function renderAmbientSettings() {
             <div class="mwt-settings-grid">
                 ${Object.entries(AMBIENT_VOCABULARY).map(([key, values]) => select(`mwt-a-pin-${key}`, key, values, s.pin?.conditions?.[key] || values[0])).join('')}
                 ${select('mwt-a-expiry', 'Expires', { none: 'Until unpinned', band: 'Next band', dawn: 'Next dawn', date: 'Story date/time' }, 'none')}
-                <label for="mwt-a-date">Story date (YYYY-MM-DD)</label><input class="mwt-input" id="mwt-a-date" type="text" placeholder="2026-06-05">
+                <label for="mwt-a-date">Story date (${custom ? 'Month D, YYYY — custom calendar' : 'YYYY-MM-DD'})</label><input class="mwt-input" id="mwt-a-date" type="text" placeholder="${custom ? 'Highsun 18, 1247' : '2026-06-05'}">
                 <label for="mwt-a-time">Story time (HH:MM, 24-hour)</label><input class="mwt-input" id="mwt-a-time" type="text" placeholder="05:00">
             </div>
             <button type="button" class="mwt-btn" id="mwt-a-pin">Pin now</button>
@@ -168,7 +172,7 @@ export function wireAmbientSettings(root) {
     }));
     el('save').addEventListener('click', () => run(() => {
         const moonDate = el('moon-date').value.trim();
-        const fullMoon = moonDate ? parseAmbientDateTime(moonDate, el('moon-time').value) : null;
+        const fullMoon = moonDate ? parseStoryDateTime(moonDate, el('moon-time').value, el('hemisphere').value) : null;
         if (moonDate && !fullMoon) throw new Error('Enter a valid full moon story date and time.');
         saveSettings({ enabled: el('enabled').checked, climate: el('climate').value,
             hemisphere: el('hemisphere').value, manualSeason: el('season').value,
@@ -176,7 +180,7 @@ export function wireAmbientSettings(root) {
             clockAhead: Number(el('clock-ahead').value),
             moonEpochOffset: fullMoon ? moonAnchorOffset(fullMoon.hours) : null,
             coastal: el('coastal').checked, tideRange: el('tide-range').value,
-            variability: Number(el('variability').value), setupAsked: true });
+            variability: Number(el('variability').value), setupAsked: true }, { restamp: el('restamp')?.checked === true });
         el('setup').hidden = true;
         invalidate('Ambient settings saved for this chat.');
     }));
@@ -192,7 +196,7 @@ export function wireAmbientSettings(root) {
         }
         if (el('expiry').value === 'date') {
             if (time.source === 'message-count') throw new Error('A dated expiry needs a usable story calendar. Choose next band or dawn instead.');
-            endHours = parseAmbientDateTime(el('date').value, el('time').value)?.hours;
+            endHours = parseStoryDateTime(el('date').value, el('time').value)?.hours;
             if (!Number.isFinite(endHours)) throw new Error('Enter a valid story date and time.');
         }
         if (endHours !== null && endHours <= time.hours) throw new Error('Expiry must be after the current story time.');

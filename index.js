@@ -10,6 +10,10 @@
 
 import { getContextSafe } from './core/context.js';
 import * as Ambient from './ambient/index.js';
+import * as Calendar from './calendar/index.js';
+import { renderCalendarPanel } from './calendar/render.js';
+import { wireCalendarPanel } from './calendar/panel.js';
+import { clearCalendarInjection } from './calendar/injection.js';
 import { observeWeekdayDrift } from './core/weekday_drift.js';
 import { renderAmbientSettings, wireAmbientSettings } from './ambient/render.js';
 import { clearAmbientInjection } from './ambient/injection.js';
@@ -221,6 +225,7 @@ const { getSettings, saveSettings } = createSettingsManager({
 
 const TABS = [
     { id: 'overview', label: '🏠 Overview', module: null },
+    { id: 'calendar', label: '📅 Calendar', module: null },
     { id: 'world-state', label: '🌍 World State', module: WorldState },
     { id: 'chronicle', label: '📜 Chronicle', module: Chronicle },
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
@@ -443,6 +448,7 @@ function renderSettingsTab() {
 }
 
 function buildTabContent(tab) {
+    if (tab.id === 'calendar') return renderCalendarPanel();
     if (tab.id === 'overview') return renderOverviewPane();
     if (tab.id === 'settings') return renderSettingsTab();
     // Diagnostics Phase 5 — the panel shell (placeholders for tabs 1–7).
@@ -515,6 +521,7 @@ function renderModal() {
     // rebuilt on every open, so rebind each render like the module wire-events.
     wireBackupEvents(modal);
     wireAmbientSettings(modal);
+    wireCalendarPanel(modal);
 
     // Part 5 (§5.4): wire the paused-store banner's actions — the module's
     // OWN tab owns Retry and the recovery export (never the read-only
@@ -658,6 +665,7 @@ function renderModal() {
                 StoryPlanner.applyPlanInjection?.();
                 Interiority.applyIntentionsInjection?.();
                 if (getSettings().injectionMasterOff) clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'panic-settings-save' });
+                if (getSettings().injectionMasterOff) clearCalendarInjection({ clearReason: 'panic-settings-save' });
             } catch { /* modules may not be initialized yet */ }
             setStatus(modal, 'Settings saved.', 'success', 3000);
         });
@@ -707,7 +715,7 @@ function openMwtModal(tabId) {
 
 // ─── Shared module registry (used by the message-event routers below) ───────
 
-const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient };
+const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar };
 
 // Part 6 (§5.4/§7.5): the out-of-band resume seam. When a paused store
 // resumes through Retry or the privileged §7.5 preparation — long after
@@ -766,6 +774,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
         // empty `others` map and registers only the new chat's payloads.
         resetBudgetInjections();
         Ambient.onChatChanged();
+        Calendar.onChatChanged();
         // Part 6 (§7.4/§5.4): a module paused by the runtime gate does NOT run
         // its chat-change hydration. Its onChatChanged() would restore
         // counters and bookkeeping from the BLOCKED store value and hold them
@@ -855,10 +864,14 @@ console.log(`[MWT] Generation-depth terminal event: ${depthTerminalEvent}`);
 // ST invokes this after inserting pending input and deleting a regenerated
 // reply, before collecting extension prompts. Never resolve ambient time in the
 // early event.
-globalThis.mwtAmbientGenerationInterceptor = Ambient.generationInterceptor;
+globalThis.mwtAmbientGenerationInterceptor = (...args) => {
+    Ambient.generationInterceptor(...args);
+    Calendar.generationInterceptor(...args);
+};
 
 onAnyEvent(['GENERATION_STARTED'], (type, options, dryRun) => {
     Ambient.prepareGeneration(type, options, dryRun);
+    Calendar.prepareGeneration(type, options, dryRun);
     Chronicle.onGenerationStarted();
     // TODO §1 — the optional "hold background tracker jobs while the user is
     // generating" policy (Settings tab, default off). Depth-counted inside

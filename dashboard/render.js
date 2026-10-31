@@ -37,7 +37,7 @@ function ambientBody(value) {
     const source = time?.source === 'timestamp' ? `latest usable In-story time tag (message #${time.messageIndex}, ${age})`
         : time?.source === 'world-state' ? 'World State Current Scene'
             : 'message-count fallback; no usable story date/time (1 synthetic hour per message)';
-    const clock = time ? `<p>Story clock used: ${escapeHtml(bound(time.hours, time.source))}.<br>Source: ${escapeHtml(source)}.</p>` : '';
+    const clock = time ? `<p>Story clock used: ${escapeHtml(time.formattedDate ? `${time.formattedDate} ${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}` : bound(time.hours, time.source))}.<br>Source: ${escapeHtml(source)}.</p>` : '';
     return `<p>${escapeHtml(value?.state || 'off')}</p>${value?.ambient
         ? `${clock}<p>Current ${escapeHtml(value.ambient.band.name)}: ${escapeHtml(describe(value.ambient.conditions))}</p><p>Next ${escapeHtml(value.ambient.forecast.band.name)}${time ? ` (${escapeHtml(bound(value.ambient.forecast.band.startHours, time.source))})` : ''}: ${escapeHtml(describe(value.ambient.forecast.conditions))}</p>` : ''}
         ${value?.ambient?.daylight ? `<p>Daylight: ${escapeHtml(value.ambient.daylight.description)}</p><p>Latitude ${escapeHtml(value.ambient.daylight.latitude)}°${value.ambient.daylight.isDefault ? ` (${escapeHtml(value.ambient.daylight.climate)} default) — set yours` : ''}; clocks ahead of sun: ${escapeHtml(value.ambient.daylight.clockAhead)} h.</p>` : ''}
@@ -271,6 +271,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
         ${drift ? `<p class="mwt-overview-weekday-drift" role="status"><strong>${drift.grammar === 'custom' ? 'Custom calendar' : 'Gregorian'} weekday mismatch</strong>: message #${escapeHtml(drift.messageIndex)} tags ${escapeHtml(drift.date)} as ${escapeHtml(drift.tagged)}; the ${drift.grammar === 'custom' ? 'calendar' : 'Gregorian'} date is ${escapeHtml(drift.computed)}. Story data has not been changed.</p>` : ''}
         <div class="mwt-overview-grid">
             ${snapshot.ambient ? renderCell('ambient', 'Ambient Conditions', ambientBody, { icon: '🌦️', tab: 'settings', target: 'ambient-settings' }) : ''}
+            ${snapshot.calendar ? renderCell('calendar', 'Calendar', value => `<p>${escapeHtml(value?.state ?? 'not configured')}</p>${value?.today ? `<p>Today: ${escapeHtml(value.today)}<br>Tomorrow: ${escapeHtml(value.tomorrow)}<br>Source: ${escapeHtml(value.time?.source)}</p>` : ''}${value?.reason ? `<p>${escapeHtml(value.reason)}</p>` : ''}`, { icon: '📅', tab: 'calendar' }) : ''}
             ${renderCell('worldState', 'World State', () => worldBody, { icon: '🌍', tab: 'world-state' })}
             ${snapshot.staging?.ok ? renderKnowledge() : errorCard('Knowledge', snapshot.staging)}
             ${renderCell('beats', 'Story Planner', () => `${countText(plannerActive, 'active arc')} · ${countText(plannerInjected, 'injected arc')} · ${countText(plannerFocused, 'focused arc')} · ${countText(plannerReady, 'ready arc')} · ${countText(plannerParked, 'parked arc')} · ${countText(awaiting, 'beat')} awaiting · ${countText(overdue, 'beat')} overdue · progress check ${plannerLastCheck ? `${countText(plannerLastProposals, 'proposal')} last run` : 'never run'}`, { icon: '🗺️', tab: 'story-planner', target: 'beats', empty: !plannerActive && !plannerParked })}

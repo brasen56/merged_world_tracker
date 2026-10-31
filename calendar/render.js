@@ -1,0 +1,50 @@
+import { escapeHtml } from '../core/diff.js';
+import { getCalendarStatus, resolveCalendarClock } from '../core/calendar_state.js';
+import { validateCalendarRecord } from '../core/calendar_math.js';
+import { generateAmbientConditions } from '../core/ambient_generator.js';
+import { getChatMeta } from '../core/context.js';
+
+export function calendarPreview(calendar) {
+    const result = validateCalendarRecord(calendar);
+    if (!result.valid) return result.errors.join(' ');
+    const time = resolveCalendarClock(result.record);
+    if (time.month == null) return 'Today preview unavailable: no readable dated story clock.';
+    const hemisphere = getChatMeta('mwt_ambient')?.hemisphere ?? 'north';
+    const ambient = generateAmbientConditions({ seed: 0, climate: 'temperate', hemisphere, variability: 0.5, time });
+    return `Today: ${time.formattedDate ?? `${time.year}-${time.month}-${time.day}`}; derived season: ${ambient.season}; midsummer reference: ${hemisphere === 'south' ? 'December' : 'June'} solstice (${hemisphere}).`;
+}
+
+export function renderCalendarPanel() {
+    const status = getCalendarStatus();
+    return `<section id="mwt-calendar-panel">
+        <h3>Calendar (this chat)</h3>
+        <p>Calendar changes rewrite past and future dates consistently. Saves are independent of global Settings.</p>
+        <p role="status" id="mwt-c-status">${escapeHtml(status.reason ?? status.state)}</p>
+        <p id="mwt-c-preview"></p>
+        <label>Structure <select class="mwt-input" id="mwt-c-structure"><option value="custom">Custom</option><option value="gregorian">Gregorian (events only)</option></select></label>
+        <div id="mwt-c-custom">
+            <h4>Months</h4><p>Reorder rows to move dates with their month. Removing a referenced month is refused.</p>
+            <div id="mwt-c-months"></div><button type="button" class="mwt-btn" id="mwt-c-add">Add month</button>
+            <label>Weekdays, one per line (blank for none)<textarea class="mwt-input" id="mwt-c-weekdays"></textarea></label>
+            <label>Era (optional)<input class="mwt-input" id="mwt-c-era"></label>
+            <h4>Midsummer anchor</h4>
+            <label>Year (defaults to the current story year)<input class="mwt-input" type="number" id="mwt-c-year" min="1" max="9999"></label>
+            <label>Month <select class="mwt-input" id="mwt-c-month"></select></label>
+            <label>Day <input class="mwt-input" type="number" id="mwt-c-day" min="1" max="40"></label>
+            <label>Weekday <select class="mwt-input" id="mwt-c-weekday"></select></label>
+            <label><input type="checkbox" id="mwt-c-date-line"> Inject authoritative date line</label>
+        </div>
+        <label><input type="checkbox" id="mwt-c-events-line"> Events line (event authoring arrives in Phase 13)</label>
+        <p><strong>Clock-domain change:</strong> adoption accepts only custom timestamps. Old Gregorian tags are ignored until a custom date is available. Re-anchoring, month edits, removal and hemisphere changes also reposition the clock. Stored pins and frequency rules do not move automatically; synthetic rules become inactive on a dated clock. Declining re-stamping leaves their hours frozen.</p>
+        <label><input type="checkbox" id="mwt-c-restamp"> Re-stamp Ambient pin and frequency-rule bounds by date (synthetic starts reset to now; requires a readable new date)</label>
+        <label><input type="checkbox" id="mwt-c-clamp"> Explicitly allow referenced days to clamp to a shortened month's last day</label>
+        <label><input type="checkbox" id="mwt-c-confirm"> I understand the clock-domain and history changes</label>
+        <button type="button" class="mwt-btn" id="mwt-c-save">Save Calendar</button>
+        <button type="button" class="mwt-btn" id="mwt-c-delete">Remove Calendar</button>
+        <h4>Export / import JSON</h4>
+        <textarea class="mwt-input" id="mwt-c-json" rows="8" aria-label="Calendar JSON"></textarea>
+        <button type="button" class="mwt-btn" id="mwt-c-export">Export to text box</button>
+        <button type="button" class="mwt-btn" id="mwt-c-import">Import and save JSON</button>
+        <h4>Copy-paste preset snippet</h4><textarea class="mwt-input" id="mwt-c-snippet" rows="6" readonly aria-label="Calendar preset snippet"></textarea>
+    </section>`;
+}

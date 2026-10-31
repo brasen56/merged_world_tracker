@@ -29,6 +29,7 @@ import source from '../index.js?raw';
 // If a tab changes there, update this list.
 const TABS = [
     { id: 'overview', label: '🏠 Overview' },
+    { id: 'calendar', label: '📅 Calendar' },
     { id: 'world-state', label: '🌍 World State' },
     { id: 'chronicle', label: '📜 Chronicle' },
     { id: 'knowledge', label: '🧠 Knowledge' },
@@ -152,12 +153,12 @@ describe('Main tab bar (render/wire seam integration)', () => {
         expect(tabs[1].getAttribute('aria-selected')).toBe('true');
         press('ArrowLeft', tabs[1]);
         expect(tabs[0].getAttribute('aria-selected')).toBe('true');
-        // Wrap in both directions across all nine tabs.
+        // Wrap in both directions across the complete tab family.
         press('ArrowLeft', tabs[0]);
-        expect(tabs[8].getAttribute('aria-selected')).toBe('true');
-        press('End', tabs[8]);
-        expect(tabs[8].getAttribute('aria-selected')).toBe('true');
-        press('Home', tabs[8]);
+        expect(tabs.at(-1).getAttribute('aria-selected')).toBe('true');
+        press('End', tabs.at(-1));
+        expect(tabs.at(-1).getAttribute('aria-selected')).toBe('true');
+        press('Home', tabs.at(-1));
         expect(tabs[0].getAttribute('aria-selected')).toBe('true');
         // Up/Down are not the declared orientation — no-op.
         press('ArrowDown', tabs[0]);

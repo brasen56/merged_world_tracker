@@ -358,7 +358,10 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         const root = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
         expect(root).toContain("onAnyEvent(['GENERATION_STARTED'], (type, options, dryRun) => {");
         expect(root).toContain('Ambient.prepareGeneration(type, options, dryRun);');
-        expect(root).toContain('globalThis.mwtAmbientGenerationInterceptor = Ambient.generationInterceptor;');
+        expect(root).toContain('globalThis.mwtAmbientGenerationInterceptor = (...args) =>');
+        expect(root).toContain('Ambient.generationInterceptor(...args)');
+        expect(root).toContain('Calendar.generationInterceptor(...args)');
+        expect(root).toContain('Calendar.prepareGeneration(type, options, dryRun)');
         const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
         expect(manifest.generate_interceptor).toBe('mwtAmbientGenerationInterceptor');
         expect(root).toMatch(/resetBudgetInjections\(\);\s+Ambient\.onChatChanged\(\);/);

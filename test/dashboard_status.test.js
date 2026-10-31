@@ -18,6 +18,7 @@ const EXPECTED_KEYS = [
     'deletedIntentions',
     'quarantine',
     'ambient',
+    'calendar',
     'weekdayDrift',
 ];
 
@@ -35,6 +36,7 @@ function stubDeps(overrides = {}) {
         getDeletedIntentions: vi.fn(() => [{ id: 'deleted-1' }]),
         collectQuarantineStatus: vi.fn(() => ({ total: 1, stores: [] })),
         getAmbientStatus: vi.fn(() => ({ state: 'off' })),
+        getCalendarStatus: vi.fn(() => ({ state: 'not configured', body: '' })),
         getWeekdayDriftStatus: vi.fn(() => null),
         ...overrides,
     };
@@ -64,6 +66,7 @@ describe('collectOverviewSnapshot', () => {
             deletedIntentions: { ok: true, value: [{ id: 'deleted-1' }] },
             quarantine: { ok: true, value: { total: 1, stores: [] } },
             ambient: { ok: true, value: { state: 'off' } },
+            calendar: { ok: true, value: { state: 'not configured', body: '' } },
             weekdayDrift: { ok: true, value: null },
         });
 

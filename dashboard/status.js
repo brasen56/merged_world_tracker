@@ -22,6 +22,7 @@ import { getCoordinatorSnapshot as readCoordinatorSnapshot } from '../core/coord
 import { collectHealthSnapshot as readHealthSnapshot } from '../diagnostics_panel/health.js';
 import { collectQuarantineStatus as readQuarantineStatus } from '../backup/recovery.js';
 import { getAmbientStatus as readAmbientStatus } from '../core/ambient_state.js';
+import { getCalendarStatus as readCalendarStatus } from '../core/calendar_state.js';
 import { getWeekdayDriftStatus as readWeekdayDriftStatus } from '../core/weekday_drift.js';
 
 /** Convert any thrown value into the JSON-safe error text used by a cell. */
@@ -71,6 +72,7 @@ export function collectOverviewSnapshot({
     getDeletedIntentions = readDeletedIntentions,
     collectQuarantineStatus = readQuarantineStatus,
     getAmbientStatus = readAmbientStatus,
+    getCalendarStatus = readCalendarStatus,
     getWeekdayDriftStatus = readWeekdayDriftStatus,
 } = {}) {
     return {
@@ -88,6 +90,7 @@ export function collectOverviewSnapshot({
         deletedIntentions: collectCell(() => getDeletedIntentions()),
         quarantine: collectCell(() => collectQuarantineStatus()),
         ambient: collectCell(() => getAmbientStatus()),
+        calendar: collectCell(() => getCalendarStatus()),
         weekdayDrift: collectCell(() => getWeekdayDriftStatus()),
     };
 }
