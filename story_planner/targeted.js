@@ -23,6 +23,7 @@ import { assessNewcomerEvidence, buildPlayerCharacterBlock, describeCastPolicyRe
 import { TARGETED_ARC_SYSTEM_PROMPT, TARGETED_OPERATION_INSTRUCTIONS } from './prompts.js';
 import { buildArcDiff, captureArcRevision, materialArcShape } from './proposals.js';
 import { buildAmbientPlannerContext } from '../core/ambient_prompt.js';
+import { buildCalendarPlannerContext } from '../core/calendar_state.js';
 
 export const TARGETED_OPERATIONS = Object.freeze(['rework', 'develop', 'alternate', 'setup']);
 
@@ -65,6 +66,8 @@ export function buildTargetedUserPrompt(operation, arc, characterContext = {}, c
     if (world) blocks.push(wrapTag('factual_world_state', world));
     const ambientContext = buildAmbientPlannerContext();
     if (ambientContext) blocks.push(wrapTag('ambient_conditions', ambientContext));
+    const calendarContext = buildCalendarPlannerContext();
+    if (calendarContext) blocks.push(wrapTag('calendar_events', calendarContext));
     const chronicle = getLatestChronicleEntry().trim();
     if (chronicle) blocks.push(wrapTag('latest_chronicle', chronicle));
     const direction = cleanText(guidance, 2000) || getDirectionHint().trim();

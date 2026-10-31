@@ -34,7 +34,27 @@ export function renderCalendarPanel() {
             <label>Weekday <select class="mwt-input" id="mwt-c-weekday"></select></label>
             <label><input type="checkbox" id="mwt-c-date-line"> Inject authoritative date line</label>
         </div>
-        <label><input type="checkbox" id="mwt-c-events-line"> Events line (event authoring arrives in Phase 13)</label>
+        <label><input type="checkbox" id="mwt-c-events-line"> Inject bounded events line</label>
+        <h4>Events</h4>
+        <p>Events are authored facts, not weather effects. Edits and deletion rewrite their past and future. Changes are drafts until Save Calendar.</p>
+        <div id="mwt-c-events"></div>
+        <fieldset><legend>Create / edit event</legend>
+            <label>ID <input class="mwt-input" id="mwt-c-event-id" maxlength="64"></label>
+            <label>Name <input class="mwt-input" id="mwt-c-event-name" maxlength="24"></label>
+            <label>Repeat <select class="mwt-input" id="mwt-c-event-repeat"><option value="none">Once</option><option value="yearly">Yearly</option><option value="every">Every N years</option><option value="new">New moon</option><option value="full">Full moon</option></select></label>
+            <label>Every N years <input type="number" id="mwt-c-event-every" min="2" max="99" value="2"></label>
+            <label>Year (first occurrence) <input type="number" id="mwt-c-event-year" min="1" max="9999"></label>
+            <label>Month <input type="number" id="mwt-c-event-month" min="1" max="24" value="1"></label>
+            <label>Day <input type="number" id="mwt-c-event-day" min="1" max="40" value="1"></label>
+            <label>Duration in days <input type="number" id="mwt-c-event-duration" min="1" max="14" value="1"></label>
+            <button type="button" class="mwt-btn" id="mwt-c-event-apply">Apply event to draft</button>
+            <button type="button" class="mwt-btn" id="mwt-c-event-new">New event</button>
+        </fieldset>
+        <p>Lunar events use the calendar day containing the exact anchored phase instant (approximate astronomy, ±1 day near midnight). No date is stored for lunar events; re-anchoring the Ambient moon moves them.</p>
+        <h4>Month grid</h4>
+        <button type="button" class="mwt-btn" id="mwt-c-grid-prev">Previous month</button>
+        <button type="button" class="mwt-btn" id="mwt-c-grid-next">Next month</button>
+        <div id="mwt-c-grid"></div>
         <p><strong>Clock-domain change:</strong> adoption accepts only custom timestamps. Old Gregorian tags are ignored until a custom date is available. Re-anchoring, month edits, removal and hemisphere changes also reposition the clock. Stored pins and frequency rules do not move automatically; synthetic rules become inactive on a dated clock. Declining re-stamping leaves their hours frozen.</p>
         <label><input type="checkbox" id="mwt-c-restamp"> Re-stamp Ambient pin and frequency-rule bounds by date (synthetic starts reset to now; requires a readable new date)</label>
         <label><input type="checkbox" id="mwt-c-clamp"> Explicitly allow referenced days to clamp to a shortened month's last day</label>

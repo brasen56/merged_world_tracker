@@ -4,6 +4,7 @@ import { resolveCalendarClock } from '../core/calendar_state.js';
 import { editCalendarMonths, requireCalendarRecord } from '../core/calendar_edit.js';
 import { validateCalendarRecord } from '../core/calendar_math.js';
 import { captureScope, assertSameScope } from '../core/scope.js';
+import { wireCalendarEvents } from './events.js';
 
 /** DOM-created controls keep every authored string out of HTML interpolation. */
 export function wireCalendarPanel(root) {
@@ -16,6 +17,13 @@ export function wireCalendarPanel(root) {
         weekdays: null, era: null, anchor: { year: metaClock.year ?? null, month: 1, day: 15 },
         dateLine: true, eventsLine: true, events: [], phenomena: [] };
     let rows = [];
+    // Event draft application rebases rows; retain the map from persisted months
+    // separately so a later re-stamp still starts in the saved clock domain.
+    let persistedMonths = new Map((base.months ?? []).map((_, index) => [index + 1, index + 1]));
+    const monthMapping = () => new Map([...persistedMonths].flatMap(([saved, current]) => {
+        const index = rows.findIndex(row => row.original === current - 1);
+        return index < 0 ? [] : [[saved, index + 1]];
+    }));
     const el = id => panel.querySelector(`#mwt-c-${id}`);
     const guard = () => {
         if (!assertSameScope(scope).ok) throw new Error('Chat changed. Reopen the Calendar tab.');
@@ -35,6 +43,7 @@ export function wireCalendarPanel(root) {
             if (base.structure === 'custom' && (base.events.length || base.phenomena.length)) throw new Error('Export and clear date-referenced events and phenomena before switching structure.');
             return { version: 1, structure: 'gregorian', eventsLine: el('events-line').checked, events: base.events, phenomena: base.phenomena };
         }
+        if (base.structure === 'gregorian' && (base.events.length || base.phenomena.length)) throw new Error('Export and clear date-referenced events and phenomena before switching structure.');
         const next = base.structure === 'custom'
             // The form authors a replacement anchor in the edited month order.
             // Only retained references should be transformed from the old order.
@@ -54,8 +63,8 @@ export function wireCalendarPanel(root) {
         return next.record;
     };
     const preview = () => {
-        try { const next = read(); el('preview').textContent = calendarPreview(next); el('snippet').value = buildPresetSnippet(requireCalendarRecord(next)); }
-        catch (error) { el('preview').textContent = error.message; el('snippet').value = ''; }
+        try { const next = requireCalendarRecord(read()); el('preview').textContent = calendarPreview(next); el('snippet').value = buildPresetSnippet(next); refreshEvents?.(next); }
+        catch (error) { el('preview').textContent = error.message; el('snippet').value = ''; el('grid').textContent = 'Month grid unavailable until the calendar is valid.'; }
     };
     const drawRows = () => {
         const selected = Number(el('month').value || 0);
@@ -82,7 +91,9 @@ export function wireCalendarPanel(root) {
         selectOptions(el('month'), rows.map(row => row.name), selected);
     };
     const refreshMonths = () => selectOptions(el('month'), rows.map(row => row.name), Number(el('month').value));
-    const load = record => {
+    const load = (record, draft = false) => {
+        record = requireCalendarRecord(record);
+        persistedMonths = draft ? monthMapping() : new Map((record.months ?? []).map((_, index) => [index + 1, index + 1]));
         base = record;
         rows = (record.months ?? [{ name: 'Highsun', days: 30 }]).map((month, original) => ({ ...month, original: record.months ? original : null }));
         el('structure').value = record.structure;
@@ -105,12 +116,20 @@ export function wireCalendarPanel(root) {
     el('save').addEventListener('click', () => run(() => {
         confirmed(); const next = read();
         const monthMap = base.structure === 'custom' && next.structure === 'custom'
-            ? new Map(rows.filter(row => row.original != null).map(row => [row.original + 1, rows.indexOf(row) + 1])) : undefined;
+            ? monthMapping() : undefined;
         load(saveCalendar(next, { ...options(), monthMap }));
         el('status').textContent = 'Calendar saved for this chat.';
     }));
     el('delete').addEventListener('click', () => run(() => { confirmed(); saveCalendar(null, options()); el('status').textContent = 'Calendar removed. Reopen this tab to start a new calendar.'; }));
     el('export').addEventListener('click', () => run(() => { el('json').value = exportCalendar(); }));
     el('import').addEventListener('click', () => run(() => { confirmed(); load(importCalendar(el('json').value, options())); el('status').textContent = 'Calendar imported and saved.'; }));
-    load(base);
+    const refreshEvents = wireCalendarEvents(panel, { read: () => requireCalendarRecord(read()), load: record => load(record, true), run });
+    // A new chat may still need an anchor year; keep that draft editable.
+    if (validateCalendarRecord(base).valid) load(base);
+    else {
+        rows = base.months.map((month, original) => ({ ...month, original }));
+        el('structure').value = base.structure; el('day').value = base.anchor.day;
+        el('year').value = base.anchor.year ?? ''; el('events-line').checked = true; el('date-line').checked = true;
+        drawRows(); preview();
+    }
 }

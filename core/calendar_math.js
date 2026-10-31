@@ -43,8 +43,7 @@ export function isCalendarDate(record, date, { authoring = true } = {}) {
 
 /**
  * Total save-time validation for JSON-shaped input. Returns a fresh normalized
- * record on success, never mutates input. Event/phenomenon item schemas belong
- * to Phases 13/14; here those extension slots must be arrays and are copied.
+ * record on success, never mutates input. Phenomena remain a Phase 14 slot.
  */
 export function validateCalendarRecord(input) {
     const errors = [];
@@ -95,6 +94,26 @@ export function validateCalendarRecord(input) {
         for (const key of ['months', 'weekdays', 'anchor', 'era', 'dateLine', 'solstice']) {
             if (Object.hasOwn(record, key)) errors.push(`${key} is absent in a gregorian record.`);
         }
+    }
+    if (Array.isArray(record.events)) {
+        const ids = new Set();
+        record.events.forEach((event, index) => {
+            const fail = message => errors.push(`events[${index}]: ${message}`);
+            if (!object(event)) { fail('Event must be an object.'); return; }
+            if (typeof event.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(event.id) || ids.has(event.id)) fail('Use a unique ID (1–64 letters, digits, hyphens or underscores).');
+            ids.add(event.id);
+            event.name = normalizeCalendarName(event.name);
+            if (!validName(event.name)) fail('Use a safe name of 1–24 characters.');
+            event.durationDays ??= 1;
+            if (!Number.isInteger(event.durationDays) || event.durationDays < 1 || event.durationDays > 14) fail('durationDays must be 1–14.');
+            const repeat = event.repeat;
+            const lunar = object(repeat) && ['new', 'full'].includes(repeat.lunar) && Object.keys(repeat).length === 1;
+            const every = object(repeat) && Number.isInteger(repeat.everyYears) && repeat.everyYears >= 2 && repeat.everyYears <= 99 && Object.keys(repeat).length === 1;
+            if (!['none', 'yearly'].includes(repeat) && !lunar && !every) fail('Invalid repeat.');
+            if (lunar) {
+                if (event.date != null) fail('Lunar events have no stored date.');
+            } else if (!isCalendarDate(record, event.date)) fail('Use an existing calendar date in years 1–9999.');
+        });
     }
     return { valid: errors.length === 0, errors, record: errors.length === 0 ? record : null };
 }

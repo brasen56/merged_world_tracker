@@ -195,6 +195,12 @@ Re-stamping is opt-in and prepared before either metadata record is committed. W
 
 ### Phase 13 — Events and bounded lookahead
 
+**Implemented (2026-10-31).** Event records are validated on save/import, with unique safe IDs, normalized safe names (1–24 characters), optional duration defaulting to one day, and the four repeat shapes below. The authored year is the first yearly/every-N-years occurrence; Gregorian February 29 recurrences skip years lacking that date. Events follow month identity/clamping edits. The panel's event changes are drafts until Save Calendar; deletion warns that history is rewritten. Structure switching with retained date references is refused in either direction.
+
+`core/calendar_events.js` is the pure occurrence/projection seam (split from structure arithmetic to keep that module focused). The horizon includes day 14; a second distinct event is included only when both are within seven calendar days; ongoing events count toward the two-mention cap and report remaining days including today. No fired/evaluated state is written. The date/events toggles are independent, Gregorian events need no custom date line, and rejected newest tags/clockless/panic states suppress event context. Injection, command, Overview and full/targeted planner context share the bounded line; Ambient's body is unchanged. The navigable month grid is not lookahead-capped and shows duration spillover.
+
+**Lunar day decision (§8.4):** the calendar day containing the exact anchored phase instant, not a separate “night of” convention. Re-anchoring moves occurrences. This inherits the shipped moon model's approximate ±1-day near-midnight accuracy. `test/calendar_events.test.js` covers projection, recurrence, validation, lunar anchors, rewind/branch/swipe determinism, UI CRUD, grid and surface parity. Host/browser story testing remains manual.
+
 Event CRUD in the panel (both structures), the events line in the block, planner parity, the month grid's event display.
 
 - Tests: D32 bounds exact (inclusion at 14 days, the second only within a week, at most two mentions); yearly repeats across year boundaries; every-N-years; lunar new/full events track the anchored moon — re-anchoring moves them, and setting the anchor from a custom date works (D47); durations state remaining days; rewind restores "in three days"; no fired state anywhere; `'gregorian'` events validate leap dates; planner context parity.
@@ -218,7 +224,7 @@ Stretching the solar year to match a custom year length (D41 keeps the shipped l
 1. **Date-line copy** — the shape is settled at revision 3 (today + tomorrow with weekday, no era, month clause only at ≤7 days remaining, month table in the preset snippet); only the wording is tokenizer-measured at Phase 12.
 2. **Drift loudness after story testing** (v2 §8.6) — badge + event is the ceiling; if custom calendars drift badly in practice, the candidate escalation is a setup-time nudge, never injection copy.
 3. **Event lookahead tuning** — D32's numbers are reused as the default; calendar users may want a longer horizon (21 days?) — decide with stories, not speculation.
-4. **Lunar event day-rounding** — the phase instant's calendar day vs an "the night of" convention; pick at Phase 13 with a test either way.
+4. **Lunar event day-rounding — resolved in Phase 13:** use the calendar day containing the phase instant; midnight-boundary tests pin the convention.
 5. **Gregorian date line** — D49's structure field makes this cheap for `'gregorian'` chats if weekday drift proves annoying; Phase 7 deliberately chose passive detection, so it stays out until asked for.
 6. **Chronicle integration** — formatting entry `worldDate` labels through the calendar; deferred, chronicle displays raw strings today.
 7. **Export versioning** — the record's `version` field exists for migrations; the first migration policy is written when there is a second version.

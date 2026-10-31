@@ -5,14 +5,19 @@ import { resolveAmbientTime, parseAmbientDateTime } from './ambient_time.js';
 import { calendarDayIndex, calendarDateFromDayIndex, calendarHoursToDate,
     calendarMonthLength, formatCalendarDate, validateCalendarRecord } from './calendar_math.js';
 import { injectionAllowed } from './settings.js';
+import { projectCalendarEvents } from './calendar_events.js';
 
 export function resolveCalendarClock(calendar = getChatMeta('mwt_calendar'), type = 'normal', hemisphere = getChatMeta('mwt_ambient')?.hemisphere) {
     return resolveAmbientTime({ messages: getContextSafe()?.chat, worldState: getCurrentWorldState(),
         calendar, type, hemisphere });
 }
 
-export function buildCalendarBody(calendar, time) {
-    if (calendar?.structure !== 'custom' || !calendar.dateLine || time?.month == null || time.rejection) return '';
+export function buildCalendarBody(calendar, time, options = {}) {
+    if (!calendar || time?.month == null || time.rejection) return '';
+    const eventsLine = calendar.eventsLine ? projectCalendarEvents(calendar, time.customDate ?? time, options).line : '';
+    if (calendar.structure !== 'custom' || !calendar.dateLine) {
+        return eventsLine ? `Stage direction, not narration. ${eventsLine} Advance the date only as in-story time advances.` : '';
+    }
     const today = time.customDate ?? time;
     const index = calendarDayIndex(calendar, today);
     const tomorrow = calendarDateFromDayIndex(calendar, index + 1);
@@ -23,6 +28,7 @@ export function buildCalendarBody(calendar, time) {
         ? ` ${remaining} day${remaining === 1 ? '' : 's'} remain in ${month}; the next month is ${calendar.months[next.month - 1].name}${next.year !== today.year ? `, ${next.year}` : ''}.` : '';
     return `Stage direction, not narration. In-world date (authoritative): ${formatCalendarDate(calendar, today)}; `
         + `tomorrow is ${formatCalendarDate(calendar, tomorrow)}.${clause} `
+        + (eventsLine ? `${eventsLine} ` : '')
         + 'Advance the date only as in-story time advances, using the dates stated here.';
 }
 
@@ -33,16 +39,25 @@ export function getCalendarStatus(type = 'normal') {
     if (!validated.valid) return { state: 'invalid calendar', reason: validated.errors.join(' '), body: '' };
     const calendar = validated.record;
     const time = resolveCalendarClock(calendar, type);
-    const body = buildCalendarBody(calendar, time);
+    const options = { hemisphere: getChatMeta('mwt_ambient')?.hemisphere ?? 'north', moonEpochOffset: getChatMeta('mwt_ambient')?.moonEpochOffset };
+    const body = buildCalendarBody(calendar, time, options);
+    const eventsLine = time.month != null && !time.rejection && calendar.eventsLine
+        ? projectCalendarEvents(calendar, time.customDate ?? time, options).line : '';
     const reason = time.rejection ? `Newest timestamp rejected (message #${time.rejection.messageIndex}): ${time.rejection.reason}`
         : time.month == null ? 'No dated story clock; waiting for a readable timestamp or World State date.'
-            : calendar.structure !== 'custom' ? 'Gregorian calendar: date line is not used.'
-                : !calendar.dateLine ? 'Date line is off.' : null;
+            : calendar.structure !== 'custom' ? 'Gregorian calendar: events only; date line is not used.'
+                : !calendar.dateLine ? 'Date line is off; events are independently controlled.' : null;
     const date = time.month != null ? calendarHoursToDate(calendar, time.hours, { hemisphere: getChatMeta('mwt_ambient')?.hemisphere ?? 'north' }) : null;
-    return { calendar, time, body: injectionAllowed('Calendar') ? body : '',
+    return { calendar, time, eventsLine: injectionAllowed('Calendar') ? eventsLine : '', body: injectionAllowed('Calendar') ? body : '',
         state: injectionAllowed('Calendar') ? 'configured' : 'blocked by panic switch', reason,
         today: date ? formatCalendarDate(calendar, date) : null,
         tomorrow: date ? formatCalendarDate(calendar, calendarDateFromDayIndex(calendar, calendarDayIndex(calendar, date) + 1)) : null };
+}
+
+/** Same bounded facts as narrator injection, independent of Ambient enablement. */
+export function buildCalendarPlannerContext() {
+    const { eventsLine } = getCalendarStatus();
+    return eventsLine ? `Calendar events (user-authored, authoritative): ${eventsLine}\nDo not invent distances, cancel events, or fast-forward to them; only the user edits these facts.` : '';
 }
 
 /** Ambient's dated inputs use the same grammar as tags, never Gregorian guessing. */
