@@ -41,7 +41,21 @@ const count = number => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', '
 /** D32: inclusive 14-day horizon, a second mention only when both are within seven. */
 export function projectCalendarEvents(calendar, today, options = {}) {
     const index = calendarDayIndex(calendar, today);
-    const candidates = calendarEventOccurrences(calendar, index, index + 14, options);
+    const horizon = index + 14;
+    const coverage = new Map();
+    // Repetitions of the same event form one continuous interval when they
+    // overlap or adjoin. Do this before ID deduplication and mention selection.
+    for (const occurrence of calendarEventOccurrences(calendar, index, horizon, options)) {
+        const intervals = coverage.get(occurrence.event.id) ?? [];
+        const previous = intervals.at(-1);
+        if (previous && occurrence.start <= previous.end) {
+            previous.end = Math.max(previous.end, occurrence.end);
+            previous.merged = true;
+        } else intervals.push({ ...occurrence });
+        coverage.set(occurrence.event.id, intervals);
+    }
+    const candidates = [...coverage.values()].flat().sort((a, b) => a.start - b.start
+        || (a.event.id < b.event.id ? -1 : a.event.id > b.event.id ? 1 : 0));
     const selected = [];
     for (const occurrence of candidates) {
         if (selected.some(item => item.event.id === occurrence.event.id)) continue;
@@ -49,8 +63,11 @@ export function projectCalendarEvents(calendar, today, options = {}) {
         selected.push(occurrence);
         if (selected.length === 2) break;
     }
-    const line = selected.map(({ event, start, end }) => {
+    const line = selected.map(({ event, start, end, merged }) => {
         if (start <= index) {
+            // Coverage reaching beyond the bounded query may continue indefinitely.
+            // Never advertise the last enumerated repetition as its final day.
+            if (merged && end > horizon) return `${event.name} is ongoing.`;
             const remaining = end - index;
             return `${event.name} is ongoing; ${remaining === 1 ? 'today is its final day' : `${count(remaining)} days remain, including today`}.`;
         }

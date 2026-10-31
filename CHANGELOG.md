@@ -14,9 +14,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0]
+
+### Added
+
+- **Calendar module — custom world calendars become an authoritative
+  fact.** Author your own months, weekdays and anchor date in a
+  chat-local Calendar tab (or run the shipped Gregorian calendar through
+  the same seams), and the story clock, the Ambient sky and a new
+  bounded date line all follow it deterministically — the same story
+  moment always produces the same date, across swipes, regenerations and
+  rewinds, and for the same resolved time Ambient output is
+  byte-identical to the same chat without a calendar.
+  (`core/calendar_math.js`, `core/calendar_state.js`,
+  `core/calendar_edit.js`, `core/calendar_events.js`, `calendar/`;
+  designed in `docs/CALENDAR_DESIGN.md`, Phases 10–14.)
+  - **Custom chats parse custom tags only.** Once a calendar exists,
+    In-story time tags and World State scene dates parse through the
+    custom grammar alone. A Gregorian tag is passed over with an
+    Overview note, so one slip ("June 3, 1247") cannot move the story
+    centuries and then be repeated as authoritative. Curly apostrophes
+    are normalized, an era suffix after the year is tolerated, and a
+    newest tag that fails to parse turns the date line off — with the
+    reason on the Overview — instead of stating a stale date as the
+    truth.
+  - **A bounded date line with nothing to drift on.** The opt-in
+    `<mwt_calendar>` block states today and tomorrow with their
+    weekdays, adds the month arithmetic (days remaining, the next
+    month's name, the year number at year end) only when 7 or fewer
+    days remain in the month, and never states the era. `/wt-calendar`
+    prints the same body. A tokenizer audit measured the generated
+    block at a median of ~64 tokens on everyday dates and ~80 near
+    month end. The panel's generated preset snippet carries the full
+    month and weekday tables — fixed text with no per-turn cost — so
+    the model can recover from its own bad tags instead of inventing
+    Rotmonth 38.
+  - **Events with bounded lookahead.** Chat-local events validate with
+    unique IDs, safe names, optional durations, and four repeat shapes:
+    none, yearly, every N years, and lunar new/full tracked against the
+    anchored moon (re-anchoring moves them; February 29 recurrences skip
+    non-leap years). The date line, Overview cell, navigable month grid
+    and Story Planner context share one projection: the next event
+    within 14 days, a second only when both are within a week, ongoing
+    events stating remaining days, at most two mentions — and no fired
+    state is ever written, so "we cross before the Lantern Festival"
+    stays true across swipes, branches and rewinds. Deleting an event
+    warns that history is rewritten.
+  - **Dated phenomena — the deferred half of the phenomena engine.**
+    Date-shaped schedules join the frequency rules: a calendar start
+    date, durations in days or calendar months of the record's own
+    lengths, yearly repeats, and visibility gates that can hide a clause
+    at night. Light overrides only darken — the darker of natural and
+    authored — so a month-long "twilight" eclipse dims noon but cannot
+    brighten 2 AM or delete the moonlight. **End now** stores a
+    calendar instant, so the played past survives and rewinding before
+    it restores the phenomenon; deleting warns that history is
+    rewritten. Both shapes share one composition engine — the darkest
+    active override wins, priority only names the winner on a tie, at
+    most three visible clauses with the omitted count reported — and
+    moon phase and tides are untouched.
+  - **Adoption and anchoring that refuse to guess.** The anchor year
+    defaults to the story's current year, and the panel previews the
+    derived season for today, so a 354-day calendar cannot quietly
+    slide midsummer into winter years later. The solstice reference
+    derives from the Ambient hemisphere at read — nothing is stored
+    twice, and a hemisphere flip repositions the calendar coherently.
+    Adopting a calendar is a clock-domain switch: the panel says so and
+    offers to re-stamp hours-stored weather pins and
+    frequency-phenomena bounds; re-anchoring, structure edits and
+    hemisphere changes rewrite the calendar's past and future
+    consistently (stated at edit time), with the same opt-in offer.
+    Structure switching is refused while dated references exist, in
+    either direction.
+  - **Every surface, one projection.** The Calendar tab (structure
+    editor with identity-preserving month edits and explicit day
+    clamping, anchor editor, month grid with events and active
+    phenomena, JSON export/import, preset snippet), the Overview's
+    today/tomorrow cell and rejection notes, a weekday-drift badge
+    generalized to custom names, diagnostics under
+    `module: 'calendar'`, Budget registration with Ambient's defaults,
+    and panic/chat-change cleanup through the shared seams. Ambient's
+    moon-anchor and pin-until inputs accept custom dates, and the
+    Overview clock line formats them.
 
 ### Changed
- - ambient_phenomena.test.js:80-81 is a deliberate change (See CALENDAR_RESPONSE.md §8.8 for info)
+
+- **Frequency-phenomena light overrides only darken now — a deliberate
+  behavior change from previously shipped releases.** The previous
+  semantics let the highest-priority active light override set the
+  scene's regime absolutely, so a high-priority rule could lift the
+  night — deleting the moonlight, aurora and meteor visibility that a
+  night-time rule is usually about. The effective regime is now the
+  darker of the natural one and the override, the darkest active
+  override wins outright and priority only names the winner on a tie,
+  and `'daylight'` remains an accepted but inert value so stored rules
+  keep validating (the panel says so). Frequency and dated rules now
+  share this one composition. One existing test
+  (`test/ambient_phenomena.test.js`) was updated deliberately to pin
+  the new behavior; the reasoning is recorded in
+  `docs/CALENDAR_RESPONSE.md` §8.8.
 
 ## [2.14.0]
 

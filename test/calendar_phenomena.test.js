@@ -135,6 +135,16 @@ describe('shared composition and Ambient integration', () => {
 });
 
 describe('dated phenomena panel', () => {
+    test('open phenomenon editor preserves start and End now month identity through reorder', () => {
+        ctx.chatMetadata.mwt_calendar.phenomena[0].end = date(1247, 1, 4, 12);
+        mount(); el('phen-list').querySelector('button').click();
+        el('months').querySelector('button:nth-of-type(2)').click();
+        el('phen-name').value = 'Renamed eclipse'; el('phen-apply').click();
+        el('confirm').checked = true; el('save').click();
+        expect(el('status').textContent).toContain('Calendar saved');
+        expect(ctx.chatMetadata.mwt_calendar.phenomena[0]).toMatchObject({ name: 'Renamed eclipse',
+            start: { month: 2, day: 3 }, end: { month: 2, day: 4, hour: 12 } });
+    });
     test('draft CRUD, End now persistence/rewind, delete warning, sharing and stale scope', () => {
         mount(); expect(el('grid').textContent).toContain('Rotmonth eclipse');
         expect(document.body.textContent).toContain('Schedule edits rewrite history');

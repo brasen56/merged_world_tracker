@@ -34,6 +34,23 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Phase 13 pure events', () => {
+    test.each([2, 3, 5])('continuous yearly coverage has no false countdown (duration %s)', durationDays => {
+        const calendar = custom(); calendar.months = [{ name: 'Highsun', days: 2 }]; calendar.anchor.day = 1;
+        calendar.events = [event('feast', 1, { repeat: 'yearly', durationDays })];
+        expect(validateCalendarRecord(calendar).valid).toBe(true);
+        for (const day of [1, 2]) {
+            const projection = projectCalendarEvents(calendar, date(1248, 1, day));
+            expect(projection.line).toBe('Festival feast is ongoing.');
+            expect(projection.events).toHaveLength(1);
+        }
+    });
+    test('every-N-year coverage merges, but separated repetitions retain exact countdowns', () => {
+        const calendar = custom(); calendar.months = [{ name: 'Highsun', days: 2 }]; calendar.anchor.day = 1;
+        calendar.events = [event('feast', 1, { repeat: { everyYears: 2 }, durationDays: 5 })];
+        expect(projectCalendarEvents(calendar, date(1249)).line).toBe('Festival feast is ongoing.');
+        calendar.events[0].durationDays = 1;
+        expect(projectCalendarEvents(calendar, date(1249)).line).toContain('today is its final day');
+    });
     test('D32 exact inclusive bounds, second only within seven, max two and deterministic ties', () => {
         const calendar = custom();
         calendar.events = [event('a', 15), event('b', 16)];
@@ -177,6 +194,26 @@ describe('Phase 13 surfaces', () => {
         el('events').querySelector('button').click(); expect(el('event-month').value).toBe('2');
         el('event-apply').click(); el('confirm').checked = true; el('save').click();
         expect(ctx.chatMetadata.mwt_calendar.events[0].date.month).toBe(2);
+    });
+    test('open event editor follows month identity through reorder', () => {
+        ctx.chatMetadata.mwt_calendar.events = [event('a', 4)]; mount();
+        el('events').querySelector('button').click();
+        el('months').querySelector('button:nth-of-type(2)').click();
+        el('event-name').value = 'Renamed feast'; el('event-apply').click();
+        el('confirm').checked = true; el('save').click();
+        expect(el('status').textContent).toContain('Calendar saved');
+        expect(ctx.chatMetadata.mwt_calendar.events[0]).toMatchObject({ name: 'Renamed feast', date: { month: 2, day: 4 } });
+    });
+    test('unsaved event date follows reorder and becomes invalid if its month is removed', () => {
+        mount(); el('event-id').value = 'new'; el('event-name').value = 'New feast';
+        el('event-day').value = '4';
+        el('months').querySelector('button:nth-of-type(2)').click();
+        expect(el('event-month').value).toBe('2');
+        el('months').querySelectorAll('button')[5].click();
+        expect(el('event-month').value).toBe('');
+        el('event-apply').click();
+        expect(el('status').textContent).toContain('Use an existing calendar date');
+        expect(ctx.chatMetadata.mwt_calendar.events).toEqual([]);
     });
     test('month grid displays all events beyond horizon, duration spillover and escapes strings', () => {
         const calendar = custom(); calendar.events = [event('a', 35, { durationDays: 4, repeat: 'yearly' }), event('b', 30)];

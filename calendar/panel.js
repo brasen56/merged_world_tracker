@@ -82,8 +82,17 @@ export function wireCalendarPanel(root) {
                 button.disabled = action !== 0 && !rows[index + action];
                 button.addEventListener('click', () => {
                     const anchorRow = rows[Number(el('month').value)];
+                    const editorMonths = ['event-month', 'phen-month'].map(id => {
+                        const input = el(id);
+                        return { input, row: rows[Number(input.value) - 1] };
+                    });
                     if (!action) rows.splice(index, 1);
                     else [rows[index], rows[index + action]] = [rows[index + action], rows[index]];
+                    // Open editors contain authored dates too, including unsaved new records.
+                    // A removed month becomes invalid rather than silently selecting another.
+                    for (const { input, row: monthRow } of editorMonths) {
+                        if (monthRow) input.value = rows.includes(monthRow) ? rows.indexOf(monthRow) + 1 : '';
+                    }
                     drawRows(); el('month').value = String(rows.indexOf(anchorRow)); preview();
                 }); wrapper.append(button);
             }
