@@ -268,7 +268,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
             <p>Status for this chat. Open a module for details.</p></div>
             <button type="button" id="mwt-overview-refresh" class="mwt-btn" title="Refresh Overview">🔄 Refresh</button>
         </div>
-        ${drift ? `<p class="mwt-overview-weekday-drift" role="status"><strong>Gregorian weekday mismatch</strong>: message #${escapeHtml(drift.messageIndex)} tags ${escapeHtml(drift.date)} as ${escapeHtml(drift.tagged)}; the Gregorian date is ${escapeHtml(drift.computed)}. Story data has not been changed.</p>` : ''}
+        ${drift ? `<p class="mwt-overview-weekday-drift" role="status"><strong>${drift.grammar === 'custom' ? 'Custom calendar' : 'Gregorian'} weekday mismatch</strong>: message #${escapeHtml(drift.messageIndex)} tags ${escapeHtml(drift.date)} as ${escapeHtml(drift.tagged)}; the ${drift.grammar === 'custom' ? 'calendar' : 'Gregorian'} date is ${escapeHtml(drift.computed)}. Story data has not been changed.</p>` : ''}
         <div class="mwt-overview-grid">
             ${snapshot.ambient ? renderCell('ambient', 'Ambient Conditions', ambientBody, { icon: '🌦️', tab: 'settings', target: 'ambient-settings' }) : ''}
             ${renderCell('worldState', 'World State', () => worldBody, { icon: '🌍', tab: 'world-state' })}

@@ -10,7 +10,8 @@ import { generateAmbientAftermath } from './ambient_aftermath.js';
 import { generateAmbientPhenomena } from './ambient_phenomena.js';
 
 export function readAmbientConditions(settings, seed, type = 'normal') {
-    const time = resolveAmbientTime({ messages: getContextSafe()?.chat, worldState: getCurrentWorldState(), type });
+    const time = resolveAmbientTime({ messages: getContextSafe()?.chat, worldState: getCurrentWorldState(), type,
+        calendar: getChatMeta('mwt_calendar'), hemisphere: settings.hemisphere });
     const ambient = applyAmbientPin(generateAmbientConditions({ ...settings, seed, time }), settings.pin, time);
     ambient.daylight = generateAmbientDaylight({ ...settings, seed, time });
     ambient.phenomena = generateAmbientPhenomena({ ...settings, seed, time, daylight: ambient.daylight,

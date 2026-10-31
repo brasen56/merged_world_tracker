@@ -1,5 +1,7 @@
 /** Pure in-story clock parsing. No host clock, locale, or persistence dependencies. */
 import { readCurrentScene } from './world_state_document.js';
+import { calendarDateToHours, calendarDayIndex, calendarWeekday, formatCalendarDate,
+    isCalendarDate, normalizeCalendarName } from './calendar_math.js';
 
 export const AMBIENT_MONTHS = Object.freeze([
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -34,7 +36,9 @@ function parseClock(text) {
  * custom calendar implementation (different month lengths remain out of v1).
  * A missing/qualitative clock returns null rather than inventing midnight.
  */
-export function parseAmbientDateTime(dateText, timeText, { monthNames = AMBIENT_MONTHS } = {}) {
+export function parseAmbientDateTime(dateText, timeText, { monthNames = AMBIENT_MONTHS, calendar, hemisphere } = {}) {
+    if (calendar && calendar.structure !== 'gregorian') return parseCustomDateTime(dateText, timeText, { calendar, hemisphere }).parsed;
+    if (calendar) monthNames = AMBIENT_MONTHS;
     if (typeof dateText !== 'string') return null;
     const clock = parseClock(timeText);
     if (!clock) return null;
@@ -63,8 +67,48 @@ export function parseAmbientDateTime(dateText, timeText, { monthNames = AMBIENT_
     return { hours: date.getTime() / AMBIENT_HOUR_MS, year, month, day, ...clock };
 }
 
+/** Calendar callers supply a validated Phase 10 record; never try Gregorian on failure. */
+function parseCustomDateTime(dateText, timeText, { calendar, hemisphere }) {
+    const reject = reason => ({ parsed: null, reason });
+    const clock = parseClock(timeText);
+    if (!clock) return reject('Invalid or missing clock.');
+    if (typeof dateText !== 'string') return reject('Missing custom calendar date.');
+    const parts = normalizeCalendarName(dateText).split(',').map(part => part.trim());
+    const taggedToken = parts.length === 3 ? parts.shift() : null;
+    if (parts.length !== 2) return reject('Expected a custom month, day and year.');
+    const named = parts[0].match(/^(.+?)\s+(\d{1,2})$/u);
+    const yearMatch = parts[1].match(/^(\d{1,4})(?:\s+(.+))?$/u);
+    if (!named || !yearMatch) return reject('Expected a custom month, day and year.');
+    if (yearMatch[2] && (!calendar.era || yearMatch[2].toLowerCase() !== calendar.era.toLowerCase())) return reject('Unknown calendar era.');
+    const month = calendar.months.findIndex(value => value.name.toLowerCase() === named[1].toLowerCase()) + 1;
+    if (!month) return reject(`Unknown custom calendar month: ${named[1]}. Gregorian dates are not accepted in a custom-calendar chat.`);
+    const date = { year: Number(yearMatch[1]), month, day: Number(named[2]), ...clock };
+    if (!isCalendarDate(calendar, date)) return reject('Date is outside the custom calendar month length or year range.');
+    const hours = calendarDateToHours(calendar, date, { hemisphere });
+    const computed = calendarWeekday(calendar, calendarDayIndex(calendar, date));
+    const tagged = taggedToken && calendar.weekdays
+        ? calendar.weekdays.find(name => name.toLowerCase() === taggedToken.toLowerCase()) ?? taggedToken : null;
+    return { parsed: { ...date, hours, grammar: 'custom', customDate: date,
+        formattedDate: formatCalendarDate(calendar, date),
+        ...(computed && tagged ? { weekday: { tagged, computed, mismatch: tagged !== computed } } : {}) } };
+}
+
+function customTimestamp(text, options) {
+    const tags = typeof text === 'string' ? [...text.matchAll(/\[In-story time:\s*([^\]\r\n]*)\]/gi)] : [];
+    let rejection;
+    for (let index = tags.length - 1; index >= 0; index--) {
+        const match = tags[index][1].match(/^(\d{1,2}:\d{2}\s*(?:AM|PM)?),\s*(.+)$/i);
+        const result = match ? parseCustomDateTime(match[2], match[1], options)
+            : { parsed: null, reason: 'Expected a clock and custom calendar date.' };
+        if (result.parsed) return { parsed: result.parsed, rejection };
+        rejection ??= { reason: result.reason, tagIndex: index };
+    }
+    return { parsed: null, rejection };
+}
+
 /** Return the last usable canonical tag in a message, or null. */
 export function parseAmbientTimestamp(text, options = {}) {
+    if (options.calendar && options.calendar.structure !== 'gregorian') return customTimestamp(text, options).parsed;
     if (typeof text !== 'string') return null;
     const tags = [...text.matchAll(/\[In-story time:\s*([^\]\r\n]*)\]/gi)];
     for (let index = tags.length - 1; index >= 0; index--) {
@@ -85,17 +129,24 @@ export function parseAmbientTimestamp(text, options = {}) {
  * Count time uses one synthetic hour per included message by default, with no
  * inferred month: the generator must use the supplied manual season instead.
  */
-export function resolveAmbientTime({ messages = [], worldState = '', type = 'normal', hoursPerMessage = 1, monthNames = AMBIENT_MONTHS } = {}) {
+export function resolveAmbientTime({ messages = [], worldState = '', type = 'normal', hoursPerMessage = 1, monthNames = AMBIENT_MONTHS, calendar, hemisphere } = {}) {
     if (!Number.isFinite(hoursPerMessage) || hoursPerMessage <= 0) throw new RangeError('hoursPerMessage must be positive and finite.');
     const chat = Array.isArray(messages) ? messages : [];
     const replacingReply = type === 'swipe' || (type === 'regenerate' && chat.at(-1)?.is_user !== true);
     const count = Math.max(0, chat.length - (replacingReply ? 1 : 0));
+    const options = { monthNames: calendar ? AMBIENT_MONTHS : monthNames, calendar, hemisphere };
+    let rejection;
     for (let index = count - 1; index >= 0; index--) {
-        const parsed = parseAmbientTimestamp(typeof chat[index] === 'string' ? chat[index] : chat[index]?.mes, { monthNames });
-        if (parsed) return { ...parsed, source: 'timestamp', messageIndex: index, messagesAfter: count - 1 - index };
+        const text = typeof chat[index] === 'string' ? chat[index] : chat[index]?.mes;
+        const result = calendar && calendar.structure !== 'gregorian' ? customTimestamp(text, options)
+            : { parsed: parseAmbientTimestamp(text, options) };
+        if (!rejection && result.rejection) rejection = { ...result.rejection, messageIndex: index };
+        const notes = rejection ? { rejection } : {};
+        if (result.parsed) return { ...result.parsed, source: 'timestamp', messageIndex: index, messagesAfter: count - 1 - index, ...notes };
     }
     const scene = typeof worldState === 'string' ? readCurrentScene(worldState) : worldState;
-    const parsed = parseAmbientDateTime(scene?.date, scene?.time, { monthNames });
-    if (parsed) return { ...parsed, source: 'world-state' };
-    return { hours: count * hoursPerMessage, month: null, source: 'message-count' };
+    const parsed = parseAmbientDateTime(scene?.date, scene?.time, options);
+    const notes = rejection ? { rejection } : {};
+    if (parsed) return { ...parsed, source: 'world-state', ...notes };
+    return { hours: count * hoursPerMessage, month: null, source: 'message-count', ...notes };
 }
