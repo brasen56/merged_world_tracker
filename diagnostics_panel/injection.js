@@ -35,6 +35,8 @@ import { MWT_VERSION } from '../core/version.js';
 import { getGlobalSettings, injectionAllowed } from '../core/settings.js';
 import { getAllInjectedSnapshots } from '../core/diagnostics.js';
 import { estimateTokens } from '../core/context.js';
+import { getCalendarStatus } from '../core/calendar_state.js';
+import { resolveInjectionPlacement as calendarPlacement } from '../calendar/injection.js';
 // The shared redaction layer — the ONE place secrets are scrubbed (Phase 5's
 // hard gate: every diagnostics surface routes through it; no hand-rolled
 // redaction anywhere else). Payloads are chat-derived content that can quote
@@ -118,6 +120,12 @@ export function roleNameToNumber(role) {
  *                     lorebook corpus; the others are prompt payload).
  */
 export const INJECTION_MODULE_SPECS = [
+    {
+        id: 'calendar', label: '📅 Calendar', moduleKey: 'Calendar',
+        key: 'mwt_calendar_injection', mechanism: 'extension-prompt', tokenKind: 'injected',
+        isEnabled: () => !!getCalendarStatus().body,
+        resolvePlacement: calendarPlacement,
+    },
     {
         id: 'world_state', label: '🌍 World State', moduleKey: 'WorldState',
         key: WS_KEY, mechanism: 'extension-prompt', tokenKind: 'injected',

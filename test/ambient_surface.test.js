@@ -34,6 +34,158 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('frequency rule controls add, edit, end and delete while preserving past output', () => {
+        saveSettings(config);
+        mount();
+        el('phenomena-kind').value = 'additive';
+        el('phenomena-chance').value = '1';
+        click('phenomena-add');
+        const rule = getSettings().phenomena[0];
+        expect(rule).toMatchObject({ id: 'phenomenon-1', startHours: hours, endHours: null, source: 'timestamp' });
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([]);
+        ctx.chat[0].mes = '[In-story time: 10:00 PM, Thursday, June 4, 2026]';
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([rule.id]);
+        click('phenomena-end');
+        expect(getSettings().phenomena[0].endHours).toBe(hours + 10);
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([]);
+        ctx.chat[0].mes = '[In-story time: 09:00 PM, Thursday, June 4, 2026]';
+        expect(getAmbientStatus().ambient.phenomena.active).toEqual([rule.id]);
+        el('phenomena-json').value = JSON.stringify([{ ...rule, chance: 2 }]);
+        click('phenomena-save');
+        expect(el('status').textContent).toContain('Invalid frequency');
+        expect(getSettings().phenomena[0].chance).toBe(1);
+        click('phenomena-delete');
+        expect(getSettings().phenomena).toEqual([]);
+    });
+
+    test('phenomena and effective light share projection across all surfaces without changing moon phase or tides', async () => {
+        saveSettings({ ...config, coastal: true, latitude: 65 });
+        const natural = getAmbientStatus().ambient;
+        saveSettings({ phenomena: [{ id: 'eclipse', shape: 'frequency', name: 'Ash eclipse', clause: 'ash veils the sun',
+            chance: 1, durationNights: 2, startHours: hours - 24, endHours: null, light: 'darkness', priority: 10 }] });
+        const before = JSON.stringify(ctx.chatMetadata);
+        const { ambient } = getAmbientStatus();
+        expect(ambient.daylight.regime).toBe('darkness');
+        expect(ambient.daylight.description).not.toContain('sunset');
+        expect(ambient.moon.phase).toBe(natural.moon.phase);
+        expect(ambient.moon.brightness).not.toBeNull();
+        expect(ambient.tide).toEqual(natural.tide);
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        for (const text of [ambientCommand(), buildAmbientPlannerContext(),
+            renderOverviewSnapshot({ ambient: { ok: true, value: getAmbientStatus() } })]) {
+            expect(text).toContain('ash veils the sun');
+            expect(text).toContain('Ash eclipse');
+        }
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain('ash veils the sun');
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+    });
+
+    test('frequency rules work on fallback clocks and obey module and panic gates', () => {
+        saveSettings(config);
+        ctx.chat = Array.from({ length: 22 }, () => ({ mes: 'No clock' }));
+        saveSettings({ phenomena: [{ id: 'mist', shape: 'frequency', name: 'Mist', clause: 'violet mist gathers',
+            chance: 1, durationNights: 1, startHours: 21, endHours: null, source: 'message-count' }] });
+        expect(ambientCommand()).toContain('violet mist gathers');
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain('violet mist gathers');
+        ctx.extensionSettings.merged_world_tracker.injectionMasterOff = true;
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').enabled).toBe(false);
+        ctx.extensionSettings.merged_world_tracker.injectionMasterOff = false;
+        saveSettings({ enabled: false });
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').enabled).toBe(false);
+    });
+
+    test('Phase 9 coastal settings save, validate and preserve inland defaults', () => {
+        expect(getSettings()).toMatchObject({ coastal: false, tideRange: 'normal' });
+        expect(ctx.chatMetadata.mwt_ambient).toBeUndefined();
+        saveSettings(config);
+        mount();
+        expect(el('coastal').checked).toBe(false);
+        el('coastal').checked = true;
+        el('tide-range').value = 'extreme';
+        click('save');
+        expect(getSettings()).toMatchObject({ coastal: true, tideRange: 'extreme' });
+        expect(el('status').textContent).toContain('saved');
+        mount();
+        expect(el('coastal').checked).toBe(true);
+        expect(el('tide-range').value).toBe('extreme');
+        expect(() => saveSettings({ coastal: 'true' })).toThrow('Coastal');
+        expect(() => saveSettings({ tideRange: 'huge' })).toThrow('Tide range');
+        expect(ctx.chatMetadata.mwt_ambient).toMatchObject({ coastal: true, tideRange: 'extreme' });
+    });
+
+    test('Phase 9 shared tide facts match all surfaces, rewind and swipe without writes', async () => {
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        saveSettings({ ...config, coastal: true, seed: 12 });
+        const status = getAmbientStatus();
+        const description = status.ambient.tide.description;
+        ctx.saveMetadataDebounced.mockClear();
+        const before = JSON.stringify(ctx.chatMetadata);
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Tides: ${description}`);
+        expect(ambientCommand()).toBe(buildInjectionBody(status.ambient));
+        expect(renderOverviewSnapshot({ ambient: { ok: true, value: status } })).toContain(`Tides: ${description}`);
+        expect(buildAmbientPlannerContext()).toContain(`Tides at the exact story time: ${description}`);
+        ctx.chat.push({ mes: '[In-story time: 06:00 PM, Thursday, June 4, 2026]' });
+        onGenerationStarted('swipe');
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Tides: ${description}`);
+        expect(getAmbientStatus().ambient.tide.phase).not.toBe(status.ambient.tide.phase);
+        ctx.chat.pop();
+        expect(getAmbientStatus().ambient.tide).toEqual(status.ambient.tide);
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+        vi.spyOn(Math, 'random').mockReturnValue(0.123);
+        ambientCommand('reseed');
+        expect(getAmbientStatus().ambient.tide.nextHighHours).not.toBe(status.ambient.tide.nextHighHours);
+    });
+
+    test('Phase 9 inland and clockless surfaces omit tide lines entirely', async () => {
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        saveSettings(config);
+        for (const coastal of [false, true]) {
+            saveSettings({ coastal });
+            if (coastal) ctx.chat = [{ mes: 'No calendar clock' }];
+            const status = getAmbientStatus();
+            expect(status.ambient.tide).toBeNull();
+            expect(ambientCommand()).not.toContain('Tides:');
+            expect(renderOverviewSnapshot({ ambient: { ok: true, value: status } })).not.toContain('Tides:');
+            expect(buildAmbientPlannerContext()).not.toContain('Tides at');
+        }
+    });
+
+    test('Phase 8 recent history and crossings match injection, command, Overview and planner without writes', async () => {
+        const { buildAmbientPlannerContext } = await import('../core/ambient_prompt.js');
+        const start = parseAmbientDateTime('2026-09-01', '13:00').hours;
+        ctx.chat = [{ mes: '[In-story time: 01:00 PM, Tuesday, September 1, 2026]' }];
+        saveSettings({ ...config, seed: 12, climate: 'tropical', pin: {
+            startHours: start, endHours: start + 4, source: 'timestamp',
+            conditions: { ...conditions, temperature: 'freezing', precipitation: 'snow' },
+        } });
+        ctx.saveMetadataDebounced.mockClear();
+        const before = JSON.stringify(ctx.chatMetadata);
+        const status = getAmbientStatus();
+        const description = status.ambient.aftermath.description;
+        expect(description).toContain('first frost today afternoon');
+        onGenerationStarted();
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Recent: ${description}`);
+        expect(ambientCommand()).toBe(buildInjectionBody(status.ambient));
+        expect(renderOverviewSnapshot({ ambient: { ok: true, value: status } })).toContain(`Recent: ${description}`);
+        expect(buildAmbientPlannerContext()).toContain(`Recent: ${description}`);
+        ctx.chat.push({ mes: '[In-story time: 01:00 PM, Wednesday, September 2, 2026]' });
+        onGenerationStarted('swipe');
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(`Recent: ${description}`);
+        ctx.chat.pop();
+        ctx.chat[0].mes = '[In-story time: 01:00 PM, Wednesday, September 2, 2026]';
+        expect(getAmbientStatus().ambient.aftermath.crossings).toEqual([]);
+        ctx.chat[0].mes = '[In-story time: 01:00 PM, Tuesday, September 1, 2026]';
+        expect(getAmbientStatus().ambient.aftermath.description).toBe(description);
+        expect(JSON.stringify(ctx.chatMetadata)).toBe(before);
+        expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
+    });
+
     test('Phase 6 anchor controls round-trip, clear, validate and remain chat-local', () => {
         saveSettings(config); mount();
         expect(el('moon-date').value).toBe('');
@@ -82,7 +234,11 @@ describe('Ambient Phase 3 user surface', () => {
         expect(fallback.ambient.moon).toBeNull();
         expect(buildInjectionBody(fallback.ambient)).not.toContain('Moon:');
         expect(buildAmbientPlannerContext()).not.toContain('Moon at');
-        expect(ambientCommand()).toContain('no calendar clock');
+        // The notice is a user-surface explanation: the Overview states it,
+        // the token-costed body and the body-identical command do not (D33
+        // revision 4).
+        expect(ambientCommand()).not.toContain('no calendar clock');
+        expect(ambientCommand()).toBe(buildInjectionBody(fallback.ambient));
         expect(renderOverviewSnapshot({ ambient: { ok: true, value: fallback } })).toContain('Moon: unavailable — no calendar clock');
     });
 

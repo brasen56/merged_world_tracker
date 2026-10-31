@@ -12,6 +12,192 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+## [2.15.0]
+
+### Added
+
+- **Calendar module — custom world calendars become an authoritative
+  fact.** Author your own months, weekdays and anchor date in a
+  chat-local Calendar tab (or run the shipped Gregorian calendar through
+  the same seams), and the story clock, the Ambient sky and a new
+  bounded date line all follow it deterministically — the same story
+  moment always produces the same date, across swipes, regenerations and
+  rewinds, and for the same resolved time Ambient output is
+  byte-identical to the same chat without a calendar.
+  (`core/calendar_math.js`, `core/calendar_state.js`,
+  `core/calendar_edit.js`, `core/calendar_events.js`, `calendar/`;
+  designed in `docs/CALENDAR_DESIGN.md`, Phases 10–14.)
+  - **Custom chats parse custom tags only.** Once a calendar exists,
+    In-story time tags and World State scene dates parse through the
+    custom grammar alone. A Gregorian tag is passed over with an
+    Overview note, so one slip ("June 3, 1247") cannot move the story
+    centuries and then be repeated as authoritative. Curly apostrophes
+    are normalized, an era suffix after the year is tolerated, and a
+    newest tag that fails to parse turns the date line off — with the
+    reason on the Overview — instead of stating a stale date as the
+    truth.
+  - **A bounded date line with nothing to drift on.** The opt-in
+    `<mwt_calendar>` block states today and tomorrow with their
+    weekdays, adds the month arithmetic (days remaining, the next
+    month's name, the year number at year end) only when 7 or fewer
+    days remain in the month, and never states the era. `/wt-calendar`
+    prints the same body. A tokenizer audit measured the generated
+    block at a median of ~64 tokens on everyday dates and ~80 near
+    month end. The panel's generated preset snippet carries the full
+    month and weekday tables — fixed text with no per-turn cost — so
+    the model can recover from its own bad tags instead of inventing
+    Rotmonth 38.
+  - **Events with bounded lookahead.** Chat-local events validate with
+    unique IDs, safe names, optional durations, and four repeat shapes:
+    none, yearly, every N years, and lunar new/full tracked against the
+    anchored moon (re-anchoring moves them; February 29 recurrences skip
+    non-leap years). The date line, Overview cell, navigable month grid
+    and Story Planner context share one projection: the next event
+    within 14 days, a second only when both are within a week, ongoing
+    events stating remaining days, at most two mentions — and no fired
+    state is ever written, so "we cross before the Lantern Festival"
+    stays true across swipes, branches and rewinds. Deleting an event
+    warns that history is rewritten.
+  - **Dated phenomena — the deferred half of the phenomena engine.**
+    Date-shaped schedules join the frequency rules: a calendar start
+    date, durations in days or calendar months of the record's own
+    lengths, yearly repeats, and visibility gates that can hide a clause
+    at night. Light overrides only darken — the darker of natural and
+    authored — so a month-long "twilight" eclipse dims noon but cannot
+    brighten 2 AM or delete the moonlight. **End now** stores a
+    calendar instant, so the played past survives and rewinding before
+    it restores the phenomenon; deleting warns that history is
+    rewritten. Both shapes share one composition engine — the darkest
+    active override wins, priority only names the winner on a tie, at
+    most three visible clauses with the omitted count reported — and
+    moon phase and tides are untouched.
+  - **Adoption and anchoring that refuse to guess.** The anchor year
+    defaults to the story's current year, and the panel previews the
+    derived season for today, so a 354-day calendar cannot quietly
+    slide midsummer into winter years later. The solstice reference
+    derives from the Ambient hemisphere at read — nothing is stored
+    twice, and a hemisphere flip repositions the calendar coherently.
+    Adopting a calendar is a clock-domain switch: the panel says so and
+    offers to re-stamp hours-stored weather pins and
+    frequency-phenomena bounds; re-anchoring, structure edits and
+    hemisphere changes rewrite the calendar's past and future
+    consistently (stated at edit time), with the same opt-in offer.
+    Structure switching is refused while dated references exist, in
+    either direction.
+  - **Every surface, one projection.** The Calendar tab (structure
+    editor with identity-preserving month edits and explicit day
+    clamping, anchor editor, month grid with events and active
+    phenomena, JSON export/import, preset snippet), the Overview's
+    today/tomorrow cell and rejection notes, a weekday-drift badge
+    generalized to custom names, diagnostics under
+    `module: 'calendar'`, Budget registration with Ambient's defaults,
+    and panic/chat-change cleanup through the shared seams. Ambient's
+    moon-anchor and pin-until inputs accept custom dates, and the
+    Overview clock line formats them.
+
+### Changed
+
+- **Frequency-phenomena light overrides only darken now — a deliberate
+  behavior change from previously shipped releases.** The previous
+  semantics let the highest-priority active light override set the
+  scene's regime absolutely, so a high-priority rule could lift the
+  night — deleting the moonlight, aurora and meteor visibility that a
+  night-time rule is usually about. The effective regime is now the
+  darker of the natural one and the override, the darkest active
+  override wins outright and priority only names the winner on a tie,
+  and `'daylight'` remains an accepted but inert value so stored rules
+  keep validating (the panel says so). Frequency and dated rules now
+  share this one composition. One existing test
+  (`test/ambient_phenomena.test.js`) was updated deliberately to pin
+  the new behavior; the reasoning is recorded in
+  `docs/CALENDAR_RESPONSE.md` §8.8.
+
+## [2.14.0]
+
+### Added
+
+- **Ambient Conditions v2 — the sky joins the weather as an authoritative
+  fact.** Sun, daylight, tides and the weather's aftermath complete the sky
+  model the 2.13.2 moon phase began. Everything is computed from the chat's
+  seed, the resolved story clock and your settings — the same story moment
+  always produces the same sky, across swipes, regenerations and rewinds,
+  with no new stored state — and injection, `/wt-ambient`, the Overview
+  Ambient card and the Story Planner context share one projection, so the
+  narrator renders "long light past nine" instead of calling an August
+  evening at 60°N dark at 5 PM.
+  - **Daylight follows latitude and the exact story time.** A latitude
+    setting (magnitude 0–90; the existing hemisphere supplies the sign, and
+    each climate shows a default that is never saved) drives
+    refraction-corrected sunrise, sunset and civil twilight, and the exact
+    resolved time is classified as daylight, civil twilight or darkness —
+    weather bands no longer decide how dark it is, so a bright 21:00
+    midsummer evening is never called near-dark and a 16:20 December dusk is
+    never called "low sun". Event facts are stated rounded to the half hour
+    ("sunset around 20:30", "civil dusk ends around 21:30"); polar day,
+    polar night and white nights are first-class; high-latitude dark nights
+    can carry a deterministic, per-night "aurora possible"; and an optional
+    per-chat "clocks run ahead of the sun by" offset (0–2 h in 30-minute
+    steps) keeps stated clock times honest for stories set in real places.
+    Chats without a usable calendar degrade to a seasonal proxy from the
+    manual season. (This landed in the 2.13.2 patch beside the moon; it is
+    recorded here now that v2 is complete.)
+  - **Tides for coastal chats.** An opt-in coastal setting adds a
+    deterministic 12.4-hour semidiurnal schedule with a per-chat port
+    offset derived from the seed. Spring and neap windows track the
+    computed lunar phase, so the 2.13.2 full-moon anchor — or a reseed —
+    shifts the tide schedule with the moon. The exact-time state reads high
+    or low water at slack, or rising/falling between; spring and neap tides
+    and a non-default small or large range (wording only) are named when
+    they hold, and forecasts name the next high water rounded to the half
+    hour. Inland and calendarless chats omit the line entirely.
+    It is a fictional-port schedule, not real-port or navigation data.
+  - **Recent weather, consistent with the injected past.** A trailing-day
+    summary ("rain since yesterday evening; previously clear", or "clear
+    throughout the past day") is
+    recomputed from the same generator as the current conditions — nothing
+    is logged, weather pins apply to past bands, and rewinding restores
+    what the rewound skies produced — so ground conditions never contradict
+    the weather the story already narrated. Calendar-clock chats also see
+    seasonal firsts (first frost, first snow, first thaw) inside their
+    day-window. Like the weather itself, changing settings or reseeding
+    rewrites the recomputed past.
+- **Frequency-shaped ambient phenomena (§3.5.1/D37).** Chat-local meteor,
+  miasma and custom rules use deterministic per-night starts, bounded duration
+  look-back, historical start gates and exact-time visibility. Shared output
+  includes additive clauses and only-darkening light overrides: the effective
+  regime is the darker of the natural one and the override (a rule can never
+  lift the night, so moonlight, aurora and meteors survive), the darkest
+  active override wins, and priority only names the winner on ties. Settings
+  provide authoring, advanced JSON, history-preserving End now and explicit
+  history-erasing deletion. Works with calendar and message-count clocks;
+  dated schedules remain deferred.
+- **Gregorian weekday drift detection.** Overview flags a mismatch between
+  the latest usable In-story time tag's weekday and its Gregorian date, with
+  a deduplicated diagnostics warning. Works with Ambient Conditions and
+  injection disabled; never changes story data or the clock.
+
+### Changed
+
+- **The optional clock-ahead offset now converts the whole sun-time basis.**
+  In 2.13.2 it shifted only stated event times; now the daylight regime,
+  the golden-hour window, the next-event pick, the aurora night identity and
+  moon-up all read the converted sun time, and stated clock facts re-add the
+  offset — so a stated sunset can never fall after a regime that already
+  calls the scene dark, and a clock running ahead of the sun sees the moon
+  rise that much earlier.
+- **Shorter daylight and moon lines in the ambient injection.** Part of the
+  v2 token-budget audit (D33 revision 4). Ordinary day lengths are no
+  longer stated (long summer light and short winter days still are), and
+  darkness no longer repeats the day's sunset: before dawn it names civil
+  dawn, and in the evening it states only that it is dark. Chats without a
+  calendar clock no longer inject, or print in `/wt-ambient`, the "Moon
+  unavailable — no calendar clock" notice; the Overview card still shows
+  it. With all of v2 in place, inland chats add at most ~46 tokens to the
+  v1 weather line; coastal chats add up to ~73 at high latitudes, and each
+  authored phenomenon clause adds about 12 more.
+
 ## [2.13.2]
 
 ### Added

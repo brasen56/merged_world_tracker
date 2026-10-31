@@ -37,6 +37,13 @@
 .mwt-overview-error { border-color: var(--mwt-error, #b44); }
 .mwt-overview-error p { margin: 0; color: var(--mwt-error, #b44); }
 .mwt-overview-empty { opacity: .75; }
+.mwt-overview-weekday-drift {
+    border: 1px solid var(--mwt-border);
+    border-left: 4px solid var(--mwt-warning, #b8860b);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--mwt-text);
+}
 .mwt-overview-health { margin: 0; padding-left: 18px; font-size: 12px; }
 .mwt-overview-footer { justify-content: flex-start; color: var(--mwt-text-dim); font-size: 12px; }
 

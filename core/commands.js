@@ -7,6 +7,7 @@
  */
 
 import { clearAmbientInjection } from '../ambient/injection.js';
+import { clearCalendarInjection } from '../calendar/injection.js';
 
 /**
  * Create the command/macro subsystem.
@@ -18,7 +19,7 @@ import { clearAmbientInjection } from '../ambient/injection.js';
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
 export function createCommands({ registerSlashCommand, macroRegistry, modules, resetFloatPositions, saveSettings }) {
-    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
 
@@ -32,6 +33,10 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
         // is an object of named arguments; the text typed after the command is
         // the second. Reading the first as text breaks the command live.
         try {
+            registerSlashCommand('wt-calendar', (_args, command) => {
+                try { return Calendar?.calendarCommand?.(command) ?? 'Calendar not available.'; }
+                catch (error) { return `Error: ${error.message}`; }
+            }, [], 'Show the authoritative Calendar injection body; edit in the Calendar tab');
             registerSlashCommand('wt-ambient', (_args, command) => {
                 try { return Ambient?.ambientCommand?.(command) ?? 'Ambient Conditions not available.'; }
                 catch (error) { return `Error: ${error.message}`; }
@@ -184,6 +189,7 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                 if (typeof saveSettings === 'function') {
                     saveSettings({ injectionMasterOff: !enabled });
                     if (!enabled) clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'panic-slash-command' });
+                    if (!enabled) clearCalendarInjection({ clearReason: 'panic-slash-command' });
                     // Re-apply injection state immediately so the toggle takes
                     // effect without requiring a new message.
                     try {

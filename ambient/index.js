@@ -85,5 +85,8 @@ export function ambientCommand(args = '') {
     if (!injectionAllowed('Ambient')) return 'Ambient Conditions injection is blocked by the global panic switch.';
     const { ambient } = readAmbientConditions(settings, ensureSeed(action === 'reseed'));
     if (action === 'reseed') clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'reseed' });
+    // Body-identical to the injection on purpose: the command shows exactly
+    // what the model sees. The clockless moon explanation lives on the
+    // Overview card, not in the token-costed body (D33 revision 4).
     return buildInjectionBody(ambient);
 }

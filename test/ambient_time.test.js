@@ -8,6 +8,7 @@ describe('ambient timestamp parser', () => {
         expect(parseAmbientTimestamp(`Narration\n${tag()}`)).toEqual({
             hours: Date.UTC(2026, 5, 4, 14, 30) / 3600000,
             year: 2026, month: 6, day: 4, hour: 14, minute: 30,
+            weekday: { tagged: 'Thursday', computed: 'Thursday', mismatch: false },
         });
     });
 

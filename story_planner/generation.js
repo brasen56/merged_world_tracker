@@ -32,6 +32,7 @@ import {
 import { applyPlanInjection } from './injection.js';
 import { captureTargetRevisions, findChangedProposalTargets } from './proposals.js';
 import { buildAmbientPlannerContext } from '../core/ambient_prompt.js';
+import { buildCalendarPlannerContext } from '../core/calendar_state.js';
 
 // ─── Message scan helper ─────────────────────────────────────────────────────
 
@@ -445,6 +446,8 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
     // the closing output instruction. Never seed or register narrator injection.
     const ambientContext = buildAmbientPlannerContext();
     if (ambientContext) out = `${wrapTag('ambient_conditions', ambientContext)}\n\n${out}`;
+    const calendarContext = buildCalendarPlannerContext();
+    if (calendarContext) out = `${wrapTag('calendar_events', calendarContext)}\n\n${out}`;
 
     if (reminderReason) {
         const reminder = `[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the story plan document (section headings with bulleted arcs beneath them). No narration, apology, or preamble.]`;
