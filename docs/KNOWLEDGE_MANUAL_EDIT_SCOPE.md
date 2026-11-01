@@ -1,6 +1,6 @@
 # Knowledge Tracker — manual entry editing in-module
 
-**Status:** Phase 1 service implemented and automated checks pass; Phases 2–5 remain unimplemented. No Edit UI exposed; feature unreleased.
+**Status:** Phases 1–2 implemented and automated checks pass; Phases 3–5 remain unimplemented. No Edit UI exposed; feature unreleased.
 **Date:** 2026-11-01
 **Area:** Knowledge Tracker NPC list UI (Minor/Major sub-tabs), the lorebook write path, and the staging accept path.
 **Purpose:** Agree on the editing affordance, safety boundaries, and first-release scope before implementation.
@@ -639,6 +639,36 @@ null baselines/unenriched items, relationship-only differences, failed reads,
 failed re-merges, second Accept, a second intervening edit, and mixed Accept All
 outcomes. Include hand-edited proposals, Promote/Demote, and keyword-only saves. Stale
 items remain reviewable and cause no write on the first stale Accept.
+
+**Completion record — 2026-11-01:**
+
+- `knowledge/render.js` now verifies NPC baselines through the identity-checked
+  loader, comparing trimmed bodies without managed relationship blocks. Failed
+  or unverifiable reads refuse acceptance; State Tracker and null-baseline
+  acceptance retain their existing paths.
+- Stale Scan/Update proposals are re-merged, with their previous baseline and
+  review text restored if reloading/merging fails. Untouched Promote/Demote
+  proposals use their dedicated builders. Enrich/Fields and hand-edited text
+  are preserved against a refreshed comparison baseline. The detail pane shows
+  a persistent review warning and refreshed diff; every later Accept checks again.
+- Accept returns explicit accepted/stale/failed outcomes. Accept All reports
+  accepted, stale/pending, failed, and unloaded/skipped counts separately, leaving
+  pending selection and notification bookkeeping intact.
+- Later acceptance uses Phase 1's synchronized pending keywords, including when
+  a single-accept keyword input remains mounted with an older, untouched value.
+  Explicit reviewer keyword changes still take precedence.
+- Added 28 workflow tests in `test/knowledge_accept_staleness.test.js` covering
+  the response table, repeated staleness, failed reads/re-merges/writes,
+  relationship-only changes, null baselines, State Tracker exclusion,
+  reviewer text, keyword-only manual saves, and mixed batch outcomes.
+- Validation run:
+  - `npx vitest run test/knowledge_accept_staleness.test.js test/knowledge_accept_relationship_block.test.js test/knowledge_manual_edit.test.js test/busy_state_handlers.test.js test/knowledge_cleanup_commit.test.js test/knowledge_cleanup_recovery.test.js`
+    — **6 files, 197 tests passed**.
+  - `npm test` — **176 files, 4,382 tests passed**.
+  - `npm run lint` — **passed**.
+  - `git diff --check` — **passed**.
+- No Edit control, model call, setting, or release/version change was added.
+  SillyTavern host QA remains **pending**; this checkpoint is not a feature release.
 
 ### Phase 3 — wire the NPC-only Edit-in-View workflow
 

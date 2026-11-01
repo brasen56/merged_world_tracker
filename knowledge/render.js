@@ -92,16 +92,57 @@ async function handleAccept(item, text, keywords, _el) {
     try {
         if (item.type === 'state') {
             const result = await writeStateTracker(item.uid, item.name, text);
-            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
+            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return 'failed'; }
             bumpStateTrackerTimestamp(item.name);
         } else {
+            if (item.existingContent != null) {
+                const scope = captureScope();
+                const current = item.uid == null ? null : await loadEntryContent(item.uid, item.name);
+                if (!scopeStillCurrent(scope).ok) return 'failed';
+                if (current === null) {
+                    ktSetStatus(`Accept failed: cannot load or verify the current entry for "${item.name}". Proposal kept pending.`, 'error');
+                    return 'failed';
+                }
+                const body = content => stripRelationshipBlock(content).trim();
+                if (body(current) !== body(item.existingContent)) {
+                    // Keep reviewer-authored text, even when it belongs to a
+                    // promotion/demotion. Only untouched proposals can be rebuilt.
+                    if (item.edited || item.refreshFields) {
+                        item.mergedContent = text;
+                        item.existingContent = stripRelationshipBlock(current);
+                    } else if (item.type === 'promote' || item.type === 'demote') {
+                        item.existingContent = current;
+                        item.mergedContent = item.type === 'promote'
+                            ? buildPromotedContent(current) : buildDemotedContent(current);
+                    } else {
+                        const previous = { existingContent: item.existingContent,
+                            mergedContent: item.mergedContent, proposedContent: item.proposedContent };
+                        item.existingContent = null;
+                        try {
+                            await enrichStagingItem(item);
+                            if (item.existingContent === null) throw new Error('The current entry could not be reloaded.');
+                        } catch (err) {
+                            // A null baseline would bypass the next freshness
+                            // check. Restore both the baseline and review text.
+                            Object.assign(item, previous);
+                            throw err;
+                        }
+                        if (!scopeStillCurrent(scope).ok) return 'failed';
+                    }
+                    item.keywords = keywords;
+                    item.staleWarning = 'The entry changed since this proposal was built. Nothing was written. Review the refreshed Current entry and diff, then Accept again if appropriate.';
+                    ktSetStatus(item.staleWarning, 'info');
+                    renderNpcsSubTab();
+                    return 'stale';
+                }
+            }
             // The relationship graph owns the managed block, not the proposal:
             // per-NPC proposals are staged with it stripped, and a scan
             // proposal's copy can go stale while it waits. Rebuilding it here
             // keeps this to one write, so one accept is one history entry.
             const content = applyCurrentRelationshipBlock(item.name, text);
             const result = await writeToLorebook(item.name, content, keywords, item.uid);
-            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
+            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return 'failed'; }
             // KNOWLEDGE-03: If this is an update (item.uid != null), resolve
             // the canonical registry key so the model's spelling doesn't create
             // a duplicate entry beside the real one. For creates, use the
@@ -146,8 +187,10 @@ async function handleAccept(item, text, keywords, _el) {
         removeNotificationEntry(item.id);
         ktSetStatus(`"${item.name}" written to lorebook.`, 'success');
         renderNpcsSubTab();
+        return 'accepted';
     } catch (err) {
         ktSetStatus(`Accept failed: ${err.message}`, 'error');
+        return 'failed';
     }
 }
 
@@ -420,6 +463,7 @@ function renderDetailForItem(item) {
     // so heading navigation lands on the detail pane too.
     return `<div class="kt-detail-inner">
         <h4 class="kt-detail-name">${escapeHtml(item.name)}</h4>
+        ${item.staleWarning ? `<div class="kt-detail-section" role="status">${escapeHtml(item.staleWarning)}</div>` : ''}
         ${item.contractRejections?.length ? `<div class="kt-detail-section kt-contract-rejections"><div class="kt-detail-label">Rejected model values (not applied or re-verified)</div><ul>${item.contractRejections.map(r => `<li>${escapeHtml(r.field)}: ${escapeHtml(r.reason)}</li>`).join('')}</ul></div>` : ''}
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
@@ -462,6 +506,10 @@ function wireStagingEvents(el) {
     // here through handleAccept's re-render (isConnected guard covers the
     // re-render and the modal closing mid-write).
     const acceptBtn = el.querySelector('#kt-accept');
+    // A manual keyword-only save can synchronize the pending item while this
+    // detail pane is still mounted. An untouched input must not resurrect the
+    // older rendered keys; an explicit reviewer change still wins.
+    const renderedKeywords = el.querySelector('#kt-keyword-input')?.value;
     acceptBtn?.addEventListener('click', async () => {
         const item = state.stagingItems.find(i => i.id === state.activeItemId);
         if (!item) return;
@@ -481,7 +529,9 @@ function wireStagingEvents(el) {
             return;
         }
         const keywordsRaw = el.querySelector('#kt-keyword-input')?.value || item.name;
-        const keywords = item.type === 'state' ? [item.name] : keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
+        const keywords = item.type === 'state' ? [item.name]
+            : keywordsRaw === renderedKeywords && item.keywords ? item.keywords
+                : keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
         setControlBusy(acceptBtn, true);
         try {
             await handleAccept(item, text, keywords, el);
@@ -507,6 +557,8 @@ function wireStagingEvents(el) {
         try {
             let accepted = 0;
             let skipped = 0;
+            let stale = 0;
+            let failed = 0;
             for (const item of [...state.stagingItems]) {
                 const text = item.mergedContent || item.proposedContent;
                 // Reject placeholders (Fetch to see changes / promoting / demoting)
@@ -514,9 +566,12 @@ function wireStagingEvents(el) {
                 // single-accept path guards this; the batch path previously had no
                 // guard at all.
                 if (!text || STAGING_PLACEHOLDERS.includes(text)) { skipped++; continue; }
-                try { await handleAccept(item, text, item.keywords || [item.name], el); accepted++; } catch (e) { console.warn('[MWT:Knowledge] Batch accept failed:', e); }
+                const outcome = await handleAccept(item, text, item.keywords || [item.name], el);
+                if (outcome === 'accepted') accepted++;
+                else if (outcome === 'stale') stale++;
+                else failed++;
             }
-            if (skipped > 0) ktSetStatus(`${accepted} accepted · ${skipped} skipped (click the item to load its content first).`, 'info');
+            ktSetStatus(`${accepted} accepted · ${stale} stale/pending (review the refreshed diff before accepting again) · ${failed} failed · ${skipped} skipped${skipped ? ' (click the item to load its content first)' : ''}.`, failed ? 'error' : 'info');
         } finally {
             if (batchAcceptBtn.isConnected) setControlBusy(batchAcceptBtn, false);
         }
