@@ -183,7 +183,10 @@ export async function writeStateTracker(uid, name, content) {
     } catch (err) { return { success: false, error: err.message }; }
 }
 
-export async function writeToLorebook(name, content, keywords, existingUid, { bookName, beforeWrite } = {}) {
+// Checked callers may pass a synchronous content factory to project graph-owned
+// data after the final read/guard. writeKeywords is opt-in on that branch so
+// existing cleanup callers continue to own content only.
+export async function writeToLorebook(name, content, keywords, existingUid, { bookName, beforeWrite, writeKeywords = false } = {}) {
     if (!state.wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
     // Resolve the book ONCE. Calling the resolver per save could target two
     // different books within a single write if the scope changed mid-flight.
@@ -212,6 +215,9 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
             }
         }
         const entries = wi.entries;
+        // A checked caller may defer its graph-owned projection until after
+        // the final async disk read and synchronous guard, before mutation.
+        if (beforeWrite && typeof content === 'function') content = content();
         // A registry uid is only meaningful for the book it was recorded in. A
         // stale one (imported registry, hand-deleted entries, a scope switch)
         // can point at an unrelated entry, and the update branch below would
@@ -292,7 +298,7 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
             pushHistory(existingUid, previousContent, book);
             entries[existingUid].content = content;
             // Cleanup owns content, not keywords edited during review.
-            if (!beforeWrite) entries[existingUid].key = keywords;
+            if (!beforeWrite || writeKeywords) entries[existingUid].key = keywords;
             entries[existingUid].comment = name;
             applyStoreToWorldInfo(book, wi);
             if (beforeWrite) await saveCleanupBook(book, wi);

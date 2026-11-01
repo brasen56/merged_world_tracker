@@ -1,6 +1,6 @@
 # Knowledge Tracker — manual entry editing in-module
 
-**Status:** Revised draft, checked against the code; not an implementation commitment.
+**Status:** Phase 1 service implemented and automated checks pass; Phases 2–5 remain unimplemented. No Edit UI exposed; feature unreleased.
 **Date:** 2026-11-01
 **Area:** Knowledge Tracker NPC list UI (Minor/Major sub-tabs), the lorebook write path, and the staging accept path.
 **Purpose:** Agree on the editing affordance, safety boundaries, and first-release scope before implementation.
@@ -526,7 +526,8 @@ Paths relative to the repository root:
 
 ## 13. Implementation phases
 
-**Planning record:** 2026-11-01. All phases below are **not started**. This
+**Planning record:** 2026-11-01. Phase 1 is **implemented, automated checks passed**;
+Phases 2–5 are **not started**. This
 breakdown sequences Slice 1 (§9); it does not claim implementation approval or
 expand the scope. Sections 1–12 remain the behavior contract. Each phase should
 land with its own tests, review, and a short completion record here.
@@ -586,6 +587,31 @@ trailing whitespace. Simulate scope changes during load, save, and
 reconciliation. Refusals produce no target mutation or history push;
 save failures may leave the redundant history snapshot described in §5.3.
 Existing cleanup commit/recovery tests still pass. No Edit control is exposed.
+
+**Completion record — 2026-11-01:**
+
+- Added `knowledge/manual_edit.js`: `loadForManualEdit({ name, uid })`,
+  `saveManualEdit({ session, body, keywords })`, `isManualEditDirty`, and
+  `parseManualKeywords`. Sessions capture scope/book, canonical identity,
+  entity id, uid, stripped baseline, exact content, and entry keys. Saves
+  preserve drafts on refusal and return disk-verified content on success.
+- The checked writer accepts opt-in `writeKeywords` (cleanup stays content-only)
+  and a synchronous content factory. The factory rebuilds the relationship
+  projection after the final asynchronous disk read and guard, so graph changes
+  during that read are included. Cache-conflict refusal wording is neutral.
+- Registry metadata/type are preserved; confirmed saves synchronize NPC pending
+  keywords, excluding State Tracker proposals. Reconciled success restores host
+  cache/editor coherence and leaves the registry store dirty. Scope checks prevent
+  new-chat registry/proposal updates during load, save, and reconciliation.
+- Added 38 service tests in `test/knowledge_manual_edit.test.js`.
+- Validation run:
+  - `npx vitest run test/knowledge_manual_edit.test.js test/knowledge_cleanup_commit.test.js test/knowledge_cleanup_recovery.test.js`
+    — **3 files, 134 tests passed**.
+  - `npm test` — **175 files, 4,354 tests passed**.
+  - `npm run lint` — **passed**.
+  - `git diff --check` — **passed**.
+- No Edit control, setting, model call, or release/version change was added.
+  SillyTavern host QA is **pending**; this checkpoint is not a feature release.
 
 ### Phase 2 — protect proposal acceptance from stale content
 

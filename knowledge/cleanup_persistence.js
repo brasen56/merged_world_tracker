@@ -44,7 +44,7 @@ export function hostCacheConflict(bookName, diskWi) {
     return {
         ok: false,
         code: 'host-unsaved-edits',
-        error: `Cleanup refused: World Info holds unsaved changes to "${bookName}" (an edit in the World Info editor is still saving, or an earlier save failed). Nothing was changed — wait a moment and retry; if it persists, reload the page.`,
+        error: `Write refused: World Info holds unsaved changes to "${bookName}" (an edit in the World Info editor is still saving, or an earlier save failed). Nothing was changed — wait a moment and retry; if it persists, reload the page.`,
     };
 }
 
