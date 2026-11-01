@@ -49,6 +49,7 @@ import {
     getStances, getStance, setStance,
     isEdgeAutoManaged, isStanceAutoManaged, toggleEdgeSource, toggleStanceSource,
     syncRelationshipsToLorebook, syncAllRelationshipsToLorebooks,
+    applyCurrentRelationshipBlock, stripRelationshipBlock,
     describeRelationshipChange, getRecentRelationshipChanges,
     recordRelationshipChanges, clearRecentRelationshipChanges,
 } from './relationships.js';
@@ -94,7 +95,12 @@ async function handleAccept(item, text, keywords, _el) {
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
             bumpStateTrackerTimestamp(item.name);
         } else {
-            const result = await writeToLorebook(item.name, text, keywords, item.uid);
+            // The relationship graph owns the managed block, not the proposal:
+            // per-NPC proposals are staged with it stripped, and a scan
+            // proposal's copy can go stale while it waits. Rebuilding it here
+            // keeps this to one write, so one accept is one history entry.
+            const content = applyCurrentRelationshipBlock(item.name, text);
+            const result = await writeToLorebook(item.name, content, keywords, item.uid);
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
             // KNOWLEDGE-03: If this is an update (item.uid != null), resolve
             // the canonical registry key so the model's spelling doesn't create
@@ -372,9 +378,15 @@ function renderDetailForItem(item) {
 
     // Skip the diff view for state tracker updates: they use the full entry text
     // as both existing and proposed content, which produces noisy, misleading diffs.
+    // The managed block is compared on neither side: accept rebuilds it from the
+    // graph, so a proposal's text cannot add, change or remove it, and a restored
+    // per-NPC proposal (stripped) against a scan baseline (raw) would read as a
+    // removal that never happens.
     let diffHtml = '';
-    if (item.type !== 'state' && item.existingContent && editorContent && item.existingContent !== editorContent) {
-        const diff = renderLineDiff(item.existingContent, editorContent);
+    if (item.type !== 'state' && item.existingContent && editorContent) {
+        const existingBody = stripRelationshipBlock(item.existingContent);
+        const proposedBody = stripRelationshipBlock(editorContent);
+        const diff = existingBody !== proposedBody ? renderLineDiff(existingBody, proposedBody) : '';
         if (diff) {
             diffHtml = `<div class="kt-detail-section">
                 <div class="kt-detail-label">Changes (diff)</div>

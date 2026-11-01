@@ -36,7 +36,7 @@ regenerated, so it gets the same save guarantees as a ledger cleanup.
 | Edit affordance | The existing View modal gains an explicit Edit mode (see §3) | Read-only remains the default; editing starts only on an explicit action |
 | Write-back | Manual saves route through the checked `beforeWrite` branch of `writeToLorebook` (§5) | Disk read, cache-conflict refusal, pre-mutation guard, and a status-checked save; no new unguarded write path |
 | Recoverability | Prior content is pushed to per-entry history before overwrite (automatic), and the modal gains one **Restore previous version** action (§5.5) | No change to history retention (50 snapshots, localStorage) |
-| Concurrent edits | Freshness check inside the write: if the entry body changed since the modal loaded it, refuse and offer reload (§6.1) | Never silently clobber a background update; the user's draft is preserved |
+| Concurrent edits | Freshness check inside the write: if the entry body changed since Edit loaded it, refuse and offer reload (§6.1) | Never silently clobber a background update; the user's draft is preserved |
 | Pending proposals | Accepting a staged proposal first checks it was built from the current entry (§6.2) | A stale proposal never silently reverts a hand edit |
 | Relationship block | The textarea holds the entry body only; the managed block is read-only and re-attached on save (§5.4) | The relationship graph stays the block's only source |
 | Validation | Advisory lint (header line, dossier shape, ledger shape, suspicious sizes); empty content is the one blocking case (§7) | Lint warnings never block save |
@@ -80,16 +80,19 @@ change the design.
 ## 4. User flow (edit-in-View)
 
 1. On a Minor or Major card, press **View** (unchanged from today).
-2. The modal loads content via the label-verified read path and captures the
-   scope token and resolved book. The entry body, with the managed
-   relationship block stripped, becomes the edit session's **baseline
-   snapshot**.
-3. Press **Edit**. The body becomes an editable textarea, with the relationship
-   block read-only beneath it. An optional keywords field (comma-separated)
-   pre-fills the entry's current `key` array.
+2. The modal loads content via the label-verified read path, exactly as it does
+   today.
+3. Press **Edit**. The edit session re-reads the entry, captures the scope token
+   and resolved book, and takes the entry body, with the managed relationship
+   block stripped, as its **baseline snapshot**. Loading here rather than at
+   View means a modal left open cannot start an edit from stale text, and View
+   itself stays unchanged. If the read fails, the modal stays read-only and
+   explains. Otherwise the body becomes an editable textarea, with the
+   relationship block read-only beneath it, and an optional keywords field
+   (comma-separated) pre-fills the entry's current `key` array.
 4. Press **Save**:
-   - Empty or whitespace-only content is blocked (§7). If neither the text nor
-     the keywords changed, the modal returns to read-only without writing.
+   - Empty or whitespace-only content is blocked (§7). If the draft is not
+     dirty (see below), the modal returns to read-only without writing.
    - Write through the checked branch (§5). The guard verifies scope, identity,
      and freshness against a disk read before anything changes (§5.2, §6.1).
      If any check fails, refuse the save, keep the draft, and explain. Prior
@@ -104,6 +107,14 @@ change the design.
    text was touched); **Escape**/close behaves the same.
 6. A chat change closes the modal without a prompt and discards the draft
    (§6.4).
+
+**Dirty rule:** a draft is dirty when its text differs from the baseline after
+both are newline-normalized, or when its parsed keywords differ from the loaded
+`key` array run through the same parser. Textareas normalize CRLF to LF, so raw
+text would read as changed when nothing was touched. The comparison is against
+the baseline, not the textarea's initial value, so a restored draft (§5.5)
+counts as a change. This rule drives both the no-op Save and the
+unsaved-changes confirm.
 
 ## 5. Write path and inherited safety properties
 
@@ -141,8 +152,8 @@ The `beforeWrite` branch closes all four. It:
 Two small seam changes are needed:
 
 1. `writeToLorebook` skips keywords when `beforeWrite` is set, because cleanup
-   owns content only. Add an explicit option so a manual save can write them
-   while cleanup keeps its rule.
+   owns content only. Add an explicit `writeKeywords` option, off by default, so
+   a manual save can write them while cleanup keeps its rule.
 2. `hostCacheConflict` says "Cleanup refused". Make the text neutral or
    caller-supplied.
 
@@ -173,7 +184,7 @@ branch and can never adopt or create.
   bookkeeping.
 - **History snapshot:** the previous content is pushed to the per-entry
   history record before overwrite. `pushHistory` runs before the save, so a
-  failed save leaves a harmless redundant snapshot.
+  failed save leaves a redundant snapshot, which §5.5 skips.
 - **Checked save:** `saveCleanupBook` fails on a non-2xx response, and the store
   still folds into the same write (`applyStoreToWorldInfo`, then
   `markStoreClean` after the save resolves).
@@ -184,9 +195,9 @@ branch and can never adopt or create.
   alone, where two open editors race blindly.
 - **Scope correctness:** the modal outlives any single write, so resolving the
   book inside the seam is not enough. The edit session captures the scope token
-  and book at open and passes `bookName`, the guard re-checks both, and the
-  scope is checked again after the write before the registry keywords update,
-  because `saveRegistry` resolves the book itself.
+  and book when Edit loads the entry and passes `bookName`, the guard re-checks
+  both, and the scope is checked again after the write before the registry
+  keywords update, because `saveRegistry` resolves the book itself.
 
 The editor itself only ever writes content and keywords. It never creates
 entries, deletes entries, or touches type/promote/demote — those remain
@@ -217,19 +228,24 @@ leaves the body with no block, matching the sync.
 
 History today is not recoverable by a user: `getHistory`'s only caller is the
 export. Read-only mode therefore gains one **Restore previous version** action.
-It opens the newest history record, with its relationship block stripped, in
-edit mode as an unsaved draft labelled with the record's timestamp. The user
-saves it through the normal path, so every check above still applies. The
-action is hidden when no history exists.
+It finds the newest history record whose stripped body differs from the current
+entry's body, and opens that body in edit mode as an unsaved draft labelled with
+the record's timestamp. The newest record alone is not enough: every
+relationship sync that changes the block pushes history, and a failed save
+leaves a copy of the current text, so the newest record often holds the same
+body. The user saves the draft through the normal path, so every check above
+still applies, and the baseline stays the live entry. History stores content,
+not keywords, so the keywords stay as they are. The action is hidden when no
+such record exists.
 
 This is one step, not a browser. Saving pushes the current text to history, so
 restoring twice toggles between two versions.
 
-Known, pre-existing gap: history caps at 50 snapshots in localStorage and
-silently ignores quota failures. This feature does not worsen that gap. The
-timestamp shows the user when the newest surviving record is older than they
-expected. A full history browser remains a separate workstream, not a
-dependency.
+Known, pre-existing gap: history caps at 50 snapshots in localStorage,
+relationship syncs use up that cap too, and quota failures are silently ignored.
+This feature does not worsen that gap. The timestamp shows the user when the
+newest usable record is older than they expected. A full history browser remains
+a separate workstream, not a dependency.
 
 ## 6. Concurrent edits and staleness
 
@@ -272,9 +288,9 @@ On a mismatch the first Accept writes nothing:
 
 | Proposal | Response |
 | --- | --- |
-| Scan or Update item, not hand-edited (no `item.edited`, no `refreshFields`) | Clear `existingContent`, rerun `enrichStagingItem`, and show the new diff |
+| Scan or Update item, not hand-edited (no `item.edited`, no `refreshFields`) | Clear `existingContent`, rerun `enrichStagingItem`, and show the new diff. If the re-merge cannot load the entry, restore the previous `existingContent`, because a null baseline would skip this check on the next Accept |
 | Promote or demote item | Rebuild with `buildPromotedContent` / `buildDemotedContent`. Never use `enrichStagingItem`: its final branch sets `mergedContent` to the existing text and would drop the change |
-| Enrich or Fields item (`refreshFields` set), or any hand-edited proposal | Keep its text, set `existingContent` to the current entry so the diff is honest, and warn |
+| Enrich or Fields item (`refreshFields` set), or any hand-edited proposal | Keep its text, set `existingContent` to the current entry with the relationship block handled the same way as the proposal text, so the diff shows only real changes, and warn |
 
 A later Accept is then an informed choice, because the diff shows the real
 entry. If the entry cannot be loaded or verified, refuse.
@@ -299,13 +315,19 @@ explain.
 A save error is different, because the server may have written the book before
 the response was lost. Disk is then ahead of ST's cache, so a retry would hit
 `hostCacheConflict` before the guard runs. After a save error, re-read the entry
-from disk and compare its body to the draft, as cleanup's `reconcileOutcome`
-does:
+from disk and compare it to what was sent, as cleanup's `reconcileOutcome` does.
+Compare `key` as well as the body, because a keyword-only save leaves the body
+unchanged whether or not it landed. Compare bodies in stripped form, taken from
+the exact content sent rather than the draft, because re-attaching the block
+trims whitespace:
 
-- body equals the draft: the write landed. Copy the disk book into ST's cache,
-  as `saveCleanupBook` does after success, refresh the editor, and continue as a
-  successful save;
-- body equals the baseline: nothing landed. Stay in edit mode; a retry is safe;
+- body and `key` both match what was sent: the write landed. Copy the disk book
+  into ST's cache, as `saveCleanupBook` does after success, refresh the editor,
+  and continue as a successful save. Leave the store dirty: `markStoreClean`
+  only clears a flag, a dirty store simply flushes again, and clearing it could
+  hide registry changes made after the save was sent;
+- body equals the baseline and `key` equals the loaded keywords: nothing landed.
+  Stay in edit mode; a retry is safe;
 - anything else, or the read fails: say the outcome is uncertain and keep the
   draft available to copy.
 
@@ -428,9 +450,9 @@ growth ownership rules.
   editor to show the new content, and a subsequent ST-side save does not
   revert the MWT edit.
 - Every save pushes the prior content to that entry's history record. A Save
-  with no changes writes nothing and pushes nothing. The dirty check compares
-  against the textarea's initial value, because textareas normalize CRLF to LF.
-- If the entry body changes between modal load and save (background update,
+  with no changes writes nothing and pushes nothing, including on an entry with
+  CRLF line endings. A restored draft counts as a change (§4 dirty rule).
+- If the entry body changes between Edit and save (background update,
   second tab, ST editor), the save is refused with an explanation, and the
   user's draft text is preserved verbatim.
 - A background relationship sync during an edit does not refuse the save, and
@@ -440,15 +462,20 @@ growth ownership rules.
   keywords-only edit survives the proposal's accept.
 - A non-2xx save response surfaces as a failure, ST's cache and View still hold
   the previous content, and a retry succeeds once the server recovers.
-- A save whose response is lost after the write landed is reported as saved.
+- A save whose response is lost after the write landed is reported as saved,
+  including when the draft ends in whitespace. A keyword-only save that never
+  landed is not reported as saved.
 - Cancel, Revert, Escape, and close-with-unsaved-changes never write.
 - A chat change with an unsaved draft closes the modal without a prompt, writes
   nothing, and leaves no live handlers.
 - Close is blocked while a save is pending, except on a scope change.
 - Empty or whitespace-only content cannot be saved.
 - An emptied keywords field saves `[name]`.
-- Restore previous version opens the newest history record as an unsaved draft
-  with its timestamp, and is hidden when no history exists.
+- Restore previous version opens the newest history record whose body differs
+  from the live entry as an unsaved draft with its timestamp, skipping records
+  that differ only in the relationship block, and is hidden when none exists.
+- If the entry cannot be loaded when Edit is pressed, the modal stays read-only
+  and explains.
 - Orphaned records (uid null) offer no edit path, matching View/Update today.
 - The State Tracker View path shows no Edit control.
 - `world-info.js` unavailable or a failed save surfaces an honest error and
@@ -469,9 +496,10 @@ growth ownership rules.
 Paths relative to the repository root:
 
 - `knowledge/render.js` — `openNpcViewModal` / `createKnowledgeViewModal`
-  (~line 1841): the modal gains edit mode, opt-in for the NPC path only; follow
-  the existing singleton (`#kt-view-modal`), `decorateModalShell` (with the
-  §6.4 `onClose`), and `setControlBusy` busy-pair conventions. `handleAccept`
+  (~line 1841): the modal gains edit mode, opt-in for the NPC path only, and
+  View's own load stays unchanged; follow the existing singleton
+  (`#kt-view-modal`), `decorateModalShell` (with the §6.4 `onClose`), and
+  `setControlBusy` busy-pair conventions. `handleAccept`
   (~line 90) and Accept All (~line 492): the §6.2 check, with `handleAccept`
   returning an outcome. Card list re-render after save.
 - `knowledge/lorebook.js` — `writeToLorebook` (~line 186): add the keywords
@@ -493,5 +521,176 @@ Paths relative to the repository root:
   existing modal styles.
 - `test/` — new unit and integration suites per §11; no changes to prompt
   or model-call tests (none are involved). `test/busy_state_handlers.test.js`
-  pins the source shape of `openNpcViewModal` with a regex, so update it if the
-  modal's load changes.
+  pins the source shape of `openNpcViewModal` with a regex; View's load stays
+  unchanged, so that test should keep passing.
+
+## 13. Implementation phases
+
+**Planning record:** 2026-11-01. All phases below are **not started**. This
+breakdown sequences Slice 1 (§9); it does not claim implementation approval or
+expand the scope. Sections 1–12 remain the behavior contract. Each phase should
+land with its own tests, review, and a short completion record here.
+
+### Phase overview
+
+| Phase | Deliverable | Depends on |
+| --- | --- | --- |
+| 1 | Checked manual-edit load/save service and keyword support | None |
+| 2 | Stale-proposal protection and honest Accept All outcomes | None; integrate with 1 |
+| 3 | NPC-only Edit-in-View workflow | 1 and 2 |
+| 4 | Restore previous version and advisory lint | 3; pure lint work can start any time |
+| 5 | Cross-path regression coverage and host release verification | 1–4 |
+
+Phases are implementation checkpoints, not independently releasable feature
+slices. Do not expose manual editing to users before stale-proposal protection
+is integrated, and do not release Slice 1 without restore, lint, and host QA.
+There is no new user setting, feature configuration, or model call.
+
+Phase 2 is the one exception to "not independently releasable". Its accept check
+changes every NPC proposal as soon as it lands, before any Edit UI exists, so it
+gets its own changelog line and its own check against real proposals at that
+point, not at Phase 5.
+
+
+### Phase 1 — implement the guarded manual-edit service
+
+**Goal:** establish a tested persistence boundary independent of modal events.
+
+- Extend `writeToLorebook` with the `writeKeywords` option (§5.1); make
+  `hostCacheConflict` wording neutral. Keep cleanup's defaults intact.
+- Add the thin load-for-edit/save-manual-edit pair described in §12. Capture
+  entry keys and identity together with the scope/book baseline; verify scope
+  after asynchronous loading before handing the session to a caller.
+- Save only through the checked `beforeWrite` branch. Enforce every §5.2 guard
+  before mutation or history: hydration, scope/book, target existence,
+  bookkeeping exclusion, alias-aware identity, and body freshness. A refusal
+  must never fall through to adoption, creation, or a different uid.
+- Strip the managed relationship block for editing/comparison and rebuild it
+  from the graph on save. Preserve all non-owned entry metadata.
+- Parse comma-separated keywords, applying `[name]` when empty. After confirmed
+  success and a scope re-check, synchronize registry keywords and every pending
+  proposal for that uid. Never update the new chat's registry after a switch.
+- Implement §6.3 disk reconciliation, comparing `key` as well as the body.
+  Restore host cache/editor coherence only when the observed disk result proves
+  success; retain the draft for unchanged or uncertain results. Leave the store
+  dirty when a lost response is reconciled as success.
+- Return persisted results for the View UI, not an unverified draft echo.
+  Empty-body rejection and the §4 dirty rule must be testable outside the DOM.
+
+**Tests / exit gate:** guarded success, every refusal, alias acceptance, uid `0`,
+no-op including CRLF entries, blank-body rejection, keyword-only
+save/fallback/synchronization, relationship-only background changes,
+history-before-overwrite, checked HTTP failure, and every reconciliation
+outcome, including a keyword-only save that never landed and a draft with
+trailing whitespace. Simulate scope changes during load, save, and
+reconciliation. Refusals produce no target mutation or history push;
+save failures may leave the redundant history snapshot described in §5.3.
+Existing cleanup commit/recovery tests still pass. No Edit control is exposed.
+
+### Phase 2 — protect proposal acceptance from stale content
+
+**Goal:** prevent a subsequent Accept from silently undoing a manual edit.
+
+- Add the §6.2 NPC freshness check when `existingContent` is non-null. Strip
+  managed blocks and trim both sides; refuse unverifiable or failed reads.
+  Preserve the existing State Tracker path and genuine new-entry behavior.
+- On mismatch, write nothing and implement every response row: re-enrich
+  ordinary Scan/Update, restoring the old baseline if the re-merge cannot load
+  the entry; rebuild Promote/Demote with their dedicated builders; preserve
+  Enrich/Fields and hand-edited text while updating the comparison baseline and
+  warning the reviewer.
+- Refresh the displayed diff. A later Accept is a separate, informed action,
+  and must re-check freshness rather than bypassing the check once warned.
+- Return explicit outcomes from `handleAccept`, including failure branches.
+  Update Accept All to retain stale items and report accepted, stale/pending,
+  failed, and existing skipped outcomes honestly. Preserve selection and
+  notification bookkeeping for items that remain pending.
+- Integrate Phase 1's pending-keyword synchronization and verify the later
+  acceptance uses the saved keywords, not the originally staged array.
+
+**Tests / exit gate:** table-driven coverage for all §6.2 rows, matching content,
+null baselines/unenriched items, relationship-only differences, failed reads,
+failed re-merges, second Accept, a second intervening edit, and mixed Accept All
+outcomes. Include hand-edited proposals, Promote/Demote, and keyword-only saves. Stale
+items remain reviewable and cause no write on the first stale Accept.
+
+### Phase 3 — wire the NPC-only Edit-in-View workflow
+
+**Goal:** connect the safe services to the existing singleton modal.
+
+- Make editing opt-in at `createKnowledgeViewModal`'s NPC caller. State Tracker
+  remains read-only; orphaned NPC records retain no View/Edit path.
+- Keep View read-only by default and leave its load unchanged. Add explicit Edit,
+  which starts the session through Phase 1's load, a labeled monospace body
+  textarea, keywords input, and a read-only managed relationship section with
+  guidance toward Relationships. Escape all displayed stored text.
+- Add Save, Revert, and Cancel using the §4 dirty rule. Preserve
+  the draft on refusal, failure, and uncertainty; offer explicit reload after a
+  stale refusal without silently replacing the draft.
+- Route saves only through Phase 1. On success show persisted content, return
+  to View, update status, and re-render cards. A no-op performs no write and
+  adds no history.
+- Preserve the shared in-flight/singleton guard and busy-pair conventions.
+  Prevent duplicate Save and close during a pending save, except on scope
+  change. Check scope before native unsaved-changes confirmation; chat change
+  must close without a prompt and clean up handlers. Late results must not
+  reopen the old modal or update the new chat's UI.
+- Add styles, keyboard focus transitions, accessible labels/status feedback,
+  and mobile layout support.
+
+**Tests / exit gate:** jsdom workflow tests for View → Edit → Save/View,
+keyword-only and no-op saves, Revert/Cancel/Escape/backdrop/close confirmation,
+stale reload, a failed load at Edit, double clicks, errors retaining drafts,
+missing host support, scope changes during loading/saving, handler cleanup, and
+the shared modal's State Tracker exclusion. Phases 1 and 2 pass together before exposing Edit.
+
+### Phase 4 — complete recovery and non-blocking guidance
+
+**Goal:** finish the remaining mandatory Slice 1 affordances, not a follow-up
+history browser or structured editor.
+
+- In View, show Restore previous version only when a history record's stripped
+  body differs from the current body. Load the newest such record as a
+  timestamp-labeled, unsaved body draft. Keep the current live entry as the
+  freshness baseline, so the §4 dirty rule counts the draft as a change.
+  History stores content, not keyword versions: do not invent historical keys.
+- Save a restored draft through the same Phase 1 service. Never write merely
+  by opening Restore. Verify repeated restores toggle versions through the
+  existing history mechanism without changing retention or schema.
+- Add every advisory check in §7: malformed header, empty/unparseable ledger,
+  ledger interruption, dossier fields missing, missing/misplaced dossier
+  marker, and a paste roughly 50k characters larger than the baseline.
+- Display warnings near Save without blocking nonempty drafts. Empty or
+  whitespace-only content remains the sole content-validation blocker;
+  concurrency and identity refusals still apply independently.
+
+**Tests / exit gate:** history absent/present, newest differing record (skipping
+block-only and redundant records), a restored draft saving as a real change,
+restore without write, guarded restore after an intervening edit, two-save
+toggle, current keywords preserved, all lint cases, and valid large pre-existing
+ledgers without an absolute-size warning. Nonempty malformed drafts remain saveable.
+
+### Phase 5 — verify the complete feature and record release readiness
+
+**Goal:** prove the combined workflow, especially failures between subsystems.
+
+- Map every §11 acceptance criterion to an automated test or explicit host QA
+  record. Add end-to-end integration cases for edit → stale proposal → review
+  → later Accept, keyword-only edit → Accept, and restore → guarded save.
+- Run focused manual-edit, staging, busy-handler, cleanup, identity, and store
+  suites, then `npm test`, `npm run lint`, and `git diff --check`. Record actual
+  commands and outcomes, not inherited test counts from another roadmap.
+- In SillyTavern, test both NPC sub-tabs, dossier on/off, desktop/mobile,
+  keyboard-only operation, correct scope-resolved books, and World Info editor
+  coexistence. Verify an ST-side save after MWT's save does not revert it.
+- Exercise HTTP failure/retry, a response lost after a landed write, stale
+  content/cache, scope switching with a dirty draft and during Save, and a
+  relationship sync during editing. Verify uncertain outcomes remain honest
+  and drafts remain copyable while the original scope is active.
+- Record any host-only checks not yet run as pending. Update the documentation
+  map, user-facing guidance, and changelog only with verified behavior; do not
+  mark the feature released solely because automated tests pass.
+
+**Exit gate:** all §11 criteria pass, automated regressions are clean, and both
+authors sign off on host results or explicitly keep the feature unreleased.
+State Tracker/Profile editing and all other §9 exclusions remain deferred.

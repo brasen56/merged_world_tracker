@@ -679,6 +679,23 @@ export function formatRelationshipBlock(name) {
     return lines.join('\n');
 }
 
+/**
+ * Bring entry text in line with the graph: the NPC's current block replaces
+ * any block the text carries, and an empty projection leaves no block.
+ *
+ * Stances and edges are keyed by the canonical registry name, so the name is
+ * resolved here. An alias spelling would otherwise read as "no relationships"
+ * and strip a block that is still true.
+ *
+ * @param {string} name — any spelling the registry resolves
+ * @param {string} content — entry text, with or without a block
+ * @returns {string}
+ */
+export function applyCurrentRelationshipBlock(name, content) {
+    const blockText = formatRelationshipBlock(getRegistryEntry(name)?.key ?? name);
+    return blockText ? injectRelationshipBlock(content, blockText) : stripRelationshipBlock(content);
+}
+
 export async function syncRelationshipsToLorebook(name) {
     const { loadEntryContent, writeToLorebook } = await import('./lorebook.js');
     // KNOWLEDGE-03: Use getRegistryEntry so a given-name or alternate spelling
@@ -704,8 +721,7 @@ export async function syncRelationshipsToLorebook(name) {
         return { success: false, error: 'chat changed during sync' };
     }
     if (currentContent === null) return { success: false, error: 'Could not load entry' };
-    const blockText = formatRelationshipBlock(canonicalName);
-    const newContent = blockText ? injectRelationshipBlock(currentContent, blockText) : stripRelationshipBlock(currentContent);
+    const newContent = applyCurrentRelationshipBlock(canonicalName, currentContent);
     if (newContent === currentContent) return { success: true, unchanged: true };
     return writeToLorebook(canonicalName, newContent, reg.keywords || [canonicalName], reg.uid);
 }
