@@ -17,6 +17,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
+import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 import { RELATIONSHIP_BLOCK_END, RELATIONSHIP_BLOCK_START, state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
@@ -157,6 +158,7 @@ beforeEach(() => {
     saveSettings({ scope: 'global', dossierMode: true, connectionProfileId: 'test-profile' });
     wiFake = makeFakeWorldInfo();
     state.wiScript = wiFake;
+    installCleanupFetch(wiFake);
     state.stagingItems = [];
     state.activeItemId = null;
     state.notificationEntries = {};

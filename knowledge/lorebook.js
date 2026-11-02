@@ -399,12 +399,17 @@ export async function relabelLorebookEntry(bookName, uid, newLabel, expectedName
  *   would then present one character's dossier under another's name (the
  *   Mikhail/Marcus symptom). Returning null blocks the display/merge; callers
  *   already treat null as "no content".
+ * @param {object} [options]
+ * @param {boolean} [options.fresh=false] — bypass the host cache for acceptance
+ *   checks and their refreshed comparison. A failed disk read must not fall
+ *   back to cached content and authorize an overwrite.
  * @returns {Promise<string|null>}
  */
-export async function loadEntryContent(uid, expectedName) {
+export async function loadEntryContent(uid, expectedName, { fresh = false } = {}) {
     if (!state.wiScript) return null;
     try {
-        const wi = await state.wiScript.loadWorldInfo(getLorebookName());
+        const book = getLorebookName();
+        const wi = fresh ? await loadCleanupBook(book) : await state.wiScript.loadWorldInfo(book);
         const entry = wi?.entries?.[uid];
         if (!entry) return null;
         if (expectedName !== undefined && expectedName !== null) {
@@ -834,7 +839,7 @@ export async function findKnowledgeEntryByName(name) {
     } catch { return null; }
 }
 
-export async function enrichStagingItem(item) {
+export async function enrichStagingItem(item, { fresh = false } = {}) {
     if (!item) return;
 
     // CREATE → UPDATE promotion (duplicate prevention, the visible half).
@@ -877,7 +882,7 @@ export async function enrichStagingItem(item) {
     // loadEntryContent verifies uid ↔ NPC identity before this content is
     // displayed or merged. A mismatch blocks the fetch (the placeholder text
     // stays) instead of merging another character's dossier.
-    const existing = await loadEntryContent(item.uid, item.name);
+    const existing = await loadEntryContent(item.uid, item.name, { fresh });
     if (existing !== null) {
         item.existingContent = existing;
         // Phase 1 seam S2: the shared field contract runs at the merge

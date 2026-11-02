@@ -81,6 +81,32 @@ afterEach(() => {
 });
 
 describe('NPC proposal freshness', () => {
+    test.each(['#kt-accept', '#kt-batch-accept'])('%s checks disk even when the host cache still holds the baseline', async selector => {
+        const cached = structuredClone(disk);
+        cached.entries[0].content = BODY;
+        host.worldInfoCache.set(BOOK, cached);
+        host.loadWorldInfo.mockImplementation(async () => structuredClone(cached));
+        const fallback = globalThis.fetch;
+        vi.stubGlobal('fetch', vi.fn(async (path, options) => {
+            if (path === '/api/worldinfo/get') {
+                return { ok: true, status: 200, json: async () => structuredClone(disk) };
+            }
+            return fallback(path, options);
+        }));
+        const item = proposal();
+        show([item]);
+        await click(selector);
+        expect(host.saveWorldInfo).not.toHaveBeenCalled();
+        expect(lorebook.getHistory(0, BOOK)).toEqual([]);
+        expect(state.stagingItems).toEqual([item]);
+        expect(item.existingContent).toBe(FRESH);
+        expect(item.mergedContent).toBe(FRESH.replace('brisk', 'wry'));
+        expect(el.querySelector('.kt-detail-current').textContent).toBe(FRESH);
+        expect(el.textContent).toContain('Nothing was written');
+        expect(entry().content).toBe(FRESH);
+        expect(host.worldInfoCache.get(BOOK)).toEqual(cached);
+    });
+
     test.each([
         ['Scan', {}], ['Update', { data: {} }],
         ['Promote', { type: 'promote' }], ['Demote', { type: 'demote' }],
@@ -133,12 +159,14 @@ describe('NPC proposal freshness', () => {
         expect(host.saveWorldInfo).toHaveBeenCalledOnce();
     });
 
-    test.each(['missing', 'identity', 'failed read', 'missing uid'])('%s refuses an unverifiable baseline', async kind => {
+    test.each(['missing', 'identity', 'failed read', 'missing uid', 'HTTP failure', 'invalid response'])('%s refuses an unverifiable baseline', async kind => {
         const item = proposal();
         if (kind === 'missing') delete disk.entries[0];
         if (kind === 'identity') entry().comment = 'Other NPC';
         if (kind === 'failed read') host.loadWorldInfo.mockRejectedValue(new Error('offline'));
         if (kind === 'missing uid') item.uid = null;
+        if (kind === 'HTTP failure') vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503 })));
+        if (kind === 'invalid response') vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
         show([item]);
         await click();
         expect(host.saveWorldInfo).not.toHaveBeenCalled();

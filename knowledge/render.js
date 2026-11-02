@@ -97,7 +97,9 @@ async function handleAccept(item, text, keywords, _el) {
         } else {
             if (item.existingContent != null) {
                 const scope = captureScope();
-                const current = item.uid == null ? null : await loadEntryContent(item.uid, item.name);
+                // loadWorldInfo may return an older cached book even after a
+                // host edit has saved. Verify the persisted entry, not the cache.
+                const current = item.uid == null ? null : await loadEntryContent(item.uid, item.name, { fresh: true });
                 if (!scopeStillCurrent(scope).ok) return 'failed';
                 if (current === null) {
                     ktSetStatus(`Accept failed: cannot load or verify the current entry for "${item.name}". Proposal kept pending.`, 'error');
@@ -119,7 +121,7 @@ async function handleAccept(item, text, keywords, _el) {
                             mergedContent: item.mergedContent, proposedContent: item.proposedContent };
                         item.existingContent = null;
                         try {
-                            await enrichStagingItem(item);
+                            await enrichStagingItem(item, { fresh: true });
                             if (item.existingContent === null) throw new Error('The current entry could not be reloaded.');
                         } catch (err) {
                             // A null baseline would bypass the next freshness
