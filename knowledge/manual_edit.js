@@ -85,7 +85,7 @@ export async function loadForManualEdit({ name, uid }) {
     }
 }
 
-function confirmed(session, entry, reconciled = false) {
+function confirmed(session, entry, reconciled = false, historyLost = false) {
     const guard = checkScope(session);
     if (guard) return { ...guard, persisted: true };
     // registerEntry merges metadata and marks the store dirty. On reconciled
@@ -100,7 +100,7 @@ function confirmed(session, entry, reconciled = false) {
         // stagingItems contains pending proposals; accepted/dismissed ones are removed.
         if (item.uid === session.uid && item.type !== 'state') item.keywords = [...keys];
     }
-    return { ok: true, reconciled, content: String(entry.content ?? ''), keywords: keys,
+    return { ok: true, reconciled, historyLost, content: String(entry.content ?? ''), keywords: keys,
         session: snapshot(session, entry) };
 }
 
@@ -108,6 +108,7 @@ function confirmed(session, entry, reconciled = false) {
  * Refusals and uncertain outcomes never consume or mutate the caller's draft/session.
  * Success returns verified content/keywords and a replacement session baseline.
  * noOp performs no I/O; reconciled means disk proved a failed response had landed.
+ * historyLost means the write landed but the displaced text was not snapshotted.
  * persisted/uncertain on scope refusals describe the old-scope write, not permission
  * to update the current UI. The caller must not apply old-scope results.
  */
@@ -150,7 +151,7 @@ export async function saveManualEdit({ session, body, keywords }) {
                 state.wiScript?.worldInfoCache?.set(session.bookName, structuredClone(wi));
                 refreshWorldInfoEditor(state.wiScript, session.bookName);
             }
-            return confirmed(session, entry, !write.success);
+            return confirmed(session, entry, !write.success, write.historyKept === false);
         }
         if (!write.success && bodyOf(entry.content) === session.baselineBody && equalKeys(entry.key, session.keys)) {
             return refuse('save-failed', `Save failed; disk confirms the entry is unchanged. Your draft can be retried. ${write.error}`);

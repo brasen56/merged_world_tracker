@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { lintManualBody, previousManualVersion } from '../knowledge/manual_edit_guidance.js';
 
@@ -18,6 +20,35 @@ describe('manual recovery selection', () => {
             { content: `older\n\n${BLOCK}`, ts: 2 },
             { content: 'oldest', ts: 1 },
         ], HEADER)).toEqual({ body: 'older', ts: 2 });
+    });
+
+    test('whitespace the relationship strip tidies away is not a different body', () => {
+        const withBlock = `${HEADER}\n\nTone: brisk\n\n${BLOCK}`;
+        expect(previousManualVersion([{ content: `${HEADER}\n\nTone: brisk\n`, ts: 1 }], withBlock)).toBeNull();
+        expect(previousManualVersion([{ content: `${HEADER}\n\n\n\nTone: brisk`, ts: 1 }], withBlock)).toBeNull();
+    });
+
+    test('skips bodies headed with another NPC, keeping own and headerless records', () => {
+        const other = { content: 'Tobias | Dwarf | cook\nTone: gruff', ts: 3 };
+        expect(previousManualVersion([other], HEADER, 'Mara')).toBeNull();
+        expect(previousManualVersion([other, { content: `[Dossier] ${HEADER}\nRole: Clerk`, ts: 2 }], HEADER, 'Mara'))
+            .toEqual({ body: `[Dossier] ${HEADER}\nRole: Clerk`, ts: 2 });
+        expect(previousManualVersion([other, { content: 'free text', ts: 1 }], HEADER, 'Mara'))
+            .toEqual({ body: 'free text', ts: 1 });
+    });
+
+    test('a changed header still matches the header the entry carries now', () => {
+        const record = { content: 'Harbourmaster | Human | clerk\nTone: dry', ts: 1 };
+        expect(previousManualVersion([record], 'Harbourmaster | Human | clerk\nTone: warm', 'Mara'))
+            .toEqual({ body: record.content, ts: 1 });
+    });
+});
+
+describe('manual edit stylesheet', () => {
+    // The host's .menu_button sets display:flex, which beats the [hidden] attribute.
+    test.each(['.kt-view-edit', '.kt-view-restore'])('%s[hidden] has its own display:none', selector => {
+        const css = readFileSync(fileURLToPath(new URL('../knowledge/style.css', import.meta.url)), 'utf8');
+        expect(css.split('\n').find(line => line.includes(`${selector}[hidden]`))).toContain('display: none');
     });
 });
 

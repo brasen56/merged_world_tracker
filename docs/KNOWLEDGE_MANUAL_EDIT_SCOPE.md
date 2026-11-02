@@ -35,7 +35,7 @@ regenerated, so it gets the same save guarantees as a ledger cleanup.
 | --- | --- | --- |
 | Edit affordance | The existing View modal gains an explicit Edit mode (see §3) | Read-only remains the default; editing starts only on an explicit action |
 | Write-back | Manual saves route through the checked `beforeWrite` branch of `writeToLorebook` (§5) | Disk read, cache-conflict refusal, pre-mutation guard, and a status-checked save; no new unguarded write path |
-| Recoverability | Prior content is pushed to per-entry history before overwrite (automatic), and the modal gains one **Restore previous version** action (§5.5) | No change to history retention (50 snapshots, localStorage) |
+| Recoverability | Prior content is pushed to per-entry history before overwrite (automatic), and the modal gains one **Restore previous version** action (§5.5) | The 50-snapshot cap stays; a full browser trims history instead of losing new snapshots (§5.5) |
 | Concurrent edits | Freshness check inside the write: if the entry body changed since Edit loaded it, refuse and offer reload (§6.1) | Never silently clobber a background update; the user's draft is preserved |
 | Pending proposals | Accepting a staged proposal first checks it was built from the current entry (§6.2) | A stale proposal never silently reverts a hand edit |
 | Relationship block | The textarea holds the entry body only; the managed block is read-only and re-attached on save (§5.4) | The relationship graph stays the block's only source |
@@ -233,17 +233,36 @@ entry's body, and opens that body in edit mode as an unsaved draft labelled with
 the record's timestamp. The newest record alone is not enough: every
 relationship sync that changes the block pushes history, and a failed save
 leaves a copy of the current text, so the newest record often holds the same
-body. The user saves the draft through the normal path, so every check above
-still applies, and the baseline stays the live entry. History stores content,
-not keywords, so the keywords stay as they are. The action is hidden when no
-such record exists.
+body. History keys are per uid and outlive their entry, so a reused uid inherits
+a former NPC's records: a record headed with another NPC's name is skipped, and
+a record with no readable header stays eligible. The user saves the draft through
+the normal path, so every check above still applies, and the baseline stays the
+live entry. History stores content, not keywords, so the keywords stay as they
+are. The action is hidden when no such record exists.
 
 This is one step, not a browser. Saving pushes the current text to history, so
 restoring twice toggles between two versions.
 
-Known, pre-existing gap: history caps at 50 snapshots in localStorage,
-relationship syncs use up that cap too, and quota failures are silently ignored.
-This feature does not worsen that gap. The timestamp shows the user when the
+History caps at 50 snapshots in localStorage, and relationship syncs use up that
+cap too. A long-running book can fill the browser's quota: one browser measured
+on 2026-11-01 had 5.24 million characters stored, 97% of it history, and 21 of
+its 91 NPCs had never managed to store a snapshot. So when the browser refuses a
+snapshot for space, history trims itself. Trimming rewrites `kt_history_*` keys
+only, so it cannot reach a lorebook entry:
+
+1. Repeats of a body a newer snapshot already holds go first. Restore skips them,
+   so no version is lost and no warning is shown.
+2. If that is not enough, the oldest snapshots of whichever history is largest go,
+   until the new snapshot fits with 256K characters to spare. One huge NPC
+   therefore cannot lock out the rest. Every history keeps at least two, because
+   one can equal the live entry.
+3. Keys holding invalid records are left alone, as their raw value is the recovery
+   copy. If the new snapshot still could not fit, nothing is dropped.
+
+Dropping real versions shows one warning per page load: entries are unaffected,
+and exporting the lorebook is how to keep older versions. If a snapshot cannot be
+stored at all, a manual save still lands and says the previous version was not
+kept; other writers ignore that failure. The timestamp shows the user when the
 newest usable record is older than they expected. A full history browser remains
 a separate workstream, not a dependency.
 

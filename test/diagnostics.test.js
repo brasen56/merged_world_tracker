@@ -389,6 +389,18 @@ describe('notify() wiring', () => {
         expect(evts[0].level).toBe('info');
     });
 
+    test('a warning toast stays a warning in toastr and the diagnostics ring', () => {
+        const calls = [];
+        globalThis.toastr = { info: () => calls.push('info'), warning: () => calls.push('warning') };
+        try {
+            notify('Careful', 'Storage is full', 'warning');
+            expect(calls).toEqual(['warning']);
+            expect(getEvents({ module: 'notify' })[0].level).toBe('warn');
+        } finally {
+            delete globalThis.toastr;
+        }
+    });
+
     test('toastr is still invoked with the same arguments (behavior identical)', () => {
         const calls = [];
         globalThis.toastr = { info: (m, t) => calls.push({ type: 'info', m, t }) };

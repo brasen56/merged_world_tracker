@@ -504,6 +504,16 @@ export function stripRelationshipBlock(content) {
     return (before + after).replace(/\n{3,}/g, '\n\n').trim();
 }
 
+/**
+ * Entry text as a comparable body. The strip above only tidies whitespace when
+ * it removed a block, so block-less text is tidied the same way here; otherwise
+ * a relationship-only change reads as a different body.
+ */
+export function normalizedEntryBody(content) {
+    return stripRelationshipBlock(String(content ?? ''))
+        .replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export function injectRelationshipBlock(content, blockText) {
     const stripped = stripRelationshipBlock(content || '');
     const block = `${RELATIONSHIP_BLOCK_START}\n${blockText}\n${RELATIONSHIP_BLOCK_END}`;

@@ -1,14 +1,29 @@
 /** Read-only recovery selection and advisory checks; neither function writes. */
 import { DOSSIER_FIELDS, DOSSIER_MARKER, isDossierEntry, isHeaderLine } from './lorebook.js';
 import { parseLedger } from './ledger_cleanup.js';
-import { stripRelationshipBlock } from './relationships.js';
+import { getRegistry, isSameNpcByName } from './registry.js';
+import { normalizedEntryBody, stripRelationshipBlock } from './relationships.js';
 
-const normalizedBody = content => stripRelationshipBlock(String(content ?? '')).replace(/\r\n?/g, '\n');
+const headerName = body => {
+    const line = body.split('\n')[0].replace(DOSSIER_MARKER, '');
+    return isHeaderLine(line) ? line.split('|')[0].trim() : null;
+};
 
-/** History is newest-first. Match the editor's newline-normalized dirty rule. */
-export function previousManualVersion(history, content) {
-    const current = normalizedBody(content);
-    const record = history.find(item => normalizedBody(item.content) !== current);
+/**
+ * History is newest-first. Match the editor's newline-normalized dirty rule.
+ * Keys are per uid and outlive their entry, so a reused uid inherits a former
+ * NPC's records: skip bodies headed with another name. Headerless bodies stay.
+ */
+export function previousManualVersion(history, content, name) {
+    const current = normalizedEntryBody(content);
+    const currentHeader = headerName(current);
+    const names = Object.keys(getRegistry());
+    const record = history.find(item => {
+        const body = normalizedEntryBody(item.content);
+        if (body === current) return false;
+        const header = headerName(body);
+        return !header || header === currentHeader || isSameNpcByName(header, name, names);
+    });
     return record ? { body: stripRelationshipBlock(record.content), ts: record.ts } : null;
 }
 

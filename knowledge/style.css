@@ -1412,7 +1412,7 @@ h4.kt-npc-name {
 .kt-manual-relationships pre { max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .kt-manual-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .kt-manual-actions .menu_button { margin: 0; }
-.kt-view-restore[hidden], .kt-manual-restored[hidden], #kt-manual-warnings[hidden] { display: none; }
+.kt-view-edit[hidden], .kt-view-restore[hidden], .kt-manual-restored[hidden], #kt-manual-warnings[hidden] { display: none; }
 #kt-view-modal .kt-history-header { flex-wrap: wrap; gap: 8px; }
 #kt-manual-warnings { border-left: 3px solid var(--sc-text-dim); padding-left: 10px; font-size: 12px; }
 #kt-manual-warnings p, .kt-manual-restored { margin: 4px 0; }

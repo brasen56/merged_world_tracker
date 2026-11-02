@@ -10,19 +10,19 @@ Record host/browser version, tested commit, outcome, and evidence for each item.
 
 1. On both Minor and Major sub-tabs, View an NPC without history. **Restore
    previous version** must be hidden. History containing only the current body
-   or relationship-block changes must also leave it hidden.
+   or relationship-block changes must also leave it hidden. FAILED: Its visible on clicking View
 2. Edit and save a body change. View must now offer Restore. Click it: the old
    body opens as a timestamp-labeled **unsaved draft**, current keywords remain,
    and managed relationships remain read-only. Opening Restore must issue no
    edit POST and add no history. Redundant/block-only records must be skipped in
-   favor of the newest differing body.
+   favor of the newest differing body. PASS
 3. Cancel/Revert/Escape/backdrop/close must treat a restored draft as dirty.
    Declining discard keeps it. Revert returns to the loaded live body and removes
-   the historical-draft label. Cancel returns to View without writing.
+   the historical-draft label. Cancel returns to View without writing. PASS
 4. Restore and Save. Expect one edit POST, the restored body persisted, current
    keys preserved, and the displaced live content added to history. Restore and
    Save again: the two body versions toggle using ordinary history. The current
-   graph, not historical relationships, must supply the managed block.
+   graph, not historical relationships, must supply the managed block. PASS
 5. Open Restore, then change the live body in another host window/tab. Saving
    must refuse stale/cache-conflicting content and preserve the draft. Explicit
    reload remains available after a stale-source refusal. Offline failures must
@@ -51,6 +51,23 @@ Every nonempty malformed draft must remain saveable; verify an actual save on
 the disposable entry. Whitespace-only content still disables Save. Revert should
 recompute warnings for the baseline. Verify keyboard focus, warning readability,
 and header/action wrapping on desktop and narrow/mobile layouts.
+
+## Full browser storage
+
+Run on a browser whose `localStorage` is full, or fill a disposable one. Trimming
+permanently removes old snapshots from that browser's history; it must never
+change a lorebook entry. Export the lorebook first if you want a copy.
+
+1. Edit and save a body change on an NPC with no history. The save lands, the
+   status has no "could not be kept" text, Restore appears, and free space grows.
+2. If only repeats were trimmed, no toast appears. If real versions went, one
+   yellow warning appears per page load, says entries are not affected, and names
+   exporting the lorebook.
+3. Compare the book before and after: only the edited NPC changed. Other
+   `localStorage` keys and any unreadable `kt_history_*` key stay byte-identical.
+4. An NPC whose history holds another NPC's text must not offer that text. With
+   no other differing version, Restore stays hidden.
+5. In Edit mode, the Edit and Restore buttons must both be hidden.
 
 ## Remaining boundary
 

@@ -11,7 +11,7 @@ import {
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getWorldStateFactual, getLatestChronicleEntry,
     stripNonNarrative, getStableHistoryEnd,
-    isCancellation,
+    isCancellation, notify, record,
 } from '../core/index.js';
 
 import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT, DOSSIER_FIELD_REFRESH_PROMPT } from './prompts.js';
@@ -25,7 +25,7 @@ import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.
 import { hasEvidenceFile } from './evidence.js';
 import { applyFieldOwnership } from './field_ownership.js';
 import { validateFields, validateFieldValue, validateKnowledgeList, validateCreationHeader } from './field_contract.js';
-import { stripRelationshipBlock } from './relationships.js';
+import { normalizedEntryBody, stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
 import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
@@ -93,8 +93,84 @@ function readHistoryRecords(key) {
     return validated;
 }
 
+/** Two, because one snapshot can equal the live entry and Restore needs one that differs. */
+const HISTORY_KEEP_MIN = 2;
+/** Freed beyond the refused snapshot once real versions must go, so the next
+ * few writes do not each have to re-read every history. */
+const HISTORY_ROOM_SLACK = 256 * 1024;
+let _historyTrimNoticeShown = false;
+
+export function _resetHistoryTrimNotice() { _historyTrimNoticeShown = false; }
+
+function isQuotaError(err) {
+    return err?.name === 'QuotaExceededError' || err?.name === 'NS_ERROR_DOM_QUOTA_REACHED';
+}
+
+/**
+ * Store a snapshot the browser refused for space. This rewrites kt_history_*
+ * keys only, so it can never reach a lorebook entry.
+ *
+ * Repeats of a body a newer snapshot already holds go first: Restore skips them,
+ * so no version is lost. Only if that is not enough do real versions go, the
+ * oldest of whichever history is largest, so one huge NPC cannot lock the rest
+ * out. Keys with invalid records are skipped (their raw value is the recovery
+ * copy), and when the snapshot still could not fit nothing is dropped at all.
+ *
+ * @returns {boolean} whether the snapshot was stored
+ */
+function storeByTrimmingHistories(key, history) {
+    try {
+        const stores = [{ key, records: history, count: history.length }];
+        for (const other of Object.keys(localStorage)) {
+            if (!other.startsWith(HISTORY_KEY_PREFIX) || other === key) continue;
+            const { data, issues } = readHistoryRecords(other);
+            if (!issues.length) stores.push({ key: other, records: data, count: data.length });
+        }
+        const needed = JSON.stringify(history).length - (localStorage.getItem(key)?.length ?? 0);
+        let freed = 0;
+        for (const store of stores) {
+            const before = JSON.stringify(store.records).length;
+            const bodies = new Set();
+            store.records = store.records.filter(item => {
+                const body = normalizedEntryBody(item.content);
+                const isFirst = !bodies.has(body);
+                bodies.add(body);
+                return isFirst;
+            });
+            store.chars = JSON.stringify(store.records).length;
+            freed += before - store.chars;
+        }
+        let versions = 0;
+        if (freed < needed) {
+            const target = needed + HISTORY_ROOM_SLACK;
+            while (freed < target) {
+                const largest = stores.filter(store => store.records.length > HISTORY_KEEP_MIN)
+                    .reduce((a, b) => (!a || b.chars > a.chars ? b : a), null);
+                if (!largest) break;
+                const size = JSON.stringify(largest.records.pop()).length + 1;
+                largest.chars -= size;
+                freed += size;
+                versions++;
+            }
+        }
+        if (freed < needed) return false;
+        for (const store of stores.slice(1)) {
+            if (store.records.length !== store.count) localStorage.setItem(store.key, JSON.stringify(store.records));
+        }
+        localStorage.setItem(key, JSON.stringify(stores[0].records));
+        const dropped = stores.reduce((total, store) => total + store.count - store.records.length, 0);
+        record({ level: 'warn', module: 'knowledge', event: 'history_trimmed', detail: { dropped, versions } });
+        if (versions && !_historyTrimNoticeShown) {
+            _historyTrimNoticeShown = true;
+            notify('Knowledge Tracker', `Browser storage is full, so MWT removed ${versions} older saved version(s) from Restore history. Your lorebook entries are not affected. To keep older versions, export your lorebook from World Info regularly.`, 'warning');
+        }
+        return true;
+    } catch { return false; }
+}
+
+/** @returns {boolean} false when nothing was stored, usually a full quota. */
 export function pushHistory(uid, content, lorebook = getLorebookName()) {
-    if (uid === null || uid === undefined) return;
+    if (uid === null || uid === undefined) return false;
     const key = HISTORY_KEY_PREFIX + lorebook + '_' + uid;
     // Part 7 (schema plan §2.2): validate the stored list before rewriting
     // it, so a malformed record converges away on this push instead of being
@@ -102,7 +178,12 @@ export function pushHistory(uid, content, lorebook = getLorebookName()) {
     const history = readHistoryRecords(key).data;
     history.unshift({ ts: Date.now(), content, msgIdx: getChat()?.length || 0 });
     if (history.length > 50) history.length = 50;
-    try { localStorage.setItem(key, JSON.stringify(history)); } catch { /* quota */ }
+    try {
+        localStorage.setItem(key, JSON.stringify(history));
+        return true;
+    } catch (err) {
+        return isQuotaError(err) && storeByTrimmingHistories(key, history);
+    }
 }
 
 export function getHistory(uid, lorebook = getLorebookName()) {
@@ -295,7 +376,7 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
         }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
-            pushHistory(existingUid, previousContent, book);
+            const historyKept = pushHistory(existingUid, previousContent, book);
             entries[existingUid].content = content;
             // Cleanup owns content, not keywords edited during review.
             if (!beforeWrite || writeKeywords) entries[existingUid].key = keywords;
@@ -304,7 +385,7 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
             if (beforeWrite) await saveCleanupBook(book, wi);
             else await saveBookNow(state.wiScript, book, wi);
             markStoreClean(book);
-            return { success: true, uid: existingUid };
+            return { success: true, uid: existingUid, historyKept };
         } else {
             // Creating an entry against an un-hydrated store is the duplicate
             // bug in miniature: an empty registry reports every NPC as new, so

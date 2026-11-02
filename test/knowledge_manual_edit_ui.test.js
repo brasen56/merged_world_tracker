@@ -85,6 +85,75 @@ describe('NPC Edit-in-View through the real modal and guarded service', () => {
         expect(control('.kt-view-restore').hidden).toBe(true);
     });
 
+    test('a hidden Edit or Restore clicked during editing cannot wipe the draft unprompted', async () => {
+        pushHistory(0, 'previous body', BOOK);
+        await open(); await edit();
+        change(`${BODY}\nunsaved`);
+        window.confirm.mockReturnValue(false);
+        click('.kt-view-edit'); await flush();
+        click('.kt-view-restore'); await flush();
+        expect(window.confirm).toHaveBeenCalledTimes(2);
+        expect(draft().value).toBe(`${BODY}\nunsaved`);
+    });
+
+    test('Restore stays hidden when the first relationship sync only tidied whitespace', async () => {
+        disk.entries[0].content = `${BODY}\n\n${BLOCK}`;
+        pushHistory(0, `${BODY}\n`, BOOK);
+        await open();
+        expect(control('.kt-view-restore').hidden).toBe(true);
+    });
+
+    test('Restore never offers a body left on this uid by a different NPC', async () => {
+        pushHistory(0, 'Someone Else | Dwarf | cook\nTone: gruff', BOOK);
+        await open();
+        expect(control('.kt-view-restore').hidden).toBe(true);
+        click('.kt-history-close');
+        pushHistory(0, 'Mara Voss | Human | deckhand\nTone: shy', BOOK);
+        pushHistory(0, 'Someone Else | Dwarf | cook\nTone: louder', BOOK);
+        await open();
+        click('.kt-view-restore'); await flush();
+        expect(draft().value).toBe('Mara Voss | Human | deckhand\nTone: shy');
+    });
+
+    test('a refused history write still saves but says the old version was not kept', async () => {
+        const setItem = Storage.prototype.setItem;
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+            if (String(key).startsWith('kt_history_')) throw new DOMException('full', 'QuotaExceededError');
+            return setItem.call(this, key, value);
+        });
+        await open(); await edit();
+        change(`${BODY}\nedited`);
+        click('.kt-manual-save'); await flush();
+        expect(disk.entries[0].content).toBe(`${BODY}\nedited`);
+        expect(getHistory(0, BOOK)).toHaveLength(0);
+        expect(control('.kt-view-restore').hidden).toBe(true);
+        expect(status()).toContain('could not be kept');
+    });
+
+    test('a full browser makes room, keeping the old version without touching any entry', async () => {
+        const other = i => `Tobias | Dwarf | cook\n${i}${'y'.repeat(200_000)}`;
+        localStorage.setItem(`kt_history_${BOOK}_7`, JSON.stringify(Array.from({ length: 10 }, (_, i) => ({ ts: 10 - i, content: other(i) }))));
+        const used = Object.keys(localStorage).reduce((n, k) => n + k.length + localStorage.getItem(k).length, 0);
+        localStorage.setItem('pad', 'x'.repeat(5_000_000 - used - 3 - 10));
+        await open(); await edit();
+        change(`${BODY}\nedited`);
+        click('.kt-manual-save'); await flush();
+        expect(disk.entries[0]).toEqual({ uid: 0, comment: NAME, content: `${BODY}\nedited`, key: [NAME] });
+        expect(getHistory(0, BOOK)[0].content).toBe(BODY);
+        expect(getHistory(7, BOOK).length).toBeLessThan(10);
+        expect(control('.kt-view-restore').hidden).toBe(false);
+        expect(status()).not.toContain('could not be kept');
+    });
+
+    test('a stored history write offers Restore straight away without a warning', async () => {
+        await open(); await edit();
+        change(`${BODY}\nedited`);
+        click('.kt-manual-save'); await flush();
+        expect(getHistory(0, BOOK)[0].content).toBe(BODY);
+        expect(control('.kt-view-restore').hidden).toBe(false);
+        expect(status()).not.toContain('could not be kept');
+    });
+
     test('Restore loads newest differing body without writing, preserves fresh keys and confirms discard', async () => {
         pushHistory(0, 'oldest', BOOK);
         pushHistory(0, `previous <script>bad()</script>\n\n${BLOCK}`, BOOK);

@@ -119,12 +119,12 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
         edit.focus();
     }
     function refreshRestore(content) {
-        restore.hidden = !previousManualVersion(getHistory(uid, book), content);
+        restore.hidden = !previousManualVersion(getHistory(uid, book), content, name);
     }
     refreshRestore(view.textContent);
     async function load(control) {
         if (!alive() || pending) return;
-        if (control === reload && !discard()) return;
+        if (!discard()) return;
         busy(control, true);
         setStatus(modal, 'Loading current entry…');
         try {
@@ -136,7 +136,7 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
             }
             session = result.session;
             const previous = control === restore
-                ? previousManualVersion(getHistory(uid, book), session.content) : null;
+                ? previousManualVersion(getHistory(uid, book), session.content, name) : null;
             if (control === restore && !previous) {
                 showView(session.content);
                 setStatus(modal, 'No differing previous version is available. Nothing written.');
@@ -194,8 +194,8 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
             session = result.session;
             showView(result.content);
             const message = result.noOp ? 'No changes to save. Nothing written.'
-                : `"${name}" saved to lorebook.${result.reconciled ? ' Verified on disk after a lost save response.' : ''}`;
-            setStatus(modal, message, 'success');
+                : `"${name}" saved to lorebook.${result.reconciled ? ' Verified on disk after a lost save response.' : ''}${result.historyLost ? ' The previous version could not be kept for Restore (browser storage is likely full).' : ''}`;
+            setStatus(modal, message, result.historyLost ? 'warning' : 'success');
             if (!result.noOp) onSaved(message);
         } catch (err) {
             if (alive()) setStatus(modal, `Save failed: ${err.message}. Your draft is retained.`, 'error');
