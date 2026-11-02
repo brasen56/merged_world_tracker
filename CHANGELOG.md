@@ -12,7 +12,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [2.51.1]
+## [2.16.0]
+
+### Added
+
+- **Knowledge Tracker — manual entry editing in the View modal.**
+  Fixing a tracked NPC no longer means leaving MWT to find the
+  right book and entry in SillyTavern's World Info editor. On the
+  Minor and Major sub-tabs, **View** gains an explicit **Edit**
+  mode: a monospace textarea for the entry body, a comma-separated
+  trigger-keywords field, and the managed relationship block shown
+  read-only beneath it (the relationship graph stays its only
+  source; the block is re-attached on save, so a background
+  relationship sync never refuses a body save). A successful save
+  returns the modal to read-only showing the persisted content,
+  not the draft echoed back. State Tracker views and NPC profiles
+  stay read-only, and orphaned cards keep no edit path.
+  (`knowledge/manual_edit.js`, `knowledge/manual_edit_ui.js`,
+  `knowledge/manual_edit_guidance.js`, with seams in
+  `knowledge/lorebook.js` and `knowledge/render.js`; designed in
+  `docs/KNOWLEDGE_MANUAL_EDIT_SCOPE.md`, Phases 1–4.)
+  - **A convenience write path, not a new authority.** Manual saves
+    route through the same checked write branch the ledger cleanup
+    uses: the book is read from disk, the save is refused while
+    SillyTavern's cache differs from disk (a pending World Info
+    editor edit, an earlier failed save, another tab's write),
+    scope, identity and freshness are verified before anything
+    mutates, and the host cache is updated only after a
+    status-checked save succeeds. A stale uid or a store collision
+    is refused rather than adopted, so a hand edit can never land
+    on another entry or on `[MWT:store]` bookkeeping.
+  - **Nothing is silently overwritten.** If the entry changed since
+    Edit loaded it — a background scan's update, another tab, or an
+    edit in ST's editor — the save is refused, the draft kept, and
+    a reload offered. Accepting a staged proposal now runs the same
+    freshness check against the persisted book rather than the host
+    cache: a proposal built from older text re-merges (or rebuilds,
+    for promote/demote), hand-edited proposals warn and re-baseline
+    so the diff shows only real changes, and Accept All counts
+    stale items separately instead of reporting them accepted. A
+    keywords-only fix propagates to that NPC's pending proposals.
+  - **Recoverable by construction.** The previous body is
+    snapshotted to per-entry history before every real change, and
+    a **Restore previous version** action opens the newest
+    differing body as a timestamp-labeled unsaved draft — hidden
+    when nothing differs, writing nothing on open, saving through
+    the same guarded path. When browser storage fills, history is
+    trimmed (redundant snapshots first) with a visible warning
+    instead of silently dropping the new snapshot — a failure mode
+    caught during host QA.
+  - **Advisory lint, one blocking rule.** Live warnings near Save
+    flag a malformed header line, an empty or interrupted
+    `Knowledge Ledger:` section, missing or misplaced dossier
+    marker or fields, and a paste roughly 50k characters larger
+    than the baseline. Warnings never block a nonempty draft;
+    empty content is the only content rule that does, and the
+    concurrency and identity refusals apply independently.
+  - **Keywords that stick.** The keywords field writes the entry's
+    real `key` array and syncs the registry. A keyword fix made in
+    ST's editor is overwritten by MWT's next write, so the
+    in-module path is the one that lasts; an emptied field falls
+    back to the NPC name so an entry never silently stops firing.
+  - **Failures stay honest.** After a save error the outcome is
+    reconciled against disk — landed, not landed (retry is safe),
+    or honestly uncertain — and the draft is always kept to retry
+    or copy out. A chat change closes the editor without a prompt
+    and cannot strand an old-chat modal; a pending save blocks
+    close the way cleanup's Apply does. No model calls, no
+    prompts, no new settings — nothing here costs API spend.
+
+## [2.15.1]
 
 ### Changed
 
