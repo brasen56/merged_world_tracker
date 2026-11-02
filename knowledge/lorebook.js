@@ -11,7 +11,7 @@ import {
     resolveApiCall, normaliseOutput, parseJsonLenient,
     getWorldStateFactual, getLatestChronicleEntry,
     stripNonNarrative, getStableHistoryEnd,
-    isCancellation,
+    isCancellation, notify, record,
 } from '../core/index.js';
 
 import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT, DOSSIER_FIELD_REFRESH_PROMPT } from './prompts.js';
@@ -25,7 +25,7 @@ import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.
 import { hasEvidenceFile } from './evidence.js';
 import { applyFieldOwnership } from './field_ownership.js';
 import { validateFields, validateFieldValue, validateKnowledgeList, validateCreationHeader } from './field_contract.js';
-import { stripRelationshipBlock } from './relationships.js';
+import { normalizedEntryBody, stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
 import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
 import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
@@ -94,8 +94,87 @@ function readHistoryRecords(key) {
     return validated;
 }
 
+/** Two, because one snapshot can equal the live entry and Restore needs one that differs. */
+const HISTORY_KEEP_MIN = 2;
+/** Freed beyond the refused snapshot once real versions must go, so the next
+ * few writes do not each have to re-read every history. */
+const HISTORY_ROOM_SLACK = 256 * 1024;
+let _historyTrimNoticeShown = false;
+
+export function _resetHistoryTrimNotice() { _historyTrimNoticeShown = false; }
+
+function isQuotaError(err) {
+    return err?.name === 'QuotaExceededError' || err?.name === 'NS_ERROR_DOM_QUOTA_REACHED';
+}
+
+/**
+ * Store a snapshot the browser refused for space. This rewrites kt_history_*
+ * keys only, so it can never reach a lorebook entry.
+ *
+ * Repeats of a body a newer snapshot already holds go first: Restore skips them,
+ * so no version is lost. Writes no longer create them, but a failed save still
+ * can, and browsers keep the ones stored by older versions.
+ *
+ * Only if that is not enough do real versions go, the oldest of whichever
+ * history is largest, so one huge NPC cannot lock the rest out. Keys with
+ * invalid records are skipped (their raw value is the recovery copy), and when
+ * the snapshot still could not fit nothing is dropped at all.
+ *
+ * @returns {boolean} whether the snapshot was stored
+ */
+function storeByTrimmingHistories(key, history) {
+    try {
+        const stores = [{ key, records: history, count: history.length }];
+        for (const other of Object.keys(localStorage)) {
+            if (!other.startsWith(HISTORY_KEY_PREFIX) || other === key) continue;
+            const { data, issues } = readHistoryRecords(other);
+            if (!issues.length) stores.push({ key: other, records: data, count: data.length });
+        }
+        const needed = JSON.stringify(history).length - (localStorage.getItem(key)?.length ?? 0);
+        let freed = 0;
+        for (const store of stores) {
+            const before = JSON.stringify(store.records).length;
+            const bodies = new Set();
+            store.records = store.records.filter(item => {
+                const body = normalizedEntryBody(item.content);
+                const isFirst = !bodies.has(body);
+                bodies.add(body);
+                return isFirst;
+            });
+            store.chars = JSON.stringify(store.records).length;
+            freed += before - store.chars;
+        }
+        let versions = 0;
+        if (freed < needed) {
+            const target = needed + HISTORY_ROOM_SLACK;
+            while (freed < target) {
+                const largest = stores.filter(store => store.records.length > HISTORY_KEEP_MIN)
+                    .reduce((a, b) => (!a || b.chars > a.chars ? b : a), null);
+                if (!largest) break;
+                const size = JSON.stringify(largest.records.pop()).length + 1;
+                largest.chars -= size;
+                freed += size;
+                versions++;
+            }
+        }
+        if (freed < needed) return false;
+        for (const store of stores.slice(1)) {
+            if (store.records.length !== store.count) localStorage.setItem(store.key, JSON.stringify(store.records));
+        }
+        localStorage.setItem(key, JSON.stringify(stores[0].records));
+        const dropped = stores.reduce((total, store) => total + store.count - store.records.length, 0);
+        record({ level: 'warn', module: 'knowledge', event: 'history_trimmed', detail: { dropped, versions } });
+        if (versions && !_historyTrimNoticeShown) {
+            _historyTrimNoticeShown = true;
+            notify('Knowledge Tracker', `Browser storage is full, so MWT removed ${versions} older saved version(s) from Restore history. Your lorebook entries are not affected. To keep older versions, export your lorebook from World Info regularly.`, 'warning');
+        }
+        return true;
+    } catch { return false; }
+}
+
+/** @returns {boolean} false when nothing was stored, usually a full quota. */
 export function pushHistory(uid, content, lorebook = getLorebookName()) {
-    if (uid === null || uid === undefined) return;
+    if (uid === null || uid === undefined) return false;
     const key = HISTORY_KEY_PREFIX + lorebook + '_' + uid;
     // Part 7 (schema plan §2.2): validate the stored list before rewriting
     // it, so a malformed record converges away on this push instead of being
@@ -103,7 +182,23 @@ export function pushHistory(uid, content, lorebook = getLorebookName()) {
     const history = readHistoryRecords(key).data;
     history.unshift({ ts: Date.now(), content, msgIdx: getChat()?.length || 0 });
     if (history.length > 50) history.length = 50;
-    try { localStorage.setItem(key, JSON.stringify(history)); } catch { /* quota */ }
+    try {
+        localStorage.setItem(key, JSON.stringify(history));
+        return true;
+    } catch (err) {
+        return isQuotaError(err) && storeByTrimmingHistories(key, history);
+    }
+}
+
+/**
+ * Keep the text a write displaces, unless its body survives the write. Restore
+ * would skip that snapshot, and a relationship sync would otherwise copy the
+ * whole entry just to change its block.
+ *
+ * @returns {boolean} false only when a needed snapshot could not be stored
+ */
+function snapshotDisplaced(uid, previous, next, lorebook) {
+    return normalizedEntryBody(previous) === normalizedEntryBody(next) || pushHistory(uid, previous, lorebook);
 }
 
 export function getHistory(uid, lorebook = getLorebookName()) {
@@ -179,12 +274,15 @@ export async function writeStateTracker(uid, name, content) {
         await saveBookNow(state.wiScript, book, wi);
         // Only now has the folded-in store actually reached disk.
         markStoreClean(book);
-        pushHistory(uid, previousContent, book);
+        snapshotDisplaced(uid, previousContent, content, book);
         return { success: true, uid };
     } catch (err) { return { success: false, error: err.message }; }
 }
 
-export async function writeToLorebook(name, content, keywords, existingUid, { bookName, beforeWrite } = {}) {
+// Checked callers may pass a synchronous content factory to project graph-owned
+// data after the final read/guard. writeKeywords is opt-in on that branch so
+// existing cleanup callers continue to own content only.
+export async function writeToLorebook(name, content, keywords, existingUid, { bookName, beforeWrite, writeKeywords = false } = {}) {
     if (!state.wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
     // Resolve the book ONCE. Calling the resolver per save could target two
     // different books within a single write if the scope changed mid-flight.
@@ -213,6 +311,9 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
             }
         }
         const entries = wi.entries;
+        // A checked caller may defer its graph-owned projection until after
+        // the final async disk read and synchronous guard, before mutation.
+        if (beforeWrite && typeof content === 'function') content = content();
         // A registry uid is only meaningful for the book it was recorded in. A
         // stale one (imported registry, hand-deleted entries, a scope switch)
         // can point at an unrelated entry, and the update branch below would
@@ -290,16 +391,16 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
         }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
-            pushHistory(existingUid, previousContent, book);
+            const historyKept = snapshotDisplaced(existingUid, previousContent, content, book);
             entries[existingUid].content = content;
             // Cleanup owns content, not keywords edited during review.
-            if (!beforeWrite) entries[existingUid].key = keywords;
+            if (!beforeWrite || writeKeywords) entries[existingUid].key = keywords;
             entries[existingUid].comment = name;
             applyStoreToWorldInfo(book, wi);
             if (beforeWrite) await saveCleanupBook(book, wi);
             else await saveBookNow(state.wiScript, book, wi);
             markStoreClean(book);
-            return { success: true, uid: existingUid };
+            return { success: true, uid: existingUid, historyKept };
         } else {
             // Creating an entry against an un-hydrated store is the duplicate
             // bug in miniature: an empty registry reports every NPC as new, so
@@ -394,12 +495,17 @@ export async function relabelLorebookEntry(bookName, uid, newLabel, expectedName
  *   would then present one character's dossier under another's name (the
  *   Mikhail/Marcus symptom). Returning null blocks the display/merge; callers
  *   already treat null as "no content".
+ * @param {object} [options]
+ * @param {boolean} [options.fresh=false] — bypass the host cache for acceptance
+ *   checks and their refreshed comparison. A failed disk read must not fall
+ *   back to cached content and authorize an overwrite.
  * @returns {Promise<string|null>}
  */
-export async function loadEntryContent(uid, expectedName) {
+export async function loadEntryContent(uid, expectedName, { fresh = false } = {}) {
     if (!state.wiScript) return null;
     try {
-        const wi = await state.wiScript.loadWorldInfo(getLorebookName());
+        const book = getLorebookName();
+        const wi = fresh ? await loadCleanupBook(book) : await state.wiScript.loadWorldInfo(book);
         const entry = wi?.entries?.[uid];
         if (!entry) return null;
         if (expectedName !== undefined && expectedName !== null) {
@@ -829,7 +935,7 @@ export async function findKnowledgeEntryByName(name) {
     } catch { return null; }
 }
 
-export async function enrichStagingItem(item) {
+export async function enrichStagingItem(item, { fresh = false } = {}) {
     if (!item) return;
 
     // CREATE → UPDATE promotion (duplicate prevention, the visible half).
@@ -872,7 +978,7 @@ export async function enrichStagingItem(item) {
     // loadEntryContent verifies uid ↔ NPC identity before this content is
     // displayed or merged. A mismatch blocks the fetch (the placeholder text
     // stays) instead of merging another character's dossier.
-    const existing = await loadEntryContent(item.uid, item.name);
+    const existing = await loadEntryContent(item.uid, item.name, { fresh });
     if (existing !== null) {
         item.existingContent = existing;
         // Phase 1 seam S2: the shared field contract runs at the merge

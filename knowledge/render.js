@@ -49,6 +49,7 @@ import {
     getStances, getStance, setStance,
     isEdgeAutoManaged, isStanceAutoManaged, toggleEdgeSource, toggleStanceSource,
     syncRelationshipsToLorebook, syncAllRelationshipsToLorebooks,
+    applyCurrentRelationshipBlock, stripRelationshipBlock,
     describeRelationshipChange, getRecentRelationshipChanges,
     recordRelationshipChanges, clearRecentRelationshipChanges,
 } from './relationships.js';
@@ -75,6 +76,7 @@ import { getVectFoxHistoryStatus, captureHistoryContext, prepareVectFoxHistory, 
 // auto-approval path, and its writes go through the guarded commit service.
 import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
 import { prepareVectFoxLedger } from './vectfox_ledger.js';
+import { wireManualEdit } from './manual_edit_ui.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -93,7 +95,7 @@ async function handleAccept(item, text, keywords, _el) {
     try {
         if (item.type === 'state') {
             const result = await writeStateTracker(item.uid, item.name, text);
-            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
+            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return 'failed'; }
             bumpStateTrackerTimestamp(item.name);
         } else {
             let writeOptions;
@@ -102,8 +104,60 @@ async function handleAccept(item, text, keywords, _el) {
                 writeOptions = { bookName: item.historyEvidence.context.book,
                     beforeWrite: entries => historyWriteGuard(item.historyEvidence, item.historyRevision, entries) };
             }
-            const result = await writeToLorebook(item.name, text, keywords, item.uid, writeOptions);
-            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return; }
+            if (item.existingContent != null) {
+                const scope = captureScope();
+                // loadWorldInfo may return an older cached book even after a
+                // host edit has saved. Verify the persisted entry, not the cache.
+                const current = item.uid == null ? null : await loadEntryContent(item.uid, item.name, { fresh: true });
+                if (!scopeStillCurrent(scope).ok) return 'failed';
+                if (current === null) {
+                    ktSetStatus(`Accept failed: cannot load or verify the current entry for "${item.name}". Proposal kept pending.`, 'error');
+                    return 'failed';
+                }
+                const body = content => stripRelationshipBlock(content).trim();
+                if (body(current) !== body(item.existingContent)) {
+                    // Keep reviewer-authored text, even when it belongs to a
+                    // promotion/demotion. Only untouched proposals can be rebuilt.
+                    if (item.edited || item.refreshFields) {
+                        item.mergedContent = text;
+                        item.existingContent = stripRelationshipBlock(current);
+                    } else if (item.type === 'promote' || item.type === 'demote') {
+                        item.existingContent = current;
+                        item.mergedContent = item.type === 'promote'
+                            ? buildPromotedContent(current) : buildDemotedContent(current);
+                    } else {
+                        const previous = { existingContent: item.existingContent,
+                            mergedContent: item.mergedContent, proposedContent: item.proposedContent };
+                        item.existingContent = null;
+                        try {
+                            await enrichStagingItem(item, { fresh: true });
+                            if (item.existingContent === null) throw new Error('The current entry could not be reloaded.');
+                        } catch (err) {
+                            // A null baseline would bypass the next freshness
+                            // check. Restore both the baseline and review text.
+                            Object.assign(item, previous);
+                            throw err;
+                        }
+                        if (!scopeStillCurrent(scope).ok) return 'failed';
+                    }
+                    item.keywords = keywords;
+                    item.staleWarning = 'The entry changed since this proposal was built. Nothing was written. Review the refreshed Current entry and diff, then Accept again if appropriate.';
+                    ktSetStatus(item.staleWarning, 'info');
+                    renderNpcsSubTab();
+                    return 'stale';
+                }
+            }
+            // The relationship graph owns the managed block, not the proposal:
+            // per-NPC proposals are staged with it stripped, and a scan
+            // proposal's copy can go stale while it waits. Rebuilding it here
+            // keeps this to one write, so one accept is one history entry.
+            // Guarded history writes project the block after the final disk
+            // read, so relationship changes during that read are included too.
+            const content = writeOptions
+                ? () => applyCurrentRelationshipBlock(item.name, text)
+                : applyCurrentRelationshipBlock(item.name, text);
+            const result = await writeToLorebook(item.name, content, keywords, item.uid, writeOptions);
+            if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return 'failed'; }
             // KNOWLEDGE-03: If this is an update (item.uid != null), resolve
             // the canonical registry key so the model's spelling doesn't create
             // a duplicate entry beside the real one. For creates, use the
@@ -154,8 +208,10 @@ async function handleAccept(item, text, keywords, _el) {
         removeNotificationEntry(item.id);
         ktSetStatus(`"${item.name}" written to lorebook.`, 'success');
         renderNpcsSubTab();
+        return 'accepted';
     } catch (err) {
         ktSetStatus(`Accept failed: ${err.message}`, 'error');
+        return 'failed';
     }
 }
 
@@ -386,9 +442,15 @@ function renderDetailForItem(item) {
 
     // Skip the diff view for state tracker updates: they use the full entry text
     // as both existing and proposed content, which produces noisy, misleading diffs.
+    // The managed block is compared on neither side: accept rebuilds it from the
+    // graph, so a proposal's text cannot add, change or remove it, and a restored
+    // per-NPC proposal (stripped) against a scan baseline (raw) would read as a
+    // removal that never happens.
     let diffHtml = '';
-    if (item.type !== 'state' && item.existingContent && editorContent && item.existingContent !== editorContent) {
-        const diff = renderLineDiff(item.existingContent, editorContent);
+    if (item.type !== 'state' && item.existingContent && editorContent) {
+        const existingBody = stripRelationshipBlock(item.existingContent);
+        const proposedBody = stripRelationshipBlock(editorContent);
+        const diff = existingBody !== proposedBody ? renderLineDiff(existingBody, proposedBody) : '';
         if (diff) {
             diffHtml = `<div class="kt-detail-section">
                 <div class="kt-detail-label">Changes (diff)</div>
@@ -424,6 +486,7 @@ function renderDetailForItem(item) {
         <h4 class="kt-detail-name">${escapeHtml(item.name)}</h4>
         ${item.historyEvidence ? `<details class="kt-detail-section"><summary>VectFox supporting history — ${escapeHtml(historySummary(item.historyEvidence))}</summary><pre class="kt-detail-current">${escapeHtml(JSON.stringify({ events: item.historyEvidence.events, sources: item.historyEvidence.sourceChecks, coverage: item.historyEvidence.coverage }, null, 2))}</pre></details>` : ''}
         ${item.vectfoxLedgerDeferred?.length ? `<details class="kt-detail-section"><summary>Deferred VectFox acquisitions (${item.vectfoxLedgerDeferred.length})</summary><pre class="kt-detail-current">${escapeHtml(JSON.stringify(item.vectfoxLedgerDeferred, null, 2))}</pre></details>` : ''}
+        ${item.staleWarning ? `<div class="kt-detail-section" role="status">${escapeHtml(item.staleWarning)}</div>` : ''}
         ${item.contractRejections?.length ? `<div class="kt-detail-section kt-contract-rejections"><div class="kt-detail-label">Rejected model values (not applied or re-verified)</div><ul>${item.contractRejections.map(r => `<li>${escapeHtml(r.field)}: ${escapeHtml(r.reason)}</li>`).join('')}</ul></div>` : ''}
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
@@ -466,6 +529,10 @@ function wireStagingEvents(el) {
     // here through handleAccept's re-render (isConnected guard covers the
     // re-render and the modal closing mid-write).
     const acceptBtn = el.querySelector('#kt-accept');
+    // A manual keyword-only save can synchronize the pending item while this
+    // detail pane is still mounted. An untouched input must not resurrect the
+    // older rendered keys; an explicit reviewer change still wins.
+    const renderedKeywords = el.querySelector('#kt-keyword-input')?.value;
     acceptBtn?.addEventListener('click', async () => {
         const item = state.stagingItems.find(i => i.id === state.activeItemId);
         if (!item) return;
@@ -485,7 +552,9 @@ function wireStagingEvents(el) {
             return;
         }
         const keywordsRaw = el.querySelector('#kt-keyword-input')?.value || item.name;
-        const keywords = item.type === 'state' ? [item.name] : keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
+        const keywords = item.type === 'state' ? [item.name]
+            : keywordsRaw === renderedKeywords && item.keywords ? item.keywords
+                : keywordsRaw.split(',').map(k => k.trim()).filter(Boolean);
         setControlBusy(acceptBtn, true);
         try {
             await handleAccept(item, text, keywords, el);
@@ -511,6 +580,8 @@ function wireStagingEvents(el) {
         try {
             let accepted = 0;
             let skipped = 0;
+            let stale = 0;
+            let failed = 0;
             for (const item of [...state.stagingItems]) {
                 const text = item.mergedContent || item.proposedContent;
                 // Reject placeholders (Fetch to see changes / promoting / demoting)
@@ -518,9 +589,12 @@ function wireStagingEvents(el) {
                 // single-accept path guards this; the batch path previously had no
                 // guard at all.
                 if (!text || STAGING_PLACEHOLDERS.includes(text)) { skipped++; continue; }
-                try { await handleAccept(item, text, item.keywords || [item.name], el); accepted++; } catch (e) { console.warn('[MWT:Knowledge] Batch accept failed:', e); }
+                const outcome = await handleAccept(item, text, item.keywords || [item.name], el);
+                if (outcome === 'accepted') accepted++;
+                else if (outcome === 'stale') stale++;
+                else failed++;
             }
-            if (skipped > 0) ktSetStatus(`${accepted} accepted · ${skipped} skipped (click the item to load its content first).`, 'info');
+            ktSetStatus(`${accepted} accepted · ${stale} stale/pending (review the refreshed diff before accepting again) · ${failed} failed · ${skipped} skipped${skipped ? ' (click the item to load its content first)' : ''}.`, failed ? 'error' : 'info');
         } finally {
             if (batchAcceptBtn.isConnected) setControlBusy(batchAcceptBtn, false);
         }
@@ -1011,6 +1085,7 @@ function wireStateTrackerEvents(el) {
             // cannot stack a second #kt-view-modal.
             if (document.getElementById('kt-view-modal') || viewModalOpening) return;
             viewModalOpening = true;
+            const viewScope = captureScope();
             // A11Y-S3-04: own this button's busy pair across the awaited read.
             setControlBusy(btn, true);
             try {
@@ -1018,7 +1093,7 @@ function wireStateTrackerEvents(el) {
                 const info = getStateRegistry()[name];
                 if (!info) return;
                 const loaded = await loadStateTrackerEntry(info.uid);
-                if (loaded) {
+                if (loaded && scopeStillCurrent(viewScope).ok) {
                     createKnowledgeViewModal(name, loaded.content);
                 }
             } finally {
@@ -1941,7 +2016,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
  */
 let viewModalOpening = false;
 
-function createKnowledgeViewModal(name, content) {
+function createKnowledgeViewModal(name, content, editableNpc = null) {
     // Singleton enforced here, at the only construction site: whichever open
     // path arrives second finds the winner's node already in the DOM and
     // keeps it, instead of stacking a duplicate #kt-view-modal with a second
@@ -1952,13 +2027,18 @@ function createKnowledgeViewModal(name, content) {
     viewModal.className = 'mwt-modal kt-view-modal-overlay';
     viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close" aria-label="Close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
     document.body.appendChild(viewModal);
-    decorateModalShell(viewModal, { title: name, destroyOnClose: true });
+    const onClose = editableNpc ? wireManualEdit(viewModal, {
+        name, uid: editableNpc.uid,
+        onSaved: message => { ktSetStatus(message, 'success'); renderNpcsSubTab(); },
+    }) : undefined;
+    decorateModalShell(viewModal, { title: name, destroyOnClose: true, onClose });
     return viewModal;
 }
 
 async function openNpcViewModal(name, triggerBtn = null) {
     if (document.getElementById('kt-view-modal') || viewModalOpening) return;
     viewModalOpening = true;
+    const viewScope = captureScope();
     // A11Y-S3-04: the label-verified read below is async — when the call came
     // from a button, own its busy pair across the load.
     if (triggerBtn) setControlBusy(triggerBtn, true);
@@ -1968,8 +2048,8 @@ async function openNpcViewModal(name, triggerBtn = null) {
     // Label-verified: a uid pointing at a differently-labelled entry must not
     // display that character's dossier under this NPC's name.
     const content = await loadEntryContent(reg.uid, name);
-    if (!content) return;
-    createKnowledgeViewModal(name, content);
+    if (!content || !scopeStillCurrent(viewScope).ok) return;
+    createKnowledgeViewModal(name, content, { uid: reg.uid });
     } finally {
         viewModalOpening = false;
         if (triggerBtn?.isConnected) setControlBusy(triggerBtn, false);

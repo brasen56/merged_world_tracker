@@ -5,10 +5,10 @@
 import { record } from './diagnostics.js';
 
 export function notify(title, message, level = 'info') {
-    const type = level === 'success' ? 'success' : level === 'error' ? 'error' : 'info';
+    const type = level === 'success' || level === 'error' || level === 'warning' ? level : 'info';
     // Map the toast level onto a diagnostics level. 'success' has no
     // diagnostics equivalent — treat it as 'info' (positive, not a fault).
-    const diagLevel = level === 'error' ? 'error' : 'info';
+    const diagLevel = level === 'error' ? 'error' : level === 'warning' ? 'warn' : 'info';
     try {
         // Capture every toast so a faded notification is still recoverable
         // from the diagnostics ring. Wrapped so a diagnostics failure can
