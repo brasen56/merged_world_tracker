@@ -118,7 +118,7 @@ disturb the existing path.
 
 ### B. Stale detection (the new behavior)
 
-- [ ] **B1. Stale entry → first Accept writes nothing.**
+- [X] **B1. Stale entry → first Accept writes nothing.**
   Stage an update for NPC X (a scan update, or a Promote item — both freeze
   their baseline: scan items at scan time, promote items at promote-click
   time). Then, in order:
@@ -153,63 +153,63 @@ disturb the existing path.
   checking ST WI entry, MWT overwrote. Suspect: ST editor edit not confirmed
   saved before Accept, or baseline captured after the edit; retest with the
   steps above before calling it a code failure._______
-  Result (retest): ____________
+  Result (retest): _____PASS - commit fca5b7c59dddcd5dd8c5eff0f1644caf2fdd8816 fixed_______
 
   Implementation follow-up (November 1, 2026): reproduced an overwrite in
   automated tests with a stale host cache, for both Accept and Accept All.
   Acceptance verification and stale-proposal re-merge now bypass that cache.
   This is not a host-QA pass; B1 still needs a fresh run in SillyTavern.
 
-- [ ] **B2. Second Accept is informed and writes.**
+- [X] **B2. Second Accept is informed and writes.**
   Continuing from B1, Accept again without changing anything.
   *Expect:* the write succeeds through the normal path; the entry ends up
   holding the proposal text; history +1 (one push for the real overwrite).
-  Result: ____________
+  Result: ____PASS________
 
-- [ ] **B3. Re-staling re-warns (no one-time bypass).**
+- [X] **B3. Re-staling re-warns (no one-time bypass).**
   Stage another update, stale the entry again in the WI editor, Accept (warns),
   then stale it a **second** time before accepting again.
   *Expect:* the second Accept warns again and writes nothing — the check runs
   on every Accept, it is not silenced by a prior warning.
-  Result: ____________
+  Result: ____PASS________
 
-- [ ] **B4. Promote/Demote item, stale.**
+- [X] **B4. Promote/Demote item, stale.**
   Promote (or demote) an NPC to stage the item, then stale the entry via the
   WI editor, then Accept.
   *Expect:* nothing written; the proposal text is **rebuilt from the current
   entry** (the dedicated promote/demote builder — the change survives the
   staleness); the Current section shows the fresh entry; warning shown.
-  Result: ____________
+  Result: ____PASS - Warning shown________
 
-- [ ] **B5. Hand-edited proposal, stale.**
+- [X] **B5. Hand-edited proposal, stale.**
   Stage an update, **edit the proposal text** in the detail pane first, then
   stale the entry via the WI editor, then Accept.
   *Expect:* nothing written; **your edited text is preserved** (not rebuilt,
   not reverted to the model's version); the comparison baseline is refreshed
   so the diff shows only real changes; warning shown. A following Accept
   writes your text.
-  Result: ____________
+  Result: ______PASS______
 
-- [ ] **B6. Relationship-only change is NOT stale.**
+- [X] **B6. Relationship-only change is NOT stale.**
   Stage an update for an NPC whose entry carries the managed relationship
   block. In the WI editor, change only text **between** the
   `mwt:relationships:start/end` markers, save, then Accept.
   *Expect:* no stale warning; the accept proceeds through the normal path —
   the comparison strips managed blocks on both sides, so a background
   relationship sync must not trip the check.
-  Result: ____________
+  Result: _____PASS_______
 
-- [ ] **B7. Unverifiable entry refuses.**
+- [X] **B7. Unverifiable entry refuses.**
   Stage an update for a throwaway NPC, then **delete that entry** in the WI
   editor (or rename its comment to a different NPC's name), then Accept.
   *Expect:* no write; status `Accept failed: cannot load or verify the current
   entry for "${name}". Proposal kept pending.`; the item remains pending and
   reviewable.
-  Result: ____________
+  Result: _____PASS_______
 
 ### C. Accept All — honest mixed outcomes
 
-- [ ] **C1. Mixed batch.**
+- [X] **C1. Mixed batch.**
   Build a pending list mixing at least: one fresh enriched proposal, one stale
   (WI-editor-edited) item, and one unenriched scan placeholder (a scan item
   never clicked, still showing the "Fetch to see changes" placeholder).
@@ -220,16 +220,16 @@ disturb the existing path.
   stale and failed items **remain in the list**, still clickable and
   reviewable, with their notifications/selection bookkeeping intact; exactly
   the accepted items produced POSTs.
-  Result: ____________
+  Result: ____PASS________
 
 ### D. Keywords (partial — reachable subset)
 
-- [ ] **D1. Reviewer keywords on a normal accept.**
+- [X] **D1. Reviewer keywords on a normal accept.**
   Type comma-separated keywords into the keyword field of a normal (fresh)
   accept.
   *Expect:* the entry's `key` array in the WI editor matches exactly what was
   typed; nothing else regressed.
-  Result: ____________
+  Result: _____PASS_______
 
 > Note: Phase 1's pending-keyword synchronization (a keywords-only manual save
 > updating staged items) is **not reachable** without the Edit UI. It is

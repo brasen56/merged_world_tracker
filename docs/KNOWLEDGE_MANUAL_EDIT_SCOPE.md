@@ -1,6 +1,6 @@
 # Knowledge Tracker — manual entry editing in-module
 
-**Status:** Phases 1–2 implemented and automated checks pass; Phases 3–5 remain unimplemented. No Edit UI exposed; feature unreleased.
+**Status:** Phases 1–3 implemented and automated checks pass; Phases 4–5 remain unimplemented. NPC-only Edit-in-View is exposed for host QA; feature unreleased.
 **Date:** 2026-11-01
 **Area:** Knowledge Tracker NPC list UI (Minor/Major sub-tabs), the lorebook write path, and the staging accept path.
 **Purpose:** Agree on the editing affordance, safety boundaries, and first-release scope before implementation.
@@ -699,6 +699,33 @@ keyword-only and no-op saves, Revert/Cancel/Escape/backdrop/close confirmation,
 stale reload, a failed load at Edit, double clicks, errors retaining drafts,
 missing host support, scope changes during loading/saving, handler cleanup, and
 the shared modal's State Tracker exclusion. Phases 1 and 2 pass together before exposing Edit.
+
+**Completion record — 2026-11-01:**
+
+- Added `knowledge/manual_edit_ui.js`, explicitly opted in by the NPC caller of
+  the shared View modal. State Tracker remains read-only and orphan NPC cards
+  retain no View action. View's label-verified load is unchanged; Edit performs
+  the fresh Phase 1 session load.
+- Added a labeled monospace body textarea, comma-separated keywords, read-only
+  managed relationships, Save/Revert/Cancel, and explicit stale-source reload.
+  Stored text uses DOM values/textContent. Failures, uncertain outcomes, and
+  failed reloads retain the draft. Successful saves show verified persisted
+  content, report status, and refresh cards; no-op saves write nothing.
+- Shared close veto checks scope before pending-save/unsaved-change guards.
+  Chat changes bypass confirmation and clean up the shared key handler; late
+  View/Edit/Save results cannot revive the modal or refresh the new chat's UI.
+  Added busy pairs, focus transitions, live status, and mobile editor styles.
+- Added `test/knowledge_manual_edit_ui.test.js` with real jsdom modal wiring and
+  real guarded persistence against the existing host/fetch doubles.
+- Validation: `npm test` — **177 files, 4,412 tests passed**;
+  `npm run lint` and `git diff --check` — **passed**. The Phase 1 service,
+  Phase 2 acceptance, singleton, and busy-handler suites pass together.
+- Host QA is still **pending**, not passed. See
+  [KNOWLEDGE_MANUAL_EDIT_PHASE3_HOST_QA.md](KNOWLEDGE_MANUAL_EDIT_PHASE3_HOST_QA.md)
+  for the UI-based route around the previous console-surface blocker. The
+  existing Phases 1–2 checklist and its in-progress tester edits are preserved.
+- No console API, model calls, settings, version bump, Restore action, or
+  Phase 4 advisory lint was added. This checkpoint is not a feature release.
 
 ### Phase 4 — complete recovery and non-blocking guidance
 

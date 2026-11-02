@@ -74,6 +74,7 @@ import { acceptedRefreshFields, contractRejectionSummary, scanContractRejections
 // separate from Enrich/Fields/staging — its proposals never enter the staging
 // auto-approval path, and its writes go through the guarded commit service.
 import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
+import { wireManualEdit } from './manual_edit_ui.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1037,6 +1038,7 @@ function wireStateTrackerEvents(el) {
             // cannot stack a second #kt-view-modal.
             if (document.getElementById('kt-view-modal') || viewModalOpening) return;
             viewModalOpening = true;
+            const viewScope = captureScope();
             // A11Y-S3-04: own this button's busy pair across the awaited read.
             setControlBusy(btn, true);
             try {
@@ -1044,7 +1046,7 @@ function wireStateTrackerEvents(el) {
                 const info = getStateRegistry()[name];
                 if (!info) return;
                 const loaded = await loadStateTrackerEntry(info.uid);
-                if (loaded) {
+                if (loaded && scopeStillCurrent(viewScope).ok) {
                     createKnowledgeViewModal(name, loaded.content);
                 }
             } finally {
@@ -1907,7 +1909,7 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
  */
 let viewModalOpening = false;
 
-function createKnowledgeViewModal(name, content) {
+function createKnowledgeViewModal(name, content, editableNpc = null) {
     // Singleton enforced here, at the only construction site: whichever open
     // path arrives second finds the winner's node already in the DOM and
     // keeps it, instead of stacking a duplicate #kt-view-modal with a second
@@ -1918,13 +1920,18 @@ function createKnowledgeViewModal(name, content) {
     viewModal.className = 'mwt-modal kt-view-modal-overlay';
     viewModal.innerHTML = `<div class="kt-history-backdrop"></div><div class="kt-history-panel"><div class="kt-history-header"><h3>${escapeHtml(name)}</h3><button class="kt-history-close" aria-label="Close">✕</button></div><div class="kt-history-body"><pre>${escapeHtml(content)}</pre></div></div>`;
     document.body.appendChild(viewModal);
-    decorateModalShell(viewModal, { title: name, destroyOnClose: true });
+    const onClose = editableNpc ? wireManualEdit(viewModal, {
+        name, uid: editableNpc.uid,
+        onSaved: message => { ktSetStatus(message, 'success'); renderNpcsSubTab(); },
+    }) : undefined;
+    decorateModalShell(viewModal, { title: name, destroyOnClose: true, onClose });
     return viewModal;
 }
 
 async function openNpcViewModal(name, triggerBtn = null) {
     if (document.getElementById('kt-view-modal') || viewModalOpening) return;
     viewModalOpening = true;
+    const viewScope = captureScope();
     // A11Y-S3-04: the label-verified read below is async — when the call came
     // from a button, own its busy pair across the load.
     if (triggerBtn) setControlBusy(triggerBtn, true);
@@ -1934,8 +1941,8 @@ async function openNpcViewModal(name, triggerBtn = null) {
     // Label-verified: a uid pointing at a differently-labelled entry must not
     // display that character's dossier under this NPC's name.
     const content = await loadEntryContent(reg.uid, name);
-    if (!content) return;
-    createKnowledgeViewModal(name, content);
+    if (!content || !scopeStillCurrent(viewScope).ok) return;
+    createKnowledgeViewModal(name, content, { uid: reg.uid });
     } finally {
         viewModalOpening = false;
         if (triggerBtn?.isConnected) setControlBusy(triggerBtn, false);
