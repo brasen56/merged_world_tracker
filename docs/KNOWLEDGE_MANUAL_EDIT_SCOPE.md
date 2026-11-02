@@ -96,7 +96,8 @@ change the design.
    - Write through the checked branch (§5). The guard verifies scope, identity,
      and freshness against a disk read before anything changes (§5.2, §6.1).
      If any check fails, refuse the save, keep the draft, and explain. Prior
-     content is snapshotted to entry history automatically.
+     content is snapshotted to entry history automatically when the body
+     changes.
    - On success: status toast, modal returns to read-only showing the saved
      content, the registry keywords update, pending proposals for this entry
      take the saved keywords (§6.2), and the NPC list re-renders (keywords
@@ -183,8 +184,9 @@ branch and can never adopt or create.
   a cleanup-recovery entry is refused; an NPC can never be written over module
   bookkeeping.
 - **History snapshot:** the previous content is pushed to the per-entry
-  history record before overwrite. `pushHistory` runs before the save, so a
-  failed save leaves a redundant snapshot, which §5.5 skips.
+  history record before overwrite, unless the write leaves the body unchanged.
+  `pushHistory` runs before the save, so a failed save leaves a redundant
+  snapshot, which §5.5 skips.
 - **Checked save:** `saveCleanupBook` fails on a non-2xx response, and the store
   still folds into the same write (`applyStoreToWorldInfo`, then
   `markStoreClean` after the save resolves).
@@ -230,10 +232,10 @@ History today is not recoverable by a user: `getHistory`'s only caller is the
 export. Read-only mode therefore gains one **Restore previous version** action.
 It finds the newest history record whose stripped body differs from the current
 entry's body, and opens that body in edit mode as an unsaved draft labelled with
-the record's timestamp. The newest record alone is not enough: every
-relationship sync that changes the block pushes history, and a failed save
-leaves a copy of the current text, so the newest record often holds the same
-body. History keys are per uid and outlive their entry, so a reused uid inherits
+the record's timestamp. The newest record alone is not enough: a failed save
+leaves a copy of the current text, and existing browsers still hold
+relationship-only snapshots from before writes stopped storing them, so the
+newest record can hold the same body. History keys are per uid and outlive their entry, so a reused uid inherits
 a former NPC's records: a record headed with another NPC's name is skipped, and
 a record with no readable header stays eligible. The user saves the draft through
 the normal path, so every check above still applies, and the baseline stays the
@@ -243,10 +245,13 @@ are. The action is hidden when no such record exists.
 This is one step, not a browser. Saving pushes the current text to history, so
 restoring twice toggles between two versions.
 
-History caps at 50 snapshots in localStorage, and relationship syncs use up that
-cap too. A long-running book can fill the browser's quota: one browser measured
-on 2026-11-01 had 5.24 million characters stored, 97% of it history, and 21 of
-its 91 NPCs had never managed to store a snapshot. So when the browser refuses a
+History caps at 50 snapshots in localStorage. A write that leaves the body
+unchanged, such as a relationship sync or a keyword-only save, stores no
+snapshot: Restore would skip it, and a relationship change would otherwise copy
+the whole entry. A long-running book can still fill the browser's quota: one
+browser measured on 2026-11-01 had 5.24 million characters stored, 97% of it
+history, and 21 of its 91 NPCs had never managed to store a snapshot. Clearing
+same-body repeats alone took it to 2.69 million. So when the browser refuses a
 snapshot for space, history trims itself. Trimming rewrites `kt_history_*` keys
 only, so it cannot reach a lorebook entry:
 
@@ -468,9 +473,10 @@ growth ownership rules.
 - With ST's World Info editor open on that book, an MWT save causes the ST
   editor to show the new content, and a subsequent ST-side save does not
   revert the MWT edit.
-- Every save pushes the prior content to that entry's history record. A Save
-  with no changes writes nothing and pushes nothing, including on an entry with
-  CRLF line endings. A restored draft counts as a change (§4 dirty rule).
+- A save that changes the body pushes the prior content to that entry's history
+  record; a keyword-only save pushes nothing. A Save with no changes writes
+  nothing and pushes nothing, including on an entry with CRLF line endings. A
+  restored draft counts as a change (§4 dirty rule).
 - If the entry body changes between Edit and save (background update,
   second tab, ST editor), the save is refused with an explanation, and the
   user's draft text is preserved verbatim.

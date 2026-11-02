@@ -2,12 +2,12 @@ import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 import { resetCoreStubs } from './stubs/core.js';
 import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
-import { state } from '../knowledge/state.js';
+import { state, TRACKER_SENTINEL } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
 import * as scope from '../knowledge/scope.js';
 import { getRegistry } from '../knowledge/registry.js';
 import { _setCacheForTests, _clearCacheForTests, captureStoreState } from '../knowledge/store.js';
-import { getHistory, writeToLorebook } from '../knowledge/lorebook.js';
+import { getHistory, writeStateTracker, writeToLorebook } from '../knowledge/lorebook.js';
 import { injectRelationshipBlock, stripRelationshipBlock, setStance } from '../knowledge/relationships.js';
 import { loadForManualEdit, saveManualEdit, isManualEditDirty, parseManualKeywords } from '../knowledge/manual_edit.js';
 
@@ -48,6 +48,25 @@ afterEach(() => {
     state.stagingItems = [];
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+});
+
+describe('snapshots skip writes that leave the body unchanged', () => {
+    test('a keyword-only save stores no snapshot and reports none lost', async () => {
+        const { session } = await load();
+        const result = await save(session, BODY, 'port');
+        expect(result).toMatchObject({ ok: true, historyLost: false, keywords: ['port'] });
+        expect(entry().key).toEqual(['port']);
+        expect(getHistory(0, BOOK)).toEqual([]);
+    });
+
+    test('a state tracker write snapshots only when its text changes', async () => {
+        entry().comment = `${TRACKER_SENTINEL} Mara`;
+        entry().content = 'Day 1';
+        await writeStateTracker(0, 'Mara', 'Day 1');
+        expect(getHistory(0, 'State Tracker')).toEqual([]);
+        await writeStateTracker(0, 'Mara', 'Day 2');
+        expect(getHistory(0, 'State Tracker').map(record => record.content)).toEqual(['Day 1']);
+    });
 });
 
 describe('manual edit service', () => {

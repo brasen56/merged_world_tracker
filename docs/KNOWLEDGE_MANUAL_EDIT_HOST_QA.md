@@ -283,7 +283,7 @@ for Phase 3's UI. The checklist is written now so it is ready either way.
 - [X] **P1-B5. Keyword-only save.**
   Save with the body unchanged and keywords changed.
   *Expect:* body byte-identical; `key` array updated; reported as a real save
-  (not a no-op); history behavior per service result.
+  (not a no-op); no history push, because the body did not change.
 - [X] **P1-B6. Emptied keywords fall back.**
   Clear the keywords field entirely and save.
   *Expect:* entry saves with `key: [name]`, not `[]`.

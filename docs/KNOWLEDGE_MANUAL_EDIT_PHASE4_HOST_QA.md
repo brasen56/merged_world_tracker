@@ -1,6 +1,6 @@
 # Knowledge manual edit — Phase 4 host QA
 
-**Implementation checkpoint:** 2026-11-01. **Host results:** pending.
+**Implementation checkpoint:** 2026-11-01. **Host results:** Pass on 2026-11-01.
 Use a disposable chat/lorebook, alongside the original Phases 1–2 checklist
 and the Phase 3 UI checklist. This adds a UI route for recovery and advisory
 guidance; no console API is required. Existing tester results are not replaced.
@@ -30,6 +30,8 @@ Record host/browser version, tested commit, outcome, and evidence for each item.
 6. Switch chats during Restore loading or saving. The modal closes without
    prompting and late results cannot alter the new chat's UI. Throttled-network
    double clicks must not duplicate loads/saves. State Tracker remains read-only.
+7. Change only an NPC's relationships, or only its keywords. The entry updates,
+   its history count stays the same, and Restore stays as it was.
 
 ## Advisory guidance
 

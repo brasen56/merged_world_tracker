@@ -443,3 +443,34 @@ describe('the proposal diff never shows the block as removed', () => {
         expect(contentEl.querySelector('.kt-detail-diff')).toBeNull();
     });
 });
+
+describe('relationship syncs leave history alone', () => {
+    beforeEach(() => {
+        // The sync's scope guard fails closed without a resolvable chat id.
+        vi.stubGlobal('SillyTavern', { getContext: () => ({ getCurrentChatId: () => 'chat-sync' }) });
+    });
+
+    test('a sync that only rewrites the block stores no snapshot', async () => {
+        seedEntry(DOSSIER);
+        seedGraph();
+        wiFake.books.get(BOOK).entries[UID].content = withCurrentBlock(DOSSIER);
+        setStance(NPC, 'friendly');
+
+        await expect(syncRelationshipsToLorebook(NPC)).resolves.toMatchObject({ success: true, historyKept: true });
+
+        expect(entryContent()).toBe(withCurrentBlock(DOSSIER));
+        expect(entryContent()).toContain('friendly');
+        expect(getHistory(UID, BOOK)).toEqual([]);
+    });
+
+    test('the first sync stores no snapshot, even when it tidies whitespace', async () => {
+        seedEntry(`${DOSSIER}\n`);
+        seedGraph();
+
+        await expect(syncRelationshipsToLorebook(NPC)).resolves.toMatchObject({ success: true });
+
+        expect(blockCount(entryContent())).toBe(1);
+        expect(stripRelationshipBlock(entryContent())).toBe(DOSSIER);
+        expect(getHistory(UID, BOOK)).toEqual([]);
+    });
+});

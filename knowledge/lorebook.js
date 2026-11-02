@@ -111,10 +111,13 @@ function isQuotaError(err) {
  * keys only, so it can never reach a lorebook entry.
  *
  * Repeats of a body a newer snapshot already holds go first: Restore skips them,
- * so no version is lost. Only if that is not enough do real versions go, the
- * oldest of whichever history is largest, so one huge NPC cannot lock the rest
- * out. Keys with invalid records are skipped (their raw value is the recovery
- * copy), and when the snapshot still could not fit nothing is dropped at all.
+ * so no version is lost. Writes no longer create them, but a failed save still
+ * can, and browsers keep the ones stored by older versions.
+ *
+ * Only if that is not enough do real versions go, the oldest of whichever
+ * history is largest, so one huge NPC cannot lock the rest out. Keys with
+ * invalid records are skipped (their raw value is the recovery copy), and when
+ * the snapshot still could not fit nothing is dropped at all.
  *
  * @returns {boolean} whether the snapshot was stored
  */
@@ -184,6 +187,17 @@ export function pushHistory(uid, content, lorebook = getLorebookName()) {
     } catch (err) {
         return isQuotaError(err) && storeByTrimmingHistories(key, history);
     }
+}
+
+/**
+ * Keep the text a write displaces, unless its body survives the write. Restore
+ * would skip that snapshot, and a relationship sync would otherwise copy the
+ * whole entry just to change its block.
+ *
+ * @returns {boolean} false only when a needed snapshot could not be stored
+ */
+function snapshotDisplaced(uid, previous, next, lorebook) {
+    return normalizedEntryBody(previous) === normalizedEntryBody(next) || pushHistory(uid, previous, lorebook);
 }
 
 export function getHistory(uid, lorebook = getLorebookName()) {
@@ -259,7 +273,7 @@ export async function writeStateTracker(uid, name, content) {
         await saveBookNow(state.wiScript, book, wi);
         // Only now has the folded-in store actually reached disk.
         markStoreClean(book);
-        pushHistory(uid, previousContent, book);
+        snapshotDisplaced(uid, previousContent, content, book);
         return { success: true, uid };
     } catch (err) { return { success: false, error: err.message }; }
 }
@@ -376,7 +390,7 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
         }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
-            const historyKept = pushHistory(existingUid, previousContent, book);
+            const historyKept = snapshotDisplaced(existingUid, previousContent, content, book);
             entries[existingUid].content = content;
             // Cleanup owns content, not keywords edited during review.
             if (!beforeWrite || writeKeywords) entries[existingUid].key = keywords;
