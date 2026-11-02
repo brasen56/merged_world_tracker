@@ -4,6 +4,8 @@ import { setStatus } from '../core/modal.js';
 import { setControlBusy } from '../core/ui.js';
 import { getLorebookName } from './scope.js';
 import { loadForManualEdit, saveManualEdit, isManualEditDirty } from './manual_edit.js';
+import { getHistory } from './lorebook.js';
+import { lintManualBody, previousManualVersion } from './manual_edit_guidance.js';
 
 /** Wire an explicitly opted-in NPC modal before decorating its shared shell. */
 export function wireManualEdit(modal, { name, uid, onSaved }) {
@@ -17,13 +19,19 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
     edit.className = 'kt-view-edit menu_button';
     edit.textContent = 'Edit';
     header.insertBefore(edit, header.querySelector('.kt-history-close'));
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'kt-view-restore menu_button';
+    restore.textContent = 'Restore previous version';
+    header.insertBefore(restore, edit);
     const editor = document.createElement('div');
     editor.className = 'kt-manual-editor';
     editor.hidden = true;
     // Only static markup goes through innerHTML. All stored text uses value/textContent.
     editor.innerHTML = `
+        <p class="kt-manual-restored" hidden></p>
         <label for="kt-manual-body">Entry body</label>
-        <textarea id="kt-manual-body" spellcheck="false" aria-describedby="kt-manual-help"></textarea>
+        <textarea id="kt-manual-body" spellcheck="false" aria-describedby="kt-manual-help kt-manual-warnings"></textarea>
         <label for="kt-manual-keywords">Trigger keywords (comma-separated)</label>
         <input id="kt-manual-keywords" type="text" aria-describedby="kt-manual-help">
         <section class="kt-manual-relationships" aria-labelledby="kt-manual-relationships-title">
@@ -32,6 +40,7 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
             <pre></pre>
         </section>
         <p id="kt-manual-help">No model calls. Empty keywords fall back to the NPC name. Empty content cannot be saved.</p>
+        <div id="kt-manual-warnings" role="status" aria-live="polite" hidden></div>
         <div class="kt-manual-actions">
             <button type="button" class="kt-manual-save menu_button">Save</button>
             <button type="button" class="kt-manual-revert menu_button">Revert</button>
@@ -52,6 +61,8 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
     const cancel = editor.querySelector('.kt-manual-cancel');
     const reload = editor.querySelector('.kt-manual-reload');
     const close = header.querySelector('.kt-history-close');
+    const restored = editor.querySelector('.kt-manual-restored');
+    const warnings = editor.querySelector('#kt-manual-warnings');
     let session = null;
     let pending = false;
 
@@ -66,16 +77,32 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
     const discard = () => !dirty() || window.confirm('Discard unsaved NPC edits?');
     function updateSave() {
         save.disabled = pending || !text.value.trim();
+        const messages = lintManualBody(text.value, session?.baselineBody || '');
+        warnings.replaceChildren();
+        warnings.hidden = messages.length === 0;
+        if (messages.length) {
+            const title = document.createElement('p');
+            title.textContent = 'Advisory warnings — nonempty drafts can still be saved.';
+            const list = document.createElement('ul');
+            for (const message of messages) {
+                const item = document.createElement('li');
+                item.textContent = message;
+                list.append(item);
+            }
+            warnings.append(title, list);
+        }
     }
     function busy(control, value) {
         pending = value;
         setControlBusy(control, value);
-        [edit, revert, cancel, reload, close].forEach(button => { button.disabled = value; });
+        [edit, restore, revert, cancel, reload, close].forEach(button => { button.disabled = value; });
         text.readOnly = value;
         keywords.readOnly = value;
         updateSave();
     }
     function fill() {
+        restored.hidden = true;
+        restored.textContent = '';
         text.value = session.baselineBody;
         keywords.value = session.keys.join(', ');
         const block = session.content.match(/<!-- mwt:relationships:start -->[\s\S]*?<!-- mwt:relationships:end -->/);
@@ -88,8 +115,13 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
         view.hidden = false;
         editor.hidden = true;
         edit.hidden = false;
+        refreshRestore(content);
         edit.focus();
     }
+    function refreshRestore(content) {
+        restore.hidden = !previousManualVersion(getHistory(uid, book), content);
+    }
+    refreshRestore(view.textContent);
     async function load(control) {
         if (!alive() || pending) return;
         if (control === reload && !discard()) return;
@@ -103,11 +135,25 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
                 return;
             }
             session = result.session;
+            const previous = control === restore
+                ? previousManualVersion(getHistory(uid, book), session.content) : null;
+            if (control === restore && !previous) {
+                showView(session.content);
+                setStatus(modal, 'No differing previous version is available. Nothing written.');
+                return;
+            }
             fill();
+            if (previous) {
+                text.value = previous.body;
+                restored.textContent = `Restored draft from ${new Date(previous.ts).toLocaleString()}. Not saved yet; current keywords are preserved.`;
+                restored.hidden = false;
+                updateSave();
+            }
             view.hidden = true;
             editor.hidden = false;
             edit.hidden = true;
-            setStatus(modal, 'Editing current entry. Changes are not saved yet.');
+            restore.hidden = true;
+            setStatus(modal, previous ? restored.textContent : 'Editing current entry. Changes are not saved yet.');
         } catch (err) {
             if (alive()) setStatus(modal, `Cannot load entry: ${err.message}`, 'error');
         } finally {
@@ -119,6 +165,7 @@ export function wireManualEdit(modal, { name, uid, onSaved }) {
         }
     }
     edit.addEventListener('click', () => void load(edit));
+    restore.addEventListener('click', () => void load(restore));
     reload.addEventListener('click', () => void load(reload));
     text.addEventListener('input', updateSave);
     revert.addEventListener('click', () => {

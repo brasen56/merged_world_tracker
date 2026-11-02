@@ -1,6 +1,6 @@
 # Knowledge Tracker — manual entry editing in-module
 
-**Status:** Phases 1–3 implemented and automated checks pass; Phases 4–5 remain unimplemented. NPC-only Edit-in-View is exposed for host QA; feature unreleased.
+**Status:** Phases 1–4 implemented; Phase 5 remains pending. NPC-only Edit-in-View, Restore, and advisory guidance are exposed for host QA; feature unreleased.
 **Date:** 2026-11-01
 **Area:** Knowledge Tracker NPC list UI (Minor/Major sub-tabs), the lorebook write path, and the staging accept path.
 **Purpose:** Agree on the editing affordance, safety boundaries, and first-release scope before implementation.
@@ -752,6 +752,33 @@ block-only and redundant records), a restored draft saving as a real change,
 restore without write, guarded restore after an intervening edit, two-save
 toggle, current keywords preserved, all lint cases, and valid large pre-existing
 ledgers without an absolute-size warning. Nonempty malformed drafts remain saveable.
+
+**Completion record — 2026-11-01:**
+
+- Added read-only recovery selection and advisory checks in
+  `knowledge/manual_edit_guidance.js`, wired into the existing NPC-only modal.
+  Restore skips body-equivalent/relationship-only history records, re-reads the
+  live entry, and opens the newest differing body as a timestamp-labeled unsaved
+  draft. Current keywords and the live freshness baseline are preserved.
+- Restore writes only through the existing Phase 1 Save service. History schema,
+  retention, relationship ownership, and all concurrency/identity guards remain
+  unchanged. Revert clears the restoration label and returns to the live baseline.
+- Added live header, ledger, dossier-marker/fields, and relative 50k-paste
+  warnings near Save. Individual dossier fields remain optional; warnings never
+  disable nonempty drafts. Empty content remains the only content-validation
+  blocker. No console API, settings, model calls, or version bump was added.
+- Automated coverage includes absent/equivalent history, newest differing body,
+  no-write Restore, fresh baseline/keywords, guarded stale refusal, two-save
+  toggling, failed loads, scope cleanup, every lint case, large existing ledgers,
+  and saving malformed nonempty content.
+- Validation: `npm test -- --run test/knowledge_manual_edit_guidance.test.js
+  test/knowledge_manual_edit_ui.test.js` — **2 files, 52 tests passed**;
+  `npm test` — **178 files, 4,438 tests passed**; `npm run lint` and
+  `git diff --check` — **passed**.
+- Host QA remains **pending**, not passed. Use
+  [KNOWLEDGE_MANUAL_EDIT_PHASE4_HOST_QA.md](KNOWLEDGE_MANUAL_EDIT_PHASE4_HOST_QA.md)
+  with the earlier checklists. Original in-progress tester edits are preserved.
+  Phase 5 release readiness is not implied by this checkpoint.
 
 ### Phase 5 — verify the complete feature and record release readiness
 

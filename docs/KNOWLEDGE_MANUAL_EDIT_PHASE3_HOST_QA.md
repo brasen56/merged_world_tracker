@@ -21,7 +21,7 @@ observability. Never interpret automated test results as host sign-off.
    Save to verify fallback to the NPC name.
 5. Save unchanged content/keywords (also try a CRLF source entry). Confirm no
    edit POST and no new history. Whitespace-only content disables Save;
-   nonempty malformed content remains saveable (advisory lint is Phase 4).
+   nonempty malformed content remains saveable (Phase 4 now supplies advisory lint).
 6. Exercise Revert, Cancel, Escape, close, and backdrop with a changed body and
    with keywords-only changes. Declining discard preserves the draft; accepting
    discards it. Revert stays in Edit with the loaded baseline; Cancel returns
@@ -50,6 +50,7 @@ observability. Never interpret automated test results as host sign-off.
   one merely for QA; keep the service's automated refusal coverage recorded.
 - Original P1-C's severed-response/reconciliation scenarios remain pending for
   the later host pass. Automated uncertain-outcome coverage is not host proof.
-- Restore and advisory lint remain Phase 4; combined release readiness remains
+- Restore and advisory lint are now available; continue with
+  `KNOWLEDGE_MANUAL_EDIT_PHASE4_HOST_QA.md`. Combined release readiness remains
   Phase 5. Record browser/host version, tested commit, outcomes, and evidence
   before marking any host checklist item passed.

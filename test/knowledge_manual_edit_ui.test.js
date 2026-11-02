@@ -8,7 +8,7 @@ import { state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
 import { getRegistry } from '../knowledge/registry.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
-import { getHistory } from '../knowledge/lorebook.js';
+import { getHistory, pushHistory } from '../knowledge/lorebook.js';
 import { renderNpcsSubTab } from '../knowledge/render.js';
 
 const NAME = 'Mara Voss';
@@ -76,6 +76,119 @@ afterEach(() => {
 });
 
 describe('NPC Edit-in-View through the real modal and guarded service', () => {
+    test('Restore is hidden without differing history, including block-only history', async () => {
+        await open();
+        expect(control('.kt-view-restore').hidden).toBe(true);
+        click('.kt-history-close');
+        pushHistory(0, `${BODY}\n\n${BLOCK}`, BOOK);
+        await open();
+        expect(control('.kt-view-restore').hidden).toBe(true);
+    });
+
+    test('Restore loads newest differing body without writing, preserves fresh keys and confirms discard', async () => {
+        pushHistory(0, 'oldest', BOOK);
+        pushHistory(0, `previous <script>bad()</script>\n\n${BLOCK}`, BOOK);
+        const ts = getHistory(0, BOOK)[0].ts;
+        pushHistory(0, `${BODY}\n\n${BLOCK}`, BOOK);
+        pushHistory(0, BODY, BOOK);
+        await open();
+        disk.entries[0].key = ['fresh key'];
+        click('.kt-view-restore'); await flush();
+        expect(draft().value).toBe('previous <script>bad()</script>');
+        expect(control('#kt-manual-keywords').value).toBe('fresh key');
+        expect(control('.kt-manual-restored').textContent).toContain(new Date(ts).toLocaleString());
+        expect(modal().querySelector('script')).toBeNull();
+        expect(getHistory(0, BOOK)).toHaveLength(4);
+        expect(host.saveWorldInfo).not.toHaveBeenCalled();
+        window.confirm.mockReturnValue(false);
+        click('.kt-manual-cancel');
+        expect(window.confirm).toHaveBeenCalledTimes(1);
+        expect(control('.kt-manual-editor').hidden).toBe(false);
+        window.confirm.mockReturnValue(true);
+        click('.kt-manual-revert');
+        expect(draft().value).toBe(BODY);
+        expect(control('.kt-manual-restored').hidden).toBe(true);
+    });
+
+    test('two saved restores toggle bodies through existing history and preserve current keys', async () => {
+        pushHistory(0, 'previous body', BOOK);
+        disk.entries[0].key = ['current keyword'];
+        await open();
+        click('.kt-view-restore'); await flush();
+        click('.kt-manual-save'); await flush();
+        expect(disk.entries[0].content).toBe('previous body');
+        expect(disk.entries[0].key).toEqual(['current keyword']);
+        expect(getHistory(0, BOOK)[0].content).toBe(BODY);
+        expect(control('.kt-view-restore').hidden).toBe(false);
+        click('.kt-view-restore'); await flush();
+        expect(draft().value).toBe(BODY);
+        click('.kt-manual-save'); await flush();
+        expect(disk.entries[0].content).toBe(BODY);
+        expect(disk.entries[0].key).toEqual(['current keyword']);
+        expect(host.saveWorldInfo).toHaveBeenCalledTimes(2);
+        expect(getHistory(0, BOOK)).toHaveLength(3);
+    });
+
+    test('Restore uses fresh live baseline, then refuses an intervening body edit without losing draft', async () => {
+        pushHistory(0, 'previous body', BOOK);
+        await open();
+        disk.entries[0].content = 'changed before Restore';
+        click('.kt-view-restore'); await flush();
+        disk.entries[0].content = 'changed after Restore';
+        click('.kt-manual-save'); await flush();
+        expect(status()).toContain('entry changed');
+        expect(draft().value).toBe('previous body');
+        expect(host.saveWorldInfo).not.toHaveBeenCalled();
+        expect(getHistory(0, BOOK)).toHaveLength(1);
+    });
+
+    test('Restore baseline is the fresh entry rather than the original View', async () => {
+        pushHistory(0, 'previous body', BOOK);
+        await open();
+        disk.entries[0].content = 'fresh live entry';
+        click('.kt-view-restore'); await flush();
+        click('.kt-manual-save'); await flush();
+        expect(disk.entries[0].content).toBe('previous body');
+        expect(getHistory(0, BOOK)[0].content).toBe('fresh live entry');
+    });
+
+    test('Restore rechecks history against fresh content and stays in View if no version differs', async () => {
+        pushHistory(0, 'previous body', BOOK);
+        await open();
+        disk.entries[0].content = 'previous body';
+        click('.kt-view-restore'); await flush();
+        expect(control('.kt-manual-editor').hidden).toBe(true);
+        expect(control('.kt-view-restore').hidden).toBe(true);
+        expect(control('.kt-history-body > pre').textContent).toBe('previous body');
+        expect(status()).toContain('No differing previous version');
+        expect(host.saveWorldInfo).not.toHaveBeenCalled();
+    });
+
+    test('failed Restore load remains read-only and retryable', async () => {
+        pushHistory(0, 'previous body', BOOK);
+        await open();
+        vi.stubGlobal('fetch', async () => { throw new Error('offline'); });
+        click('.kt-view-restore'); await flush();
+        expect(control('.kt-manual-editor').hidden).toBe(true);
+        expect(control('.kt-view-restore').disabled).toBe(false);
+        expect(status()).toContain('offline');
+        expect(host.saveWorldInfo).not.toHaveBeenCalled();
+    });
+
+    test('warnings update live, clear on Revert, and do not prevent a malformed draft saving', async () => {
+        await open(); await edit();
+        expect(control('#kt-manual-warnings').hidden).toBe(true);
+        change('malformed but intentional');
+        expect(control('#kt-manual-warnings').textContent).toContain('first line');
+        expect(control('.kt-manual-save').disabled).toBe(false);
+        click('.kt-manual-revert');
+        expect(control('#kt-manual-warnings').hidden).toBe(true);
+        change('malformed but intentional');
+        click('.kt-manual-save'); await flush();
+        expect(disk.entries[0].content).toBe('malformed but intentional');
+        expect(host.saveWorldInfo).toHaveBeenCalledTimes(1);
+    });
+
     test('View is read-only; Edit re-reads, strips managed text and renders stored text safely', async () => {
         await open();
         expect(control('.kt-manual-editor').hidden).toBe(true);
@@ -253,7 +366,8 @@ describe('NPC Edit-in-View through the real modal and guarded service', () => {
         expect(control('.kt-manual-save').getAttribute('aria-busy')).not.toBe('true');
     });
 
-    test.each(['view', 'edit', 'save'])('scope change during %s ignores late results and cleans handlers', async stage => {
+    test.each(['view', 'edit', 'restore', 'save'])('scope change during %s ignores late results and cleans handlers', async stage => {
+        if (stage === 'restore') pushHistory(0, 'previous body', BOOK);
         const gate = deferred();
         if (stage === 'view') host.loadWorldInfo.mockImplementation(async () => { await gate.promise; return structuredClone(disk); });
         if (stage === 'view') {
@@ -262,7 +376,7 @@ describe('NPC Edit-in-View through the real modal and guarded service', () => {
             await open();
             if (stage === 'save') { await edit(); change('old chat draft'); }
             vi.stubGlobal('fetch', async (...args) => { await gate.promise; return fetchDisk(...args); });
-            click(stage === 'edit' ? '.kt-view-edit' : '.kt-manual-save');
+            click(stage === 'edit' ? '.kt-view-edit' : stage === 'restore' ? '.kt-view-restore' : '.kt-manual-save');
         }
         const old = modal();
         bumpEpoch();

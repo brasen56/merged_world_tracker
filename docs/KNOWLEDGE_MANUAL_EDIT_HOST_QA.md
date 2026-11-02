@@ -265,46 +265,51 @@ To run this section, either ask for a small `window.MWT.manualEdit` console
 surface in `index.js` (same precedent as `window.MWT.cleanupRecovery`) or wait
 for Phase 3's UI. The checklist is written now so it is ready either way.
 
-- [ ] **P1-B1. Load returns a stripped baseline.**
+- [X] **P1-B1. Load returns a stripped baseline.**
   Load a session for an NPC whose entry carries a relationship block.
   *Expect:* session baseline body equals the entry content **minus** the
   managed block; keys equal the entry's `key` array; book/scope captured.
-- [ ] **P1-B2. No-op save writes nothing.**
+- [X] **P1-B2. No-op save writes nothing.**
   Save with the identical body and keywords.
   *Expect:* `noOp` result; **no POST**; history count unchanged.
-- [ ] **P1-B3. CRLF entry no-op.**
+  Test: Shows 'No changes to save. Nothing written.'
+- [X] **P1-B3. CRLF entry no-op.**
   Same as P1-B2 on an entry whose content uses CRLF line endings.
   *Expect:* still a no-op (newline normalization), no POST, no history push.
-- [ ] **P1-B4. Body edit persists.**
+- [X] **P1-B4. Body edit persists.**
   Save a changed body.
   *Expect:* entry updated on disk and in ST's cache; an open WI editor on that
   book reloads the new content; history +1.
-- [ ] **P1-B5. Keyword-only save.**
+- [X] **P1-B5. Keyword-only save.**
   Save with the body unchanged and keywords changed.
   *Expect:* body byte-identical; `key` array updated; reported as a real save
   (not a no-op); history behavior per service result.
-- [ ] **P1-B6. Emptied keywords fall back.**
+- [X] **P1-B6. Emptied keywords fall back.**
   Clear the keywords field entirely and save.
   *Expect:* entry saves with `key: [name]`, not `[]`.
-- [ ] **P1-B7. Empty body refused.**
+- [X] **P1-B7. Empty body refused.**
   Save whitespace-only content.
   *Expect:* refusal `empty-body`; nothing written; nothing pushed.
-- [ ] **P1-B8. Cache conflict refuses.**
+  Test: Wont even allow you to save, button disables
+- [X] **P1-B8. Cache conflict refuses.**
   Stage the two-tab conflict from P1-A1, then save a manual edit in tab 1.
   *Expect:* refusal `host-unsaved-edits` with the neutral wording; draft and
   session retained for retry.
-- [ ] **P1-B9. HTTP failure is honest, retry succeeds.**
+- [X] **P1-B9. HTTP failure is honest, retry succeeds.**
   Stop the ST server (or set devtools to Offline) before saving.
   *Expect:* failure surfaced honestly; ST's cache and the entry unchanged;
   draft retained; after the server recovers, the same save succeeds.
-- [ ] **P1-B10. Chat switch mid-session refuses.**
+- [X] **P1-B10. Chat switch mid-session refuses.**
   Load a session, switch chats, then save.
   *Expect:* refusal `scope-changed`; the **new** chat's registry and staged
   proposals untouched.
-- [ ] **P1-B11. Bookkeeping uid refused.**
+  Test: Cant do this. Trying to click out of MWT panel will force a warning about discarding edits.
+    Cant change chats without discarding or cancelling
+- [X] **P1-B11. Bookkeeping uid refused.**
   Attempt a save targeting the `[MWT:store]` entry's uid.
   *Expect:* refusal `bookkeeping-entry`; nothing written.
-- [ ] **P1-B12. Pending proposals receive saved keywords.**
+  Test: MWT:store is read only. Cant change it from MWT; would have to change it in ST WI editor
+- [X] **P1-B12. Pending proposals receive saved keywords.**
   With a staged NPC proposal for that uid, perform a keywords-only save, then
   accept the proposal.
   *Expect:* the accept uses the saved keywords, not the originally staged
