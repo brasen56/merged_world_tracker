@@ -28,9 +28,37 @@ export const AMBIENT_CLIMATES = Object.freeze({
     mediterranean: preset('Mediterranean', 19, 8, 4, 6, [6, 40], [0.05, 0.95]),
 });
 
+const fahrenheit = celsius => Math.round(celsius * 9 / 5 + 32);
+
+/**
+ * The one source of the temperature cut-offs, used both to classify and to
+ * describe. Narrator-facing copy states the label's fixed range (D7), never the
+ * raw value: pins carry only the label, and the raw value is sampled once per
+ * weather band. Freezing includes 0 °C; every other band excludes its upper
+ * bound. A climate clamp can make a band narrower than stated (tropical "mild"
+ * starts at 18 °C), never wider.
+ */
+export const AMBIENT_TEMPERATURE_BANDS = Object.freeze([
+    ['freezing', -Infinity, 0], ['cold', 0, 8], ['cool', 8, 16], ['mild', 16, 22], ['warm', 22, 30], ['hot', 30, Infinity],
+].map(([name, min, max]) => Object.freeze({ name, min, max,
+    range: min === -Infinity ? `${max}°C / ${fahrenheit(max)}°F or below`
+        : max === Infinity ? `${min}°C+ / ${fahrenheit(min)}°F+`
+            : `${min}–${max}°C / ${fahrenheit(min)}–${fahrenheit(max)}°F` })));
+
+export function classifyAmbientTemperature(celsius) {
+    const band = celsius <= 0 ? AMBIENT_TEMPERATURE_BANDS[0] : AMBIENT_TEMPERATURE_BANDS.find(entry => celsius < entry.max);
+    return (band ?? AMBIENT_TEMPERATURE_BANDS.at(-1)).name;
+}
+
+/** A label with its fixed range, e.g. "mild (16–22°C / 61–72°F)". Unknown labels pass through. */
+export function describeAmbientTemperature(label) {
+    const band = AMBIENT_TEMPERATURE_BANDS.find(entry => entry.name === label);
+    return band ? `${label} (${band.range})` : String(label);
+}
+
 export const AMBIENT_VOCABULARY = Object.freeze({
     sky: Object.freeze(['clear', 'partly cloudy', 'overcast', 'foggy']),
-    temperature: Object.freeze(['freezing', 'cold', 'cool', 'mild', 'warm', 'hot']),
+    temperature: Object.freeze(AMBIENT_TEMPERATURE_BANDS.map(band => band.name)),
     air: Object.freeze(['dry', 'comfortable', 'damp']),
     precipitation: Object.freeze(['none', 'rain', 'heavy rain', 'snow', 'heavy snow', 'thunderstorm', 'blizzard']),
     wind: Object.freeze(['calm', 'light', 'breezy', 'strong']),
@@ -137,7 +165,7 @@ function evaluate(seedTime, hasCalendar, config) {
         band, season: season.name,
         conditions: {
             sky: fog ? 'foggy' : moisture > 0.6 ? 'overcast' : moisture > 0.35 ? 'partly cloudy' : 'clear',
-            temperature: temperature <= 0 ? 'freezing' : temperature < 8 ? 'cold' : temperature < 16 ? 'cool' : temperature < 22 ? 'mild' : temperature < 30 ? 'warm' : 'hot',
+            temperature: classifyAmbientTemperature(temperature),
             air: moisture < 0.3 ? 'dry' : moisture > 0.6 ? 'damp' : 'comfortable',
             precipitation,
             wind: wind < 0.2 ? 'calm' : wind < 0.45 ? 'light' : wind < 0.75 ? 'breezy' : 'strong',

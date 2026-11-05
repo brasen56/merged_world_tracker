@@ -10,8 +10,11 @@ export const EXTENSION_PROMPT_KEY = 'mwt_ambient_injection';
 export function buildInjectionBody(ambient) {
     // Channels assemble conditionally (D33): a clockless chat omits the moon
     // line entirely — the Overview keeps the "no calendar clock" explanation,
-    // which the model cannot act on (D33 revision 4).
-    return `Stage direction, not narration. Ambient conditions (authoritative): ${describeConditions(ambient.conditions)} `
+    // which the model cannot act on (D33 revision 4). The season is the one the
+    // generator used: in a clockless chat it is the manual setting, which the
+    // model cannot see otherwise, and in the south it overrides month priors.
+    const season = ambient.season ? `; ${ambient.season}` : '';
+    return `Stage direction, not narration. Ambient conditions (authoritative${season}): ${describeConditions(ambient.conditions)} `
         + (ambient.daylight ? `Daylight: ${ambient.daylight.description} ` : '')
         + (ambient.moon ? `Moon: ${ambient.moon.description} ` : '')
         + (ambient.tide ? `Tides: ${ambient.tide.description} ` : '')

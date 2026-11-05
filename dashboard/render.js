@@ -11,6 +11,7 @@
 import { escapeHtml } from '../core/diff.js';
 import { AMBIENT_HOUR_MS } from '../core/ambient_time.js';
 import { isAmbientPin } from '../core/ambient_pin.js';
+import { describeAmbientTemperature } from '../core/ambient_generator.js';
 import { collectOverviewSnapshot } from './status.js';
 import {
     applyPrunePlan,
@@ -26,7 +27,9 @@ import { assertSameScope, captureScope } from '../core/scope.js';
 const EMOJI = '<span aria-hidden="true">';
 
 function ambientBody(value) {
-    const describe = conditions => Object.entries(conditions).map(([key, text]) => `${key}: ${text}`).join(', ');
+    const describe = conditions => Object.entries(conditions)
+        .map(([key, text]) => `${key}: ${key === 'temperature' ? describeAmbientTemperature(text) : text}`).join(', ');
+    const season = value?.ambient?.season ? `season: ${value.ambient.season}, ` : '';
     const bound = (hours, source) => source === 'message-count' ? `synthetic story hour ${hours}`
         : new Date(hours * AMBIENT_HOUR_MS).toISOString().slice(0, 16).replace('T', ' ');
     const pin = isAmbientPin(value?.pin) ? value.pin : null;
@@ -39,7 +42,7 @@ function ambientBody(value) {
             : 'message-count fallback; no usable story date/time (1 synthetic hour per message)';
     const clock = time ? `<p>Story clock used: ${escapeHtml(time.formattedDate ? `${time.formattedDate} ${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}` : bound(time.hours, time.source))}.<br>Source: ${escapeHtml(source)}.</p>` : '';
     return `<p>${escapeHtml(value?.state || 'off')}</p>${value?.ambient
-        ? `${clock}<p>Current ${escapeHtml(value.ambient.band.name)}: ${escapeHtml(describe(value.ambient.conditions))}</p><p>Next ${escapeHtml(value.ambient.forecast.band.name)}${time ? ` (${escapeHtml(bound(value.ambient.forecast.band.startHours, time.source))})` : ''}: ${escapeHtml(describe(value.ambient.forecast.conditions))}</p>` : ''}
+        ? `${clock}<p>Current ${escapeHtml(value.ambient.band.name)}: ${escapeHtml(season + describe(value.ambient.conditions))}</p><p>Next ${escapeHtml(value.ambient.forecast.band.name)}${time ? ` (${escapeHtml(bound(value.ambient.forecast.band.startHours, time.source))})` : ''}: ${escapeHtml(describe(value.ambient.forecast.conditions))}</p>` : ''}
         ${value?.ambient?.daylight ? `<p>Daylight: ${escapeHtml(value.ambient.daylight.description)}</p><p>Latitude ${escapeHtml(value.ambient.daylight.latitude)}°${value.ambient.daylight.isDefault ? ` (${escapeHtml(value.ambient.daylight.climate)} default) — set yours` : ''}; clocks ahead of sun: ${escapeHtml(value.ambient.daylight.clockAhead)} h.</p>` : ''}
         ${value?.ambient ? `<p>Moon: ${value.ambient.moon ? escapeHtml(value.ambient.moon.description) : 'unavailable — no calendar clock.'}</p>` : ''}
         ${value?.ambient?.tide ? `<p>Tides: ${escapeHtml(value.ambient.tide.description)}</p>` : ''}

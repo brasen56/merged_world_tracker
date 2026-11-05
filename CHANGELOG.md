@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.16.1]
+
+### Changed
+
+- **Ambient Conditions — temperature words now carry their range,
+  and the line names the season.** "mild" became
+  "mild (16–22°C / 61–72°F)", and the injection opens
+  `Ambient conditions (authoritative; summer):`. English
+  temperature words are season-relative ("a mild July evening"
+  reads cool), but the labels are fixed bands, so models were
+  left to guess — and could call July rain cold. The range is
+  the label's fixed band, never the generator's raw value, so
+  pinned weather reads the same way. The season is the one the
+  generator used, which matters most in clockless chats (the
+  manual season) and the southern hemisphere. The Story Planner
+  context, `/wt-ambient`, the Overview card and the pin editor's
+  temperature list show the same ranges. Cost: +20–24 tokens per
+  injection. This revises design decision D7 ("never numeric")
+  in `docs/AMBIENT_CONDITIONS_DESIGN.md`. The cut-offs now live
+  in one table, `AMBIENT_TEMPERATURE_BANDS` in
+  `core/ambient_generator.js`, which both classification and the
+  stated ranges read; generated labels are unchanged.
+
 ## [2.16.0]
 
 ### Added

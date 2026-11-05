@@ -26,7 +26,8 @@ describe('Ambient Phase 4 planner integration', () => {
         const before = JSON.stringify(getFakeMeta());
         const { ambient } = readAmbientConditions(config, config.seed);
         const context = buildAmbientPlannerContext();
-        expect(context).toContain(`Current ${ambient.band.name} band: ${describeConditions(ambient.conditions)}`);
+        expect(context).toContain(`Season: summer\nCurrent ${ambient.band.name} band: ${describeConditions(ambient.conditions)}`);
+        expect(describeConditions(pinned)).toBe('overcast, cool (8–16°C / 46–61°F), damp air; thunderstorm. Wind strong.');
         expect(context).toContain(`Forecast for the next ${ambient.forecast.band.name} band only: ${describeConditions(ambient.forecast.conditions)}`);
         expect(context.match(/Forecast for/g)).toHaveLength(1);
         expect(context).toContain('do not invent conflicting weather');
