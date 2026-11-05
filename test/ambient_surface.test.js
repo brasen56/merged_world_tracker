@@ -331,7 +331,8 @@ describe('Ambient Phase 3 user surface', () => {
         document.body.innerHTML = renderOverviewSnapshot({ ambient: { ok: true, value: getAmbientStatus() } });
         expect(document.body.textContent).toContain('Story clock used: 2026-06-04 23:37');
         expect(document.body.textContent).toContain('latest usable In-story time tag (message #0, 1 message ago)');
-        expect(document.body.textContent).toContain('Current night:');
+        expect(document.body.textContent).toContain('Current night: season: summer, sky: ');
+        expect(document.body.textContent).toMatch(/Current night: [^\n]*temperature: \w+ \([^)]*°C[^)]*°F[^)]*\)/);
         expect(document.body.textContent).toContain('Next dawn (2026-06-05 05:00)');
         expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
     });
@@ -394,10 +395,13 @@ describe('Ambient Phase 3 user surface', () => {
     test.each([['band', hours + 6], ['dawn', hours + 17], ['none', null], ['date', hours + 24]])('pin UI persists %s expiry and unpins', (expiry, endHours) => {
         saveSettings(config); mount();
         for (const [key, value] of Object.entries(conditions)) el(`pin-${key}`).value = value;
+        // The option shows the range; its value stays the bare label the pin stores.
+        expect(el('pin-temperature').selectedOptions[0].textContent).toBe('cool (8–16°C / 46–61°F)');
         el('expiry').value = expiry; el('date').value = '2026-06-05'; el('time').value = '12:00'; click('pin');
         expect(getSettings().pin).toEqual({ ...pin, endHours });
         expect(onGenerationStarted()).toBe(true);
         expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain('thunderstorm');
+        expect(getInjectedSnapshot('mwt_ambient_injection').payload).toContain(', cool (8–16°C / 46–61°F), ');
         expect(getInjectedSnapshot('mwt_ambient_injection').diagnostics.pinned).toBe(true);
         click('unpin'); expect(getSettings().pin).toBeNull();
     });

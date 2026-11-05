@@ -1,9 +1,13 @@
 /** Shared qualitative copy; planner reads live conditions without owning state. */
 import { getAmbientStatus } from './ambient_state.js';
+import { describeAmbientTemperature } from './ambient_generator.js';
 
+// Temperature words are season-relative in English ("a mild July evening" reads
+// cool, "a mild January day" warm), but the labels are fixed bands, so the
+// label's range rides along to keep the model from resolving the word itself (D7).
 export function describeConditions(conditions) {
     const precipitation = conditions.precipitation === 'none' ? 'no precipitation' : conditions.precipitation;
-    return `${conditions.sky}, ${conditions.temperature}, ${conditions.air} air; ${precipitation}. Wind ${conditions.wind}.`;
+    return `${conditions.sky}, ${describeAmbientTemperature(conditions.temperature)}, ${conditions.air} air; ${precipitation}. Wind ${conditions.wind}.`;
 }
 
 export function buildAmbientPlannerContext() {
@@ -12,6 +16,7 @@ export function buildAmbientPlannerContext() {
     const { ambient } = status;
     return '[Ambient Conditions owns weather, sky conditions and tides for this chat. These conditions are authoritative, even if older story, World State or plan text describes different weather, daylight, moon or tides. Build consequences and playable incidents from them; do not invent conflicting weather, sky conditions or tides or pin future weather to an arc. '
         + 'The forecast covers only the next named band, not the duration of an arc. Beyond that band or after a time skip, leave weather unspecified; Ambient Conditions will supply it when that story time is reached.]\n'
+        + (ambient.season ? `Season: ${ambient.season}\n` : '')
         + `Current ${ambient.band.name} band: ${describeConditions(ambient.conditions)}\n`
         + (ambient.daylight ? `Daylight at the exact story time: ${ambient.daylight.description}\n` : '')
         + (ambient.moon ? `Moon at the exact story time: ${ambient.moon.description}\n` : '')

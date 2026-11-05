@@ -5,7 +5,7 @@ import { EXTENSION_PROMPT_KEY, buildInjectionBody, clearAmbientInjection } from 
 import { getInjectedSnapshot, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { resetBudgetInjections, _resetBudgetEnforcementState, _setBudgetSettingsReader } from '../core/budget.js';
 import { collectBudgetSnapshot, renderBudgetSnapshot } from '../budget/panel.js';
-import { generateAmbientConditions } from '../core/ambient_generator.js';
+import { AMBIENT_TEMPERATURE_BANDS, generateAmbientConditions } from '../core/ambient_generator.js';
 import { bumpEpoch } from '../core/scope.js';
 
 const tag = (hour = '12:00 PM', day = 4) => `[In-story time: ${hour}, Thursday, June ${day}, 2026]`;
@@ -68,7 +68,12 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         expect(text).toContain('Forecast for the next evening band only:');
         expect(text).toContain('Reference when perceptually relevant; do not re-mention conditions every reply.');
         expect(text).toContain('If this response skips ahead in time, keep conditions vague; they will be supplied next turn.');
-        expect(text).not.toMatch(/°|within the hour/);
+        expect(text).not.toContain('within the hour');
+        // D7: the only numbers in degrees are a temperature label's fixed range,
+        // never a raw generator value.
+        const withoutRanges = AMBIENT_TEMPERATURE_BANDS.reduce((rest, band) => rest.replaceAll(` (${band.range})`, ''), text);
+        expect(withoutRanges).not.toContain('°');
+        expect(text.length - withoutRanges.length).toBeGreaterThan(0);
     });
 
     test.each(['swipe', 'regenerate'])('normal and repeated %s requests agree despite the replaced message jumping ahead', type => {
@@ -263,7 +268,7 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         ctx.extensionSettings.merged_world_tracker.structuralBoundaries = false;
         onGenerationStarted('normal');
         expect(snapshot().payload).not.toContain('<mwt_ambient>');
-        expect(snapshot().payload).toContain('Ambient conditions (authoritative)');
+        expect(snapshot().payload).toContain('Ambient conditions (authoritative; summer)');
     });
 
     test('budget panel and console collector see the registered ambient block; caps enforce', () => {
@@ -352,6 +357,22 @@ describe('ambient per-generation runtime (real injection and budget seam)', () =
         const body = buildInjectionBody(ambient);
         expect(body).toContain('next evening band only');
         expect(body).not.toContain('within the hour');
+    });
+
+    test('states the generator season and each temperature label with its fixed range, pinned or not', () => {
+        // Clockless: the season is the manual setting, which nothing else tells the model.
+        const ambient = generateAmbientConditions({ seed: 42, time: { hours: 12, month: null }, climate: 'temperate', manualSeason: 'autumn' });
+        const body = buildInjectionBody(ambient);
+        expect(body).toContain('Ambient conditions (authoritative; autumn): ');
+        expect(body.match(/°C\+? \/ \d+(–\d+)?°F/g)).toHaveLength(2);
+        expect(body).toContain(`${ambient.conditions.temperature} (`);
+        expect(body).not.toMatch(/\d+\.\d+°/);
+        // A pin carries only the label; the stated range comes from the label alone.
+        const pinned = { ...ambient, conditions: { ...ambient.conditions, temperature: 'mild' } };
+        expect(buildInjectionBody(pinned)).toContain(', mild (16–22°C / 61–72°F), ');
+        // Southern hemisphere: July is winter, and the line says so.
+        const south = generateAmbientConditions({ seed: 42, time: Date.UTC(2026, 6, 15, 12) / 3600000, climate: 'temperate', hemisphere: 'south' });
+        expect(buildInjectionBody(south)).toContain('(authoritative; winter)');
     });
 
     test('root wires the existing generation event with all host arguments and chat cleanup', () => {

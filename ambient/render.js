@@ -2,7 +2,7 @@
 import { escapeHtml } from '../core/diff.js';
 import { getChatMeta } from '../core/context.js';
 import { getEpoch } from '../core/scope.js';
-import { AMBIENT_CLIMATES, AMBIENT_SEASONS, AMBIENT_VOCABULARY } from '../core/ambient_generator.js';
+import { AMBIENT_CLIMATES, AMBIENT_SEASONS, AMBIENT_VOCABULARY, describeAmbientTemperature } from '../core/ambient_generator.js';
 import { AMBIENT_HOUR_MS } from '../core/ambient_time.js';
 import { parseStoryDateTime, formatStoryDateInput } from '../core/calendar_state.js';
 import { readAmbientConditions } from '../core/ambient_state.js';
@@ -83,7 +83,9 @@ export function renderAmbientSettings() {
         <details><summary>Pin conditions</summary>
             <p>Pins override rolls, including climate restrictions. Expiry uses story time, not real time.</p>
             <div class="mwt-settings-grid">
-                ${Object.entries(AMBIENT_VOCABULARY).map(([key, values]) => select(`mwt-a-pin-${key}`, key, values, s.pin?.conditions?.[key] || values[0])).join('')}
+                ${Object.entries(AMBIENT_VOCABULARY).map(([key, values]) => select(`mwt-a-pin-${key}`, key,
+        key === 'temperature' ? Object.fromEntries(values.map(value => [value, describeAmbientTemperature(value)])) : values,
+        s.pin?.conditions?.[key] || values[0])).join('')}
                 ${select('mwt-a-expiry', 'Expires', { none: 'Until unpinned', band: 'Next band', dawn: 'Next dawn', date: 'Story date/time' }, 'none')}
                 <label for="mwt-a-date">Story date (${custom ? 'Month D, YYYY — custom calendar' : 'YYYY-MM-DD'})</label><input class="mwt-input" id="mwt-a-date" type="text" placeholder="${custom ? 'Highsun 18, 1247' : '2026-06-05'}">
                 <label for="mwt-a-time">Story time (HH:MM, 24-hour)</label><input class="mwt-input" id="mwt-a-time" type="text" placeholder="05:00">

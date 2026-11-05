@@ -1,12 +1,34 @@
 import { describe, expect, test } from 'vitest';
 import {
-    AMBIENT_BANDS, AMBIENT_CLIMATES, AMBIENT_VOCABULARY,
-    generateAmbientConditions, quantizeAmbientTime,
+    AMBIENT_BANDS, AMBIENT_CLIMATES, AMBIENT_TEMPERATURE_BANDS, AMBIENT_VOCABULARY,
+    classifyAmbientTemperature, describeAmbientTemperature, generateAmbientConditions, quantizeAmbientTime,
 } from '../core/ambient_generator.js';
 import { resolveAmbientTime } from '../core/ambient_time.js';
 
 const hours = (month = 6, day = 4, hour = 12) => Date.UTC(2026, month - 1, day, hour) / 3600000;
 const generate = (time, options = {}) => generateAmbientConditions({ seed: 12345, climate: 'temperate', time, ...options });
+
+describe('temperature bands (D7)', () => {
+    test('one table supplies the vocabulary, contiguous cut-offs and the stated ranges', () => {
+        expect(AMBIENT_VOCABULARY.temperature).toEqual(AMBIENT_TEMPERATURE_BANDS.map(band => band.name));
+        AMBIENT_TEMPERATURE_BANDS.slice(1).forEach((band, index) => expect(band.min).toBe(AMBIENT_TEMPERATURE_BANDS[index].max));
+        expect(AMBIENT_VOCABULARY.temperature.map(describeAmbientTemperature)).toEqual([
+            'freezing (0°C / 32°F or below)',
+            'cold (0–8°C / 32–46°F)',
+            'cool (8–16°C / 46–61°F)',
+            'mild (16–22°C / 61–72°F)',
+            'warm (22–30°C / 72–86°F)',
+            'hot (30°C+ / 86°F+)',
+        ]);
+        expect(describeAmbientTemperature('balmy')).toBe('balmy');
+    });
+
+    test('classification matches the stated boundaries: freezing includes 0 °C, every other band excludes its top', () => {
+        expect([-40, 0, 0.01, 7.99, 8, 15.99, 16, 21.99, 22, 29.99, 30, 48].map(classifyAmbientTemperature)).toEqual([
+            'freezing', 'freezing', 'cold', 'cold', 'cool', 'cool', 'mild', 'mild', 'warm', 'warm', 'hot', 'hot',
+        ]);
+    });
+});
 
 describe('ambient bands and forecast', () => {
     test.each(AMBIENT_BANDS)('quantizes every moment in $name without flicker', ({ hour }) => {
