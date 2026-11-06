@@ -236,6 +236,22 @@ trial's outputs.
   real NPC wiring case in `test/knowledge_cleanup_review.test.js`, and chat
   sweep coverage in `test/paused_chat_cleanup.test.js`. F–G remain manual.
 
+#### Pre-trial fixes (2026-11-06)
+
+- Disclosure recomputes boundary/pins against the same immutable preview
+  review. Consent changes no longer mint random UUIDs, so identical settings
+  return identical estimates under the same tokenizer. Real requests and
+  retries still capture fresh IDs; their exact estimates can differ slightly
+  because the new ID itself is tokenized. Rewrite-all planning keeps pins
+  exact rather than estimating an illegal rewrite of them.
+- UI requests pass the reviewed capture as an expectation. A changed entry,
+  destination book, or NPC identity refuses before sending; close and reopen
+  to inspect and consent to the new snapshot. Retries also refuse changed
+  sources rather than silently reinterpreting source numbers.
+- Invalid record text still blocks exports, but its Keep originals button
+  remains usable. Recovery starts from the last valid proposal and restores
+  the complete merged owner, preserving other validated edits.
+
 ### F. Trial protocol (manual, on the testing RP)
 
 - [ ] Baseline regrowth BEFORE consolidating (response point 7): run a few

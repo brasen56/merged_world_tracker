@@ -4,7 +4,7 @@ import { createModal, showModal, setModalOpener, setStatus } from '../core/modal
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { ktSetStatus } from './state.js';
 import { prepareDeepConsolidation } from './deep_consolidation_capture.js';
-import { captureDeepConsolidationReview } from './deep_consolidation.js';
+import { selectDeepConsolidationSources } from './deep_consolidation.js';
 import { estimateDeepConsolidationRequest, requestDeepConsolidation } from './deep_consolidation_request.js';
 import { inspectDeepConsolidation, keepDeepSourceExact } from './deep_consolidation_checks.js';
 import { moveDeepSource, exportDeepTrialPacket } from './deep_consolidation_preview.js';
@@ -28,6 +28,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
     let closed = false;
     let controller = null;
     let session = null;
+    let validProposal = null;
     let acceptedGroups = false;
     let busy = false;
     const modal = createModal({ id: ID, title: `Experimental: Deep Consolidate (preview) — ${name}`,
@@ -79,7 +80,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
             });
             options = { name, uid, throughSource, activeBudget: Number(budgetInput.value),
                 pins: [...body.querySelectorAll('[data-deep-pin]:checked')].map(input => Number(input.dataset.deepPin)) };
-            const selection = captureDeepConsolidationReview(prepared.selection.review.original, options);
+            const selection = selectDeepConsolidationSources(prepared.selection.review, options);
             const { estimate, budget } = estimateDeepConsolidationRequest({ name, selection, activeBudget: options.activeBudget });
             const model = estimate.disclosure;
             disclosure.innerHTML = `<p>Knowledge connection: ${esc(model.source)} · transport ${esc(model.mode)} · model ${esc(model.modelName || 'profile-resolved / unknown')} · profile ${esc(model.connectionProfileId || 'none')}.</p>
@@ -100,7 +101,10 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         const { selection, proposal } = session;
         let report;
         let error;
-        try { report = inspectDeepConsolidation(selection, proposal, { activeBudget: session.activeBudget }); }
+        try {
+            report = inspectDeepConsolidation(selection, proposal, { activeBudget: session.activeBudget });
+            validProposal = structuredClone(proposal);
+        }
         catch (caught) { error = caught; }
         const number = id => selection.review.sources.find(source => source.id === id).order + 1;
         const warnings = report?.warnings || [];
@@ -127,7 +131,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
                     <p>${esc(record.notes)}</p>
                     <details><summary>Original sources</summary>${record.sourceIds.map(id => `<p>s${number(id)}: ${esc(selection.review.sources[number(id) - 1].text)}</p>`).join('')}</details>
                     ${warningList(warnings.filter(warning => warning.recordId === record.id))}
-                    ${button('keep-record', 'Keep source originals exactly', `data-source="${esc(record.sourceIds[0])}" ${error ? 'disabled' : ''}`)}</section>`).join('')}
+                    ${button('keep-record', 'Keep source originals exactly', `data-source="${esc(record.sourceIds[0])}"`)}</section>`).join('')}
                 <h4>Archived dispositions (packet only; not persisted)</h4>
                 ${proposal.archivedSourceIds.map(id => `<section class="kt-deep-record"><p>s${number(id)}: ${esc(selection.review.sources[number(id) - 1].text)}</p>${warningList(warnings.filter(warning => warning.sourceId === id))}${button('keep-record', 'Keep source exactly', `data-source="${esc(id)}" ${error ? 'disabled' : ''}`)}</section>`).join('') || '<p>None.</p>'}
                 <h4>Archive-only lexical details</h4>${warningList(report?.archiveOnlyDetails || [])}<p>This list is not a complete inventory of archived meaning.</p>
@@ -180,7 +184,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
                 generate.setAttribute('aria-busy', 'true');
                 setStatus(modal, 'Requesting a read-only preview…');
                 try {
-                    const result = await requestDeepConsolidation({ ...options, signal: controller.signal });
+                    const result = await requestDeepConsolidation({ ...options, signal: controller.signal, expectedCapture: prepared.capture });
                     if (!current() || controller.signal.aborted) return;
                     session = { ...result, activeBudget: options.activeBudget };
                     acceptedGroups = false;
@@ -211,6 +215,10 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
                 renderReview();
                 setStatus(modal, 'New group created with s1, restored exactly. Move other sources into it as needed.');
             } else if (action === 'keep-record') {
+                // Invalid text remains editable, but must not block recovery.
+                // Restore from the last valid draft if validation currently fails.
+                try { inspectDeepConsolidation(session.selection, session.proposal); }
+                catch { session.proposal = structuredClone(validProposal); }
                 session.proposal = keepDeepSourceExact(session.selection, session.proposal, control.dataset.source);
                 renderReview();
             } else if (action === 'export-text') {

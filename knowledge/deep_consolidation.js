@@ -23,6 +23,14 @@ const nonempty = value => typeof value === 'string' && value.trim().length > 0;
 export function captureDeepConsolidationReview(content, { throughSource, pins = [] } = {}) {
     const reviewId = `deep-${globalThis.crypto.randomUUID()}`;
     const review = captureLedgerReview(content, reviewId);
+    return selectDeepConsolidationSources(review, { throughSource, pins });
+}
+
+/** Re-select a preview snapshot without minting a new request identity. Actual
+ * generations must still use captureDeepConsolidationReview afresh.
+ */
+export function selectDeepConsolidationSources(review, { throughSource, pins = [] } = {}) {
+    originalLedgerProposal(review);
     const boundary = throughSource ?? review.sources.length;
     if (!Number.isInteger(boundary) || boundary < 1 || boundary > review.sources.length) {
         throw new Error('The consolidation boundary must be a known ledger source number.');

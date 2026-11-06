@@ -55,6 +55,49 @@ afterEach(() => {
 });
 
 describe('read-only deep consolidation preview UI', () => {
+    it('keeps disclosure identity stable across consent and reversible configuration changes', async () => {
+        const uuid = vi.spyOn(globalThis.crypto, 'randomUUID');
+        await open();
+        const initial = find('.kt-deep-disclosure').textContent;
+        const captures = uuid.mock.calls.length;
+        find('[data-deep-consent]').click();
+        expect(find('.kt-deep-disclosure').textContent).toBe(initial);
+        find('[data-deep-consent]').click();
+        expect(find('.kt-deep-disclosure').textContent).toBe(initial);
+        find('[data-deep-pin="1"]').click();
+        find('[data-deep-pin="1"]').click();
+        expect(find('.kt-deep-disclosure').textContent).toBe(initial);
+        change(find('[data-deep-boundary]'), '2');
+        change(find('[data-deep-boundary]'), '3');
+        expect(find('.kt-deep-disclosure').textContent).toBe(initial);
+        expect(uuid).toHaveBeenCalledTimes(captures);
+        expect(ktFetchFromApi).not.toHaveBeenCalled();
+    });
+
+    it('refuses changed source content before sending consented lines', async () => {
+        await open();
+        captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, bookName: 'Test',
+            originalContent: original.replace('gate code 7314', 'UNREVIEWED PRIVATE'), scopeToken: captureScope() });
+        find('[data-deep-consent]').click();
+        action('generate').click();
+        await vi.waitFor(() => expect(document.body.textContent).toContain('Close and reopen'));
+        expect(ktFetchFromApi).not.toHaveBeenCalled();
+    });
+
+    it('can restore a merged record after an invalid edit without losing other valid edits', async () => {
+        await open(); await generate();
+        change(find('[data-deep-label]'), 'Reviewed gate group');
+        action('accept-groups').click();
+        change(find('[data-deep-record]'), 'bad\nline');
+        expect(action('export-text').disabled).toBe(true);
+        expect(action('keep-record').disabled).toBe(false);
+        action('keep-record').click();
+        expect(action('export-text').disabled).toBe(false);
+        expect([...document.querySelectorAll('[data-deep-record]')].map(input => input.value))
+            .toEqual(['gate code 7314', 'gate opens at dawn']);
+        expect(find('[data-deep-label]').value).toBe('Reviewed gate group');
+    });
+
     it('discloses, requires consent, minimizes the request, gates records on groups and escapes untrusted strings', async () => {
         const modal = await open();
         expect(modal.style.display).not.toBe('none');

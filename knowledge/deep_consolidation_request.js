@@ -25,10 +25,11 @@ export function estimateDeepConsolidationRequest({ name, selection, activeBudget
     const userContent = requestContent(name, selection, activeBudget);
     const disclosure = cleanupModelDisclosure();
     const numbers = selection.eligibleSources.map(source => source.order + 1);
+    const rewritable = selection.eligibleSources.filter(source => !selection.pinnedSourceIds.includes(source.id));
     const base = { version: 3, reviewId: selection.review.reviewId, keep: numbers, changed: [], archive: [], groups: [] };
-    const rewrite = { ...base, keep: [],
-        changed: selection.eligibleSources.map(source => ({ s: [source.order + 1], t: source.text.replace(/^\s*- /, '') })),
-        groups: numbers.map(n => ({ s: [n], label: `Subject ${n}` })),
+    const rewrite = { ...base, keep: numbers.filter(n => selection.pinnedSourceIds.includes(selection.eligibleSources[n - 1].id)),
+        changed: rewritable.map(source => ({ s: [source.order + 1], t: source.text.replace(/^\s*- /, '') })),
+        groups: rewritable.map(source => ({ s: [source.order + 1], label: `Subject ${source.order + 1}` })),
     };
     const estimate = {
         inputTokens: estimateTokens(DEEP_CONSOLIDATION_PROMPT) + estimateTokens(userContent),
@@ -54,7 +55,7 @@ function assertCurrent(capture, signal) {
  * bounded retry is also a new request with a new identity-bound capture/id;
  * cancellation and scope changes are never retried. Nothing is persisted.
  */
-export async function requestDeepConsolidation({ name, uid, throughSource, pins = [], activeBudget = 4000, signal } = {}) {
+export async function requestDeepConsolidation({ name, uid, throughSource, pins = [], activeBudget = 4000, signal, expectedCapture } = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
     let origin;
     let lastError;
@@ -65,6 +66,13 @@ export async function requestDeepConsolidation({ name, uid, throughSource, pins 
         if (origin) assertCurrent(origin, signal);
         origin ??= capture;
         assertCurrent(capture, signal);
+        // Source numbers and consent refer to a specific snapshot/destination.
+        // Never silently send replacement content after a scan or book switch.
+        const expected = expectedCapture ?? origin;
+        if (expectedCapture) assertCurrent(expectedCapture, signal);
+        if (['name', 'uid', 'bookName', 'entityId', 'originalContent'].some(key => capture[key] !== expected[key])) {
+            throw new Error('The Knowledge entry or destination changed. Close and reopen the preview to review the current sources before sending.');
+        }
         if (!selection) throw new Error(eligibility.reason || 'No eligible ledger to consolidate.');
         const request = estimateDeepConsolidationRequest({ name: capture.name, selection, activeBudget });
         if (!request.budget.ok) {

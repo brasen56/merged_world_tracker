@@ -59,6 +59,29 @@ describe('deep consolidation request', () => {
         expect(first.selection.review.reviewId).not.toBe(second.selection.review.reviewId);
     });
 
+    it.each(['originalContent', 'bookName', 'entityId', 'uid', 'name'])('refuses a changed %s before dispatch', async key => {
+        const expectedCapture = { name: 'Mara', uid: 7, bookName: 'Book', entityId: 'npc-id', originalContent: original, scopeToken: {} };
+        captureCleanupTarget.mockResolvedValue({ ...expectedCapture, [key]: key === 'uid' ? 8 : 'changed' });
+        await expect(requestDeepConsolidation({ ...options(), expectedCapture })).rejects.toThrow('Close and reopen');
+        expect(ktFetchFromApi).not.toHaveBeenCalled();
+        expect(captureCleanupTarget).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry against different sources after an invalid answer', async () => {
+        ktFetchFromApi.mockImplementationOnce(() => {
+            captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, originalContent: original + '\n- new fact', scopeToken: {} });
+            return '{"version":';
+        });
+        await expect(requestDeepConsolidation(options())).rejects.toThrow('Close and reopen');
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not plan to rewrite pinned sources', () => {
+        const selection = captureDeepConsolidationReview(original, { throughSource: 2, pins: [1, 2] });
+        const { estimate } = estimateDeepConsolidationRequest({ name: 'Mara', selection });
+        expect(estimate.rewriteAllOutputTokens).toBe(estimate.minimumOutputTokens);
+    });
+
     it('refuses known excess before dispatch and never clips or chunks', async () => {
         cleanupModelDisclosure.mockReturnValue({ maxTokens: 1 });
         await expect(requestDeepConsolidation(options())).rejects.toMatchObject({ code: 'output-envelope-exceeds-allowance' });
