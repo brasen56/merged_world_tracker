@@ -37,31 +37,68 @@ trial's outputs.
 
 ### A. Capture, boundary, pins
 
-- [ ] Reuse `captureCleanupTarget` + `parseLedger` + `captureLedgerReview`
+- [x] Reuse `captureCleanupTarget` + `parseLedger` + `captureLedgerReview`
       (knowledge/cleanup_commit.js, knowledge/ledger_cleanup.js); fresh review
       id for every request, regenerations included.
-- [ ] Boundary selection: the request payload contains ONLY the sources at or
+- [x] Boundary selection: the request payload contains ONLY the sources at or
       above the chosen line. Later lines are excluded entirely — they stay
       verbatim, unseen by the model, and count toward the budget.
-- [ ] Pin selection happens BEFORE the request; pinned lines are stated as
+- [x] Pin selection happens BEFORE the request; pinned lines are stated as
       pins in the prompt and pre-assigned to keep, so the model never merges them.
 
 ### B. Wire format and validation (fork, do not weaken)
 
-- [ ] A parallel deep-consolidation wire (version 3 or a separate module):
+- [x] A parallel deep-consolidation wire (version 3 or a separate module):
       `{ keep:[n], changed:[{s,t,n}], archive:[n], groups:[{s,label}] }` —
       every source exactly once across keep ∪ changed ∪ archive, preserving
       the coverage rule; groups per response point 1 (source numbers plus a
       label, "no group" a normal outcome).
-- [ ] Experimental validator: a sibling of `validateLedgerProposal` with a
+- [x] Experimental validator: a sibling of `validateLedgerProposal` with a
       third ownership state (archived). The shipped validator is unchanged.
-- [ ] Decide and document the invariant wording: "Model JSON can never approve
+- [x] Decide and document the invariant wording: "Model JSON can never approve
       removals" (ledger_cleanup.js header) becomes, on the experimental path
       only, "model JSON can propose archiving; archive is a recoverable
       disposition, never a deletion."
-- [ ] Consolidated records obey the existing single-line, ≤800-character
+- [x] Consolidated records obey the existing single-line, ≤800-character
       bound (`LEDGER_ITEM_LIMITS.fact`, field_contract.js:107); a subject group
       that needs more becomes multiple records.
+
+#### A–B implementation contract (2026-11-05)
+
+- `knowledge/deep_consolidation_capture.js` provides read-only
+  `prepareDeepConsolidation({name, uid, throughSource, pins})`. Call it anew
+  for each request/regeneration. Identity capture failures propagate; parser
+  refusals/empty ledgers return eligibility without a review. This foundation
+  does not yet dispatch a request or expose a UI (C–E remain pending).
+- `knowledge/deep_consolidation.js` owns the pure capture, minimized user
+  payload, wire expansion, and sibling proposal validator. `throughSource`
+  and `pins` use **1-based ledger source numbers**, not physical file lines.
+  The boundary is inclusive; omission selects the entire ledger. Pins must
+  be unique eligible sources. Captures retain the complete exact entry and
+  frozen source tables, including recent sources and their offsets/EOLs.
+  The user payload contains only eligible lines, NPC name, review ID and pin
+  instructions. Later lines never enter it; `recentSources` is reserved for
+  verbatim preservation and active-budget counting in D–E.
+- The strict wire is `{version:3, reviewId, keep:[n], changed:[{s:[n],t,n?}],
+  archive:[n], groups:[{s:[n],label}], notes?}`. Parse JSON with the existing
+  `parseLedgerProposal` before expanding. Pins are pre-assigned to keep and
+  must be echoed there exactly once; omission is a coverage failure, not an
+  inferred keep. Unknown fields, stale IDs, duplicate ownership and sources
+  beyond the boundary fail closed.
+- Groups are nonempty, disjoint subject annotations, not ownership. Empty
+  `groups:[]` is valid when sources stay exact. Ungrouped sources must remain
+  exact; a changed record cannot cross groups. A subject group may contain
+  several records, but every source still has exactly one owner (no splitting
+  one source among multiple records). New/merged records are single-line,
+  structurally safe and at most 800 characters. Exact legacy originals retain
+  the existing overlength exception rather than forcing a lossy rewrite.
+- Experimental invariant: **model JSON can propose archiving; archive is a
+  recoverable disposition, never a deletion.** In this read-only trial it is
+  in-memory bookkeeping backed by the full captured original, not a persisted
+  archive or a recovery guarantee across reloads. No write/apply API exists.
+  The shipped version-2 wire, validator, and prompt remain unchanged; tests
+  explicitly pin refusal of an `archive` field on both public validation seams.
+- Regression coverage: `test/knowledge_deep_consolidation.test.js`.
 
 ### C. Request and prompt
 
