@@ -624,7 +624,7 @@ export function onChatChanged() {
     // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
     // also detaches any document-level Escape listener a removed modal left
     // behind — a bare remove() leaks it.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal').forEach(m => {
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal, #kt-deep-consolidation-modal').forEach(m => {
         // Use the shared close path so the modal stack restores body inertness
         // before the old-chat node is discarded. Direct remove() leaves the
         // remaining application inert when this was the topmost dialog.
@@ -678,7 +678,7 @@ export function onChatChangedWhilePaused() {
     // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
     // also detaches any document-level Escape listener a removed modal left
     // behind.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal').forEach(m => {
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal, #kt-deep-consolidation-modal').forEach(m => {
         if (typeof m._closeModal === 'function') m._closeModal();
         else { m._cleanupKeyHandler?.(); m.remove(); }
     });

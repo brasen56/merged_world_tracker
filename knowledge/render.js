@@ -75,6 +75,7 @@ import { getVectFoxHistoryStatus, captureHistoryContext, prepareVectFoxHistory, 
 // separate from Enrich/Fields/staging — its proposals never enter the staging
 // auto-approval path, and its writes go through the guarded commit service.
 import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
+import { openDeepConsolidationPreviewModal } from './deep_consolidation_review_ui.js';
 import { prepareVectFoxLedger } from './vectfox_ledger.js';
 import { wireManualEdit } from './manual_edit_ui.js';
 
@@ -667,6 +668,7 @@ function renderNpcListContent(type, entries) {
                     ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)"><span aria-hidden="true">📋</span> Enrich</button>` : ''}
                     ${showEnrich ? `<button class="mwt-btn kt-npc-fields" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Refresh individual dossier fields (agenda, appearance, secrets, …)"><span aria-hidden="true">🎯</span> Fields</button>` : ''}
                     <button class="mwt-btn kt-npc-condense" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Reviewed condensation of the knowledge ledger — one model proposal (up to two billable attempts), then a source-mapped review; nothing changes until you apply it"><span aria-hidden="true">🧹</span> Condense</button>
+                    <button class="mwt-btn kt-npc-deep-preview" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Read-only experimental preview; no changes are saved. Export text and a trial packet for testing on a copy book.">Experimental: Deep Consolidate (preview)</button>
                     <button class="mwt-btn kt-npc-vectfox-import" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Stage explicit current-chat knowledge acquisitions for review. No generation calls.">Import from VectFox</button>
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations"><span aria-hidden="true">🌱</span> Growth</button>` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}"><span aria-hidden="true">⬇</span> Demote</button>` : ''}
@@ -811,6 +813,14 @@ function wireNpcListEvents(el, _type) {
             // two #kt-ledger-review-modal nodes with the same id.
             setControlBusy(btn, true);
             try { await openLedgerCleanupReviewModal(btn.dataset.name, Number(btn.dataset.uid)); }
+            finally { setControlBusy(btn, false); }
+        });
+    });
+
+    el.querySelectorAll('.kt-npc-deep-preview').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            setControlBusy(btn, true);
+            try { await openDeepConsolidationPreviewModal(btn.dataset.name, Number(btn.dataset.uid)); }
             finally { setControlBusy(btn, false); }
         });
     });

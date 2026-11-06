@@ -4,6 +4,16 @@
    notification panel, orphan indicators, NPC growth profile modal, mobile.
    ────────────────────────────────────────────────────────────────────────── */
 
+/* Experimental read-only deep consolidation preview. */
+.kt-deep-preview .mwt-modal-panel { max-width: 960px; max-height: 90vh; }
+.kt-deep-preview .mwt-modal-body { overflow-y: auto; }
+.kt-deep-preview label { display: block; margin: 8px 0; }
+.kt-deep-preview textarea { width: 100%; min-height: 5em; box-sizing: border-box; }
+.kt-deep-preview input:not([type="checkbox"]), .kt-deep-preview select { max-width: 100%; }
+.kt-deep-preview .kt-deep-source, .kt-deep-preview .kt-deep-record,
+.kt-deep-preview .kt-deep-measurements { padding: 8px; margin: 8px 0; border: 1px solid var(--mwt-border); overflow-wrap: anywhere; }
+.kt-deep-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* ─── Staging layout ─────────────────────────────────────────────────────── */
 
 .kt-npcs-container {

@@ -70,7 +70,7 @@ trial's outputs.
   for each request/regeneration. Identity capture failures propagate; parser
   refusals/empty ledgers return eligibility without a review. This foundation
       does not itself dispatch a request or expose a UI (C–D now have sibling
-      services below; E remains pending).
+      services below; E now provides the read-only UI).
 - `knowledge/deep_consolidation.js` owns the pure capture, minimized user
   payload, wire expansion, and sibling proposal validator. `throughSource`
   and `pins` use **1-based ledger source numbers**, not physical file lines.
@@ -153,7 +153,7 @@ trial's outputs.
   Each clause keeps its own provenance/date; unknowns are never invented.
   Exact originals retain their grammar. `requestFacts` includes the full prompt,
   payload, grammar object, model/profile disclosure, estimate and budget
-  warnings, ready for E's trial packet; no download UI exists yet.
+  warnings, included in E's trial packet downloads.
 - `knowledge/deep_consolidation_checks.js` provides
   `inspectDeepConsolidation(selection, proposal, {activeBudget})`: export-ready
   entry text, source/record-linked warnings, archive-only missing lexical
@@ -179,26 +179,62 @@ trial's outputs.
   dossier. Pin/ungrouped/recent shares report source counts and estimated
   tokens relative to the original ledger. Floor/actual excess is an outcome,
   never a refusal. Recent tail text/EOLs and non-ledger sections stay exact.
-- C–D implement the backing services only. The visual budget panel,
-  exact-candidate buttons and packet exports remain part of E; there is still
-  no per-NPC experimental action, modal, Apply button or persisted archive.
+- C–D implement the backing services. E adds the visual budget panel,
+  exact-candidate buttons, packet exports and per-NPC experimental modal;
+  there is still no Apply button or persisted archive.
 - Regression coverage: `test/knowledge_deep_consolidation_checks.test.js` and
   `test/knowledge_deep_consolidation_request.test.js`, alongside the A–B suite
   and the unchanged public Condense regressions.
 
 ### E. Preview UI
 
-- [ ] Reuse the review-modal skeleton (core/modal.js; cleanup_review_ui.js
+- [x] Reuse the review-modal skeleton (core/modal.js; cleanup_review_ui.js
       pattern), separate from staging and auto-approval.
-- [ ] Groups visible and editable before accepting records: relabel, move a
+- [x] Groups visible and editable before accepting records: relabel, move a
       source between groups, ungroup (line stays exactly as written).
-- [ ] Editable records; archive-only details listed; warnings from D
+- [x] Editable records; archive-only details listed; warnings from D
       attached to the lines they concern.
-- [ ] Export buttons: (1) the consolidated entry text for pasting into the
+- [x] Export buttons: (1) the consolidated entry text for pasting into the
       copy book; (2) the trial packet JSON — groups, dispositions, links from
       each summary record to its source numbers, warnings, measurements,
       prompt/model facts.
-- [ ] No Apply button. No write path of any kind.
+- [x] No Apply button. No write path of any kind.
+
+#### E implementation contract (2026-11-06)
+
+- `knowledge/deep_consolidation_review_ui.js` exposes the separate per-NPC
+  **Experimental: Deep Consolidate (preview)** action beside Condense. The
+  shared modal lifecycle supplies keyboard/focus handling. Closing, including
+  chat-switch sweeps (normal and paused), aborts requests and discards UI state.
+- Boundary, pins and token goal are selected before generation. Knowledge
+  connection/model facts, estimated request/response sizes, honest unknown
+  context capacity and budget warnings are disclosed; explicit consent gates
+  generation. Regeneration replaces the current draft with a fresh capture/ID;
+  download before regenerating if the old draft should be retained.
+- Groups must be reviewed before record editing/export. Relabeling or moving
+  sources reopens that gate. Moving/ungrouping first restores the source's
+  entire merged owner to exact originals, never removing links while leaving
+  unsupported summary prose. A new group explicitly starts from s1 restored
+  exactly; source selectors can then move other lines into it. Empty groups
+  disappear. Ungrouped lines remain exact under the existing validator.
+- Every committed record edit reruns D's validation, warnings and measurements.
+  Invalid text remains editable but disables exports. Group edits fail closed.
+  Source originals, record/source-linked warnings, archived dispositions,
+  archive-only lexical details and exact-candidate keep buttons are visible.
+  The floor is labeled a lexical baseline, never a semantic minimum; exceeding
+  the goal is an outcome, not an export refusal.
+- `knowledge/deep_consolidation_preview.js` owns pure move/export helpers.
+  The text download is the entire export-ready entry, preserving dossier/recent
+  bytes through D's builder. The versioned JSON packet includes the full
+  original and consolidated entry, source numbers/IDs and dispositions,
+  record-to-source links, edited groups/proposal, warnings, measurements,
+  exact candidates and original request/prompt/grammar/model facts. Both files
+  contain private RP data. Neither helper persists anything.
+- No Apply, staging, auto-approval, recovery record or durable archive exists
+  on this path. The public version-2 prompt/wire/validator remain unchanged.
+- Regression coverage: `test/knowledge_deep_consolidation_ui.test.js`, the
+  real NPC wiring case in `test/knowledge_cleanup_review.test.js`, and chat
+  sweep coverage in `test/paused_chat_cleanup.test.js`. F–G remain manual.
 
 ### F. Trial protocol (manual, on the testing RP)
 

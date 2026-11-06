@@ -143,6 +143,26 @@ function useGoodApi() {
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
+test('experimental NPC action opens a separate read-only preview without generating or saving', async () => {
+    seedBook();
+    renderNpcsSubTab();
+    const saves = wiFake.saveCalls;
+    const button = contentEl.querySelector('.kt-npc-deep-preview');
+    expect(button).toBeTruthy();
+    button.click();
+    await vi.waitFor(() => expect(document.getElementById('kt-deep-consolidation-modal')).toBeTruthy());
+    const modal = document.getElementById('kt-deep-consolidation-modal');
+    expect(button.disabled).toBe(false);
+    expect(modal.textContent).toContain('Read-only experiment');
+    expect(apiRequests).toHaveLength(0);
+    expect(wiFake.saveCalls).toBe(saves);
+    expect(entry7().content).toBe(ORIGINAL);
+    expect(state.stagingItems).toHaveLength(0);
+    expect(document.getElementById('kt-ledger-review-modal')).toBeNull();
+    modal._closeModal();
+    expect(document.getElementById('kt-deep-consolidation-modal')).toBeNull();
+});
+
 /** Hold every world-info save until the returned release() is called. A
  *  failing test that never releases is released by afterEach, so its held
  *  write cannot keep the store lock and stall every later test. */
