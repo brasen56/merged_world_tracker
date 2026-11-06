@@ -69,7 +69,8 @@ trial's outputs.
   `prepareDeepConsolidation({name, uid, throughSource, pins})`. Call it anew
   for each request/regeneration. Identity capture failures propagate; parser
   refusals/empty ledgers return eligibility without a review. This foundation
-  does not yet dispatch a request or expose a UI (C–E remain pending).
+      does not itself dispatch a request or expose a UI (C–D now have sibling
+      services below; E remains pending).
 - `knowledge/deep_consolidation.js` owns the pure capture, minimized user
   payload, wire expansion, and sibling proposal validator. `throughSource`
   and `pins` use **1-based ledger source numbers**, not physical file lines.
@@ -102,34 +103,88 @@ trial's outputs.
 
 ### C. Request and prompt
 
-- [ ] Reuse the disclosure + budget pattern (`cleanupModelDisclosure`,
+- [x] Reuse the disclosure + budget pattern (`cleanupModelDisclosure`,
       `estimateCleanupRequest`, `checkCleanupBudget` in cleanup_review.js):
       whole-ledger request, clear refusal on known excess, honest
       unknown-capacity disclosure, Knowledge model config reused.
-- [ ] New sibling prompt (do not edit `LEDGER_CLEANUP_PROMPT`): subject
+- [x] New sibling prompt (do not edit `LEDGER_CLEANUP_PROMPT`): subject
       grouping with corrections kept with the lines they correct; belief vs
       fact; no psychological conclusions; per-fact provenance and dates kept
       inline; budget stated as a goal, never truncation permission; pins
       honored; archive list justified per line or group.
-- [ ] Decide the consolidated-line grammar. Multi-fact lines do not fit
+- [x] Decide the consolidated-line grammar. Multi-fact lines do not fit
       `- fact via source — date` (lorebook.js:771); propose inline
       parenthetical provenance/date per clause. This choice affects scan
       regrowth recognition (see F) and must be recorded in the trial packet.
 
 ### D. Deterministic checks (mandatory guard — response point 4)
 
-- [ ] Extended detail check: archived AND summarized sources compared against
+- [x] Extended detail check: archived AND summarized sources compared against
       the WHOLE active result (all kept + changed text together), not
       per-record; numbers and codes listed before capitalized names
       (sentence-start false positives are numerous at this scale).
-- [ ] Exact-by-default reporting (response open-question 2): lines with
+- [x] Exact-by-default reporting (response open-question 2): lines with
       numbers, codes, or quoted text; rumor/belief lines; the latest version
       of corrected facts — surfaced in the preview with a one-click
       "keep exact instead."
-- [ ] Budget panel shows: before/after active token estimates
+- [x] Budget panel data: before/after active token estimates
       (`estimateTokens`), the deterministic floor (active tokens if every
       exact-by-default line were kept), pinned and ungrouped share, and
       warning counts. Floor > budget is a recorded outcome, not an error.
+
+#### C–D implementation contract (2026-11-05)
+
+- `knowledge/deep_consolidation_request.js` exposes the manual-only
+  `requestDeepConsolidation({name, uid, throughSource, pins, activeBudget,
+  signal})` seam. It captures the target afresh for every generation and each
+  of at most two attempts. Strict parse/experimental expansion precede every
+  returned preview. Cancellation, scope changes and non-retryable transport
+  failures are never retried. No draft, staging, recovery or write API is used.
+- `estimateDeepConsolidationRequest({name, selection, activeBudget})` returns
+  user payload, resolved Knowledge disclosure, experimental v3 prompt/wire
+  estimates and the shared budget verdict for E's pre-request disclosure.
+  Whole **eligible** ledger sources are sent, never chunked or clipped;
+  recent lines and dossier text remain excluded. The endpoint's context
+  capacity stays honestly unknown; chat limits are not borrowed. Keep-all is
+  the minimal complete envelope; rewrite-all is a planning estimate, not a
+  guarantee or upper bound (notes/group labels can grow).
+- `knowledge/deep_consolidation_prompt.js` defines the sibling prompt and
+  grammar v1: `fact (via source — date); fact (via source — date)`.
+  Each clause keeps its own provenance/date; unknowns are never invented.
+  Exact originals retain their grammar. `requestFacts` includes the full prompt,
+  payload, grammar object, model/profile disclosure, estimate and budget
+  warnings, ready for E's trial packet; no download UI exists yet.
+- `knowledge/deep_consolidation_checks.js` provides
+  `inspectDeepConsolidation(selection, proposal, {activeBudget})`: export-ready
+  entry text, source/record-linked warnings, archive-only missing lexical
+  details, exact candidates, and measurements. Re-run after every edit.
+  Kept/changed/recent active text is checked together; numbers and explicit
+  codes rank before candidate names. Shared numeric normalization is retained;
+  explicit codes without digits and quoted wording receive extra checks.
+  These are advisory lexical checks, not semantic equivalence or a complete
+  inventory of everything made archive-only. Every changed/archived source
+  receives a semantic-review reminder, even if all its tokens survive elsewhere.
+- Exact candidates cover numbers, explicit code labels, quoted text,
+  rumor/belief markers and explicit correction markers. Correction detection
+  is conservative and lexical: **all** marked corrections are surfaced, not
+  just a guessed latest one. Implicit corrections/relationships cannot be
+  reliably inferred without semantic review; E must not claim otherwise.
+  `keepDeepSourceExact` is the one-click backing action. A merged owner is
+  restored as a whole to avoid leaving unsupported prose or partial mappings;
+  archived sources are restored individually. It never mutates the draft.
+- The reported deterministic floor is the token estimate of the union of
+  exact candidates, pins, ungrouped and recent originals (counted once), with
+  other summaries excluded. It is a mandatory-exact baseline, **not a proven
+  semantic minimum**. Before/after counts cover the active ledger body, not the
+  dossier. Pin/ungrouped/recent shares report source counts and estimated
+  tokens relative to the original ledger. Floor/actual excess is an outcome,
+  never a refusal. Recent tail text/EOLs and non-ledger sections stay exact.
+- C–D implement the backing services only. The visual budget panel,
+  exact-candidate buttons and packet exports remain part of E; there is still
+  no per-NPC experimental action, modal, Apply button or persisted archive.
+- Regression coverage: `test/knowledge_deep_consolidation_checks.test.js` and
+  `test/knowledge_deep_consolidation_request.test.js`, alongside the A–B suite
+  and the unchanged public Condense regressions.
 
 ### E. Preview UI
 
