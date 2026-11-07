@@ -55,6 +55,25 @@ afterEach(() => {
 });
 
 describe('read-only deep consolidation preview UI', () => {
+    it('uses themed fields and compact group choices with full wrapping descriptions', async () => {
+        const modal = await open();
+        await generate();
+        const longLabel = 'Beginning ' + 'a long subject label '.repeat(30) + 'end <img src=x>';
+        change(find('[data-deep-label]'), longLabel);
+        const select = find('[data-deep-group]');
+        expect([...select.options].map(option => option.textContent)).toEqual(['Ungrouped — exact', 'Group 1']);
+        expect(select.value).toBe('0');
+        const description = document.getElementById(select.getAttribute('aria-describedby'));
+        expect(description.textContent).toBe(`Group 1: ${longLabel}`);
+        expect(description.querySelector('img')).toBeNull();
+        action('accept-groups').click();
+        modal.querySelectorAll('input:not([type="checkbox"]), select, textarea').forEach(field => {
+            expect(field.classList.contains(field.tagName === 'TEXTAREA' ? 'mwt-textarea' : 'mwt-input')).toBe(true);
+        });
+        change(find('[data-deep-group]'), '-1');
+        expect(find('.kt-deep-group-description').textContent).toBe('Ungrouped — kept exactly.');
+    });
+
     it('keeps disclosure identity stable across consent and reversible configuration changes', async () => {
         const uuid = vi.spyOn(globalThis.crypto, 'randomUUID');
         await open();

@@ -50,8 +50,8 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
     body.innerHTML = `${intro}
         <fieldset class="kt-deep-config"><legend>Choose sources before requesting</legend>
             <label>Inclusive boundary (ledger source number)
-                <input data-deep-boundary type="number" min="1" max="${sources.length}" value="${sources.length}"></label>
-            <label>Active ledger token goal <input data-deep-budget type="number" min="1" step="1" value="4000"></label>
+                <input class="mwt-input" data-deep-boundary type="number" min="1" max="${sources.length}" value="${sources.length}"></label>
+            <label>Active ledger token goal <input class="mwt-input" data-deep-budget type="number" min="1" step="1" value="4000"></label>
             <p>Only sources at or above the boundary are sent. Later lines stay verbatim and count toward the goal. Pins are pre-assigned to keep.</p>
             <details><summary>Source table and pins</summary>${sources.map(source => `<label class="kt-deep-source"><input type="checkbox" data-deep-pin="${source.order + 1}"> Pin s${source.order + 1}: <span>${esc(source.text)}</span></label>`).join('')}</details>
         </fieldset>
@@ -111,12 +111,13 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         const m = report?.measurements;
         review.innerHTML = `<h4>1. Review subject groups</h4>
             <p>Relabel, move or ungroup before reviewing records. Moving a source restores its whole merged record to exact originals; ungrouped lines stay exact.</p>
-            ${proposal.groups.map((group, index) => `<label>Group ${index + 1} label <input data-deep-label="${index}" value="${esc(group.label)}"></label>`).join('')}
+            ${proposal.groups.map((group, index) => `<label>Group ${index + 1} label <input class="mwt-input" data-deep-label="${index}" value="${esc(group.label)}"></label>`).join('')}
             ${button('add-group', 'New group from s1 (keep originals)')}
             ${selection.eligibleSources.map(source => {
         const index = proposal.groups.findIndex(group => group.sourceIds.includes(source.id));
         return `<div class="kt-deep-source"><label>s${source.order + 1}: ${esc(source.text)}
-                    <select data-deep-group="${esc(source.id)}"><option value="-1" ${index === -1 ? 'selected' : ''}>Ungrouped — exact</option>${proposal.groups.map((group, i) => `<option value="${i}" ${index === i ? 'selected' : ''}>${esc(group.label)}</option>`).join('')}</select></label></div>`;
+                    <select class="mwt-input" data-deep-group="${esc(source.id)}" aria-describedby="kt-deep-group-description-${source.order}"><option value="-1" ${index === -1 ? 'selected' : ''}>Ungrouped — exact</option>${proposal.groups.map((_group, i) => `<option value="${i}" ${index === i ? 'selected' : ''}>Group ${i + 1}</option>`).join('')}</select></label>
+                    <p id="kt-deep-group-description-${source.order}" class="kt-deep-group-description">${index === -1 ? 'Ungrouped — kept exactly.' : `Group ${index + 1}: ${esc(proposal.groups[index].label)}`}</p></div>`;
     }).join('')}
             ${button('accept-groups', acceptedGroups ? 'Groups reviewed' : 'Review records with these groups', acceptedGroups || error ? 'disabled' : '')}
             ${error ? `<p role="alert">Draft invalid — exports disabled: ${esc(error.message)}</p>` : ''}
@@ -127,7 +128,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
                 <p>${m.warningCount} advisory warnings. Lexical retention is not semantic equivalence; implicit corrections and relationships still need manual review.</p></section>` : ''}
             ${acceptedGroups ? `<h4>2. Edit active records</h4>
                 ${proposal.records.map((record, index) => `<section class="kt-deep-record"><label>Record ${index + 1} ← ${record.sourceIds.map(id => `s${number(id)}`).join(', ')}
-                    <textarea rows="3" data-deep-record="${index}">${esc(record.text)}</textarea></label>
+                    <textarea class="mwt-textarea" rows="3" data-deep-record="${index}">${esc(record.text)}</textarea></label>
                     <p>${esc(record.notes)}</p>
                     <details><summary>Original sources</summary>${record.sourceIds.map(id => `<p>s${number(id)}: ${esc(selection.review.sources[number(id) - 1].text)}</p>`).join('')}</details>
                     ${warningList(warnings.filter(warning => warning.recordId === record.id))}
