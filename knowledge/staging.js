@@ -359,7 +359,8 @@ export function mergeScanResults(newItems, removeNotification) {
         // supersededContent and is restorable from the staging panel, so a
         // pending promote/demote that a fresh scan supersedes is recoverable.
         const key = identityOf(item);
-        const existingIdx = state.stagingItems.findIndex(it => identityOf(it) === key);
+        // Growth and scan reviews are independent; neither may supersede the other.
+        const existingIdx = state.stagingItems.findIndex(it => it.type !== 'growth-dossier' && identityOf(it) === key);
         let stored;
         if (existingIdx >= 0) {
             const existing = state.stagingItems[existingIdx];
@@ -370,6 +371,7 @@ export function mergeScanResults(newItems, removeNotification) {
                     ...item,
                     id: existing.id,
                     edited: true,
+                    reviewerBaseline: existing.reviewerBaseline ?? existing.proposedContent,
                     mergedContent: existing.mergedContent,
                     proposedContent: existing.mergedContent || existing.proposedContent,
                     existingContent: existing.existingContent ?? item.existingContent,

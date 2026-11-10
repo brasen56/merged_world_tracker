@@ -191,7 +191,7 @@ describe('A11Y-S3-03: remaining async handlers own their busy state (source)', (
             /const acceptBtn = el\.querySelector\('#kt-accept'\);[\s\S]*?setControlBusy\(acceptBtn, true\);[\s\S]{0,400}?await handleAccept\(item, text, keywords, el\);[\s\S]{0,300}?if \(acceptBtn\.isConnected\) setControlBusy\(acceptBtn, false\);/,
         );
         expect(knowledgeRenderSource).toMatch(
-            /const batchAcceptBtn = el\.querySelector\('#kt-batch-accept'\);[\s\S]{0,300}?confirm\(`Accept all \$\{state\.stagingItems\.length\} proposals\?`\)\) return;[\s\S]{0,200}?setControlBusy\(batchAcceptBtn, true\);[\s\S]{0,2500}?if \(batchAcceptBtn\.isConnected\) setControlBusy\(batchAcceptBtn, false\);/,
+            /const batchAcceptBtn = el\.querySelector\('#kt-batch-accept'\);[\s\S]{0,900}?confirm\(`Accept all \$\{eligible\.length\} proposals\?[\s\S]{0,200}?\)\) return;[\s\S]{0,200}?setControlBusy\(batchAcceptBtn, true\);[\s\S]{0,2500}?if \(batchAcceptBtn\.isConnected\) setControlBusy\(batchAcceptBtn, false\);/,
         );
     });
 

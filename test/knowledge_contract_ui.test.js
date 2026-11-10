@@ -30,6 +30,7 @@ describe('Knowledge contract UI', () => {
         const rejections = rejected.map(field => ({ ...rejection, field }));
         const c = {
             acceptedRefreshFields, contractRejectionSummary,
+            extractDossierFieldValues: () => ({}),
             ktSetStatus: vi.fn(), recordDossierFieldRefresh: vi.fn(),
             setControlBusy: vi.fn(), addNotificationEntry: vi.fn(), renderNpcsSubTab: vi.fn(),
             isCancellation: () => false, console,
@@ -61,12 +62,36 @@ describe('Knowledge contract UI', () => {
     });
 
     test('staged rejection reasons remain visible and HTML-escaped', () => {
-        const c = { escapeHtml: text => String(text).replaceAll('<', '&lt;').replaceAll('>', '&gt;') };
+        const c = { GROWTH_ITEM_TYPE: 'growth-dossier', escapeHtml: text => String(text).replaceAll('<', '&lt;').replaceAll('>', '&gt;') };
         loadFunction('function renderDetailForItem(', 'function wireStagingEvents(', c);
         const html = c.renderDetailForItem({ name: 'Mara', proposedContent: 'safe', contractRejections: [{ field: '<role>', reason: '<script>bad</script>' }] });
         expect(html).toContain('Rejected model values');
         expect(html).toContain('&lt;role&gt;');
         expect(html).not.toContain('<script>');
+    });
+
+    test('over-scan-limit refresh keeps the line and explains why it was not re-verified', async () => {
+        const modal = document.createElement('div');
+        modal.innerHTML = '<button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button><input class="kt-dfr-field" type="checkbox" data-key="personality" checked>';
+        let handler;
+        modal.querySelector('.kt-dfr-run').addEventListener = (_event, fn) => { handler = fn; };
+        const currentContent = `Personality: ${'x'.repeat(1400)}`;
+        const c = {
+            acceptedRefreshFields, contractRejectionSummary,
+            extractDossierFieldValues: () => ({ personality: 'x'.repeat(1400) }),
+            ktSetStatus: vi.fn(), recordDossierFieldRefresh: vi.fn(), setControlBusy: vi.fn(),
+            isCancellation: () => false, console,
+            runDossierFieldRefresh: async () => ({ currentContent, merged: currentContent,
+                fields: { personality: null }, requestedFields: ['personality'], skippedFields: [],
+                contractRejections: [{ field: 'personality', reason: '1400 characters exceeds the 900-character bound' }],
+            }),
+        };
+        loadFunction('function setContractStatus(', '// ─── Accept / reject', c);
+        loadFunction('function wireDossierFieldRefreshModal(', '// ─── Relationship sub-tab', c);
+        c.wireDossierFieldRefreshModal(modal, 'Mara', { uid: 7 }, [], vi.fn());
+        await handler();
+        expect(c.recordDossierFieldRefresh).not.toHaveBeenCalled();
+        expect(c.ktSetStatus.mock.calls[0][0]).toContain('personality kept: current line is over the scan limit (900 characters)');
     });
 
     test.each(['fact', 'source', 'date'])('%s rejects each structural marker and edge line break', part => {

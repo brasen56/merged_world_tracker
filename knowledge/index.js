@@ -914,6 +914,11 @@ export async function scanAndAccept() {
     const skips = [];
 
     for (const item of items) {
+        if (item.type === 'growth-dossier') {
+            item.skipReason = 'Growth proposals require individual review and acceptance.';
+            skips.push(`"${item.name}" — ${item.skipReason}`);
+            continue;
+        }
         // May convert a create into an update when the entry already exists.
         await enrichStagingItem(item);
 

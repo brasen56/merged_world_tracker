@@ -15,6 +15,15 @@ import {
 // could actually identify the chat, so hosts without a usable chat id are not
 // falsely marked stale on every await.
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
+import { estimateTokens } from '../core/context.js';
+import { isModulePausedForCurrentScope } from '../core/schema_status.js';
+import { draftGrowthDossier, growthDossierEvidence } from './growth_dossier.js';
+import { getEvidenceFile } from './evidence.js';
+import { GROWTH_DOSSIER_CEILINGS } from './growth_dossier_state.js';
+import {
+    GROWTH_ITEM_TYPE, assertGrowthReviewCurrent, buildGrowthReviewContent,
+    createGrowthStagingItem, preserveGrowthOwnedLines, growthEditsOutsideLines,
+} from './growth_dossier_review.js';
 
 import {
     RELATIONSHIP_TYPES, USER_STANCES, TRACKER_SENTINEL,
@@ -25,7 +34,7 @@ import {
     getRegistry, saveRegistry, getAllNpcNames,
     getStateRegistry, registerStateTracker, unregisterStateTracker,
     setStateTrackerEnabled, setStateTrackerAlwaysUpdate, bumpStateTrackerTimestamp,
-    resolveRegistryKey,
+    resolveRegistryKey, isSameNpcByName, getGrowthDossierSettings, setGrowthDossierSettings,
 } from './registry.js';
 import {
     addAlias, removeAlias, listAliases,
@@ -58,7 +67,8 @@ import {
     mergeScanResults, formatHistoryAge,
     STAGING_PLACEHOLDERS,
 } from './staging.js';
-import { getStateLorebookName } from './scope.js';
+import { getLorebookName, getStateLorebookName } from './scope.js';
+import { isInternalEntry } from './internal_entries.js';
 // setStatus joins decorateModalShell so the Growth modal's flash messages
 // route through the shared live-region writer instead of a bare textContent
 // assignment (a11y plan §4.4).
@@ -78,6 +88,50 @@ import { wireManualEdit } from './manual_edit_ui.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+let growthControlId = 0;
+function renderGrowthDossierControls(name, limits = false) {
+    const settings = getGrowthDossierSettings(name);
+    const id = `kt-growth-controls-${++growthControlId}`;
+    return `<div class="kt-growth-dossier-controls" data-name="${escapeHtml(name)}">
+        <label for="${id}-enabled" title="Off keeps approved text, but gives Personality and Voice back to scans; repeated scan rewording can drift.">
+            <input id="${id}-enabled" type="checkbox" class="kt-growth-dossier-enabled" ${settings.enabled === true ? 'checked' : ''}> Use Growth in dossier — ${settings.enabled === true ? 'on' : 'off'}
+        </label>
+        <span class="kt-growth-dossier-legacy">${settings.enabled === undefined ? 'Not yet set: evidence still locks Personality until you make a choice.' : ''}</span>
+        ${limits ? `<div>${Object.entries(GROWTH_DOSSIER_CEILINGS).map(([key, max]) => `<label for="${id}-${key}">${key === 'personality' ? 'Personality' : 'Voice'} limit
+            <input id="${id}-${key}" type="number" class="kt-growth-dossier-limit" data-field="${key}" min="1" max="${max}" step="1" value="${settings.limits[key]}"></label>`).join(' ')}
+            <span class="kt-growth-token-estimate" role="status">About ${estimateTokens('x'.repeat(settings.limits.personality + settings.limits.voice))} tokens each time this dossier activates. Shared World Info budget may leave other entries out.</span></div>` : ''}
+    </div>`;
+}
+
+function wireGrowthDossierControls(root, onChange) {
+    root.querySelectorAll('.kt-growth-dossier-controls').forEach(controls => {
+        const name = controls.dataset.name;
+        const scope = captureScope();
+        controls.querySelector('.kt-growth-dossier-enabled')?.addEventListener('change', event => {
+            if (!scopeStillCurrent(scope).ok || isModulePausedForCurrentScope('knowledge')) return;
+            setGrowthDossierSettings(name, { enabled: event.target.checked });
+            controls.querySelector('.kt-growth-dossier-legacy').textContent = '';
+            // Keep the actual checkbox mounted so keyboard focus is not lost.
+            event.target.nextSibling.textContent = ` Use Growth in dossier — ${event.target.checked ? 'on' : 'off'}\n        `;
+            onChange();
+        });
+        controls.querySelectorAll('.kt-growth-dossier-limit').forEach(input => {
+            input.addEventListener('input', () => {
+                if (!scopeStillCurrent(scope).ok || isModulePausedForCurrentScope('knowledge')) return;
+                const value = Number(input.value);
+                if (!Number.isInteger(value) || value < 1 || value > GROWTH_DOSSIER_CEILINGS[input.dataset.field]) {
+                    input.setCustomValidity(`Choose a whole number from 1 to ${GROWTH_DOSSIER_CEILINGS[input.dataset.field]}.`);
+                    return;
+                }
+                input.setCustomValidity('');
+                setGrowthDossierSettings(name, { limits: { [input.dataset.field]: value } });
+                const { limits } = getGrowthDossierSettings(name);
+                controls.querySelector('.kt-growth-token-estimate').textContent = `About ${estimateTokens('x'.repeat(limits.personality + limits.voice))} tokens each time this dossier activates. Shared World Info budget may leave other entries out.`;
+            });
+        });
+    });
+}
+
 function sortEntries(obj, key) {
     return Object.entries(obj).sort((a, b) => String(a[1][key] || a[0]).localeCompare(String(b[1][key] || b[0])));
 }
@@ -91,6 +145,21 @@ function setContractStatus(message, rejections = [], level = 'success') {
 
 async function handleAccept(item, text, keywords, _el) {
     try {
+        const growth = item.type === GROWTH_ITEM_TYPE;
+        const growthScope = growth ? captureScope() : null;
+        const growthBook = growth ? getLorebookName() : null;
+        const assertGrowthTarget = () => {
+            if (!scopeStillCurrent(growthScope).ok || !growthBook || getLorebookName() !== growthBook) {
+                throw new Error('Growth acceptance stopped: chat scope or lorebook changed. Proposal kept pending.');
+            }
+            if (isModulePausedForCurrentScope('knowledge')) throw new Error('Knowledge is paused.');
+            return assertGrowthReviewCurrent(item);
+        };
+        let reviewedContent;
+        if (growth) {
+            keywords = [...(assertGrowthTarget().info.keywords || [item.name])];
+            if (item.existingContent == null) throw new Error('Growth proposal has no verified baseline.');
+        }
         if (item.type === 'state') {
             const result = await writeStateTracker(item.uid, item.name, text);
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return 'failed'; }
@@ -102,15 +171,23 @@ async function handleAccept(item, text, keywords, _el) {
                 // host edit has saved. Verify the persisted entry, not the cache.
                 const current = item.uid == null ? null : await loadEntryContent(item.uid, item.name, { fresh: true });
                 if (!scopeStillCurrent(scope).ok) return 'failed';
+                if (growth) {
+                    keywords = [...(assertGrowthTarget().info.keywords || [item.name])];
+                    reviewedContent = current;
+                }
                 if (current === null) {
                     ktSetStatus(`Accept failed: cannot load or verify the current entry for "${item.name}". Proposal kept pending.`, 'error');
                     return 'failed';
                 }
                 const body = content => stripRelationshipBlock(content).trim();
+                const baseline = item.reviewerBaseline ?? item.proposedContent ?? item.mergedContent ?? text;
+                if (growth) text = buildGrowthReviewContent(current, text);
+                else text = preserveGrowthOwnedLines(item.name, current, text, item.edited ? baseline : text);
                 if (body(current) !== body(item.existingContent)) {
                     // Keep reviewer-authored text, even when it belongs to a
                     // promotion/demotion. Only untouched proposals can be rebuilt.
-                    if (item.edited || item.refreshFields) {
+                    if (growth || item.edited || item.refreshFields) {
+                        if (!growth) item.reviewerBaseline = preserveGrowthOwnedLines(item.name, current, baseline, baseline);
                         item.mergedContent = text;
                         item.existingContent = stripRelationshipBlock(current);
                     } else if (item.type === 'promote' || item.type === 'demote') {
@@ -143,8 +220,27 @@ async function handleAccept(item, text, keywords, _el) {
             // per-NPC proposals are staged with it stripped, and a scan
             // proposal's copy can go stale while it waits. Rebuilding it here
             // keeps this to one write, so one accept is one history entry.
-            const content = applyCurrentRelationshipBlock(item.name, text);
-            const result = await writeToLorebook(item.name, content, keywords, item.uid);
+            const content = () => applyCurrentRelationshipBlock(item.name, text);
+            const result = growth
+                ? await writeToLorebook(item.name, content, keywords, item.uid, {
+                    bookName: growthBook,
+                    beforeWrite: entries => {
+                        assertGrowthTarget();
+                        const entry = entries[item.uid];
+                        if (!entry || isInternalEntry(entry)
+                            || !isSameNpcByName(entry.comment, item.name, Object.values(entries).map(candidate => candidate?.comment))) {
+                            return { error: 'Growth acceptance refused: the entry is missing or belongs to a different NPC. Proposal kept pending.' };
+                        }
+                        if (entry.content !== reviewedContent) {
+                            return { error: 'The entry changed during acceptance. Nothing was written. Accept again to refresh the diff, then review before accepting.' };
+                        }
+                        return null;
+                    },
+                })
+                : await writeToLorebook(item.name, content(), keywords, item.uid);
+            // An old-scope save may finish after chat navigation. Never apply
+            // its registry or staging bookkeeping to the newly active scope.
+            if (growth) assertGrowthTarget();
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return 'failed'; }
             // KNOWLEDGE-03: If this is an update (item.uid != null), resolve
             // the canonical registry key so the model's spelling doesn't create
@@ -163,7 +259,7 @@ async function handleAccept(item, text, keywords, _el) {
             reg[regKey] = {
                 ...(reg[regKey] || {}),
                 uid: result.uid,
-                type: item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
+                type: growth ? reg[regKey].type : item.type === 'promote' ? 'major' : item.type === 'demote' ? 'minor' : item.type,
                 keywords,
                 lastUpdated: Date.now(),
             };
@@ -421,6 +517,23 @@ function renderStagingContent(count) {
 function renderDetailForItem(item) {
     if (!item) return '<div class="kt-detail-empty">Select a proposal.</div>';
     const editorContent = item.mergedContent || item.proposedContent || '';
+    const growth = item.type === GROWTH_ITEM_TYPE;
+    const evidence = growth ? growthDossierEvidence(getEvidenceFile(item.name, false)) : [];
+    const reviewHtml = growth ? `<div class="kt-growth-review kt-detail-section">
+        <div class="kt-detail-label">Growth sentence changes</div>
+        <p>The change list describes the model draft. Reviewer edits are authoritative; only Personality and Voice are written.</p>
+        <ul>${(item.changes || []).map(change => `<li>
+            <strong>${escapeHtml(change.field)} — ${change.action === 'remove' && change.reason === 'length' ? 'dropped to fit length' : escapeHtml({ keep: 'kept', edit: 'edited', add: 'added', remove: 'removed' }[change.action])}</strong>
+            ${escapeHtml(change.before)}${change.after !== change.before ? ` → ${escapeHtml(change.after)}` : ''}
+            ${change.sourceLabel ? `<span>(${escapeHtml(change.sourceLabel)})</span>` : ''}
+            ${(change.evidenceIds || []).map(id => evidence.some(o => o.id === id)
+                ? `<button class="mwt-btn kt-growth-evidence-link" data-evidence-id="${escapeHtml(id)}">${escapeHtml(id)}</button>`
+                : `<span>${escapeHtml(id)} — no longer on file</span>`).join(' ')}
+        </li>`).join('')}</ul>
+        <ul>${(item.warnings || []).map(w => `<li>${escapeHtml(w.field)}: ${escapeHtml(w.message)}</li>`).join('')}</ul>
+        <p id="kt-growth-outside-warning" role="status">${growthEditsOutsideLines(item.existingContent, editorContent) ? 'Edits outside Personality and Voice will not be written.' : ''}</p>
+        ${getGrowthDossierSettings(item.name).enabled !== true ? '<p>Turn Use Growth in dossier on to accept this pending proposal.</p>' : ''}
+    </div>` : '';
 
     // Skip the diff view for state tracker updates: they use the full entry text
     // as both existing and proposed content, which produces noisy, misleading diffs.
@@ -470,14 +583,29 @@ function renderDetailForItem(item) {
         ${item.contractRejections?.length ? `<div class="kt-detail-section kt-contract-rejections"><div class="kt-detail-label">Rejected model values (not applied or re-verified)</div><ul>${item.contractRejections.map(r => `<li>${escapeHtml(r.field)}: ${escapeHtml(r.reason)}</li>`).join('')}</ul></div>` : ''}
         ${item.existingContent ? `<div class="kt-detail-section"><div class="kt-detail-label">Current</div><pre class="kt-detail-current">${escapeHtml(item.existingContent)}</pre></div>` : ''}
         ${diffHtml}
+        ${reviewHtml}
         <div class="kt-detail-section"><label class="kt-detail-label" for="kt-proposal-editor">Proposed</label><textarea class="kt-detail-editor" id="kt-proposal-editor">${escapeHtml(editorContent)}</textarea></div>
         ${item.type !== 'state' ? `<div class="kt-detail-section"><label class="kt-detail-label" for="kt-keyword-input">Keywords</label><input class="kt-keyword-input" id="kt-keyword-input" type="text" value="${escapeHtml((item.keywords || [item.name]).join(', '))}" /></div>` : ''}
         ${supersededHtml}
-        <div class="kt-detail-actions"><button class="mwt-btn mwt-btn-primary" id="kt-accept"><span aria-hidden="true">✓</span> Accept &amp; Write</button><button class="mwt-btn" id="kt-dismiss"><span aria-hidden="true">✗</span> Dismiss</button></div>
+        <div class="kt-detail-actions"><button class="mwt-btn mwt-btn-primary" id="kt-accept" ${growth && getGrowthDossierSettings(item.name).enabled !== true ? 'disabled' : ''}><span aria-hidden="true">✓</span> Accept &amp; Write</button><button class="mwt-btn" id="kt-dismiss"><span aria-hidden="true">✗</span> Dismiss</button></div>
     </div>`;
 }
 
 function wireStagingEvents(el) {
+    el.querySelectorAll('.kt-growth-evidence-link').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const item = state.stagingItems.find(i => i.id === state.activeItemId);
+            if (!item) return;
+            await openGrowthProfileModal(item.name, btn);
+            const observation = [...(document.getElementById('kt-growth-modal')?.querySelectorAll('[data-obs-id]') || [])]
+                .find(node => node.dataset.obsId === btn.dataset.evidenceId);
+            if (observation) {
+                observation.setAttribute('tabindex', '-1');
+                observation.focus();
+                observation.scrollIntoView?.({ block: 'nearest' });
+            }
+        });
+    });
     // Click staging items
     el.querySelectorAll('.kt-staging-item').forEach(item => {
         item.addEventListener('click', async () => {
@@ -497,8 +625,12 @@ function wireStagingEvents(el) {
     editorEl?.addEventListener('input', () => {
         const item = state.stagingItems.find(i => i.id === state.activeItemId);
         if (!item) return;
+        item.reviewerBaseline ??= item.mergedContent || item.proposedContent;
         item.edited = true;
         item.mergedContent = editorEl.value;
+        const outsideWarning = el.querySelector('#kt-growth-outside-warning');
+        if (outsideWarning) outsideWarning.textContent = growthEditsOutsideLines(item.existingContent, editorEl.value)
+            ? 'Edits outside Personality and Voice will not be written.' : '';
         if (!item.proposedContent || STAGING_PLACEHOLDERS.includes(item.proposedContent)) {
             item.proposedContent = editorEl.value;
         }
@@ -555,14 +687,17 @@ function wireStagingEvents(el) {
     // the sequential lorebook writes; cleared before the closing re-render.
     const batchAcceptBtn = el.querySelector('#kt-batch-accept');
     batchAcceptBtn?.addEventListener('click', async () => {
-        if (!confirm(`Accept all ${state.stagingItems.length} proposals?`)) return;
+        const eligible = state.stagingItems.filter(item => item.type !== GROWTH_ITEM_TYPE);
+        const growthCount = state.stagingItems.length - eligible.length;
+        if (!eligible.length) { ktSetStatus('Growth proposals require individual review and acceptance.', 'info'); return; }
+        if (!confirm(`Accept all ${eligible.length} proposals?${growthCount ? ` ${growthCount} Growth proposal(s) excluded; accept those individually.` : ''}`)) return;
         setControlBusy(batchAcceptBtn, true);
         try {
             let accepted = 0;
             let skipped = 0;
             let stale = 0;
             let failed = 0;
-            for (const item of [...state.stagingItems]) {
+            for (const item of eligible) {
                 const text = item.mergedContent || item.proposedContent;
                 // Reject placeholders (Fetch to see changes / promoting / demoting)
                 // so unloaded proposals are never written to the lorebook. The
@@ -574,7 +709,7 @@ function wireStagingEvents(el) {
                 else if (outcome === 'stale') stale++;
                 else failed++;
             }
-            ktSetStatus(`${accepted} accepted · ${stale} stale/pending (review the refreshed diff before accepting again) · ${failed} failed · ${skipped} skipped${skipped ? ' (click the item to load its content first)' : ''}.`, failed ? 'error' : 'info');
+            ktSetStatus(`${accepted} accepted · ${stale} stale/pending (review the refreshed diff before accepting again) · ${failed} failed · ${skipped} skipped${skipped ? ' (click the item to load its content first)' : ''}.${growthCount ? ` ${growthCount} Growth proposal(s) excluded; accept individually.` : ''}`, failed ? 'error' : 'info');
         } finally {
             if (batchAcceptBtn.isConnected) setControlBusy(batchAcceptBtn, false);
         }
@@ -647,7 +782,7 @@ function renderNpcListContent(type, entries) {
                     ${showEnrich ? `<button class="mwt-btn kt-npc-enrich" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Fill in all dossier fields (appearance, voice, background, secrets, etc.)"><span aria-hidden="true">📋</span> Enrich</button>` : ''}
                     ${showEnrich ? `<button class="mwt-btn kt-npc-fields" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Refresh individual dossier fields (agenda, appearance, secrets, …)"><span aria-hidden="true">🎯</span> Fields</button>` : ''}
                     <button class="mwt-btn kt-npc-condense" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Reviewed condensation of the knowledge ledger — one model proposal (up to two billable attempts), then a source-mapped review; nothing changes until you apply it"><span aria-hidden="true">🧹</span> Condense</button>
-                    ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations"><span aria-hidden="true">🌱</span> Growth</button>` : ''}
+                    ${type === 'major' ? `<button class="mwt-btn kt-npc-growth" data-name="${escapeHtml(name)}" data-uid="${info.uid}" title="Generate an evidence-driven growth profile from behavioral observations"><span aria-hidden="true">🌱</span> Growth</button>${renderGrowthDossierControls(name)}` : ''}
                     ${type === 'major' ? `<button class="mwt-btn kt-npc-demote" data-name="${escapeHtml(name)}"><span aria-hidden="true">⬇</span> Demote</button>` : ''}
                     <button class="mwt-btn kt-npc-view" data-name="${escapeHtml(name)}"><span aria-hidden="true">📖</span> View</button>
                 ` : ''}
@@ -658,6 +793,7 @@ function renderNpcListContent(type, entries) {
 }
 
 function wireNpcListEvents(el, _type) {
+    wireGrowthDossierControls(el, () => renderNpcsSubTab());
     el.querySelectorAll('.kt-npc-update').forEach(btn => {
         btn.addEventListener('click', async () => {
             const name = btn.dataset.name;
@@ -1343,6 +1479,9 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             ${renderObsList('speech', 'Speech')}
         </div>
         <div class="kt-growth-profile-section">
+            ${renderGrowthDossierControls(name, true)}
+            <button class="mwt-btn" id="kt-growth-draft" ${getGrowthDossierSettings(name).enabled !== true || !profile.trim() ? 'disabled' : ''}
+                title="One explicit model request (up to one retry). Sends profile and evidence claims, never quotes. Replaces this NPC's pending Growth draft; nothing is written until Accept &amp; Write.">Prepare dossier lines — model call</button>
             <div class="kt-growth-section-label" id="kt-growth-profile-label"><span aria-hidden="true">📝</span> Generated Profile <span class="kt-growth-hint">(edit freely before saving)</span></div>
             <textarea class="kt-growth-profile-editor" id="kt-growth-profile-text" aria-labelledby="kt-growth-profile-label">${escapeHtml(profile)}</textarea>
             <div class="kt-growth-actions">
@@ -1375,12 +1514,41 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             refine any prior <code>Personality:</code> line, breaking the feedback loop where personality
             is re-derived from its own prose every cycle. Observations are now persisted in chat metadata
             (the two-tier evidence store); saving writes the profile to the <strong>NPC Profiles</strong>
-            lorebook (a separate lorebook with no keywords, so it's never auto-injected). After the first evidence capture for an NPC, the dossier updater stops touching its <code>Personality:</code> line.
+            lorebook (a separate lorebook with no keywords, so it's never auto-injected). Until you set Use Growth in dossier, the first evidence capture locks <code>Personality:</code>. On locks Personality and Voice for Growth; off gives both back to scans without reverting text.
         </div>
     `;
 }
 
 function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
+    const draftButton = modal.querySelector('#kt-growth-draft');
+    const syncDraftButton = () => {
+        if (draftButton) draftButton.disabled = getGrowthDossierSettings(name).enabled !== true
+            || !modal.querySelector('#kt-growth-profile-text')?.value.trim();
+    };
+    wireGrowthDossierControls(modal, () => { syncDraftButton(); renderNpcsSubTab(); });
+    modal.querySelector('#kt-growth-profile-text')?.addEventListener('input', syncDraftButton);
+    draftButton?.addEventListener('click', async () => {
+        const scope = captureScope();
+        try {
+            setControlBusy(draftButton, true);
+            const draft = await draftGrowthDossier(name, { profile: modal.querySelector('#kt-growth-profile-text')?.value || '' });
+            if (!scopeStillCurrent(scope).ok || !modal.isConnected) return;
+            const item = createGrowthStagingItem(draft);
+            const previous = state.stagingItems.filter(i => i.type === GROWTH_ITEM_TYPE && i.entityId === item.entityId);
+            for (const old of previous) removeNotificationEntry(old.id);
+            state.stagingItems = state.stagingItems.filter(i => !previous.includes(i));
+            state.stagingItems.push(item);
+            addNotificationEntry(item);
+            state.activeItemId = item.id;
+            state.activeSubTab = 'staging';
+            renderNpcsSubTab();
+            setStatus(modal, 'Dossier lines staged. Close this window to review, then Accept & Write or Dismiss. Nothing written yet.', 'success', 0);
+        } catch (err) {
+            if (scopeStillCurrent(scope).ok && modal.isConnected) setStatus(modal, `Draft failed: ${err.message}`, 'error', 0);
+        } finally {
+            if (draftButton.isConnected) { setControlBusy(draftButton, false); syncDraftButton(); }
+        }
+    });
 
     // Helper to flash a status message in the modal's status bar. Routes
     // through the shared setStatus() (a11y plan §4.4): same text/class/opacity
@@ -2237,6 +2405,11 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
         try {
             setControlBusy(runBtn, true); runBtn.textContent = '⏳…';
             const result = await runDossierFieldRefresh(name, reg.uid, selected);
+            const scanLimits = { personality: 900, voice: 600 };
+            const refreshedValues = extractDossierFieldValues(result.currentContent);
+            const overScanLimit = selected.filter(key => scanLimits[key] && refreshedValues[key]?.length > scanLimits[key]
+                && result.fields[key] == null);
+            const scanLimitNote = overScanLimit.length ? ` ${overScanLimit.join(' and ')} kept: current line is over the scan limit (${overScanLimit.map(key => scanLimits[key]).join('/') } characters).` : '';
             // The field-refresh prompt ECHOES unchanged values instead of
             // returning null (the Update prompt's convention), so "nothing
             // changed" cannot be read off the field values — a byte-identical
@@ -2245,7 +2418,7 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
             if (!hasChanges) {
                 const verified = acceptedRefreshFields(result.requestedFields, result.contractRejections);
                 try { if (verified.length) recordDossierFieldRefresh(name, verified); } catch { /* bookkeeping */ }
-                setContractStatus(`No new info for the selected fields of "${name}" — ${verified.length ? `${verified.length} field(s) marked re-verified` : 'no fields marked re-verified'}.`, result.contractRejections, 'info');
+                setContractStatus(`No new info for the selected fields of "${name}" — ${verified.length ? `${verified.length} field(s) marked re-verified` : 'no fields marked re-verified'}.${scanLimitNote}`, result.contractRejections, 'info');
                 cleanup();
                 return;
             }
@@ -2268,9 +2441,9 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
             addNotificationEntry(stagedItem);
             renderNpcsSubTab();
             if (result.skippedFields.length > 0) {
-                setContractStatus(`Field refresh for "${name}" staged (${result.skippedFields.length} field(s) skipped as locked).`, result.contractRejections, 'info');
+                setContractStatus(`Field refresh for "${name}" staged (${result.skippedFields.length} field(s) skipped as locked).${scanLimitNote}`, result.contractRejections, 'info');
             } else {
-                setContractStatus(`Field refresh for "${name}" staged for review.`, result.contractRejections);
+                setContractStatus(`Field refresh for "${name}" staged for review.${scanLimitNote}`, result.contractRejections);
             }
             cleanup();
         } catch (err) {

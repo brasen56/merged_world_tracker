@@ -1,7 +1,7 @@
 # Growth-derived dossier text — scope and implementation plan
 
-**Status:** Revision 3. Phases 1–2 implemented and automated checks passing;
-Phases 3–5 not started. Not release-ready until Phase 5.
+**Status:** Revision 3. Phases 1–3 implemented and automated checks passing;
+Phases 4–5 not started. Not release-ready until Phase 5.
 The plan this scope develops went to the requester on 2026-11-09, and they
 answered on 2026-11-10 with three refinements. Revision 2 added the results of
 a code review done before implementation. Revision 3 adds the requester's
@@ -988,6 +988,39 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
   lets scans update both from the next scan.
 - The limits round-trip and the token estimate updates.
 - The manual-edit and accept-staleness suites pass unchanged.
+
+**Phase 3 completion — 2026-11-10:**
+- Added Growth-window and NPC-card controls using the persisted three-state
+  settings; never-set reads off with the legacy evidence-lock explanation.
+  The Growth window includes validated per-NPC limits and a token estimate.
+- Explicit, disclosed drafting uses Phase 2's service and stages a separate
+  `growth-dossier` item. Re-drafting replaces only that NPC's pending Growth
+  item; ordinary scan merging leaves Growth reviews alone. No draft writes the
+  dossier, profile or approval history.
+- Staging shows sentence actions, source labels, warnings, evidence links to
+  the existing evidence view, and "no longer on file" for deleted evidence.
+  Reviewer edits outside the two owned lines warn and are never applied.
+- Growth acceptance verifies identity, scope, pause state and the switch,
+  validates reviewer lines against Growth ceilings, and rebuilds only those
+  lines onto a fresh dossier. An intervening edit refreshes Current/Proposed
+  and requires a second acceptance. Keywords and registry type are retained.
+- Scan acceptance reapplies live owned lines without passing them through scan
+  limits, except where the reviewer explicitly changed that line against the
+  original proposal baseline. Repeated stale accepts retain that distinction.
+- Accept All's confirmation excludes Growth, explains the exclusion and leaves
+  those items pending. Programmatic scan-and-accept also explicitly refuses
+  Growth items. A pending Growth item's Accept is disabled while off, with a
+  runtime guard covering switch changes during reads.
+- Field-refresh status explains when an unchanged line is over the scan limit;
+  its text is kept and rejected fields are not marked re-verified.
+- Validation: **183 test files / 4,588 tests passed**, including **20 new jsdom
+  Growth-review tests** and one additional over-scan-limit UI regression.
+  Existing manual-edit and accept-staleness suites pass. `npm run lint` and
+  `git diff --check` passed. Existing isolated source-test harnesses were
+  updated for new dependencies and the filtered Accept All count.
+- Approval history/lineage and echo warnings remain Phase 4 work. No live
+  SillyTavern host or configured-model QA was performed; release remains
+  gated on Phase 5.
 
 ### Phase 4 — Approval history and the echo warning
 
