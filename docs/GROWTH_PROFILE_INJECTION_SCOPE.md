@@ -906,7 +906,8 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
 - Proposal shape: `{ personality, voice, changes }`, where each change has
   `{ field, action, before, after, evidenceIds, reason? }`. Every current
   sentence must be consumed once, and proposed sentences must reconstruct the
-  output in order. Boundaries are deterministic: terminal punctuation followed
+  output in order and match its split sentence boundaries one for one.
+  Boundaries are deterministic: terminal punctuation followed
   by whitespace/end, plus any trailing fragment; semicolon clauses stay together.
 - Strict complete JSON, optionally one whole JSON fence; no truncation repair,
   parse retry, staging, UI, dossier writes or history writes. The single API
@@ -926,6 +927,26 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
   Host QA remains Phase 5; Phase 3 must still supply guarded staging/accept and
   the first user-facing controls. No configured-model or SillyTavern host QA
   was performed in this phase.
+
+**Phase 2 review fixes — 2026-11-10:**
+- Drafting captures primitive dossier UID, entity ID and profile UID before the
+  first await. Reads and the returned identity use those captured values; the
+  live registry guard detects in-place UID/entity-ID mutations during I/O.
+- Growth proposals cannot clear an existing non-empty Personality or Voice
+  line: validation rejects the whole proposal with instructions to keep or
+  replace at least one sentence. Already-empty lines may remain empty. This
+  preserves ordinary scans' empty/null-as-no-change merger contract without
+  accepting removals that cannot be applied. The drafting prompt states this
+  restriction too.
+- Ordered change-item outputs must equal the final line's split sentences,
+  not just concatenate to its text. Appending after an unpunctuated fragment
+  requires an evidence-backed edit that establishes a sentence boundary.
+- Six added regression cases reproduced the defects before the fixes and pass
+  afterward, covering both identity properties and both fields, including the
+  validator-to-merger path and unchanged empty lines/fragments.
+- Validation: `npm test` passed **182 files / 4,567 tests**; the focused drafting
+  suite passed **63 tests**. `npm run lint` and `git diff --check` passed.
+  No SillyTavern host or configured-model QA was performed.
 
 ### Phase 3 — Staging review and guarded accept
 

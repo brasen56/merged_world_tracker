@@ -5,7 +5,7 @@ import { state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
 import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
 import { getEvidenceFile, saveEvidenceMap } from '../knowledge/evidence.js';
-import { setGrowthDossierSettings } from '../knowledge/registry.js';
+import { getRegistryEntry, setGrowthDossierSettings } from '../knowledge/registry.js';
 import { buildUpdatedDossierContent } from '../knowledge/lorebook.js';
 import { validateFieldValue, validateScanRecord } from '../knowledge/field_contract.js';
 import { GROWTH_DOSSIER_CEILINGS } from '../knowledge/growth_dossier_state.js';
@@ -93,6 +93,48 @@ describe('strict Growth proposal contract', () => {
         expect(validate(p, { limits }).ok).toBe(false);
         limits.personality--;
         expect(validate(p, { limits }).ok).toBe(true);
+    });
+    test.each(['personality', 'voice'])('%s cannot be cleared through the validator-to-merger path', field => {
+        const p = proposal();
+        p[field] = '';
+        p.changes = p.changes.filter(c => c.field !== field);
+        for (const before of splitGrowthSentences(current[field])) {
+            p.changes.push({ ...change(field, before, '', 'remove', ['obs-1']), reason: 'evidence' });
+        }
+        const result = validate(p);
+        expect(result.ok).toBe(false);
+        expect(result.reason).toContain(`${field}: clearing an existing line is not supported`);
+        expect(result.proposal).toBeUndefined();
+
+        const dossier = `Personality: ${current.personality}\nVoice: ${current.voice}\nRole: captain`;
+        // A rejected draft supplies no fields to apply; ordinary empty/null updates stay no-ops too.
+        expect(buildUpdatedDossierContent(dossier, result.proposal, [], { ceilings: GROWTH_DOSSIER_CEILINGS })).toBe(dossier);
+        expect(buildUpdatedDossierContent(dossier, { [field]: '' })).toBe(dossier);
+        expect(buildUpdatedDossierContent(dossier, { [field]: null })).toBe(dossier);
+
+        const baseline = { ...current, [field]: '' };
+        const unchanged = validate({ ...baseline, changes: proposal().changes.filter(c => c.field !== field) }, { current: baseline });
+        expect(unchanged.ok).toBe(true);
+        const blankDossier = `Personality: ${baseline.personality}\nVoice: ${baseline.voice}\nRole: captain`;
+        expect(buildUpdatedDossierContent(blankDossier, unchanged.proposal, [], { ceilings: GROWTH_DOSSIER_CEILINGS })).toBe(blankDossier);
+    });
+    test.each(['personality', 'voice'])('%s output items must match final sentence boundaries', field => {
+        const baseline = { ...current, [field]: 'Patient' };
+        const p = { ...baseline, [field]: 'Patient Speaks plainly.', changes: [
+            ...proposal().changes.filter(c => c.field !== field),
+            change(field, 'Patient'), change(field, '', 'Speaks plainly.', 'add', ['obs-1']),
+        ] };
+        const result = validate(p, { current: baseline });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toContain('every proposed sentence in order');
+
+        // Punctuating the fragment is a real edit, requiring evidence, not a keep plus an add.
+        p[field] = 'Patient. Speaks plainly.';
+        Object.assign(p.changes.at(-2), { action: 'edit', after: 'Patient.', evidenceIds: ['obs-1'] });
+        expect(validate(p, { current: baseline }).ok).toBe(true);
+        expect(validate({ ...baseline, changes: [
+            ...proposal().changes.filter(c => c.field !== field), change(field, 'Patient'),
+        ] }, { current: baseline }).ok).toBe(true);
     });
     test.each(['omit-source', 'omit-output', 'duplicate', 'unknown-field', 'extra-field', 'invent-source', 'multi-sentence', 'reason'])('rejects incomplete/invalid accounting: %s', mode => {
         const p = proposal();
@@ -211,6 +253,19 @@ describe('headless drafting service', () => {
     test('chat switch during model call discards response', async () => {
         setFakeApi(() => { bumpEpoch(); return JSON.stringify(proposal()); });
         await expect(draftGrowthDossier('Mara')).rejects.toThrow('scope or NPC changed');
+        expect(save).not.toHaveBeenCalled();
+    });
+    test.each(['uid', 'entityId'])('in-place %s mutation during model call discards response', async field => {
+        const info = getRegistryEntry('Mara').info;
+        const before = structuredClone(books);
+        setFakeApi(async () => {
+            await Promise.resolve();
+            info[field] = field === 'uid' ? 99 : 'ent-other';
+            return JSON.stringify(proposal());
+        });
+        await expect(draftGrowthDossier('Mara')).rejects.toThrow('scope or NPC changed');
+        expect(getRegistryEntry('Mara').info).toBe(info);
+        expect(books).toEqual(before);
         expect(save).not.toHaveBeenCalled();
     });
     test('latest approval is read for hand-edit labels, never sent to the model', async () => {

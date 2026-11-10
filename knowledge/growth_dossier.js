@@ -79,6 +79,9 @@ export function validateGrowthDossierProposal(proposal, {
         const check = validateFieldValue(field, proposal[field], { ceilings: GROWTH_DOSSIER_CEILINGS });
         if (!check.ok) return fail(`${field}: ${check.reason}`);
         fields[field] = check.value || '';
+        // Empty strings become null/no-change in the shared merger. Do not accept
+        // removals that downstream application would silently fail to perform.
+        if (current[field].trim() && !fields[field]) return fail(`${field}: clearing an existing line is not supported; keep or replace at least one sentence.`);
         if (fields[field].length > limits[field]) warnings.push({ field, code: 'over-target', message: `Over the ${limits[field]}-character target.` });
         if (/["“”„«»‘’]|(?:^|\s)'|'(?:\s|$)/u.test(fields[field])) warnings.push({ field, code: 'quotes', message: 'Quote characters present.' });
         if (TYPOLOGY.test(fields[field])) warnings.push({ field, code: 'typology', message: 'Typology vocabulary present.' });
@@ -126,7 +129,11 @@ export function validateGrowthDossierProposal(proposal, {
     }
     for (const field of FIELDS) {
         if (remaining[field].length) return fail(`${field}: change list does not account for every current sentence.`);
-        if (written[field].join(' ') !== fields[field]) return fail(`${field}: change list does not account for every proposed sentence in order.`);
+        const sentences = splitGrowthSentences(fields[field]);
+        if (written[field].join(' ') !== fields[field] || written[field].length !== sentences.length
+            || written[field].some((sentence, index) => sentence !== sentences[index])) {
+            return fail(`${field}: change list does not account for every proposed sentence in order.`);
+        }
     }
     return { ok: true, proposal: { ...fields, changes }, warnings };
 }
@@ -142,26 +149,28 @@ export async function draftGrowthDossier(name, { profile: generatedProfile } = {
     const match = getRegistryEntry(name);
     if (!match || match.info.uid == null) throw new Error('Growth draft needs an existing NPC dossier.');
     const { key, info } = match;
+    // Registry records are live objects (reconciliation can mutate them in place).
+    const { uid, entityId, profileUid } = info;
     const settings = getGrowthDossierSettings(key);
     const assertCurrent = () => {
         const live = getRegistryEntry(key);
         if (!scopeStillCurrent(scope).ok || getLorebookName() !== book || !live
-            || live.info.entityId !== info.entityId || live.info.uid !== info.uid) throw new Error('Growth draft discarded: chat scope or NPC changed.');
+            || live.info.entityId !== entityId || live.info.uid !== uid) throw new Error('Growth draft discarded: chat scope or NPC changed.');
         if (isModulePausedForCurrentScope('knowledge')) throw new Error('Knowledge is paused; Growth draft did not run or was discarded.');
         if (getGrowthDossierSettings(key).enabled !== true) throw new Error('Turn Use Growth in dossier on before preparing lines.');
     };
     assertCurrent();
-    const profile = generatedProfile === undefined ? await loadProfileContent(info.profileUid) : generatedProfile;
+    const profile = generatedProfile === undefined ? await loadProfileContent(profileUid) : generatedProfile;
     assertCurrent();
     if (typeof profile !== 'string' || !profile.trim()) throw new Error('Generate a Growth profile before preparing dossier lines.');
     if (!hasValidSettings()) throw new Error('No API connection configured.');
-    const content = await loadEntryContent(info.uid, key, { fresh: true });
+    const content = await loadEntryContent(uid, key, { fresh: true });
     assertCurrent();
     if (typeof content !== 'string' || !content.trim()) throw new Error('Could not load the current NPC dossier.');
     const history = await readGrowthHistoryContainer(book);
     assertCurrent();
     if (!history.ok) throw new Error(`Growth draft cannot read approval history (${history.reason}).`);
-    const approved = history.records[info.entityId]?.at(-1)?.approved ?? null;
+    const approved = history.records[entityId]?.at(-1)?.approved ?? null;
     const current = extractGrowthDossierLines(content);
     const evidence = growthDossierEvidence(getEvidenceFile(key, false));
     const canonLock = content.match(/^Canon Lock:[ \t]*(.*)$/m)?.[1] || '';
@@ -173,5 +182,5 @@ export async function draftGrowthDossier(name, { profile: generatedProfile } = {
     if (!parsed.ok) throw new Error(parsed.reason);
     const result = validateGrowthDossierProposal(parsed.proposal, { current, evidence, limits: settings.limits, approved });
     if (!result.ok) throw new Error(`Growth draft rejected: ${result.reason}`);
-    return { ...result, name: key, entityId: info.entityId, uid: info.uid, original: content, current, limits: settings.limits };
+    return { ...result, name: key, entityId, uid, original: content, current, limits: settings.limits };
 }
