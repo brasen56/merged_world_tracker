@@ -1,7 +1,7 @@
 # Growth-derived dossier text — scope and implementation plan
 
-**Status:** Revision 3. Phase 1 implemented and automated checks passing;
-Phases 2–5 not started. Not release-ready until Phase 5.
+**Status:** Revision 3. Phases 1–2 implemented and automated checks passing;
+Phases 3–5 not started. Not release-ready until Phase 5.
 The plan this scope develops went to the requester on 2026-11-09, and they
 answered on 2026-11-10 with three refinements. Revision 2 added the results of
 a code review done before implementation. Revision 3 adds the requester's
@@ -793,7 +793,7 @@ Paths relative to the repository root; line numbers verified 2026-11-10:
 ## 12. Implementation phases
 
 **Planning record:** 2026-11-09, revised 2026-11-10 for revision 3. All
-Phase 1 is complete (record below); Phases 2–5 are **not started**. Sections 1–11 are the behavior contract; this breakdown only
+Phases 1–2 are complete (records below); Phases 3–5 are **not started**. Sections 1–11 are the behavior contract; this breakdown only
 sequences the work and does not expand the scope. Each phase lands with its
 own tests and a short completion record here. Do not expose the option in the
 UI before Phase 3's guarded accept exists, and do not release before Phase 5.
@@ -897,6 +897,35 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
 - The labels are correct on a first draft and after a hand edit.
 - The typology warning fires.
 - No model call is made unless the option is on and a profile exists.
+
+**Phase 2 completion — 2026-11-10:**
+- Added the headless `draftGrowthDossier` service and drafting prompt. It takes
+  the generated profile displayed by the caller (or loads the saved profile),
+  current lines, Canon Lock, and whitelisted evidence claims/ids/message times.
+  Evidence receipts, archived raw evidence and approval history are not sent.
+- Proposal shape: `{ personality, voice, changes }`, where each change has
+  `{ field, action, before, after, evidenceIds, reason? }`. Every current
+  sentence must be consumed once, and proposed sentences must reconstruct the
+  output in order. Boundaries are deterministic: terminal punctuation followed
+  by whitespace/end, plus any trailing fragment; semicolon clauses stay together.
+- Strict complete JSON, optionally one whole JSON fence; no truncation repair,
+  parse retry, staging, UI, dossier writes or history writes. The single API
+  invocation uses `retries: 1`. Explicit on, profile availability, pause state,
+  scope and NPC identity are guarded, including after asynchronous reads/calls.
+- Shared field validation and the dossier merger accept explicit per-call
+  ceilings. Growth uses 1,500/1,000; ordinary callers still use 900/600.
+  Targets remain advisory. Typology, quotes and unresolved ids warn; edits,
+  additions and evidence removals require at least one existing evidence id.
+  A length removal must actually overflow the target if retained.
+- Non-verbatim keeps become edits. Original/hand-edit labels are deterministic,
+  using the latest history record's `approved: { personality, voice }` shape;
+  unapproved kept sentences never acquire evidence links merely by being kept.
+  Phase 4's writer must preserve that approved-text shape.
+- Validation: `npm test` passed all **182 test files / 4,561 tests**, including
+  **57 new Phase 2 tests**; `npm run lint` and `git diff --check` passed.
+  Host QA remains Phase 5; Phase 3 must still supply guarded staging/accept and
+  the first user-facing controls. No configured-model or SillyTavern host QA
+  was performed in this phase.
 
 ### Phase 3 — Staging review and guarded accept
 

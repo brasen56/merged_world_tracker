@@ -436,6 +436,7 @@ describe('Knowledge export/import', () => {
                     entityId: 'mwt_fixed_id',
                     aliases: ['The Vixen'],
                     mergedFrom: [{ entityId: 'mwt_sophie', name: 'Sophie', at: 99 }],
+                    growthDossier: { enabled: false, limits: { personality: 1200, voice: 800 } },
                 },
             },
         });
@@ -474,6 +475,7 @@ describe('Knowledge export/import', () => {
             aliases: ['The Vixen'],
             mergedFrom: [{ entityId: 'mwt_sophie', name: 'Sophie', at: 99 }],
             content: 'Mara dossier text',
+            growthDossier: { enabled: false, limits: { personality: 1200, voice: 800 } },
         });
         expect(data.entries.Mara.history).toEqual([{ ts: 1, content: 'scan happened', msgIdx: 3 }]);
         // The API key must never leave the install.
@@ -512,6 +514,7 @@ describe('Knowledge export/import', () => {
         // and merge audit trail — not a re-minted NPC that shares the name.
         expect(registry.Mara.entityId).toBe('mwt_fixed_id');
         expect(registry.Mara.aliases).toEqual(['The Vixen']);
+        expect(registry.Mara.growthDossier).toEqual({ enabled: false, limits: { personality: 1200, voice: 800 } });
         expect(registry.Mara.mergedFrom).toEqual([{ entityId: 'mwt_sophie', name: 'Sophie', at: 99 }]);
 
         // The dossier CONTENT was re-created under the ASSIGNED uid.
@@ -537,6 +540,51 @@ describe('Knowledge export/import', () => {
         expect(JSON.parse(entry.content).registry.Mara.uid).toBe(0);
         // …and the persisted record kept the identity layer with it.
         expect(JSON.parse(entry.content).registry.Mara.entityId).toBe('mwt_fixed_id');
+        expect(JSON.parse(entry.content).registry.Mara.growthDossier).toEqual(registry.Mara.growthDossier);
+    });
+
+    test.each([
+        [undefined, { enabled: true, limits: { voice: 700 } }, { enabled: true, limits: { voice: 700 } }],
+        [{ enabled: false, limits: { personality: 900 } }, { enabled: true, limits: { personality: 1200, voice: 800 } },
+            { enabled: false, limits: { personality: 900, voice: 800 } }],
+        [{ limits: { voice: 700 } }, { enabled: false, limits: { personality: 1200 } },
+            { enabled: false, limits: { personality: 1200, voice: 700 } }],
+        [undefined, { enabled: false, limits: { personality: 1501, voice: 800 } }, { enabled: false, limits: { voice: 800 } }],
+        [undefined, { enabled: 'false' }, undefined],
+        [{ enabled: true }, { limits: [] }, { enabled: true }],
+        [undefined, undefined, undefined],
+    ])('import repairs Growth settings and fills local gaps: local=%j, incoming=%j', async (local, incoming, expected) => {
+        const { _setCacheForTests } = await import('../knowledge/store.js');
+        const { getRegistry } = await import('../knowledge/registry.js');
+        _setCacheForTests('Knowledge Tracker', { registry: { Mara: { uid: null,
+            ...(local === undefined ? {} : { growthDossier: local }) } } });
+        setPickTextFileStub(async () => JSON.stringify({ entries: { Mara: { uid: null,
+            ...(incoming === undefined ? {} : { growthDossier: incoming }) } } }));
+        await importNpcs();
+        expect(knowledgeState._lastKtStatusLevel).toBe('success');
+        expect(getRegistry().Mara.growthDossier).toEqual(expected);
+        if (expected === undefined) expect(getRegistry().Mara).not.toHaveProperty('growthDossier');
+    });
+
+    test('export repairs malformed Growth settings without changing the live record', async () => {
+        await populatedInstall();
+        const { getRegistry } = await import('../knowledge/registry.js');
+        const malformed = { enabled: false, limits: { personality: 1501, voice: 800 }, extra: 'drop' };
+        getRegistry().Mara.growthDossier = malformed;
+        await exportNpcs();
+        expect(getFakeDownloadJsonCalls()[0].data.entries.Mara.growthDossier)
+            .toEqual({ enabled: false, limits: { voice: 800 } });
+        expect(getRegistry().Mara.growthDossier).toEqual(malformed);
+    });
+
+    test('an already tracked NPC keeps local Growth settings when import skips it', async () => {
+        await populatedInstall();
+        const { getRegistry } = await import('../knowledge/registry.js');
+        const before = structuredClone(getRegistry().Mara);
+        setPickTextFileStub(async () => JSON.stringify({ entries: { Mara: { uid: null, growthDossier: { enabled: true } } } }));
+        await importNpcs();
+        expect(getRegistry().Mara).toEqual(before);
+        expect(knowledgeState._lastKtStatusMsg).toContain('skipped');
     });
 
     test('import into the SAME install reuses a uid whose entry content still matches', async () => {

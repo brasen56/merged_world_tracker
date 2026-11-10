@@ -191,14 +191,16 @@ export function scanContractRejections(newItems, added) {
  *
  * @param {string} key field key; non-contract keys pass through untouched
  * @param {*} value model-supplied value
+ * @param {object} [options] explicit per-call ceilings; default scan bounds never change
  * @returns {{ok: true, value: *}|{ok: false, reason: string}}
  *   ok+null means "no value supplied" (callers treat null as no-change).
  *   Rejections carry a field-specific reason for surfacing; values are never
  *   sliced — the caller drops them and keeps the previous state.
  */
-export function validateFieldValue(key, value) {
+export function validateFieldValue(key, value, { ceilings = {} } = {}) {
     const def = FIELD_CONTRACT_BY_KEY[key];
     if (!def) return { ok: true, value };
+    const maxChars = Number.isInteger(ceilings[key]) && ceilings[key] > 0 ? ceilings[key] : def.maxChars;
     if (value === undefined || value === null || value === '') return { ok: true, value: null };
 
     if (typeof value === 'number' || typeof value === 'boolean') value = String(value);
@@ -208,8 +210,8 @@ export function validateFieldValue(key, value) {
             return { ok: false, reason: 'value is not a string (structured values are only allowed for secrets/canon_lock)' };
         }
         const preview = previewStructured(value);
-        if (preview.length > def.maxChars) {
-            return { ok: false, reason: `structured value coerces to ${preview.length} characters (max ${def.maxChars})` };
+        if (preview.length > maxChars) {
+            return { ok: false, reason: `structured value coerces to ${preview.length} characters (max ${maxChars})` };
         }
         const reason = structuralRejection(preview);
         if (reason) return { ok: false, reason };
@@ -221,8 +223,8 @@ export function validateFieldValue(key, value) {
     if (trimmed === '') return { ok: true, value: null };
     const reason = structuralRejection(trimmed);
     if (reason) return { ok: false, reason };
-    if (trimmed.length > def.maxChars) {
-        return { ok: false, reason: `${trimmed.length} characters exceeds the ${def.maxChars}-character bound` };
+    if (trimmed.length > maxChars) {
+        return { ok: false, reason: `${trimmed.length} characters exceeds the ${maxChars}-character bound` };
     }
     return { ok: true, value: trimmed };
 }
@@ -235,9 +237,10 @@ export function validateFieldValue(key, value) {
  * change beyond this contract.
  *
  * @param {object} fields
+ * @param {object} [options] passed to validateFieldValue (Growth-only callers opt in)
  * @returns {{fields: object, rejected: Array<{key: string, reason: string}>}}
  */
-export function validateFields(fields) {
+export function validateFields(fields, options = {}) {
     if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
         return { fields: {}, rejected: [] };
     }
@@ -245,7 +248,7 @@ export function validateFields(fields) {
     const rejected = [];
     for (const def of FIELD_CONTRACT) {
         if (!Object.prototype.hasOwnProperty.call(fields, def.key)) continue;
-        const check = validateFieldValue(def.key, fields[def.key]);
+        const check = validateFieldValue(def.key, fields[def.key], options);
         if (!check.ok) {
             out[def.key] = null;
             rejected.push({ key: def.key, reason: check.reason });

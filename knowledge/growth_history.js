@@ -1,6 +1,6 @@
 /** Durable, never-injected Growth history container. Approval writers land later. */
 import { getLorebookName } from './scope.js';
-import { applyStoreToWorldInfo, markStoreClean, withStoreLock } from './store.js';
+import { applyStoreToWorldInfo, beginStoreTransaction, markStoreClean, withStoreLock } from './store.js';
 import { hostCacheConflict, loadCleanupBook, saveCleanupBook } from './cleanup_persistence.js';
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
 
@@ -13,7 +13,9 @@ export function isGrowthHistoryEntry(entry) {
 }
 
 export function readGrowthHistoryContainerFromBook(wi) {
-    const entry = Object.values(wi?.entries || {}).find(isGrowthHistoryEntry);
+    const entries = Object.values(wi?.entries || {}).filter(isGrowthHistoryEntry);
+    if (entries.length > 1) return { ok: false, reason: 'duplicate-containers' };
+    const entry = entries[0];
     if (!entry) return { ok: true, version: GROWTH_HISTORY_VERSION, records: {} };
     let parsed;
     try { parsed = JSON.parse(entry.content); } catch { return { ok: false, reason: 'container-json-invalid' }; }
@@ -62,10 +64,14 @@ export async function mergeGrowthHistoryRecordsUnlocked(records, bookName = getL
         vectorized: false, selective: false, excludeRecursion: true, preventRecursion: true,
     });
     assertCurrent();
+    // Caller holds the store lock. Buffer ordinary synchronous writes until
+    // that lock settles so clean-marking covers only the snapshot saved here.
+    beginStoreTransaction();
     applyStoreToWorldInfo(bookName, wi);
     await saveCleanupBook(bookName, wi);
     const reloaded = await loadCleanupBook(bookName);
-    if (Object.values(reloaded?.entries || {}).find(isGrowthHistoryEntry)?.content !== content) {
+    const verified = readGrowthHistoryContainerFromBook(reloaded);
+    if (!verified.ok || Object.values(reloaded?.entries || {}).find(isGrowthHistoryEntry)?.content !== content) {
         throw new Error('Growth history: persistence could not be verified');
     }
     markStoreClean(bookName);

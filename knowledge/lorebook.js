@@ -1151,13 +1151,15 @@ export function extractDossierFieldValues(content) {
 /**
  * Apply a partial dossier update (from DOSSIER_UPDATE_PROMPT result) to existing
  * content. Only non-null fields are replaced; unknown fields are ignored.
+ * contractOptions is an explicit per-call opt-in for Growth's identity ceilings;
+ * ordinary scans and refreshes omit it and retain the default field contract.
  */
-export function buildUpdatedDossierContent(existingContent, fields, newKnowledge) {
+export function buildUpdatedDossierContent(existingContent, fields, newKnowledge, contractOptions = {}) {
     // Phase 1 seam S6 backstop: one more validation pass at the universal
     // dossier choke point, so no future caller can merge an invalid model
     // value even if it bypasses seams S1–S5. Rejection keeps the existing
     // line (the merge below skips null) — values are never sliced.
-    const { fields: safeFields, rejected } = validateFields(fields);
+    const { fields: safeFields, rejected } = validateFields(fields, contractOptions);
     if (rejected.length > 0) {
         console.warn('[MWT:Knowledge] field contract dropped invalid values:',
             rejected.map(r => `${r.key} (${r.reason})`).join('; '));

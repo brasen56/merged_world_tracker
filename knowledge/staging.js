@@ -33,7 +33,7 @@ import { getLorebookName, getStateLorebookName } from './scope.js';
 import { mergeStoreQuarantineItems } from './store.js';
 import { isInternalEntry } from './internal_entries.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
-import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema } from './schema.js';
+import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema, repairGrowthDossier } from './schema.js';
 import { makeQuarantineItem } from '../core/quarantine.js';
 import { captureScope } from '../core/index.js';
 import { scopeStillCurrent } from '../core/scope.js';
@@ -430,6 +430,7 @@ export async function exportNpcs() {
                 history = getHistory(info.uid, getLorebookName());
             } catch { /* ignore */ }
         }
+        const growthDossier = repairGrowthDossier(info.growthDossier);
         entries[name] = {
             uid: info.uid ?? null,
             type: info.type || 'minor',
@@ -446,6 +447,7 @@ export async function exportNpcs() {
             ...(info.entityId ? { entityId: info.entityId } : {}),
             aliases: Array.isArray(info.aliases) ? info.aliases : [],
             ...(Array.isArray(info.mergedFrom) ? { mergedFrom: info.mergedFrom } : {}),
+            ...(growthDossier !== undefined ? { growthDossier } : {}),
             content,
             history,
         };
@@ -612,6 +614,18 @@ export async function importNpcs() {
             // audit entries are append-only facts. Without this the imported
             // NPC came back as a different entity than the one exported.
             const prev = registry[name] || {};
+            // Local choices win per field; the file fills only missing switch
+            // and limit values. Repair both sides before merging, retaining
+            // explicit false without reviving malformed settings.
+            const localGrowth = repairGrowthDossier(prev.growthDossier);
+            const importedGrowth = repairGrowthDossier(entry.growthDossier);
+            const growthDossier = localGrowth === undefined ? importedGrowth
+                : importedGrowth === undefined ? localGrowth : {
+                    ...importedGrowth, ...localGrowth,
+                    ...((importedGrowth.limits || localGrowth.limits) ? {
+                        limits: { ...importedGrowth.limits, ...localGrowth.limits },
+                    } : {}),
+                };
             registry[name] = {
                 ...prev, // keep local-only fields (e.g. profileUid)
                 uid: incomingUid,
@@ -625,6 +639,8 @@ export async function importNpcs() {
                     ...(Array.isArray(entry.mergedFrom) ? entry.mergedFrom : []),
                 ],
             };
+            if (growthDossier === undefined) delete registry[name].growthDossier;
+            else registry[name].growthDossier = growthDossier;
 
             // If the uid was dropped (or was never present) but content is
             // available, write it as a new entry in the local lorebook.

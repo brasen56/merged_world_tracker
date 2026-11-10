@@ -1,0 +1,229 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { resetCoreStubs, setFakeApi } from './stubs/core.js';
+import { installCleanupFetch } from './stubs/cleanup-fetch.js';
+import { state } from '../knowledge/state.js';
+import { saveSettings } from '../knowledge/settings.js';
+import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
+import { getEvidenceFile, saveEvidenceMap } from '../knowledge/evidence.js';
+import { setGrowthDossierSettings } from '../knowledge/registry.js';
+import { buildUpdatedDossierContent } from '../knowledge/lorebook.js';
+import { validateFieldValue, validateScanRecord } from '../knowledge/field_contract.js';
+import { GROWTH_DOSSIER_CEILINGS } from '../knowledge/growth_dossier_state.js';
+import { bumpEpoch } from '../core/scope.js';
+import { pauseStore, _resetPausedStores, _setScopeKeyResolver } from '../core/schema_status.js';
+import { draftGrowthDossier, extractGrowthDossierLines, growthDossierEvidence,
+    parseGrowthDossierProposal, splitGrowthSentences, validateGrowthDossierProposal } from '../knowledge/growth_dossier.js';
+
+const current = { personality: 'Keeps promises. Trusts slowly.', voice: 'Speaks plainly.' };
+const evidence = [{ id: 'obs-1', claim: 'Owns mistakes', ts: 100 }];
+const change = (field, before, after = before, action = 'keep', evidenceIds = []) => ({ field, before, after, action, evidenceIds });
+function proposal() {
+    return { ...current, changes: [change('personality', 'Keeps promises.'),
+        change('personality', 'Trusts slowly.'), change('voice', current.voice)] };
+}
+const validate = (p, options = {}) => validateGrowthDossierProposal(p, { current, evidence, ...options });
+
+describe('strict Growth proposal contract', () => {
+    test.each(['{"personality":', '{"x":1,}', 'prefix {"x":1}', '{"x":1} suffix', '[]', 'null', '{"x":1}\n{"y":2}'])('rejects malformed/truncated/wrapped output %s', text => {
+        expect(parseGrowthDossierProposal(text).ok).toBe(false);
+    });
+    test('accepts complete JSON and exactly one whole fence', () => {
+        const p = proposal();
+        expect(parseGrowthDossierProposal(JSON.stringify(p)).proposal).toEqual(p);
+        expect(parseGrowthDossierProposal('```json\n' + JSON.stringify(p) + '\n```').proposal).toEqual(p);
+    });
+    test('shared sentence grammar and extraction preserve clauses', () => {
+        expect(splitGrowthSentences('Waits; watches. Then acts! A fragment')).toEqual(['Waits; watches.', 'Then acts!', 'A fragment']);
+        expect(extractGrowthDossierLines('Personality: Keeps promises.\nVoice: Plain.\nRole: captain')).toEqual({ personality: 'Keeps promises.', voice: 'Plain.' });
+    });
+    test.each(['personality', 'voice'])('%s ceiling is inclusive, target is advisory, scan cap unchanged', field => {
+        const ceiling = GROWTH_DOSSIER_CEILINGS[field];
+        const value = 'x'.repeat(ceiling - 1) + '.';
+        const p = proposal();
+        p[field] = value;
+        p.changes = p.changes.filter(c => c.field !== field);
+        for (const before of splitGrowthSentences(current[field])) p.changes.push({ ...change(field, before, '', 'remove', ['obs-1']), reason: 'evidence' });
+        p.changes.push(change(field, '', value, 'add', ['obs-1']));
+        expect(validate(p).ok).toBe(true);
+        expect(validate(p).warnings).toContainEqual(expect.objectContaining({ field, code: 'over-target' }));
+        expect(validate(p, { limits: { personality: 1500, voice: 1000 } }).warnings).toEqual([]);
+        expect(validate({ ...p, [field]: value + 'x' }).ok).toBe(false);
+        expect(validateFieldValue(field, value).ok).toBe(false);
+        expect(validateScanRecord({ fields: { [field]: value } }).data.fields[field]).toBeNull();
+        const dossier = 'Personality: old\nVoice: old\nRole: captain';
+        expect(buildUpdatedDossierContent(dossier, { [field]: value })).not.toContain(value);
+        expect(buildUpdatedDossierContent(dossier, { [field]: value }, undefined, { ceilings: GROWTH_DOSSIER_CEILINGS })).toContain(value);
+    });
+    test('target equality is not a warning, exceeding by one is', () => {
+        const limits = { personality: current.personality.length, voice: current.voice.length };
+        expect(validate(proposal(), { limits }).warnings.some(w => w.code === 'over-target')).toBe(false);
+        limits.voice--;
+        expect(validate(proposal(), { limits }).warnings).toContainEqual(expect.objectContaining({ field: 'voice', code: 'over-target' }));
+    });
+    test.each(['bad\nline', 'Personality: nested', {}, null, 1])('rejects invalid field %j whole', value => {
+        expect(validate({ ...proposal(), personality: value }).ok).toBe(false);
+    });
+    test('downgrades non-verbatim keeps to evidence-backed edits', () => {
+        const p = proposal();
+        p.personality = 'Owns mistakes. Trusts slowly.';
+        p.changes[0].after = 'Owns mistakes.';
+        expect(validate(p).ok).toBe(false);
+        p.changes[0].evidenceIds = ['obs-1'];
+        expect(validate(p).proposal.changes[0].action).toBe('edit');
+    });
+    test('missing ids warn, but edits/removals require at least one live id', () => {
+        const p = proposal();
+        p.changes[0].evidenceIds = ['deleted'];
+        expect(validate(p).warnings).toContainEqual(expect.objectContaining({ code: 'unresolvable-evidence' }));
+        p.changes[0].action = 'edit';
+        expect(validate(p).ok).toBe(false);
+        p.changes[0].evidenceIds.push('obs-1');
+        expect(validate(p).ok).toBe(true);
+        p.personality = 'Trusts slowly.';
+        Object.assign(p.changes[0], { action: 'remove', after: '', reason: 'evidence', evidenceIds: ['deleted'] });
+        expect(validate(p).ok).toBe(false);
+        p.changes[0].evidenceIds.push('obs-1');
+        expect(validate(p).ok).toBe(true);
+    });
+    test('length removals require actual overflow including the joining space', () => {
+        const p = proposal();
+        p.personality = 'Trusts slowly.';
+        Object.assign(p.changes[0], { action: 'remove', after: '', reason: 'length' });
+        const limits = { personality: current.personality.length, voice: 350 };
+        expect(validate(p, { limits }).ok).toBe(false);
+        limits.personality--;
+        expect(validate(p, { limits }).ok).toBe(true);
+    });
+    test.each(['omit-source', 'omit-output', 'duplicate', 'unknown-field', 'extra-field', 'invent-source', 'multi-sentence', 'reason'])('rejects incomplete/invalid accounting: %s', mode => {
+        const p = proposal();
+        if (mode === 'omit-source') p.changes.shift();
+        if (mode === 'omit-output') p.personality += ' Extra.';
+        if (mode === 'duplicate') p.changes.push({ ...p.changes[0] });
+        if (mode === 'unknown-field') p.changes[0].field = 'role';
+        if (mode === 'extra-field') p.role = 'admiral';
+        if (mode === 'invent-source') p.changes[0].before = 'Never existed.';
+        if (mode === 'multi-sentence') p.changes[0].after = 'One. Two.';
+        if (mode === 'reason') p.changes[0].reason = 'length';
+        expect(validate(p).ok).toBe(false);
+    });
+    test('original and hand-edited keeps get deterministic no-evidence labels and no links', () => {
+        const p = proposal();
+        p.changes[0].evidenceIds = ['obs-1'];
+        expect(validate(p).proposal.changes.every(c => c.sourceLabel === 'from the original line, no evidence' && !c.evidenceIds.length)).toBe(true);
+        const result = validate(p, { approved: { personality: 'Keeps promises.', voice: current.voice } });
+        expect(result.proposal.changes[0].sourceLabel).toBeUndefined();
+        expect(result.proposal.changes[1].sourceLabel).toBe('hand edit, no evidence');
+    });
+    test.each(['INTJ', 'ENFP', 'Enneagram', 'Type 7', 'a 3', '3w4', 'wing', 'DISC', 'Big Five', 'personality type', 'analytical type', 'temperament', 'character archetype'])('warns for typology %s without blocking baseline keep', term => {
+        const text = `An ${term}.`;
+        const p = { personality: text, voice: '', changes: [change('personality', text)] };
+        const result = validate(p, { current: { personality: text, voice: '' } });
+        expect(result.ok).toBe(true);
+        expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'typology' }));
+    });
+    test('quote warnings are advisory', () => {
+        const p = proposal();
+        p.voice = 'Says “hello”.';
+        Object.assign(p.changes[2], { action: 'edit', after: p.voice, evidenceIds: ['obs-1'] });
+        expect(validate(p).warnings).toContainEqual(expect.objectContaining({ code: 'quotes' }));
+    });
+    test('evidence projection carries message times but no receipts/archive', () => {
+        expect(growthDossierEvidence({ raw: [{ ...evidence[0], category: 'values', quote: 'SECRET', canon: true }],
+            consolidated: [{ id: 'con-1', claim: 'calm', firstSeen: 50, quote: 'SECRET', sources: ['obs-1'] }],
+            archivedRaw: [{ id: 'old', quote: 'SECRET' }] })).toEqual([
+            { id: 'con-1', category: undefined, claim: 'calm', firstSeen: 50, tier: 'consolidated', canon: false },
+            { ...evidence[0], category: 'values', tier: 'raw', canon: true },
+        ]);
+    });
+});
+
+describe('headless drafting service', () => {
+    let requests;
+    let books;
+    let save;
+    const BOOK = 'Knowledge Tracker';
+    const content = `[Dossier] Mara | Human | captain\nPersonality: ${current.personality}\nVoice: ${current.voice}\nRole: captain\nCanon Lock: born at sea`;
+    beforeEach(() => {
+        resetCoreStubs();
+        _resetPausedStores();
+        _setScopeKeyResolver(() => 'growth-test');
+        _clearCacheForTests();
+        saveSettings({ scope: 'global', apiUrl: 'https://example.test', modelName: 'test-model', dossierMode: true });
+        _setCacheForTests(BOOK, { registry: { Mara: { uid: 7, profileUid: 8, type: 'major', entityId: 'ent-mara', growthDossier: { enabled: true } } } });
+        books = new Map([[BOOK, { entries: { 7: { uid: 7, comment: 'Mara', key: ['Mara'], content } } }]]);
+        save = vi.fn();
+        state.wiScript = { async loadWorldInfo(name) { return structuredClone(books.get(name) || { entries: { 8: { content: 'A generated profile.' } } }); }, saveWorldInfo: save };
+        installCleanupFetch(state.wiScript);
+        requests = [];
+        setFakeApi(request => { requests.push(request); return JSON.stringify(proposal()); });
+    });
+    afterEach(() => { _clearCacheForTests(); _resetPausedStores(); _setScopeKeyResolver(null); state.wiScript = null; vi.unstubAllGlobals(); });
+    test.each([true, false, undefined])('calls only when switch explicitly on (%s)', async enabled => {
+        _setCacheForTests(BOOK, { registry: { Mara: { uid: 7, profileUid: 8, entityId: 'ent-mara', growthDossier: enabled === undefined ? {} : { enabled } } } });
+        if (enabled) expect((await draftGrowthDossier('Mara')).ok).toBe(true);
+        else await expect(draftGrowthDossier('Mara')).rejects.toThrow('Turn Use Growth');
+        expect(requests).toHaveLength(enabled ? 1 : 0);
+        expect(save).not.toHaveBeenCalled();
+    });
+    test('requires profile before any API call', async () => {
+        await expect(draftGrowthDossier('Mara', { profile: '' })).rejects.toThrow('Generate a Growth profile');
+        expect(requests).toHaveLength(0);
+    });
+    test('one request, quote-free evidence and limits, no persistent writes', async () => {
+        const file = getEvidenceFile('Mara');
+        file.raw.push({ ...evidence[0], category: 'values', quote: 'SECRET RECEIPT', canon: true });
+        file.consolidated.push({ id: 'con-1', category: 'traits', claim: 'Patient', firstSeen: 50 });
+        saveEvidenceMap();
+        setGrowthDossierSettings('Mara', { limits: { personality: 1400, voice: 800 } });
+        const before = structuredClone(books);
+        const result = await draftGrowthDossier('Mara', { profile: 'Fresh unsaved profile.' });
+        expect(result.ok).toBe(true);
+        expect(requests).toHaveLength(1);
+        const input = JSON.parse(requests[0].userContent);
+        expect(input.profile).toBe('Fresh unsaved profile.');
+        expect(input.limits).toEqual({ personality: 1400, voice: 800 });
+        expect(input.canonLock).toBe('born at sea');
+        expect(input.evidence[0].firstSeen).toBe(50);
+        expect(input.evidence[1].ts).toBe(100);
+        expect(requests[0].userContent).not.toContain('SECRET RECEIPT');
+        expect(books).toEqual(before);
+        expect(save).not.toHaveBeenCalled();
+    });
+    test.each(['parse', 'validation', 'api'])('failure %s leaves book unchanged and does not retry parsing', async mode => {
+        const before = structuredClone(books);
+        let calls = 0;
+        setFakeApi(() => { calls++; if (mode === 'api') throw new Error('offline'); return mode === 'parse' ? '{"personality":' : '{}'; });
+        await expect(draftGrowthDossier('Mara')).rejects.toThrow();
+        expect(calls).toBe(1);
+        expect(books).toEqual(before);
+        expect(save).not.toHaveBeenCalled();
+    });
+    test('switch disabled during request discards response', async () => {
+        setFakeApi(() => { setGrowthDossierSettings('Mara', { enabled: false }); return JSON.stringify(proposal()); });
+        await expect(draftGrowthDossier('Mara')).rejects.toThrow('Turn Use Growth');
+        expect(save).not.toHaveBeenCalled();
+    });
+    test('paused Knowledge refuses before spending', async () => {
+        pauseStore('knowledgeStore', { reason: 'unsafe schema' });
+        await expect(draftGrowthDossier('Mara')).rejects.toThrow('paused');
+        expect(requests).toHaveLength(0);
+    });
+    test('chat switch during model call discards response', async () => {
+        setFakeApi(() => { bumpEpoch(); return JSON.stringify(proposal()); });
+        await expect(draftGrowthDossier('Mara')).rejects.toThrow('scope or NPC changed');
+        expect(save).not.toHaveBeenCalled();
+    });
+    test('latest approval is read for hand-edit labels, never sent to the model', async () => {
+        books.get(BOOK).entries[9] = { comment: '[MWT:growth-history]', content: JSON.stringify({ version: 1,
+            records: { 'ent-mara': [{ approved: { personality: 'Keeps promises.', voice: current.voice }, privateHistory: 'HISTORY SECRET' }] } }) };
+        const result = await draftGrowthDossier('Mara');
+        expect(result.proposal.changes[0].sourceLabel).toBeUndefined();
+        expect(result.proposal.changes[1].sourceLabel).toBe('hand edit, no evidence');
+        expect(requests[0].userContent).not.toContain('HISTORY SECRET');
+    });
+    test('future history version blocks rather than pretending no approvals exist', async () => {
+        books.get(BOOK).entries[9] = { comment: '[MWT:growth-history]', content: '{"version":99,"records":{}}' };
+        await expect(draftGrowthDossier('Mara')).rejects.toThrow('unsupported-version');
+        expect(requests).toHaveLength(0);
+    });
+});

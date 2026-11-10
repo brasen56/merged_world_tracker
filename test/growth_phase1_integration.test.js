@@ -3,7 +3,7 @@ import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
 import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 import { state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
-import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
+import { _clearCacheForTests, _setCacheForTests, flushAll, isStoreEntry, peekStore } from '../knowledge/store.js';
 import { getEvidenceFile, saveEvidenceMap } from '../knowledge/evidence.js';
 import { captureEvidence, runContinuousCapture, runIlsBackfillCapture } from '../knowledge/growth.js';
 import { runNpcUpdate } from '../knowledge/lorebook.js';
@@ -76,6 +76,38 @@ test.each([true, false])('single-NPC update honors explicit switch=%s despite ev
 });
 
 describe('Growth history container', () => {
+    test.each([false, true])('registry changes during history save stay dirty (save fails=%s)', async fails => {
+        const save = state.wiScript.saveWorldInfo;
+        state.wiScript.saveWorldInfo = async (...args) => {
+            setGrowthDossierSettings('Mara', { enabled: false });
+            if (fails) throw new Error('history save failed');
+            return save(...args);
+        };
+        const write = writeGrowthHistoryContainer(BOOK, { 'ent-mara': [] });
+        if (fails) await expect(write).rejects.toThrow('history save failed');
+        else await write;
+        expect(peekStore(BOOK).dirty).toBe(true);
+        if (!fails) {
+            const saved = Object.values(books.get(BOOK).entries).find(isStoreEntry);
+            expect(JSON.parse(saved.content).registry.Mara).not.toHaveProperty('growthDossier');
+        }
+        state.wiScript.saveWorldInfo = save;
+        await flushAll();
+        const saved = Object.values(books.get(BOOK).entries).find(isStoreEntry);
+        expect(JSON.parse(saved.content).registry.Mara.growthDossier.enabled).toBe(false);
+        expect(peekStore(BOOK).dirty).toBe(false);
+    });
+    test.each([1, 2])('duplicate containers are refused by reads, writes and backup (second version=%s)', async version => {
+        for (const [uid, v] of [[8, 1], [9, version]]) {
+            books.get(BOOK).entries[uid] = { uid, comment: '[MWT:growth-history]',
+                content: JSON.stringify({ version: v, records: { [`ent-${uid}`]: [{ approvedAt: uid }] } }) };
+        }
+        const before = structuredClone(books.get(BOOK));
+        expect(await readGrowthHistoryContainer(BOOK)).toEqual({ ok: false, reason: 'duplicate-containers' });
+        await expect(writeGrowthHistoryContainer(BOOK, {})).rejects.toThrow('duplicate-containers');
+        await expect(collectBackup()).rejects.toThrow('Growth history');
+        expect(books.get(BOOK)).toEqual(before);
+    });
     test('reload, cap, never-inject flags, internal-entry exclusion and backup round trip', async () => {
         const records = { 'ent-mara': Array.from({ length: 12 }, (_, i) => ({ approvedAt: i, personality: `P${i}` })) };
         await writeGrowthHistoryContainer(BOOK, records);
