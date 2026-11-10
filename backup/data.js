@@ -115,6 +115,7 @@ export function buildBackupEnvelope({
     knowledgeStore,
     quarantine,
     cleanupRecovery,
+    growthHistory,
     sectionVersions = null,
     identity = null,
     createdAt = new Date().toISOString(),
@@ -175,6 +176,7 @@ export function buildBackupEnvelope({
     if (cleanupRecovery !== undefined && cleanupRecovery !== null) {
         envelope.cleanupRecovery = cloneBackupData(cleanupRecovery);
     }
+    if (growthHistory !== undefined && growthHistory !== null) envelope.growthHistory = cloneBackupData(growthHistory);
     return envelope;
 }
 

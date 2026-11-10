@@ -50,6 +50,7 @@ import {
 } from '../schema/manifest.js';
 import { CHAT_METADATA_SCHEMA_IDS } from '../schema/registry.js';
 import { readCleanupRecoveryContainerFromBook } from '../knowledge/cleanup_recovery.js';
+import { readGrowthHistoryContainerFromBook } from '../knowledge/growth_history.js';
 import { state as knowledgeState } from '../knowledge/state.js';
 
 /**
@@ -143,6 +144,7 @@ export async function collectBackup({
 
     let knowledgeStore;
     let cleanupRecovery;
+    let growthHistory;
     if (includeKnowledgeStore) {
         const knowledgeBook = getLorebookName();
         const stateBook = getStateLorebookName();
@@ -212,6 +214,11 @@ export async function collectBackup({
         if (knowledgeState.wiScript) {
             try {
                 const wi = await knowledgeState.wiScript.loadWorldInfo(knowledgeBook);
+                const historyRead = readGrowthHistoryContainerFromBook(wi);
+                if (!historyRead.ok) throw new Error(`Growth history cannot be read safely (${historyRead.reason})`);
+                if (Object.keys(historyRead.records).length > 0) {
+                    growthHistory = { version: historyRead.version, records: historyRead.records };
+                }
                 cleanupRead = readCleanupRecoveryContainerFromBook(wi);
             } catch (err) {
                 throw new Error(
@@ -248,6 +255,7 @@ export async function collectBackup({
         knowledgeStore,
         quarantine,
         cleanupRecovery,
+        growthHistory,
         sectionVersions,
         identity: resolvedIdentity,
         createdAt: new Date().toISOString(),

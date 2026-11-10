@@ -1375,8 +1375,7 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             refine any prior <code>Personality:</code> line, breaking the feedback loop where personality
             is re-derived from its own prose every cycle. Observations are now persisted in chat metadata
             (the two-tier evidence store); saving writes the profile to the <strong>NPC Profiles</strong>
-            lorebook (a separate lorebook with no keywords, so it's never auto-injected). Once an NPC has
-            a growth profile, the dossier updater stops touching its <code>Personality:</code> line.
+            lorebook (a separate lorebook with no keywords, so it's never auto-injected). After the first evidence capture for an NPC, the dossier updater stops touching its <code>Personality:</code> line.
         </div>
     `;
 }
@@ -2136,13 +2135,12 @@ async function openDossierFieldRefreshModal(name) {
         ktSetStatus(`"${name}" is not in dossier format — use 📋 Enrich to convert it first.`, 'error');
         return;
     }
-    const { hasEvidenceFile } = await import('./evidence.js');
-    const growthOwnsPersonality = hasEvidenceFile(name);
+    const { growthOwnsField } = await import('./field_ownership.js');
     const values = extractDossierFieldValues(content);
     const rows = DOSSIER_FIELDS.map(f => {
         const staleness = getDossierFieldStaleness(name, f.key);
         const lockedCanon = f.key === 'canon_lock';
-        const growthField = f.key === 'personality' && growthOwnsPersonality;
+        const growthField = growthOwnsField(name, f.key);
         return {
             key: f.key,
             label: f.label,

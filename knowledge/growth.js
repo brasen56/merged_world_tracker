@@ -66,6 +66,13 @@ import {
 import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
 import { expandIlsSummaries, isIlsSummary, normalizeSendDate } from './ils_compat.js';
 
+/** Growth is a leaf: capture may read facts and canon, never identity prose. */
+export function stripCaptureIdentityLines(content) {
+    return String(content ?? '').split(/\r?\n/)
+        .filter(line => !/^\s*(?:Personality|Voice|Tone|Perceived as)\s*:/i.test(line))
+        .join('\n');
+}
+
 // ─── Part 6 pause guard (§7.4) ────────────────────────────────────────────────
 
 /**
@@ -239,16 +246,15 @@ export async function captureEvidence(name, uid, captureWindow = getIndexedMessa
     const messages = captureWindow?.text;
     if (!messages) throw new Error('No recent messages to analyze.');
 
-    // Load the existing entry as identity/context — NOT as a source of
-    // observations. The evidence prompt explicitly instructs the model to
-    // extract observations from <messages> only.
+    // Load factual/canon context only, stripping identity prose structurally.
+    // The prompt also restricts observation sources to <messages>.
     let existingContext = '';
     if (uid != null) {
         try {
             // Label-verified: a stale uid must not feed another NPC's dossier
             // in as identity context for evidence capture.
             const content = await loadEntryContent(uid, name);
-            if (content) existingContext = content;
+            if (content) existingContext = stripCaptureIdentityLines(content);
         } catch { /* ignore load errors */ }
     }
     if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
@@ -1013,7 +1019,7 @@ export async function runContinuousCapture(name, opts = {}) {
     try {
         // Label-verified: identity context must be THIS NPC's entry.
         const content = await loadEntryContent(uid, name);
-        if (content) existingContext = content;
+        if (content) existingContext = stripCaptureIdentityLines(content);
     } catch { /* ignore */ }
 
     if (!scopeStillCurrent(scopeBefore).ok) return null;
@@ -1301,7 +1307,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
     try {
         // Label-verified: identity context must be THIS NPC's entry.
         const content = await loadEntryContent(uid, name);
-        if (content) existingContext = content;
+        if (content) existingContext = stripCaptureIdentityLines(content);
     } catch { /* ignore */ }
 
     if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during backfill — result discarded.');

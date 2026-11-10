@@ -1,0 +1,123 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
+import { installCleanupFetch } from './stubs/cleanup-fetch.js';
+import { state } from '../knowledge/state.js';
+import { saveSettings } from '../knowledge/settings.js';
+import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
+import { getEvidenceFile, saveEvidenceMap } from '../knowledge/evidence.js';
+import { captureEvidence, runContinuousCapture, runIlsBackfillCapture } from '../knowledge/growth.js';
+import { runNpcUpdate } from '../knowledge/lorebook.js';
+import { isInternalEntry } from '../knowledge/internal_entries.js';
+import { findDestinationEntryUid } from '../knowledge/reconcile.js';
+import { readGrowthHistoryContainer, writeGrowthHistoryContainer, isGrowthHistoryEntry,
+    mergeGrowthHistoryRecordsUnlocked } from '../knowledge/growth_history.js';
+import { collectBackup } from '../backup/collect.js';
+import { validateBackupEnvelope } from '../backup/validate.js';
+import { setGrowthDossierSettings } from '../knowledge/registry.js';
+
+const BOOK = 'Knowledge Tracker';
+const content = '[Dossier] Mara | Human | captain\nTone: soft\nPerceived as: kind\nVoice: old voice\nPersonality: old personality\nRole: captain\nBackground: sailor\nCanon Lock: born at sea';
+let books;
+let requests;
+
+beforeEach(() => {
+    resetCoreStubs();
+    _clearCacheForTests();
+    saveSettings({ scope: 'global', apiUrl: 'https://example.test', modelName: 'test-model', dossierMode: true });
+    _setCacheForTests(BOOK, { registry: { Mara: { uid: 7, type: 'major', entityId: 'ent-mara', aliases: [] } } });
+    _setCacheForTests('State Tracker', { stateRegistry: {} });
+    books = new Map([[BOOK, { entries: { 7: { uid: 7, comment: 'Mara', key: ['Mara'], content } } }]]);
+    state.wiScript = {
+        books,
+        async loadWorldInfo(name) { return structuredClone(books.get(name) || null); },
+        async saveWorldInfo(name, wi, immediately) { if (immediately) books.set(name, structuredClone(wi)); },
+    };
+    installCleanupFetch(state.wiScript);
+    setFakeChat([0, 1, 2, 3].map(i => ({ name: 'Mara', mes: `Mara takes watch ${i}.`, send_date: 1000 + i })));
+    requests = [];
+    setFakeApi(request => { requests.push(request); return JSON.stringify({ observations: [] }); });
+});
+afterEach(() => { _clearCacheForTests(); state.wiScript = null; vi.unstubAllGlobals(); });
+
+describe('capture leaf rule', () => {
+    test.each(['manual', 'continuous', 'backfill'])('%s context excludes all four identity lines, keeps facts and canon', async path => {
+        if (path === 'manual') await captureEvidence('Mara', 7);
+        if (path === 'continuous') await runContinuousCapture('Mara', { minMessages: 1 });
+        if (path === 'backfill') await runIlsBackfillCapture('Mara');
+        expect(requests).toHaveLength(1);
+        const context = requests[0].userContent.match(/<existing_context>([^]*?)<\/existing_context>/)?.[1];
+        expect(context).toBeTypeOf('string');
+        expect(context).not.toMatch(/^(?:Tone|Perceived as|Voice|Personality):/m);
+        expect(context).toContain('Role: captain');
+        expect(context).toContain('Background: sailor');
+        expect(context).toContain('Canon Lock: born at sea');
+    });
+});
+
+test('upgrade: existing evidence and an untouched switch protect Personality during single-NPC update', async () => {
+    getEvidenceFile('Mara').enrolled = true;
+    saveEvidenceMap();
+    setFakeApi(() => JSON.stringify({ fields: { personality: 'Replacement personality', voice: 'New voice', role: 'admiral' } }));
+    const result = await runNpcUpdate('Mara', 7);
+    expect(result.merged).toContain('Personality: old personality');
+    expect(result.merged).toContain('Voice: New voice');
+    expect(result.merged).toContain('Role: admiral');
+});
+
+test.each([true, false])('single-NPC update honors explicit switch=%s despite evidence', async enabled => {
+    getEvidenceFile('Mara').enrolled = true;
+    saveEvidenceMap();
+    setGrowthDossierSettings('Mara', { enabled });
+    setFakeApi(() => JSON.stringify({ fields: { personality: 'New personality', voice: 'New voice', role: 'admiral' } }));
+    const result = await runNpcUpdate('Mara', 7);
+    expect(result.merged).toContain(`Personality: ${enabled ? 'old personality' : 'New personality'}`);
+    expect(result.merged).toContain(`Voice: ${enabled ? 'old voice' : 'New voice'}`);
+    expect(result.merged).toContain('Role: admiral');
+});
+
+describe('Growth history container', () => {
+    test('reload, cap, never-inject flags, internal-entry exclusion and backup round trip', async () => {
+        const records = { 'ent-mara': Array.from({ length: 12 }, (_, i) => ({ approvedAt: i, personality: `P${i}` })) };
+        await writeGrowthHistoryContainer(BOOK, records);
+        expect((await readGrowthHistoryContainer(BOOK)).records['ent-mara']).toHaveLength(10);
+        let wi = books.get(BOOK);
+        let entry = Object.values(wi.entries).find(isGrowthHistoryEntry);
+        expect(isInternalEntry(entry)).toBe(true);
+        expect(findDestinationEntryUid({ [entry.uid]: { ...entry, key: ['Mara'] } }, 'Mara')).toBeNull();
+        Object.assign(entry, { key: ['Mara'], keysecondary: ['Mara'], enabled: true, disable: false,
+            constant: true, vectorized: true, excludeRecursion: false, preventRecursion: false });
+        await writeGrowthHistoryContainer(BOOK, {});
+        wi = books.get(BOOK);
+        entry = Object.values(wi.entries).find(isGrowthHistoryEntry);
+        expect(entry).toMatchObject({ key: [], keysecondary: [], enabled: false, disable: true,
+            constant: false, vectorized: false, excludeRecursion: true, preventRecursion: true });
+        const backup = await collectBackup();
+        const checked = validateBackupEnvelope(JSON.parse(JSON.stringify(backup)));
+        expect(checked.ok).toBe(true);
+        expect(checked.growthHistory.records['ent-mara']).toHaveLength(10);
+        delete wi.entries[entry.uid];
+        await mergeGrowthHistoryRecordsUnlocked(checked.growthHistory.records, BOOK);
+        expect((await readGrowthHistoryContainer(BOOK)).records).toEqual(checked.growthHistory.records);
+    });
+    test('future versions are refused untouched on write and backup', async () => {
+        books.get(BOOK).entries[8] = { uid: 8, comment: '[MWT:growth-history]', content: '{"version":2,"records":{}}' };
+        const before = structuredClone(books.get(BOOK));
+        await expect(writeGrowthHistoryContainer(BOOK, {})).rejects.toThrow('unsupported-version');
+        await expect(collectBackup()).rejects.toThrow('Growth history');
+        expect(books.get(BOOK)).toEqual(before);
+    });
+    test('import is current-wins and preserves other entity histories', async () => {
+        await writeGrowthHistoryContainer(BOOK, { 'ent-mara': [{ approvedAt: 2 }] });
+        await mergeGrowthHistoryRecordsUnlocked({ 'ent-mara': [{ approvedAt: 1 }], 'ent-other': [] }, BOOK);
+        expect((await readGrowthHistoryContainer(BOOK)).records).toEqual({ 'ent-mara': [{ approvedAt: 2 }], 'ent-other': [] });
+    });
+    test('a lost save fails persistence verification', async () => {
+        state.wiScript.saveWorldInfo = async () => {};
+        await expect(writeGrowthHistoryContainer(BOOK, { 'ent-mara': [] })).rejects.toThrow('persistence could not be verified');
+    });
+    test('malformed records cannot replace existing history', async () => {
+        await writeGrowthHistoryContainer(BOOK, { 'ent-mara': [{ approvedAt: 2 }] });
+        await expect(writeGrowthHistoryContainer(BOOK, { 'ent-mara': {} })).rejects.toThrow('invalid records');
+        expect((await readGrowthHistoryContainer(BOOK)).records['ent-mara']).toEqual([{ approvedAt: 2 }]);
+    });
+});

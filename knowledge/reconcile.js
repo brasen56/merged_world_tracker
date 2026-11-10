@@ -7,13 +7,12 @@
  */
 
 import { normalizeRegistryName, isUnambiguousNpcAlias, resolvesToSameRegistryRecord } from './registry.js';
-import { isStoreEntry } from './store.js';
-import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
+import { isInternalEntry } from './internal_entries.js';
 import { TRACKER_SENTINEL } from './state.js';
 
 /** Module-owned entries (store, cleanup recovery) are never NPC destinations. */
 function isModuleEntry(entry) {
-    return isStoreEntry(entry) || isCleanupRecoveryEntry(entry);
+    return isInternalEntry(entry);
 }
 
 /** Find a destination entry by its stable user-visible label. */

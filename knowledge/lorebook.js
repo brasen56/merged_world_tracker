@@ -22,13 +22,12 @@ import {
     state,
 } from './state.js';
 import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.js';
-import { hasEvidenceFile } from './evidence.js';
-import { applyFieldOwnership } from './field_ownership.js';
+import { applyFieldOwnership, growthOwnsField } from './field_ownership.js';
 import { validateFields, validateFieldValue, validateKnowledgeList, validateCreationHeader } from './field_contract.js';
 import { normalizedEntryBody, stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
-import { applyStoreToWorldInfo, markStoreClean, assertHydrated, isStoreEntry, saveBookNow, STORE_SENTINEL } from './store.js';
-import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
+import { applyStoreToWorldInfo, markStoreClean, assertHydrated, saveBookNow, STORE_SENTINEL } from './store.js';
+import { isInternalEntry } from './internal_entries.js';
 import { hostCacheConflict, loadCleanupBook, saveCleanupBook } from './cleanup_persistence.js';
 import { findEntryUidByNpcIdentity } from './reconcile.js';
 import { validateHistoryRecords } from '../schema/secondary.js';
@@ -319,7 +318,7 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
         // silently overwrite it. The store entry is the unambiguous case —
         // never let an NPC be written over the module's own bookkeeping.
         if (existingUid !== null && existingUid !== undefined
-            && (isStoreEntry(entries[existingUid]) || isCleanupRecoveryEntry(entries[existingUid]))) {
+            && isInternalEntry(entries[existingUid])) {
             console.warn(
                 `[MWT:Knowledge] Registry uid ${existingUid} for "${name}" points at the ` +
                 `${STORE_SENTINEL} entry in "${book}" — the uid is stale. Creating a new entry instead.`
@@ -456,7 +455,7 @@ export async function relabelLorebookEntry(bookName, uid, newLabel, expectedName
         const wi = await state.wiScript.loadWorldInfo(bookName);
         const entry = wi?.entries?.[uid];
         if (!entry) return { success: false, error: `UID ${uid} not found in "${bookName}".` };
-        if (isStoreEntry(entry) || isCleanupRecoveryEntry(entry)) {
+        if (isInternalEntry(entry)) {
             return { success: false, error: `UID ${uid} is module bookkeeping (${STORE_SENTINEL} or ${'[MWT:cleanup-recovery]'}) — refusing to relabel it.` };
         }
         if (expectedName !== null && expectedName !== undefined) {
@@ -544,7 +543,7 @@ export async function listKnowledgeEntries() {
         const wi = await state.wiScript.loadWorldInfo(getLorebookName());
         const entries = wi?.entries || {};
         return Object.keys(entries)
-            .filter(k => !isStoreEntry(entries[k]) && !isCleanupRecoveryEntry(entries[k]))
+            .filter(k => !isInternalEntry(entries[k]))
             .map(k => {
                 const e = entries[k];
                 const content = String(e?.content || '');
@@ -1535,20 +1534,9 @@ export async function runNpcUpdate(name, uid) {
             throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
         }
 
-        // Slice 2 guardrail: if this NPC has an evidence file (growth profile
-        // exists), the personality field is OWNED by the growth profile system,
-        // not DOSSIER_UPDATE_PROMPT. Null it out here so the two systems never
-        // touch the same field — the hard structural partition from
-        // NPC_GROWTH_BLUEPRINT.md §"The split-brain resolution". This prevents
-        // DOSSIER_UPDATE_PROMPT from re-deriving personality from its own prior
-        // prose (the telephone loop) for profiled NPCs.
-        //
-        // Guard against `result.fields` being a truthy non-object (e.g. a
-        // string) before assigning to it — a truthiness check alone would
-        // throw a TypeError on a primitive.
-        if (useDossier && result.fields && typeof result.fields === 'object' && !Array.isArray(result.fields) && hasEvidenceFile(name)) {
-            result.fields.personality = null;
-        }
+        // Shared three-state ownership, including the legacy upgrade lock.
+        // The helper also leaves malformed non-object responses safe to validate.
+        if (useDossier) result.fields = applyFieldOwnership(name, result.fields);
 
         // Phase 1 seam S3: the shared field contract — invalid values are
         // dropped whole (the existing entry keeps its old line), valid
@@ -1680,7 +1668,7 @@ export async function runNpcEnrich(name, uid) {
  *   1. `canon_lock` is user-authored immutable canon — ALWAYS excluded, never
  *      auto-overwritten by any generation path.
  *   2. For NPCs with a growth profile, `personality` is owned by the
- *      evidence/growth system (the `hasEvidenceFile(name)` partition from
+ *      evidence/growth system (the shared three-state ownership partition from
  *      NPC_GROWTH_BLUEPRINT.md §"The split-brain resolution") — excluded so a
  *      field-scoped refresh cannot reintroduce the telephone loop.
  *
@@ -1693,7 +1681,6 @@ export async function runNpcEnrich(name, uid) {
  */
 export function sanitizeDossierRefreshFields(fieldKeys, name) {
     const knownKeys = DOSSIER_FIELDS.map(f => f.key);
-    const growthOwnsPersonality = hasEvidenceFile(name);
     const requested = [];
     const skipped = [];
     const seen = new Set();
@@ -1709,8 +1696,8 @@ export function sanitizeDossierRefreshFields(fieldKeys, name) {
             skipped.push({ key, reason: 'canon_lock is user-authored canon — edit it manually; it is never model-refreshed' });
             continue;
         }
-        if (key === 'personality' && growthOwnsPersonality) {
-            skipped.push({ key, reason: 'personality is owned by the Growth profile system for this NPC (see 🌱 Growth)' });
+        if (growthOwnsField(name, key)) {
+            skipped.push({ key, reason: `${key} is owned by the Growth profile system for this NPC (see 🌱 Growth)` });
             continue;
         }
         seen.add(key);

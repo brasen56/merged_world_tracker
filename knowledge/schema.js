@@ -42,6 +42,26 @@ import {
     restoreReceiptMap,
 } from '../core/schema.js';
 import { validateQuarantineStoreData } from '../core/quarantine.js';
+/** Persisted Growth dossier settings; independent of chat-local evidence. */
+export const GROWTH_DOSSIER_DEFAULT_LIMITS = Object.freeze({ personality: 450, voice: 350 });
+export const GROWTH_DOSSIER_CEILINGS = Object.freeze({ personality: 1500, voice: 1000 });
+
+/** Malformed settings are repaired, never grounds to quarantine an NPC. */
+export function repairGrowthDossier(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') return undefined;
+    if (value.limits !== undefined && (!value.limits || typeof value.limits !== 'object' || Array.isArray(value.limits))) return undefined;
+    const result = {};
+    if (value.enabled !== undefined) result.enabled = value.enabled;
+    if (value.limits !== undefined) {
+        result.limits = {};
+        for (const [key, ceiling] of Object.entries(GROWTH_DOSSIER_CEILINGS)) {
+            const limit = value.limits[key];
+            if (Number.isInteger(limit) && limit > 0 && limit <= ceiling) result.limits[key] = limit;
+        }
+    }
+    return result;
+}
 
 /** Chat-metadata key for the growth-evidence NPC map. */
 export const EVIDENCE_META_KEY = 'knowledge_growth_evidence';
@@ -569,6 +589,17 @@ export function validateKnowledgeStoreData(data) {
     // import, knowledge/staging.js) run the exact same repair set on the
     // combined registry BEFORE committing it.
     if (accepted.registry) {
+        for (const [name, record] of Object.entries(accepted.registry)) {
+            if (record.growthDossier === undefined) continue;
+            const repaired = repairGrowthDossier(record.growthDossier);
+            if (JSON.stringify(repaired) === JSON.stringify(record.growthDossier)) continue;
+            issues.push(repairIssue('registry-growth-dossier-repaired', ['registry', name, 'growthDossier'],
+                'Malformed Growth dossier settings were dropped; the NPC remains live.', record.growthDossier));
+            const copy = { ...record };
+            if (repaired === undefined) delete copy.growthDossier;
+            else copy.growthDossier = repaired;
+            accepted.registry[name] = copy;
+        }
         issues.push(...canonicalizeRegistryIdentityClaims(accepted.registry));
     }
     if (data.relationships !== undefined) {

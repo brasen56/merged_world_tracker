@@ -635,6 +635,13 @@ async function commitRestore() {
     }
 
     if (result.ok && result.committed) {
+        if (result.growthHistory?.ok === false) {
+            setControlBusy(confirmBtn, false);
+            if (confirmBtn) confirmBtn.disabled = true;
+            setBusy(false);
+            setStatus(modal, `Store sections restored, but Growth history could not be restored: ${result.growthHistory.error}. Keep the original backup file to retry.`, 'error');
+            return;
+        }
         if (result.cleanupRecovery?.ok === false || result.cleanupRecovery?.rejected?.length) {
             const recovery = result.cleanupRecovery;
             const detail = recovery.ok === false

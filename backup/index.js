@@ -54,14 +54,15 @@ import {
     flushBook,
     getStoreQuarantineItems,
     isHydrated,
-    isStoreEntry,
     mergeStoreQuarantineItems,
     restoreStoreState,
     STORE_VERSION,
     withStoreLock,
     _writeFieldDirect,
 } from '../knowledge/store.js';
-import { isCleanupRecoveryEntry, mergeCleanupRecoveryRecordsUnlocked } from '../knowledge/cleanup_recovery.js';
+import { mergeCleanupRecoveryRecordsUnlocked } from '../knowledge/cleanup_recovery.js';
+import { isInternalEntry } from '../knowledge/internal_entries.js';
+import { mergeGrowthHistoryRecordsUnlocked } from '../knowledge/growth_history.js';
 import { getLorebookName, getStateLorebookName } from '../knowledge/scope.js';
 import { state as knowledgeState } from '../knowledge/state.js';
 import { findDestinationEntryUid } from '../knowledge/reconcile.js';
@@ -205,8 +206,7 @@ function identityMatches(a, b) {
 }
 
 function hasLiveDestinationUid(entries, uid) {
-    if (uid !== null && uid !== undefined && entries?.[uid] && !isStoreEntry(entries[uid])
-        && !isCleanupRecoveryEntry(entries[uid])) return true;
+    if (uid !== null && uid !== undefined && entries?.[uid] && !isInternalEntry(entries[uid])) return true;
     return false;
 }
 
@@ -1270,6 +1270,16 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
     // recovery manager), so the result carries a warning instead. Unlocked
     // merge: commitRestore already runs under withStoreLock, which is a queue
     // — nesting would deadlock.
+    let growthHistoryMerge;
+    const importedGrowthHistory = commitPreview.validation?.growthHistory;
+    if (importedGrowthHistory && Object.keys(importedGrowthHistory.records).length > 0) {
+        try {
+            growthHistoryMerge = await mergeGrowthHistoryRecordsUnlocked(importedGrowthHistory.records,
+                cleanupRecoveryBook, { assertCurrent: assertCleanupRecoveryCurrent });
+        } catch (err) {
+            growthHistoryMerge = { ok: false, error: err?.message || String(err) };
+        }
+    }
     let cleanupRecoveryMerge;
     const importedCleanupRecovery = commitPreview.validation?.cleanupRecovery;
     if (importedCleanupRecovery && Object.keys(importedCleanupRecovery.records || {}).length > 0) {
@@ -1292,6 +1302,7 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         preview: commitPreview,
         preRestoreBackup,
         ...(cleanupRecoveryMerge !== undefined ? { cleanupRecovery: cleanupRecoveryMerge } : {}),
+        ...(growthHistoryMerge !== undefined ? { growthHistory: growthHistoryMerge } : {}),
     };
 }
 
