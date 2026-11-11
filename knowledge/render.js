@@ -17,7 +17,10 @@ import {
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { estimateTokens } from '../core/context.js';
 import { isModulePausedForCurrentScope } from '../core/schema_status.js';
-import { draftGrowthDossier, growthDossierEvidence } from './growth_dossier.js';
+import { draftGrowthDossier, growthDossierEvidence, extractGrowthDossierLines } from './growth_dossier.js';
+import { appendGrowthApprovalToBook, readGrowthHistoryContainer } from './growth_history.js';
+import { growthEchoStatus } from './growth_lineage.js';
+import { withStoreLock } from './store.js';
 import { getEvidenceFile } from './evidence.js';
 import { GROWTH_DOSSIER_CEILINGS } from './growth_dossier_state.js';
 import {
@@ -222,8 +225,12 @@ async function handleAccept(item, text, keywords, _el) {
             // keeps this to one write, so one accept is one history entry.
             const content = () => applyCurrentRelationshipBlock(item.name, text);
             const result = growth
-                ? await writeToLorebook(item.name, content, keywords, item.uid, {
+                ? await withStoreLock(() => writeToLorebook(item.name, content, keywords, item.uid, {
                     bookName: growthBook,
+                    skipLegacyHistory: true,
+                    updateBook: (wi, before, after) => appendGrowthApprovalToBook(wi, item.entityId, {
+                        current: extractGrowthDossierLines(before), approved: extractGrowthDossierLines(after), changes: item.changes,
+                    }),
                     beforeWrite: entries => {
                         assertGrowthTarget();
                         const entry = entries[item.uid];
@@ -236,7 +243,7 @@ async function handleAccept(item, text, keywords, _el) {
                         }
                         return null;
                     },
-                })
+                }))
                 : await writeToLorebook(item.name, content(), keywords, item.uid);
             // An old-scope save may finish after chat navigation. Never apply
             // its registry or staging bookkeeping to the newly active scope.
@@ -526,6 +533,7 @@ function renderDetailForItem(item) {
             <strong>${escapeHtml(change.field)} — ${change.action === 'remove' && change.reason === 'length' ? 'dropped to fit length' : escapeHtml({ keep: 'kept', edit: 'edited', add: 'added', remove: 'removed' }[change.action])}</strong>
             ${escapeHtml(change.before)}${change.after !== change.before ? ` → ${escapeHtml(change.after)}` : ''}
             ${change.sourceLabel ? `<span>(${escapeHtml(change.sourceLabel)})</span>` : ''}
+            <span class="kt-growth-echo">${escapeHtml(growthEchoStatus(change, evidence, item.lineage || []))}</span>
             ${(change.evidenceIds || []).map(id => evidence.some(o => o.id === id)
                 ? `<button class="mwt-btn kt-growth-evidence-link" data-evidence-id="${escapeHtml(id)}">${escapeHtml(id)}</button>`
                 : `<span>${escapeHtml(id)} — no longer on file</span>`).join(' ')}
@@ -1479,6 +1487,7 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
             ${renderObsList('speech', 'Speech')}
         </div>
         <div class="kt-growth-profile-section">
+            <div class="kt-growth-approval-history" role="region" aria-label="Dossier approval history">Loading approval history…</div>
             ${renderGrowthDossierControls(name, true)}
             <button class="mwt-btn" id="kt-growth-draft" ${getGrowthDossierSettings(name).enabled !== true || !profile.trim() ? 'disabled' : ''}
                 title="One explicit model request (up to one retry). Sends profile and evidence claims, never quotes. Replaces this NPC's pending Growth draft; nothing is written until Accept &amp; Write.">Prepare dossier lines — model call</button>
@@ -1519,7 +1528,38 @@ function renderGrowthProfileContent(name, observations, profile, canon, truncate
     `;
 }
 
+export function renderGrowthApprovalHistory(read, entityId) {
+    if (!read.ok) return '<p>Approval history unavailable; stored data was left untouched.</p>';
+    const records = read.records[entityId] || [];
+    return `<details><summary>Dossier approval history (${records.length}/10)</summary>
+        ${!records.length ? '<p>No dossier approvals yet.</p>' : records.slice().reverse().map(record => `<article>
+            <h4>${escapeHtml(new Date(record.acceptedAt).toLocaleString())}</h4>
+            ${record.original ? `<p>Pre-Growth original</p><pre>${escapeHtml(JSON.stringify(record.original, null, 2))}</pre>` : ''}
+            <p>Personality: ${escapeHtml(record.approved?.personality || '')}</p>
+            <p>Voice: ${escapeHtml(record.approved?.voice || '')}</p>
+            <ul>${(record.changes || []).map(change => `<li>${escapeHtml(change.field)} — ${escapeHtml(change.action)}:
+                ${escapeHtml(change.before || '')} → ${escapeHtml(change.after || '')}
+                ${escapeHtml(change.sourceLabel || '')}
+                ${change.firstApprovedAt ? ` · first approved ${escapeHtml(new Date(change.firstApprovedAt).toLocaleString())}` : ''}
+            </li>`).join('')}</ul>
+        </article>`).join('')}
+    </details>`;
+}
+
 function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
+    // Every profile/evidence rerender wires again; keep history local to this
+    // modal and discard late reads after navigation or another render.
+    const historyScope = captureScope();
+    const historyId = getRegistry()[resolveRegistryKey(getRegistry(), name)]?.entityId;
+    const historyEl = modal.querySelector('.kt-growth-approval-history');
+    if (historyEl) {
+        readGrowthHistoryContainer().then(read => {
+            if (!scopeStillCurrent(historyScope).ok || !historyEl.isConnected) return;
+            historyEl.innerHTML = renderGrowthApprovalHistory(read, historyId);
+        }).catch(() => {
+            if (historyEl.isConnected) historyEl.textContent = 'Approval history could not be loaded.';
+        });
+    }
     const draftButton = modal.querySelector('#kt-growth-draft');
     const syncDraftButton = () => {
         if (draftButton) draftButton.disabled = getGrowthDossierSettings(name).enabled !== true

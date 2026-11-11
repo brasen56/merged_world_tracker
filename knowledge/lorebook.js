@@ -280,7 +280,7 @@ export async function writeStateTracker(uid, name, content) {
 // Checked callers may pass a synchronous content factory to project graph-owned
 // data after the final read/guard. writeKeywords is opt-in on that branch so
 // existing cleanup callers continue to own content only.
-export async function writeToLorebook(name, content, keywords, existingUid, { bookName, beforeWrite, writeKeywords = false } = {}) {
+export async function writeToLorebook(name, content, keywords, existingUid, { bookName, beforeWrite, writeKeywords = false, updateBook, skipLegacyHistory = false } = {}) {
     if (!state.wiScript) return { success: false, content, keywords, error: 'world-info.js not loaded' };
     // Resolve the book ONCE. Calling the resolver per save could target two
     // different books within a single write if the scope changed mid-flight.
@@ -389,7 +389,8 @@ export async function writeToLorebook(name, content, keywords, existingUid, { bo
         }
         if (existingUid !== null && existingUid !== undefined && entries[existingUid]) {
             const previousContent = entries[existingUid].content || '';
-            const historyKept = snapshotDisplaced(existingUid, previousContent, content, book);
+            if (updateBook) updateBook(wi, previousContent, content);
+            const historyKept = skipLegacyHistory ? true : snapshotDisplaced(existingUid, previousContent, content, book);
             entries[existingUid].content = content;
             // Cleanup owns content, not keywords edited during review.
             if (!beforeWrite || writeKeywords) entries[existingUid].key = keywords;

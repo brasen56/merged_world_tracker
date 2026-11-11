@@ -1,3 +1,10 @@
+.kt-growth-approval-history article {
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    padding: 0.5em 0;
+    overflow-wrap: anywhere;
+}
+.kt-growth-approval-history pre { white-space: pre-wrap; }
+.kt-growth-echo { font-style: italic; }
 /*   Knowledge Tracker Styles (.kt-*)
    Staging layout, toolbar, sub-tabs, detail panel, NPC list, state tracker,
    view/history modal, status, diff, settings, relationship editor & graph,

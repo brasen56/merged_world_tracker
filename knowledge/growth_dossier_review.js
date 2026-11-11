@@ -46,6 +46,7 @@ export function createGrowthStagingItem(draft) {
         existingContent: draft.original, mergedContent: proposed, proposedContent: proposed,
         keywords: [...(live.info.keywords || [live.key])],
         changes: draft.proposal.changes, warnings: draft.warnings,
+        lineage: draft.lineage || [],
     };
 }
 

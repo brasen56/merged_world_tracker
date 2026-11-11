@@ -45,6 +45,7 @@ import { knowledgeStoreSchema, COUNTERS_META_KEY, KNOWLEDGE_STORE_VERSION } from
 import { prepareStore } from '../core/schema.js';
 import { getEvidenceMap, saveEvidenceMap } from '../knowledge/evidence.js';
 import { recordDossierFieldRefresh } from '../knowledge/dossier_status.js';
+import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 // Side-effect import: knowledge/lorebook.js assigns state.wiScript at module
 // load. Loading it here means that assignment happens BEFORE any beforeEach
 // installs the per-test fake — otherwise the first renameEntity's dynamic
@@ -99,6 +100,12 @@ beforeEach(() => {
     // Mark the knowledge book hydrated so writes are accepted without a fake
     // lorebook behind them; flushes then no-op with a warning.
     _setCacheForTests(getLorebookName(), {});
+    // Identity merges now preflight the durable history container via checked
+    // disk I/O even when relabels/relationship sync are disabled.
+    installCleanupFetch({
+        loadWorldInfo: name => state.wiScript?.loadWorldInfo?.(name) ?? null,
+        saveWorldInfo: (...args) => state.wiScript?.saveWorldInfo?.(...args),
+    });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 

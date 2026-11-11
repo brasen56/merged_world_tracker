@@ -40,10 +40,11 @@ import {
     syncAllRelationshipsToLorebooks,
 } from './relationships.js';
 import { backfillRelationshipEntityIds, ensureRegistryIdentityFields } from './schema.js';
-import { renameEvidenceFile, mergeEvidenceFiles, canRekeyEvidence, canRenameEvidence } from './evidence.js';
+import { renameEvidenceFile, mergeEvidenceFiles, canRekeyEvidence, canRenameEvidence, getEvidenceMap } from './evidence.js';
 import { renameDossierFieldStatus, mergeDossierFieldStatus } from './dossier_status.js';
 import { getLorebookName, getProfileLorebookName } from './scope.js';
 import { flushBook } from './store.js';
+import { mergeGrowthHistoryIdentities } from './growth_history.js';
 // Direct import (not the barrel): the scope guard must be the REAL module's
 // epoch/identity state under the test barrel→stub alias too. scopeStillCurrent
 // carries the §7.5 semantics a write path needs — the epoch (bumped
@@ -434,6 +435,15 @@ export async function mergeEntities(keepName, mergeName, { relabelEntries = true
     const keep = reg[keepKey];
     const merge = reg[mergeKey];
     const warnings = [];
+
+    try {
+        await mergeGrowthHistoryIdentities(keep.entityId, merge.entityId, knowledgeBook, () => {
+            if (!scopeGuard.stillCurrent() || getRegistryEntry(keepKey)?.info !== keep
+                || getRegistryEntry(mergeKey)?.info !== merge) throw new Error('Chat scope or NPC changed during history merge');
+        }, getEvidenceMap()[keepKey] ? merge.entityId : null);
+    } catch (err) {
+        return { ok: false, reason: 'growth-history-unavailable', warnings: [String(err?.message || err)] };
+    }
 
     // 1) Registry: combine the records under keep. Uid/profile pointers are
     //    adopted only where keep has none — an existing pointer is a statement

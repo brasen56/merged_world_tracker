@@ -10,6 +10,8 @@ import { hasValidSettings } from './settings.js';
 import { GROWTH_DOSSIER_PROMPT } from './prompts.js';
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { isModulePausedForCurrentScope } from '../core/schema_status.js';
+import { splitGrowthSentences, growthEchoStatus } from './growth_lineage.js';
+export { splitGrowthSentences } from './growth_lineage.js';
 
 const FIELDS = ['personality', 'voice'];
 const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -20,10 +22,6 @@ const onlyKeys = (value, keys) => Object.keys(value).every(key => keys.includes(
  * No locale-dependent segmentation: punctuation followed by whitespace ends a
  * sentence; a final fragment counts too. Semicolon-separated clauses stay one.
  */
-export function splitGrowthSentences(text = '') {
-    return text.trim().match(/[^]*?[.!?…](?=\s|$)|[^]+$/gu)?.map(s => s.trim()).filter(Boolean) || [];
-}
-
 export function extractGrowthDossierLines(content) {
     return Object.fromEntries(FIELDS.map(field => {
         const label = field === 'personality' ? 'Personality' : 'Voice';
@@ -170,7 +168,8 @@ export async function draftGrowthDossier(name, { profile: generatedProfile } = {
     const history = await readGrowthHistoryContainer(book);
     assertCurrent();
     if (!history.ok) throw new Error(`Growth draft cannot read approval history (${history.reason}).`);
-    const approved = history.records[entityId]?.at(-1)?.approved ?? null;
+    const previous = history.records[entityId]?.at(-1) ?? null;
+    const approved = previous?.approved ?? null;
     const current = extractGrowthDossierLines(content);
     const evidence = growthDossierEvidence(getEvidenceFile(key, false));
     const canonLock = content.match(/^Canon Lock:[ \t]*(.*)$/m)?.[1] || '';
@@ -182,5 +181,13 @@ export async function draftGrowthDossier(name, { profile: generatedProfile } = {
     if (!parsed.ok) throw new Error(parsed.reason);
     const result = validateGrowthDossierProposal(parsed.proposal, { current, evidence, limits: settings.limits, approved });
     if (!result.ok) throw new Error(`Growth draft rejected: ${result.reason}`);
-    return { ...result, name: key, entityId, uid, original: content, current, limits: settings.limits };
+    const lineage = previous?.changes || [];
+    for (const change of result.proposal.changes) {
+        if (!change.evidenceIds.length && !change.sourceLabel) {
+            const ancestor = lineage.find(c => c.field === change.field && c.after === change.before);
+            if (ancestor?.sourceLabel) change.sourceLabel = ancestor.sourceLabel;
+        }
+        change.echoStatus = growthEchoStatus(change, evidence, lineage);
+    }
+    return { ...result, lineage, name: key, entityId, uid, original: content, current, limits: settings.limits };
 }

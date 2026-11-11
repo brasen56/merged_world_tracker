@@ -1,7 +1,7 @@
 # Growth-derived dossier text — scope and implementation plan
 
-**Status:** Revision 3. Phases 1–3 implemented and automated checks passing;
-Phases 4–5 not started. Not release-ready until Phase 5.
+**Status:** Revision 3. Phases 1–4 implemented and automated checks passing;
+Phase 5 not started. Not release-ready until Phase 5.
 The plan this scope develops went to the requester on 2026-11-09, and they
 answered on 2026-11-10 with three refinements. Revision 2 added the results of
 a code review done before implementation. Revision 3 adds the requester's
@@ -793,7 +793,7 @@ Paths relative to the repository root; line numbers verified 2026-11-10:
 ## 12. Implementation phases
 
 **Planning record:** 2026-11-09, revised 2026-11-10 for revision 3. All
-Phases 1–2 are complete (records below); Phases 3–5 are **not started**. Sections 1–11 are the behavior contract; this breakdown only
+Phases 1–4 are complete (records below); Phase 5 is **not started**. Sections 1–11 are the behavior contract; this breakdown only
 sequences the work and does not expand the scope. Each phase lands with its
 own tests and a short completion record here. Do not expose the option in the
 UI before Phase 3's guarded accept exists, and do not release before Phase 5.
@@ -1055,6 +1055,38 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
 - No localStorage writes, pinned by test.
 - The container's size at the cap is measured with the schema perf harness
   and recorded here.
+
+**Phase 4 completion — 2026-11-10:**
+- Growth acceptance saves one approval record alongside the approved dossier
+  in the same checked whole-book write, under the store lock. This bypasses
+  legacy displaced-text localStorage history. Unreadable/future history refuses
+  acceptance without writing either surface.
+- Records retain approved Personality/Voice, acceptance time, actual accepted
+  sentence changes, first-approval lineage, and the pre-Growth original on the
+  first record only. Explicit keeps inherit lineage; edits/additions and reviewer
+  rewrites are stamped at acceptance. Unverified text retains its no-evidence
+  label. Records are capped at ten per entityId; the first original naturally
+  ages out with its record.
+- Renames keep the stable history key. Identity merges preflight history before
+  removing the absorbed identity, concatenate by acceptance date and re-cap;
+  absorbed evidence links follow the evidence merge's namespace rule. A failed
+  history preflight refuses the identity merge rather than orphaning history.
+- The Growth window displays approvals newest first, including changes and
+  first-approval dates. Staging displays advisory possible-echo/timing-unknown
+  labels computed from raw message `ts` or consolidated `firstSeen`; older or
+  canon support suppresses echo, undated support is neutral, capture time is
+  ignored, and no-evidence sentences never echo.
+- Automated coverage includes reload/cap/flags, lineage, reviewer rewrites,
+  rename/merge, echo boundaries, modal/review display, future-version refusal,
+  and no localStorage writes. Existing identity fixtures now supply checked
+  history disk reads.
+- Schema performance harness: 36 NPCs × ten approvals, default-target-sized
+  lines, measured **1,032,705 UTF-8 whole-book bytes** (~28,686 bytes/NPC),
+  **1.482 ms** whole-book serialization in the targeted run (informational,
+  machine-dependent, not a host save/network benchmark).
+- Validation: `npm test` — **184 files / 4,621 tests passed**;
+  `npm run lint` and `git diff --check` passed. No live SillyTavern/model QA;
+  release remains gated on Phase 5.
 
 ### Phase 5 — Cross-path regression and release validation
 

@@ -34,6 +34,7 @@ import { STORE_SCHEMAS } from '../schema/registry.js';
 import { runFastLoadGate } from '../schema/gate.js';
 import { prepareStore } from '../core/schema.js';
 import { createSchemaManifest } from '../schema/manifest.js';
+import { appendGrowthApprovalToBook } from '../knowledge/growth_history.js';
 
 // ─── Reference-scale fixture ─────────────────────────────────────────────────
 //
@@ -49,6 +50,23 @@ const RAW_PER_NPC = 30;
 const CONSOLIDATED_PER_NPC = 5;
 // 55 × (30 raw + 5 consolidated) = 1,925 records ≈ the reference chat's scale.
 const REFERENCE_RECORDS = NPC_COUNT * (RAW_PER_NPC + CONSOLIDATED_PER_NPC);
+
+test('Growth history at the ten-approval cap: whole-book serialization baseline', () => {
+    const wi = { entries: {} };
+    const approved = { personality: `${'Patient and observant; '.repeat(20)}Waits.`, voice: `${'Speaks softly; '.repeat(22)}Pauses.` };
+    const changes = Object.entries(approved).map(([field, after]) => ({ field, action: 'keep', before: after, after, evidenceIds: ['obs-1'] }));
+    for (let npc = 0; npc < 36; npc++) {
+        for (let i = 0; i < 10; i++) appendGrowthApprovalToBook(wi, `npc-${npc}`, {
+            approved, current: approved, changes, acceptedAt: 1_700_000_000_000 + i * 1000,
+        });
+    }
+    const start = performance.now();
+    const json = JSON.stringify(wi);
+    const elapsed = performance.now() - start;
+    const bytes = new TextEncoder().encode(json).length;
+    console.log(`[perf] Growth history: 36 NPCs × 10 approvals, ${bytes} UTF-8 whole-book bytes, ${(bytes / 36).toFixed(0)} bytes/NPC; stringify ${elapsed.toFixed(3)} ms (recorded, no budget)`);
+    expect(JSON.parse(json).entries).toEqual(wi.entries);
+});
 
 function pad(index, width = 4) {
     return String(index).padStart(width, '0');

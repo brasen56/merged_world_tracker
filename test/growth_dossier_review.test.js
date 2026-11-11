@@ -12,6 +12,7 @@ import { createGrowthStagingItem, buildGrowthReviewContent } from '../knowledge/
 import { mergeScanResults } from '../knowledge/staging.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 import { pauseStore, resumeStore } from '../core/schema_status.js';
+import { appendGrowthApprovalToBook, readGrowthHistoryContainer, isGrowthHistoryEntry } from '../knowledge/growth_history.js';
 
 vi.mock('../knowledge/growth.js', async importOriginal => ({ ...await importOriginal(), loadProfile: vi.fn(async () => 'A patient captain.') }));
 
@@ -87,7 +88,40 @@ test('review shows changes, warnings, live evidence and deleted evidence; dismis
     expect(host.saveWorldInfo).not.toHaveBeenCalled();
 });
 
+test('Growth modal displays durable approvals and pre-Growth original', async () => {
+    appendGrowthApprovalToBook(disk, 'mara', { approved: { personality: 'Asks for help.', voice: 'Drops formal titles.' },
+        current: { personality: 'Waits patiently.', voice: 'Speaks plainly.' }, changes: makeItem().changes });
+    await openGrowthProfileModal(NAME);
+    await vi.waitFor(() => expect(document.querySelector('.kt-growth-approval-history')?.textContent).toContain('Dossier approval history (1/10)'));
+    const history = document.querySelector('.kt-growth-approval-history');
+    expect(history.textContent).toContain('Pre-Growth original');
+    expect(history.textContent).toContain('Asks for help.');
+});
+
+test('review displays advisory message-time echo and timing unknown', () => {
+    const item = makeItem();
+    item.lineage = [{ field: 'personality', after: 'Waits patiently.', firstApprovedAt: 1000 }];
+    getEvidenceFile(NAME).raw[0].ts = 2000;
+    show([item]);
+    expect(el.querySelector('.kt-growth-review').textContent).toContain('possible echo');
+    expect(el.querySelector('#kt-accept').disabled).toBe(false);
+    getEvidenceFile(NAME).raw[0].ts = null;
+    show([item]);
+    expect(el.querySelector('.kt-growth-review').textContent).toContain('timing unknown');
+});
+
+test('unsupported history refuses acceptance without writing dossier or history', async () => {
+    disk.entries[9] = { uid: 9, comment: '[MWT:growth-history]', content: '{"version":99,"records":{}}' };
+    const before = structuredClone(disk);
+    show([makeItem()]);
+    await click();
+    expect(disk).toEqual(before);
+    expect(host.saveWorldInfo).not.toHaveBeenCalled();
+    expect(state.stagingItems).toHaveLength(1);
+});
+
 test('accept writes only identity lines, preserves registry type and live keywords', async () => {
+    const localWrite = vi.spyOn(Storage.prototype, 'setItem');
     const item = makeItem();
     show([item]);
     edit(GROWN.replace('Role: captain', 'Role: injected').replace('- Knows the harbour.', '- erased'));
@@ -98,6 +132,13 @@ test('accept writes only identity lines, preserves registry type and live keywor
     expect(entry().key).toEqual([NAME]);
     expect(getRegistry().Mara.type).toBe('major');
     expect(host.saveWorldInfo).toHaveBeenCalledOnce();
+    const history = await readGrowthHistoryContainer();
+    expect(history.records.mara).toHaveLength(1);
+    expect(history.records.mara[0].approved).toEqual({ personality: 'Asks for help.', voice: 'Drops formal titles.' });
+    expect(history.records.mara[0].original).toEqual({ personality: 'Waits patiently.', voice: 'Speaks plainly.' });
+    expect(Object.values(disk.entries).some(isGrowthHistoryEntry)).toBe(true);
+    expect(localWrite).not.toHaveBeenCalled();
+    localWrite.mockRestore();
 });
 
 test.each(['scan', 'manual edit', 'field refresh'])('Growth stale accept after %s rebuilds both times onto fresh fields and ledger', async _kind => {
