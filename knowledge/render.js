@@ -20,7 +20,7 @@ import { isModulePausedForCurrentScope } from '../core/schema_status.js';
 import { draftGrowthDossier, growthDossierEvidence, extractGrowthDossierLines } from './growth_dossier.js';
 import { appendGrowthApprovalToBook, readGrowthHistoryContainer } from './growth_history.js';
 import { growthEchoStatus } from './growth_lineage.js';
-import { withStoreLock } from './store.js';
+import { beginStoreTransaction, withStoreLock } from './store.js';
 import { getEvidenceFile } from './evidence.js';
 import { GROWTH_DOSSIER_CEILINGS } from './growth_dossier_state.js';
 import {
@@ -225,7 +225,9 @@ async function handleAccept(item, text, keywords, _el) {
             // keeps this to one write, so one accept is one history entry.
             const content = () => applyCurrentRelationshipBlock(item.name, text);
             const result = growth
-                ? await withStoreLock(() => writeToLorebook(item.name, content, keywords, item.uid, {
+                ? await withStoreLock(() => {
+                    beginStoreTransaction();
+                    return writeToLorebook(item.name, content, keywords, item.uid, {
                     bookName: growthBook,
                     skipLegacyHistory: true,
                     updateBook: (wi, before, after) => appendGrowthApprovalToBook(wi, item.entityId, {
@@ -243,7 +245,8 @@ async function handleAccept(item, text, keywords, _el) {
                         }
                         return null;
                     },
-                }))
+                    });
+                })
                 : await writeToLorebook(item.name, content(), keywords, item.uid);
             // An old-scope save may finish after chat navigation. Never apply
             // its registry or staging bookkeeping to the newly active scope.

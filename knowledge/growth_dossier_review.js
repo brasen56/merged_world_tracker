@@ -1,5 +1,4 @@
 /** Growth staging helpers. No model calls, dossier writes, or history writes. */
-import { buildUpdatedDossierContent } from './lorebook.js';
 import { extractGrowthDossierLines } from './growth_dossier.js';
 import { GROWTH_DOSSIER_CEILINGS } from './growth_dossier_state.js';
 import { validateFieldValue } from './field_contract.js';
@@ -9,6 +8,22 @@ import { stripRelationshipBlock } from './relationships.js';
 
 export const GROWTH_ITEM_TYPE = 'growth-dossier';
 const labels = { personality: 'Personality', voice: 'Voice' };
+
+/** Growth owns only these lines, not the entry's format or header. */
+function applyGrowthLines(current, fields) {
+    let result = current;
+    for (const [key, label] of Object.entries(labels)) {
+        const pattern = new RegExp(`^${label}:[^\\n]*`, 'm');
+        if (pattern.test(result)) result = result.replace(pattern, () => `${label}: ${fields[key] || ''}`);
+        else if (fields[key]) {
+            const lines = result.split('\n');
+            const ledger = lines.findIndex(line => /^Knowledge Ledger:/i.test(line));
+            lines.splice(ledger < 0 ? lines.length : ledger, 0, `${label}: ${fields[key]}`);
+            result = lines.join('\n');
+        }
+    }
+    return result;
+}
 
 export function assertGrowthReviewCurrent(item) {
     const live = getRegistryEntry(item.name);
@@ -26,19 +41,27 @@ export function buildGrowthReviewContent(current, proposed) {
     const before = extractGrowthDossierLines(current);
     for (const key of Object.keys(labels)) {
         // Reject duplicate labels rather than silently selecting one of them.
-        if ((proposed.match(new RegExp(`^${labels[key]}:`, 'gm')) || []).length !== 1) {
+        const count = (proposed.match(new RegExp(`^${labels[key]}:`, 'gm')) || []).length;
+        if (count !== 1 && !(count === 0 && !before[key] && !fields[key])) {
             throw new Error(`Growth review needs exactly one ${labels[key]} line.`);
         }
         const check = validateFieldValue(key, fields[key], { ceilings: GROWTH_DOSSIER_CEILINGS });
         if (!check.ok) throw new Error(`${labels[key]}: ${check.reason}`);
         if (before[key] && !check.value) throw new Error(`Cannot clear ${labels[key]}; keep or replace its text.`);
+        fields[key] = check.value;
     }
-    return buildUpdatedDossierContent(current, fields, [], { ceilings: GROWTH_DOSSIER_CEILINGS });
+    return applyGrowthLines(current, fields);
 }
 
 export function createGrowthStagingItem(draft) {
     const live = assertGrowthReviewCurrent(draft);
-    const proposed = buildUpdatedDossierContent(draft.original, draft.proposal, [], { ceilings: GROWTH_DOSSIER_CEILINGS });
+    const fields = {};
+    for (const [key, label] of Object.entries(labels)) {
+        const check = validateFieldValue(key, draft.proposal[key], { ceilings: GROWTH_DOSSIER_CEILINGS });
+        if (!check.ok) throw new Error(`${label}: ${check.reason}`);
+        fields[key] = check.value;
+    }
+    const proposed = applyGrowthLines(draft.original, fields);
     return {
         id: `growth-dossier-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         type: GROWTH_ITEM_TYPE, action: 'update', name: live.key,

@@ -30,7 +30,7 @@ OUTPUT FORMAT:
     { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" } }
   ],
   "update_major": [
-    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }] }
+    { "name": "must match an existing tracked NPC — use the tracked spelling when possible", "fields": { "tone": "updated value or null if unchanged", "perceived_as": "updated value or null if unchanged", "descriptor": "updated value or null if unchanged", "personality": "updated value only if this line exists in existing_entry, else null", "voice": "updated value only if this line exists in existing_entry, else null" }, "new_knowledge": [{ "fact": "new concrete fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }] }
   ]
 }
 
@@ -75,7 +75,9 @@ OUTPUT FORMAT:
   "fields": {
     "tone": "updated communication style if it changed, else null",
     "perceived_as": "updated perception if it changed, else null",
-    "descriptor": "updated descriptor if appearance/role changed, else null"
+    "descriptor": "updated descriptor if appearance/role changed, else null",
+    "personality": "updated value only if a Personality line already exists in current_entry, else null",
+    "voice": "updated value only if a Voice line already exists in current_entry, else null"
   },
   "new_knowledge": [
     { "fact": "concrete new fact this NPC learned or now knows (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date if known" }

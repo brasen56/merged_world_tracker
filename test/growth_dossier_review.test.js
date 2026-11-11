@@ -4,7 +4,7 @@ import { resetCoreStubs, setFakeApi, setFakeContextExtras } from './stubs/core.j
 import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 import { state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
-import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
+import { _clearCacheForTests, _setCacheForTests, flushAll, isStoreEntry } from '../knowledge/store.js';
 import { getRegistry, getGrowthDossierSettings, setGrowthDossierSettings } from '../knowledge/registry.js';
 import { getEvidenceFile } from '../knowledge/evidence.js';
 import { renderNpcsSubTab, openGrowthProfileModal } from '../knowledge/render.js';
@@ -204,6 +204,51 @@ test('pending off disables acceptance; back on permits it; runtime guard also re
     show([item]);
     await click();
     expect(entry().content).toBe(GROWN);
+});
+
+test('turning Growth off during a pending acceptance remains persistable', async () => {
+    show([makeItem()]);
+    let release;
+    host.saveWorldInfo.mockImplementationOnce(async (_book, wi) => {
+        const snapshot = structuredClone(wi);
+        await new Promise(resolve => { release = resolve; });
+        disk = snapshot;
+    });
+    const accepting = click();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    setGrowthDossierSettings(NAME, { enabled: false });
+    release();
+    await accepting;
+    await flushAll();
+    expect(getGrowthDossierSettings(NAME).enabled).toBe(false);
+    const store = Object.values(disk.entries).find(isStoreEntry);
+    expect(JSON.parse(store.content).registry.Mara.growthDossier.enabled).toBe(false);
+});
+
+test.each(['personality', 'voice'])('an already absent %s field can stay empty through staging and acceptance', async field => {
+    const label = field === 'voice' ? 'Voice' : 'Personality';
+    const original = BODY.replace(new RegExp(`^${label}:[^\\n]*\\n`, 'm'), '');
+    entry().content = original;
+    const item = createGrowthStagingItem({ name: NAME, uid: 0, entityId: 'mara', original,
+        proposal: { personality: 'Asks for help.', voice: 'Drops formal titles.', [field]: '', changes: [] } });
+    show([item]);
+    await click();
+    expect(state.stagingItems).toEqual([]);
+    expect(entry().content).not.toContain(`${label}:`);
+    expect((await readGrowthHistoryContainer()).records.mara[0].approved[field]).toBe('');
+});
+
+test('Growth with Dossier Mode off preserves a compact header through staging and acceptance', async () => {
+    saveSettings({ dossierMode: false });
+    const original = BODY.replace('[Dossier] ', '');
+    entry().content = original;
+    const item = createGrowthStagingItem({ name: NAME, uid: 0, entityId: 'mara', original,
+        proposal: { personality: 'Asks for help.', voice: 'Drops formal titles.', changes: [] } });
+    expect(item.proposedContent).toBe(GROWN.replace('[Dossier] ', ''));
+    show([item]);
+    await click();
+    expect(entry().content).toBe(GROWN.replace('[Dossier] ', ''));
+    expect(state.stagingItems).toEqual([]);
 });
 
 test('Accept All excludes Growth from confirmation and leaves it pending', async () => {

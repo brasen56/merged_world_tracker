@@ -18,9 +18,15 @@ export function buildGrowthApproval({ approved, current, changes = [], previous 
         const available = changes.filter(c => c.field === field && c.after).slice();
         const prior = (previous?.changes || []).filter(c => c.field === field && c.after).slice();
         const removals = changes.filter(c => c.field === field && c.action === 'remove').slice();
+        const remaining = splitGrowthSentences(current[field]);
         for (const sentence of splitGrowthSentences(approved[field])) {
             const index = available.findIndex(c => c.after === sentence);
             const source = index < 0 ? null : available.splice(index, 1)[0];
+            // Consume occurrences, not a set: repeated sentences can be kept
+            // and deleted independently. A model rewrite accounts for its old
+            // sentence too; unmatched reviewer text carries no model evidence.
+            const oldIndex = remaining.indexOf(source ? source.before : sentence);
+            if (oldIndex >= 0) remaining.splice(oldIndex, 1);
             // Proposed outputs consume their occurrences first. Only unmatched
             // approved occurrences can restore a proposed removal.
             if (!source) {
@@ -32,7 +38,7 @@ export function buildGrowthApproval({ approved, current, changes = [], previous 
             const inherited = source?.action === 'keep' && ancestor;
             const evidenceIds = source ? [...(source.evidenceIds || [])] : [];
             const sourceLabel = !source ? 'hand edit, no evidence'
-                : evidenceIds.length ? source.sourceLabel
+                : evidenceIds.length ? undefined
                     : source.sourceLabel || (inherited && ancestor.sourceLabel)
                         || (!ancestor ? 'from the original line, no evidence' : 'no evidence');
             stamped.push({ field, action: source?.action || 'edit', before: source?.before || '', after: sentence,
@@ -40,7 +46,12 @@ export function buildGrowthApproval({ approved, current, changes = [], previous 
                 ...(sourceLabel ? { sourceLabel } : {}),
                 firstApprovedAt: inherited ? (growthEvidenceTime(ancestor.firstApprovedAt) ?? acceptedAt) : acceptedAt });
         }
-        stamped.push(...removals.map(c => ({ ...c, evidenceIds: [...(c.evidenceIds || [])] })));
+        for (const sentence of remaining) {
+            const index = removals.findIndex(c => c.before === sentence);
+            const source = index < 0 ? null : removals.splice(index, 1)[0];
+            stamped.push(source ? { ...source, evidenceIds: [...(source.evidenceIds || [])] }
+                : { field, action: 'remove', before: sentence, after: '', evidenceIds: [], sourceLabel: 'hand edit, no evidence' });
+        }
     }
     return { acceptedAt, approved: { ...approved }, changes: stamped, ...(!previous ? { original: { ...current } } : {}) };
 }

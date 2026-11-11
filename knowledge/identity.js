@@ -449,7 +449,13 @@ export async function mergeEntities(keepName, mergeName, { relabelEntries = true
     // 1) Registry: combine the records under keep. Uid/profile pointers are
     //    adopted only where keep has none — an existing pointer is a statement
     //    about which physical entry is authoritative.
-    if (adoptedUid) keep.uid = merge.uid;
+    if (adoptedUid) {
+        keep.uid = merge.uid;
+        if (merge.growthDossier) {
+            keep.growthDossier = { ...merge.growthDossier, ...keep.growthDossier,
+                limits: { ...merge.growthDossier.limits, ...keep.growthDossier?.limits } };
+        }
+    }
     const adoptedProfileUid = (keep.profileUid === null || keep.profileUid === undefined)
         && merge.profileUid !== null && merge.profileUid !== undefined;
     if (adoptedProfileUid) keep.profileUid = merge.profileUid;

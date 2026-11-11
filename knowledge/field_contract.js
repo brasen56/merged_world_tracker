@@ -372,7 +372,7 @@ export function validateScanRecord(data) {
  */
 export function contractPromptBlock({ mode = 'dossier' } = {}) {
     const keys = mode === 'compact'
-        ? ['tone', 'perceived_as', 'descriptor', 'first_seen']
+        ? ['tone', 'perceived_as', 'descriptor', 'first_seen', 'personality', 'voice']
         : FIELD_CONTRACT.map(def => def.key);
     const lines = [
         'FIELD CONTRACT (applies to every field you output):',

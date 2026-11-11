@@ -868,6 +868,10 @@ export function buildUpdatedMajorContent(existingContent, fields, newKnowledge) 
     let lines = existingContent.split('\n');
     const headerIdx = findHeaderLineIdx(lines);
     lines = lines.map((line, idx) => {
+        // Growth can add identity lines without converting the compact entry.
+        // Once relinquished, ordinary updates may replace those existing lines.
+        if (safeFields?.personality != null && line.startsWith('Personality:')) return `Personality: ${safeFields.personality}`;
+        if (safeFields?.voice != null && line.startsWith('Voice:')) return `Voice: ${safeFields.voice}`;
         if (safeFields?.tone != null && line.startsWith('Tone:')) return `Tone: ${safeFields.tone}`;
         if (safeFields?.perceived_as != null && line.startsWith('Perceived as:')) return `Perceived as: ${safeFields.perceived_as}`;
         if (safeFields?.descriptor != null && idx === headerIdx && headerIdx !== -1) { const parts = line.split('|').map(p => p.trim()); parts[2] = safeFields.descriptor; return parts.join(' | '); }
@@ -1395,18 +1399,16 @@ export async function runScan({ trigger = null } = {}) {
     const chronicle = getLatestChronicleEntry();
     if (!recentMessages) throw new Error('No recent messages to scan.');
 
-    // Build the "Already Tracked NPCs" section. In Dossier Mode, include the
-    // existing entry content (truncated) so the model can see which dossier
-    // fields are missing and fill them in rather than returning all-null.
+    // Include bounded existing major entries: dossier scans can fill missing
+    // fields, and compact scans can update identity lines released by Growth.
     let knownSection;
     if (knownNames.length > 0) {
         const lines = [];
         for (const name of knownNames) {
             const info = registry[name];
             lines.push(`- ${name} [${info.type}]`);
-            // In dossier mode, include existing content for major NPCs so the
-            // scan can detect and fill missing dossier fields.
-            if (dossierMode && info.type === 'major' && info.uid != null) {
+            // Compact entries may also have Personality/Voice lines from Growth.
+            if (info.type === 'major' && info.uid != null) {
                 try {
                     const existing = await loadEntryContent(info.uid, name);
                     // A bounded projection, not a prefix: every field label
@@ -1539,7 +1541,7 @@ export async function runNpcUpdate(name, uid) {
 
         // Shared three-state ownership, including the legacy upgrade lock.
         // The helper also leaves malformed non-object responses safe to validate.
-        if (useDossier) result.fields = applyFieldOwnership(name, result.fields);
+        result.fields = applyFieldOwnership(name, result.fields);
 
         // Phase 1 seam S3: the shared field contract — invalid values are
         // dropped whole (the existing entry keeps its old line), valid

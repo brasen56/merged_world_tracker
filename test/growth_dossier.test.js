@@ -271,7 +271,8 @@ describe('headless drafting service', () => {
     });
     test('latest approval is read for hand-edit labels, never sent to the model', async () => {
         books.get(BOOK).entries[9] = { comment: '[MWT:growth-history]', content: JSON.stringify({ version: 1,
-            records: { 'ent-mara': [{ approved: { personality: 'Keeps promises.', voice: current.voice }, privateHistory: 'HISTORY SECRET' }] } }) };
+            records: { 'ent-mara': [{ acceptedAt: 1000, changes: [],
+                approved: { personality: 'Keeps promises.', voice: current.voice }, privateHistory: 'HISTORY SECRET' }] } }) };
         const result = await draftGrowthDossier('Mara');
         expect(result.proposal.changes[0].sourceLabel).toBeUndefined();
         expect(result.proposal.changes[1].sourceLabel).toBe('hand edit, no evidence');

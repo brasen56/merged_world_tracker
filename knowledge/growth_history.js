@@ -70,8 +70,30 @@ export function mergeGrowthHistoryIdentities(keepId, mergeId, bookName, assertCu
             activeDossierApproval: !adoptDossier && record === active,
         })), ...incoming]
             .sort((a, b) => (growthEvidenceTime(a.acceptedAt) || 0) - (growthEvidenceTime(b.acceptedAt) || 0)));
-        await mergeGrowthHistoryRecordsUnlocked({ [keepId]: combined, [mergeId]: [] }, bookName, { replace: true, assertCurrent });
-        assertCurrent();
+        let saveStarted = false;
+        let recoverySnapshots = [];
+        try {
+            await mergeGrowthHistoryRecordsUnlocked({ [keepId]: combined, [mergeId]: [] }, bookName, {
+                replace: true, assertCurrent, onSaveStart: (before, attempted) => {
+                    saveStarted = true;
+                    recoverySnapshots = [before, attempted];
+                },
+            });
+            assertCurrent();
+        } catch (err) {
+            if (!saveStarted) throw err;
+            // A save can complete after cancellation (or throw after writing).
+            // Restore both uncapped inputs in the captured book, even if that
+            // book is no longer active. The registry fold has not started yet.
+            try {
+                await mergeGrowthHistoryRecordsUnlocked({ [keepId]: retained, [mergeId]: absorbed }, bookName, {
+                    replace: true, recoverySnapshots, cap: false,
+                });
+            } catch (rollbackError) {
+                throw new Error(`${err.message}; Growth history rollback failed: ${rollbackError.message}`);
+            }
+            throw err;
+        }
     });
 }
 
@@ -83,6 +105,21 @@ export function isGrowthHistoryEntry(entry) {
     return typeof entry?.comment === 'string' && entry.comment.startsWith(GROWTH_HISTORY_SENTINEL);
 }
 
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isLines = value => isObject(value) && ['personality', 'voice'].every(key => typeof value[key] === 'string');
+function isApproval(record) {
+    return isObject(record) && growthEvidenceTime(record.acceptedAt) !== null && isLines(record.approved)
+        && (record.original === undefined || isLines(record.original))
+        && (record.activeDossierApproval === undefined || typeof record.activeDossierApproval === 'boolean')
+        && Array.isArray(record.changes) && record.changes.every(change => isObject(change)
+            && ['personality', 'voice'].includes(change.field)
+            && ['keep', 'edit', 'add', 'remove'].includes(change.action)
+            && typeof change.before === 'string' && typeof change.after === 'string'
+            && Array.isArray(change.evidenceIds) && change.evidenceIds.every(id => typeof id === 'string')
+            && (change.sourceLabel === undefined || typeof change.sourceLabel === 'string')
+            && (change.firstApprovedAt === undefined || growthEvidenceTime(change.firstApprovedAt) !== null));
+}
+
 export function readGrowthHistoryContainerFromBook(wi) {
     const entries = Object.values(wi?.entries || {}).filter(isGrowthHistoryEntry);
     if (entries.length > 1) return { ok: false, reason: 'duplicate-containers' };
@@ -92,7 +129,7 @@ export function readGrowthHistoryContainerFromBook(wi) {
     try { parsed = JSON.parse(entry.content); } catch { return { ok: false, reason: 'container-json-invalid' }; }
     if (parsed?.version !== GROWTH_HISTORY_VERSION) return { ok: false, reason: 'unsupported-version' };
     if (!parsed.records || typeof parsed.records !== 'object' || Array.isArray(parsed.records)
-        || Object.values(parsed.records).some(records => !Array.isArray(records))) {
+        || Object.values(parsed.records).some(records => !Array.isArray(records) || !records.every(isApproval))) {
         return { ok: false, reason: 'container-records-invalid' };
     }
     return { ok: true, version: parsed.version, records: parsed.records };
@@ -105,11 +142,12 @@ export async function readGrowthHistoryContainer(bookName = getLorebookName()) {
 
 /** Merge by entityId, current-wins on import. Never downgrade unreadable data. */
 export async function mergeGrowthHistoryRecordsUnlocked(records, bookName = getLorebookName(), {
-    assertCurrent = () => {}, replace = false,
+    assertCurrent = () => {}, replace = false, onSaveStart = () => {}, recoverySnapshots = [], cap = true,
 } = {}) {
     assertCurrent();
     if (!bookName) throw new Error('Growth history: no Knowledge book');
     const wi = await loadCleanupBook(bookName) || { entries: {} };
+    const before = structuredClone(wi);
     assertCurrent();
     const read = readGrowthHistoryContainerFromBook(wi);
     if (!read.ok) throw new Error(`Growth history: refusing write (${read.reason})`);
@@ -118,15 +156,20 @@ export async function mergeGrowthHistoryRecordsUnlocked(records, bookName = getL
     } } });
     if (!incoming.ok) throw new Error('Growth history: invalid records');
     const merged = replace ? { ...read.records, ...records } : { ...records, ...read.records };
-    for (const [id, history] of Object.entries(merged)) merged[id] = capGrowthHistory(history);
+    if (cap) for (const [id, history] of Object.entries(merged)) merged[id] = capGrowthHistory(history);
     const conflict = hostCacheConflict(bookName, wi);
-    if (conflict) throw new Error(conflict.error);
+    // Recovery may see our own write on disk with the pre-write host cache.
+    // Both sides must match known snapshots; never bypass unrelated edits.
+    const ownWrite = recoverySnapshots.some(snapshot => JSON.stringify(snapshot) === JSON.stringify(wi))
+        && recoverySnapshots.some(snapshot => !hostCacheConflict(bookName, snapshot));
+    if (conflict && !ownWrite) throw new Error(conflict.error);
     const content = putGrowthHistoryInBook(wi, merged);
     assertCurrent();
     // Caller holds the store lock. Buffer ordinary synchronous writes until
     // that lock settles so clean-marking covers only the snapshot saved here.
     beginStoreTransaction();
     applyStoreToWorldInfo(bookName, wi);
+    onSaveStart(before, structuredClone(wi));
     await saveCleanupBook(bookName, wi);
     const reloaded = await loadCleanupBook(bookName);
     const verified = readGrowthHistoryContainerFromBook(reloaded);

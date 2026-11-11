@@ -6,7 +6,10 @@ import { saveSettings } from '../knowledge/settings.js';
 import { _clearCacheForTests, _setCacheForTests, flushAll, isStoreEntry, peekStore } from '../knowledge/store.js';
 import { getEvidenceFile, saveEvidenceMap } from '../knowledge/evidence.js';
 import { captureEvidence, runContinuousCapture, runIlsBackfillCapture } from '../knowledge/growth.js';
-import { runNpcUpdate } from '../knowledge/lorebook.js';
+import { runNpcUpdate, runScan, enrichStagingItem } from '../knowledge/lorebook.js';
+import { buildStagingItems } from '../knowledge/staging.js';
+import { buildGrowthReviewContent } from '../knowledge/growth_dossier_review.js';
+import { buildGrowthApproval } from '../knowledge/growth_lineage.js';
 import { isInternalEntry } from '../knowledge/internal_entries.js';
 import { findDestinationEntryUid } from '../knowledge/reconcile.js';
 import { readGrowthHistoryContainer, writeGrowthHistoryContainer, isGrowthHistoryEntry,
@@ -17,6 +20,8 @@ import { setGrowthDossierSettings } from '../knowledge/registry.js';
 
 const BOOK = 'Knowledge Tracker';
 const content = '[Dossier] Mara | Human | captain\nTone: soft\nPerceived as: kind\nVoice: old voice\nPersonality: old personality\nRole: captain\nBackground: sailor\nCanon Lock: born at sea';
+const approval = acceptedAt => buildGrowthApproval({ acceptedAt,
+    current: { personality: 'Patient.', voice: 'Plain.' }, approved: { personality: 'Patient.', voice: 'Plain.' } });
 let books;
 let requests;
 
@@ -38,6 +43,51 @@ beforeEach(() => {
     setFakeApi(request => { requests.push(request); return JSON.stringify({ observations: [] }); });
 });
 afterEach(() => { _clearCacheForTests(); state.wiScript = null; vi.unstubAllGlobals(); });
+
+test.each(['scan', 'npc-update'])('compact Growth lines return to %s updates when ownership is off', async path => {
+    saveSettings({ dossierMode: false, trackMainCharAsNpc: true });
+    const compact = 'Mara | Human | captain\nTone: soft\nKnowledge Ledger:\n- Knows the harbour.';
+    const grown = buildGrowthReviewContent(compact, 'Personality: Patient.\nVoice: Plain.');
+    books.get(BOOK).entries[7].content = grown;
+    expect(grown.startsWith('[Dossier]')).toBe(false);
+    const fields = { tone: 'firm', personality: 'Asks for help.', voice: 'Drops formal titles.' };
+    setFakeApi(request => {
+        requests.push(request);
+        return JSON.stringify(path === 'scan'
+            ? { update_major: [{ name: 'Mara', fields, new_knowledge: [] }] }
+            : { fields, new_knowledge: [] });
+    });
+    const update = async () => {
+        if (path === 'npc-update') return (await runNpcUpdate('Mara', 7)).merged;
+        const result = await runScan();
+        const items = buildStagingItems(result);
+        await enrichStagingItem(items[0]);
+        expect(requests.at(-1).userContent).toContain('Personality: Patient.');
+        return items[0].mergedContent;
+    };
+    setGrowthDossierSettings('Mara', { enabled: true });
+    const protectedContent = await update();
+    expect(protectedContent).toContain('Personality: Patient.');
+    expect(protectedContent).toContain('Voice: Plain.');
+    setGrowthDossierSettings('Mara', { enabled: false });
+    const released = await update();
+    expect(released).toContain('Personality: Asks for help.');
+    expect(released).toContain('Voice: Drops formal titles.');
+    expect(released).toContain('Tone: firm');
+    expect(released.startsWith('[Dossier]')).toBe(false);
+    expect(requests.at(-1).systemPrompt).toContain('"personality"');
+    expect(requests.at(-1).systemPrompt).toContain('"voice"');
+});
+
+test.each([null, { ...approval(1), changes: [null] }])('backup validation refuses malformed history without changing its source: %j', async record => {
+    const envelope = await collectBackup();
+    envelope.growthHistory = { version: 1, records: { 'ent-mara': [record] } };
+    const before = structuredClone(envelope);
+    const checked = validateBackupEnvelope(envelope);
+    expect(checked.growthHistory).toBeUndefined();
+    expect(checked.warnings.some(warning => warning.includes('Growth history'))).toBe(true);
+    expect(envelope).toEqual(before);
+});
 
 describe('capture leaf rule', () => {
     test.each(['manual', 'continuous', 'backfill'])('%s context excludes all four identity lines, keeps facts and canon', async path => {
@@ -109,7 +159,7 @@ describe('Growth history container', () => {
         expect(books.get(BOOK)).toEqual(before);
     });
     test('reload, cap, never-inject flags, internal-entry exclusion and backup round trip', async () => {
-        const records = { 'ent-mara': Array.from({ length: 12 }, (_, i) => ({ approvedAt: i, personality: `P${i}` })) };
+        const records = { 'ent-mara': Array.from({ length: 12 }, (_, i) => approval(i + 1)) };
         await writeGrowthHistoryContainer(BOOK, records);
         expect((await readGrowthHistoryContainer(BOOK)).records['ent-mara']).toHaveLength(10);
         let wi = books.get(BOOK);
@@ -139,17 +189,17 @@ describe('Growth history container', () => {
         expect(books.get(BOOK)).toEqual(before);
     });
     test('import is current-wins and preserves other entity histories', async () => {
-        await writeGrowthHistoryContainer(BOOK, { 'ent-mara': [{ approvedAt: 2 }] });
-        await mergeGrowthHistoryRecordsUnlocked({ 'ent-mara': [{ approvedAt: 1 }], 'ent-other': [] }, BOOK);
-        expect((await readGrowthHistoryContainer(BOOK)).records).toEqual({ 'ent-mara': [{ approvedAt: 2 }], 'ent-other': [] });
+        await writeGrowthHistoryContainer(BOOK, { 'ent-mara': [approval(2)] });
+        await mergeGrowthHistoryRecordsUnlocked({ 'ent-mara': [approval(1)], 'ent-other': [] }, BOOK);
+        expect((await readGrowthHistoryContainer(BOOK)).records).toEqual({ 'ent-mara': [approval(2)], 'ent-other': [] });
     });
     test('a lost save fails persistence verification', async () => {
         state.wiScript.saveWorldInfo = async () => {};
         await expect(writeGrowthHistoryContainer(BOOK, { 'ent-mara': [] })).rejects.toThrow('persistence could not be verified');
     });
     test('malformed records cannot replace existing history', async () => {
-        await writeGrowthHistoryContainer(BOOK, { 'ent-mara': [{ approvedAt: 2 }] });
+        await writeGrowthHistoryContainer(BOOK, { 'ent-mara': [approval(2)] });
         await expect(writeGrowthHistoryContainer(BOOK, { 'ent-mara': {} })).rejects.toThrow('invalid records');
-        expect((await readGrowthHistoryContainer(BOOK)).records['ent-mara']).toEqual([{ approvedAt: 2 }]);
+        expect((await readGrowthHistoryContainer(BOOK)).records['ent-mara']).toEqual([approval(2)]);
     });
 });

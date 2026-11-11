@@ -8,8 +8,10 @@ import { _clearCacheForTests, _setCacheForTests } from '../knowledge/store.js';
 import { saveSettings } from '../knowledge/settings.js';
 import { state } from '../knowledge/state.js';
 import { renameEntity, mergeEntities } from '../knowledge/identity.js';
-import { getRegistry } from '../knowledge/registry.js';
+import { getRegistry, getGrowthDossierSettings } from '../knowledge/registry.js';
+import { growthOwnsField } from '../knowledge/field_ownership.js';
 import '../knowledge/lorebook.js';
+import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 
 const BOOK = 'Knowledge Tracker';
 const lines = { personality: 'Waits patiently.', voice: 'Speaks plainly.' };
@@ -17,6 +19,7 @@ const keeps = Object.entries(lines).map(([field, after]) => ({ field, action: 'k
 let disk;
 beforeEach(() => {
     resetCoreStubs();
+    _resetEpoch();
     _clearCacheForTests();
     saveSettings({ scope: 'global' });
     _setCacheForTests(BOOK, { registry: { Mara: { uid: 0, entityId: 'mara', type: 'major', aliases: [] },
@@ -156,4 +159,98 @@ test.each([0, 1, 2])('removals reconcile restored duplicate occurrences (%s rest
     expect(record.changes.filter(c => c.action === 'remove')).toHaveLength(2 - restored);
     expect(record.changes.filter(c => c.after === lines.personality)).toHaveLength(1 + restored);
     expect(changes.filter(c => c.action === 'remove')).toHaveLength(2);
+});
+
+test.each(['cancel', 'save-error'])('failed identity merge restores uncapped histories (%s)', async kind => {
+    for (let i = 1; i <= 10; i++) {
+        for (const id of ['mara', 'mary']) {
+            appendGrowthApprovalToBook(disk, id, { approved: lines, current: lines, changes: keeps, acceptedAt: i * 1000 });
+        }
+    }
+    const original = structuredClone(readGrowthHistoryContainerFromBook(disk).records);
+    state.wiScript.worldInfoCache = new Map([[BOOK, structuredClone(disk)]]);
+    let first = true;
+    state.wiScript.saveWorldInfo = async (_name, wi) => {
+        disk = structuredClone(wi);
+        if (first) {
+            first = false;
+            if (kind === 'cancel') bumpEpoch();
+            else throw new Error('save failed after write');
+        }
+    };
+    const result = await mergeEntities('Mara', 'Mary', { relabelEntries: false, syncBlocks: false });
+    expect(result.ok).toBe(false);
+    expect(Object.keys(getRegistry())).toEqual(['Mara', 'Mary']);
+    expect((await readGrowthHistoryContainer()).records).toEqual(original);
+});
+
+test('rollback does not overwrite unrelated host-cache edits after a failed save', async () => {
+    appendGrowthApprovalToBook(disk, 'mara', { approved: lines, current: lines, changes: keeps });
+    appendGrowthApprovalToBook(disk, 'mary', { approved: lines, current: lines, changes: keeps });
+    state.wiScript.worldInfoCache = new Map([[BOOK, structuredClone(disk)]]);
+    let writes = 0;
+    state.wiScript.saveWorldInfo = async (_name, wi) => {
+        writes++;
+        disk = structuredClone(wi);
+        state.wiScript.worldInfoCache.get(BOOK).entries[99] = { uid: 99, content: 'Unsaved editor change' };
+        throw new Error('response lost');
+    };
+    await expect(mergeGrowthHistoryIdentities('mara', 'mary', BOOK, () => {})).rejects.toThrow('rollback failed');
+    expect(writes).toBe(1);
+    expect(state.wiScript.worldInfoCache.get(BOOK).entries[99].content).toBe('Unsaved editor change');
+});
+
+test('mapped rewrites consume their source occurrence before matching duplicate output', () => {
+    const record = buildGrowthApproval({ current: { ...lines, personality: 'A. B.' },
+        approved: { ...lines, personality: 'B. B.' }, changes: [
+            { field: 'personality', action: 'edit', before: 'A.', after: 'B.', evidenceIds: ['obs'] },
+            { field: 'personality', action: 'keep', before: 'B.', after: 'B.', evidenceIds: [] }, keeps[1],
+        ] });
+    expect(record.changes.map(c => c.action)).toEqual(['edit', 'keep', 'keep']);
+});
+
+test('evidence-backed replacements shed baseline labels, including subsequent keeps', () => {
+    const approved = { ...lines, personality: 'Asks for help.' };
+    const record = buildGrowthApproval({ current: lines, approved, changes: [
+        { ...keeps[0], action: 'edit', after: approved.personality, evidenceIds: ['obs'], sourceLabel: 'from the original line, no evidence' }, keeps[1],
+    ] });
+    expect(record.changes[0].sourceLabel).toBeUndefined();
+    const next = buildGrowthApproval({ current: approved, approved, previous: record,
+        changes: [{ ...record.changes[0], action: 'keep', before: approved.personality }, keeps[1]] });
+    expect(next.changes[0].sourceLabel).toBeUndefined();
+});
+
+test.each([undefined, { enabled: false }, { limits: { personality: 700 } }])('dossier adoption fills missing settings, preserving survivor choices: %j', settings => {
+    getRegistry().Mara.uid = null;
+    getRegistry().Mara.growthDossier = settings;
+    getRegistry().Mary.growthDossier = { enabled: true, limits: { personality: 1400, voice: 800 } };
+    return mergeEntities('Mara', 'Mary', { relabelEntries: false, syncBlocks: false }).then(result => {
+        expect(result.ok).toBe(true);
+        expect(getGrowthDossierSettings('Mara')).toMatchObject({ enabled: settings?.enabled ?? true,
+            limits: { personality: settings?.limits?.personality ?? 1400, voice: 800 } });
+        expect(growthOwnsField('Mara', 'voice')).toBe(settings?.enabled ?? true);
+    });
+});
+
+test.each([null, [], {}, { changes: null }, { changes: [null] }, { changes: [{}] },
+    { changes: [{ ...keeps[0], evidenceIds: 'obs' }] }, { approved: null }, { activeDossierApproval: 'yes' }])(
+    'malformed approval records refuse reads and writes untouched: %j', malformed => {
+        const valid = buildGrowthApproval({ current: lines, approved: lines, changes: keeps });
+        const record = malformed && !Array.isArray(malformed) ? { ...valid, ...malformed } : malformed;
+        // An empty object is independently malformed, rather than a patch.
+        disk.entries[2] = { comment: '[MWT:growth-history]', content: JSON.stringify({ version: 1,
+            records: { mara: [malformed && Object.keys(malformed).length === 0 ? malformed : record] } }) };
+        const before = structuredClone(disk);
+        expect(readGrowthHistoryContainerFromBook(disk)).toEqual({ ok: false, reason: 'container-records-invalid' });
+        expect(() => appendGrowthApprovalToBook(disk, 'mara', { current: lines, approved: lines })).toThrow('container-records-invalid');
+        expect(disk).toEqual(before);
+    });
+
+test('reviewer deletions of model keeps are audited without model evidence', () => {
+    const current = { ...lines, personality: 'Waits patiently. Trusts slowly.' };
+    const changes = [...keeps, { field: 'personality', action: 'keep', before: 'Trusts slowly.', after: 'Trusts slowly.', evidenceIds: ['obs'] }];
+    const record = buildGrowthApproval({ approved: lines, current, changes });
+    expect(record.changes.filter(c => c.action === 'remove')).toEqual([
+        { field: 'personality', action: 'remove', before: 'Trusts slowly.', after: '', evidenceIds: [], sourceLabel: 'hand edit, no evidence' },
+    ]);
 });
