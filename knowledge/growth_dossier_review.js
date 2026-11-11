@@ -5,6 +5,7 @@ import { validateFieldValue } from './field_contract.js';
 import { growthOwnsField } from './field_ownership.js';
 import { getRegistryEntry, getGrowthDossierSettings } from './registry.js';
 import { stripRelationshipBlock } from './relationships.js';
+import { buildGrowthApproval, splitGrowthSentences } from './growth_lineage.js';
 
 export const GROWTH_ITEM_TYPE = 'growth-dossier';
 const labels = { personality: 'Personality', voice: 'Voice' };
@@ -51,6 +52,32 @@ export function buildGrowthReviewContent(current, proposed) {
         fields[key] = check.value;
     }
     return applyGrowthLines(current, fields);
+}
+
+/** A pending model draft must not silently undo a later hand-edited line. */
+export function refreshGrowthReview(item, current, proposed) {
+    const before = extractGrowthDossierLines(item.existingContent);
+    const live = extractGrowthDossierLines(current);
+    const reviewed = extractGrowthDossierLines(proposed);
+    const model = extractGrowthDossierLines(item.proposedContent);
+    const changed = Object.keys(labels).filter(key => before[key] !== live[key]);
+    for (const key of changed) {
+        if (reviewed[key] === model[key]) reviewed[key] = live[key];
+    }
+    const content = applyGrowthLines(current, reviewed);
+    const preserved = changed.flatMap(field => {
+        const remaining = splitGrowthSentences(live[field]);
+        return splitGrowthSentences(reviewed[field]).flatMap(sentence => {
+            const index = remaining.indexOf(sentence);
+            if (index < 0) return [];
+            remaining.splice(index, 1);
+            return [{ field, action: 'keep', before: sentence, after: sentence, evidenceIds: [], sourceLabel: 'hand edit, no evidence' }];
+        });
+    });
+    item.changes = buildGrowthApproval({ current: live, approved: reviewed,
+        changes: [...(item.changes || []).filter(change => !changed.includes(change.field)), ...preserved],
+    }).changes;
+    return { content, changed };
 }
 
 export function createGrowthStagingItem(draft) {

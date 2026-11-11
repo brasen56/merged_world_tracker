@@ -2256,6 +2256,11 @@ h4.kt-npc-name {
     margin-bottom: 20px;
 }
 
+.kt-growth-dossier-limit {
+    width: 90px;
+    margin: 4px 8px 4px 4px;
+}
+
 .kt-growth-profile-editor {
     width: 100%;
     min-height: 200px;

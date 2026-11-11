@@ -36,7 +36,11 @@ export function buildGrowthApproval({ approved, current, changes = [], previous 
             const priorIndex = prior.findIndex(c => c.after === sentence);
             const ancestor = priorIndex < 0 ? null : prior.splice(priorIndex, 1)[0];
             const inherited = source?.action === 'keep' && ancestor;
-            const evidenceIds = source ? [...(source.evidenceIds || [])] : [];
+            // A keep re-approves the earlier sentence. When the draft cites
+            // nothing new, the earlier support carries forward rather than
+            // the sentence turning into "no evidence" by being kept.
+            const cited = source ? [...(source.evidenceIds || [])] : [];
+            const evidenceIds = cited.length || !inherited ? cited : [...(ancestor.evidenceIds || [])];
             const sourceLabel = !source ? 'hand edit, no evidence'
                 : evidenceIds.length ? undefined
                     : source.sourceLabel || (inherited && ancestor.sourceLabel)
@@ -56,13 +60,19 @@ export function buildGrowthApproval({ approved, current, changes = [], previous 
     return { acceptedAt, approved: { ...approved }, changes: stamped, ...(!previous ? { original: { ...current } } : {}) };
 }
 
-/** Missing/undated evidence is neutral; any canon or older support suppresses echo. */
+/** Only an approved, kept sentence can echo its own dossier text. Edits and
+ * additions are new sentences, first approved at this acceptance, and their
+ * evidence postdates the old line by construction. Missing/undated evidence
+ * is neutral; any canon or older support suppresses echo.
+ */
 export function growthEchoStatus(change, evidence = [], lineage = []) {
+    if (change.action !== 'keep' || !change.after) return '';
+    const ancestor = lineage.find(c => c.field === change.field && c.after === change.after);
+    const firstApproved = growthEvidenceTime(ancestor?.firstApprovedAt);
+    if (firstApproved === null) return '';
     const support = evidence.filter(o => (change.evidenceIds || []).includes(o.id));
-    if (!change.after || !support.length || support.some(o => o.canon)) return '';
+    if (!support.length || support.some(o => o.canon)) return '';
     const times = support.map(o => growthEvidenceTime(o.tier === 'consolidated' ? o.firstSeen : o.ts)).filter(t => t !== null);
     if (!times.length) return 'timing unknown';
-    const ancestor = lineage.find(c => c.field === change.field && c.after === (change.before || change.after));
-    const firstApproved = growthEvidenceTime(ancestor?.firstApprovedAt);
-    return firstApproved !== null && times.every(t => t > firstApproved) ? 'possible echo — all dated support was written after first approval' : '';
+    return times.every(t => t > firstApproved) ? 'possible echo — all dated support was written after first approval' : '';
 }

@@ -41,7 +41,16 @@ export function putGrowthHistoryInBook(wi, records) {
         entry = { uid, displayIndex: uid, order: 100, position: 0, addMemo: true };
         wi.entries[uid] = entry;
     }
-    const content = JSON.stringify({ version: GROWTH_HISTORY_VERSION, records });
+    // A keep's before is identical to after. Persist it once; readers expand
+    // the compact shape so lineage and UI callers retain the public contract.
+    const compact = Object.fromEntries(Object.entries(records).map(([id, history]) => [id,
+        history.map(record => ({ ...record, changes: record.changes.map(change => {
+            if (change.action !== 'keep' || change.before !== change.after) return change;
+            const { before: _before, ...kept } = change;
+            return kept;
+        }) })),
+    ]));
+    const content = JSON.stringify({ version: GROWTH_HISTORY_VERSION, records: compact });
     Object.assign(entry, {
         comment: `${GROWTH_HISTORY_SENTINEL} Growth approval history`, content,
         key: [], keysecondary: [], enabled: false, disable: true, constant: false,
@@ -128,6 +137,19 @@ export function readGrowthHistoryContainerFromBook(wi) {
     let parsed;
     try { parsed = JSON.parse(entry.content); } catch { return { ok: false, reason: 'container-json-invalid' }; }
     if (parsed?.version !== GROWTH_HISTORY_VERSION) return { ok: false, reason: 'unsupported-version' };
+    if (isObject(parsed.records)) {
+        for (const history of Object.values(parsed.records)) {
+            if (!Array.isArray(history)) continue;
+            for (const record of history) {
+                if (!Array.isArray(record?.changes)) continue;
+                for (const change of record.changes) {
+                    if (change?.action === 'keep' && change.before === undefined && typeof change.after === 'string') {
+                        change.before = change.after;
+                    }
+                }
+            }
+        }
+    }
     if (!parsed.records || typeof parsed.records !== 'object' || Array.isArray(parsed.records)
         || Object.values(parsed.records).some(records => !Array.isArray(records) || !records.every(isApproval))) {
         return { ok: false, reason: 'container-records-invalid' };

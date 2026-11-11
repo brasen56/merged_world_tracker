@@ -26,7 +26,9 @@ import { GROWTH_DOSSIER_CEILINGS } from './growth_dossier_state.js';
 import {
     GROWTH_ITEM_TYPE, assertGrowthReviewCurrent, buildGrowthReviewContent,
     createGrowthStagingItem, preserveGrowthOwnedLines, growthEditsOutsideLines,
+    refreshGrowthReview,
 } from './growth_dossier_review.js';
+import { FIELD_CONTRACT_BY_KEY } from './field_contract.js';
 
 import {
     RELATIONSHIP_TYPES, USER_STANCES, TRACKER_SENTINEL,
@@ -101,7 +103,7 @@ function renderGrowthDossierControls(name, limits = false) {
         </label>
         <span class="kt-growth-dossier-legacy">${settings.enabled === undefined ? 'Not yet set: evidence still locks Personality until you make a choice.' : ''}</span>
         ${limits ? `<div>${Object.entries(GROWTH_DOSSIER_CEILINGS).map(([key, max]) => `<label for="${id}-${key}">${key === 'personality' ? 'Personality' : 'Voice'} limit
-            <input id="${id}-${key}" type="number" class="kt-growth-dossier-limit" data-field="${key}" min="1" max="${max}" step="1" value="${settings.limits[key]}"></label>`).join(' ')}
+            <input id="${id}-${key}" type="number" class="mwt-input kt-growth-dossier-limit" data-field="${key}" min="1" max="${max}" step="1" value="${settings.limits[key]}"></label>`).join(' ')}
             <span class="kt-growth-token-estimate" role="status">About ${estimateTokens('x'.repeat(settings.limits.personality + settings.limits.voice))} tokens each time this dossier activates. Shared World Info budget may leave other entries out.</span></div>` : ''}
     </div>`;
 }
@@ -187,6 +189,12 @@ async function handleAccept(item, text, keywords, _el) {
                 if (growth) text = buildGrowthReviewContent(current, text);
                 else text = preserveGrowthOwnedLines(item.name, current, text, item.edited ? baseline : text);
                 if (body(current) !== body(item.existingContent)) {
+                    let changedGrowthLines = [];
+                    if (growth) {
+                        const refreshed = refreshGrowthReview(item, current, text);
+                        text = refreshed.content;
+                        changedGrowthLines = refreshed.changed;
+                    }
                     // Keep reviewer-authored text, even when it belongs to a
                     // promotion/demotion. Only untouched proposals can be rebuilt.
                     if (growth || item.edited || item.refreshFields) {
@@ -214,6 +222,7 @@ async function handleAccept(item, text, keywords, _el) {
                     }
                     item.keywords = keywords;
                     item.staleWarning = 'The entry changed since this proposal was built. Nothing was written. Review the refreshed Current entry and diff, then Accept again if appropriate.';
+                    if (changedGrowthLines.length) item.staleWarning += ` Hand-edited ${changedGrowthLines.join(' and ')} lines were preserved unless you explicitly edited them in Proposed. The change list now describes Current → Proposed; prepare a new Growth draft to reconsider those lines.`;
                     ktSetStatus(item.staleWarning, 'info');
                     renderNpcsSubTab();
                     return 'stale';
@@ -229,7 +238,6 @@ async function handleAccept(item, text, keywords, _el) {
                     beginStoreTransaction();
                     return writeToLorebook(item.name, content, keywords, item.uid, {
                     bookName: growthBook,
-                    skipLegacyHistory: true,
                     updateBook: (wi, before, after) => appendGrowthApprovalToBook(wi, item.entityId, {
                         current: extractGrowthDossierLines(before), approved: extractGrowthDossierLines(after), changes: item.changes,
                     }),
@@ -250,7 +258,9 @@ async function handleAccept(item, text, keywords, _el) {
                 : await writeToLorebook(item.name, content(), keywords, item.uid);
             // An old-scope save may finish after chat navigation. Never apply
             // its registry or staging bookkeeping to the newly active scope.
-            if (growth) assertGrowthTarget();
+            if (growth && (!scopeStillCurrent(growthScope).ok || getLorebookName() !== growthBook)) {
+                return result.success ? 'accepted' : 'failed';
+            }
             if (!result.success) { ktSetStatus(`Write failed: ${result.error}`, 'error'); return 'failed'; }
             // KNOWLEDGE-03: If this is an update (item.uid != null), resolve
             // the canonical registry key so the model's spelling doesn't create
@@ -528,7 +538,7 @@ function renderDetailForItem(item) {
     if (!item) return '<div class="kt-detail-empty">Select a proposal.</div>';
     const editorContent = item.mergedContent || item.proposedContent || '';
     const growth = item.type === GROWTH_ITEM_TYPE;
-    const evidence = growth ? growthDossierEvidence(getEvidenceFile(item.name, false)) : [];
+    const evidence = growth ? growthDossierEvidence(getEvidenceFile(item.name, false), { includeArchived: true }) : [];
     const reviewHtml = growth ? `<div class="kt-growth-review kt-detail-section">
         <div class="kt-detail-label">Growth sentence changes</div>
         <p>The change list describes the model draft. Reviewer edits are authoritative; only Personality and Voice are written.</p>
@@ -607,7 +617,18 @@ function wireStagingEvents(el) {
         btn.addEventListener('click', async () => {
             const item = state.stagingItems.find(i => i.id === state.activeItemId);
             if (!item) return;
+            const scope = captureScope();
             await openGrowthProfileModal(item.name, btn);
+            if (!scopeStillCurrent(scope).ok) return;
+            const modal = document.getElementById('kt-growth-modal');
+            const archived = getEvidenceFile(item.name, false)?.archivedRaw?.find(o => o.id === btn.dataset.evidenceId);
+            if (modal && archived && ![...modal.querySelectorAll('[data-obs-id]')].some(node => node.dataset.obsId === archived.id)) {
+                const audit = document.createElement('div');
+                audit.className = 'kt-growth-obs';
+                audit.dataset.obsId = archived.id;
+                audit.textContent = `Archived raw evidence — ${archived.id}: ${archived.claim}${archived.quote ? ` — “${archived.quote}”` : ''}`;
+                modal.querySelector('.kt-growth-content')?.append(audit);
+            }
             const observation = [...(document.getElementById('kt-growth-modal')?.querySelectorAll('[data-obs-id]') || [])]
                 .find(node => node.dataset.obsId === btn.dataset.evidenceId);
             if (observation) {
@@ -2296,7 +2317,11 @@ function openIdentityModal(name) {
         if (otherKey === key) { ktSetStatus('An NPC cannot merge into itself.', 'error'); return; }
         if (!confirm(`Merge "${otherKey}" into "${key}"?\n\nThis absorbs its evidence, relationships, and aliases, keeps "${otherKey}" as a resolvable alias, and removes its registry record. Its lorebook entry stays for manual deletion. This cannot be undone automatically.`)) return;
         const result = await mergeEntities(key, otherKey);
-        if (!result.ok) { ktSetStatus(`Merge refused: ${result.reason}`, 'error'); return; }
+        if (!result.ok) {
+            ktSetStatus(`Merge refused: ${result.reason}${result.warnings?.length ? `. ${result.warnings.join(' ')}` : ''}`, 'error');
+            for (const warning of result.warnings ?? []) console.warn('[MWT:Knowledge]', warning);
+            return;
+        }
         // Same as the rename flush: the captured book, never the new chat's.
         await flushIdentityWrites(result.book);
         ktSetStatus(
@@ -2448,7 +2473,7 @@ function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
         try {
             setControlBusy(runBtn, true); runBtn.textContent = '⏳…';
             const result = await runDossierFieldRefresh(name, reg.uid, selected);
-            const scanLimits = { personality: 900, voice: 600 };
+            const scanLimits = Object.fromEntries(['personality', 'voice'].map(key => [key, FIELD_CONTRACT_BY_KEY[key].maxChars]));
             const refreshedValues = extractDossierFieldValues(result.currentContent);
             const overScanLimit = selected.filter(key => scanLimits[key] && refreshedValues[key]?.length > scanLimits[key]
                 && result.fields[key] == null);

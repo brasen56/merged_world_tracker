@@ -12,6 +12,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.17.0]
+
+### Added
+
+- **Knowledge Tracker — Growth-written dossier Personality and Voice.**
+  Once an NPC had Growth evidence, scans stopped updating its
+  `Personality:` line, and the approved profile itself never reached the
+  RP prompt — so growth entered play only if you pasted it in by hand. A
+  new per-NPC **Use Growth in dossier** switch (in the Growth window and
+  on the NPC card) fixes that: one explicit, disclosed model call turns
+  the generated profile into proposed one-line `Personality:`/`Voice:`
+  text — the profile's prose is never injected, because its scene quotes
+  would turn into catchphrases, it is too long for the slot, and it would
+  feed on itself through capture. The proposal lands in Staging with a
+  per-sentence change list, evidence links and advisory warnings, and
+  **Accept & Write** makes the approved text the field text, so it
+  reaches the RP prompt by construction. Nothing is drafted without the
+  explicit action, no draft writes anything, and Growth items are
+  excluded from Accept All and every auto-approval path.
+  (`knowledge/growth_dossier.js`, `knowledge/growth_dossier_review.js`,
+  `knowledge/growth_dossier_state.js`, `knowledge/growth_history.js`,
+  `knowledge/growth_lineage.js`, with the ownership rule in
+  `knowledge/field_ownership.js` and seams in `knowledge/staging.js`,
+  `knowledge/lorebook.js`, `knowledge/render.js`, `knowledge/prompts.js`
+  and `knowledge/growth.js`; designed in
+  `docs/GROWTH_PROFILE_INJECTION_SCOPE.md`, Phases 1–4.)
+  - **The switch decides who owns the two lines.** On: Growth owns
+    Personality and Voice — scans, single-NPC updates, Enrich and 🎯
+    field refresh leave both lines alone while still updating every
+    other field and the Knowledge Ledger. Off: the approved text stays
+    (nothing reverts) and scans own both lines again from the next scan
+    on; a pending Growth item can't be accepted while the switch is off.
+    Never set — every NPC until you touch it: today's rule, where
+    evidence keeps locking Personality and scans own Voice, so upgrading
+    changes nothing for anyone.
+  - **Reviewed sentence by sentence.** The Staging diff gains the
+    change list: add / edit / keep / remove actions, links into the
+    existing evidence view (including "no longer on file" for deleted
+    evidence), "no evidence" labels for pre-Growth original and
+    hand-edited text, and advisory warnings for quotes, typology
+    vocabulary and limit overruns. Reviewer edits outside the two owned
+    lines warn and are never written. An intervening scan, hand edit or
+    field refresh never silently wins: a Growth acceptance rebuilds only
+    the two owned lines onto a fresh dossier, and a scan acceptance
+    re-applies Growth-owned lines unless the reviewer explicitly rewrote
+    them.
+  - **Per-NPC length limits.** Personality and Voice get separate limits
+    per NPC — defaults 450/350, raisable to 1,500/1,000, with an
+    estimated token cost shown beside them. Going over the NPC's limit
+    warns; only the 1,500/1,000 Growth ceiling rejects. Scans stay bound
+    to 900/600 for every NPC, and a 🎯 refresh keeps an over-limit line
+    with a message saying so.
+  - **A look-back history.** Each acceptance appends one record — the
+    date, the approved text and the change list, with the pre-Growth
+    original on the first record only — capped at the last 10 per NPC.
+    It lives in a dedicated disabled `[MWT:growth-history]` lorebook
+    entry that is never injected and never touches localStorage,
+    survives reloads, backups, renames and identity merges, and is
+    viewable per NPC in the Growth window, newest first.
+  - **An advisory echo warning.** A kept sentence whose supporting
+    evidence all comes from RP messages written after it was first
+    approved is flagged — by message time, not capture time, so
+    backfilling older scenes never trips it; canon support suppresses
+    the flag and undated evidence is neutral. Advisory only: it never
+    blocks acceptance.
+  - **Scope follows Lorebook Scope, and the cost is one call.** The
+    switch, the limits, the approved text and the history all live in
+    the Knowledge lorebook, so they follow the Knowledge → Lorebook
+    Scope setting; raw evidence stays in the chat where it was captured,
+    and a new chapter never treats missing evidence as a change. Each
+    drafted proposal costs one model call, reusing the Growth model
+    settings — no new setting.
+
+### Changed
+
+- **Evidence capture no longer sees the dossier's identity lines.** All
+  three capture paths (manual, continuous, backfill) strip
+  `Personality:`, `Voice:`, `Tone:` and `Perceived as:` from the
+  existing context handed to the model — for every NPC, whether or not
+  the new option is on — so dossier text can no longer loop back into
+  capture and confirm itself. Role, background and canon context are
+  retained.
+
+### Fixed
+
+- **The Growth window explainer now states the Personality freeze
+  correctly:** it begins at the first evidence capture, not once a
+  growth profile is saved.
+
 ## [2.16.1]
 
 ### Changed

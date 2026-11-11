@@ -621,13 +621,13 @@ export async function importNpcs() {
             // explicit false without reviving malformed settings.
             const localGrowth = repairGrowthDossier(prev.growthDossier);
             const importedGrowth = repairGrowthDossier(entry.growthDossier);
-            const growthDossier = localGrowth === undefined ? importedGrowth
+            const growthDossier = repairGrowthDossier(localGrowth === undefined ? importedGrowth
                 : importedGrowth === undefined ? localGrowth : {
                     ...importedGrowth, ...localGrowth,
                     ...((importedGrowth.limits || localGrowth.limits) ? {
                         limits: { ...importedGrowth.limits, ...localGrowth.limits },
                     } : {}),
-                };
+                });
             registry[name] = {
                 ...prev, // keep local-only fields (e.g. profileUid)
                 uid: incomingUid,

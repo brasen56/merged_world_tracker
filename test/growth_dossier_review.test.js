@@ -13,6 +13,8 @@ import { mergeScanResults } from '../knowledge/staging.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 import { pauseStore, resumeStore } from '../core/schema_status.js';
 import { appendGrowthApprovalToBook, readGrowthHistoryContainer, isGrowthHistoryEntry } from '../knowledge/growth_history.js';
+import { getHistory } from '../knowledge/lorebook.js';
+import { applyConsolidation } from '../knowledge/evidence.js';
 
 vi.mock('../knowledge/growth.js', async importOriginal => ({ ...await importOriginal(), loadProfile: vi.fn(async () => 'A patient captain.') }));
 
@@ -98,16 +100,28 @@ test('Growth modal displays durable approvals and pre-Growth original', async ()
     expect(history.textContent).toContain('Asks for help.');
 });
 
-test('review displays advisory message-time echo and timing unknown', () => {
-    const item = makeItem();
-    item.lineage = [{ field: 'personality', after: 'Waits patiently.', firstApprovedAt: 1000 }];
+test('review displays advisory message-time echo and timing unknown on kept sentences only', () => {
+    // Personality is kept with fresh support (echo candidate); Voice is an
+    // evidence-backed edit, which is a new sentence and can never echo.
+    const item = createGrowthStagingItem({ name: NAME, uid: 0, entityId: 'mara', original: BODY,
+        proposal: { personality: 'Waits patiently.', voice: 'Drops formal titles.', changes: [
+            { field: 'personality', action: 'keep', before: 'Waits patiently.', after: 'Waits patiently.', evidenceIds: ['obs-1'] },
+            { field: 'voice', action: 'edit', before: 'Speaks plainly.', after: 'Drops formal titles.', evidenceIds: ['obs-1'] },
+        ] }, warnings: [] });
+    item.lineage = [
+        { field: 'personality', after: 'Waits patiently.', firstApprovedAt: 1000 },
+        { field: 'voice', after: 'Speaks plainly.', firstApprovedAt: 1000 },
+    ];
+    const echoes = () => [...el.querySelectorAll('.kt-growth-echo')].map(node => node.textContent);
     getEvidenceFile(NAME).raw[0].ts = 2000;
     show([item]);
-    expect(el.querySelector('.kt-growth-review').textContent).toContain('possible echo');
+    expect(echoes()[0]).toContain('possible echo');
+    expect(echoes()[1]).toBe('');
     expect(el.querySelector('#kt-accept').disabled).toBe(false);
     getEvidenceFile(NAME).raw[0].ts = null;
     show([item]);
-    expect(el.querySelector('.kt-growth-review').textContent).toContain('timing unknown');
+    expect(echoes()[0]).toContain('timing unknown');
+    expect(echoes()[1]).toBe('');
 });
 
 test('unsupported history refuses acceptance without writing dossier or history', async () => {
@@ -137,8 +151,66 @@ test('accept writes only identity lines, preserves registry type and live keywor
     expect(history.records.mara[0].approved).toEqual({ personality: 'Asks for help.', voice: 'Drops formal titles.' });
     expect(history.records.mara[0].original).toEqual({ personality: 'Waits patiently.', voice: 'Speaks plainly.' });
     expect(Object.values(disk.entries).some(isGrowthHistoryEntry)).toBe(true);
-    expect(localWrite).not.toHaveBeenCalled();
+    expect(localWrite).toHaveBeenCalled();
+    expect(getHistory(0).some(record => record.content === BODY)).toBe(true);
     localWrite.mockRestore();
+});
+
+test.each(['switch', 'pause'])('successful Growth save is finalized after a %s during persistence', async change => {
+    const save = host.saveWorldInfo;
+    host.saveWorldInfo = vi.fn(async (...args) => {
+        await save(...args);
+        if (change === 'switch') setGrowthDossierSettings(NAME, { enabled: false });
+        else pauseStore('knowledgeStore', { reasonCode: 'test', message: 'test pause' });
+    });
+    show([makeItem()]);
+    await click();
+    expect(entry().content).toBe(GROWN);
+    expect(state.stagingItems).toHaveLength(0);
+    expect(state._lastKtStatusMsg).not.toContain('Accept failed');
+    expect((await readGrowthHistoryContainer()).records.mara).toHaveLength(1);
+});
+
+test('stale Growth review preserves a later hand edit and updates Current → Proposed changes', async () => {
+    const item = makeItem();
+    show([item]);
+    entry().content = BODY.replace('Waits patiently.', 'A hand-edited personality.');
+    await click();
+    expect(host.saveWorldInfo).not.toHaveBeenCalled();
+    expect(item.mergedContent).toContain('Personality: A hand-edited personality.');
+    expect(item.staleWarning).toContain('Hand-edited personality');
+    expect(item.changes.filter(c => c.field === 'personality')).toEqual([
+        expect.objectContaining({ action: 'keep', before: 'A hand-edited personality.', after: 'A hand-edited personality.', evidenceIds: [] }),
+    ]);
+    await click();
+    expect(entry().content).toContain('Personality: A hand-edited personality.');
+    expect(entry().content).toContain('Voice: Drops formal titles.');
+});
+
+test('stale Growth review retains an explicit reviewer rewrite without attributing model evidence', async () => {
+    const item = makeItem();
+    show([item]);
+    edit(GROWN.replace('Asks for help.', 'Reviewer choice.'));
+    entry().content = BODY.replace('Waits patiently.', 'A hand-edited personality.');
+    await click();
+    expect(item.mergedContent).toContain('Personality: Reviewer choice.');
+    expect(item.changes.filter(c => c.field === 'personality')).toEqual([
+        expect.objectContaining({ action: 'edit', after: 'Reviewer choice.', evidenceIds: [] }),
+        expect.objectContaining({ action: 'remove', before: 'A hand-edited personality.', evidenceIds: [] }),
+    ]);
+});
+
+test('pending Growth evidence links survive raw evidence consolidation', async () => {
+    const item = makeItem();
+    const file = getEvidenceFile(NAME);
+    applyConsolidation(NAME, [{ claim: 'Asks for help.', category: 'trait', sources: [1] }]);
+    expect(file.raw).toHaveLength(0);
+    show([item]);
+    expect(el.querySelector('[data-evidence-id="obs-1"]')).not.toBeNull();
+    expect(el.textContent).not.toContain('obs-1 — no longer on file');
+    expect(el.textContent).toContain('deleted — no longer on file');
+    el.querySelector('[data-evidence-id="obs-1"]').click();
+    await vi.waitFor(() => expect(document.querySelector('#kt-growth-modal [data-obs-id="obs-1"]')?.textContent).toContain('Archived raw evidence'));
 });
 
 test('reviewer restores a proposed removal before accepting without recording that removal', async () => {
@@ -383,6 +455,13 @@ test('evidence link opens the existing evidence view and focuses its observation
 test('Growth window limits round-trip and switch on card updates ownership setting', async () => {
     await openGrowthProfileModal(NAME);
     const modal = document.getElementById('kt-growth-modal');
+    const limits = modal.querySelectorAll('.kt-growth-dossier-limit');
+    expect(limits).toHaveLength(2);
+    for (const limit of limits) {
+        expect(limit.classList.contains('mwt-input')).toBe(true);
+        expect(limit.type).toBe('number');
+        expect(modal.querySelector(`label[for="${limit.id}"]`)).not.toBeNull();
+    }
     const estimate = modal.querySelector('.kt-growth-token-estimate').textContent;
     const input = modal.querySelector('[data-field="personality"]');
     input.value = '1400';

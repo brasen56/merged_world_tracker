@@ -30,11 +30,13 @@ export function extractGrowthDossierLines(content) {
 }
 
 /** Whitelist evidence properties: receipts, quotes, source payloads never travel. */
-export function growthDossierEvidence(file) {
+export function growthDossierEvidence(file, { includeArchived = false } = {}) {
     return [
         ...(file?.consolidated || []).map(o => ({ id: o.id, category: o.category,
             claim: o.claim, firstSeen: o.firstSeen ?? null, canon: false, tier: 'consolidated' })),
         ...(file?.raw || []).map(o => ({ id: o.id, category: o.category,
+            claim: o.claim, ts: o.ts ?? null, canon: !!o.canon, tier: 'raw' })),
+        ...(includeArchived ? file?.archivedRaw || [] : []).map(o => ({ id: o.id, category: o.category,
             claim: o.claim, ts: o.ts ?? null, canon: !!o.canon, tier: 'raw' })),
     ];
 }
@@ -53,7 +55,23 @@ export function parseGrowthDossierProposal(text) {
     }
 }
 
-const TYPOLOGY = /\b(?:[IE][NS][TF][JP]|MBTI|enneagram|type\s*[1-9]|a\s+[1-9]|[1-9]w[1-9]|wing|DISC|Big\s+Five|personality\s+type|analytical\s+type|temperament|character\s+archetype)\b/i;
+// Advisory warnings mirror the prompts' ban lists in their typology senses
+// only: "east wing", "an even temperament", "rated a 9 at archery", "a disc"
+// and the crew’s apostrophes are ordinary prose, and noise trains reviewers
+// to skip the real hits. Acronyms are case-sensitive; terms are not.
+const TYPOLOGY_CODES = /\b(?:[IE][NS][TF][JP](?:-[AT])?|MBTI|DISC|DiSC)\b/;
+const TYPOLOGY_TERMS = new RegExp(`\\b(?:${[
+    'enneagram', 'type\\s*[1-9]', '[1-9]\\s?w\\s?[1-9]', '[1-9]\\s+wing', 'wing\\s+[1-9]',
+    // "a 3." / "a 3 with a 4 wing", not "a 9 at the trials".
+    'a\\s+[1-9](?=\\s*(?:[.,;:!?…]|$|(?:with|wing|type)\\b))',
+    'big\\s+five', 'personality\\s+type', 'analytical\\s+type',
+    '(?:sanguine|choleric|melancholic|phlegmatic)\\s+(?:temperament|type)', 'four\\s+temperaments', 'temperament\\s+type',
+    'character\\s+archetype',
+].join('|')})\\b`, 'i');
+const isTypology = text => TYPOLOGY_CODES.test(text) || TYPOLOGY_TERMS.test(text);
+// Double quotes, or a single quote opening a word. A ’ or ' after a letter is
+// an apostrophe (doesn’t, crew’s, friends') or a closing mark.
+const QUOTES = /["“”„«»‘‚‹›]|(?:^|[\s([{—–-])'(?=\p{L})/u;
 
 /** Validate the entire proposal atomically; never salvage a partial field.
  * Changes: {field, action, before, after, evidenceIds, reason?}.
@@ -81,8 +99,8 @@ export function validateGrowthDossierProposal(proposal, {
         // removals that downstream application would silently fail to perform.
         if (current[field].trim() && !fields[field]) return fail(`${field}: clearing an existing line is not supported; keep or replace at least one sentence.`);
         if (fields[field].length > limits[field]) warnings.push({ field, code: 'over-target', message: `Over the ${limits[field]}-character target.` });
-        if (/["“”„«»‘’]|(?:^|\s)'|'(?:\s|$)/u.test(fields[field])) warnings.push({ field, code: 'quotes', message: 'Quote characters present.' });
-        if (TYPOLOGY.test(fields[field])) warnings.push({ field, code: 'typology', message: 'Typology vocabulary present.' });
+        if (QUOTES.test(fields[field])) warnings.push({ field, code: 'quotes', message: 'Quote characters present.' });
+        if (isTypology(fields[field])) warnings.push({ field, code: 'typology', message: 'Typology vocabulary present.' });
     }
     const evidenceIds = new Set(evidence.map(o => o.id).filter(id => typeof id === 'string' && id));
     const remaining = Object.fromEntries(FIELDS.map(field => [field, splitGrowthSentences(current[field])]));
