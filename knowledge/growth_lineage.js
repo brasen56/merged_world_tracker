@@ -17,9 +17,16 @@ export function buildGrowthApproval({ approved, current, changes = [], previous 
     for (const field of fields) {
         const available = changes.filter(c => c.field === field && c.after).slice();
         const prior = (previous?.changes || []).filter(c => c.field === field && c.after).slice();
+        const removals = changes.filter(c => c.field === field && c.action === 'remove').slice();
         for (const sentence of splitGrowthSentences(approved[field])) {
             const index = available.findIndex(c => c.after === sentence);
             const source = index < 0 ? null : available.splice(index, 1)[0];
+            // Proposed outputs consume their occurrences first. Only unmatched
+            // approved occurrences can restore a proposed removal.
+            if (!source) {
+                const restored = removals.findIndex(c => c.before === sentence);
+                if (restored >= 0) removals.splice(restored, 1);
+            }
             const priorIndex = prior.findIndex(c => c.after === sentence);
             const ancestor = priorIndex < 0 ? null : prior.splice(priorIndex, 1)[0];
             const inherited = source?.action === 'keep' && ancestor;
@@ -33,8 +40,8 @@ export function buildGrowthApproval({ approved, current, changes = [], previous 
                 ...(sourceLabel ? { sourceLabel } : {}),
                 firstApprovedAt: inherited ? (growthEvidenceTime(ancestor.firstApprovedAt) ?? acceptedAt) : acceptedAt });
         }
+        stamped.push(...removals.map(c => ({ ...c, evidenceIds: [...(c.evidenceIds || [])] })));
     }
-    stamped.push(...changes.filter(c => c.action === 'remove').map(c => ({ ...c, evidenceIds: [...(c.evidenceIds || [])] })));
     return { acceptedAt, approved: { ...approved }, changes: stamped, ...(!previous ? { original: { ...current } } : {}) };
 }
 

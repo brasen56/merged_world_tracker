@@ -13,6 +13,7 @@ import { bumpEpoch } from '../core/scope.js';
 import { pauseStore, _resetPausedStores, _setScopeKeyResolver } from '../core/schema_status.js';
 import { draftGrowthDossier, extractGrowthDossierLines, growthDossierEvidence,
     parseGrowthDossierProposal, splitGrowthSentences, validateGrowthDossierProposal } from '../knowledge/growth_dossier.js';
+import { appendGrowthApprovalToBook, mergeGrowthHistoryIdentities } from '../knowledge/growth_history.js';
 
 const current = { personality: 'Keeps promises. Trusts slowly.', voice: 'Speaks plainly.' };
 const evidence = [{ id: 'obs-1', claim: 'Owns mistakes', ts: 100 }];
@@ -275,6 +276,24 @@ describe('headless drafting service', () => {
         expect(result.proposal.changes[0].sourceLabel).toBeUndefined();
         expect(result.proposal.changes[1].sourceLabel).toBe('hand edit, no evidence');
         expect(requests[0].userContent).not.toContain('HISTORY SECRET');
+    });
+    test('draft after identity fold uses retained approval for labels and echo rather than newer absorbed audit', async () => {
+        const wi = books.get(BOOK);
+        appendGrowthApprovalToBook(wi, 'ent-mara', { approved: current, current, changes: proposal().changes, acceptedAt: 1000 });
+        const other = { personality: 'Acts impulsively.', voice: 'Shouts orders.' };
+        appendGrowthApprovalToBook(wi, 'ent-other', { approved: other, current: other, acceptedAt: 2000 });
+        save.mockImplementation(async (name, book) => { books.set(name, structuredClone(book)); });
+        await mergeGrowthHistoryIdentities('ent-mara', 'ent-other', BOOK, () => {});
+        getEvidenceFile('Mara').raw.push({ id: 'later', claim: 'Patient', category: 'trait', ts: 2500 });
+        const p = proposal();
+        p.changes[0].evidenceIds = ['later'];
+        setFakeApi(request => { requests.push(request); return JSON.stringify(p); });
+        const result = await draftGrowthDossier('Mara');
+        expect(result.proposal.changes[0].sourceLabel).not.toBe('hand edit, no evidence');
+        expect(result.proposal.changes[0].evidenceIds).toEqual(['later']);
+        expect(result.proposal.changes[0].echoStatus).toContain('possible echo');
+        expect(result.lineage[0].firstApprovedAt).toBe(1000);
+        expect(requests[0].userContent).not.toContain('activeDossierApproval');
     });
     test('future history version blocks rather than pretending no approvals exist', async () => {
         books.get(BOOK).entries[9] = { comment: '[MWT:growth-history]', content: '{"version":99,"records":{}}' };

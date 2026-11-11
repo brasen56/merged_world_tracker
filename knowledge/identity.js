@@ -436,11 +436,12 @@ export async function mergeEntities(keepName, mergeName, { relabelEntries = true
     const merge = reg[mergeKey];
     const warnings = [];
 
+    const adoptedUid = (keep.uid === null || keep.uid === undefined) && merge.uid !== null && merge.uid !== undefined;
     try {
         await mergeGrowthHistoryIdentities(keep.entityId, merge.entityId, knowledgeBook, () => {
             if (!scopeGuard.stillCurrent() || getRegistryEntry(keepKey)?.info !== keep
                 || getRegistryEntry(mergeKey)?.info !== merge) throw new Error('Chat scope or NPC changed during history merge');
-        }, getEvidenceMap()[keepKey] ? merge.entityId : null);
+        }, getEvidenceMap()[keepKey] ? merge.entityId : null, adoptedUid);
     } catch (err) {
         return { ok: false, reason: 'growth-history-unavailable', warnings: [String(err?.message || err)] };
     }
@@ -448,7 +449,6 @@ export async function mergeEntities(keepName, mergeName, { relabelEntries = true
     // 1) Registry: combine the records under keep. Uid/profile pointers are
     //    adopted only where keep has none — an existing pointer is a statement
     //    about which physical entry is authoritative.
-    const adoptedUid = (keep.uid === null || keep.uid === undefined) && merge.uid !== null && merge.uid !== undefined;
     if (adoptedUid) keep.uid = merge.uid;
     const adoptedProfileUid = (keep.profileUid === null || keep.profileUid === undefined)
         && merge.profileUid !== null && merge.profileUid !== undefined;

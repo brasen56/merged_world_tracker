@@ -5,13 +5,31 @@ import { hostCacheConflict, loadCleanupBook, saveCleanupBook } from './cleanup_p
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { buildGrowthApproval, growthEvidenceTime } from './growth_lineage.js';
 
+/** Legacy histories used their last record; explicit markers survive identity folds. */
+export function getActiveGrowthApproval(history = []) {
+    return history.find(record => record.activeDossierApproval === true)
+        || (history.some(record => 'activeDossierApproval' in record) ? null : history.at(-1) || null);
+}
+
+/** Keep the active baseline even when a newer absorbed audit would evict it. */
+function capGrowthHistory(history) {
+    const active = getActiveGrowthApproval(history);
+    const capped = history.slice(-GROWTH_HISTORY_CAP);
+    if (active && !capped.includes(active)) {
+        return history.filter(record => record === active || capped.slice(1).includes(record));
+    }
+    return capped;
+}
+
 /** Mutates only the caller's book snapshot, so dossier and history save atomically. */
 export function appendGrowthApprovalToBook(wi, entityId, input) {
     const read = readGrowthHistoryContainerFromBook(wi);
     if (!read.ok) throw new Error(`Growth history: refusing approval (${read.reason})`);
     const history = read.records[entityId] || [];
-    const record = buildGrowthApproval({ ...input, previous: history.at(-1) || null });
-    putGrowthHistoryInBook(wi, { ...read.records, [entityId]: [...history, record].slice(-GROWTH_HISTORY_CAP) });
+    const record = { ...buildGrowthApproval({ ...input, previous: getActiveGrowthApproval(history) }), activeDossierApproval: true };
+    putGrowthHistoryInBook(wi, { ...read.records, [entityId]: [
+        ...history.map(item => ({ ...item, activeDossierApproval: false })), record,
+    ].slice(-GROWTH_HISTORY_CAP) });
     return record;
 }
 
@@ -33,21 +51,25 @@ export function putGrowthHistoryInBook(wi, records) {
 }
 
 /** Date-ordered identity fold. Called before removing the absorbed registry id. */
-export function mergeGrowthHistoryIdentities(keepId, mergeId, bookName, assertCurrent, evidenceNamespace = null) {
+export function mergeGrowthHistoryIdentities(keepId, mergeId, bookName, assertCurrent, evidenceNamespace = null, adoptDossier = false) {
     return withStoreLock(async () => {
         assertCurrent();
         const read = await readGrowthHistoryContainer(bookName);
         assertCurrent();
         if (!read.ok) throw new Error(`Growth history merge refused (${read.reason})`);
-        if (!read.records[mergeId]?.length) return;
-        const incoming = read.records[mergeId].map(record => ({ ...record,
+        const retained = read.records[keepId] || [];
+        const absorbed = read.records[mergeId] || [];
+        if (!retained.length && !absorbed.length) return;
+        const active = getActiveGrowthApproval(adoptDossier ? absorbed : retained);
+        const incoming = absorbed.map(record => ({ ...record, activeDossierApproval: adoptDossier && record === active,
             changes: (record.changes || []).map(change => ({ ...change,
                 evidenceIds: (change.evidenceIds || []).map(id => evidenceNamespace ? `${evidenceNamespace}::${id}` : id),
             })),
         }));
-        const combined = [...(read.records[keepId] || []), ...incoming]
-            .sort((a, b) => (growthEvidenceTime(a.acceptedAt) || 0) - (growthEvidenceTime(b.acceptedAt) || 0))
-            .slice(-GROWTH_HISTORY_CAP);
+        const combined = capGrowthHistory([...retained.map(record => ({ ...record,
+            activeDossierApproval: !adoptDossier && record === active,
+        })), ...incoming]
+            .sort((a, b) => (growthEvidenceTime(a.acceptedAt) || 0) - (growthEvidenceTime(b.acceptedAt) || 0)));
         await mergeGrowthHistoryRecordsUnlocked({ [keepId]: combined, [mergeId]: [] }, bookName, { replace: true, assertCurrent });
         assertCurrent();
     });
@@ -96,7 +118,7 @@ export async function mergeGrowthHistoryRecordsUnlocked(records, bookName = getL
     } } });
     if (!incoming.ok) throw new Error('Growth history: invalid records');
     const merged = replace ? { ...read.records, ...records } : { ...records, ...read.records };
-    for (const [id, history] of Object.entries(merged)) merged[id] = history.slice(-GROWTH_HISTORY_CAP);
+    for (const [id, history] of Object.entries(merged)) merged[id] = capGrowthHistory(history);
     const conflict = hostCacheConflict(bookName, wi);
     if (conflict) throw new Error(conflict.error);
     const content = putGrowthHistoryInBook(wi, merged);

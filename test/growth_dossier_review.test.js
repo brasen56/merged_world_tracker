@@ -141,6 +141,25 @@ test('accept writes only identity lines, preserves registry type and live keywor
     localWrite.mockRestore();
 });
 
+test('reviewer restores a proposed removal before accepting without recording that removal', async () => {
+    const item = createGrowthStagingItem({ name: NAME, uid: 0, entityId: 'mara', original: BODY,
+        proposal: { personality: '', voice: 'Speaks plainly.', changes: [
+            { field: 'personality', action: 'remove', before: 'Waits patiently.', after: '', reason: 'evidence', evidenceIds: ['obs-1'] },
+            { field: 'voice', action: 'keep', before: 'Speaks plainly.', after: 'Speaks plainly.', evidenceIds: [] },
+        ] }, warnings: [] });
+    show([item]);
+    edit(BODY);
+    await click();
+    expect(entry().content).toBe(BODY);
+    expect(host.saveWorldInfo).toHaveBeenCalledOnce();
+    const record = (await readGrowthHistoryContainer()).records.mara[0];
+    expect(record.approved.personality).toBe('Waits patiently.');
+    expect(record.changes.some(c => c.action === 'remove')).toBe(false);
+    expect(record.changes.find(c => c.field === 'personality')).toMatchObject({
+        after: 'Waits patiently.', evidenceIds: [], sourceLabel: 'hand edit, no evidence',
+    });
+});
+
 test.each(['scan', 'manual edit', 'field refresh'])('Growth stale accept after %s rebuilds both times onto fresh fields and ledger', async _kind => {
     const item = makeItem();
     show([item]);

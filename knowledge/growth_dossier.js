@@ -4,7 +4,7 @@ import { GROWTH_DOSSIER_CEILINGS, GROWTH_DOSSIER_DEFAULT_LIMITS } from './growth
 import { getGrowthDossierSettings, getRegistryEntry } from './registry.js';
 import { getEvidenceFile } from './evidence.js';
 import { ktFetchFromApi, loadEntryContent, loadProfileContent } from './lorebook.js';
-import { readGrowthHistoryContainer } from './growth_history.js';
+import { getActiveGrowthApproval, readGrowthHistoryContainer } from './growth_history.js';
 import { getLorebookName } from './scope.js';
 import { hasValidSettings } from './settings.js';
 import { GROWTH_DOSSIER_PROMPT } from './prompts.js';
@@ -168,7 +168,7 @@ export async function draftGrowthDossier(name, { profile: generatedProfile } = {
     const history = await readGrowthHistoryContainer(book);
     assertCurrent();
     if (!history.ok) throw new Error(`Growth draft cannot read approval history (${history.reason}).`);
-    const previous = history.records[entityId]?.at(-1) ?? null;
+    const previous = getActiveGrowthApproval(history.records[entityId]);
     const approved = previous?.approved ?? null;
     const current = extractGrowthDossierLines(content);
     const evidence = growthDossierEvidence(getEvidenceFile(key, false));
