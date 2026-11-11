@@ -10,6 +10,7 @@ import { state } from '../knowledge/state.js';
 import { renameEntity, mergeEntities } from '../knowledge/identity.js';
 import { getRegistry, getGrowthDossierSettings } from '../knowledge/registry.js';
 import { growthOwnsField } from '../knowledge/field_ownership.js';
+import { validateKnowledgeStoreData } from '../knowledge/schema.js';
 import '../knowledge/lorebook.js';
 import { bumpEpoch, _resetEpoch } from '../core/scope.js';
 
@@ -70,6 +71,32 @@ test('no-evidence, removed and unapproved sentences never echo', () => {
     expect(growthEchoStatus({ ...change, evidenceIds: [] }, [{ id: 'a', ts: 2000 }], lineage)).toBe('');
     expect(growthEchoStatus({ ...change, after: '' }, [{ id: 'a', ts: 2000 }], lineage)).toBe('');
     expect(growthEchoStatus(change, [{ id: 'a', ts: 2000 }], [])).toBe('');
+});
+test('edits and additions never echo, even when all their support postdates the old line', () => {
+    const later = [{ id: 'a', ts: 2000 }];
+    expect(growthEchoStatus({ ...keeps[0], action: 'edit', after: 'Asks for help.', evidenceIds: ['a'] }, later, lineage)).toBe('');
+    expect(growthEchoStatus({ ...keeps[0], action: 'add', before: '', evidenceIds: ['a'] }, later, lineage)).toBe('');
+    expect(growthEchoStatus({ ...keeps[0], action: 'edit', after: 'Asks for help.', evidenceIds: ['a'] }, [{ id: 'a', ts: null }], lineage)).toBe('');
+    expect(growthEchoStatus({ ...keeps[0], evidenceIds: ['a'] }, later, lineage)).toContain('possible echo');
+});
+test('a kept evidence-backed sentence keeps its support instead of becoming "no evidence"', () => {
+    const sentence = 'Owns mistakes now.';
+    const line = { personality: sentence, voice: '' };
+    const kept = { field: 'personality', action: 'keep', before: sentence, after: sentence, evidenceIds: [] };
+    const first = buildGrowthApproval({ approved: line, current: { personality: '', voice: '' }, acceptedAt: 1000,
+        changes: [{ field: 'personality', action: 'add', before: '', after: sentence, evidenceIds: ['e1'] }] });
+    const second = buildGrowthApproval({ approved: line, current: line, changes: [kept], previous: first, acceptedAt: 2000 });
+    expect(second.changes).toEqual([{ ...kept, evidenceIds: ['e1'], firstApprovedAt: 1000 }]);
+    const third = buildGrowthApproval({ approved: line, current: line, changes: [kept], previous: second, acceptedAt: 3000 });
+    expect(third.changes).toEqual([{ ...kept, evidenceIds: ['e1'], firstApprovedAt: 1000 }]);
+    const recited = buildGrowthApproval({ approved: line, current: line, changes: [{ ...kept, evidenceIds: ['e2'] }], previous: third, acceptedAt: 4000 });
+    expect(recited.changes).toEqual([{ ...kept, evidenceIds: ['e2'], firstApprovedAt: 1000 }]);
+    // Unverified original text still keeps its label through repeated keeps.
+    const original = buildGrowthApproval({ approved: lines, current: lines, changes: keeps, acceptedAt: 1000 });
+    const again = buildGrowthApproval({ approved: lines, current: lines, changes: keeps, previous: original, acceptedAt: 2000 });
+    expect(again.changes.map(c => [c.sourceLabel, c.evidenceIds])).toEqual([
+        ['from the original line, no evidence', []], ['from the original line, no evidence', []],
+    ]);
 });
 
 test('durable reload, cap and flags; no localStorage writes', async () => {
@@ -229,7 +256,20 @@ test.each([undefined, { enabled: false }, { limits: { personality: 700 } }])('do
         expect(getGrowthDossierSettings('Mara')).toMatchObject({ enabled: settings?.enabled ?? true,
             limits: { personality: settings?.limits?.personality ?? 1400, voice: 800 } });
         expect(growthOwnsField('Mara', 'voice')).toBe(settings?.enabled ?? true);
+        expect(validateKnowledgeStoreData({ registry: getRegistry() }).issues
+            .filter(issue => issue.code === 'registry-growth-dossier-repaired')).toEqual([]);
     });
+});
+
+test('kept sentences are stored once and expand on read; legacy full changes still read', () => {
+    appendGrowthApprovalToBook(disk, 'mara', { approved: lines, current: lines, changes: keeps });
+    const entry = Object.values(disk.entries).find(isGrowthHistoryEntry);
+    const stored = JSON.parse(entry.content);
+    expect(stored.records.mara[0].changes[0]).not.toHaveProperty('before');
+    expect(readGrowthHistoryContainerFromBook(disk).records.mara[0].changes[0]).toMatchObject(keeps[0]);
+    stored.records.mara[0].changes[0].before = lines.personality;
+    entry.content = JSON.stringify(stored);
+    expect(readGrowthHistoryContainerFromBook(disk).records.mara[0].changes[0]).toMatchObject(keeps[0]);
 });
 
 test.each([null, [], {}, { changes: null }, { changes: [null] }, { changes: [{}] },

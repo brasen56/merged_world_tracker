@@ -212,20 +212,23 @@ export async function collectBackup({
         // module or no book simply means no container to carry.
         let cleanupRead = { ok: true, records: {}, rawRecords: {} };
         if (knowledgeState.wiScript) {
+            let wi;
             try {
-                const wi = await knowledgeState.wiScript.loadWorldInfo(knowledgeBook);
-                const historyRead = readGrowthHistoryContainerFromBook(wi);
-                if (!historyRead.ok) throw new Error(`Growth history cannot be read safely (${historyRead.reason})`);
-                if (Object.keys(historyRead.records).length > 0) {
-                    growthHistory = { version: historyRead.version, records: historyRead.records };
-                }
-                cleanupRead = readCleanupRecoveryContainerFromBook(wi);
+                wi = await knowledgeState.wiScript.loadWorldInfo(knowledgeBook);
             } catch (err) {
                 throw new Error(
-                    `Backup export cancelled because the "${knowledgeBook}" lorebook's cleanup-recovery container `
-                    + `cannot be read safely (read-failed: ${err.message}). The book could not be loaded.`
+                    `Backup export cancelled because the "${knowledgeBook}" lorebook could not be loaded `
+                    + `(read-failed: ${err.message}).`
                 );
             }
+            const historyRead = readGrowthHistoryContainerFromBook(wi);
+            if (!historyRead.ok) {
+                throw new Error(`Backup export cancelled because the "${knowledgeBook}" lorebook's Growth history cannot be read safely (${historyRead.reason}). Upgrade MWT (or repair the container) before exporting.`);
+            }
+            if (Object.keys(historyRead.records).length > 0) {
+                growthHistory = { version: historyRead.version, records: historyRead.records };
+            }
+            cleanupRead = readCleanupRecoveryContainerFromBook(wi);
         }
         if (!cleanupRead.ok) {
             throw new Error(

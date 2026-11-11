@@ -18,6 +18,25 @@ export function growthOwnsField(name, key) {
     return key === 'personality' && hasEvidenceFile(name);
 }
 
+/**
+ * Compact entries only gain Personality/Voice lines through Growth (or by
+ * hand). Compact scans have never written them, so only an explicit off
+ * switch hands them to compact scans. Never set keeps that legacy rule.
+ */
+export function compactScansOwnIdentity(name) {
+    return getRegistryEntry(name)?.info?.growthDossier?.enabled === false;
+}
+
+/** Null identity fields from a compact-prompt result unless released. */
+export function applyCompactIdentityGate(name, fields) {
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields) || compactScansOwnIdentity(name)) return fields;
+    let result = fields;
+    for (const key of ['personality', 'voice']) {
+        if (fields[key] != null) result = { ...result, [key]: null };
+    }
+    return result;
+}
+
 export function applyFieldOwnership(name, fields) {
     if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return fields;
     let result = fields;

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { resolve } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
-import { acceptedRefreshFields, contractRejectionSummary, validateKnowledgeList } from '../knowledge/field_contract.js';
+import { acceptedRefreshFields, contractRejectionSummary, validateKnowledgeList, FIELD_CONTRACT_BY_KEY } from '../knowledge/field_contract.js';
 
 // Exercise the real UI handlers in isolation from the SillyTavern host.
 const source = readFileSync(resolve(process.cwd(), 'knowledge/render.js'), 'utf8').replace(/\r\n/g, '\n');
@@ -29,7 +29,7 @@ describe('Knowledge contract UI', () => {
         modal.querySelector('.kt-dfr-run').addEventListener = (_event, fn) => { handler = fn; };
         const rejections = rejected.map(field => ({ ...rejection, field }));
         const c = {
-            acceptedRefreshFields, contractRejectionSummary,
+            acceptedRefreshFields, contractRejectionSummary, FIELD_CONTRACT_BY_KEY,
             extractDossierFieldValues: () => ({}),
             ktSetStatus: vi.fn(), recordDossierFieldRefresh: vi.fn(),
             setControlBusy: vi.fn(), addNotificationEntry: vi.fn(), renderNpcsSubTab: vi.fn(),
@@ -77,7 +77,7 @@ describe('Knowledge contract UI', () => {
         modal.querySelector('.kt-dfr-run').addEventListener = (_event, fn) => { handler = fn; };
         const currentContent = `Personality: ${'x'.repeat(1400)}`;
         const c = {
-            acceptedRefreshFields, contractRejectionSummary,
+            acceptedRefreshFields, contractRejectionSummary, FIELD_CONTRACT_BY_KEY,
             extractDossierFieldValues: () => ({ personality: 'x'.repeat(1400) }),
             ktSetStatus: vi.fn(), recordDossierFieldRefresh: vi.fn(), setControlBusy: vi.fn(),
             isCancellation: () => false, console,

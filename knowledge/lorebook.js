@@ -22,7 +22,7 @@ import {
     state,
 } from './state.js';
 import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.js';
-import { applyFieldOwnership, growthOwnsField } from './field_ownership.js';
+import { applyFieldOwnership, applyCompactIdentityGate, compactScansOwnIdentity, growthOwnsField } from './field_ownership.js';
 import { validateFields, validateFieldValue, validateKnowledgeList, validateCreationHeader } from './field_contract.js';
 import { normalizedEntryBody, stripRelationshipBlock } from './relationships.js';
 import { getLorebookName, getProfileLorebookName, getStateLorebookName } from './scope.js';
@@ -990,7 +990,11 @@ export async function enrichStagingItem(item, { fresh = false } = {}) {
         // value can never reach a formatter. Ownership is re-applied for the
         // same reason. Invalid values are dropped whole with surfaced
         // reasons; valid unrelated updates are retained.
-        const owned = applyFieldOwnership(item.name, item.fields || {});
+        // Compact scan prompts may return identity lines; they apply only
+        // once the switch is explicitly off (see compactScansOwnIdentity).
+        const compactScan = item.type === 'major' && item.dossierMode !== true && item.fromDossierScan !== true;
+        const ownedFields = applyFieldOwnership(item.name, item.fields || {});
+        const owned = compactScan ? applyCompactIdentityGate(item.name, ownedFields) : ownedFields;
         const { fields: safeFields, rejected } = validateFields(owned);
         const { items: safeKnowledge, rejected: knowledgeRejected } = validateKnowledgeList(item.newKnowledge || []);
         if (rejected.length + knowledgeRejected.length > 0) {
@@ -1400,22 +1404,24 @@ export async function runScan({ trigger = null } = {}) {
     if (!recentMessages) throw new Error('No recent messages to scan.');
 
     // Include bounded existing major entries: dossier scans can fill missing
-    // fields, and compact scans can update identity lines released by Growth.
+    // fields. Compact scans only see an entry whose Personality/Voice lines
+    // an explicit off switch handed back to scans — never every major NPC,
+    // which would raise the cost of every default (compact) scan.
     let knownSection;
     if (knownNames.length > 0) {
         const lines = [];
         for (const name of knownNames) {
             const info = registry[name];
             lines.push(`- ${name} [${info.type}]`);
-            // Compact entries may also have Personality/Voice lines from Growth.
-            if (info.type === 'major' && info.uid != null) {
+            if (info.type === 'major' && info.uid != null && (dossierMode || compactScansOwnIdentity(name))) {
                 try {
                     const existing = await loadEntryContent(info.uid, name);
                     // A bounded projection, not a prefix: every field label
                     // survives and the ledger's recent tail is always carried.
                     // See buildScanEntryProjection for why the old
                     // slice(0, 800) made the scan blind to the ledger.
-                    const projected = buildScanEntryProjection(existing);
+                    const relevant = dossierMode || /^(?:Personality|Voice):/m.test(existing || '');
+                    const projected = relevant ? buildScanEntryProjection(existing) : '';
                     if (projected) lines.push(`<existing_entry>\n${projected}\n</existing_entry>`);
                 } catch { /* ignore load errors */ }
             }
@@ -1542,6 +1548,9 @@ export async function runNpcUpdate(name, uid) {
         // Shared three-state ownership, including the legacy upgrade lock.
         // The helper also leaves malformed non-object responses safe to validate.
         result.fields = applyFieldOwnership(name, result.fields);
+        // The compact prompt can return identity lines; never set keeps the
+        // legacy rule that compact updates leave them alone.
+        if (!useDossier) result.fields = applyCompactIdentityGate(name, result.fields);
 
         // Phase 1 seam S3: the shared field contract — invalid values are
         // dropped whole (the existing entry keeps its old line), valid

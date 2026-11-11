@@ -157,18 +157,34 @@ describe('strict Growth proposal contract', () => {
         expect(result.proposal.changes[0].sourceLabel).toBeUndefined();
         expect(result.proposal.changes[1].sourceLabel).toBe('hand edit, no evidence');
     });
-    test.each(['INTJ', 'ENFP', 'Enneagram', 'Type 7', 'a 3', '3w4', 'wing', 'DISC', 'Big Five', 'personality type', 'analytical type', 'temperament', 'character archetype'])('warns for typology %s without blocking baseline keep', term => {
+    test.each(['INTJ', 'ENFP-T', 'Enneagram', 'Type 7', 'a 3', 'a 3 with a 4 wing', '3w4', '4 wing', 'wing 5', 'DISC', 'Big Five',
+        'personality type', 'analytical type', 'choleric temperament', 'sanguine type', 'four temperaments', 'temperament type', 'character archetype',
+    ])('warns for typology %s without blocking baseline keep', term => {
         const text = `An ${term}.`;
         const p = { personality: text, voice: '', changes: [change('personality', text)] };
         const result = validate(p, { current: { personality: text, voice: '' } });
         expect(result.ok).toBe(true);
         expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'typology' }));
     });
-    test('quote warnings are advisory', () => {
+    test.each([
+        'Keeps to the east wing of the manor.', 'Took the new recruit under her wing.', 'Has an even temperament until cornered.',
+        'Rated a 9 at the archery trials.', 'Throws a disc for the dog.', 'Grows melancholic at dusk.', 'Plays the type of fool who listens.',
+    ])('ordinary prose raises no typology warning: %s', text => {
+        const p = { personality: text, voice: '', changes: [change('personality', text)] };
+        expect(validate(p, { current: { personality: text, voice: '' } }).warnings).toEqual([]);
+    });
+    test.each(['Says “hello”.', 'Says "hello".', 'Answers ‘aye’ to everything.', "Answers 'aye' to everything.", 'Calls it «duty».'])('quote warnings are advisory: %s', voice => {
         const p = proposal();
-        p.voice = 'Says “hello”.';
+        p.voice = voice;
         Object.assign(p.changes[2], { action: 'edit', after: p.voice, evidenceIds: ['obs-1'] });
+        expect(validate(p).ok).toBe(true);
         expect(validate(p).warnings).toContainEqual(expect.objectContaining({ code: 'quotes' }));
+    });
+    test.each(['Doesn’t trust the crew’s officers.', "Doesn't trust the crew's officers.", 'Laughs at her friends’ jokes.', "Laughs at her friends' jokes."])('apostrophes are not quotes: %s', voice => {
+        const p = proposal();
+        p.voice = voice;
+        Object.assign(p.changes[2], { action: 'edit', after: p.voice, evidenceIds: ['obs-1'] });
+        expect(validate(p).warnings).toEqual([]);
     });
     test('evidence projection carries message times but no receipts/archive', () => {
         expect(growthDossierEvidence({ raw: [{ ...evidence[0], category: 'values', quote: 'SECRET', canon: true }],

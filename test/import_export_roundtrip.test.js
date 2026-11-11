@@ -563,6 +563,9 @@ describe('Knowledge export/import', () => {
         await importNpcs();
         expect(knowledgeState._lastKtStatusLevel).toBe('success');
         expect(getRegistry().Mara.growthDossier).toEqual(expected);
+        const { validateKnowledgeStoreData } = await import('../knowledge/schema.js');
+        expect(validateKnowledgeStoreData({ registry: getRegistry() }).issues
+            .filter(issue => issue.code === 'registry-growth-dossier-repaired')).toEqual([]);
         if (expected === undefined) expect(getRegistry().Mara).not.toHaveProperty('growthDossier');
     });
 

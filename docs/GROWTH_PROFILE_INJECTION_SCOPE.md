@@ -1058,8 +1058,9 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
 
 **Phase 4 completion — 2026-11-10:**
 - Growth acceptance saves one approval record alongside the approved dossier
-  in the same checked whole-book write, under the store lock. This bypasses
-  legacy displaced-text localStorage history. Unreadable/future history refuses
+  in the same checked whole-book write, under the store lock. The initial
+  implementation bypassed localStorage snapshots; the follow-up below restores
+  the manual editor's one-click Restore. Unreadable/future history refuses
   acceptance without writing either surface.
 - Records retain approved Personality/Voice, acceptance time, actual accepted
   sentence changes, first-approval lineage, and the pre-Growth original on the
@@ -1078,7 +1079,7 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
   ignored, and no-evidence sentences never echo.
 - Automated coverage includes reload/cap/flags, lineage, reviewer rewrites,
   rename/merge, echo boundaries, modal/review display, future-version refusal,
-  and no localStorage writes. Existing identity fixtures now supply checked
+  and (initially) no localStorage writes. Existing identity fixtures now supply checked
   history disk reads.
 - Schema performance harness: 36 NPCs × ten approvals, default-target-sized
   lines, measured **1,032,705 UTF-8 whole-book bytes** (~28,686 bytes/NPC),
@@ -1087,6 +1088,70 @@ UI before Phase 3's guarded accept exists, and do not release before Phase 5.
 - Validation: `npm test` — **184 files / 4,621 tests passed**;
   `npm run lint` and `git diff --check` passed. No live SillyTavern/model QA;
   release remains gated on Phase 5.
+
+**Phase 4 review fixes — 2026-11-10:**
+- **Compact mode.** A late Phase 4 commit let compact scans and single-NPC
+  updates write Personality and Voice, so lines Growth added to a compact
+  entry could go back to scans after the switch is turned off. That change
+  had reached too far. Compact-prompt values for those two lines now apply
+  only when the switch is explicitly off. A never-set NPC keeps the legacy
+  rule that compact scans never touch them, hand-added lines included (§6,
+  "nothing changes on upgrade"). A compact scan loads an entry projection
+  only for an explicitly-off major NPC whose entry has a Personality or Voice
+  line, so default compact scans cost nothing extra. Dossier-mode rules are
+  unchanged.
+- **Lineage.** An explicit keep that cites no new evidence inherits the
+  previous version's evidence ids. Before, it was stamped "no evidence", and
+  later drafts carried that label forward. Unverified original and hand-edit
+  text keeps its label through repeated keeps.
+- **Echo.** Only an approved, kept sentence can echo (§5.8–§5.9). Edits and
+  additions are new sentences, first approved at that acceptance, and their
+  evidence postdates the old line by construction. Before this fix, nearly
+  every real edit was flagged. "Timing unknown" now also applies only to kept
+  sentences.
+- **Advisory warnings.** Apostrophes (’, plural possessives) are no longer
+  read as quotes; an opening single quote still is. Typology checks keep the
+  prompts' ban list, but only in their typology senses ("4 wing", "a 3.",
+  "choleric temperament"). "East wing", "an even temperament", "rated a 9"
+  and a lowercase "disc" no longer warn. MBTI and DISC codes are matched
+  case-sensitively.
+- Validation: `npm test` — **184 files / 4,681 tests passed**. Each new
+  regression case failed before its fix. `npm run lint` and `git diff --check`
+  passed, and no file's line endings changed. The perf harness now measures
+  **1,044,189 bytes** (~29,005/NPC). The 11,484-byte rise over the figure
+  above is exactly the `activeDossierApproval` marker added after that record
+  (360 records). No SillyTavern host or model QA.
+
+**Phase 4 persistence/review follow-up — 2026-11-10:**
+- Backup refusal now identifies Growth history and its actual refusal reason;
+  loader failures are separate from container failures. Identity merge refusal
+  includes the underlying warnings in the visible error and console.
+- Import and identity-adoption settings merges run through `repairGrowthDossier`
+  after combining values, preventing key-order-only repair warnings on reload.
+- Successful Growth saves finalize even if the switch turns off or Knowledge
+  pauses during persistence. Post-save bookkeeping still rejects a different
+  chat scope/book. Growth writes again retain the displaced localStorage text
+  for the manual editor's Restore, alongside atomic durable approval history.
+- Pending review resolves archived raw evidence without adding it to model
+  input. Evidence links open a read-only archived observation when necessary.
+  A stale review preserves later hand edits unless the reviewer explicitly
+  rewrote that line, rebuilds Current → Proposed changes without invented
+  evidence, and explains the conflict before another acceptance.
+- Kept changes omit their duplicate `before` sentence on disk; history reads
+  expand it, while legacy full changes remain readable. The ten-record fixture
+  now measures **743,589 UTF-8 whole-book bytes** (~20,655/NPC), down from
+  1,044,189 bytes (~29%). Targeted stringify time: **1.754 ms** (informational).
+  `writeGrowthHistoryContainer` remains a checked replacement API exercised by
+  tests; production approval writes intentionally use `appendGrowthApprovalToBook`
+  in the same book save as the dossier, not a second standalone history save.
+- Render reads scan ceilings from the shared field contract, not numeric copies.
+  The compact-mode correction and **4,681-test** review baseline above supersede
+  the original completion record's pre-follow-up behavior and test count.
+- Validation: `npm test` — **184 files / 4,687 tests passed**;
+  `npm run lint` and `git diff --check` passed. Coverage includes switch/pause
+  changes during successful saves, stale hand/reviewer edits, archived evidence
+  navigation, Restore snapshots, compact/legacy history reads, and settings
+  revalidation after import/adoption. No live SillyTavern/model QA performed.
 
 ### Phase 5 — Cross-path regression and release validation
 

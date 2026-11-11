@@ -62,21 +62,55 @@ test.each(['scan', 'npc-update'])('compact Growth lines return to %s updates whe
         const result = await runScan();
         const items = buildStagingItems(result);
         await enrichStagingItem(items[0]);
-        expect(requests.at(-1).userContent).toContain('Personality: Patient.');
         return items[0].mergedContent;
     };
     setGrowthDossierSettings('Mara', { enabled: true });
     const protectedContent = await update();
     expect(protectedContent).toContain('Personality: Patient.');
     expect(protectedContent).toContain('Voice: Plain.');
+    // Owned lines need no compact projection: the scan loads no entry.
+    if (path === 'scan') expect(requests.at(-1).userContent).not.toContain('<existing_entry>');
     setGrowthDossierSettings('Mara', { enabled: false });
     const released = await update();
+    if (path === 'scan') expect(requests.at(-1).userContent).toContain('Personality: Patient.');
     expect(released).toContain('Personality: Asks for help.');
     expect(released).toContain('Voice: Drops formal titles.');
     expect(released).toContain('Tone: firm');
     expect(released.startsWith('[Dossier]')).toBe(false);
     expect(requests.at(-1).systemPrompt).toContain('"personality"');
     expect(requests.at(-1).systemPrompt).toContain('"voice"');
+});
+
+test.each(['scan', 'npc-update'])('never-set compact NPCs keep hand-added identity lines on %s', async path => {
+    saveSettings({ dossierMode: false, trackMainCharAsNpc: true });
+    const compact = 'Mara | Human | captain\nTone: soft\nKnowledge Ledger:\n- Knows the harbour.';
+    books.get(BOOK).entries[7].content = compact.replace('Tone: soft', 'Tone: soft\nPersonality: Hand-written.\nVoice: Hand-written voice.');
+    const fields = { tone: 'firm', personality: 'Rewritten.', voice: 'Rewritten voice.' };
+    setFakeApi(request => {
+        requests.push(request);
+        return JSON.stringify(path === 'scan'
+            ? { update_major: [{ name: 'Mara', fields, new_knowledge: [] }] }
+            : { fields, new_knowledge: [] });
+    });
+    let merged;
+    if (path === 'npc-update') merged = (await runNpcUpdate('Mara', 7)).merged;
+    else {
+        const items = buildStagingItems(await runScan());
+        await enrichStagingItem(items[0]);
+        merged = items[0].mergedContent;
+        // Default compact scans do not pay for entry projections.
+        expect(requests.at(-1).userContent).not.toContain('<existing_entry>');
+    }
+    expect(merged).toContain('Personality: Hand-written.');
+    expect(merged).toContain('Voice: Hand-written voice.');
+    expect(merged).toContain('Tone: firm');
+    if (path === 'scan') {
+        // Released, but with no identity lines: still nothing to project.
+        books.get(BOOK).entries[7].content = compact;
+        setGrowthDossierSettings('Mara', { enabled: false });
+        await runScan();
+        expect(requests.at(-1).userContent).not.toContain('<existing_entry>');
+    }
 });
 
 test.each([null, { ...approval(1), changes: [null] }])('backup validation refuses malformed history without changing its source: %j', async record => {
@@ -155,7 +189,7 @@ describe('Growth history container', () => {
         const before = structuredClone(books.get(BOOK));
         expect(await readGrowthHistoryContainer(BOOK)).toEqual({ ok: false, reason: 'duplicate-containers' });
         await expect(writeGrowthHistoryContainer(BOOK, {})).rejects.toThrow('duplicate-containers');
-        await expect(collectBackup()).rejects.toThrow('Growth history');
+        await expect(collectBackup()).rejects.toThrow(/Growth history.*duplicate-containers/);
         expect(books.get(BOOK)).toEqual(before);
     });
     test('reload, cap, never-inject flags, internal-entry exclusion and backup round trip', async () => {
@@ -185,7 +219,7 @@ describe('Growth history container', () => {
         books.get(BOOK).entries[8] = { uid: 8, comment: '[MWT:growth-history]', content: '{"version":2,"records":{}}' };
         const before = structuredClone(books.get(BOOK));
         await expect(writeGrowthHistoryContainer(BOOK, {})).rejects.toThrow('unsupported-version');
-        await expect(collectBackup()).rejects.toThrow('Growth history');
+        await expect(collectBackup()).rejects.toThrow(/Growth history.*unsupported-version/);
         expect(books.get(BOOK)).toEqual(before);
     });
     test('import is current-wins and preserves other entity histories', async () => {

@@ -39,7 +39,7 @@ import {
     mergeRelationshipIdentities, repairRelationshipEntityNames,
     syncAllRelationshipsToLorebooks,
 } from './relationships.js';
-import { backfillRelationshipEntityIds, ensureRegistryIdentityFields } from './schema.js';
+import { backfillRelationshipEntityIds, ensureRegistryIdentityFields, repairGrowthDossier } from './schema.js';
 import { renameEvidenceFile, mergeEvidenceFiles, canRekeyEvidence, canRenameEvidence, getEvidenceMap } from './evidence.js';
 import { renameDossierFieldStatus, mergeDossierFieldStatus } from './dossier_status.js';
 import { getLorebookName, getProfileLorebookName } from './scope.js';
@@ -452,8 +452,8 @@ export async function mergeEntities(keepName, mergeName, { relabelEntries = true
     if (adoptedUid) {
         keep.uid = merge.uid;
         if (merge.growthDossier) {
-            keep.growthDossier = { ...merge.growthDossier, ...keep.growthDossier,
-                limits: { ...merge.growthDossier.limits, ...keep.growthDossier?.limits } };
+            keep.growthDossier = repairGrowthDossier({ ...merge.growthDossier, ...keep.growthDossier,
+                limits: { ...merge.growthDossier.limits, ...keep.growthDossier?.limits } });
         }
     }
     const adoptedProfileUid = (keep.profileUid === null || keep.profileUid === undefined)
