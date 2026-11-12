@@ -604,6 +604,9 @@ function requestSummary(request) {
             : ' Journey subjects: any tracked character.'
         : '';
     const lensNote = request.lens === 'world-pressure' ? ' Focus: world complications.' : '';
+    if (request.pitchOnly) {
+        return `Pitch ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} (no setup beats) in ${labels.join(', ')}.${subjects}${lensNote} Use the selected public context.`;
+    }
     return request.operation === 'add'
         ? `Add up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects}${lensNote} Use the selected public context.`
         : `Refresh ${request.targetArcIds.length} selected active arc${request.targetArcIds.length === 1 ? '' : 's'} in ${labels.join(', ')}.${subjects}${lensNote} Use the selected public context.`;
@@ -710,7 +713,7 @@ function renderScopedAddition(arc, proposal) {
     return `
         ${ownership}
         ${arc.body ? `<p class="mwt-text-sm">${escapeHtml(arc.body)}</p>` : ''}
-        ${beats.length ? `<h4>Setup beats</h4><ol class="sp-proposal-diff">${beats.map(beat => `<li>${escapeHtml(beat.text)}</li>`).join('')}</ol>` : '<p class="mwt-text-dim mwt-text-sm">No setup beats proposed.</p>'}`;
+        ${beats.length ? `<h4>Setup beats</h4><ol class="sp-proposal-diff">${beats.map(beat => `<li>${escapeHtml(beat.text)}</li>`).join('')}</ol>` : proposal.request?.pitchOnly ? '' : '<p class="mwt-text-dim mwt-text-sm">No setup beats proposed.</p>'}`;
 }
 
 function finishScopedReview() {
@@ -784,7 +787,13 @@ export function showScopedReview(proposal) {
         diagnostics.newcomerRequirementUnmet ? '' : diagnostics.newcomerPolicyMessage || '',
         diagnostics.newcomerOutcomeAttribution?.message || '',
         diagnostics.validationWarning || '',
+        diagnostics.pitchBeatsDropped
+            ? `${diagnostics.pitchBeatsDropped} pitch${diagnostics.pitchBeatsDropped === 1 ? '' : 'es'} came back with setup beats, which were dropped: setup is generated per arc after you keep a pitch.`
+            : '',
     ].filter(Boolean);
+    // Pitches are over-asked on purpose, so nothing is pre-selected: the user
+    // picks the few worth developing instead of unticking the rest.
+    const pitchOnly = proposal.request?.pitchOnly === true;
     const coverageHtml = renderCharacterContextCoverage(
         diagnostics.characterContextMode,
         diagnostics.characterContextCoverage,
@@ -806,7 +815,9 @@ export function showScopedReview(proposal) {
         destroyOnClose: true,
         onClose: finishScopedReview,
         content: `
-            <p class="mwt-text-dim mwt-text-sm">Review the scoped changes below. Nothing is saved until you choose Apply.</p>
+            <p class="mwt-text-dim mwt-text-sm">${pitchOnly
+                ? 'These are pitches: a name and a description, no setup beats yet. Tick the ones worth developing; nothing is saved until you choose Keep. Then open each kept arc\'s Setup beats and use Generate setup beats.'
+                : 'Review the scoped changes below. Nothing is saved until you choose Apply.'}</p>
             ${proposal.stale ? `<p class="sp-proposal-stale" role="alert">${escapeHtml(proposal.staleReason || 'A selected target changed while this proposal was generated. Generate again to review the current plan.')}</p>` : ''}
             <p><strong>${escapeHtml(requestSummary(proposal.request))}</strong></p>
             ${proposal.castPolicyContract ? `<p class="mwt-text-dim mwt-text-sm"><strong>Cast policy:</strong> ${escapeHtml(proposal.castPolicyContract.policyLabel)} · Source: ${escapeHtml(proposal.castPolicyContract.sourceLabel)}. ${escapeHtml(proposal.castPolicyContract.message)}</p>` : ''}
@@ -816,11 +827,11 @@ export function showScopedReview(proposal) {
             ${diagnostics.newcomerRequirementUnmet ? `<p class="sp-proposal-requirement" role="alert"><strong>Cast requirement unmet.</strong> ${escapeHtml(diagnostics.newcomerPolicyMessage || 'The requested newcomer coverage was not returned.')}</p>` : ''}
             ${diagnosticItems.length ? `<ul class="sp-proposal-diagnostics">${diagnosticItems.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
             <fieldset class="sp-proposal-selection">
-                <legend class="mwt-label">Changes to apply</legend>
+                <legend class="mwt-label">${pitchOnly ? 'Pitches to keep' : 'Changes to apply'}</legend>
                 ${preview.rows.length ? preview.rows.map(row => `
                 <div class="sp-proposal-item">
                     <label class="sp-proposal-choice" for="mwt-sp-proposal-${escapeHtml(row.id)}">
-                        <input id="mwt-sp-proposal-${escapeHtml(row.id)}" type="checkbox" name="mwt-sp-proposal" value="${escapeHtml(row.id)}" checked>
+                        <input id="mwt-sp-proposal-${escapeHtml(row.id)}" type="checkbox" name="mwt-sp-proposal" value="${escapeHtml(row.id)}" ${pitchOnly ? '' : 'checked'}>
                         <span><strong>${escapeHtml(row.title || 'Untitled arc')}</strong><small>${escapeHtml(getSectionMeta(row.section)?.label || row.section)} · ${row.kind === 'added' ? 'new arc' : 'refreshed'}</small></span>
                     </label>
                     ${row.kind === 'added' ? renderScopedAddition(row.arc, proposal) : renderArcDiff(row.diff)}
@@ -832,7 +843,7 @@ export function showScopedReview(proposal) {
                 </div>`).join('') : '<p class="mwt-text-dim mwt-text-sm">No material proposal was returned. Diagnostics are preserved below.</p>'}
             </fieldset>
             <div class="mwt-flex mwt-gap-8 mwt-mt-8">
-                <button id="mwt-sp-scoped-apply" class="mwt-btn mwt-btn-primary">Apply changes</button>
+                <button id="mwt-sp-scoped-apply" class="mwt-btn mwt-btn-primary">${pitchOnly ? 'Keep selected pitches' : 'Apply changes'}</button>
                 <button id="mwt-sp-scoped-discard" class="mwt-btn">Discard</button>
             </div>`,
     });
@@ -845,6 +856,10 @@ export function showScopedReview(proposal) {
             return;
         }
         const acceptedProposalIds = [...modal.querySelectorAll('input[name="mwt-sp-proposal"]:checked')].map(input => input.value);
+        if (pitchOnly && !acceptedProposalIds.length) {
+            notify('Story Planner', 'Tick at least one pitch to keep, or choose Discard.', 'info');
+            return;
+        }
         const reviewedArcs = diagnostics.authorContextUsed ? proposal.arcs.map(arc => {
             const editor = [...modal.querySelectorAll('.sp-author-review')].find(node => node.dataset.arcId === arc.id);
             if (!editor) return arc;
@@ -878,6 +893,10 @@ export function showScopedReview(proposal) {
         applyPlanInjection();
         renderArcs();
         const skipped = result.excludedRecurrences?.length || 0;
+        if (pitchOnly) {
+            notify('Story Planner', `${acceptedProposalIds.length} pitch${acceptedProposalIds.length === 1 ? '' : 'es'} kept${skipped ? `; ${skipped} skipped as exact-title recurrence${skipped === 1 ? '' : 's'}` : ''}. Open each arc's Setup beats and use Generate setup beats.`, 'success');
+            return;
+        }
         notify('Story Planner', skipped
             ? `Scoped story plan applied; ${skipped} exact-title recurrence${skipped === 1 ? ' was' : 's were'} skipped because the live plan changed.`
             : 'Scoped story plan applied.', 'success');
@@ -940,6 +959,10 @@ export function openGenerateDialog() {
             <div class="mwt-settings-grid mwt-mt-8">
                 <label class="mwt-label" for="sp-generate-count">Requested count</label>
                 <input id="sp-generate-count" class="mwt-input" type="number" min="1" max="30" value="${preferences.requestedCount || getArcCount()}" style="max-width:100px">
+            </div>
+            <div class="mwt-mt-8">
+                <label class="sp-mode-label" for="sp-generate-pitch"><input id="sp-generate-pitch" type="checkbox" ${preferences.pitchOnly ? 'checked' : ''} aria-describedby="sp-generate-pitch-help"> Pitches only (Add ideas only)</label>
+                <p id="sp-generate-pitch-help" class="mwt-text-dim mwt-text-sm">Asks for names and descriptions without setup beats. Request about twice as many as you want, keep the best in review, then use Generate setup beats on each kept arc so its beats are written on their own. A kept pitch without beats is sent to the narrator as a plain line until its setup is generated.</p>
             </div>
             <div class="mwt-settings-grid mwt-mt-8">
                 <label class="mwt-label" for="sp-generate-cast-policy">Cast policy</label>
@@ -1043,7 +1066,7 @@ export function openGenerateDialog() {
         const targetArcIds = [...modal.querySelectorAll('input[name="sp-generate-target"]:checked')].map(input => input.value);
         const subjectMode = modal.querySelector('input[name="sp-generate-subject-mode"]:checked')?.value || 'any';
         const subjectEntityIds = [...modal.querySelectorAll('input[name="sp-generate-subject"]:checked')].map(input => input.value);
-        return sanitizeStoryPlanRequest({ operation, lens, sectionKeys, subjectMode, subjectEntityIds, requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: modal.querySelector('#sp-generate-cast-policy')?.value, targetArcIds });
+        return sanitizeStoryPlanRequest({ operation, lens, pitchOnly: modal.querySelector('#sp-generate-pitch')?.checked === true, sectionKeys, subjectMode, subjectEntityIds, requestedCount: modal.querySelector('#sp-generate-count')?.value, castPolicy: modal.querySelector('#sp-generate-cast-policy')?.value, targetArcIds });
     };
     // Once the user has touched the target list, their selection is
     // authoritative — including an empty one. Falling back to the saved
@@ -1101,6 +1124,8 @@ export function openGenerateDialog() {
         modal.querySelectorAll('input[name="sp-generate-lens"]').forEach(input => {
             input.disabled = request.operation !== 'add';
         });
+        const pitch = modal.querySelector('#sp-generate-pitch');
+        if (pitch) pitch.disabled = request.operation !== 'add';
         const targets = modal.querySelector('#sp-generate-targets');
         if (targets) targets.hidden = request.operation !== 'refresh';
         const subjects = modal.querySelector('#sp-generate-subjects');
@@ -1128,7 +1153,7 @@ export function openGenerateDialog() {
         syncSummary();
     });
     modal.querySelectorAll('input[name="sp-generate-section"]').forEach(input => input.addEventListener('change', refresh));
-    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-lens"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"], #sp-generate-count, #sp-generate-cast-policy').forEach(input => input.addEventListener('change', refresh));
+    modal.querySelectorAll('input[name="sp-generate-operation"], input[name="sp-generate-lens"], input[name="sp-generate-subject-mode"], input[name="sp-generate-subject"], input[name="sp-generate-context-source"], #sp-generate-count, #sp-generate-pitch, #sp-generate-cast-policy').forEach(input => input.addEventListener('change', refresh));
     modal.querySelector('#sp-generate-cancel')?.addEventListener('click', () => hideModal(GENERATE_MODAL_ID));
     modal.querySelector('#sp-generate-legacy')?.addEventListener('click', async () => {
         hideModal(GENERATE_MODAL_ID);
@@ -1162,6 +1187,7 @@ export function openGenerateDialog() {
                 ...request,
                 lens: modal.querySelector('input[name="sp-generate-lens"]:checked')?.value || 'open',
                 requestedCount: modal.querySelector('#sp-generate-count')?.value,
+                pitchOnly: modal.querySelector('#sp-generate-pitch')?.checked === true,
             }),
         });
         try {

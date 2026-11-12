@@ -110,9 +110,20 @@ export const ESCALATION_GUIDANCE = Object.freeze({
     escalating: `Escalation preference: escalating. ${WORKS_AGAINST_DESTINATION} Each beat should leave someone with more to lose than the one before. ${COMPLICATION_LIMITS}`,
 });
 
+// ─── Pitch mode (scoped Add) ─────────────────────────────────────────────────
+// Three rounds of rule wording left plans that passed every rule and still read
+// flat. Part of that is the shape of the request: one call asked for every arc
+// and its beats at once, so each arc got the model's first idea and a share of
+// the output budget. A pitch request asks for descriptions alone, more of them
+// than the user means to keep; review is the selection step, and the targeted
+// `setup` operation then writes beats for one kept arc at a time. The variety
+// rule is what makes over-asking worth it: without it the extra slots fill with
+// the next obvious step of each open thread.
+export const PITCH_VARIETY_RULE = 'The user will keep only a few of these, so make them genuinely different from one another: vary what drives each pitch, who it puts under pressure, the kind of encounter it builds toward, and its scale. Two pitches that are one idea under different names waste a slot. Prefer an idea a reader of this story would not have predicted but would recognise as fitting over the next obvious step of an open thread.';
+
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
-export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
+export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open', { pitchOnly = false } = {}) {
     const selected = Array.isArray(sectionKeys)
         ? SECTIONS.filter(section => sectionKeys.includes(section.key))
         : SECTIONS;
@@ -182,7 +193,19 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
   1. Mira's brother asks {{user}} to help talk her round, saying she always listens to them.
   2. Mira finds out he went to {{user}} before asking her, and calls off the dinner where she had planned to say yes.
   3. Her brother gives notice on his flat and tells their mother it is settled, so refusing him now means refusing them both.`;
-    const beatsRule = hooksOnly
+    // A pitch request shows the same two examples with their beat lines
+    // removed, so the description format is still demonstrated and no beat
+    // format is.
+    const pitchExamples = examples.split('\n').filter(line => !/^\s+\d+\.\s/.test(line)).join('\n');
+    const beatsRule = pitchOnly
+        ? (hooksOnly
+            ? `Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone. ${PITCH_VARIETY_RULE}`
+            : `This request is for pitches only. Return each bullet alone: no setup beats and no numbered lists. Setup is written later, one arc at a time, for the pitches the user keeps. ${PITCH_VARIETY_RULE}
+
+Two examples of the format, from unrelated stories. Do not reuse their events.
+
+${pitchExamples}`)
+        : hooksOnly
         ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
         : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: concrete, in-scene events that build toward the arc's turning point. ${beatActorRule} ${BEAT_PROGRESSION_RULE}
 

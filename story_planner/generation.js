@@ -86,7 +86,7 @@ export function buildSystemPrompt(requestSpec = null, settings = getSettings()) 
     // owned. Custom system prompts remain supported by the legacy full-plan path.
     if (!requestSpec) return custom || STORY_PLAN_SYSTEM_PROMPT;
     const request = sanitizeStoryPlanRequest(requestSpec);
-    return buildStoryPlanSystemPrompt(request.sectionKeys, request.lens);
+    return buildStoryPlanSystemPrompt(request.sectionKeys, request.lens, { pitchOnly: request.pitchOnly === true });
 }
 
 // Bounded, but wide enough to cover a legal plan (getArcCount caps at 30). For
@@ -200,10 +200,29 @@ export function buildReadOnlyContinuityProjection(arcs) {
     return included.map(row => row.text).join('\n');
 }
 
-export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy, lens = 'open') {
+const WORLD_PRESSURE_EMPHASIS_GLOSS = 'World pressure means complications imposed by the setting — adverse, beneficial, or mixed developments in weather, supply and abundance, infrastructure, markets, institutions, public events, or discoveries — that change someone\'s concrete options. Decisions that apply to everyone they reach qualify, such as a toll, a ration, or a festival; a plan aimed at particular people does not, even when the cast is not its target. Opportunities need not conceal a threat.';
+
+export function storyPaletteProjection(palette = getStoryPalette(), castPolicy = palette.castPolicy, lens = 'open', { pitchOnly = false } = {}) {
     const lines = [];
+    // A pitch has no beats, so the escalation line (which asks for a beat that
+    // works against the destination) and the newcomer marker contract (which
+    // pairs an arc marker with an entrance beat) have nothing to attach to.
+    // Both are applied when setup is generated for a kept pitch.
+    if (pitchOnly) {
+        if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
+        if (palette.emphases.includes('world pressure')) lines.push(WORLD_PRESSURE_EMPHASIS_GLOSS);
+        if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
+        lines.push('A character already evidenced in the story is established even without a Knowledge record.');
+        lines.push(castPolicy === 'existing-only'
+            ? 'Cast policy — established cast only: use established named story participants. Do not propose a new recurring or major character.'
+            : castPolicy === 'propose'
+                ? 'Cast policy — actively propose new characters: at least one pitch should turn on a distinct recurring or major newcomer, named as new in its description. Keep any addition genre-appropriate; friends, clients, witnesses, colleagues, relatives, and other non-antagonist roles are valid.'
+                : 'Cast policy — new characters allowed: a pitch may turn on a new major character when expansion genuinely serves the story, named as new in its description. There is no newcomer quota.');
+        lines.push('Do not emit [NEWCOMER:*] or [ENTRANCE:*] proposal markers in a pitch.');
+        return lines.join('\n');
+    }
     if (palette.emphases.length) lines.push(`Emphasis preferences (not quotas): ${palette.emphases.join(', ')}.`);
-    if (palette.emphases.includes('world pressure')) lines.push('World pressure means complications imposed by the setting — adverse, beneficial, or mixed developments in weather, supply and abundance, infrastructure, markets, institutions, public events, or discoveries — that change someone\'s concrete options. Decisions that apply to everyone they reach qualify, such as a toll, a ration, or a festival; a plan aimed at particular people does not, even when the cast is not its target. Opportunities need not conceal a threat.');
+    if (palette.emphases.includes('world pressure')) lines.push(WORLD_PRESSURE_EMPHASIS_GLOSS);
     if (lens !== 'world-pressure') lines.push(ESCALATION_GUIDANCE[palette.escalation]);
     else if (palette.escalation !== 'balanced') lines.push(`Escalation preference: ${palette.escalation}.`);
     lines.push('Cast novelty and plot escalation are separate choices: a newcomer need not raise the stakes, and escalation need not add a newcomer. Keep any addition genre-appropriate and useful to the requested arc; friends, clients, witnesses, colleagues, relatives, and other non-antagonist roles are valid.');
@@ -347,7 +366,7 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
         requestSpec: request,
         palette: savedPalette,
     });
-    const palette = storyPaletteProjection(savedPalette, castPolicyContract.policy, request?.lens);
+    const palette = storyPaletteProjection(savedPalette, castPolicyContract.policy, request?.lens, { pitchOnly: request?.pitchOnly === true });
     const paletteBlock = palette ? wrapTag('story_palette', palette) : '';
     const characterContext = requestContext.characterContext || { text: '' };
     const characterBlock = characterContext.text
@@ -420,9 +439,11 @@ export function buildUserPrompt(recentText, reminderReason = '', requestContext 
 
     if (request) {
         const labels = request.sectionKeys.map(key => SECTIONS.find(section => section.key === key)?.label || key);
-        const operationText = request.operation === 'add'
-            ? `Propose exactly up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} across the selected sections.`
-            : `Refresh only the captured existing arcs. Do not add new arcs; omitted targets remain unchanged.`;
+        const operationText = request.pitchOnly
+            ? `Pitch ${request.requestedCount} distinct new arc${request.requestedCount === 1 ? '' : 's'} across the selected sections: name and description only, no setup beats.`
+            : request.operation === 'add'
+                ? `Propose exactly up to ${request.requestedCount} new arc${request.requestedCount === 1 ? '' : 's'} across the selected sections.`
+                : `Refresh only the captured existing arcs. Do not add new arcs; omitted targets remain unchanged.`;
         const scopeBlock = [
             '<application_request>',
             `Operation: ${request.operation === 'add' ? 'Add ideas' : 'Refresh selected arcs'}.`,
@@ -516,8 +537,22 @@ export function validateOutput(text, expectHeader = true, requestSpec = null) {
 }
 
 /** Evaluate transient newcomer/entrance evidence before merge sanitization drops it. */
-export function assessNewcomerEvidence(arcs, castPolicyContract, { reviewed = false, operation = 'add', targeted = false } = {}) {
+export function assessNewcomerEvidence(arcs, castPolicyContract, { reviewed = false, operation = 'add', targeted = false, pitchOnly = false } = {}) {
     const policy = castPolicyContract?.policy || 'allowed';
+    // A pitch carries no beats, so there is no entrance beat to pair with and
+    // nothing to evaluate. The pairing is checked when setup is generated.
+    if (pitchOnly) {
+        return {
+            ok: true,
+            rows: [],
+            validCount: 0,
+            message: policy === 'existing-only' ? '' : 'Newcomer entrances are not checked on pitches; they are checked when setup beats are generated.',
+            attribution: {
+                plannerOutcome: 'not-evaluated', proposedCount: 0, narrationOutcome: 'not-evaluated',
+                message: '',
+            },
+        };
+    }
     const rows = (arcs || []).map(arc => ({
         title: arc.title || 'Untitled arc',
         marked: !!(arc._newcomerHandle || arc._newcomerMarkerError || arc._entranceHandles?.length),
@@ -937,6 +972,19 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
             strictHeadings: !!request,
             subjectHandles: request?.sectionKeys.includes('character') ? subjectHandles : undefined,
         });
+        // Pitch mode stores descriptions only. A model that writes beats anyway
+        // has them dropped here, with any newcomer markers, so every kept
+        // pitch reaches the targeted `setup` operation in the same beatless
+        // state; the review reports how many were affected.
+        const pitchOnly = request?.pitchOnly === true;
+        let pitchBeatsDropped = 0;
+        if (pitchOnly) {
+            for (const arc of parsed) {
+                if (arc.beats?.length) pitchBeatsDropped++;
+                arc.beats = [];
+                for (const key of ['_newcomerHandle', '_newcomerMarkerError', '_entranceHandles', '_entranceBeatIndex', '_newcomerEvidence']) delete arc[key];
+            }
+        }
         // Malformed evidence and existing-only violations invalidate the whole
         // response, including overflow rows. Active-proposal coverage, however,
         // is measured only from the accepted scoped set: a newcomer hidden on an
@@ -944,6 +992,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         const responseNewcomerEvidence = assessNewcomerEvidence(parsed, castPolicyContract, {
             reviewed: true,
             operation: request ? 'refresh' : 'add',
+            pitchOnly,
         });
         if (!responseNewcomerEvidence.ok) throw new Error(responseNewcomerEvidence.reason);
         const scopedSelection = request ? selectScopedParsedArcs(parsed, request, capturedArcs, subjectCandidates) : null;
@@ -951,6 +1000,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         const newcomerEvidence = assessNewcomerEvidence(limitedParsed, castPolicyContract, {
             reviewed: reviewOnly && !!request,
             operation: request?.operation || 'add',
+            pitchOnly,
         });
         if (!newcomerEvidence.ok) throw new Error(newcomerEvidence.reason);
         record({
@@ -1073,6 +1123,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
         const mergedNewcomerEvidence = assessNewcomerEvidence(survivingEvidence, castPolicyContract, {
             reviewed: reviewOnly && !!request,
             operation: request?.operation || 'add',
+            pitchOnly,
         });
         if (!mergedNewcomerEvidence.ok) throw new Error(mergedNewcomerEvidence.reason);
         if (newcomerEvidence.validCount > mergedNewcomerEvidence.validCount
@@ -1148,6 +1199,7 @@ export async function generatePlan(isAuto = false, requestSpec = null, { reviewO
                     participantDiagnostics,
                     excludedRecurrences,
                     validationWarning: validation.warning || '',
+                    pitchBeatsDropped,
                     newcomerEvidence: finalNewcomerEvidence.rows,
                     newcomerPolicyMessage: finalNewcomerEvidence.message,
                     newcomerOutcomeAttribution: finalNewcomerEvidence.attribution,

@@ -107,6 +107,11 @@ export function sanitizeStoryPlanRequestPreferences(value) {
         // preserved), but the saved preference should reopen the dialog where
         // the user left it.
         lens: STORY_PLAN_LENSES.includes(raw.lens) ? raw.lens : 'open',
+        // Read from the input for the same reason as the lens: Refresh drops
+        // it from the request. The key is written only when on, so preferences
+        // saved before pitch mode existed are still canonical as stored and do
+        // not raise a repair issue on load.
+        ...(raw.pitchOnly === true ? { pitchOnly: true } : {}),
     };
 }
 
@@ -145,6 +150,11 @@ export function sanitizeStoryPlanRequest(value, { sectionKeys = SECTION_KEYS } =
         targetArcIds,
         castPolicy,
         lens,
+        // Pitch mode (Add only): titles and descriptions without setup beats,
+        // so the user can over-ask, keep the few worth developing, and have
+        // setup written one arc at a time by the targeted `setup` operation.
+        // Absent means off.
+        ...(operation === 'add' && raw.pitchOnly === true ? { pitchOnly: true } : {}),
     };
 }
 
