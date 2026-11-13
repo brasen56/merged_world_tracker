@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Interiority's intentions read this field, so they should follow the want
   too. Existing values are not rewritten by ordinary scans: run 🎯 Fields →
   Current Agenda once on each major NPC to bring an old entry up to date.
+- **Story Planner — the plan prompt no longer asks for "possible outcomes".**
+  The rule that framed arcs as hypotheses asked the model to describe
+  "attempts, pressures, complications, and possible outcomes", which
+  invited hedged lists in a prompt whose other rules ask for one specific
+  event. It now reads: arcs are plans, not established facts; leave the
+  turning point's outcome unresolved, and never present planned events as
+  already having happened. The Harbor Lease example's last beat now
+  happens in person, with the dockmaster announcing the earlier hearing at
+  the warehouse in front of the crew, since most beats in recent trials
+  arrived on paper. A saved custom system prompt receives neither change.
 
 ## [2.17.0]
 

@@ -170,7 +170,11 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open', { 
     // two also differ in setting and scale and share no posted-notice beats,
     // which an earlier pair had in common. The Harbor Lease keeps its clock, so
     // The Spare Room's last beat is a public commitment instead: both used to
-    // end "a week sooner, before anyone can respond".
+    // end "a week sooner, before anyone can respond". The Harbor Lease's last
+    // beat happens in person, with the dockmaster at the warehouse, rather
+    // than as an announcement: 9 of the 16 beats in the 2026-10-31 trial
+    // arrived on paper. It keeps "before anyone can find the retired
+    // inspector" because that ties it to beat 2's discovery.
     const beatActorRule = worldPressure
         ? 'A beat must be something a narrator can actually perform in a single scene — the world moves: something arrives, opens, flourishes, is discovered, fails, runs short, or changes how ordinary life works. People and institutions may act, react, and adapt inside a beat, but the initiating development applies to everyone it reaches, never a plan aimed at particular people.'
         : 'A beat must be something a narrator can actually perform in a single scene — someone does, demands, refuses, offers, or reveals something; something arrives or is discovered; a deadline moves.';
@@ -187,7 +191,7 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open', { 
         : `- The Harbor Lease — The dockmaster wants the guild's warehouse back before the autumn fleet arrives, and a damning inspection report gives her the grounds; it builds toward a hearing before the harbor council where the guild must answer the report, and losing it could cost them the warehouse.
   1. The dockmaster's clerk posts an inspection notice on the warehouse door, citing rot no one on the crew has seen.
   2. A carpenter hired to check the beams finds them sound and points out that the notice was signed by an inspector who retired last spring.
-  3. The dockmaster moves the hearing up a week, before anyone can find the retired inspector.
+  3. The dockmaster turns up at the warehouse with a harbor warden and, in front of the crew, announces that the hearing has been moved up a week, before anyone can find the retired inspector.
 
 - The Spare Room — Mira wants to stop being her brother's rescuer, and his plan to move in "just for a month" makes it urgent; it builds toward Mira telling him what she will and won't do, which could end with him leaving angry or her giving him a key on her terms.
   1. Mira's brother asks {{user}} to help talk her round, saying she always listens to them.
@@ -225,13 +229,20 @@ ${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are 
         ? `- ${WORLD_PRESSURE_RULE} When an Ambient Conditions block is supplied, weather and sky conditions come from that module: build on its stated conditions, exact-time daylight and one-band weather forecast, rather than inventing conflicting weather or daylight.`
         : '- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.\n- Read the recent story for the routine that has set in and build arcs that disturb it, not the premise.';
 
+    // The arcs-are-plans rule used to say "treat every arc as a hypothesis:
+    // describe attempts, pressures, complications, and possible outcomes",
+    // which asked for a list of outcomes in the same prompt whose beat and
+    // destination rules ask for one event. It now names only what must stay
+    // open (the turning point's outcome) and what must never be claimed
+    // (planned events as history). It says nothing about beats, because this
+    // line also reaches pitch and Hooks-only requests, which ask for none.
     return `${introRule}
 
 ABSOLUTE RULES:
 - Output ONLY the story plan document. Never continue the roleplay or write any part of it as a scene. Summarizing what an NPC asks, offers, or reveals is planning, not dialogue.
 - Frame every idea as a future arc, chapter, or episode — never a time frame ("three days later", "next month").
 ${sortRule}
-- Treat every arc as a hypothesis: describe attempts, pressures, complications, and possible outcomes, and never claim an uncertain outcome succeeds.
+- Arcs are plans, not established facts: leave the turning point's outcome unresolved, and never present planned events as already having happened.
 - ${PLAYER_AGENCY_RULE}
 - ${STORY_GROUNDING_RULE}
 ${castDevelopmentRule}
