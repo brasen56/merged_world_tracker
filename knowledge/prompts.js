@@ -118,7 +118,7 @@ OUTPUT FORMAT:
       "background": "3-5 sentences: origin, how they got here, the event that shaped them",
       "personality": "2-3 defining traits shown as behavior, a core flaw, a core fear, a tell",
       "read_on_pc": "their current assessment of the player character — a stance, not a log of interactions",
-      "agenda": "their main agenda in the story right now",
+      "agenda": "the one situation they most want to achieve or protect, and what stands in its way (empty if the story hasn't shown one)",
       "secrets": "A SINGLE STRING: tiered secrets the NPC guards (never narrate unless disclosed). Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
       "canon_lock": "A SINGLE STRING: 3-5 immutable facts that must never change across appearances, separated by semicolons",
       "initial_knowledge": [{ "fact": "concrete established fact (past/present only — never this NPC's own future plans or intentions)", "source": "witness/told/document/rumor/institutional", "date": "in-world date" }]
@@ -270,7 +270,7 @@ OUTPUT FORMAT:
     "background": "3-5 sentences: origin, how they got here, the event that shaped them",
     "personality": "2-3 defining traits shown as behavior, a core flaw, a core fear, a tell",
     "read_on_pc": "their current assessment of the player character — a stance, not a log of interactions",
-    "agenda": "their main agenda in the story right now",
+    "agenda": "the one situation they most want to achieve or protect, and what stands in its way (empty if the story hasn't shown one)",
     "secrets": "A SINGLE STRING: tiered secrets. Write as one string like 'Tier 1 (semi-public): ... | Tier 2 (private): ... | Tier 3 (buried): ...'. Do NOT use a nested object.",
     "canon_lock": "A SINGLE STRING: 3-5 immutable facts, separated by semicolons"
   },

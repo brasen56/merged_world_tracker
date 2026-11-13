@@ -12,6 +12,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+
+- **Story Planner — Pitches only (Add ideas).** A new checkbox in the
+  Generate dialog asks for arc names and descriptions without setup beats.
+  Request about twice as many as you want; the review opens with nothing
+  ticked, so you keep only the pitches worth developing, then use
+  **Generate setup beats** on each kept arc so its beats are written on
+  their own instead of sharing one response with every other arc. The
+  request tells the model the list will be cut down and asks for pitches
+  that differ in what drives them, who they pressure, and their scale.
+  Beats a model writes anyway are dropped and reported in the review.
+  Newcomer entrance markers are not used on pitches; they are checked when
+  setup is generated. A kept pitch with no beats is sent to the narrator as
+  a plain line until its setup exists. Whole-plan and automatic generation
+  are unchanged.
+
+### Changed
+
+- **Knowledge — Current Agenda now holds what the NPC wants.** Dossier
+  scans, Enrich and 🎯 Fields ask for the one situation the NPC most wants
+  to achieve or protect, as the story and their choices show it, and what
+  stands in its way. Tasks, exams and schedules stay out unless the want
+  hinges on one, and a goal that has been reached or dropped goes to the
+  Knowledge Ledger instead of staying in the field. The old wording asked
+  for their agenda "right now", which filled the field with task lists.
+  Interiority's intentions read this field, so they should follow the want
+  too. Existing values are not rewritten by ordinary scans: run 🎯 Fields →
+  Current Agenda once on each major NPC to bring an old entry up to date.
+
 ## [2.17.0]
 
 ### Added

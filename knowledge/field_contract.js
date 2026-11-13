@@ -81,9 +81,17 @@ export const FIELD_CONTRACT = Object.freeze([
         notBelongs: 'an interaction log, relationship milestones, or what the player did and felt',
         shape: '1-2 short sentences',
     }),
+    // Agenda used to be an "active overarching goal" and the scan templates
+    // asked for "their main agenda in the story right now", which produced
+    // task lists: an exam date next to a deal that had already closed. It now
+    // holds the want behind the tasks. Interiority's intentions call reads this
+    // field, so intentions become moves toward the want. Keep the label: it is
+    // how existing entries are parsed back.
     Object.freeze({
         key: 'agenda', label: 'Current Agenda', maxChars: 400,
-        belongs: 'active overarching goal and meaningful constraint', notBelongs: 'every small task or completed obligation', shape: '1-2 short sentences',
+        belongs: 'the one situation they most want to achieve or protect, as the story and their choices show it, and what stands in its way',
+        notBelongs: 'a task, exam, or schedule unless the want hinges on it; steps toward it; a goal already reached or dropped (its outcome goes in the ledger); a list',
+        shape: '1-2 short sentences: the want, then the obstacle',
     }),
     Object.freeze({
         key: 'secrets', label: 'Secrets', maxChars: 1200, structured: true,
