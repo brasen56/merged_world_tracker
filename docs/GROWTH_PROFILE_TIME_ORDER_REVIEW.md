@@ -7,6 +7,8 @@ the co-author's review of it (record in §8).
 **Related:** [GROWTH_PROFILE_INJECTION_SCOPE.md](./GROWTH_PROFILE_INJECTION_SCOPE.md).
 The requester uses profiles to update Personality and Voice through that
 feature, so its draft step is part of this problem (§4.3).
+**Scope:** [GROWTH_PROFILE_TIME_ORDER_SCOPE.md](./GROWTH_PROFILE_TIME_ORDER_SCOPE.md) —
+the buildable version of §5.
 
 ## Summary
 

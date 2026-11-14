@@ -11,6 +11,7 @@ import { GROWTH_DOSSIER_PROMPT } from './prompts.js';
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { isModulePausedForCurrentScope } from '../core/schema_status.js';
 import { splitGrowthSentences, growthEchoStatus } from './growth_lineage.js';
+import { buildProfileEvidenceView } from './growth_timeline.js';
 export { splitGrowthSentences } from './growth_lineage.js';
 
 const FIELDS = ['personality', 'voice'];
@@ -39,6 +40,24 @@ export function growthDossierEvidence(file, { includeArchived = false } = {}) {
         ...(includeArchived ? file?.archivedRaw || [] : []).map(o => ({ id: o.id, category: o.category,
             claim: o.claim, ts: o.ts ?? null, canon: !!o.canon, tier: 'raw' })),
     ];
+}
+
+/**
+ * Model-only projection. Times remain in growthDossierEvidence for validation/echo.
+ * Quotes never travel; keys that only restate another (orderUnknown is
+ * `position === null`, the tie flags qualify quotes that are not sent) and
+ * empty sample fields are dropped to keep the draft input small.
+ */
+export function growthDossierPromptEvidence(file) {
+    return buildProfileEvidenceView(file).items.map(item => {
+        const { quote: _quote, earliestQuote: _earliest, latestQuote: _latest, sourceQuotes: _sources,
+            orderUnknown: _unknown, earliestTied: _earliestTied, latestTied: _latestTied, ...safe } = item;
+        if (safe.samples?.length) safe.samples = safe.samples.map(({ orderUnknown: _sampleUnknown, ...sample }) => sample);
+        else delete safe.samples;
+        if (!safe.omittedMessages) delete safe.omittedMessages;
+        if (!safe.omittedUndated) delete safe.omittedUndated;
+        return safe;
+    });
 }
 
 /** Strict cleanup convention: one whole JSON fence allowed, no repairs. */
@@ -189,10 +208,11 @@ export async function draftGrowthDossier(name, { profile: generatedProfile } = {
     const previous = getActiveGrowthApproval(history.records[entityId]);
     const approved = previous?.approved ?? null;
     const current = extractGrowthDossierLines(content);
-    const evidence = growthDossierEvidence(getEvidenceFile(key, false));
+    const file = getEvidenceFile(key, false);
+    const evidence = growthDossierEvidence(file);
     const canonLock = content.match(/^Canon Lock:[ \t]*(.*)$/m)?.[1] || '';
     const input = { name: key, profile, current, currentSentences: Object.fromEntries(FIELDS.map(field => [field, splitGrowthSentences(current[field])])),
-        canonLock, evidence, limits: settings.limits };
+        canonLock, evidence: growthDossierPromptEvidence(file), limits: settings.limits };
     const output = await ktFetchFromApi(GROWTH_DOSSIER_PROMPT, JSON.stringify(input), { retries: 1 });
     assertCurrent();
     const parsed = parseGrowthDossierProposal(output);

@@ -11,7 +11,7 @@ import { validateFieldValue, validateScanRecord } from '../knowledge/field_contr
 import { GROWTH_DOSSIER_CEILINGS } from '../knowledge/growth_dossier_state.js';
 import { bumpEpoch } from '../core/scope.js';
 import { pauseStore, _resetPausedStores, _setScopeKeyResolver } from '../core/schema_status.js';
-import { draftGrowthDossier, extractGrowthDossierLines, growthDossierEvidence,
+import { draftGrowthDossier, extractGrowthDossierLines, growthDossierEvidence, growthDossierPromptEvidence,
     parseGrowthDossierProposal, splitGrowthSentences, validateGrowthDossierProposal } from '../knowledge/growth_dossier.js';
 import { appendGrowthApprovalToBook, mergeGrowthHistoryIdentities } from '../knowledge/growth_history.js';
 
@@ -186,13 +186,18 @@ describe('strict Growth proposal contract', () => {
         Object.assign(p.changes[2], { action: 'edit', after: p.voice, evidenceIds: ['obs-1'] });
         expect(validate(p).warnings).toEqual([]);
     });
-    test('evidence projection carries message times but no receipts/archive', () => {
+    test('internal evidence projection retains echo times; model projection excludes times and receipts', () => {
         expect(growthDossierEvidence({ raw: [{ ...evidence[0], category: 'values', quote: 'SECRET', canon: true }],
             consolidated: [{ id: 'con-1', claim: 'calm', firstSeen: 50, quote: 'SECRET', sources: ['obs-1'] }],
             archivedRaw: [{ id: 'old', quote: 'SECRET' }] })).toEqual([
             { id: 'con-1', category: undefined, claim: 'calm', firstSeen: 50, tier: 'consolidated', canon: false },
             { ...evidence[0], category: 'values', tier: 'raw', canon: true },
         ]);
+        const model = growthDossierPromptEvidence({ raw: [{ ...evidence[0], category: 'values', quote: 'SECRET', canon: true }] });
+        // A null position is the only unknown-order marker the model needs (the prompt says so).
+        expect(model).toEqual([{ id: 'obs-1', claim: 'Owns mistakes', category: 'values', canon: true,
+            tier: 'raw', position: null, phase: null }]);
+        expect(JSON.stringify(model)).not.toContain('SECRET');
     });
 });
 
@@ -242,8 +247,9 @@ describe('headless drafting service', () => {
         expect(input.profile).toBe('Fresh unsaved profile.');
         expect(input.limits).toEqual({ personality: 1400, voice: 800 });
         expect(input.canonLock).toBe('born at sea');
-        expect(input.evidence[0].firstSeen).toBe(50);
-        expect(input.evidence[1].ts).toBe(100);
+        expect(input.evidence.every(o => o.position === null && o.phase === null && !('orderUnknown' in o))).toBe(true);
+        expect(input.evidence.every(o => !('firstSeen' in o) && !('ts' in o))).toBe(true);
+        expect(growthDossierEvidence(getEvidenceFile('Mara'))[0].firstSeen).toBe(50);
         expect(requests[0].userContent).not.toContain('SECRET RECEIPT');
         expect(books).toEqual(before);
         expect(save).not.toHaveBeenCalled();

@@ -22,16 +22,24 @@ function generateUuid() {
 }
 
 /**
- * Return a stable identity for a chat message, creating and persisting a UUID
- * when SillyTavern has not supplied `id` or `extra.mesid`.
+ * Read an existing identity without creating a UUID or saving the chat.
+ * Safe for messages restored from strictly read-only ILS_Originals.
  *
  * @param {object} message
  * @returns {string|null}
  */
-export function getOrCreateReceiptIdentity(message) {
+export function getReceiptIdentity(message) {
     if (!message || typeof message !== 'object') return null;
     if (message.id != null && String(message.id).trim()) return `id:${message.id}`;
     if (message.extra?.mesid != null && String(message.extra.mesid).trim()) return `mesid:${message.extra.mesid}`;
+    return message.extra?.[UUID_KEY] ? `uuid:${message.extra[UUID_KEY]}` : null;
+}
+
+/** Return an existing identity, or create and persist a UUID for a live message. */
+export function getOrCreateReceiptIdentity(message) {
+    if (!message || typeof message !== 'object') return null;
+    const existing = getReceiptIdentity(message);
+    if (existing) return existing;
 
     if (!message.extra || typeof message.extra !== 'object') message.extra = {};
     if (!message.extra[UUID_KEY]) {

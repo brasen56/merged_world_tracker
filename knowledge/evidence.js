@@ -31,6 +31,7 @@ import { GROWTH_EVIDENCE_KEY } from './state.js';
 import { knowledgeEvidenceSchema } from './schema.js';
 import { fingerprintValue } from '../core/quarantine.js';
 import { clonePlainData } from '../core/schema.js';
+import { getReceiptIdentity } from '../core/message_identity.js';
 // Part 6 write-seam pause guard. Direct import (not the barrel) so the REAL
 // pause singleton is read even under the test barrel→stub alias.
 import { isStoreWriteBlocked } from '../core/schema_status.js';
@@ -719,6 +720,18 @@ export function appendRawObservations(name, observations, cursor = null, backfil
         const ts = (typeof obs.ts === 'number' && Number.isFinite(obs.ts))
             ? obs.ts
             : extractMsgTs(chat, obs.msgIdx);
+        const explicitTs = typeof obs.ts === 'number' && Number.isFinite(obs.ts);
+        const message = obs.msgIdx != null && obs.msgIdx >= 0 && obs.msgIdx < chat.length ? chat[obs.msgIdx] : null;
+        // Provenance of `ts` (read-time chronology, growth_timeline.js):
+        //   message — the send_date of the message the quote was verified in;
+        //   cited   — the send_date of the message the model cited, but the quote
+        //             was never matched there (for ILS backfill this can be the
+        //             summary's own date), so it must not order the evidence;
+        //   capture — no usable send_date; `ts` is the capture time.
+        const verified = obs.verified === true;
+        const tsSource = explicitTs ? (TS_SOURCES.includes(obs.tsSource) ? obs.tsSource : 'message')
+            : !message || sendDateToMs(message.send_date) == null ? 'capture'
+                : verified ? 'message' : 'cited';
         file.raw.push({
             id: nextObsId(file, 'raw'),
             category: validCategory(obs.category),
@@ -726,8 +739,11 @@ export function appendRawObservations(name, observations, cursor = null, backfil
             quote: String(obs.quote).trim(),
             msgIdx: typeof obs.msgIdx === 'number' ? obs.msgIdx : null,
             ts,
+            tsSource,
+            // An unconfirmed citation names no source message, so it never counts as support.
+            msgKey: explicitTs ? (obs.msgKey || null) : verified ? getReceiptIdentity(message) : null,
             capturedAt: Date.now(),
-            verified: obs.verified === true,
+            verified,
             canon: false,
         });
         added++;
@@ -1284,6 +1300,7 @@ export function stampProfileGenerated(name) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const VALID_CATEGORIES = ['trait', 'value', 'speech'];
+const TS_SOURCES = ['message', 'cited', 'capture'];
 
 function validCategory(cat) {
     return VALID_CATEGORIES.includes(cat) ? cat : 'trait';

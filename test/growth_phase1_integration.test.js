@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { resetCoreStubs, setFakeApi, setFakeChat } from './stubs/core.js';
+import { resetCoreStubs, setFakeApi, setFakeChat, getFakeMeta } from './stubs/core.js';
 import { installCleanupFetch } from './stubs/cleanup-fetch.js';
 import { state } from '../knowledge/state.js';
 import { saveSettings } from '../knowledge/settings.js';
@@ -43,6 +43,31 @@ beforeEach(() => {
     setFakeApi(request => { requests.push(request); return JSON.stringify({ observations: [] }); });
 });
 afterEach(() => { _clearCacheForTests(); state.wiScript = null; vi.unstubAllGlobals(); });
+
+test('backfill provenance reads restored identities without writing ILS_Originals', async () => {
+    const originals = [
+        { name: 'Mara', mes: 'Mara quietly folds the sails before anyone asks.', send_date: 1000, extra: {} },
+        { name: 'Mara', mes: 'Mara takes charge of the watch and assigns the crew.', send_date: 1001, id: 'original-two' },
+    ];
+    getFakeMeta().ILS_Originals = { restored: originals };
+    setFakeChat([
+        { mes: 'Summary of the voyage.', send_date: 5000, extra: { ILS_Data: { Ref: 'restored' } } },
+        { is_system: true, mes: 'in flight' }, { is_system: true, mes: 'in flight' },
+    ]);
+    const snapshot = JSON.stringify(getFakeMeta().ILS_Originals);
+    setFakeApi(() => JSON.stringify({ observations: [...originals.map((o, i) => ({ category: 'trait',
+        claim: `Takes initiative ${i}`, quote: o.mes, msgIdx: 0 })),
+    // An unmatched quote citing the summary: its only date is the summary's own.
+    { category: 'trait', claim: 'Paraphrased', quote: 'Mara never said this.', msgIdx: 0 }] }));
+    const result = await runIlsBackfillCapture('Mara');
+    expect(result.added).toBe(3);
+    expect(JSON.stringify(getFakeMeta().ILS_Originals)).toBe(snapshot);
+    expect(getEvidenceFile('Mara').raw).toEqual(expect.arrayContaining([
+        expect.objectContaining({ ts: 1000000, tsSource: 'message', msgKey: null, msgIdx: null }),
+        expect.objectContaining({ ts: 1001000, tsSource: 'message', msgKey: 'id:original-two', msgIdx: null }),
+        expect.objectContaining({ claim: 'Paraphrased', ts: 5000000, tsSource: 'cited', msgKey: null, msgIdx: 0, verified: false }),
+    ]));
+});
 
 test.each(['scan', 'npc-update'])('compact Growth lines return to %s updates when ownership is off', async path => {
     saveSettings({ dossierMode: false, trackMainCharAsNpc: true });

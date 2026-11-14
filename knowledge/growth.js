@@ -44,7 +44,8 @@ import {
 // Direct import (not the barrel) so the REAL scope module is read under the
 // test barrel→stub alias.
 import { scopeStillCurrent } from '../core/scope.js';
-import { getOrCreateReceiptIdentity } from '../core/message_identity.js';
+import { getOrCreateReceiptIdentity, getReceiptIdentity } from '../core/message_identity.js';
+import { buildProfileEvidenceView, formatProfileEvidence, formatConsolidationEvidence } from './growth_timeline.js';
 // Part 6 (§7.4) pause guard for the Growth profiler's direct entry points.
 // Direct import (not the barrel) so the REAL pause singleton is read even under
 // the test barrel→stub alias — the same rule knowledge/index.js applies to its
@@ -57,7 +58,7 @@ import { flushBook } from './store.js';
 import { getLorebookName } from './scope.js';
 import {
     appendRawObservations, getEvidenceForProfile, stampProfileGenerated,
-    hasEvidenceFile,
+    hasEvidenceFile, getEvidenceFile,
     getRawForConsolidation, applyConsolidation,
     getUserOverrides,
     getCaptureWatermark, getCaptureCursor, setCaptureWatermark,
@@ -348,11 +349,8 @@ export async function generateProfile(name, observations, canon) {
     // observation includes its category, distilled claim, and the verbatim
     // quote receipt. Canon-flagged observations (user-promoted, authoritative)
     // are marked so the generator knows they outrank inference.
-    const evidenceText = observations.map((o, i) => {
-        const canonTag = o.canon ? ' [CANON]' : '';
-        const tierTag = o.tier === 'consolidated' ? ' [consolidated]' : '';
-        return `${i + 1}. [${o.category}]${canonTag}${tierTag} ${o.claim}\n   Quote: "${o.quote}"${o.msgIdx != null ? ` (msg ${o.msgIdx})` : ''}`;
-    }).join('\n');
+    const evidenceText = formatProfileEvidence(buildProfileEvidenceView(getEvidenceFile(name, false)
+        || { raw: observations }));
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -399,11 +397,8 @@ export async function generatePsychoanalyzeProfile(name, observations, curatedEn
     }
 
     // Format the evidence as a readable list (same format as generateProfile).
-    const evidenceText = observations.map((o, i) => {
-        const canonTag = o.canon ? ' [CANON]' : '';
-        const tierTag = o.tier === 'consolidated' ? ' [consolidated]' : '';
-        return `${i + 1}. [${o.category}]${canonTag}${tierTag} ${o.claim}\n   Quote: "${o.quote}"${o.msgIdx != null ? ` (msg ${o.msgIdx})` : ''}`;
-    }).join('\n');
+    const evidenceText = formatProfileEvidence(buildProfileEvidenceView(getEvidenceFile(name, false)
+        || { raw: observations }));
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -751,9 +746,7 @@ export async function consolidateEvidence(name) {
     const sourceIds = rawForCon.map(o => o.id);
 
     // Format raw observations with their numeric IDs for the consolidator.
-    const rawText = rawForCon.map(o => {
-        return `[${o.numericId}] [${o.category}] ${o.claim}\n   Quote: "${o.quote}"`;
-    }).join('\n');
+    const rawText = formatConsolidationEvidence(getEvidenceFile(name, false), rawForCon);
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -904,9 +897,7 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
         sinceIndex = -1;
         for (let i = 0; i < getEligibleChatEnd(chat); i++) {
             const msg = chat[i];
-            const identity = msg?.id != null ? `id:${msg.id}`
-                : msg?.extra?.mesid != null ? `mesid:${msg.extra.mesid}`
-                    : msg?.extra?.mwt_uuid ? `uuid:${msg.extra.mwt_uuid}` : null;
+            const identity = getReceiptIdentity(msg);
             if (identity === sinceCursor.identity) { sinceIndex = i; break; }
         }
         // If the boundary itself was removed, replay surviving equal-time
@@ -1375,6 +1366,8 @@ export async function runIlsBackfillCapture(name, opts = {}) {
                 quote,
                 msgIdx: null,
                 ts: window[expandedIdx].ts,
+                tsSource: 'message',
+                msgKey: getReceiptIdentity(window[expandedIdx].msg),
                 verified: true,
             };
         }
