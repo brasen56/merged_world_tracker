@@ -131,7 +131,7 @@ describe('pure Growth story timeline', () => {
         const claim = view.items.find(o => o.id === 'con-1');
         expect(claim).toMatchObject({ sourceMessages: 4, earliestQuote: 'receipt 8', latestQuote: 'receipt 11',
             spread: { early: 0, middle: 0, late: 4 }, sourceQuotes: ['receipt 20'] });
-        expect(claim.samples.at(-1)).toMatchObject({ claim: 'behavior 20', position: null, orderUnknown: true });
+        expect(claim.samples.at(-1)).toEqual({ claim: 'behavior 20', position: null, phase: null });
         const text = formatProfileEvidence(view);
         // One line for span and support; a claim inside one phase sends only its latest receipt.
         expect(text).toContain('Seen: late 72.7 → late 100 · 4 source messages: early ×0, middle ×0, late ×4');
@@ -153,19 +153,18 @@ describe('pure Growth story timeline', () => {
         file.consolidated = [{ id: 'con-1', category: 'trait', claim: 'Defers, then acts', sources: file.archivedRaw.map(o => o.id) }];
         const claim = buildProfileEvidenceView(file).items.find(o => o.id === 'con-1');
         expect(claim.samples.map(s => s.claim)).toEqual(['waits for permission 0', 'waits for permission 1',
-            'waits for permission 2', 'takes initiative 7', 'takes initiative 8', 'takes initiative 9',
-            'restored scene 20', 'restored scene 21', 'restored scene 22']);
-        expect(claim).toMatchObject({ omittedMessages: 4, omittedUndated: 0 });
+            'takes initiative 8', 'takes initiative 9', 'restored scene 20', 'restored scene 21']);
+        expect(claim).toMatchObject({ omittedMessages: 6, omittedUndated: 1 });
         const text = formatProfileEvidence(buildProfileEvidenceView(file));
-        expect(text.indexOf('… 4 more …')).toBeGreaterThan(text.indexOf('waits for permission 2'));
-        expect(text.indexOf('… 4 more …')).toBeLessThan(text.indexOf('takes initiative 7'));
+        expect(text.indexOf('… 6 more …')).toBeGreaterThan(text.indexOf('waits for permission 1'));
+        expect(text.indexOf('… 6 more …')).toBeLessThan(text.indexOf('takes initiative 8'));
         expect(text.indexOf('takes initiative 9')).toBeLessThan(text.indexOf('order unknown restored scene 20'));
+        expect(text).toContain('… 1 more with unknown order …');
         file.archivedRaw.push(observation(23, { ts: 0, msgKey: 'id:u23' }));
         file.consolidated[0].sources.push('obs-023');
         const capped = buildProfileEvidenceView(file).items.find(o => o.id === 'con-1');
-        expect(capped.samples.filter(s => s.position == null)).toHaveLength(3);
-        expect(capped).toMatchObject({ omittedMessages: 4, omittedUndated: 1 });
-        expect(formatProfileEvidence(buildProfileEvidenceView(file))).toContain('… 1 more with unknown order …');
+        expect(capped.samples.filter(s => s.position == null)).toHaveLength(2);
+        expect(capped).toMatchObject({ omittedMessages: 6, omittedUndated: 2 });
     });
     test('tied endpoint quotes are explicitly representative of their positions', () => {
         const file = arcFile();
@@ -213,40 +212,63 @@ describe('pure Growth story timeline', () => {
         file.raw.push(file.archivedRaw[0]); // Expand duplicate must not change the domain.
         expect(buildProfileEvidenceView(file).items.find(o => o.id === 'con-1').position).toBe(claim.position);
     });
-    test('cap; budget goes to the widest claims first at the largest k that fits; deterministic', () => {
+    test('k = 2 cap; late-reaching claims first, then span; one pass that skips what no longer fits', () => {
         const file = arcFile();
         file.archivedRaw = file.raw;
         file.raw = [];
         const ids = keep => file.archivedRaw.filter(o => keep(o.ts)).map(o => o.id);
         file.consolidated = [
-            { id: 'con-a', claim: 'narrow but busy', sources: ids(ts => ts >= 1006) }, // 6 messages, middle 54.5 → late 100
-            { id: 'con-b', claim: 'whole story', sources: ids(() => true) }, // 12 messages, early 0 → late 100
-            { id: 'con-c', claim: 'two ends', sources: ids(ts => ts === 1000 || ts === 1011) }, // 2 messages, early 0 → late 100
+            { id: 'con-a', claim: 'widest, ends before late', sources: ids(ts => ts <= 1007) }, // 8 messages, early 0 → middle 63.6
+            { id: 'con-b', claim: 'narrow, late only', sources: ids(ts => ts >= 1009) }, // 3 messages, late 81.8 → late 100
+            { id: 'con-c', claim: 'whole story', sources: ids(ts => [1000, 1004, 1008, 1011].includes(ts)) }, // 4 messages, early 0 → late 100
         ];
         const claim = (view, id) => view.items.find(o => o.id === id);
         const cost = o => JSON.stringify({ samples: o.samples, omittedMessages: o.omittedMessages,
             omittedUndated: o.omittedUndated }).length;
-        const full = buildProfileEvidenceView(file);
-        expect(claim(full, 'con-b')).toMatchObject({ omittedMessages: 6 });
-        expect(claim(full, 'con-b').samples).toHaveLength(6);
-        expect(claim(full, 'con-a').samples).toHaveLength(6);
-        // Span outranks source count: the two-message whole-story claim beats the six-message narrow one.
-        const wide = buildProfileEvidenceView(file, { sampleBudget: cost(claim(full, 'con-b')) + cost(claim(full, 'con-c')) });
-        expect(claim(wide, 'con-b').samples).toHaveLength(6);
-        expect(claim(wide, 'con-c').samples).toHaveLength(2);
-        expect(claim(wide, 'con-a')).toMatchObject({ samples: [], omittedMessages: 6 });
-        // A claim that cannot afford k = 3 falls back to the largest k that fits.
-        const oneCost = cost(claim(buildProfileEvidenceView(file, { sampleK: 1 }), 'con-b'));
-        const reduced = buildProfileEvidenceView(file, { sampleBudget: oneCost });
-        expect(claim(reduced, 'con-b')).toMatchObject({ omittedMessages: 10 });
-        expect(claim(reduced, 'con-b').samples).toHaveLength(2);
-        expect(claim(reduced, 'con-c').samples).toEqual([]);
-        expect(buildProfileEvidenceView(file, { sampleBudget: oneCost })).toEqual(reduced);
+        const full = buildProfileEvidenceView(file, { sampleBudget: Infinity });
+        expect(claim(full, 'con-a')).toMatchObject({ omittedMessages: 4 });
+        expect(claim(full, 'con-a').samples.map(s => s.claim)).toEqual(['behavior 0', 'behavior 1', 'behavior 6', 'behavior 7']);
+        expect(claim(full, 'con-b').samples).toHaveLength(3);
+        expect(claim(full, 'con-c').samples).toHaveLength(4);
+        // Reaching late outranks span: the narrow late-only claim beats the widest one that ended earlier.
+        const lateFirst = buildProfileEvidenceView(file, { sampleBudget: cost(claim(full, 'con-c')) + cost(claim(full, 'con-b')) });
+        expect(claim(lateFirst, 'con-c').samples).toHaveLength(4);
+        expect(claim(lateFirst, 'con-b').samples).toHaveLength(3);
+        expect(claim(lateFirst, 'con-a')).toMatchObject({ samples: [], omittedMessages: 8 });
+        // One pass: a claim that no longer fits gets nothing, and a cheaper one after it still may.
+        expect(cost(claim(full, 'con-c'))).toBeGreaterThan(cost(claim(full, 'con-b')));
+        const skip = buildProfileEvidenceView(file, { sampleBudget: cost(claim(full, 'con-b')) });
+        expect(claim(skip, 'con-c')).toMatchObject({ samples: [], omittedMessages: 4 });
+        expect(claim(skip, 'con-b').samples).toHaveLength(3);
+        expect(buildProfileEvidenceView(file, { sampleBudget: cost(claim(full, 'con-b')) })).toEqual(skip);
         // Exhausted budget: spans and the cross-phase receipts survive.
         const empty = buildProfileEvidenceView(file, { sampleBudget: 0 });
-        expect(empty.items.every(o => o.samples.length === 0 && o.latestQuote === 'receipt 11' && o.lastPosition === 100)).toBe(true);
+        expect(empty.items.every(o => o.samples.length === 0)).toBe(true);
         expect(formatProfileEvidence(empty)).toContain('Earliest: "receipt 0"  Latest: "receipt 11"');
-        expect(formatProfileEvidence(empty)).toContain('… 12 source messages omitted …');
+        expect(formatProfileEvidence(empty)).toContain('… 8 source messages omitted …');
+    });
+    test('default budget is a share of the evidence text without samples, never below the floor', () => {
+        const file = claimFile();
+        const unsampled = view => formatProfileEvidence({ ...view, items: view.items.map(o => ({ ...o,
+            samples: [], omittedMessages: 0, omittedUndated: 0 })) }).length;
+        const base = unsampled(buildProfileEvidenceView(file));
+        expect(buildProfileEvidenceView(file).sampleBudget).toBe(8000); // a small store sits on the floor
+        expect(buildProfileEvidenceView(file, { sampleBudgetFloor: 0 }).sampleBudget).toBe(Math.floor(0.25 * base));
+        expect(buildProfileEvidenceView(file, { sampleBudgetFloor: 0, sampleBudgetShare: 1 }).sampleBudget).toBe(base);
+        expect(buildProfileEvidenceView(file, { sampleBudget: 123 }).sampleBudget).toBe(123); // explicit override
+        // Larger evidence text, larger budget: growth stays proportional to the store.
+        const bigger = claimFile();
+        bigger.raw.push(...Array.from({ length: 40 }, (_, n) => observation(200 + n, { ts: 2000 + n })));
+        expect(buildProfileEvidenceView(bigger, { sampleBudgetFloor: 0 }).sampleBudget)
+            .toBeGreaterThan(buildProfileEvidenceView(file, { sampleBudgetFloor: 0 }).sampleBudget);
+    });
+    test('positions are rounded once, so the shown number and its phase label agree', () => {
+        // 54 timestamps: rank 18 is 33.96…, shown as 34 — which must read "middle", not "early".
+        const file = { raw: Array.from({ length: 54 }, (_, n) => observation(n)), consolidated: [], archivedRaw: [] };
+        const view = buildProfileEvidenceView(file);
+        expect(view.items.find(o => o.id === 'obs-018')).toMatchObject({ position: 34, phase: 'middle' });
+        expect(view.items.every(o => o.position === Math.round(o.position * 10) / 10)).toBe(true);
+        expect(formatProfileEvidence(view)).toContain('Seen: middle 34\n');
     });
     test('dossier split keeps validator/echo times but model samples have no ids/quotes/receipts', () => {
         const file = claimFile();

@@ -1,6 +1,12 @@
 /** Pure, read-time story chronology. Never mutates evidence or exposes clock time. */
-export const GROWTH_TIMELINE_DEFAULTS = Object.freeze({ sampleK: 3, sampleBudget: 8000,
-    minTimestamps: 3, maxTimestampShare: 0.25 });
+/**
+ * sampleK: source messages shown at EACH end of a claim (two = sustained, not a
+ * one-off). sampleBudget: an explicit character budget for all samples; when
+ * null it is sampleBudgetShare of the evidence text without samples, never
+ * below sampleBudgetFloor. Share and floor are starting values for the host check.
+ */
+export const GROWTH_TIMELINE_DEFAULTS = Object.freeze({ sampleK: 2, sampleBudget: null,
+    sampleBudgetFloor: 8000, sampleBudgetShare: 0.25, minTimestamps: 3, maxTimestampShare: 0.25 });
 
 const compareId = (a, b) => String(a.id).localeCompare(String(b.id), 'en');
 const phaseAt = position => position < 34 ? 'early' : position <= 66 ? 'middle' : 'late';
@@ -39,7 +45,9 @@ function timelineDomain(file, options) {
     const timestamps = [...counts.keys()].sort((a, b) => a - b);
     const orderUnknown = timestamps.length < options.minTimestamps
         || [...counts.values()].some(count => count / dated.length > options.maxTimestampShare);
-    const positions = new Map(timestamps.map((ts, index) => [ts, 100 * index / (timestamps.length - 1)]));
+    // Round once, here: the shown number, its phase label, ties and every
+    // projection then agree (77.92 and 77.95 are one position everywhere).
+    const positions = new Map(timestamps.map((ts, index) => [ts, Math.round(1000 * index / (timestamps.length - 1)) / 10]));
     const annotate = o => {
         const unknown = orderUnknown || isPositionUnknown(o);
         const position = unknown ? null : positions.get(o.ts);
@@ -71,27 +79,28 @@ function pickSamples({ dated, undated }, k, sample) {
 }
 
 /**
- * Spend the sample budget on the widest claims first — a change hidden inside
- * a claim can only show where its sources spread out — each at the largest k
- * that still fits. Ties: more source messages, then claim id. Deterministic.
+ * One pass at k, in priority order; a claim whose samples no longer fit gets
+ * none (smaller ones after it still may). Priority: claims whose sources reach
+ * the late phase first — a blend there is what carries an old habit into the
+ * current profile — then wider span, more source messages, claim id. Span is a
+ * signal, not proof of change. Deterministic.
  */
-function allocateSamples(candidates, sample, options) {
+function allocateSamples(candidates, sample, options, budget) {
+    const late = item => item.lastPhase === 'late' ? 1 : 0;
     const span = item => item.lastPosition == null ? -1 : item.lastPosition - item.position;
-    const ranked = [...candidates.keys()].sort((a, b) => span(b) - span(a)
+    const ranked = [...candidates.keys()].sort((a, b) => late(b) - late(a) || span(b) - span(a)
         || b.sourceMessages - a.sourceMessages || compareId(a, b));
-    let remaining = options.sampleBudget;
+    let remaining = budget;
     for (const item of ranked) {
         const sets = candidates.get(item);
-        Object.assign(item, { samples: [], omittedMessages: sets.dated.length, omittedUndated: sets.undated.length });
-        for (let k = options.sampleK; k >= 1; k--) {
-            const pick = pickSamples(sets, k, sample);
-            // Budget exactly the serialized sample payload, including elision counts.
-            const cost = JSON.stringify(pick).length;
-            if (cost <= remaining) {
-                Object.assign(item, pick);
-                remaining -= cost;
-                break;
-            }
+        const pick = pickSamples(sets, options.sampleK, sample);
+        // Budget exactly the serialized sample payload, including elision counts.
+        const cost = JSON.stringify(pick).length;
+        if (cost <= remaining) {
+            Object.assign(item, pick);
+            remaining -= cost;
+        } else {
+            Object.assign(item, { samples: [], omittedMessages: sets.dated.length, omittedUndated: sets.undated.length });
         }
     }
 }
@@ -130,9 +139,17 @@ export function buildProfileEvidenceView(file, settings = {}) {
     for (const o of file?.raw || []) items.push({ id: o.id, category: o.category, claim: o.claim,
         quote: o.quote, canon: !!o.canon, tier: 'raw', ...annotate(o) });
 
-    allocateSamples(candidates, o => ({ claim: o.claim, ...annotate(o) }), options);
+    // A store whose samples all fit pays only what they cost; a large one is
+    // capped relative to its own evidence text, so growth stays proportional.
+    const sampleBudget = options.sampleBudget ?? Math.max(options.sampleBudgetFloor,
+        Math.floor(options.sampleBudgetShare * formatProfileEvidence({ orderUnknown, items }).length));
+    const sample = o => {
+        const { position, phase } = annotate(o);
+        return { claim: o.claim, position, phase };
+    };
+    allocateSamples(candidates, sample, options, sampleBudget);
     items.sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity) || compareId(a, b));
-    return { orderUnknown, items };
+    return { orderUnknown, sampleBudget, items };
 }
 
 const location = (position, phase) => position == null ? 'order unknown' : `${phase} ${Math.round(position * 10) / 10}`;

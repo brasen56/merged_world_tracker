@@ -12,6 +12,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.17.2]
+
+### Changed
+
+- **Knowledge — Growth profiles describe the character as they are now,
+  instead of blending early and current behavior into one conflicted
+  personality.** A profile used to update an NPC's dossier could carry
+  pre-growth traits into the next scene, because both model calls behind
+  it were time-blind: evidence reached the prompts in capture order with
+  no timestamps, and once Catch Up or Backfill recovers old scenes after
+  continuous capture, capture order puts the oldest behavior at the end
+  of the list — where a model reads it as the most recent. The profile
+  prompt even leaned into it, asking for contradiction and tension. A new
+  pure read-time view now ranks each NPC's evidence by message time into
+  positions 0–100 with *early*/*middle*/*late* labels — ranks on distinct
+  message timestamps, never real dates or elapsed time, so a two-month
+  hiatus doesn't squash history into "early" — and all four Growth model
+  calls format from it: Consolidate, Generate Profile, Psychoanalyze and
+  the v2.17.0 Personality/Voice draft, sharing one position domain so the
+  numbers agree between them at the same store state. The fix is
+  read-time only: nothing is written back to the evidence store, there is
+  no migration, and already-consolidated evidence produces better
+  profiles with no extra steps — the 📝 Generate Profile flow and its
+  no-recapture regenerate are unchanged.
+  (`knowledge/growth_timeline.js`, consumed by `knowledge/growth.js` and
+  `knowledge/growth_dossier.js`, with the rewritten prompts in
+  `knowledge/prompts.js`; designed in
+  `docs/GROWTH_PROFILE_TIME_ORDER_SCOPE.md`.)
+  - **Change inside a single claim is visible again.** Every consolidated
+    claim with two or more distinct source messages carries a bounded,
+    ordered sample of its source claims — the two earliest and the two
+    latest — so "waits for permission" then "takes initiative" hiding
+    inside one blended claim is spelled out; crossing a phase boundary is
+    not required, and equal positions never imply an order between
+    messages. The sample budget is a share of the sample-free evidence
+    text (25% by default, floor 8,000 characters), spent first on claims
+    that reach the late phase, and selection is deterministic — the same
+    evidence produces the same prompt every time.
+  - **The prompts were rewritten for chronology.** The profile prompt asks
+    for the character as they are in the latest part of the story: a
+    behavior seen earlier and replaced later is change, not contradiction
+    (inside a single phase too); earlier behavior appears only when it
+    explains the present and late evidence shows it recurring in that
+    situation; a real tension needs both sides present in late evidence;
+    one recent source message is a reaction, not a new default; and if
+    nothing changed, the profile says so and invents no arc. The
+    consolidation prompt must not merge observations that show a behavior
+    changing — the earlier and later behavior become separate claims —
+    and its 40–60% reduction target explicitly yields to that rule.
+    Psychoanalyze's "recent behavioral observations" wording, which had
+    not been true since backfill existed, is fixed.
+  - **Support means distinct source messages.** Several observations
+    captured from one message are one moment of evidence, never repeated
+    support. Each claim shows its first and last position, its phase
+    spread, its count of distinct source messages, and its earliest and
+    latest quotes.
+  - **The Personality/Voice draft sees the same ordered view** through a
+    split projection: the model gets positions, phases and id-less
+    samples, but no timestamps, quotes or receipts; samples carry no
+    citable ids (a draft citing the parent claim still passes
+    validation), and the echo check behaves exactly as before.
+  - **Order unknown is stated, not guessed.** When the timestamps cannot
+    separate the evidence — fewer than three distinct timestamps, or one
+    holding more than a quarter of the dated observations, as with
+    imported chats or coarse host dates — positions and phases are
+    omitted, the evidence is labeled "order unknown", and the prompts say
+    not to infer change from list order. Unverified captures and missing
+    or fallback timestamps never enter positions, spans or support
+    counts; they are listed last, marked as such. New captures now
+    record where their timestamp came from and the verified message's
+    identity so this detection sharpens over time; restored ILS
+    originals are never written.
+  - **Cost and unchanged surfaces.** No new model calls, settings or UI:
+    the same four calls run with reordered, annotated input, which
+    measured +51% Generate input on the largest real store and +73% on a
+    fully consolidated one (the Personality/Voice draft grows a little
+    more). The evidence list UI, the "Generated from N observations"
+    count and the underlying `getEvidenceForProfile` read are unchanged.
+
 ## [2.17.1]
 
 ### Added

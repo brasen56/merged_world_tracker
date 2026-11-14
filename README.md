@@ -10,10 +10,10 @@
 
 One line each; the complete version-by-version history lives in [CHANGELOG.md](CHANGELOG.md).
 
+- **v2.17.2** — Growth profiles describe the character now: evidence reaches the model in story order, so early traits stop blending into the current self
 - **v2.17.0** — Growth-written dossier Personality & Voice: approved NPC growth can write those two lines, reviewed sentence-by-sentence in Staging
 - **v2.16.0** — Manual NPC entry editing: opt-in Edit mode in the NPC View, riding the same guarded write path as the module's own cleanups
 - **v2.15.0** — Custom world calendars: author your own months, weekdays, and events; drives the story clock and the whole Ambient sky, deterministically
-- **v2.12.0** — Ambient Conditions module: deterministic weather with no LLM calls — code decides, the narrator renders
 
 > Design and planning documents for shipped and in-progress work are indexed in the [`docs/` directory](docs/README.md).
 

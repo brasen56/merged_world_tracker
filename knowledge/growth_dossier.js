@@ -52,8 +52,7 @@ export function growthDossierPromptEvidence(file) {
     return buildProfileEvidenceView(file).items.map(item => {
         const { quote: _quote, earliestQuote: _earliest, latestQuote: _latest, sourceQuotes: _sources,
             orderUnknown: _unknown, earliestTied: _earliestTied, latestTied: _latestTied, ...safe } = item;
-        if (safe.samples?.length) safe.samples = safe.samples.map(({ orderUnknown: _sampleUnknown, ...sample }) => sample);
-        else delete safe.samples;
+        if (!safe.samples?.length) delete safe.samples;
         if (!safe.omittedMessages) delete safe.omittedMessages;
         if (!safe.omittedUndated) delete safe.omittedUndated;
         return safe;

@@ -85,7 +85,7 @@ The four asks, and what was decided on each:
 | Workstream | Change | Boundary |
 | --- | --- | --- |
 | Timed evidence view | New pure view: positions 0–100 on distinct timestamps, phase labels, chronological list, per-claim spans and support (§4.1) | Read-time only; `getEvidenceForProfile`'s output and the evidence list UI are unchanged (§4.8) |
-| Source-claim samples | Bounded, ordered source claims per multi-message claim (§4.2) | Per-claim cap and overall budget, spent on the widest claims first; the dossier variant carries no quotes or ids |
+| Source-claim samples | Bounded, ordered source claims per multi-message claim (§4.2) | Two per end, a budget proportional to the evidence text, claims reaching the late phase first; the dossier variant carries no quotes or ids |
 | Position-unknown rules | Saved provenance, `verified: false`, `ts` 0/non-finite, and a qualified legacy heuristic decide (§4.3) | Unknown items are listed last and never enter positions, spans or support counts |
 | Message keys and ties | Support and ranking key on distinct source messages; equal timestamps share one position (§4.4) | ILS restored messages get a read-only identity; `ILS_Originals` is never written |
 | Prompts | Profile, consolidation and Psychoanalyze rewritten for chronology (§4.6) | Anti-typology and evidence-only rules unchanged; prompts stay deterministic |
@@ -93,11 +93,13 @@ The four asks, and what was decided on each:
 | New-capture provenance | Optional `tsSource` and `msgKey` on new captures (§4.5) | Older data falls back to the read-time rules; no migration |
 
 Cost: no new model calls — the same Consolidate, Generate, Psychoanalyze and
-draft calls run with reordered, annotated input. The sample budget (§4.2)
-bounds only the samples; each claim's span, support and receipt lines grow
-with the number of claims. Measured on the largest real store (409 claims,
-532 raw observations): Generate input +28%, Personality/Voice draft input
-+40% (§10).
+draft calls run with reordered, annotated input. Two things grow it: each
+claim's span, support and receipt lines, which scale with the number of
+claims, and the samples, capped at a share of that text (§4.2). Measured on
+the real stores at the default share of 25% (§10): Generate input +51% on the
+largest store (409 claims, 528 raw) and +73% on a fully consolidated one (431
+claims, 26 raw); the Personality/Voice draft input grows a little more (+63%
+and +80%). The share is the lever the host check tunes.
 
 ## 4. Design
 
@@ -115,7 +117,10 @@ One pure function builds the view — for example `buildProfileEvidenceView(file
 2. **Positions.** Rank the NPC's distinct timestamps from 0 to 100; ties share
    a position (§4.4). Phase words are labels on top: *early* below 34,
    *middle* 34–66, *late* above 66. Each item shows both, for example
-   "late 84". Apply the order-unknown rule first (§4.4).
+   "late 84". Positions are rounded to one decimal once, at the source, so the
+   shown number, its phase and every projection agree, and timestamps that
+   round together share a position. Apply the order-unknown rule first
+   (§4.4).
 3. **Support.** Count distinct source-message keys (§4.4), never observations.
 4. **For each consolidated claim**, from its dated sources: first and last
    position; phase spread by distinct messages (`early ×6, middle ×1, late
@@ -136,8 +141,7 @@ Example of one claim in the prompt:
    Source claims (equal positions do not imply order):
      early 4   asks permission before starting chores
      early 9   waits to be told before serving dinner
-     early 21  apologizes for moving furniture unasked
-     … 1 more …
+     … 3 more …
      early 30  checks before answering the door
      middle 58 hesitates at the threshold until invited in
 ```
@@ -155,26 +159,38 @@ confuse them with in-story time from Chronicle or the calendar.
 - **One sample per source message.** When several observations share a
   message, use the one with the lowest id.
 - **Per-claim cap:** the earliest *k* and latest *k* dated source messages,
-  *k* = 3 to start. A claim with no more than 2*k* dated source messages
-  shows all of them. Position-unknown sources (§4.3) follow the dated ones,
-  at most *k* of them, so they never take the latest slots. Elided messages
-  show as counts: "… N more …" between the dated halves, "… N more with
-  unknown order …" after the undated ones.
-- **Overall budget:** a fixed character budget for all samples — starting
-  value about 8,000 characters each for the profile prompt and the dossier
-  draft. Small local models struggle with large prompts; tune on one.
-- **Deterministic allocation rule:** rank claims by span (last position minus
-  first), widest first; ties go to more distinct source messages, then claim
-  id; claims with no position rank last. Each claim in turn gets the largest
-  *k* (3, 2, 1) whose samples still fit the remaining budget, or none. The
-  span and the receipts (§4.1) always survive. The same evidence must always
-  produce the same prompt.
-- *Revision, 2026-11-14 review:* the first rule lowered *k* for every claim and
-  then dropped samples from the claims with the fewest source messages. On a
+  *k* = 2: two at each end show a behavior that held, not a one-off. A claim
+  with no more than 2*k* dated source messages shows all of them.
+  Position-unknown sources (§4.3) follow the dated ones, at most *k* of them,
+  so they never take the latest slots. Elided messages show as counts: "… N
+  more …" between the dated halves, "… N more with unknown order …" after the
+  undated ones. Each sample is lean — claim text, rounded position, phase.
+- **Overall budget:** a share of the evidence text *without* samples — 25% to
+  start — and never below 8,000 characters. A store whose samples all fit
+  pays only what they cost; a large store's samples grow with its own text,
+  not a fixed number (a fixed 64,000 would more than double a small,
+  fully consolidated store's prompt). Both prompts use the same selection.
+  Small local models struggle with large prompts; tune the share on one.
+- **Deterministic allocation rule:** one pass at *k*, in priority order —
+  claims whose sources reach the late phase first, then wider span, then more
+  distinct source messages, then claim id; claims with no position rank last.
+  A claim whose samples no longer fit gets none, and cheaper claims after it
+  still may. The span and the receipts (§4.1) always survive. The same
+  evidence must always produce the same prompt.
+- **Why late first, and why span is only a tiebreak.** A blend inside a claim
+  that reaches the late phase is what carries an old habit into the current
+  profile; a blend inside a claim that ended earlier is history the profile
+  mentions only if it recurs. A wide claim is not proof of change — on real
+  data the widest claims read as stable core traits — and a narrow late claim
+  can hold the most recent change (the §7 "change within one phase" case).
+- *Revisions, 2026-11-14:* (1) the first rule lowered *k* for every claim and
+  then dropped samples from the claims with the fewest source messages; on a
   real 409-claim store it left 21 claims of 49–260 source messages with only
-  their two endpoints — repeating the receipts — and nothing for the 71 claims
-  whose sources span more than 30 positions, the claims most likely to hide a
-  change.
+  their two endpoints and nothing for the 71 claims spanning more than 30
+  positions. (2) Span-first allocation at *k* = 3 within a fixed 8,000
+  characters then sampled only that store's 8 widest claims; even at 64,000 it
+  reached 6 of the 67 claims that run into the late phase. The rules above
+  replace both.
 - **The dossier draft** uses the same samples minus quotes and ids (§4.7).
 
 ### 4.3 Position-unknown rules (fallback timestamps)
@@ -401,10 +417,14 @@ Automated (fixtures):
   never reaches the prompt.
 - **ILS read-only:** a backfill capture from a restored message leaves
   `ILS_Originals` unchanged (no `mwt_uuid` written).
-- **Budget:** over budget, the widest claims keep samples first, each at the
-  largest *k* that fits, ahead of narrower claims with more source messages;
-  the same evidence produces the same prompt every time; spans and receipts
-  always survive.
+- **Budget:** the default budget is the share of the sample-free evidence
+  text, never below the floor, and an explicit budget overrides it. Over
+  budget, claims reaching the late phase keep samples ahead of wider claims
+  that ended earlier; a claim that no longer fits is skipped and a cheaper
+  one after it still gets samples; the same evidence produces the same prompt
+  every time; spans and receipts always survive.
+- **Rounding:** a shown position and its phase label always agree (33.96 is
+  shown as 34 and reads *middle*).
 - **Undated sources:** position-unknown sources follow a claim's dated
   samples, capped at *k*, and never displace its latest dated samples.
 - **Dossier draft:** samples carry no ids; a draft citing the parent claim
@@ -429,12 +449,12 @@ release gate.
    story order? Not needed for the fix; it would help users audit it.
 2. Should the reply to the requester ask them to report back after this ships,
    before anyone commits to the consolidation look-back?
-3. Starting values to confirm on the host check: *k* = 3, the 8,000-character
-   sample budget, and the order-unknown thresholds (fewer than 3 distinct
-   timestamps, or one holding over a quarter of the evidence). Also decide
-   whether the budget should scale with the number of claims: at 8,000
-   characters a 409-claim store gives samples to only its 8 widest claims
-   (§10, review fixes).
+3. Starting values to confirm on the host check: *k* = 2, the sample budget
+   (25% of the sample-free evidence text, floor 8,000 characters), and the
+   order-unknown thresholds (fewer than 3 distinct timestamps, or one holding
+   over a quarter of the evidence). The share is the main trade-off: on the
+   fully consolidated real store, 25% samples 87 of the 129 claims that reach
+   the late phase, 50% samples all of them at about +100% prompt size (§10).
 
 ## 9. Working decisions (ours, absent requester input)
 
@@ -514,7 +534,43 @@ tests passed; `npm run lint` and `git diff --check` passed.
 Still for the host check (§8.3): at 8,000 characters, only 8 of the largest
 store's 376 multi-message claims get samples, and 79 claims spanning more than
 30 positions get none. Decide whether the budget should scale with the
-number of claims.
+number of claims. *(Answered by the sample plan revision below.)*
+
+### Sample plan revision — 2026-11-14
+
+The co-author's budget ladder (`tmp/audit_growth_timeline.mjs`, local and
+gitignored) and a simulation of the alternatives on the same stores showed
+coverage grows linearly with budget — no natural cut-off — and that the
+claims that matter for a current-self profile, the ones reaching the late
+phase, were the ones span-first allocation skipped. Changes (§4.2):
+
+- *k* = 2 in one pass, instead of the largest *k* that fits: about 40% more
+  claims per character, and two per end already show a sustained behavior.
+- Priority: reaches the late phase, then span, source messages, id.
+- Budget: 25% of the sample-free evidence text, floor 8,000 (was a fixed
+  8,000); an explicit `sampleBudget` still overrides, and the view reports
+  the budget it used.
+- Leaner samples: positions rounded to one decimal at the source (also fixes
+  labels like "early 34"), and no `orderUnknown` on samples.
+
+Measured on the current real chat (`Newish (1)`) at shares 25% / 33% / 50%
+— claims reaching the late phase that get samples, and Generate input
+against the old format:
+
+| NPC | Store | Late-reaching sampled | Generate (old → 25%) |
+| --- | --- | --- | --- |
+| Derek | 409 claims, 528 raw | 67/67 at every share | 251k → 379k (+51%) |
+| Ezra | 431 claims, 26 raw | 87 / 115 / 129 of 129 | 157k → 271k (+73%) |
+| Ranger | 64 claims, 46 raw | 17 / 23 / 26 of 26 | 30k → 51k (+72%) |
+
+The Personality/Voice draft input grows a little more (Derek 205k → 334k,
+Ezra 131k → 236k at 25%). Ezra and Ranger are the shape the host check
+uses — fully consolidated — so tune the share there.
+
+Tests rewritten for the new rules (late-first beats span, one-pass skip,
+computed budget and override, rounding agrees with phase labels).
+**Automated gate passed:** `npm test -- --maxWorkers=2` — 186 files, 4,734
+tests passed; `npm run lint` and `git diff --check` passed.
 
 Line numbers verified 2026-11-14. **One phase, read-time only** (plus the host
 check as the release gate); the deferred consolidation look-back is excluded
