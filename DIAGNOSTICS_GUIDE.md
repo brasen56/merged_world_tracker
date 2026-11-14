@@ -197,4 +197,6 @@ the report — is redacted by default, exactly like the panel.
 - [`DIAGNOSTICS_CONSOLE_GUIDE.md`](DIAGNOSTICS_CONSOLE_GUIDE.md) — the full
   per-command reference: every column of every table explained, plus the
   privacy model in detail.
-- [`README.md`](README.md) — everything else about MWT.
+- [`README.md`](README.md) — the short overview, with links to every guide.
+- [`USER_GUIDE.md`](USER_GUIDE.md) — everything else about MWT: every module,
+  feature, and setting with its default.

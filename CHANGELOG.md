@@ -12,10 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.17.1]
 
 ### Added
 
+- **Documentation — SETUP_GUIDE.md, USER_GUIDE.md, docs/ARCHITECTURE.md,
+  and docs/ONBOARDING_PRESET_PLAN.md.** SETUP_GUIDE.md is the new
+  first-run onboarding page: a **Lite / Standard / Full** choice that sets
+  module enables, the World State Detail Level, and cadence toggles in one
+  step (as checklists today), plus "what's safe to disable" for every
+  module, what the shipped defaults give you if you do nothing, and how to
+  move between levels later. USER_GUIDE.md is the full reference — the
+  former README Features, Usage Guide, Configuration, API Compatibility,
+  and Data Storage sections, merged per module so each chapter holds the
+  what/how/settings in one place, plus a 📅 Calendar chapter and the
+  v2.16.0 manual NPC entry editing, which until now were described only in
+  the README's What's New. docs/ARCHITECTURE.md carries the code
+  file trees and module-communication map for contributors.
+  docs/ONBOARDING_PRESET_PLAN.md specs the future one-click first-run
+  dialog for the same presets (settings-key contract, fresh-install
+  gating, apply mechanics) so the code can be built without re-deriving
+  the design.
 - **Story Planner — Pitches only (Add ideas).** A new checkbox in the
   Generate dialog asks for arc names and descriptions without setup beats.
   Request about twice as many as you want; the review opens with nothing
@@ -32,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **README.md restructured into a short highlights document** (875 → ~130
+  lines): pitch, trimmed What's New, module table, installation, a Quick
+  Start that begins with picking a setup level, a Lite / Standard / Full
+  summary table, an "every module works independently" reassurance, and a
+  documentation index linking the new guides. No content was deleted from
+  the project — every moved section lives on in USER_GUIDE.md or
+  docs/ARCHITECTURE.md, and all cross-references were repointed.
 - **Knowledge — Current Agenda now holds what the NPC wants.** Dossier
   scans, Enrich and 🎯 Fields ask for the one situation the NPC most wants
   to achieve or protect, as the story and their choices show it, and what

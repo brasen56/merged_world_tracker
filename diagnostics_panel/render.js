@@ -1328,7 +1328,7 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
             ${historySection}
             <p class="mwt-diag-note">⛔ next to a trigger means the panic switch was already ON when that request fired. That is a gate leak for
                 <code>message_received</code> / <code>swipe</code> / <code>edit</code>, and expected for <code>manual</code> / <code>slash_command</code>
-                — the 💭 Generate button and <code>/wt-thoughts</code> are explicit user intent and bypass the switch by design. A call with panic
+                — the 💭 Generate Now button and <code>/wt-thoughts</code> are explicit user intent and bypass the switch by design. A call with panic
                 <em>off</em> but a long duration was simply still in flight when the switch was flipped, which is not a leak.</p>
             <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. Telemetry by construction: the capture records ABOUT a call — module,
                 trigger, panic state, mode, model/profile, HTTP status, duration, retries, finish_reason, token usage, error class — and NEVER the prompt, API key, custom

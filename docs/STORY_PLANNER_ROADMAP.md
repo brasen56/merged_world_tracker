@@ -652,7 +652,7 @@ the optional automation is justified.
 
 Work:
 
-- Update the README Story Planner feature and usage sections.
+- Update the Story Planner feature and usage sections in the README/USER_GUIDE (moved out of the README in the docs restructure).
 - Explain Pin vs Focus vs Park, Planted vs Skipped, Ready vs Resolved, and Archive
   vs Delete in the panel's help text.
 - Update slash commands or add equivalents only where they shorten common actions;

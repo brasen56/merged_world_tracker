@@ -628,7 +628,7 @@ export function renderSettingsPanel() {
 
             <div style="margin-top:12px">
                 <label for="mwt-int-auto-mode"><input type="checkbox" id="mwt-int-auto-mode" ${s.autoMode ? 'checked' : ''}> Auto-generate on each AI message</label>
-                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, thoughts are generated automatically when an AI message lands. When OFF, use the 💭 Generate button per message.</p>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, thoughts are generated automatically when an AI message lands. When OFF, generate them when you want with the 💭 Generate Now button above, or /wt-thoughts.</p>
             </div>
 
             <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
