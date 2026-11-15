@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Interiority — much smaller chat files on long chats.** Every message
+  with thoughts used to save a full copy of the intention lifecycle history
+  so a swipe, edit or delete could undo that turn. Once the history reached
+  its 150-record limit each copy was about 68,000 characters, so a chat with
+  40 such messages carried roughly 2.7 million characters of copies. Each
+  message now saves a short marker of where the history ended instead, and
+  rollback removes what was written after it. Copies saved by earlier
+  versions shrink the next time Interiority generates in that chat.
+  - Rolling back no longer brings back old records that the 150-record limit
+    pushed out during the undone turn, and no longer restores a history you
+    cleared after that turn.
+  - An older MWT version opening a chat saved by this one skips the lifecycle
+    part of a rollback (the undone turn's records stay in the history).
+
 ## [2.17.3]
 
 ### Fixed

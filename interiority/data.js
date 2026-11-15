@@ -1656,7 +1656,33 @@ export function setPerMessage(msgKey, entry) {
     if (!msgKey) return;
     const data = getInteriorityData();
     data.perMessage[msgKey] = entry;
+    // Records written before the rollback point existed each hold a full copy
+    // of the lifecycle history (about 68K at the cap, on every message). Shrink
+    // them here, on a write that is already saving the store.
+    for (const stored of Object.values(data.perMessage)) {
+        if (Array.isArray(stored?.lifecycleHistorySnapshot)) {
+            stored.lifecycleHistorySnapshot = lifecycleRollbackPoint(stored.lifecycleHistorySnapshot);
+        }
+    }
     saveInteriorityData(data);
+}
+
+/**
+ * Where the lifecycle history ended, for a perMessage rollback record. The
+ * history only ever grows at its end, so "everything after this record" names
+ * what a later rollback must undo without storing the records themselves.
+ * `lastAt` finds the same place when the record itself is gone (trimmed by the
+ * retention cap, cleared, or quarantined).
+ *
+ * @param {Array<object>} history
+ * @returns {{lastId: string|null, lastAt: number|null}}
+ */
+export function lifecycleRollbackPoint(history) {
+    const last = Array.isArray(history) && history.length ? history[history.length - 1] : null;
+    return {
+        lastId: typeof last?.id === 'string' ? last.id : null,
+        lastAt: Number.isFinite(last?.at) ? last.at : null,
+    };
 }
 
 /**

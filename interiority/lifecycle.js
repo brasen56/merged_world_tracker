@@ -34,6 +34,7 @@ import {
     getLedger, addLedgerEntry, updateLedgerEntry, removeLedgerEntries,
     wakeLedgerEntry, setLedgerEntryDormant,
     getTurnCounter, getSettings, getWorldTime,
+    lifecycleRollbackPoint,
 } from './data.js';
 import { LIFECYCLE_OUTCOMES, LIFECYCLE_SOURCES, MAX_LIFECYCLE_EVENTS } from './schema.js';
 
@@ -344,9 +345,13 @@ export function restoreNpcControlWatermarksSnapshot(snapshot) {
 
 // ─── Lifecycle rollback (spec §2 ownership rule) ──────────────────────────────
 
-/** Detached copy of the history for a perMessage rollback record. */
+/**
+ * The history's rollback point for a perMessage record: where it ends now, not
+ * a copy of it (a copy was about 68K per message once the history reached its
+ * cap). See lifecycleRollbackPoint in interiority/data.js.
+ */
 export function getLifecycleHistorySnapshot() {
-    return JSON.parse(JSON.stringify(getLifecycleHistory()));
+    return lifecycleRollbackPoint(getLifecycleHistory());
 }
 
 // ─── Per-NPC controls (spec §5) ───────────────────────────────────────────────
@@ -747,33 +752,47 @@ export function wakeLedgerEntryTracked(id, gracePeriod = 0) {
  * records written after the snapshot are truncated with the rolled-back
  * generation, keeping the audit line consistent with the restored ledger.
  *
- * Surviving user records are re-appended in their original relative order at
- * the end of the restored prefix — record order is chronological by
- * construction, and a rollback is exactly the case where wall-clock order and
- * story order diverge.
+ * Surviving user records keep their place after the restored prefix — record
+ * order is chronological by construction, and a rollback is exactly the case
+ * where wall-clock order and story order diverge.
  *
- * Post-snapshot records are identified by SET DIFFERENCE on the record ids,
- * never by comparing lengths: once the history reaches MAX_LIFECYCLE_EVENTS
+ * The snapshot is a ROLLBACK POINT ({ lastId, lastAt }, see
+ * lifecycleRollbackPoint in interiority/data.js), not a copy: the history only
+ * grows at its end, so the post-snapshot records are the ones after `lastId`.
+ * Never compare lengths instead: once the history reaches MAX_LIFECYCLE_EVENTS
  * every push trims an older record, so the length is pinned at the cap and a
- * length-derived count reads 0 for a turn that really did write records. That
- * is the steady state for any long chat, so a length comparison would make
- * every later swipe silently keep its engine records.
+ * length-derived count reads 0 for a turn that really did write records.
  *
- * @param {Array<object>} snapshot
+ * When `lastId` is no longer in the history (the cap trimmed it, the user
+ * cleared the history, or it was quarantined) the records newer than `lastAt`
+ * are the post-snapshot ones; a record with no usable time is kept. A point
+ * taken on an empty history marks every record as post-snapshot.
+ *
+ * Records the cap trimmed after the snapshot are not brought back: a point
+ * holds no copy to bring them back from. Full-copy arrays written by earlier
+ * versions are still accepted and read as their own rollback point.
+ *
+ * @param {{lastId: string|null, lastAt: number|null}|Array<object>} snapshot
  * @returns {number} how many engine records were removed
  */
 export function restoreLifecycleHistorySnapshot(snapshot) {
-    if (!Array.isArray(snapshot)) return 0;
+    if (!snapshot || typeof snapshot !== 'object') return 0;
+    const point = Array.isArray(snapshot) ? lifecycleRollbackPoint(snapshot) : snapshot;
     const data = getInteriorityData();
-    const snapshotIds = new Set(snapshot.map(evt => evt.id));
-    const post = data.lifecycleHistory.filter(evt => !snapshotIds.has(evt.id));
-    // Nothing was written since the snapshot — and trimming only ever happens
-    // on a push, so an empty post-set also means nothing was trimmed away.
-    if (post.length === 0) return 0;
-    const survivors = post.filter(evt => evt.source === 'user');
-    const removed = post.length - survivors.length;
-    data.lifecycleHistory = [...JSON.parse(JSON.stringify(snapshot)), ...survivors]
-        .slice(-MAX_LIFECYCLE_EVENTS);
+    const history = data.lifecycleHistory;
+    const lastIndex = typeof point.lastId === 'string'
+        ? history.findIndex(evt => evt.id === point.lastId)
+        : -1;
+    const hasTime = Number.isFinite(point.lastAt);
+    const isPost = (evt, index) => {
+        if (lastIndex !== -1) return index > lastIndex;
+        if (!hasTime) return point.lastId == null;
+        return Number.isFinite(evt.at) && evt.at > point.lastAt;
+    };
+    const kept = history.filter((evt, index) => !isPost(evt, index) || evt.source === 'user');
+    const removed = history.length - kept.length;
+    if (removed === 0) return 0;
+    data.lifecycleHistory = kept;
     saveInteriorityData(data);
     return removed;
 }
