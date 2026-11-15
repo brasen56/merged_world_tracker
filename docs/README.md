@@ -33,6 +33,7 @@ repo root; live planning documents live here; everything historical lives in
 | [STORY_PLANNER_ROADMAP_V3.md](./STORY_PLANNER_ROADMAP_V3.md) | Implemented in code; host QA pending | Phases 0–5: scoped Add/Refresh, journey subjects, cast policy, opt-in author context, and arc quality. Human spoiler and model checks remain pending; type/horizon and execution prerequisites are deferred behind §7 gates. |
 
 | [ONBOARDING_PRESET_PLAN.md](./ONBOARDING_PRESET_PLAN.md) | Draft for review; Phase 0 (SETUP_GUIDE) shipped | First-run Lite / Standard / Full onboarding presets — the settings-key contract, fresh-install gating, and the planned one-click dialog. |
+| [LEDGER_V1_DESIGN.md](./LEDGER_V1_DESIGN.md) | Draft for co-author review; nothing built | Manual-entry money and inventory for the player character: computed balances in exact minor units, Carried/Stored items, a floating badge with one number, chat-metadata storage registered for backup, and World State proposals as the later step. |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Live | Code map for contributors — annotated file trees and module communication. |
 
 Root-level user guides (tracked): `README.md`, `SETUP_GUIDE.md`,
