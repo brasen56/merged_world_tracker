@@ -16,6 +16,9 @@ export function onChatChanged() {
     clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'chat-changed' });
 }
 
+/** Chat change while the runtime gate pauses `mwt_ambient`: the same cleanup, which never reads the store. */
+export function onChatChangedWhilePaused() { onChatChanged(); }
+
 /** Early host event: clear stale context without resolving pre-insertion history. */
 export function prepareGeneration(type = 'normal', options = {}, dryRun = false) {
     if (dryRun) return false;

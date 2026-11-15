@@ -532,8 +532,8 @@ Tested with:
 ## Data Storage
 
 - **Chat data** (world state text, chronicle entries, growth evidence store, story plan text, interiority ledger + lifecycle history + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
-- **Ambient Conditions** stores only a random seed and its per-chat settings in chat metadata — the conditions themselves are never stored or refreshed; they are recomputed from (seed, in-story clock, climate) at prompt-build time
-- **Calendar** stores its structure, anchor, events, and dated phenomena in chat metadata (`mwt_calendar`). Dates and event mentions are never stored — they are recomputed from the story clock, so they stay correct across swipes, branches, and rewinds
+- **Ambient Conditions** stores only a random seed and its per-chat settings in chat metadata — the conditions themselves are never stored or refreshed; they are recomputed from (seed, in-story clock, climate) at prompt-build time. The seed and settings are part of MWT's unified backup, so a restore brings back the same weather
+- **Calendar** stores its structure, anchor, events, and dated phenomena in chat metadata (`mwt_calendar`). Dates and event mentions are never stored — they are recomputed from the story clock, so they stay correct across swipes, branches, and rewinds. The calendar is part of MWT's unified backup
 - **Lorebook bookkeeping** (NPC registry, state tracker registry, relationships) lives inside the Knowledge Tracker and State Tracker lorebooks themselves, in a single disabled entry titled `[MWT:store]` — see [the section below](#the-mwtstore-entry--what-it-is-and-why-its-there) for exactly what it is and why it can never reach your prompt
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback — validated and version-stamped as of 2.0 (a bad record repairs itself; your values are never silently deleted)
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID — malformed records are filtered from the view as of 2.0 and the list heals itself on the next edit

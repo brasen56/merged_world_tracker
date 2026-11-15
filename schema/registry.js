@@ -24,6 +24,8 @@ import {
 } from '../knowledge/schema.js';
 import { storyPlannerSchema } from '../story_planner/schema.js';
 import { interioritySchema } from '../interiority/schema.js';
+import { calendarSchema } from '../calendar/schema.js';
+import { ambientSchema } from '../ambient/schema.js';
 
 /** Every authoritative store descriptor, keyed by store id. */
 export const STORE_SCHEMAS = Object.freeze({
@@ -33,13 +35,15 @@ export const STORE_SCHEMAS = Object.freeze({
     knowledgeCounters: knowledgeCountersSchema,
     storyPlanner: storyPlannerSchema,
     interiority: interioritySchema,
+    calendar: calendarSchema,
+    ambient: ambientSchema,
     knowledgeStore: knowledgeStoreSchema,
 });
 
 /** All registered store ids, in canonical order. */
 export const SCHEMA_STORE_IDS = Object.freeze(Object.keys(STORE_SCHEMAS));
 
-/** The six chat-metadata stores (they own a `metadataKey`; Knowledge's lorebook store does not). */
+/** The chat-metadata stores (they own a `metadataKey`; Knowledge's lorebook store does not). */
 export const CHAT_METADATA_SCHEMA_IDS = Object.freeze(
     SCHEMA_STORE_IDS.filter(id => typeof STORE_SCHEMAS[id].metadataKey === 'string'),
 );
