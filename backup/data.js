@@ -27,6 +27,7 @@ export const SECTION_KEYS = Object.freeze([
     'interiority',
     'calendar',
     'ambient',
+    'ledger',
     'knowledgeStore',
 ]);
 
@@ -40,6 +41,7 @@ export const METADATA_KEYS = Object.freeze({
     interiority: 'mwt_interiority',
     calendar: 'mwt_calendar',
     ambient: 'mwt_ambient',
+    ledger: 'mwt_ledger',
 });
 
 const METADATA_SECTION_KEYS = Object.freeze(Object.keys(METADATA_KEYS));

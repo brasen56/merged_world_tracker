@@ -168,10 +168,11 @@ describe('buildRestoreModes', () => {
         expect(buildRestoreModes({ calendar: 'merge', ambient: 'nuke' })).toEqual({});
     });
 
-    test('calendar and ambient pass explicit choices through like World State', () => {
-        expect(buildRestoreModes({ calendar: 'keep', ambient: 'replace' })).toEqual({
+    test('whole-record stores pass explicit choices through like World State', () => {
+        expect(buildRestoreModes({ calendar: 'keep', ambient: 'replace', ledger: 'keep' })).toEqual({
             calendar: 'keep',
             ambient: 'replace',
+            ledger: 'keep',
         });
         expect(buildRestoreModes({ calendar: '', ambient: '' })).toEqual({});
     });
@@ -184,6 +185,7 @@ describe('readRestoreControlValues', () => {
             '#mwt-bk-counters-mode': { value: values.knowledgeCounters ?? '' },
             '#mwt-bk-calendar-mode': { value: values.calendar ?? '' },
             '#mwt-bk-ambient-mode': { value: values.ambient ?? '' },
+            '#mwt-bk-ledger-mode': { value: values.ledger ?? '' },
             '#mwt-bk-session-config': { checked: !!values.restoreSessionConfig },
             '#mwt-bk-exact': { checked: !!values.exact },
         };
@@ -192,7 +194,7 @@ describe('readRestoreControlValues', () => {
 
     test('reads the control values into the plain-values shape', () => {
         const v = readRestoreControlValues(fakeRoot({
-            worldState: 'keep', knowledgeCounters: 'replace', calendar: 'keep', ambient: 'replace',
+            worldState: 'keep', knowledgeCounters: 'replace', calendar: 'keep', ambient: 'replace', ledger: 'keep',
             restoreSessionConfig: true, exact: true,
         }));
         expect(v).toEqual({
@@ -200,6 +202,7 @@ describe('readRestoreControlValues', () => {
             knowledgeCounters: 'replace',
             calendar: 'keep',
             ambient: 'replace',
+            ledger: 'keep',
             restoreSessionConfig: true,
             exact: true,
         });
@@ -212,6 +215,7 @@ describe('readRestoreControlValues', () => {
             knowledgeCounters: '',
             calendar: '',
             ambient: '',
+            ledger: '',
             restoreSessionConfig: false,
             exact: false,
         });

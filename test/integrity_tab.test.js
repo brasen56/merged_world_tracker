@@ -171,7 +171,7 @@ describe('collectIntegritySnapshot', () => {
         expect(snap.storeValidations.sections.map((r) => [r.id, r.present])).toEqual([
             ['worldState', false], ['chronicle', false], ['knowledgeEvidence', false],
             ['knowledgeCounters', false], ['storyPlanner', false], ['interiority', false],
-            ['calendar', false], ['ambient', false],
+            ['calendar', false], ['ambient', false], ['ledger', false],
             ['knowledgeStore', false], ['knowledgeStore', false],
         ]);
         expect(snap.totals.sectionsPresent).toBe(0);

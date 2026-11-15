@@ -20,6 +20,7 @@ import {
     resolveSafeCharacterContextEntities,
 } from '../core/index.js';
 import { collectBackup } from './collect.js';
+import { refreshInjection as refreshLedgerInjection } from '../ledger/index.js';
 import { backupDataEqual, cloneBackupData, getEnvelopeMetadataSections, METADATA_KEYS } from './data.js';
 import { planRestore } from './restore.js';
 import {
@@ -1276,6 +1277,10 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
             preRestoreBackup,
         };
     }
+
+    // Ledger is static context (no per-generation rebuild). Restore and undo
+    // must replace its registered prompt too, but never touch a switched chat.
+    if (assertRestoreScope(scope, exact).ok) refreshLedgerInjection('backup-restored');
 
     // ── D3 (concision plan): cleanup-recovery merge ────────────────────────
     //

@@ -1,4 +1,4 @@
-/** Ledger v1 descriptor. Registration and persistence belong to Phase 2. */
+/** Ledger v1 descriptor, shared by runtime preparation, backup and Diagnostics. */
 import {
     defineIssuePolicy, defineStoreSchema, emptyStats, fatalIssue,
     isObject, ISSUE_SEVERITIES, makeIssue,

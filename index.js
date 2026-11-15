@@ -10,6 +10,7 @@
 
 import { getContextSafe } from './core/context.js';
 import * as Ambient from './ambient/index.js';
+import * as Ledger from './ledger/index.js';
 import * as Calendar from './calendar/index.js';
 import { renderCalendarPanel } from './calendar/render.js';
 import { wireCalendarPanel } from './calendar/panel.js';
@@ -664,6 +665,7 @@ function renderModal() {
                 Chronicle.applyInjection?.();
                 StoryPlanner.applyPlanInjection?.();
                 Interiority.applyIntentionsInjection?.();
+                Ledger.refreshInjection('settings-saved');
                 if (getSettings().injectionMasterOff) clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'panic-settings-save' });
                 if (getSettings().injectionMasterOff) clearCalendarInjection({ clearReason: 'panic-settings-save' });
             } catch { /* modules may not be initialized yet */ }
@@ -715,7 +717,7 @@ function openMwtModal(tabId) {
 
 // ─── Shared module registry (used by the message-event routers below) ───────
 
-const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar };
+const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar, Ledger };
 
 // Part 6 (§5.4/§7.5): the out-of-band resume seam. When a paused store
 // resumes through Retry or the privileged §7.5 preparation — long after
@@ -733,6 +735,7 @@ const MODULE_BY_MODULE_ID = Object.freeze({
     knowledge: Knowledge,
     story_planner: StoryPlanner,
     interiority: Interiority,
+    ledger: Ledger,
 });
 for (const [resumeStoreId, resumeModuleId] of Object.entries(STORE_MODULE_IDS)) {
     const resumeModule = MODULE_BY_MODULE_ID[resumeModuleId];
@@ -995,6 +998,7 @@ Chronicle.init(null);
 Knowledge.init(null);
 StoryPlanner.init(null);
 Interiority.init(null);
+Ledger.init();
 
 // Periodically update floating button token counts and auto-refresh countdown
 setInterval(ui.updateFloatTokenCounts, 5000);

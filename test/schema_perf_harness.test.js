@@ -298,6 +298,12 @@ function buildReferenceFixture() {
         interiority: referenceInteriority(),
         calendar: referenceCalendar(),
         ambient: referenceAmbient(),
+        ledger: {
+            version: 1,
+            currencies: [{ id: 'c1', name: 'gold', decimals: 0, badge: true }],
+            transactions: Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, currency: 'c1', amount: i % 2 ? -3 : 5, kind: 'entry', note: 'Campaign entry', date: null })),
+            items: Array.from({ length: 20 }, (_, i) => ({ id: `i${i}`, name: `Item ${i}`, qty: 1, carried: i < 15, note: '' })),
+        },
         knowledgeStore: referenceKnowledgeStore(),
     };
 }

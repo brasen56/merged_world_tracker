@@ -114,6 +114,7 @@ function legacyChatMeta() {
             dateLine: true, eventsLine: true, events: [], phenomena: [],
         },
         [KEY.ambient]: { enabled: true, climate: 'temperate', hemisphere: 'north', seed: 42 },
+        [KEY.ledger]: { version: 1, currencies: [], transactions: [], items: [] },
     };
 }
 

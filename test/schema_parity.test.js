@@ -337,6 +337,7 @@ describe('adapter surface — validateSection and the envelope', () => {
                 interiority: { schemaVersion: 1, data: { ledger: [] } },
                 calendar: { schemaVersion: 1, data: { version: 1, structure: 'gregorian', eventsLine: false, events: [], phenomena: [] } },
                 ambient: { schemaVersion: 1, data: { enabled: false, seed: 7 } },
+                ledger: { schemaVersion: 1, data: { version: 1, currencies: [], transactions: [], items: [] } },
             },
         };
         const result = validateBackupEnvelope(envelope);

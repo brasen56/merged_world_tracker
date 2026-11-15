@@ -26,6 +26,7 @@ import { storyPlannerSchema } from '../story_planner/schema.js';
 import { interioritySchema } from '../interiority/schema.js';
 import { calendarSchema } from '../calendar/schema.js';
 import { ambientSchema } from '../ambient/schema.js';
+import { ledgerSchema } from '../ledger/schema.js';
 
 /** Every authoritative store descriptor, keyed by store id. */
 export const STORE_SCHEMAS = Object.freeze({
@@ -37,6 +38,7 @@ export const STORE_SCHEMAS = Object.freeze({
     interiority: interioritySchema,
     calendar: calendarSchema,
     ambient: ambientSchema,
+    ledger: ledgerSchema,
     knowledgeStore: knowledgeStoreSchema,
 });
 

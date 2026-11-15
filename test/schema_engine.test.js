@@ -629,7 +629,7 @@ describe('schema modules stay pure', () => {
             checkedImports += specifiers.length;
             for (const specifier of specifiers) {
                 expect(specifier, `${file} imports ${specifier}`).toMatch(
-                    /^(\.\/(?:schema|quarantine)\.js|\.\.\/core\/(?:schema|quarantine|calendar_math)\.js|\.\.\/(?:world_state|chronicle|knowledge|story_planner|interiority|calendar|ambient)\/schema\.js|\.\/(?:registry|manifest|secondary)\.js)$/,
+                    /^(\.\/(?:schema|quarantine)\.js|\.\.\/core\/(?:schema|quarantine|calendar_math)\.js|\.\.\/(?:world_state|chronicle|knowledge|story_planner|interiority|calendar|ambient|ledger)\/schema\.js|\.\/(?:registry|manifest|secondary)\.js)$/,
                 );
             }
         }

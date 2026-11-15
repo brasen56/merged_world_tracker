@@ -154,7 +154,7 @@ describe('backup envelope — calendar and ambient sections', () => {
         const odd = olderBackup({ ambient: { schemaVersion: 1, data: ambientRecord() } });
         odd._meta.metadataSections = 'everything';
         expect(getEnvelopeMetadataSections(odd)).toEqual([...LEGACY_METADATA_SECTION_KEYS, 'ambient']);
-        odd._meta.metadataSections = ['worldState', 'ledger'];
+        odd._meta.metadataSections = ['worldState', 'unknown-future-store'];
         expect(getEnvelopeMetadataSections(odd)).toEqual(['worldState', 'ambient']);
     });
 

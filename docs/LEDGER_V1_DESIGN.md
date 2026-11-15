@@ -1,6 +1,6 @@
 # Ledger module design (v1)
 
-**Status:** Draft for co-author review. Nothing implemented.
+**Status:** Phases 1–2 implemented (pure core, store and plumbing). Phase 3 user surface and Phase 4 host QA remain.
 **Written:** 2026-11-14, from the co-author's "deterministic ledgers" proposal and Brasen's v1 scope call.
 **Naming:** working name **Ledger**, one module with two tabs: **Finances** and **Inventory**.
 
@@ -130,6 +130,10 @@ The fix for "users still forget to update it". During its normal refresh, World 
 **Phase 1: pure core (solo, startable now).** `ledger/data.js` and `ledger/schema.js`: balances in minor units, compact badge formatting, fold-forward that keeps every balance unchanged, and validation. Unit tests, including fold-forward balance checks and the decimals edge cases.
 
 **Phase 2: store and plumbing.** Registry, backup key, budget entry, injection, and chat-change handling. Tests: schema engine, a backup round trip that includes `mwt_ledger`, and injection text snapshots.
+
+Implemented API: `ledger/store.js` exposes detached `getLedger()` reads and validated `saveLedger(record)` writes. Writes fold to the 200-transaction cap, stamp the schema manifest, persist, and re-apply injection. Absent stores stay absent until explicitly saved. Invalid readable records remain recoverable but never drive injection; paused/future-version stores refuse writes. Backup restores Ledger as a whole record, not a transaction merge, and preserves it when an older backup did not cover Ledger. Restore and undo refresh the static injection.
+
+Phase 2 injection uses the existing global gates `enableLedger` and `injectLedger` (both default true), plus the panic switch; Phase 3 will provide their controls. It injects all exact currency totals, including zero/debt, and at most 15 carried item rows, with an explicit omitted-item count. Stored items, notes and transaction history are not injected. Startup, chat change, schema resume, settings save and Ledger edits refresh context without a generation interceptor.
 
 **Phase 3: user surface.** Ledger tab, floating button and badge, Overview row, settings. Optional slash commands.
 

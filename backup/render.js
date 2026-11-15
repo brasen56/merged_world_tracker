@@ -61,6 +61,7 @@ export const SECTION_LABELS = Object.freeze({
     interiority: '💭 Interiority',
     calendar: '📅 Calendar',
     ambient: '🌦️ Ambient Conditions',
+    ledger: '💰 Ledger',
     knowledgeStore: '📖 Registry & State Tracker',
 });
 
@@ -73,6 +74,7 @@ export const SECTION_ORDER = Object.freeze([
     'interiority',
     'calendar',
     'ambient',
+    'ledger',
     'knowledgeStore',
 ]);
 
@@ -224,6 +226,7 @@ export function buildRestoreModes({
     knowledgeCounters = '',
     calendar = '',
     ambient = '',
+    ledger = '',
     restoreSessionConfig = false,
 } = {}) {
     const modes = {};
@@ -235,6 +238,7 @@ export function buildRestoreModes({
     if (explicit(knowledgeCounters)) modes.knowledgeCounters = knowledgeCounters;
     if (explicit(calendar)) modes.calendar = calendar;
     if (explicit(ambient)) modes.ambient = ambient;
+    if (explicit(ledger)) modes.ledger = ledger;
     if (restoreSessionConfig) modes.restoreSessionConfig = true;
     return modes;
 }
@@ -272,6 +276,7 @@ export function readRestoreControlValues(root) {
         knowledgeCounters: val('#mwt-bk-counters-mode', ''),
         calendar: val('#mwt-bk-calendar-mode', ''),
         ambient: val('#mwt-bk-ambient-mode', ''),
+        ledger: val('#mwt-bk-ledger-mode', ''),
         restoreSessionConfig: checked('#mwt-bk-session-config'),
         exact: checked('#mwt-bk-exact'),
     };
@@ -406,6 +411,12 @@ function buildSummaryModalContent() {
             </select>
             <label class="mwt-label" for="mwt-bk-ambient-mode" style="margin:0;text-align:left">🌦️ Ambient</label>
             <select id="mwt-bk-ambient-mode" class="mwt-input" style="width:auto">
+                <option value="">Default (recommended)</option>
+                <option value="replace">Replace with backup</option>
+                <option value="keep">Keep current</option>
+            </select>
+            <label class="mwt-label" for="mwt-bk-ledger-mode" style="margin:0;text-align:left">💰 Ledger</label>
+            <select id="mwt-bk-ledger-mode" class="mwt-input" style="width:auto">
                 <option value="">Default (recommended)</option>
                 <option value="replace">Replace with backup</option>
                 <option value="keep">Keep current</option>

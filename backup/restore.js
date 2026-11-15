@@ -367,11 +367,12 @@ function exactKnowledgeStore(incoming) {
 
 /**
  * Sections that hold ONE authored record each (a calendar, Ambient's settings
- * and seed). Merging two calendars field by field — or one chat's climate with
- * another's seed — produces a record neither chat had, so these restore as a
+ * and seed, or a Ledger). Merging fields or financial histories produces a
+ * record neither chat had, so these restore as a
  * unit: replace, or keep/skip, exactly like World State.
  */
-const WHOLE_RECORD_SECTIONS = Object.freeze(['calendar', 'ambient']);
+// Never merge Ledger histories: shared transactions would be counted twice.
+const WHOLE_RECORD_SECTIONS = Object.freeze(['calendar', 'ambient', 'ledger']);
 
 /**
  * Default mode for a whole-record section. Known identity: replace (the

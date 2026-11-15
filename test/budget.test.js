@@ -125,7 +125,7 @@ describe('normalizeBudgetSettings', () => {
         expect(s.enforce).toBe(false);
         expect(s.globalHardCap).toBe(0);
         expect(s.contextLimitOverride).toBe(0);
-        expect(Object.keys(s.modules).sort()).toEqual(['ambient', 'calendar', 'chronicle', 'interiority', 'knowledge', 'story_planner', 'world_state']);
+        expect(Object.keys(s.modules).sort()).toEqual(['ambient', 'calendar', 'chronicle', 'interiority', 'knowledge', 'ledger', 'story_planner', 'world_state']);
         for (const m of Object.values(s.modules)) {
             expect(m.softCap).toBe(0);
             expect(m.hardCap).toBe(0);
@@ -306,7 +306,7 @@ describe('modelDropOrder', () => {
         // Dropped FIRST → kept LAST: older/reference material goes first.
         // Knowledge uses ST World Info rather than MWT's seam, so it cannot be
         // enforced and is deliberately outside this actionable model.
-        expect(order).toEqual(['story_planner', 'calendar', 'ambient', 'chronicle', 'interiority', 'world_state']);
+        expect(order).toEqual(['story_planner', 'calendar', 'ambient', 'chronicle', 'ledger', 'interiority', 'world_state']);
     });
 
     test('user priorities reorder it, and equal priorities tie-break by table order', () => {
@@ -314,7 +314,7 @@ describe('modelDropOrder', () => {
         const order = modelDropOrder({ settings: s }).map((d) => d.id);
         // Chronicle joins the P1 tier; within it, the later table row drops
         // first (World State survives, then Interiority, then Chronicle).
-        expect(order).toEqual(['story_planner', 'calendar', 'ambient', 'chronicle', 'interiority', 'world_state']);
+        expect(order).toEqual(['story_planner', 'calendar', 'ambient', 'ledger', 'chronicle', 'interiority', 'world_state']);
     });
 });
 
@@ -561,6 +561,7 @@ describe('resetBudgetInjections', () => {
             'mwt_ambient_injection',
             'mwt_calendar_injection',
             'mwt_interiority_injection',
+            'mwt_ledger_injection',
             'mwt_story_plan_injection',
             'mwt_world_state_injection',
             'session_chronicle_injection',
@@ -766,7 +767,7 @@ describe('collectBudgetSnapshot', () => {
             knowledgeTokens: () => 36000,
             contextLimit: { value: 8192, source: 'ctx.maxContext', note: 'x' },
         });
-        expect(snap.modules).toHaveLength(7);
+        expect(snap.modules).toHaveLength(8);
         const byId = Object.fromEntries(snap.modules.map((m) => [m.id, m]));
         expect(byId.knowledge.tokenKind).toBe('stored');
         expect(byId.knowledge.advisory).toBe(true);
