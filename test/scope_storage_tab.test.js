@@ -924,14 +924,19 @@ describe('collectStorageSizes — chat metadata sizes', () => {
     test('rows enumerate the registry stores plus the unregistered MWT keys, in order', () => {
         expect(chatMetadataSizeSpecs().map((s) => s.id)).toEqual([
             ...CHAT_METADATA_SCHEMA_IDS,
-            'calendar', 'ambient', 'contextBudget', 'schemaManifest', 'quarantine',
+            'contextBudget', 'schemaManifest', 'quarantine',
         ]);
         for (const id of CHAT_METADATA_SCHEMA_IDS) {
             const spec = chatMetadataSizeSpecs().find((s) => s.id === id);
             expect(spec).toMatchObject({ key: STORE_SCHEMAS[id].metadataKey, registered: true });
         }
-        expect(chatMetadataSizeSpecs().find((s) => s.id === 'calendar')).toMatchObject({ key: 'mwt_calendar', registered: false });
-        expect(chatMetadataSizeSpecs().find((s) => s.id === 'ambient')).toMatchObject({ key: 'mwt_ambient', registered: false });
+        // A key the registry covers never also appears as an extra row:
+        // calendar and ambient sit in EXTRA_CHAT_METADATA_KEYS as a
+        // pre-registration fallback and must stay single-rowed, or the
+        // measurement lands in one copy while the other renders absent/0.
+        expect(chatMetadataSizeSpecs().filter((s) => s.key === 'mwt_calendar')).toHaveLength(1);
+        expect(chatMetadataSizeSpecs().filter((s) => s.key === 'mwt_ambient')).toHaveLength(1);
+        expect(chatMetadataSizeSpecs().filter((s) => s.key === 'mwt_calendar')[0]).toMatchObject({ registered: true });
     });
 
     test('each present store measures its serialized JSON; absent stores say so', () => {
