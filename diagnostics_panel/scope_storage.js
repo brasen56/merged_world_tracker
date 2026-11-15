@@ -356,9 +356,12 @@ export const LOCAL_STORAGE_FAMILIES = Object.freeze([
 export const OTHER_STORAGE_FAMILY_ID = 'other';
 
 /**
- * MWT chat-metadata keys that are not registry stores. Calendar and Ambient
- * are chat-local records with no schema descriptor; the manifest, quarantine
- * container and context-budget record are MWT bookkeeping. Any further
+ * MWT chat-metadata keys that are not registry stores: the manifest,
+ * quarantine container and context-budget record are MWT bookkeeping.
+ * Calendar and Ambient predate their registration and are kept here as a
+ * fallback — chatMetadataSizeSpecs() drops any key the registry already
+ * covers, so they are measured through their registry rows while registered
+ * and fall back to these rows if that ever changes. Any further
  * `mwt_`-prefixed key is summed into one "other MWT keys" row, so a key added
  * later is still counted.
  */
@@ -374,12 +377,21 @@ const EXTRA_CHAT_METADATA_KEYS = Object.freeze([
  * Every named MWT chat-metadata row, in display order: the registry's
  * chat-metadata stores first, then the unregistered keys above.
  *
+ * A key covered by the registry gets its registry row ONLY. The extras list
+ * can name the same key (calendar and ambient above), and an undeduped pair
+ * would render two rows while measureChatMetadata's by-key map routes the
+ * measurement to just one of them, leaving the other forever absent/0.
+ *
  * @returns {Array<{id: string, key: string, registered: boolean}>}
  */
 export function chatMetadataSizeSpecs() {
+    const registered = CHAT_METADATA_SCHEMA_IDS.map((id) => ({ id, key: STORE_SCHEMAS[id].metadataKey, registered: true }));
+    const registeredKeys = new Set(registered.map((row) => row.key));
     return [
-        ...CHAT_METADATA_SCHEMA_IDS.map((id) => ({ id, key: STORE_SCHEMAS[id].metadataKey, registered: true })),
-        ...EXTRA_CHAT_METADATA_KEYS.map((spec) => ({ ...spec, registered: false })),
+        ...registered,
+        ...EXTRA_CHAT_METADATA_KEYS
+            .filter((spec) => !registeredKeys.has(spec.key))
+            .map((spec) => ({ ...spec, registered: false })),
     ];
 }
 

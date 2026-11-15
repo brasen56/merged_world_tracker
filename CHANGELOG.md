@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `backup/data.js`, `backup/restore.js`, `backup/index.js`,
   `backup/render.js`; tests in `test/backup_calendar_ambient.test.js` and
   `test/schema_runtime_gate.test.js`.)
+- **Diagnostics — the storage meter no longer lists Calendar and Ambient
+  Conditions twice.** The meter was written while both keys lived outside
+  the schema registry and hardcoded them as unregistered rows; the backup
+  fix above registered them, and once both changes were merged each got two
+  rows in the Scope & storage chat-metadata table — one that always read
+  absent/0 and one holding the real size. A key the registry covers is now
+  measured through its registry row only (the hardcoded entries remain as a
+  fallback should a key ever leave the registry). Totals were never
+  double-counted — only the duplicated rows were wrong.
+  (`diagnostics_panel/scope_storage.js`; the row-list test in
+  `test/scope_storage_tab.test.js`.)
 
 ### Added
 
