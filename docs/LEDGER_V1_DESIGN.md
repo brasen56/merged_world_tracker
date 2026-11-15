@@ -19,10 +19,10 @@ The Ledger holds what the player character owns and how much money they have. **
 | D3 | **Finances is a transaction list; the balance is computed, never stored.** Each entry: signed amount, currency, note, optional in-story date. The balance is the sum per currency. | Gives history ("where did my 200 gold go?"), lets users fix a mistake by editing one entry, and is the shape later versions add proposals to. A stored total can drift from its history; a computed one can't. |
 | D4 | **Amounts are integers in the currency's smallest unit.** Each currency has a `decimals` setting (0 for gold, 2 for dollars). | "Code does the arithmetic" has to mean exact arithmetic. Floating-point sums drift (0.1 + 0.2). |
 | D5 | **Several user-defined currencies, no conversion.** One currency is marked as the badge currency. | Exchange rates differ in every setting. Gold/silver/copper or credits/scrip stay as separate totals. |
-| D6 | **Inventory items:** name, quantity, note, and **Carried** or **Stored**. Only Carried items are injected. No change log for items in v1; edits are direct. | Keeps the injection small when someone tracks a big stash. Money needs a history; items rarely do. |
+| D6 | **Inventory items:** name, quantity, note, and **Carried** or **Stored**. Only Carried items are injected. Quantities are ≥ 1; zero is a confirmed delete, never a silent row removal. No change log for items in v1; edits are direct. | Keeps the injection small when someone tracks a big stash. Money needs a history; items rarely do. |
 | D7 | **Player character only.** No NPC wallets or inventories. | Tracking what NPCs own is scope creep, and it would pull the Ledger toward Knowledge. |
 | D8 | **Stored per chat in `chat_metadata` (`mwt_ledger`), registered as a schema store.** | Per-story data. Branches inherit it through ST's metadata copy, the way Ambient's seed does (Ambient D2). Registering it gives backup, validation and Diagnostics coverage (§5). |
-| D9 | **Cap the transaction log.** Past a limit (500 is a starting guess; see §9), the oldest entries fold into one "Carried forward" entry per currency. The balance doesn't change. | Keeps the chat file small over a long campaign. |
+| D9 | **Cap the transaction log.** Past a limit (200; see §9 — re-tune when §7.1's automatic entries arrive), the oldest entries fold into one "Carried forward" entry per currency. The balance doesn't change. | Keeps the chat file small over a long campaign. |
 | D10 | **One injection, set again on every ledger edit and on chat change.** No `generate_interceptor`. Nothing is injected when the module is off or the ledger is empty. | Unlike Ambient, nothing depends on the clock, so the text only changes when the user changes the ledger. |
 | D11 | **The money total is authoritative; the item list is not complete.** The injection says listed items are definitely carried, and says nothing about unlisted ones. | Users won't list every possession. An "if it's not listed, you don't have it" rule would make the narrator take away the character's boots. |
 | D12 | **World State is unchanged.** The item rule stays as it is, and the Ledger doesn't feed World State in v1. | Loosening the item rule would undo World State's token savings. The two answer different questions (§1). |
@@ -44,6 +44,7 @@ The Ledger holds what the player character owns and how much money they have. **
     // D9 fold-forward: kind 'carried' replaces the oldest entries, same sum
   ],
   items: [
+    // qty is an integer >= 1; zero rows never exist — reaching 0 is a confirmed delete (§4.2)
     { id: 'i1', name: 'Grandfather\'s sword', qty: 1, note: 'Notched blade', carried: true },
     { id: 'i2', name: 'Rope (50 ft)', qty: 2, note: '', carried: false },
   ],
@@ -63,8 +64,8 @@ The Ledger holds what the player character owns and how much money they have. **
 - Click opens the Ledger tab.
 
 ### 4.2 Ledger tab
-- **Finances:** balance per currency at the top. An add row: + or −, amount, currency, note, date (prefilled). Below it the transactions, newest first, each with edit and delete (delete asks first). "Carried forward" entries are marked and can't be edited, only removed by deleting the whole log.
-- **Inventory:** rows with name, quantity stepper, note, and a Carried/Stored toggle. Carried items list first. An add row at the top.
+- **Finances:** balance per currency at the top. An add row: + or −, amount, currency, note, date (prefilled). Below it the transactions, newest first, each with edit and delete (delete asks first). "Carried forward" entries are marked: amount and note are editable (the balance is computed, D3, so an edit is just a corrected opening balance and can't desync anything), the currency is locked and there's no date field (an aggregate spanning hundreds of entries has no one date), and delete asks first, naming the amount it would remove.
+- **Inventory:** rows with name, quantity stepper, note, and a Carried/Stored toggle. Quantities are integers ≥ 1: the stepper bottoms out at 1, and stepping or typing 0 prompts "Remove item?" — the same confirmed delete as Finances — so an item never disappears silently and zero-quantity rows never exist. Carried items list first. An add row at the top.
 - **Settings strip:** enable, show button, inject on/off, and the currency list (add, rename, decimals, badge currency).
 
 ### 4.3 Overview
@@ -137,7 +138,17 @@ The fix for "users still forget to update it". During its normal refresh, World 
 ## 9. Open questions for the co-author
 
 1. **Debts:** add an optional counterparty field to transactions in v1 so §7.2 has data later, or leave it out completely?
+ - Leave out until v2
 2. **Item history:** is "no item log in v1" right, or do users want to see when the sword was sold?
+ - No item log until v2
 3. **Badge when there's nothing to show:** hide the number when no currency exists, or show `0`?
+ - Prefer hiding when no currency exists, allow negative numbers (debt)
 4. **The log cap:** is 500 transactions before folding forward reasonable for long campaigns?
+ - Drop to 200 transactions, doubtful anyone would need more than that for an audit. Can change once automatic entries are in
 5. **Name:** "Ledger", or something friendlier in the UI like "Purse & Pack"?
+ - Keep "Ledger", its more setting agnostic
+
+Additional questions:
+
+6. **Cap on Carried Items**: Nothing currently bounds carried items, so a user could select 60-80 items and blow past the token estimate. Cap the carried list?
+ - I suggest yes. Cap at 10-15 (injectable). A cap that truncates should say so in the injection text (e.g., the list ends with "…and 5 more items"), which keeps D11's honesty contract intact
