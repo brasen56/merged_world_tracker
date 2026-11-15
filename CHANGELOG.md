@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+
+- **Diagnostics — a storage meter on the 🗂️ Scope & storage tab.** The tab
+  now shows how full the browser's storage (localStorage) is for this site,
+  against an approximate limit of about 5,000,000 characters (browsers do
+  not report the real one), and how much of it is MWT's, grouped by key
+  family: Knowledge Restore history, settings fallback copies, floating
+  button positions, and settings left by the pre-merge extensions.
+  Everything else is one "other" row. Below it, each MWT store in the
+  current chat's metadata shows its saved size, with a note that chat
+  metadata lives in the chat file on the server and does not count toward
+  the browser limit. The bar turns amber at 90%. Nothing here changed
+  how storage is used: Knowledge already trims old Restore versions when
+  storage fills, and the meter only makes the level visible, which used to
+  take a console snippet. The tab stays read-only, and Copy Report carries
+  the sizes and family names only, never stored values or key names.
+
 ## [2.17.2]
 
 ### Changed

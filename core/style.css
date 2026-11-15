@@ -762,6 +762,61 @@ html {
     font-weight: 700;
 }
 
+/* Storage meter: localStorage fill against the approximate quota, then the
+   per-family and per-store size tables. The bar wraps under its label on a
+   narrow screen instead of squeezing to nothing. */
+.mwt-diag-storage {
+    margin-top: 16px;
+}
+
+.mwt-diag-storage-meter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin: 6px 0 10px;
+}
+
+.mwt-diag-storage-bar {
+    flex: 1 1 160px;
+    height: 10px;
+    border-radius: 5px;
+    background: var(--mwt-bg-light);
+    border: 1px solid var(--mwt-border);
+    overflow: hidden;
+}
+
+.mwt-diag-storage-fill {
+    height: 100%;
+    background: var(--mwt-accent);
+}
+
+.mwt-diag-storage-fill--warn {
+    background: var(--mwt-warning);
+}
+
+.mwt-diag-storage-label {
+    font-size: 12px;
+    color: var(--mwt-text-dim);
+}
+
+.mwt-diag-storage-subtotal td {
+    font-weight: 600;
+}
+
+/* Name cells wrap (the tables are otherwise nowrap) so both storage tables
+   fit a phone; the metadata key sits under its store label. */
+.mwt-diag-env-table td.mwt-diag-storage-name {
+    white-space: normal;
+}
+
+.mwt-diag-storage-key {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--mwt-text-dim);
+    overflow-wrap: anywhere;
+}
+
 /* ─── Diagnostics panel — 💉 Injection tab (Phase 9) ───────────────────────── */
 
 /* Per-module provenance note under a Module cell (Knowledge's lorebook

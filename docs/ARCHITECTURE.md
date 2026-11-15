@@ -139,7 +139,7 @@ The tree above lists the six user-facing modules; five more support directories 
     ├── render.js         # Panel shell, sub-tab strip, Health/Environment panes, Copy Report
     ├── health.js         # ❤️ Health snapshot (per-module status)
     ├── environment.js    # 🌐 Environment snapshot (versions, feature detection)
-    ├── scope_storage.js  # 🗂️ Scope & storage snapshot (lorebook resolution, store versions)
+    ├── scope_storage.js  # 🗂️ Scope & storage snapshot (lorebook resolution, store versions, storage meter)
     ├── injection.js      # 💉 Injection snapshot (resolved placement + recorded payloads)
     ├── last_request.js   # 📡 Last-request snapshot (API telemetry)
     ├── log.js            # 📋 Log snapshot + redaction gate
