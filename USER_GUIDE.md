@@ -374,7 +374,7 @@ A read-only **🩺 Diagnostics** tab inside the MWT modal answers "what is MWT a
 
 - **❤️ Health** — One row per module: enabled, injection gate, busy state, token estimates, auto-cadence countdowns, last run
 - **🌐 Environment** — MWT + SillyTavern versions, feature detection, and the raw context-field probe (fork compatibility)
-- **🗂️ Scope & storage** — Which lorebooks this chat resolves to and *why*, per-book hydration and store versions, saved bindings, and fallback-to-global warnings
+- **🗂️ Scope & storage** — Which lorebooks this chat resolves to and *why*, per-book hydration and store versions, saved bindings, and fallback-to-global warnings, plus a storage meter: how full browser storage (localStorage) is against an approximate limit, MWT's share by key family, and the size of each MWT store in this chat's metadata
 - **💉 Injection** — Per-module on/off, gate, resolved role/depth with provenance, token estimate, and the exact payload last registered with SillyTavern
 - **📡 Last request** — The most recent LLM request per module (statuses, retries, timings — never API keys)
 - **📋 Log** — Rolling in-memory event buffer with severity filtering

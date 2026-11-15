@@ -265,6 +265,15 @@ duplicate-entry guard. The footer also counts every `scope_fallback_global`
 warn recorded this session, including fallbacks on chats you have since
 switched away from.
 
+It then prints the storage meter (`snap.storage`): browser storage used
+against an approximate ~5,000,000-character limit with a table of MWT's key
+families (Knowledge Restore history, settings fallback copies, floating
+button positions, pre-merge settings, and one "other" row for everything
+else), and a table of each MWT store's serialized size in this chat's
+metadata. Sizes and family names only — no key name or stored value is
+printed or returned. Chat metadata lives in the chat file on the server, so
+it never counts toward the browser limit.
+
 **When to capture it:** any "my data is weird across chats/characters"
 report, any scoping or binding question, and any Knowledge write failure.
 Pair it with `MWT.scope.diagnose()` for the raw context fields. Identity

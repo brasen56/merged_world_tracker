@@ -16,12 +16,18 @@
  *      renderScopePane() string builders (banner tones, badges, escaping)
  *      plus the pane switch that mounts the sub-tab.
  *
+ *   4. The storage meter (collectStorageSizes + renderStorageSection):
+ *      localStorage grouped by MWT key family against a REAL jsdom Storage
+ *      (genuine 5,000,000-char quota — storage is filled, never mocked), and
+ *      the per-store chat-metadata sizes, plus the Copy Report no-values rule.
+ *
  * The final smoke test exercises the DEFAULT wiring (real knowledge/* graph
  * under the barrel→stub alias) — it exists to catch import-graph breakage,
  * not to assert live values.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { JSDOM } from 'jsdom';
 
 import {
     explainBookResolution,
@@ -30,12 +36,20 @@ import {
     classifyBookActivation,
     SCOPE_BOOK_SPECS,
     GLOBAL_BOOK_NAMES,
+    collectStorageSizes,
+    chatMetadataSizeSpecs,
+    APPROX_LOCAL_STORAGE_QUOTA_CHARS,
+    LOCAL_STORAGE_WARN_RATIO,
+    OTHER_STORAGE_FAMILY_ID,
 } from '../diagnostics_panel/scope_storage.js';
 import {
     renderScopePane,
     renderScopeSnapshot,
+    renderStorageSection,
     renderDiagnosticsPanel,
 } from '../diagnostics_panel/render.js';
+import { buildReport } from '../diagnostics_panel/report.js';
+import { CHAT_METADATA_SCHEMA_IDS, STORE_SCHEMAS } from '../schema/registry.js';
 import { peekStore, isHydrated, _setCacheForTests, _clearCacheForTests, STORE_VERSION } from '../knowledge/store.js';
 import { deriveBookNames, shortHash } from '../knowledge/scope.js';
 import { record, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
@@ -734,5 +748,371 @@ describe('renderScopePane (default wiring)', () => {
         // seven v1 tabs renders a real pane — no placeholder remains.
         expect(html).toContain('mwt-diag-int-run');
         expect(html).not.toContain('— not built yet');
+    });
+});
+
+// ─── Storage meter (localStorage + chat metadata sizes) ──────────────────────
+//
+// The localStorage half runs against a REAL jsdom Storage: jsdom enforces a
+// genuine 5,000,000-character quota and throws a real QuotaExceededError, so
+// "full" is reached by filling storage, never by mocking a number. The suite
+// itself stays in the Node environment; each test gets its own jsdom window.
+
+const openDoms = [];
+afterEach(() => {
+    while (openDoms.length) openDoms.pop().window.close();
+});
+
+/** A fresh, empty, quota-enforcing jsdom localStorage. */
+function realStorage() {
+    const dom = new JSDOM('', { url: 'https://mwt-storage-meter.test/' });
+    openDoms.push(dom);
+    dom.window.localStorage.clear();
+    return dom.window.localStorage;
+}
+
+/** Everything in a Storage, for before/after comparison. */
+function dumpStorage(storage) {
+    const out = {};
+    for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i);
+        out[key] = storage.getItem(key);
+    }
+    return out;
+}
+
+/** Characters used, counted the way the quota counts them (key + value). */
+function usedChars(storage) {
+    return Object.entries(dumpStorage(storage)).reduce((n, [k, v]) => n + k.length + v.length, 0);
+}
+
+/** Fill to `target` characters with one filler key outside every MWT family. */
+function fillTo(storage, target, key = 'zz_filler') {
+    storage.setItem(key, 'x'.repeat(target - usedChars(storage) - key.length));
+}
+
+const family = (snap, id) => snap.local.families.find((f) => f.id === id);
+const metaRow = (snap, id) => snap.chatMetadata.rows.find((r) => r.id === id);
+
+describe('collectStorageSizes — localStorage by key family (real jsdom quota)', () => {
+    test('groups every MWT writer into its family and the rest into "other"', () => {
+        const storage = realStorage();
+        const entries = {
+            'kt_history_Knowledge Tracker_3': JSON.stringify([{ ts: 1, content: 'a'.repeat(400) }]),
+            'kt_history_State Tracker_0': JSON.stringify([{ ts: 2, content: 'b'.repeat(100) }]),
+            mwt_float_positions: '{"wt":{"x":1,"y":2}}',
+            merged_world_tracker: '{"enabled":true}',
+            mwt_knowledge: '{"scope":"global"}',
+            knowledge_tracker_settings: '{"old":true}',
+            TavernAI_theme: 'dark',
+            some_other_extension: 'z'.repeat(50),
+        };
+        for (const [k, v] of Object.entries(entries)) storage.setItem(k, v);
+        const size = (...keys) => keys.reduce((n, k) => n + k.length + entries[k].length, 0);
+
+        const snap = collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => null });
+
+        expect(snap.local.available).toBe(true);
+        expect(snap.local.keyCount).toBe(8);
+        expect(family(snap, 'knowledgeHistory')).toMatchObject({ mwt: true, keys: 2, chars: size('kt_history_Knowledge Tracker_3', 'kt_history_State Tracker_0') });
+        // Float positions is matched BEFORE the mwt_ settings prefix.
+        expect(family(snap, 'floatPositions')).toMatchObject({ keys: 1, chars: size('mwt_float_positions') });
+        expect(family(snap, 'settings')).toMatchObject({ keys: 2, chars: size('merged_world_tracker', 'mwt_knowledge') });
+        expect(family(snap, 'legacySettings')).toMatchObject({ keys: 1, chars: size('knowledge_tracker_settings') });
+        expect(family(snap, OTHER_STORAGE_FAMILY_ID)).toMatchObject({ mwt: false, keys: 2, chars: size('TavernAI_theme', 'some_other_extension') });
+        expect(snap.local.totalChars).toBe(usedChars(storage));
+        expect(snap.local.mwtChars).toBe(snap.local.totalChars - family(snap, OTHER_STORAGE_FAMILY_ID).chars);
+        expect(snap.local.approxQuotaChars).toBe(APPROX_LOCAL_STORAGE_QUOTA_CHARS);
+        expect(snap.local.level).toBe('ok');
+        expect(snap.errors).toBeUndefined();
+    });
+
+    test('a genuinely full storage reads as exactly 100% — the meter counts what the browser counts', () => {
+        const storage = realStorage();
+        storage.setItem('kt_history_Knowledge Tracker_1', JSON.stringify([{ ts: 1, content: 'c'.repeat(1000) }]));
+        fillTo(storage, 5_000_000);
+        // jsdom refuses one more character: storage really is full.
+        let refused = null;
+        try { storage.setItem('y', ''); } catch (err) { refused = err; }
+        expect(refused?.name).toBe('QuotaExceededError');
+
+        const snap = collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => null });
+        expect(snap.local.totalChars).toBe(5_000_000);
+        expect(snap.local.percentOfQuota).toBe(100);
+        expect(snap.local.level).toBe('warn');
+        expect(snap.local.warning).toContain('Restore versions');
+        expect(snap.local.warning).toContain('lorebook entries are not touched');
+    });
+
+    test('amber starts at the warn ratio of the approximate quota, not before', () => {
+        const threshold = APPROX_LOCAL_STORAGE_QUOTA_CHARS * LOCAL_STORAGE_WARN_RATIO;
+        const below = realStorage();
+        fillTo(below, threshold - 1);
+        expect(collectStorageSizes({ getLocalStorage: () => below, getChatMetadata: () => null }).local.level).toBe('ok');
+
+        const at = realStorage();
+        fillTo(at, threshold);
+        const snap = collectStorageSizes({ getLocalStorage: () => at, getChatMetadata: () => null });
+        expect(snap.local.level).toBe('warn');
+        expect(snap.local.percentOfQuota).toBe(90);
+    });
+
+    test('READ-ONLY: measuring a full storage never writes, removes, or clears a key', () => {
+        const storage = realStorage();
+        storage.setItem('kt_history_Knowledge Tracker_2', '[]');
+        fillTo(storage, 4_999_000);
+        const before = dumpStorage(storage);
+        const proto = Object.getPrototypeOf(storage);
+        const writes = ['setItem', 'removeItem', 'clear'].map((m) => vi.spyOn(proto, m));
+
+        collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => ({ mwt_calendar: {} }) });
+
+        for (const spy of writes) expect(spy).not.toHaveBeenCalled();
+        expect(dumpStorage(storage)).toEqual(before);
+    });
+
+    test('a storage the browser blocks degrades the local meter only', () => {
+        const snap = collectStorageSizes({
+            getLocalStorage: () => { throw Object.assign(new Error('The operation is insecure.'), { name: 'SecurityError' }); },
+            getChatMetadata: () => ({ mwt_calendar: { structure: 'custom' } }),
+        });
+        expect(snap.local.available).toBe(false);
+        expect(snap.local.totalChars).toBeNull();
+        expect(snap.local.note).toContain('could not be read');
+        expect(snap.errors.some((e) => e.startsWith('localStorage:'))).toBe(true);
+        // The chat-metadata half is unaffected.
+        expect(snap.chatMetadata.available).toBe(true);
+        expect(metaRow(snap, 'calendar').present).toBe(true);
+    });
+
+    test('no localStorage at all (Node, or a stripped embed) is a note, not an error', () => {
+        const snap = collectStorageSizes({ getLocalStorage: () => undefined, getChatMetadata: () => null });
+        expect(snap.local.available).toBe(false);
+        expect(snap.errors).toBeUndefined();
+    });
+
+    test('one unreadable key is counted as unreadable; the rest still measure', () => {
+        const storage = realStorage();
+        storage.setItem('kt_history_Knowledge Tracker_5', '[1]');
+        storage.setItem('poisoned', 'v');
+        storage.setItem('fine', 'ok');
+        const hostile = {
+            get length() { return storage.length; },
+            key: (i) => storage.key(i),
+            getItem: (k) => {
+                if (k === 'poisoned') throw new Error('read refused');
+                return storage.getItem(k);
+            },
+        };
+        const snap = collectStorageSizes({ getLocalStorage: () => hostile, getChatMetadata: () => null });
+        expect(snap.local.available).toBe(true);
+        expect(snap.local.unreadableKeys).toBe(1);
+        expect(snap.local.keyCount).toBe(2);
+        expect(family(snap, 'knowledgeHistory').keys).toBe(1);
+        expect(snap.errors.some((e) => /1 key\(s\) could not be read/.test(e))).toBe(true);
+    });
+
+    test('a throwing length getter degrades to unavailable with an error note', () => {
+        const hostile = { get length() { throw new Error('length refused'); }, key: () => null, getItem: () => null };
+        const snap = collectStorageSizes({ getLocalStorage: () => hostile, getChatMetadata: () => null });
+        expect(snap.local.available).toBe(false);
+        expect(snap.errors.some((e) => e.startsWith('localStorage.length:'))).toBe(true);
+    });
+});
+
+describe('collectStorageSizes — chat metadata sizes', () => {
+    test('rows enumerate the registry stores plus the unregistered MWT keys, in order', () => {
+        expect(chatMetadataSizeSpecs().map((s) => s.id)).toEqual([
+            ...CHAT_METADATA_SCHEMA_IDS,
+            'calendar', 'ambient', 'contextBudget', 'schemaManifest', 'quarantine',
+        ]);
+        for (const id of CHAT_METADATA_SCHEMA_IDS) {
+            const spec = chatMetadataSizeSpecs().find((s) => s.id === id);
+            expect(spec).toMatchObject({ key: STORE_SCHEMAS[id].metadataKey, registered: true });
+        }
+        expect(chatMetadataSizeSpecs().find((s) => s.id === 'calendar')).toMatchObject({ key: 'mwt_calendar', registered: false });
+        expect(chatMetadataSizeSpecs().find((s) => s.id === 'ambient')).toMatchObject({ key: 'mwt_ambient', registered: false });
+    });
+
+    test('each present store measures its serialized JSON; absent stores say so', () => {
+        const worldState = { entities: [{ name: 'Mara', notes: 'n'.repeat(300) }] };
+        const calendar = { structure: 'custom', months: [{ name: 'Frost', days: 30 }] };
+        const meta = {
+            [STORE_SCHEMAS.worldState.metadataKey]: worldState,
+            mwt_calendar: calendar,
+            mwt_ambient: { enabled: true },
+            mwt_chat_world_info: 'Knowledge Tracker',
+            world_info: 'Some Book',
+            note_prompt: 'hello',
+        };
+        const snap = collectStorageSizes({ getLocalStorage: () => undefined, getChatMetadata: () => meta });
+
+        expect(snap.chatMetadata.available).toBe(true);
+        expect(metaRow(snap, 'worldState')).toMatchObject({ present: true, chars: JSON.stringify(worldState).length });
+        expect(metaRow(snap, 'calendar')).toMatchObject({ present: true, chars: JSON.stringify(calendar).length });
+        expect(metaRow(snap, 'storyPlanner')).toMatchObject({ present: false, chars: 0 });
+        // An unnamed mwt_ key lands in its own bucket; non-MWT keys in "other".
+        expect(snap.chatMetadata.otherMwt).toEqual({ id: 'otherMwt', keys: 1, chars: JSON.stringify('Knowledge Tracker').length });
+        expect(snap.chatMetadata.other).toEqual({ id: OTHER_STORAGE_FAMILY_ID, keys: 2, chars: JSON.stringify('Some Book').length + JSON.stringify('hello').length });
+        expect(snap.chatMetadata.mwtChars).toBe(JSON.stringify(worldState).length + JSON.stringify(calendar).length
+            + JSON.stringify({ enabled: true }).length + JSON.stringify('Knowledge Tracker').length);
+        expect(snap.chatMetadata.totalChars).toBe(snap.chatMetadata.mwtChars + snap.chatMetadata.other.chars);
+    });
+
+    test('an unserializable value degrades only its own row; a non-MWT one is not named', () => {
+        const cyclic = {}; cyclic.self = cyclic;
+        const foreign = {}; foreign.self = foreign;
+        const meta = {
+            [STORE_SCHEMAS.storyPlanner.metadataKey]: cyclic,
+            mwt_calendar: { structure: 'gregorian' },
+            private_extension_key: foreign,
+        };
+        const snap = collectStorageSizes({ getLocalStorage: () => undefined, getChatMetadata: () => meta });
+        expect(metaRow(snap, 'storyPlanner')).toMatchObject({ present: true, chars: null });
+        expect(metaRow(snap, 'calendar').chars).toBe(JSON.stringify({ structure: 'gregorian' }).length);
+        expect(snap.errors.some((e) => e.startsWith(`chatMetadata[${STORE_SCHEMAS.storyPlanner.metadataKey}]`))).toBe(true);
+        expect(snap.errors.join(' ')).not.toContain('private_extension_key');
+    });
+
+    test('no open chat → unavailable with a note; the default reader never creates chatMetadata', () => {
+        // core/context.js getChatMeta() would plant `chatMetadata = {}` on a
+        // context that lacks it; the meter's default reader must not.
+        const ctx = {};
+        vi.stubGlobal('SillyTavern', { getContext: () => ctx });
+        try {
+            const snap = collectStorageSizes({ getLocalStorage: () => undefined });
+            expect(snap.chatMetadata.available).toBe(false);
+            expect(snap.chatMetadata.note).toContain('No chat is open');
+            expect(ctx).toEqual({});
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});
+
+describe('collectScopeSnapshot — storage field', () => {
+    test('the snapshot carries the storage meter from the injected collector', () => {
+        const storage = realStorage();
+        storage.setItem('kt_history_Knowledge Tracker_8', '[]');
+        const snap = collectScopeSnapshot(deps({
+            storageApi: { collect: () => collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => ({ mwt_ambient: {} }) }) },
+        }));
+        expect(snap.storage.local.available).toBe(true);
+        expect(family(snap.storage, 'knowledgeHistory').keys).toBe(1);
+        expect(metaRow(snap.storage, 'ambient').present).toBe(true);
+        // The meter never joins the lorebook-resolution banner.
+        expect(snap.warnings.some((w) => /storage/i.test(w.id))).toBe(false);
+    });
+
+    test('a throwing storage collector degrades to an unavailable meter, never a blank tab', () => {
+        const snap = collectScopeSnapshot(deps({ storageApi: { collect: () => { throw new Error('meter exploded'); } } }));
+        expect(snap.errors.some((e) => e.startsWith('storage:'))).toBe(true);
+        expect(snap.storage.local.available).toBe(false);
+        expect(snap.storage.chatMetadata.available).toBe(false);
+        expect(snap.books).toHaveLength(3);
+        expect(() => renderScopeSnapshot(snap, { formatTime: T })).not.toThrow();
+    });
+
+    test('Copy Report carries sizes and family names only — never values or raw key names', () => {
+        const storage = realStorage();
+        storage.setItem('kt_history_Knowledge Tracker - Velkaris_3', JSON.stringify([{ ts: 1, content: 'SECRET-PROSE' }]));
+        storage.setItem('someone_elses_key', 'OTHER-VALUE');
+        const meta = {
+            mwt_calendar: { months: [{ name: 'CALENDAR-MONTH-NAME', days: 30 }] },
+            private_extension_key: 'FOREIGN-VALUE',
+        };
+        const snap = collectScopeSnapshot(deps({
+            storageApi: { collect: () => collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => meta }) },
+        }));
+        const { markdown } = buildReport({ sections: [{ id: 'scope', title: 'Scope & storage', data: snap }], knownSecrets: [] });
+
+        expect(markdown).toContain('"knowledgeHistory"');
+        expect(markdown).toContain(`"chars": ${family(snap.storage, 'knowledgeHistory').chars}`);
+        expect(markdown).toContain('"mwt_calendar"');
+        for (const leaked of ['Velkaris', 'SECRET-PROSE', 'someone_elses_key', 'OTHER-VALUE', 'CALENDAR-MONTH-NAME', 'private_extension_key', 'FOREIGN-VALUE']) {
+            expect(markdown).not.toContain(leaked);
+        }
+    });
+});
+
+describe('renderStorageSection — meter, families, chat metadata', () => {
+    const quota = APPROX_LOCAL_STORAGE_QUOTA_CHARS;
+
+    test('renders the bar, the approximate-quota label, family rows and the MWT subtotal', () => {
+        const storage = realStorage();
+        storage.setItem('kt_history_Knowledge Tracker_1', 'h'.repeat(5000));
+        storage.setItem('mwt_float_positions', '{}');
+        fillTo(storage, 1_000_000);
+        const sizes = collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => ({}) });
+        const html = renderStorageSection(sizes);
+
+        expect(html).toContain('data-diag-storage="1"');
+        expect(html).toContain('role="meter"');
+        expect(html).toContain('style="width:20.0%"');
+        expect(html).toContain(`${(1_000_000).toLocaleString()} of ≈${quota.toLocaleString()} characters`);
+        expect(html).toContain('approximate');
+        expect(html).toContain('🧠 Knowledge Restore history');
+        expect(html).toContain('data-storage-family="mwt-total"');
+        expect(html).toContain('Other (SillyTavern and other extensions)');
+        expect(html).not.toContain('mwt-diag-storage-fill--warn');
+    });
+
+    test('a nearly full storage turns the bar amber and lists the warning', () => {
+        const storage = realStorage();
+        fillTo(storage, 4_800_000);
+        const html = renderStorageSection(collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => null }));
+        expect(html).toContain('mwt-diag-storage-fill--warn');
+        expect(html).toContain('96% of the approximate limit');
+        expect(html).toContain('Knowledge removes the oldest Restore versions');
+    });
+
+    test('past the estimate the bar caps at 100% and says the browser allows more', () => {
+        const html = renderStorageSection({
+            local: { available: true, totalChars: 5_242_875, approxQuotaChars: quota, mwtChars: 0, families: [], level: 'warn', warning: 'full' },
+            chatMetadata: { available: false, note: 'No chat is open, so there is no chat metadata to measure.' },
+        });
+        expect(html).toContain('style="width:100.0%"');
+        expect(html).toContain('this browser allows more');
+    });
+
+    test('chat-metadata rows use the schema-status labels and mark absent / unreadable stores', () => {
+        const cyclic = {}; cyclic.self = cyclic;
+        const sizes = collectStorageSizes({
+            getLocalStorage: () => undefined,
+            getChatMetadata: () => ({
+                [STORE_SCHEMAS.worldState.metadataKey]: { a: 1 },
+                [STORE_SCHEMAS.chronicle.metadataKey]: cyclic,
+                mwt_calendar: {},
+                mwt_extra_thing: [1, 2, 3],
+            }),
+        });
+        const html = renderStorageSection(sizes);
+        expect(html).toContain('🌍 World State');
+        expect(html).toContain('📅 Calendar');
+        expect(html).toContain('🌦️ Ambient Conditions');
+        expect(html).toContain(`<code>${STORE_SCHEMAS.worldState.metadataKey}</code>`);
+        expect(html).toMatch(/data-meta-store="storyPlanner">(?:(?!<\/tr>)[\s\S])*absent/);
+        expect(html).toMatch(/data-meta-store="chronicle">(?:(?!<\/tr>)[\s\S])*unreadable/);
+        expect(html).toContain('data-meta-store="otherMwt"');
+        expect(html).toContain('Some sizes degraded');
+    });
+
+    test('the chat-file note always renders, and unavailable halves explain themselves', () => {
+        const html = renderStorageSection(collectStorageSizes({ getLocalStorage: () => undefined, getChatMetadata: () => null }));
+        expect(html).toContain('saved in the chat file on the server, not in browser storage');
+        expect(html).toContain("doesn't count toward the browser limit");
+        expect(html).toContain('Browser storage could not be read here');
+        expect(html).toContain('No chat is open');
+        // A missing storage field (an older snapshot shape) still renders.
+        expect(() => renderStorageSection(undefined)).not.toThrow();
+    });
+
+    test('renderScopeSnapshot mounts the storage section', () => {
+        const snap = collectScopeSnapshot(deps({
+            storageApi: { collect: () => collectStorageSizes({ getLocalStorage: () => undefined, getChatMetadata: () => ({}) }) },
+        }));
+        const html = renderScopeSnapshot(snap, { formatTime: T });
+        expect(html).toContain('data-diag-storage="1"');
+        expect(html).toContain('Chat metadata — MWT stores in this chat');
     });
 });

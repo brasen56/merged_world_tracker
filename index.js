@@ -1969,8 +1969,10 @@ window.MWT.diagnostics = {
     // the 🗂️ Scope & storage sub-tab renders — resolved identity + epoch,
     // which lorebooks this chat resolves to and WHY (re-derived read-only:
     // calling this never saves a binding), per-book hydration + store
-    // version, saved bindings, and every scope_fallback_global warn Phase 3
-    // recorded this session. Synchronous; read-only; resolves live per call.
+    // version, saved bindings, every scope_fallback_global warn Phase 3
+    // recorded this session, and the storage meter (localStorage by key
+    // family + this chat's MWT metadata sizes). Synchronous; read-only;
+    // resolves live per call.
     // MWT.scope.diagnose() remains the deeper dump (raw context fields); this
     // is the pasteable one-table answer.
     scope: () => {
@@ -2025,6 +2027,20 @@ window.MWT.diagnostics = {
                 profiles: row.profiles,
             })));
             console.log('[MWT] "key" is the stable identity (avatar filename), which is why renaming a card keeps its books.');
+        }
+        // Storage meter — sizes by key family only, never a key name or value.
+        const local = snap.storage?.local;
+        if (local?.available) {
+            if (local.warning) console.warn(`[MWT] ⚠ [storage-near-full] ${local.warning}`);
+            console.log(`[MWT] Browser storage: ${local.totalChars.toLocaleString()} of ≈${local.approxQuotaChars.toLocaleString()} characters used (approximate limit); MWT's share ${local.mwtChars.toLocaleString()}.`);
+            console.table(local.families.map((f) => ({ family: f.label, keys: f.keys, chars: f.chars })));
+        } else if (local) {
+            console.log(`[MWT] Browser storage: ${local.note}`);
+        }
+        const chatMeta = snap.storage?.chatMetadata;
+        if (chatMeta?.available) {
+            console.table(chatMeta.rows.map((row) => ({ store: row.id, key: row.key, chars: row.present ? row.chars : 'absent' })));
+            console.log('[MWT] Chat metadata is saved in the chat file on the server, not in browser storage, so it does not count toward the browser limit.');
         }
         console.log(
             '[MWT] Scope & storage snapshot for MWT v' + snap.mwtVersion + ' — read-only, re-derived live; nothing was ' +

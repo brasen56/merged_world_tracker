@@ -54,7 +54,7 @@ tab.
 |---|---|
 | ❤️ **Health** | "Is anything broken right now?" One row per module: is it on, may it inject, when did it last run, and did that run succeed? |
 | 🌐 **Environment** | "Which SillyTavern am I on, and does it have everything MWT needs?" Matters most on customized ("fork") builds. |
-| 🗂️ **Scope & storage** | "Which lorebooks is this chat using, and why?" The go-to for "my data is weird across chats". |
+| 🗂️ **Scope & storage** | "Which lorebooks is this chat using, and why?" The go-to for "my data is weird across chats". Also: "How full is browser storage, and how much of it is MWT's?" |
 | 💉 **Injection** | "What is MWT putting in the narrator's prompt, where, and why?" |
 | 📡 **Last request** | "What did the last AI call look like?" Duration, retries, status, token usage — never the prompt text itself. |
 | 📋 **Log** | "What has MWT been doing this session?" A timeline, newest first. |
@@ -99,6 +99,7 @@ private report to the developer, paste as-is.
 | "Token counts look wrong" | 🌐 Environment + ❤️ Health | Environment shows whether a real tokenizer answered; Health shows each module's estimated token load. |
 | "I'm on a fork / custom SillyTavern build" | 🌐 Environment | States the compatibility verdict — include it in every report from that build. |
 | "Knowledge won't create entries / writes fail" | 🗂️ Scope & storage, 🌐 Environment | Scope flags an unloaded store (its one red finding); Environment shows SillyTavern's world-info module state. |
+| "Restore history lost older versions" or "MWT says browser storage is full" | 🗂️ Scope & storage | The storage meter shows how full browser storage is (against an approximate ~5,000,000-character limit) and which MWT key family holds it — usually Knowledge Restore history, which trims its oldest versions when storage fills. |
 
 **Overwhelmed? Just press 📋 Copy Report and paste it.** The report contains
 all of these sections anyway.

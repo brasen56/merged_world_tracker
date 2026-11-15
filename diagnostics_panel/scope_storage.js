@@ -10,6 +10,11 @@
  * scope silently fell back to the global books (fueled by Phase 3's site-4
  * `scope_fallback_global` counter in the event ring).
  *
+ * The storage half (collectStorageSizes, below) is a size meter: how full the
+ * browser's localStorage is and how much of it is MWT's, grouped by key
+ * family, plus the serialized size of each MWT store in this chat's metadata.
+ * Sizes and family names only — never a stored value or a raw key name.
+ *
  * ── Why resolution is RE-DERIVED, not resolved ───────────────────────────────
  * `knowledge/scope.js resolveBookNames()` is the authoritative resolver, but it
  * is also a WRITER: on first sight of an identity it saves a binding via
@@ -50,10 +55,18 @@ import {
 } from '../knowledge/scope.js';
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, PROFILE_LOREBOOK_NAME,
+    HISTORY_KEY_PREFIX,
     state as knowledgeState,
 } from '../knowledge/state.js';
 import { getSettings } from '../knowledge/settings.js';
 import { peekStore, STORE_VERSION } from '../knowledge/store.js';
+// Storage meter: the chat-metadata rows enumerate the schema registry (the
+// "one list" rule, schema/registry.js header) plus the MWT keys that live
+// outside it. Leaf imports only — none of these pull a module's store graph.
+import { CHAT_METADATA_SCHEMA_IDS, STORE_SCHEMAS } from '../schema/registry.js';
+import { MANIFEST_METADATA_KEY } from '../schema/manifest.js';
+import { QUARANTINE_METADATA_KEY } from '../core/quarantine.js';
+import { BUDGET_METADATA_KEY } from '../core/budget.js';
 
 // Re-exported from the one-owner home (knowledge/scope.js): the two-book
 // read-only resolver and the explainer it builds on live beside
@@ -257,6 +270,318 @@ export function classifyBookActivation(name, active, { injectable = true } = {})
     };
 }
 
+// ─── Storage meter (read-only) ────────────────────────────────────────────────
+//
+// Two sizes the tab used to leave to a console snippet: how full the browser's
+// localStorage is (and how much of it is MWT's), and how big each MWT store in
+// this chat's metadata is. Knowledge's Restore history once filled localStorage
+// to the last character and new snapshots were dropped without a sound; the
+// self-trimming exists now (knowledge/lorebook.js storeByTrimmingHistories),
+// what was missing is a place to SEE the level.
+//
+// Sizes only, never values or individual key names: a history key embeds a
+// lorebook name (a character name under per-character scope), so keys are
+// counted into families and only the family label and totals leave this
+// module — the Copy Report serializes exactly this.
+
+/**
+ * Approximate localStorage quota in characters. Browsers count the UTF-16
+ * length of every key plus its value against a per-site limit near five
+ * million characters (Chromium and Firefox ≈ 5.24M, jsdom exactly 5.00M).
+ * There is no API that reports the real number, so the meter labels this an
+ * estimate everywhere it appears.
+ */
+export const APPROX_LOCAL_STORAGE_QUOTA_CHARS = 5_000_000;
+
+/** Fraction of the approximate quota at which the meter turns amber. */
+export const LOCAL_STORAGE_WARN_RATIO = 0.9;
+
+/** core/ui.js FLOAT_POSITIONS_KEY (module-private there; core/ui.js is a DOM
+ * module this collector must not import). */
+const FLOAT_POSITIONS_KEY = 'mwt_float_positions';
+
+/** The global settings key (core/settings.js GLOBAL_SETTINGS_KEY). */
+const GLOBAL_SETTINGS_KEY = 'merged_world_tracker';
+
+/**
+ * Settings keys of the three extensions MWT merged. createSettingsManager()
+ * reads each once as `legacyKey` (chronicle/data.js, knowledge/settings.js,
+ * world_state/settings.js) and migrates it, but never removes it — so they can
+ * sit in storage indefinitely. A closed, historical set: no new legacy key can
+ * appear.
+ */
+const LEGACY_SETTINGS_KEYS = Object.freeze([
+    'session_chronicle_settings',
+    'knowledge_tracker_settings',
+    'world_state_settings',
+]);
+
+/**
+ * MWT's localStorage key families, matched first-to-last (float positions
+ * before the `mwt_` settings prefix). Every MWT localStorage writer lands in
+ * one of these:
+ *   - knowledge/lorebook.js pushHistory() and knowledge/staging.js's import
+ *     both write `kt_history_<lorebook>_<uid>` keys;
+ *   - core/settings.js createSettingsManager() writes `merged_world_tracker`
+ *     and the per-module `mwt_<module>` keys ONLY when SillyTavern's
+ *     extension_settings is unavailable (normally these are absent);
+ *   - core/ui.js writes `mwt_float_positions`.
+ * The settings rule is a prefix, like report.js collectKnownSecrets(), so a
+ * module added later is counted without touching this list.
+ */
+export const LOCAL_STORAGE_FAMILIES = Object.freeze([
+    {
+        id: 'knowledgeHistory',
+        label: '🧠 Knowledge Restore history',
+        match: (key) => key.startsWith(HISTORY_KEY_PREFIX),
+    },
+    {
+        id: 'floatPositions',
+        label: '📍 Floating button positions',
+        match: (key) => key === FLOAT_POSITIONS_KEY,
+    },
+    {
+        id: 'settings',
+        label: '⚙️ Settings (fallback copy)',
+        match: (key) => key === GLOBAL_SETTINGS_KEY || key.startsWith('mwt_'),
+    },
+    {
+        id: 'legacySettings',
+        label: '🗄️ Old pre-merge settings',
+        match: (key) => LEGACY_SETTINGS_KEYS.includes(key),
+    },
+]);
+
+/** The non-MWT bucket's id (SillyTavern itself and every other extension). */
+export const OTHER_STORAGE_FAMILY_ID = 'other';
+
+/**
+ * MWT chat-metadata keys that are not registry stores. Calendar and Ambient
+ * are chat-local records with no schema descriptor; the manifest, quarantine
+ * container and context-budget record are MWT bookkeeping. Any further
+ * `mwt_`-prefixed key is summed into one "other MWT keys" row, so a key added
+ * later is still counted.
+ */
+const EXTRA_CHAT_METADATA_KEYS = Object.freeze([
+    { id: 'calendar', key: 'mwt_calendar' },
+    { id: 'ambient', key: 'mwt_ambient' },
+    { id: 'contextBudget', key: BUDGET_METADATA_KEY },
+    { id: 'schemaManifest', key: MANIFEST_METADATA_KEY },
+    { id: 'quarantine', key: QUARANTINE_METADATA_KEY },
+]);
+
+/**
+ * Every named MWT chat-metadata row, in display order: the registry's
+ * chat-metadata stores first, then the unregistered keys above.
+ *
+ * @returns {Array<{id: string, key: string, registered: boolean}>}
+ */
+export function chatMetadataSizeSpecs() {
+    return [
+        ...CHAT_METADATA_SCHEMA_IDS.map((id) => ({ id, key: STORE_SCHEMAS[id].metadataKey, registered: true })),
+        ...EXTRA_CHAT_METADATA_KEYS.map((spec) => ({ ...spec, registered: false })),
+    ];
+}
+
+/** @private Default localStorage accessor; the property itself can throw (a
+ * browser blocking site data raises SecurityError on access). */
+function defaultLocalStorage() {
+    return globalThis.localStorage;
+}
+
+/** @private Default chat-metadata accessor. Reads the context field directly:
+ * core/context.js getChatMeta() creates `chatMetadata` when it is missing,
+ * and this collector must not write even in memory. */
+function defaultChatMetadata() {
+    return getContextSafe()?.chatMetadata;
+}
+
+/**
+ * Measure localStorage and this chat's metadata (DOM-free, read-only).
+ *
+ * localStorage is walked with `length` / `key(i)` / `getItem()` only, and each
+ * call is individually guarded: a key that cannot be read is counted as
+ * unreadable (the totals then become a known minimum) without dropping the
+ * rest. Each chat-metadata value is serialized under its own guard, so one
+ * unserializable value degrades only its own row.
+ *
+ * Sizes are characters (UTF-16 code units), the unit browsers enforce the
+ * localStorage quota in. Chat-metadata sizes are each value's JSON length.
+ *
+ * @param {object} [deps]
+ * @param {function(): (Storage|undefined)} [deps.getLocalStorage]
+ * @param {function(): (object|undefined)} [deps.getChatMetadata]
+ * @param {number} [deps.approxQuotaChars]
+ * @returns {{local: object, chatMetadata: object, errors?: string[]}}
+ */
+export function collectStorageSizes({
+    getLocalStorage = defaultLocalStorage,
+    getChatMetadata = defaultChatMetadata,
+    approxQuotaChars = APPROX_LOCAL_STORAGE_QUOTA_CHARS,
+} = {}) {
+    const errors = [];
+    const errText = (err) => String(err?.message || err);
+    return {
+        local: measureLocalStorage(getLocalStorage, approxQuotaChars, errors, errText),
+        chatMetadata: measureChatMetadata(getChatMetadata, errors, errText),
+        ...(errors.length ? { errors } : {}),
+    };
+}
+
+/** @private */
+function measureLocalStorage(getLocalStorage, approxQuotaChars, errors, errText) {
+    const families = [
+        ...LOCAL_STORAGE_FAMILIES.map((f) => ({ id: f.id, label: f.label, mwt: true, keys: 0, chars: 0 })),
+        { id: OTHER_STORAGE_FAMILY_ID, label: 'Other (SillyTavern and other extensions)', mwt: false, keys: 0, chars: 0 },
+    ];
+    const out = {
+        available: false,
+        note: '',
+        totalChars: null,
+        keyCount: null,
+        mwtChars: null,
+        unreadableKeys: 0,
+        approxQuotaChars,
+        percentOfQuota: null,
+        level: 'ok',
+        warning: null,
+        families,
+    };
+
+    let storage = null;
+    try {
+        storage = getLocalStorage();
+    } catch (err) {
+        errors.push(`localStorage: ${errText(err)}`);
+    }
+    if (!storage || typeof storage.getItem !== 'function' || typeof storage.key !== 'function') {
+        out.note = 'Browser storage could not be read here — the browser is blocking it for this site, or this environment has none.';
+        return out;
+    }
+
+    let length = 0;
+    try {
+        length = Number(storage.length) || 0;
+    } catch (err) {
+        errors.push(`localStorage.length: ${errText(err)}`);
+        out.note = 'Browser storage refused to report how many keys it holds.';
+        return out;
+    }
+
+    const familyFor = (key) => {
+        const index = LOCAL_STORAGE_FAMILIES.findIndex((f) => f.match(key));
+        return families[index === -1 ? families.length - 1 : index];
+    };
+    let total = 0;
+    let readable = 0;
+    for (let i = 0; i < length; i++) {
+        let key;
+        let value;
+        try {
+            key = storage.key(i);
+            if (typeof key !== 'string') throw new Error('no key at this index');
+            value = storage.getItem(key);
+        } catch {
+            out.unreadableKeys++;
+            continue;
+        }
+        const size = key.length + (typeof value === 'string' ? value.length : 0);
+        const family = familyFor(key);
+        family.keys++;
+        family.chars += size;
+        total += size;
+        readable++;
+    }
+    if (out.unreadableKeys > 0) {
+        errors.push(`localStorage: ${out.unreadableKeys} key(s) could not be read — totals are a minimum`);
+    }
+
+    out.available = true;
+    out.totalChars = total;
+    out.keyCount = readable;
+    out.mwtChars = families.filter((f) => f.mwt).reduce((sum, f) => sum + f.chars, 0);
+    out.percentOfQuota = approxQuotaChars > 0
+        ? Math.round((total / approxQuotaChars) * 1000) / 10
+        : null;
+    if (approxQuotaChars > 0 && total >= approxQuotaChars * LOCAL_STORAGE_WARN_RATIO) {
+        out.level = 'warn';
+        out.warning = `Browser storage for this site is about ${Math.round((total / approxQuotaChars) * 100)}% of the approximate limit. When it fills, Knowledge removes the oldest Restore versions to make room (lorebook entries are not touched), and SillyTavern or other extensions may fail to save their own browser data.`;
+    }
+    return out;
+}
+
+/** @private */
+function measureChatMetadata(getChatMetadata, errors, errText) {
+    const specs = chatMetadataSizeSpecs();
+    const rows = specs.map((spec) => ({ ...spec, present: false, chars: 0 }));
+    const otherMwt = { id: 'otherMwt', keys: 0, chars: 0 };
+    const other = { id: OTHER_STORAGE_FAMILY_ID, keys: 0, chars: 0 };
+    const out = {
+        available: false,
+        note: '',
+        rows,
+        otherMwt,
+        other,
+        mwtChars: null,
+        totalChars: null,
+    };
+
+    let meta;
+    try {
+        meta = getChatMetadata();
+    } catch (err) {
+        errors.push(`chatMetadata: ${errText(err)}`);
+    }
+    if (!meta || typeof meta !== 'object') {
+        out.note = 'No chat is open, so there is no chat metadata to measure.';
+        return out;
+    }
+
+    let keys = [];
+    try {
+        keys = Object.keys(meta);
+    } catch (err) {
+        errors.push(`chatMetadata keys: ${errText(err)}`);
+        out.note = 'This chat\'s metadata could not be listed.';
+        return out;
+    }
+
+    const rowByKey = new Map(rows.map((row) => [row.key, row]));
+    for (const key of keys) {
+        const row = rowByKey.get(key);
+        let size;
+        try {
+            const value = meta[key];
+            if (value === undefined) continue;
+            // JSON.stringify returns undefined for functions/symbols — those
+            // never reach the chat file, so they measure 0.
+            size = JSON.stringify(value)?.length ?? 0;
+        } catch (err) {
+            if (row) {
+                row.present = true;
+                row.chars = null;
+                errors.push(`chatMetadata[${key}]: ${errText(err)}`);
+            } else {
+                errors.push(`chatMetadata: a ${key.startsWith('mwt_') ? 'MWT' : 'non-MWT'} key could not be serialized`);
+            }
+            continue;
+        }
+        if (row) {
+            row.present = true;
+            row.chars = size;
+        } else {
+            const bucket = key.startsWith('mwt_') ? otherMwt : other;
+            bucket.keys++;
+            bucket.chars += size;
+        }
+    }
+
+    out.available = true;
+    out.mwtChars = rows.reduce((sum, row) => sum + (row.chars ?? 0), 0) + otherMwt.chars;
+    out.totalChars = out.mwtChars + other.chars;
+    return out;
+}
+
 // ─── Snapshot collector ───────────────────────────────────────────────────────
 
 /**
@@ -272,6 +597,7 @@ export function classifyBookActivation(name, active, { injectable = true } = {})
  * @param {string} [deps.version]
  * @param {number} [deps.currentStoreVersion]
  * @param {function(): number} [deps.now]
+ * @param {object} [deps.storageApi] — { collect } → collectStorageSizes()
  * @returns {{generatedAt: number, mwtVersion: string, epoch: number,
  *   scopeSetting: {value: string, valid: boolean}, character: object|null,
  *   chat: object|null, resolution: object, books: Array<object>,
@@ -280,6 +606,7 @@ export function classifyBookActivation(name, active, { injectable = true } = {})
  *   bindings: {count: number, rows: Array<object>},
  *   fallbackEvents: {count: number, last: object|null},
  *   bannerLevel: 'ok'|'warn'|'fail', warnings: Array<object>,
+ *   storage: {local: object, chatMetadata: object, errors?: string[]},
  *   errors?: string[]}}
  */
 export function collectScopeSnapshot({
@@ -292,6 +619,7 @@ export function collectScopeSnapshot({
     version = MWT_VERSION,
     currentStoreVersion = STORE_VERSION,
     now = Date.now,
+    storageApi = { collect: collectStorageSizes },
 } = {}) {
     const errors = [];
     // Per-field guard (health.js pattern): one throwing accessor degrades its
@@ -517,6 +845,26 @@ export function collectScopeSnapshot({
         ? 'fail'
         : (warnings.length > 0 ? 'warn' : 'ok');
 
+    // Storage meter — sizes only. Its level and degraded fields stay inside
+    // `storage` (rendered in its own section) rather than joining the
+    // lorebook-resolution banner above, which answers a different question.
+    // collectStorageSizes() guards each of its own reads; this outer guard is
+    // only for an injected collector that throws outright.
+    const storage = call('storage', () => storageApi.collect?.() ?? null, null) ?? {
+        local: {
+            available: false, note: '(storage probe failed — see errors)',
+            totalChars: null, keyCount: null, mwtChars: null, unreadableKeys: 0,
+            approxQuotaChars: APPROX_LOCAL_STORAGE_QUOTA_CHARS, percentOfQuota: null,
+            level: 'ok', warning: null, families: [],
+        },
+        chatMetadata: {
+            available: false, note: '(storage probe failed — see errors)',
+            rows: [], otherMwt: { id: 'otherMwt', keys: 0, chars: 0 },
+            other: { id: OTHER_STORAGE_FAMILY_ID, keys: 0, chars: 0 },
+            mwtChars: null, totalChars: null,
+        },
+    };
+
     return {
         generatedAt: now(),
         mwtVersion: version,
@@ -542,6 +890,7 @@ export function collectScopeSnapshot({
         fallbackEvents,
         bannerLevel,
         warnings,
+        storage,
         ...(errors.length ? { errors } : {}),
     };
 }
