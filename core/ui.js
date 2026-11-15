@@ -511,6 +511,7 @@ const FLOAT_BUTTONS = [
     { id: 'mwt-float-knowledge',     label: '🧠', title: 'Knowledge',     tab: 'knowledge',     visibilityKey: 'showFloatKnowledge',     enableKey: 'enableKnowledge' },
     { id: 'mwt-float-story-planner', label: '🗺️', title: 'Story Planner', tab: 'story-planner', visibilityKey: 'showFloatStoryPlanner', enableKey: 'enableStoryPlanner' },
     { id: 'mwt-float-interiority',   label: '💭', title: 'Interiority',   tab: 'interiority',   visibilityKey: 'showFloatInteriority',   enableKey: 'enableInteriority' },
+    { id: 'mwt-float-ledger',        label: '💰', title: 'Ledger',        tab: 'ledger',        visibilityKey: 'showFloatLedger',        enableKey: 'enableLedger' },
     { id: 'mwt-float-settings',      label: '⚙️', title: 'All Settings',  tab: 'settings',      visibilityKey: 'showFloatSettings',      masterKey: 'injectionMasterOff' },
 ];
 
@@ -679,6 +680,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     'mwt-float-knowledge': '🧠 Knowledge Tracker',
                     'mwt-float-story-planner': '🗺️ Story Planner',
                     'mwt-float-interiority': '💭 Interiority',
+                    'mwt-float-ledger': '💰 Ledger',
                     'mwt-float-settings': '⚙️ Settings',
                 };
                 if (iconEl && classicLabels[cfg.id]) {
@@ -692,6 +694,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                     'mwt-float-knowledge': '🧠',
                     'mwt-float-story-planner': '🗺️',
                     'mwt-float-interiority': '💭',
+                    'mwt-float-ledger': '💰',
                     'mwt-float-settings': '⚙️',
                 };
                 if (iconEl && modernLabels[cfg.id]) {
@@ -699,6 +702,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 }
             }
         }
+        updateFloatTokenCounts();
     }
 
     function setupButtonBar() {
@@ -957,6 +961,20 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
     /** Called every 5 s to refresh token counts and auto-refresh countdowns. */
     function updateFloatTokenCounts() {
         try {
+            const ledgerButton = document.getElementById('mwt-float-ledger');
+            if (ledgerButton) {
+                let status;
+                try { status = Ledger?.getStatus?.(); } catch { status = { state: 'Ledger unavailable; open Diagnostics', badge: '', totals: [], carried: 0 }; }
+                const badge = ledgerButton.querySelector('.mwt-float-btn-countdown');
+                badge.textContent = status?.badge ?? '';
+                badge.style.display = status?.badge && getSettings().buttonStyle !== 'classic' ? 'block' : 'none';
+                const label = getSettings().buttonStyle === 'classic'
+                    ? `💰 ${status?.badge ? `${status.badge} ${status.currency}` : 'Ledger'}` : '💰';
+                ledgerButton.querySelector('.mwt-float-btn-icon').textContent = label;
+                const title = status ? ['Ledger', ...status.totals, `${status.carried} carried items`, status.state].join(' · ') : 'Ledger';
+                ledgerButton.title = title;
+                ledgerButton.setAttribute('aria-label', title);
+            }
             const mods = [
                 { id: 'mwt-float-world', getTokens: WorldState.getTotalTokens },
                 { id: 'mwt-float-chronicle', getTokens: Chronicle.getTotalTokens },

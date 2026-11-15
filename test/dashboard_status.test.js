@@ -19,6 +19,7 @@ const EXPECTED_KEYS = [
     'quarantine',
     'ambient',
     'calendar',
+    'ledger',
     'weekdayDrift',
 ];
 
@@ -37,6 +38,7 @@ function stubDeps(overrides = {}) {
         collectQuarantineStatus: vi.fn(() => ({ total: 1, stores: [] })),
         getAmbientStatus: vi.fn(() => ({ state: 'off' })),
         getCalendarStatus: vi.fn(() => ({ state: 'not configured', body: '' })),
+        getLedgerStatus: vi.fn(() => ({ balance: '500', currency: 'gold', carried: 2 })),
         getWeekdayDriftStatus: vi.fn(() => null),
         ...overrides,
     };
@@ -67,6 +69,7 @@ describe('collectOverviewSnapshot', () => {
             quarantine: { ok: true, value: { total: 1, stores: [] } },
             ambient: { ok: true, value: { state: 'off' } },
             calendar: { ok: true, value: { state: 'not configured', body: '' } },
+            ledger: { ok: true, value: { balance: '500', currency: 'gold', carried: 2 } },
             weekdayDrift: { ok: true, value: null },
         });
 

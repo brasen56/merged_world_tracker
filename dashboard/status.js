@@ -24,6 +24,7 @@ import { collectQuarantineStatus as readQuarantineStatus } from '../backup/recov
 import { getAmbientStatus as readAmbientStatus } from '../core/ambient_state.js';
 import { getCalendarStatus as readCalendarStatus } from '../core/calendar_state.js';
 import { getWeekdayDriftStatus as readWeekdayDriftStatus } from '../core/weekday_drift.js';
+import { getStatus as readLedgerStatus } from '../ledger/status.js';
 
 /** Convert any thrown value into the JSON-safe error text used by a cell. */
 function errorMessage(error) {
@@ -74,6 +75,7 @@ export function collectOverviewSnapshot({
     getAmbientStatus = readAmbientStatus,
     getCalendarStatus = readCalendarStatus,
     getWeekdayDriftStatus = readWeekdayDriftStatus,
+    getLedgerStatus = readLedgerStatus,
 } = {}) {
     return {
         worldState: collectCell(() => getDocumentStatus()),
@@ -91,6 +93,7 @@ export function collectOverviewSnapshot({
         quarantine: collectCell(() => collectQuarantineStatus()),
         ambient: collectCell(() => getAmbientStatus()),
         calendar: collectCell(() => getCalendarStatus()),
+        ledger: collectCell(() => getLedgerStatus()),
         weekdayDrift: collectCell(() => getWeekdayDriftStatus()),
     };
 }

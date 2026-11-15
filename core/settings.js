@@ -353,6 +353,7 @@ export const GLOBAL_SETTINGS_DEFAULTS = Object.freeze({
     showFloatKnowledge: true,
     showFloatStoryPlanner: true,
     showFloatInteriority: true,
+    showFloatLedger: true,
     showFloatSettings: true,
     collapseFloatButtons: false,
     buttonStyle: 'modern', // 'modern' | 'classic'

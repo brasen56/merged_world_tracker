@@ -11,6 +11,7 @@
 import { getContextSafe } from './core/context.js';
 import * as Ambient from './ambient/index.js';
 import * as Ledger from './ledger/index.js';
+import { renderLedger, wireLedger } from './ledger/render.js';
 import * as Calendar from './calendar/index.js';
 import { renderCalendarPanel } from './calendar/render.js';
 import { wireCalendarPanel } from './calendar/panel.js';
@@ -227,6 +228,7 @@ const { getSettings, saveSettings } = createSettingsManager({
 const TABS = [
     { id: 'overview', label: '🏠 Overview', module: null },
     { id: 'calendar', label: '📅 Calendar', module: null },
+    { id: 'ledger', label: '💰 Ledger', module: null },
     { id: 'world-state', label: '🌍 World State', module: WorldState },
     { id: 'chronicle', label: '📜 Chronicle', module: Chronicle },
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
@@ -433,6 +435,11 @@ function renderSettingsTab() {
 
         </details>
 
+        <div class="mwt-ledger-global-settings">
+            <label for="mwt-s-show-ledger"><input type="checkbox" id="mwt-s-show-ledger"> Show Ledger button</label>
+            <label for="mwt-s-enable-ledger"><input type="checkbox" id="mwt-s-enable-ledger"> Enable Ledger</label>
+            <label for="mwt-s-inject-ledger"><input type="checkbox" id="mwt-s-inject-ledger"> Inject money and carried items</label>
+        </div>
         <div class="mwt-settings-actions mwt-flex mwt-gap-4" style="flex-wrap:wrap">
             <button id="mwt-s-save" class="mwt-btn mwt-btn-primary">Save Settings</button>
             <button id="mwt-s-sync" class="mwt-btn" title="Copy these API settings to all module-specific configs"><span aria-hidden="true">↓</span> Sync to Modules</button>
@@ -449,6 +456,7 @@ function renderSettingsTab() {
 }
 
 function buildTabContent(tab) {
+    if (tab.id === 'ledger') return renderPausedStoresBanner('ledger') + renderLedger();
     if (tab.id === 'calendar') return renderCalendarPanel();
     if (tab.id === 'overview') return renderOverviewPane();
     if (tab.id === 'settings') return renderSettingsTab();
@@ -506,6 +514,9 @@ function renderModal() {
     // render; see wireMainTabBar() for why repeated renders can neither drop
     // the handlers nor stack duplicates.
     wireMainTabBar(modal);
+    for (const [id, key] of [['show-ledger', 'showFloatLedger'], ['enable-ledger', 'enableLedger'], ['inject-ledger', 'injectLedger']]) {
+        modal.querySelector(`#mwt-s-${id}`).checked = getSettings()[key] !== false;
+    }
 
     // Init feature modules with modal reference and wire their events
     for (const tab of TABS) {
@@ -523,6 +534,17 @@ function renderModal() {
     wireBackupEvents(modal);
     wireAmbientSettings(modal);
     wireCalendarPanel(modal);
+    wireLedger(modal, { getSettings, saveSettings, onChanged: () => {
+        Ledger.refreshInjection('ledger-ui');
+        ui.applyButtonVisibility();
+        ui.updateFloatTokenCounts();
+        // Keep the global Settings form in sync with the immediately saved strip.
+        const settings = getSettings();
+        for (const [id, key] of [['show-ledger', 'showFloatLedger'], ['enable-ledger', 'enableLedger'], ['inject-ledger', 'injectLedger']]) {
+            const control = modal.querySelector(`#mwt-s-${id}`);
+            if (control) control.checked = settings[key] !== false;
+        }
+    } });
 
     // Part 5 (§5.4): wire the paused-store banner's actions — the module's
     // OWN tab owns Retry and the recovery export (never the read-only
@@ -639,6 +661,9 @@ function renderModal() {
                 enableKnowledge: modal.querySelector('#mwt-s-enable-knowledge')?.checked ?? true,
                 enableStoryPlanner: modal.querySelector('#mwt-s-enable-story-planner')?.checked ?? true,
                 enableInteriority: modal.querySelector('#mwt-s-enable-interiority')?.checked ?? true,
+                enableLedger: modal.querySelector('#mwt-s-enable-ledger')?.checked ?? true,
+                injectLedger: modal.querySelector('#mwt-s-inject-ledger')?.checked ?? true,
+                showFloatLedger: modal.querySelector('#mwt-s-show-ledger')?.checked ?? true,
                 interiorityDepth: depthOr('#mwt-s-int-depth', 1),
                 interiorityRole: modal.querySelector('#mwt-s-int-role')?.value || 'system',
                 injectionMasterOff: modal.querySelector('#mwt-s-master-off')?.checked ?? false,
@@ -651,6 +676,9 @@ function renderModal() {
             // that the previous one-way coupling created.
 
             saveSettings(patch);
+            modal.querySelectorAll('[data-ledger-setting]').forEach(control => {
+                control.checked = getSettings()[control.dataset.ledgerSetting] !== false;
+            });
             ui.applyButtonVisibility();
             ui.applyButtonStyle();
             ui.updateButtonStates();

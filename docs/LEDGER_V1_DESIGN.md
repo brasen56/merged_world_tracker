@@ -1,6 +1,6 @@
 # Ledger module design (v1)
 
-**Status:** Phases 1–2 implemented (pure core, store and plumbing). Phase 3 user surface and Phase 4 host QA remain.
+**Status:** Phases 1–3 implemented (pure core, store/plumbing and user surface). Phase 4 host QA remains. Optional slash commands are deferred.
 **Written:** 2026-11-14, from the co-author's "deterministic ledgers" proposal and Brasen's v1 scope call.
 **Naming:** working name **Ledger**, one module with two tabs: **Finances** and **Inventory**.
 
@@ -136,6 +136,8 @@ Implemented API: `ledger/store.js` exposes detached `getLedger()` reads and vali
 Phase 2 injection uses the existing global gates `enableLedger` and `injectLedger` (both default true), plus the panic switch; Phase 3 will provide their controls. It injects all exact currency totals, including zero/debt, and at most 15 carried item rows, with an explicit omitted-item count. Stored items, notes and transaction history are not injected. Startup, chat change, schema resume, settings save and Ledger edits refresh context without a generation interceptor.
 
 **Phase 3: user surface.** Ledger tab, floating button and badge, Overview row, settings. Optional slash commands.
+
+Implemented: Finances/Inventory sub-tabs, confirmed deletion (including zero quantity), currency management, exact value-preserving decimal changes, global enable/visibility/injection controls, both floating button styles and the read-only Overview link. Ledger inputs use MWT theme variables with scoped textbox rules. Invalid, paused and future stores are not edited; stale chat panels and externally changed records refuse saves. Optional slash commands remain deferred. Automated DOM coverage does not replace Phase 4 visual/host QA.
 
 **Phase 4: host QA in ST.** Desktop and mobile; a branch inherits the ledger; backup and restore round trip; badge in both button styles; injection visible in the prompt and in the budget panel.
 

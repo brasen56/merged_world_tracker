@@ -8,6 +8,8 @@ import { ledgerSchema } from './schema.js';
 import { applyLedgerInjection, clearLedgerInjection } from './injection.js';
 import { validateLedgerRecord } from './data.js';
 
+export { getStatus } from './status.js';
+
 export function refreshInjection(reason = 'refresh') {
     try {
         const meta = getChatMeta();
