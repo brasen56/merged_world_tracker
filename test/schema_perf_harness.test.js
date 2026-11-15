@@ -229,6 +229,64 @@ function referenceKnowledgeStore() {
     };
 }
 
+/**
+ * A full custom calendar at its authoring ceilings where they bite: 24 months,
+ * 14 weekdays, 40 events, and the 16-rule dated-phenomena cap. The validator
+ * (core/calendar_math.js validateCalendarRecord) walks all of it.
+ */
+function referenceCalendar() {
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWX';
+    const months = Array.from({ length: 24 }, (_, i) => ({ name: `Month ${letters[i]}`, days: 30 }));
+    const weekdays = Array.from({ length: 14 }, (_, i) => `Day ${letters[i]}`);
+    return {
+        version: 1,
+        structure: 'custom',
+        months,
+        weekdays,
+        era: 'Reference Era',
+        anchor: { year: 1247, month: 6, day: 18, weekday: 3 },
+        dateLine: true,
+        eventsLine: true,
+        events: Array.from({ length: 40 }, (_, i) => ({
+            id: `event-${pad(i)}`,
+            name: `Festival ${letters[i % 24]}`,
+            date: { year: 1247, month: (i % 24) + 1, day: (i % 28) + 1 },
+            durationDays: (i % 14) + 1,
+            repeat: i % 2 === 0 ? 'yearly' : 'none',
+        })),
+        phenomena: Array.from({ length: 16 }, (_, i) => ({
+            id: `dated-${pad(i)}`,
+            shape: 'dated',
+            name: `Reference omen ${i}`,
+            clause: `a reference omen ${i} hangs over the harbor`,
+            start: { year: 1247, month: (i % 24) + 1, day: 1 },
+            durationDays: 3,
+            repeat: 'yearly',
+            end: null,
+        })),
+    };
+}
+
+/** A configured Ambient record: every settings field the module writes. */
+function referenceAmbient() {
+    return {
+        enabled: true,
+        climate: 'temperate',
+        hemisphere: 'north',
+        manualSeason: 'spring',
+        variability: 0.5,
+        seed: 2654435761,
+        latitude: null,
+        clockAhead: 0,
+        moonEpochOffset: null,
+        coastal: true,
+        tideRange: 'normal',
+        setupAsked: true,
+        pin: null,
+        phenomena: [],
+    };
+}
+
 /** The full reference chat, as raw (pre-v1) chat metadata would hold it. */
 function buildReferenceFixture() {
     return {
@@ -238,6 +296,8 @@ function buildReferenceFixture() {
         knowledgeCounters: referenceKnowledgeCounters(),
         storyPlanner: referenceStoryPlanner(),
         interiority: referenceInteriority(),
+        calendar: referenceCalendar(),
+        ambient: referenceAmbient(),
         knowledgeStore: referenceKnowledgeStore(),
     };
 }

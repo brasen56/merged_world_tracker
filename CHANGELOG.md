@@ -12,7 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.17.3]
+
+### Fixed
+
+- **Backup — the custom calendar and Ambient Conditions are now backed up
+  and restored.** Both live in the chat's metadata (`mwt_calendar`,
+  `mwt_ambient`) but were never registered with the unified backup, so a
+  backup and restore silently lost a hand-authored calendar and reset the
+  Ambient seed, which changes the chat's weather history. They now ride
+  every backup as their own sections and restore as whole records: the
+  backup's record replaces the current one by default, and the restore
+  preview gains **📅 Calendar** and **🌦️ Ambient** options to keep the
+  current one instead. When the chat's identity can't be verified, an
+  existing record is kept, as World State is. Undo Last Restore puts both
+  back too.
+  - **Older backups still restore, and leave your current calendar and
+    Ambient settings alone.** A backup made before this fix has no such
+    sections, and that now means "not covered", not "remove": even an exact
+    (replace) restore keeps them and says so in the preview. Backups now
+    record which stores they cover, so an exact restore of a new backup
+    still removes a calendar the source chat didn't have.
+  - **Both stores join the schema checks** (registry, load gate,
+    🩺 Diagnostics integrity and Scope & storage). The first open after
+    updating stamps them at version 1 without changing them. The calendar is
+    checked by the same rules the Calendar tab saves with
+    (`validateCalendarRecord`); a calendar that fails them is kept as-is
+    and reported, never quarantined, matching how the Overview already shows
+    "invalid calendar". Ambient is checked only for an unreadable record and
+    a non-number seed (reported, not removed), since the module already
+    reads every field tolerantly.
+  (`calendar/schema.js`, `ambient/schema.js`, `schema/registry.js`,
+  `backup/data.js`, `backup/restore.js`, `backup/index.js`,
+  `backup/render.js`; tests in `test/backup_calendar_ambient.test.js` and
+  `test/schema_runtime_gate.test.js`.)
 
 ### Added
 

@@ -59,6 +59,8 @@ export const SECTION_LABELS = Object.freeze({
     knowledgeCounters: '🔢 Knowledge Counters',
     storyPlanner: '🗺️ Story Planner',
     interiority: '💭 Interiority',
+    calendar: '📅 Calendar',
+    ambient: '🌦️ Ambient Conditions',
     knowledgeStore: '📖 Registry & State Tracker',
 });
 
@@ -69,6 +71,8 @@ export const SECTION_ORDER = Object.freeze([
     'knowledgeCounters',
     'storyPlanner',
     'interiority',
+    'calendar',
+    'ambient',
     'knowledgeStore',
 ]);
 
@@ -161,6 +165,7 @@ export function formatSectionChangeBits(desc) {
     if (desc.kind === 'exact') {
         if (desc.action === 'removed') bits.push({ text: 'will be removed', tone: 'danger' });
         else if (desc.action === 'blocked') bits.push({ text: 'left unchanged (destination store refused)', tone: 'warning' });
+        else if (desc.action === 'kept') bits.push({ text: 'kept (this older backup does not include it)', tone: 'normal' });
         else if (desc.action === 'unchanged') bits.push({ text: 'unchanged', tone: 'normal' });
         else bits.push({ text: `${desc.added} replaced`, tone: 'normal' });
     } else {
@@ -217,18 +222,19 @@ export function describePreviewFailure(preview) {
 export function buildRestoreModes({
     worldState = '',
     knowledgeCounters = '',
+    calendar = '',
+    ambient = '',
     restoreSessionConfig = false,
 } = {}) {
     const modes = {};
     // An empty value means "let the planner apply its identity-policy default"
     // (e.g. world state defaults to 'keep' on unverified-identity builds). Only
     // an explicit Replace/Keep/Skip from the user overrides that.
-    if (worldState === 'replace' || worldState === 'keep' || worldState === 'skip') {
-        modes.worldState = worldState;
-    }
-    if (knowledgeCounters === 'replace' || knowledgeCounters === 'keep' || knowledgeCounters === 'skip') {
-        modes.knowledgeCounters = knowledgeCounters;
-    }
+    const explicit = value => value === 'replace' || value === 'keep' || value === 'skip';
+    if (explicit(worldState)) modes.worldState = worldState;
+    if (explicit(knowledgeCounters)) modes.knowledgeCounters = knowledgeCounters;
+    if (explicit(calendar)) modes.calendar = calendar;
+    if (explicit(ambient)) modes.ambient = ambient;
     if (restoreSessionConfig) modes.restoreSessionConfig = true;
     return modes;
 }
@@ -264,6 +270,8 @@ export function readRestoreControlValues(root) {
     return {
         worldState: val('#mwt-bk-ws-mode', ''),
         knowledgeCounters: val('#mwt-bk-counters-mode', ''),
+        calendar: val('#mwt-bk-calendar-mode', ''),
+        ambient: val('#mwt-bk-ambient-mode', ''),
         restoreSessionConfig: checked('#mwt-bk-session-config'),
         exact: checked('#mwt-bk-exact'),
     };
@@ -281,7 +289,8 @@ export function renderBackupPanel() {
         <h3 style="margin-bottom:8px">💾 Backup / Restore</h3>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Export a single versioned backup of <em>this chat's</em> MWT data (world state, chronicle, knowledge
-            evidence/counters/registry, story planner, interiority), or restore one. Restore always shows a dry-run
+            evidence/counters/registry, story planner, interiority, custom calendar, Ambient Conditions settings
+            and weather seed), or restore one. Restore always shows a dry-run
             preview first and auto-downloads a pre-restore backup before writing anything. Lorebook-resident text
             (NPC dossiers/profiles) is not included — use the Knowledge tab's export for those.
         </p>
@@ -385,6 +394,18 @@ function buildSummaryModalContent() {
             </select>
             <label class="mwt-label" for="mwt-bk-counters-mode" style="margin:0;text-align:left">🔢 Counters</label>
             <select id="mwt-bk-counters-mode" class="mwt-input" style="width:auto">
+                <option value="">Default (recommended)</option>
+                <option value="replace">Replace with backup</option>
+                <option value="keep">Keep current</option>
+            </select>
+            <label class="mwt-label" for="mwt-bk-calendar-mode" style="margin:0;text-align:left">📅 Calendar</label>
+            <select id="mwt-bk-calendar-mode" class="mwt-input" style="width:auto">
+                <option value="">Default (recommended)</option>
+                <option value="replace">Replace with backup</option>
+                <option value="keep">Keep current</option>
+            </select>
+            <label class="mwt-label" for="mwt-bk-ambient-mode" style="margin:0;text-align:left">🌦️ Ambient</label>
+            <select id="mwt-bk-ambient-mode" class="mwt-input" style="width:auto">
                 <option value="">Default (recommended)</option>
                 <option value="replace">Replace with backup</option>
                 <option value="keep">Keep current</option>
