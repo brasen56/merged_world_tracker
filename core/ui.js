@@ -602,13 +602,13 @@ function clampFloatPosition(left, top, width, height) {
  * @param {object} deps
  * @param {() => object} deps.getSettings   — returns current global settings
  * @param {(tabId: string|null) => void} deps.openModal — opens the MWT modal
- * @param {object} deps.modules — { WorldState, Chronicle, Knowledge }
+ * @param {object} deps.modules — { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ledger }
  * @returns {object} UI helpers: applyButtonVisibility, applyButtonStyle,
  *                   setupButtonBar, setupExtensionsDrawer, setupWandMenu,
  *                   updateFloatTokenCounts, updateButtonStates
  */
 export function createFloatingButtonBar({ getSettings, saveSettings, openModal, modules }) {
-    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ledger } = modules;
 
     /**
      * Apply per-button visibility from settings.
@@ -827,6 +827,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                         Chronicle.applyInjection?.();
                         StoryPlanner.applyPlanInjection?.();
                         Interiority.applyIntentionsInjection?.();
+                        Ledger?.refreshInjection?.('panic-floating-button');
                     } catch { /* modules may not be initialized yet */ }
                     updateButtonStates();
                     notify(
