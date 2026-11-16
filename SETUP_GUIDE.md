@@ -32,6 +32,11 @@ Not sure? Pick **Standard**. It shows you everything MWT can do with zero surpri
 
 Every level ends with the same per-chat step: switching **Chronicle injection** on. Chronicle entries only reach the AI when injection is on, it is **off by default**, and it is set separately in each chat.
 
+Shortcut: **⚙️ Settings → Modules & Configuration → Configure** opens each
+tracker's own settings, including disabled trackers, without enabling it or
+saving global changes. Ambient and Calendar links open their per-chat owners.
+Use each destination's own Save action for its detailed configuration.
+
 ### Lite (about 2 minutes)
 
 The core loop only: a rolling "what's true right now" document (World State) plus timestamped session summaries (Chronicle). Lighter prompts, minimal API usage.

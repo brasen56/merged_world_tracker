@@ -35,6 +35,7 @@ import {
 } from './snapshots.js';
 
 import { exportChronicle, exportMarkdown, triggerImport } from './import-export.js';
+import { focusSettingsTarget, hasSettingsDraft } from '../core/settings_targets.js';
 
 // ─── Sub-views ───────────────────────────────────────────────────────────────
 
@@ -297,9 +298,17 @@ function showInjectionSelector() {
     el.querySelector('#sc-cancel-injection')?.addEventListener('click', () => renderContent());
 }
 
-function showSettingsModal() {
+export function showSettingsModal() {
     const el = getContentEl();
     if (!el) return;
+    const existing = el.querySelector('#sc-save-settings');
+    if (existing) return focusSettingsTarget(el.querySelector('h3'));
+    // Background refresh also protects non-list views. Configure must not
+    // bypass a pending editor, consolidation, or regeneration decision.
+    if ((hasSettingsDraft(el) || (el.children.length && !el.querySelector('[data-sc-view="list"]')))
+        && !confirm('Leave the current Chronicle view? Unsaved edits or pending previews will be discarded.')) {
+        return focusSettingsTarget(el.querySelector('textarea, input, button') || el);
+    }
     const s = getSettings();
     const apiFieldOpts = {
         profileId: 'sc-connection-profile',
@@ -310,7 +319,7 @@ function showSettingsModal() {
         headersHintHtml: 'Custom Headers: JSON object of extra HTTP headers sent with each API request. Example: <code>{"X-Organization":"my-org"}</code>. Leave blank if unsure.',
     };
     el.innerHTML = `<div>
-        <h3>Chronicle Settings</h3>
+        <h3 tabindex="-1">Chronicle Settings</h3>
         <div class="mwt-settings-grid">
             ${renderApiSettingsFields(s, apiFieldOpts)}
         </div>
@@ -324,6 +333,7 @@ function showSettingsModal() {
         <div style="margin-top:8px"><label for="sc-window-chars">Max chat per entry: <input type="number" id="sc-window-chars" class="mwt-input" style="width:100px;display:inline-block" value="${getWindowChars(s)}" min="${WINDOW_CHARS_MIN}" max="${WINDOW_CHARS_DEFAULT}" step="1000"></label> <span style="font-size:11px;color:var(--mwt-text-dim)">characters (~4 per token; ${WINDOW_CHARS_DEFAULT} ≈ ${Math.round(WINDOW_CHARS_DEFAULT / 4000)}k tokens). Lower it if your model's context is small; the instructions, World State, and reply need room on top. Longer backlogs become several entries.</span></div>
         <div class="mwt-flex mwt-gap-4 mwt-mt-8"><button id="sc-save-settings" class="mwt-btn mwt-btn-primary">Save Settings</button><button id="sc-cancel-settings" class="mwt-btn">Cancel</button></div>
     </div>`;
+    focusSettingsTarget(el.querySelector('h3'));
     wireApiSettingsFields(el, apiFieldOpts);
     el.querySelector('#sc-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(el, apiFieldOpts);

@@ -190,26 +190,28 @@ export function renderGlobalSettingsForm(s, { selectedSection = 'connection', am
             </label>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Stops injection and scanning for every module. Useful for testing or branching a chat. **Lorebook entries need to be manually disabled**.</p>
 
-            <label class="mwt-label" for="mwt-s-enable-world"><span aria-hidden="true">🌍</span> World State</label>
-            <label for="mwt-s-enable-world" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-world" ${s.enableWorldState !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-chronicle"><span aria-hidden="true">📜</span> Chronicle</label>
-            <label for="mwt-s-enable-chronicle" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-chronicle" ${s.enableChronicle !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-knowledge"><span aria-hidden="true">🧠</span> Knowledge</label>
-            <label for="mwt-s-enable-knowledge" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-knowledge" ${s.enableKnowledge !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-story-planner"><span aria-hidden="true">🗺️</span> Story Planner</label>
-            <label for="mwt-s-enable-story-planner" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-story-planner" ${s.enableStoryPlanner !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-interiority"><span aria-hidden="true">💭</span> Interiority</label>
-            <label for="mwt-s-enable-interiority" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-interiority" ${s.enableInteriority !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-ledger"><span aria-hidden="true">💰</span> Ledger</label>
-            <label for="mwt-s-enable-ledger" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-ledger" ${s.enableLedger !== false ? 'checked' : ''}> Use this tracker</label>
+            ${[
+        ['world', 'world-state', 'World State', 'enableWorldState'],
+        ['chronicle', 'chronicle', 'Chronicle', 'enableChronicle'],
+        ['knowledge', 'knowledge', 'Knowledge', 'enableKnowledge'],
+        ['story-planner', 'story-planner', 'Story Planner', 'enableStoryPlanner'],
+        ['interiority', 'interiority', 'Interiority', 'enableInteriority'],
+        ['ledger', 'ledger', 'Ledger', 'enableLedger'],
+    ].map(([field, target, label, key]) => `
+            <label class="mwt-label" for="mwt-s-enable-${field}">${label}</label>
+            <div class="mwt-settings-module-controls">
+                <label for="mwt-s-enable-${field}"><input type="checkbox" id="mwt-s-enable-${field}" ${s[key] !== false ? 'checked' : ''}> Use this tracker</label>
+                <button type="button" class="mwt-btn" data-settings-configure="${target}" aria-label="Configure ${label}">Configure</button>
+            </div>`).join('')}
         </div>
 
-        <p>Detailed configuration remains in each module's own tab. Enable switches and floating-button visibility are independent.</p>`,
+        <p>Unchecked trackers stop injecting and scanning. Configure remains available while disabled and never enables a tracker. Enable switches and floating-button visibility are independent; save global changes separately.</p>
+        <p>Detailed forms keep their own Save actions. Chronicle and Knowledge open settings in place of their current view; pending edits require confirmation before replacement.</p>
+        <div class="mwt-settings-module-controls">
+            <button type="button" class="mwt-btn" data-settings-configure="ambient">Configure Ambient Conditions</button>
+            <button type="button" class="mwt-btn" data-settings-configure="calendar">Configure Calendar</button>
+        </div>
+        <p>Ambient and Calendar belong to this chat, not the global tracker switches.</p>`,
         ambient: `<p><strong>This chat — separate save.</strong> Use Ambient's own Save and immediate actions below. Global Save does not save these drafts.</p>${ambient}`,
         backup,
     };

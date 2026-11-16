@@ -50,7 +50,7 @@ pre-slice behavior; automated coverage lives in `test/settings_form.test.js`.
 
 ## Slice 2 — Workspace shell and responsive navigation
 
-Implemented 2026-11-16. Host QA pending; automated results do not prove these items.
+Implemented 2026-11-16. Host QA **Pass: tested 26411cd on chrome, ST v1.19.0 on 202/11/16**.
 
 1. Only the selected section is visible in the real host stylesheet stack:
    the `[hidden]` rule holds against both MWT and SillyTavern `display` rules.

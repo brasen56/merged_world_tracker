@@ -1,8 +1,9 @@
 # MWT Settings workspace — refreshed implementation plan
 
 **Project:** B (information architecture, separate from the accessibility pass).
-**Status:** Slices 1–2 implemented on 2026-11-16 (form seam and responsive
-workspace navigation). Slice 2 host QA is pending; module discoverability remains planned.
+**Status:** Slices 1–3 implemented on 2026-11-16 (form seam, responsive
+workspace navigation, and module discoverability). Slice 2 host QA is recorded
+in `SETTINGS_WORKSPACE_HOST_QA.md`; Slice 3 host QA remains pending.
 **Original plan:** 2026-09-08. **Code reconciliation:** 2026-11-16, against
 `ee1edc4` (package version 2.18.1).
 **Prerequisite:** Project A is implemented; the documentation map records full
@@ -10,7 +11,7 @@ manual QA and host confirmation on 2026-11-16. It is no longer an unmerged
 dependency. This refresh does not claim a particular duration of real-world use.
 
 This document replaces the parked September plan. Slices 1–2 implement the
-form seam and workspace shell below; Slice 3 remains future work.
+form seam and workspace shell below; Slice 3 adds owner-facing Configure actions.
 
 ## 1. Scope and changes since the old plan
 
@@ -319,7 +320,7 @@ picker navigation, session-only section restoration, visible-focus fallback,
 shared global Save with scope help (normal flow after the host QA follow-up), omit-chrome owner rendering, and Overview
 section deep links. Production navigation is in `core/settings_workspace.js`;
 cross-section Save parity and navigation/rebuild tests exercise the real seams.
-Host/browser/screen-reader checks remain pending in `SETTINGS_WORKSPACE_HOST_QA.md`.
+Host QA results are recorded in `SETTINGS_WORKSPACE_HOST_QA.md`.
 
 1. Render the seven sections, keep every form mounted, and move existing owner
    renderers into the relevant sections without changing their save behavior.
@@ -340,6 +341,20 @@ and reopen retain section choice without leaking prior-chat data; Overview's
 Coordinator and Ambient links land on the right section and target.
 
 ### Slice 3 — Module discoverability
+
+**Implemented 2026-11-16:** six tracker Configure rows and Ambient/Calendar
+owner links, routed through `core/settings_configuration.js`. World State and
+Story Planner expose disclosure openers; Chronicle exports its in-place opener;
+Knowledge opens directly without a sub-tab prerequisite; Interiority exposes
+an idempotent lazy-panel opener that preserves drafts even after hiding.
+Owner openers reveal, scroll, and focus their targets. Chronicle protects
+non-list work-in-progress views, and both in-place owners confirm before
+discarding native-control edits or pending previews. Already-open settings
+are reused, not reconstructed. No persistence keys or Save ownership changed.
+Executable coverage lives in `test/settings_configuration.test.js`; real-host
+keyboard/screen-reader and responsive checks remain release gates.
+Validation: `npm test` passed 196 files / 4,973 tests; `npm run lint` and
+`git diff --check` passed. Slice 3 host validation is not claimed by these gates.
 
 1. Provide a concise row for each of the six globally switchable trackers and
    owner links for Ambient and Calendar. Explain disabled state in text.

@@ -26,6 +26,7 @@ import { createModal, showModal, hideModal } from '../core/modal.js';
 // setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
 // (a11y plan §4.4).
 import { setControlBusy } from '../core/ui.js';
+import { focusSettingsTarget } from '../core/settings_targets.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { storyPlannerSchema } from './schema.js';
 
@@ -1277,6 +1278,13 @@ export function openGenerateDialog() {
 
 // ─── Render ──────────────────────────────────────────────────────────────────
 
+export function openSettings() {
+    const disclosure = state.modal?.querySelector('#sp-settings');
+    if (!disclosure) return;
+    disclosure.open = true;
+    return focusSettingsTarget(disclosure.querySelector('summary'));
+}
+
 export function render() {
     const s = getSettings();
     const autoEnabled = isAutoEnabled();
@@ -1317,7 +1325,7 @@ export function render() {
 
         <div id="sp-auto-banner" style="color:var(--mwt-accent);font-size:12px;margin:8px 0 4px;${autoEnabled ? '' : 'display:none'}">${autoEnabled ? `<span aria-hidden="true">🔄</span> Auto-generate: ON — generates a new plan every ${autoInterval} messages (${state.autoCounter}/${autoInterval} since last)` : ''}</div>
 
-        <details class="mwt-mt-8">
+        <details id="sp-settings" class="mwt-mt-8">
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500"><span aria-hidden="true">⚙️</span> Story Planner Settings</summary>
             <div class="mwt-settings-grid mwt-mt-8">
                 ${renderApiSettingsFields(s, { ...SP_API_FIELD_IDS, includeAdvanced: true, includeHeaders: true })}

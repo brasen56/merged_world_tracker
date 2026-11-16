@@ -17,6 +17,7 @@ import {
 // setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
 // (a11y plan §4.4).
 import { setControlBusy } from '../core/ui.js';
+import { focusSettingsTarget } from '../core/settings_targets.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import {
@@ -606,6 +607,14 @@ function renderThoughtsList(msgKeys) {
 /**
  * Render the settings panel inside the Interiority tab.
  */
+export function openSettingsPanel() {
+    const panel = getContentEl()?.querySelector('#mwt-int-settings-panel');
+    if (!panel) return;
+    if (!panel.querySelector('#mwt-int-save-settings')) renderSettingsPanel();
+    panel.style.display = 'block';
+    return focusSettingsTarget(panel.querySelector('h3, h4') || panel);
+}
+
 export function renderSettingsPanel() {
     const panel = getContentEl()?.querySelector('#mwt-int-settings-panel');
     if (!panel) return;
@@ -746,8 +755,8 @@ function wireEvents(el) {
         const panel = el.querySelector('#mwt-int-settings-panel');
         if (panel) {
             const isHidden = panel.style.display === 'none';
-            panel.style.display = isHidden ? 'block' : 'none';
-            if (isHidden) renderSettingsPanel();
+            if (isHidden) openSettingsPanel();
+            else panel.style.display = 'none';
         }
     });
 

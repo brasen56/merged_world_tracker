@@ -48,6 +48,12 @@ import { createFloatingButtonBar, setControlBusy } from './core/ui.js';
 import { renderMainTabShell, wireMainTabBar } from './core/main_tabs.js';
 import { renderGlobalSettingsForm, wireGlobalSettingsForm } from './core/settings_form.js';
 import { wireSettingsWorkspace, restoreSettingsFocus } from './core/settings_workspace.js';
+import { wireSettingsConfiguration } from './core/settings_configuration.js';
+import { openSettings as openWorldSettings } from './world_state/render.js';
+import { openSettings as openPlannerSettings } from './story_planner/render.js';
+import { showSettingsModal as openChronicleSettings } from './chronicle/render.js';
+import { showKnowledgeSettings } from './knowledge/settings.js';
+import { openSettingsPanel as openInterioritySettings } from './interiority/render.js';
 import { createCommands } from './core/commands.js';
 import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
 // Diagnostics accessors (Phases 0–1). Read-only peek at the in-memory capture,
@@ -325,6 +331,13 @@ function renderModal() {
 
     // Wire the Backup/Restore control (lives in the Settings tab). The body is
     // rebuilt on every open, so rebind each render like the module wire-events.
+    wireSettingsConfiguration(modal, { openers: {
+        'world-state': openWorldSettings,
+        chronicle: openChronicleSettings,
+        knowledge: showKnowledgeSettings,
+        'story-planner': openPlannerSettings,
+        interiority: openInterioritySettings,
+    } });
     wireBackupEvents(modal);
     wireAmbientSettings(modal);
     wireCalendarPanel(modal);

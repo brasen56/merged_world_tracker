@@ -4,6 +4,7 @@
  *
  * Depends on all other world_state sub-modules.
  */
+import { focusSettingsTarget } from '../core/settings_targets.js';
 
 import {
     escapeHtml, computeLcsDiff, renderDiffHtml, estimateTokens,
@@ -488,6 +489,13 @@ export function refreshProvenancePanel() {
 
 // ─── Main render ─────────────────────────────────────────────────────────────
 
+export function openSettings() {
+    const disclosure = state.modal?.querySelector('#ws-settings');
+    if (!disclosure) return;
+    disclosure.open = true;
+    return focusSettingsTarget(disclosure.querySelector('summary'));
+}
+
 export function render() {
     const s = getSettings();
     const text = getWorldStateText();
@@ -654,7 +662,7 @@ export function render() {
             </div>
         </details>
 
-        <details class="mwt-mt-8">
+        <details id="ws-settings" class="mwt-mt-8">
             <summary style="cursor:pointer;color:var(--mwt-accent);font-weight:500"><span aria-hidden="true">⚙️</span> World State Settings</summary>
             <div class="mwt-settings-grid mwt-mt-8">
                 ${renderApiSettingsFields(s, WS_API_FIELD_IDS)}

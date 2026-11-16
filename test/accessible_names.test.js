@@ -24,6 +24,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createFloatingButtonBar, renderApiSettingsFields } from '../core/ui.js';
+import { renderGlobalSettingsForm } from '../core/settings_form.js';
 // The Budget pane renderer, for its DOM-level contract below (the pane the
 // a11y plan's source inventory missed — BUG scope miss filed mid-Slice 4).
 import { renderBudgetSnapshot } from '../budget/panel.js';
@@ -455,13 +456,15 @@ describe('re-swept forms associate every label explicitly (Slice 4 item 4)', () 
     });
 
     test('Settings form float-button and per-tracker rows name their checkbox', () => {
+        const root = document.createElement('div');
+        root.innerHTML = renderGlobalSettingsForm({});
         // Both cells label the row's checkbox, so its name carries the module
         // rather than being one of six identical "Visible"s.
         for (const cid of ['mwt-s-show-world', 'mwt-s-show-chronicle', 'mwt-s-show-knowledge',
             'mwt-s-show-story-planner', 'mwt-s-show-interiority', 'mwt-s-show-settings',
             'mwt-s-enable-world', 'mwt-s-enable-chronicle', 'mwt-s-enable-knowledge',
             'mwt-s-enable-story-planner', 'mwt-s-enable-interiority']) {
-            expect(settingsFormSource.match(new RegExp(`for="${cid}"`, 'g'))?.length, cid).toBe(2);
+            expect(root.querySelectorAll(`label[for="${cid}"]`).length, cid).toBe(2);
         }
     });
 

@@ -1333,6 +1333,7 @@ html {
 .mwt-settings-section h3 { margin: 0 0 12px; }
 .mwt-settings-block + .mwt-settings-block { border-top: 1px solid var(--mwt-border); margin-top: 16px; padding-top: 12px; }
 .mwt-settings-mobile-nav { display: none; }
+.mwt-settings-module-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .mwt-settings-workspace .mwt-settings-actions {
     /* Normal flow keeps every field readable, including at large text sizes. */
     position: static;

@@ -5,6 +5,7 @@
 import { createSettingsManager, syncSharedConnectionSettings, renderApiSettingsFields, readApiSettingsValues, wireApiSettingsFields } from '../core/index.js';
 
 import { SETTINGS_KEY, state, getNpcsContentEl, ktSetStatus } from './state.js';
+import { focusSettingsTarget, hasSettingsDraft } from '../core/settings_targets.js';
 
 const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
     settingsKey: SETTINGS_KEY,
@@ -102,6 +103,11 @@ export { getSettings, saveSettings, hasValidSettings };
 export function showKnowledgeSettings() {
     const el = getNpcsContentEl();
     if (!el) return;
+    if (el.querySelector('.kt-settings-form')) return focusSettingsTarget(el.querySelector('.kt-settings-form h3'));
+    if ((hasSettingsDraft(el) || el.querySelector('#kt-proposal-editor'))
+        && !confirm('Leave the current Knowledge view? Unsaved edits or pending previews will be discarded.')) {
+        return focusSettingsTarget(el.querySelector('textarea, input, button') || el);
+    }
     const s = getSettings();
     // Lorebook activation UI helpers: the effective state scope, and the
     // breadth warning for the case where the State slot is WIDER than the
@@ -123,7 +129,7 @@ export function showKnowledgeSettings() {
         headersHintHtml: 'Custom Headers: JSON object of extra HTTP headers. Leave blank if unsure.',
     };
     el.innerHTML = `<div class="kt-settings-form">
-        <h3>Knowledge Tracker Settings</h3>
+        <h3 tabindex="-1">Knowledge Tracker Settings</h3>
         <div class="mwt-settings-grid">
             ${renderApiSettingsFields(s, apiFieldOpts)}
         </div>
@@ -202,6 +208,7 @@ export function showKnowledgeSettings() {
         <div id="kt-status" class="kt-status" style="margin-top:8px"></div>
     </div>`;
 
+    focusSettingsTarget(el.querySelector('.kt-settings-form h3'));
     wireApiSettingsFields(el, apiFieldOpts);
     el.querySelector('#kt-save-settings')?.addEventListener('click', () => {
         const apiValues = readApiSettingsValues(el, apiFieldOpts);

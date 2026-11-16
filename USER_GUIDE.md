@@ -478,6 +478,13 @@ Ambient retains its own Save and immediate actions. Backup exports, restore
 previews, undo, and recovery downloads remain separate actions for this chat.
 Detailed module settings remain in their existing module tabs.
 
+In **Modules & Configuration**, each tracker has a **Configure** button that
+opens and focuses its own settings, even while disabled. This does not enable
+the tracker or save global drafts. Repeating Configure preserves an already-open
+settings form and its drafts. Chronicle and Knowledge replace their current
+in-tab view; leaving edits or a pending preview requires confirmation. Ambient
+and Calendar have separate links to their per-chat configuration owners.
+
 ### Connection Profiles (Recommended)
 
 Configured in the **⚙️ Settings** tab. Selecting a Connection Manager profile is the recommended way to power MWT — it reuses your existing SillyTavern connection and supports every backend ST supports (OpenAI, Claude, Gemini, TextGen, KoboldCPP, NovelAI, local models, etc.) with full preset and instruct support.
