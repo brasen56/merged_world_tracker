@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 /**
  * test/cards_relationship_views.test.js — Accessibility plan Slice 5
- * (docs/accessibility_plan.md §5 Slice 5 / §4.6 / §6.4): cards and the
+ * (archive/completed_plans/accessibility_plan.md §5 Slice 5 / §4.6 / §6.4): cards and the
  * relationship views.
  *
  * Drives the REAL render pipeline (renderNpcsSubTab →

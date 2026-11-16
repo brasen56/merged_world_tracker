@@ -116,7 +116,7 @@ You cannot break MWT by disabling things. Each module can be turned off on its o
 | [docs/README.md](docs/README.md) | Documentation map: live planning docs, shipped designs, archive |
 | [CHANGELOG.md](CHANGELOG.md) | Complete version-by-version history |
 
-MWT supports both dark and light SillyTavern themes, is fully operable without a mouse (keyboard navigation, real dialogs with focus management, screen-reader labels — details in the [User Guide's Accessibility section](USER_GUIDE.md#-accessibility) and [docs/accessibility_plan.md](docs/accessibility_plan.md)), and works on touch devices (responsive layout, pointer-event drag, collapsible floating buttons).
+MWT supports both dark and light SillyTavern themes, is fully operable without a mouse (keyboard navigation, real dialogs with focus management, screen-reader labels — details in the [User Guide's Accessibility section](USER_GUIDE.md#-accessibility) and works on touch devices (responsive layout, pointer-event drag, collapsible floating buttons).
 
 ---
 

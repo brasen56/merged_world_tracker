@@ -721,7 +721,7 @@ subsystem *replaces one thing instead of twenty*.
   "Select stale" bulk action) that stages into the normal review flow, watermark
   cleanup on NPC removal + chat switch. Tests in
   `test/dossier_field_refresh.test.js`. See CHANGELOG 2.2.0 "Added".*
-- [ ] **F — Story Planner reliability and creative controls.** Replace positional
+- [x] **F — Story Planner reliability and creative controls.** Replace positional
   beat progress with stable beat records; retain resolved/dropped ideas as bounded
   generation memory; add full beat editing, Park and Focus controls, targeted arc
   proposals, evidence-backed progress suggestions, and a compact story palette.
@@ -763,14 +763,14 @@ subsystem *replaces one thing instead of twenty*.
   pending staging items, overdue beats, active intentions, token load, and last
   successful run per module. *(Source: PI UX)*
   `[plan drafted 2026-09-10]` — merged with the console-tools UI item below
-  into [`overview_dashboard_plan.md`](overview_dashboard_plan.md): one 🏠
+  into [`overview_dashboard_plan.md`](../archive/completed_plans/overview_dashboard_plan.md): one 🏠
   Overview tab, status cards + a 🧰 Maintenance section.
   **COMPLETE 2026-09-11 (v2.8.0)** — the 🏠 Overview tab is the modal's first
   tab: guarded status cards with deep links for every signal (per-module
   health lines, World State staleness, staging + growth evidence, beats,
   intentions, budget summary, coordinator, quarantine), plus 🔎 Findings and
   🧰 Tools. Receipts: CHANGELOG 2.8.0; the design record stays at
-  [`overview_dashboard_plan.md`](overview_dashboard_plan.md).
+  [`overview_dashboard_plan.md`](../archive/completed_plans/overview_dashboard_plan.md).
 - [ ] **F — "Pause background automation for this chat"** as a control **separate**
   from disabling injection. *(Source: PI UX)*
 - [x] **F — User-facing UI for the existing `window.MWT.*` console tools**
@@ -783,7 +783,7 @@ subsystem *replaces one thing instead of twenty*.
   console-only (read-only by contract — DIAGNOSTICS_PANEL.md §I.1).
   `[plan drafted 2026-09-10]` — the mutating toolset is now planned as the 🧰
   Maintenance section of the Overview dashboard
-  ([`overview_dashboard_plan.md`](overview_dashboard_plan.md)): Diagnostics
+  ([`overview_dashboard_plan.md`](../archive/completed_plans/overview_dashboard_plan.md)): Diagnostics
   stays read-only by contract, and DIAGNOSTICS_PANEL.md §I.2 already reserved
   this promotion for "a home for them." The console tools remain the
   power-user path (one collector, two surfaces).

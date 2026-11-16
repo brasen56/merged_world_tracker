@@ -2,7 +2,7 @@
 
 **Project:** B (information architecture).
 **Status:** Parked. Do not start until Project A
-([`accessibility_plan.md`](./accessibility_plan.md)) has merged and had real
+([`accessibility_plan.md`](../archive/completed_plans/accessibility_plan.md)) has merged and had real
 use.
 **Origin:** split out of the combined 2026-09-08 UX/accessibility plan, which
 bundled this redesign with the `TODO.md` §4 accessibility pass.

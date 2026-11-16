@@ -618,5 +618,3 @@ MWT is built to be fully operable without a mouse and usable with a screen reade
 - **Status Announcements** — Status bars and module status lines are polite live regions (`role="status"`), async controls expose their busy state (`aria-busy` alongside disabled, cleared on error paths too), and countdown digits are never announced
 - **Reduced Motion** — With `prefers-reduced-motion` enabled, pulses, transitions, and graph animation are suppressed — functional timers keep counting, they just stop animating
 - **Keyboard Graph, Cards & Staging** — The relationship graph has labeled zoom in/out/reset controls and full keyboard node selection (Tab to a node, Enter to select, Enter again to open) with a screen-reader-only summary, plus NPC/type filters whose results are announced; staging proposals are real buttons with a pressed state, so reviewing, accepting, and dismissing never requires a mouse; NPC and tracker cards use real headings with native action buttons
-
-The full implementation plan, verified baseline, and manual QA checklist are in [docs/accessibility_plan.md](docs/accessibility_plan.md).

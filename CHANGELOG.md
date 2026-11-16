@@ -1733,7 +1733,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Story Planner V3 Phase 4 — opt-in private NPC author context**
-  (`docs/STORY_PLANNER_ROADMAP_V3.md`). Scoped generation can now plan with
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP_V3.md`). Scoped generation can now plan with
   what only the author knows. The Generate dialog gains a collapsed
   **Opt-in private NPC author context (this chat)** picker: every major NPC
   dossier offers six field groups — public profile, agenda, secrets,
@@ -1782,10 +1782,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     review editor.
 - **Story Planner V3 is complete through its planned scope.** With author
   context above and the arc-quality pass below, every planned phase of
-  `docs/STORY_PLANNER_ROADMAP_V3.md` has shipped: the Phase 0 attribution
+  `archive/completed_plans/STORY_PLANNER_ROADMAP_V3.md` has shipped: the Phase 0 attribution
   and projection inventory (2.9.0), scoped Add/Refresh, selected journey
   subjects, cast policy, and newcomer continuity (Phases 1–3, 2.9.1), plus
-  Phases 4–5 here. The baseline `docs/STORY_PLANNER_ROADMAP.md` closed with
+  Phases 4–5 here. The baseline `archive/completed_plans/STORY_PLANNER_ROADMAP.md` closed with
   its Phase 7 in 2.9.0. The roadmap's deferred §7 items — an independent arc
   type and horizon, execution prerequisites, staged disclosure with release
   flags, a proposed-cast collection, and two-pass turning-point generation —
@@ -1796,7 +1796,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Story Planner: arcs are asked for a story, not a to-do list** (V3 Phase
-  5, `docs/STORY_PLANNER_ROADMAP_V3.md`). Reported by testers: plans came
+  5, `archive/completed_plans/STORY_PLANNER_ROADMAP_V3.md`). Reported by testers: plans came
   back bland. Setup beats showed one character doing the
   same thing four times, or were only logistics (a fax arrives, a sheet gets
   pinned, a rental meter starts). Each arc's description now names what is
@@ -1863,12 +1863,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 7 — documentation, observation, and default decisions
-  (`docs/STORY_PLANNER_ROADMAP.md`). The planner now measures its own real
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). The planner now measures its own real
   usage so the roadmap's remaining automation decisions can be made from
   evidence rather than intuition, without retaining any prompt or story
   content. Closes Phase 7, the final phase of the Story Planner feature
   update; the host-runtime manual QA matrix remains pending and tracked in
-  `docs/STORY_PLANNER_PHASE7_DECISIONS.md`.
+  `archive/completed_plans/STORY_PLANNER_PHASE7_DECISIONS.md`.
   - A per-chat, content-free `phase7Metrics` store records full and targeted
     generation counts, targeted proposals applied, progress checks with
     verified-suggestion and no-evidence results, accepted and ignored
@@ -1904,7 +1904,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and controls work" section explaining Pin vs Focus vs Park, Planted vs
     Skipped, Ready vs Resolved, and Archive vs Delete, the manual
     evidence-backed progress review, and the `/wt-beat` commands.
-  - `docs/STORY_PLANNER_PHASE7_DECISIONS.md` records the four default
+  - `archive/completed_plans/STORY_PLANNER_PHASE7_DECISIONS.md` records the four default
     decisions with their rationale — progress checking stays manual,
     `activateWhen` stays a human note, the Story Palette does not silently
     alter auto-generation defaults, and closed-memory ranking stays pin plus
@@ -1956,7 +1956,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 6 — creative palette and safe character grounding
-  (`docs/STORY_PLANNER_ROADMAP.md`). Two opt-in, per-chat controls now steer
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). Two opt-in, per-chat controls now steer
   full-plan **and** targeted-arc generation:
   - **Story Palette** — emphasis chips (conflict, mystery, discovery,
     consequences, relationships, character growth, quiet moments,
@@ -2117,7 +2117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 5 — evidence-backed progress suggestions
-  (`docs/STORY_PLANNER_ROADMAP.md`). A manual **Check progress** action
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). A manual **Check progress** action
   reviews every active arc's current beat and every Ready arc's payoff
   against settled messages newer than that item's last check watermark, and
   returns only reviewable proposals: **Beat appears planted**, **Arc may be
@@ -2187,7 +2187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 4 — targeted arc development
-  (`docs/STORY_PLANNER_ROADMAP.md`). Each arc card now offers Rework remaining
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). Each arc card now offers Rework remaining
   setup, Develop this arc, and Suggest an alternate route, so one weak
   route can be improved without regenerating or churning the whole plan.
   Rework preserves the title, endpoint, section, and historical beats; Develop
@@ -2241,7 +2241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 3 — parked arcs, focus, and injection-mode cleanup
-  (`docs/STORY_PLANNER_ROADMAP.md`). Arcs can now be Parked and later Resumed
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). Arcs can now be Parked and later Resumed
   without losing their pin, focus, setup beats, or optional “activate when”
   note. Parked arcs are retained through regeneration but never age, trigger
   reminders, or enter narrator injection; resuming resets their reminder age
@@ -2302,7 +2302,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the beat text, and a full action set: add, edit, delete, reorder
   (move up/down), mark Planted, mark Skipped with an optional reason,
   Undo (restore a Planted beat to pending), and Restore to pending (for a
-  Skipped beat). Closes `docs/STORY_PLANNER_ROADMAP.md` Phase 2.
+  Skipped beat). Closes `archive/completed_plans/STORY_PLANNER_ROADMAP.md` Phase 2.
   - Skip and Delete are deliberately separate. Skip keeps the beat as a
     historical record and stores an optional reason (prompted); Delete
     permanently removes the beat after a specific confirmation that says
@@ -2391,7 +2391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remainder pending (clamped exactly as the v1 reader did), and drops
   `beatIndex` from the stored shape. Existing v1 plans, history snapshots,
   imports, and backups migrate without losing an arc or its planted progress.
-  Closes `docs/STORY_PLANNER_ROADMAP.md` Phase 1.
+  Closes `archive/completed_plans/STORY_PLANNER_ROADMAP.md` Phase 1.
   - `isArcReady` is now "at least one beat and none pending" rather than
     `beatIndex >= beats.length`; `getCurrentBeat` derives from the first
     pending beat record; `advanceBeat`/`retreatBeat` flip the target beat's
@@ -2466,7 +2466,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Phase 0 regression coverage pinning the current Story Planner behavior before
-  the store redesign (`docs/STORY_PLANNER_ROADMAP.md` Phase 0). The fixtures and
+  the store redesign (`archive/completed_plans/STORY_PLANNER_ROADMAP.md` Phase 0). The fixtures and
   tests establish the invariants the later phases must preserve.
   - Literal v1 compatibility records (`test/fixtures/story_planner_phase0.js`)
     keep beats as strings; `beatIndex` is the only durable evidence that the
@@ -2508,7 +2508,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay out of the prompt. An arc the model renames but keeps the marker
   on now keeps its id and planted progress. Handles are random rather
   than sequential so the model has no numbering to renumber or extend
-  onto new arcs. Closes `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase
+  onto new arcs. Closes `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase
   patch 3".
   - The marker is stripped wherever the model puts it — bolded with the
     name, moved after it, in the body, or on a beat — and matched
@@ -2563,7 +2563,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reminder is not an automatic model call; `turnsSinceAdvance`
   continues to age through auto-generation and resets only when the
   current beat changes or the arc is reopened. Closes the Ready-arc
-  lifecycle item in `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch
+  lifecycle item in `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch
   2"; tests in `test/beats.test.js` (`takeDueNudges` → Ready-arc
   reminder).
 
@@ -2578,7 +2578,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejected, but prompt and history growth no longer accumulate with
   every closed arc. The arcs themselves stay in storage and remain
   visible; only the generation projection changes. Closes the
-  bounded-memory item in `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase
+  bounded-memory item in `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase
   patch 2"; tests in `test/beats.test.js` (`closed regeneration
   memory`).
 
@@ -2592,7 +2592,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mis-timing the next reminder. Every UI status transition now goes
   through the one `setArcStatus` path that resets age on reactivation
   and clears marks on any status change. Closes the lifecycle item in
-  `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 2".
+  `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 2".
 - **The All-mode injection description no longer claims resolved arcs
   are injected.** The injection-mode radio for "All" now reads "Inject
   every active arc; resolved and dropped arcs are excluded," matching
@@ -2611,7 +2611,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beats it was shown cannot duplicate or displace them. The exact stored
   strings stay in the prefix; only the normalized form is used for matching.
   Reproduces and closes the positional-progress cases in
-  `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 1"; tests in
+  `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 1"; tests in
   `test/plan.test.js` (`regeneration progress safety`).
 - A model response that omits pending beats can no longer mark an arc
   Ready. When the model returns only the planted prefix (or nothing usable
@@ -2633,7 +2633,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arcs that were materially edited keep the user's version rather than being
   silently overwritten. A title the user re-added as a new arc during the
   call is treated as live, not tombstoned. Covered by `test/plan.test.js`
-  (`regeneration progress safety`); see `docs/STORY_PLANNER_ROADMAP.md`
+  (`regeneration progress safety`); see `archive/completed_plans/STORY_PLANNER_ROADMAP.md`
   §"Pre-phase patch 1".
 
 ## [2.8.9]
@@ -2687,7 +2687,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Implemented the measurement-only scope of Phase 6 in
-  `docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`. World State injection snapshots now
+  `archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`. World State injection snapshots now
   report stored and injected estimated tokens per semantic section, separate
   factual/hook totals, final registered payload tokens, outer Budget action,
   and explicit section omission/partial-truncation reasons.
@@ -2770,7 +2770,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Implemented Phase 5 of the World State reliability roadmap
-  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): downstream modules now read
+  (`archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): downstream modules now read
   World State through shared core accessors instead of each maintaining its
   own scene parser, and every prompt consumer receives a factual projection
   that excludes hook sections.
@@ -2829,7 +2829,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Implemented Phase 4 of the World State reliability roadmap
-  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): full refreshes now use the shared
+  (`archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): full refreshes now use the shared
   World State document validator before grounding and commit, while delta
   refreshes, Current Scene regeneration, and Chronicle scene-anchor patches
   validate their complete resulting documents before writing.
@@ -2854,7 +2854,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Implemented Phase 3 of the World State reliability roadmap
-  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): the fixed default generation
+  (`archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): the fixed default generation
   prompt is now built by a hook-mode-aware `buildDefaultSystemPrompt(hookMode)`
   in `world_state/prompts.js`.
 - Rewrote the built-in prompt around the `Current Scene` contract: good/bad
@@ -2908,7 +2908,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Phase 0 of world_state_improvement_roadmap.md
   - reusable World State fixtures and corresponding tests
-- Phase 1 of `docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`:
+- Phase 1 of `archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`:
   - a dependency-free shared World State Markdown parser and `Current Scene`
     contract in `core/world_state_document.js`;
   - byte-preserving scene patching, `Present` normalization, structural/default/
@@ -2921,7 +2921,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **🏠 Overview tab — the unified MWT dashboard** (TODO §3, planned in
-  [`docs/overview_dashboard_plan.md`](docs/overview_dashboard_plan.md)):
+  [`archive/completed_plans/overview_dashboard_plan.md`](archive/completed_plans/overview_dashboard_plan.md)):
   one page of everything waiting on you in this chat, and the new
   first tab of the MWT modal.
   - **Status cards** for every module signal — World State staleness
@@ -2997,7 +2997,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Accessibility Slice 5 — cards and relationship views
-  (`docs/accessibility_plan.md` §5 Slice 5 / §4.6): labeled zoom-in / zoom-out
+  (`archive/completed_plans/accessibility_plan.md` §5 Slice 5 / §4.6): labeled zoom-in / zoom-out
   / reset controls on the relationship graph with an announced zoom level
   (also updated by wheel zoom); keyboard node selection (Tab to a node,
   Enter/Space to select, Enter again to open the dossier) with the selected
@@ -3061,7 +3061,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hidden from assistive technology, tooltip-only explanations became visible
   help text, form labels are associated with their controls, and the last
   color/emoji-only state indicators gained text equivalents** (Slice 4 of the
-  accessibility pass, `docs/accessibility_plan.md` §4.4 and §5; tests in
+  accessibility pass, `archive/completed_plans/accessibility_plan.md` §4.4 and §5; tests in
   `test/accessible_names.test.js` and `test/accessible_names_css.test.js`):
   - Every emoji/symbol-only button across the six module renderers, the
     diagnostics panel, the paused-store banners, and the extensions drawer
@@ -3207,7 +3207,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Keyboard focus is now visible without restyling SillyTavern, status
   messages are announced, busy state is owned per control, and motion
   respects `prefers-reduced-motion`** (Slice 3 of the accessibility pass,
-  `docs/accessibility_plan.md` §4.3–§4.5 and §5; tests in
+  `archive/completed_plans/accessibility_plan.md` §4.3–§4.5 and §5; tests in
   `test/focus_status_motion.test.js` and
   `test/focus_status_motion_css.test.js`):
   - The old bare-element `:focus-visible` rule (`button:focus-visible`,
@@ -3255,7 +3255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Tabs are now real WAI-ARIA tab lists** (Slice 2 of the accessibility
-  pass, `docs/accessibility_plan.md` §4.2 and §5; tests in
+  pass, `archive/completed_plans/accessibility_plan.md` §4.2 and §5; tests in
   `test/tab_navigation.test.js`):
   - New shared `wireTablist()` helper in `core/ui.js` owns the whole tab
     contract — `role="tablist"` / `tab` / `tabpanel`, an explicit
@@ -3287,7 +3287,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Modals are now real dialogs, with one authoritative close path** (Slice 1
-  of the accessibility pass, `docs/accessibility_plan.md` §4.1 and §5; tests
+  of the accessibility pass, `archive/completed_plans/accessibility_plan.md` §4.1 and §5; tests
   in `test/modal_accessibility.test.js`):
   - `.mwt-modal-panel` — the dialog surface, not the backdrop container — now
     carries `role="dialog"` and `aria-labelledby` pointing at a stable heading

@@ -1,5 +1,5 @@
 /**
- * Phase 0 characterization coverage for docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md.
+ * Phase 0 characterization coverage for archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md.
  *
  * Phase 2 inverts the original unsafe Chronicle chronology and concurrency
  * characterizations. Phases 3-6 will change prompt size,

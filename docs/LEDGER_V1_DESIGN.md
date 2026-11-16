@@ -112,6 +112,8 @@ Shared files touched: `core/ui.js` (button entry plus classic/modern labels), `i
 
 ## 7. Later versions (not v1)
 
+> **2026-11-16:** v2 planning moved to `LEDGER_V2_DESIGN.md` (decisions D13+, Phases 5+). §7.1 and §7.2 below are the sketches that doc designs; the two docs disagree, the v2 doc wins.
+
 ### 7.1 Proposals from World State refresh
 The fix for "users still forget to update it". During its normal refresh, World State also reports money and item changes it saw in the messages it read ("paid 30 gold to the smith"). They arrive as **proposals** in the Ledger tab, and the user accepts or rejects each one with one click. Code still does the arithmetic.
 
