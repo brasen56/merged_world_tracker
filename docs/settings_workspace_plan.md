@@ -1,15 +1,16 @@
 # MWT Settings workspace — refreshed implementation plan
 
 **Project:** B (information architecture, separate from the accessibility pass).
-**Status:** Refreshed proposal; workspace implementation has not started.
+**Status:** Slice 1 implemented on 2026-11-16 (testable form seam; existing
+layout retained). Workspace navigation and module discoverability remain planned.
 **Original plan:** 2026-09-08. **Code reconciliation:** 2026-11-16, against
 `ee1edc4` (package version 2.18.1).
 **Prerequisite:** Project A is implemented; the documentation map records full
 manual QA and host confirmation on 2026-11-16. It is no longer an unmerged
 dependency. This refresh does not claim a particular duration of real-world use.
 
-This document replaces the parked September plan. It describes future work,
-not the current interface. No runtime change is part of this reconciliation.
+This document replaces the parked September plan. The workspace interface below
+remains future work; Slice 1 extracts the existing form without changing layout.
 
 ## 1. Scope and changes since the old plan
 
@@ -55,9 +56,9 @@ Paths below are relative to the repository root.
 
 | Concern | Current owner / contract |
 | --- | --- |
-| Global form | `index.js`: `renderSettingsTab()`; profile toggle, global Save, reset positions, and Sync are wired inside `renderModal()`. |
+| Global form | `core/settings_form.js`: `renderGlobalSettingsForm()`, `collectGlobalSettingsPatch()`, `collectGlobalApiPatch()`, `wireGlobalSettingsForm()`, and `GLOBAL_API_FIELD_IDS`. `index.js` composes Ambient/Backup in `renderSettingsTab()` and supplies host Save/Sync/reset callbacks from `renderModal()`. |
 | Global persistence | `core/settings.js`: `GLOBAL_SETTINGS_DEFAULTS`, `createSettingsManager()`, `getGlobalSettings()`. The Settings manager merges defaults; the canonical accessor deliberately does **not** materialize absent fields. |
-| API fields | `core/ui.js`: `renderConnectionProfileSelect()`, `renderApiSettingsFields()`, `wireApiSettingsFields()`, `readApiSettingsValues()`; global IDs come from `GLOBAL_API_FIELD_IDS` in `index.js`. |
+| API fields | `core/ui.js`: `renderConnectionProfileSelect()`, `renderApiSettingsFields()`, `wireApiSettingsFields()`, `readApiSettingsValues()`; global IDs come from `GLOBAL_API_FIELD_IDS` in `core/settings_form.js`. |
 | Main tabs | `core/main_tabs.js`: `renderMainTabShell()`, `wireMainTabBar()`; explicit `.mwt-tab-content` panel selector excludes nested panels. |
 | Section navigation primitive | `core/ui.js`: `wireTablist()` already supports vertical orientation, roving focus, Home/End, hidden panels, and programmatic selection. |
 | Ambient form | `ambient/render.js`: `renderAmbientSettings()`, `wireAmbientSettings()`; `ambient/settings.js` persists `mwt_ambient` in chat metadata. |
@@ -275,6 +276,18 @@ the old eight-section outline. Those can be separate features if needed.
 ## 5. Implementation slices and exit gates
 
 ### Slice 1 — Establish a testable form seam (behavior-preserving)
+
+**Implemented 2026-11-16:** `core/settings_form.js` owns the render/read/wire
+seam; host orchestration remains in `index.js`. The six disclosures, control
+IDs, Save scope, Sync and reset actions are unchanged. Wiring replaces handlers
+on surviving controls rather than stacking listeners. Executable jsdom coverage
+in `test/settings_form.test.js` pins full patches, closed/profile-hidden fields,
+missing profiles, numeric defaults/clamps, unsaved Sync values, separate action
+callbacks, and rewiring/rebuild behavior. Disclosure and accessible-name coverage
+now targets the extracted form. Host callback contents are checked structurally;
+live SillyTavern behavior still requires host QA. Validation: 193 test files /
+4,935 tests passed, plus `npm run lint`. The numbered items below retain the
+slice's original scope and exit contract.
 
 1. Extract the global form rendering, patch collection, and wiring behind a
    small injectable seam, following `core/main_tabs.js`'s render/wire precedent.
