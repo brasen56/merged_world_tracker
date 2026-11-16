@@ -39,20 +39,20 @@ export function renderAmbientSettings({ omitChrome = false } = {}) {
         <div class="mwt-settings-grid">
             ${select('mwt-a-climate', 'Climate', Object.fromEntries(Object.entries(AMBIENT_CLIMATES).map(([key, preset]) => [key, preset.label])), s.climate, true)}
             ${select('mwt-a-hemisphere', 'Hemisphere', { north: 'Northern', south: 'Southern' }, s.hemisphere, true)}
-            ${custom ? '<p>A hemisphere flip repositions every custom date and rewrites evaluated history. Declining re-stamping freezes stored Ambient bounds on their old hours.</p><label><input type="checkbox" id="mwt-a-restamp"> Re-stamp stored pin and frequency bounds by calendar date on hemisphere change</label>' : ''}
+            ${custom ? '<p style="grid-column:1/3">A hemisphere flip repositions every custom date and rewrites evaluated history. Declining re-stamping freezes stored Ambient bounds on their old hours.</p><label style="margin:0;text-align:left;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1/3"><input type="checkbox" id="mwt-a-restamp"> Re-stamp stored pin and frequency bounds by calendar date on hemisphere change</label>' : ''}
             <label class="mwt-label" for="mwt-a-latitude">Latitude magnitude (0–90°; hemisphere supplies the sign)</label>
             <div><input class="mwt-input" id="mwt-a-latitude" type="number" min="0" max="90" step="any" value="${Number.isFinite(s.latitude) ? s.latitude : ''}" placeholder="Climate default: ${resolveAmbientLatitude(s).latitude}°">
                 <p class="mwt-text-dim mwt-text-sm">Leave blank to follow the climate default; no default latitude is saved.</p></div>
             ${select('mwt-a-clock-ahead', 'Clocks run ahead of the sun by', { '0': '0 hours (sun time)', '0.5': '30 minutes', '1': '1 hour', '1.5': '1 hour 30 minutes', '2': '2 hours' }, String(s.clockAhead))}
-            <p class="mwt-text-dim mwt-text-sm">Offsets stated sky-event times only. No longitude, time-zone or automatic summer-time modeling.</p>
+            <p class="mwt-text-dim mwt-text-sm" style="grid-column:1/3">Offsets stated sky-event times only. No longitude, time-zone or automatic summer-time modeling.</p>
             <label class="mwt-label" for="mwt-a-moon-date">Full moon falls on (story date)</label>
             <div><input class="mwt-input" id="mwt-a-moon-date" type="${custom ? 'text' : 'date'}" value="${escapeHtml(anchorDate)}">
                 <label for="mwt-a-moon-time">Story time of full moon</label>
                 <input class="mwt-input" id="mwt-a-moon-time" type="time" value="${anchor ? anchor.slice(11, 16) : '18:00'}">
                 <p class="mwt-text-dim mwt-text-sm">Optional. Blank date restores the real-world moon cycle. Re-anchoring rewrites past and future phases consistently; it is not a weather pin. Moon facts need a calendar clock. Moon-up is approximate and ignores latitude.</p></div>
             ${select('mwt-a-season', 'Manual season (when no calendar is usable)', AMBIENT_SEASONS, s.manualSeason)}
-            <label for="mwt-a-coastal"><input type="checkbox" id="mwt-a-coastal" ${s.coastal ? 'checked' : ''}> Coastal location (enable tides)</label>
-            <p class="mwt-text-dim mwt-text-sm">Tides need a story calendar clock. Fictional semidiurnal schedule, not real-port or navigation predictions. Re-anchoring the moon shifts tides; reseeding changes both weather and the tide schedule.</p>
+            <label for="mwt-a-coastal" style="margin:0;text-align:left;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1/3"><input type="checkbox" id="mwt-a-coastal" ${s.coastal ? 'checked' : ''}> Coastal location (enable tides)</label>
+            <p class="mwt-text-dim mwt-text-sm" style="grid-column:1/3">Tides need a story calendar clock. Fictional semidiurnal schedule, not real-port or navigation predictions. Re-anchoring the moon shifts tides; reseeding changes both weather and the tide schedule.</p>
             ${select('mwt-a-tide-range', 'Tidal range (wording only)', { calm: 'Calm — small range', normal: 'Normal — moderate range', extreme: 'Extreme — large range' }, s.tideRange)}
             <label class="mwt-label" for="mwt-a-variability">Variability (change frequency)</label>
             <div>

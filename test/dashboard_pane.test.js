@@ -246,6 +246,19 @@ describe('Maintenance findings', () => {
         expect(items.at(-1)).toContain('and 3 more');
     });
 
+    test('leftover profiles explain intentional removal without requiring an NPC rescan', () => {
+        document.body.innerHTML = renderMaintenanceFindings([{
+            kind: 'relink-candidates', count: 1, relinkNpcs: [], withOtherCandidates: 0,
+            unmatched: [{ npc: 'Removed NPC', count: 1 }], command: 'MWT.profiles.relink()', rows: [],
+        }]);
+        const text = document.body.textContent;
+        expect(text).toContain('No automatic relink is available');
+        expect(text).toContain('separate NPC Profiles lorebook');
+        expect(text).toContain('If this NPC was intentionally removed, delete its profile there too');
+        expect(text).toContain('does not delete its generated profile');
+        expect(document.querySelector('[data-maintenance-action="relink"]')).toBeNull();
+    });
+
     test('identity findings summarize by kind without dumping entry previews', () => {
         const rows = Array.from({ length: 12 }, (_, i) => ({
             kind: 'untracked-entry', npc: `NPC ${i}`, detail: `in book, no registry record (40 chars: "secret preview ${i}")`,

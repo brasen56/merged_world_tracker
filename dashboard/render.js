@@ -121,7 +121,7 @@ function describeRelink(finding) {
     const crowded = Number(finding.withOtherCandidates) || 0;
     let summary = names.length
         ? `${countText(names.length, 'profile')} can be relinked to ${names.length === 1 ? 'its' : 'their'} NPC (${nameList(names)}).`
-        : 'nothing can be relinked automatically.';
+        : 'No automatic relink is available; the remaining profiles need manual review.';
     if (crowded) {
         // The console twin's wording (MWT.profiles.relink): relink does pick a
         // candidate automatically — largest entry, newest on ties — so the
@@ -130,7 +130,7 @@ function describeRelink(finding) {
     }
     return {
         summary,
-        review: (finding.unmatched || []).map(({ npc }) => `${npc} — no NPC registry record; scan the NPC into the Knowledge book first.`),
+        review: (finding.unmatched || []).map(({ npc }) => `${npc} — no NPC registry record, but a generated profile remains in the separate NPC Profiles lorebook. If this NPC was intentionally removed, delete its profile there too; otherwise scan the NPC into the Knowledge book first. Removing an NPC from the major/minor tab or Knowledge lorebook does not delete its generated profile.`),
     };
 }
 
@@ -185,7 +185,7 @@ export function renderMaintenanceFindings(findings = []) {
         const { summary, review } = describe(finding);
         const action = finding.kind === 'duplicate-profiles'
             ? '<button type="button" class="mwt-btn" data-maintenance-action="prune">Preview profile prune</button>'
-            : finding.kind === 'relink-candidates'
+            : finding.kind === 'relink-candidates' && finding.relinkNpcs?.length
                 ? '<button type="button" class="mwt-btn" data-maintenance-action="relink">Preview profile relink</button>'
                 : '';
         return `<li class="mwt-overview-finding"><strong>${escapeHtml(label)}</strong> — ${escapeHtml(summary)} <code>${escapeHtml(finding.command || 'review manually')}</code>${action}${renderReview(review)}</li>`;

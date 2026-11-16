@@ -30,7 +30,7 @@ import {
 import { applyFieldOwnership } from './field_ownership.js';
 import { validateScanRecord } from './field_contract.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
-import { mergeStoreQuarantineItems } from './store.js';
+import { mergeStoreQuarantineItems, hydrateCurrentBooks, assertHydrated, flushBook, withStoreLock } from './store.js';
 import { isInternalEntry } from './internal_entries.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
 import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema, repairGrowthDossier } from './schema.js';
@@ -790,7 +790,15 @@ export async function reconcileRegistry() {
     const result = { verified: 0, relinked: 0, detached: 0, ambiguous: 0, adopted: 0, duplicates: 0, report: [] };
     if (!state.wiScript) return result;
 
-    const ktWi = await state.wiScript.loadWorldInfo(getLorebookName());
+    // A repair must never run against the permissive pre-hydration fallback:
+    // that would replace saved identity metadata with freshly adopted records.
+    const scopeToken = captureScope();
+    const bookName = getLorebookName();
+    await hydrateCurrentBooks();
+    if (!scopeStillCurrent(scopeToken).ok || getLorebookName() !== bookName) throw new Error('The chat or lorebook scope changed. Retry reconciliation.');
+    assertHydrated(bookName, 'reconcile NPC identities');
+    const ktWi = await state.wiScript.loadWorldInfo(bookName);
+    if (!scopeStillCurrent(scopeToken).ok || getLorebookName() !== bookName) throw new Error('The chat or lorebook scope changed. Retry reconciliation.');
     const rawEntries = ktWi?.entries;
     if (!rawEntries) return result;
 
@@ -904,6 +912,11 @@ export async function reconcileRegistry() {
     }
 
     saveRegistry(registry);
+    // Completion promises durability, not just the store's 1.2s debounce.
+    // Otherwise a successful repair disappears on the next page reload.
+    if (!await withStoreLock(() => flushBook(bookName))) {
+        throw new Error('NPC registry could not be saved. The changes remain in memory; retry before reloading.');
+    }
     return result;
 }
 
@@ -916,6 +929,7 @@ export async function importFromLorebooks() {
     const imported = { npcs: 0, states: 0 };
     const skipped  = { npcs: 0, states: 0 };
     const errors = [];
+    const scopeToken = captureScope();
 
     // ── Knowledge Tracker (reconcile registry ↔ physical entries) ────────
     let kt = { verified: 0, relinked: 0, detached: 0, ambiguous: 0, adopted: 0, duplicates: 0, report: [] };
@@ -927,7 +941,11 @@ export async function importFromLorebooks() {
 
     // ── State Tracker ───────────────────────────────────────────────────
     try {
-        const stWi = await state.wiScript.loadWorldInfo(getStateLorebookName());
+        const bookName = getStateLorebookName();
+        if (!scopeStillCurrent(scopeToken).ok) throw new Error('The chat changed. Retry the import.');
+        const stWi = await state.wiScript.loadWorldInfo(bookName);
+        if (!scopeStillCurrent(scopeToken).ok || getStateLorebookName() !== bookName) throw new Error('The chat or lorebook scope changed. Retry the import.');
+        assertHydrated(bookName, 'import state tracker identities');
         if (stWi?.entries) {
             const stateReg = getStateRegistry();
 
@@ -950,6 +968,9 @@ export async function importFromLorebooks() {
                 imported.states++;
             }
             saveStateRegistry(stateReg);
+            if (!await withStoreLock(() => flushBook(bookName))) {
+                throw new Error('State tracker registry could not be saved. Retry before reloading.');
+            }
         }
     } catch (err) {
         errors.push(`State Tracker: ${err.message}`);
@@ -983,5 +1004,5 @@ export async function importFromLorebooks() {
         );
     }
     ktSetStatus(msg, errors.length ? 'error' : 'success');
-    notify('Knowledge Tracker', msg, parts.length ? 'success' : 'info');
+    notify('Knowledge Tracker', msg, errors.length ? 'error' : (parts.length ? 'success' : 'info'));
 }

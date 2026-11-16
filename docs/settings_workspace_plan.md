@@ -261,11 +261,15 @@ the old eight-section outline. Those can be separate features if needed.
   accessible name) and give every section a visible heading. Confirm with a
   screen reader in the host gate. Breakpoint changes must preserve selection
   and keep focus on a visible control.
-- Keep global Save in a shared sticky action area **outside** section panels.
+- Keep global Save in a shared normal-flow action area **outside** section panels.
+  Host QA follow-up (2026-11-16): removed sticky positioning because it covered
+  section content and left text visible below the action block. The main modal
+  now retains a viewport-bounded height across tabs/sections; body scrollbar
+  space and border-box sizing keep available width consistent.
   Scope help must remain visible even in Ambient/Backup. Sync may live in the
   connection section because it is API-specific; it is not a second Save.
 - Reuse the modal's existing live statusbar; do not introduce duplicate live
-  announcements. Sticky content must not cover the last field or focused item.
+  announcements. The action area must not cover the last field or focused item.
 - Reuse existing theme variables and shared grid/disclosure/action styles;
   add scoped `.mwt-settings-*` layout classes rather than more inline styles.
   Native controls only; no UI framework or new runtime dependency.
@@ -312,7 +316,7 @@ the production seam, not a parallel reimplementation of its save reader.
 
 **Implemented 2026-11-16:** seven mounted sections, shared vertical-tab/mobile
 picker navigation, session-only section restoration, visible-focus fallback,
-sticky global Save with scope help, omit-chrome owner rendering, and Overview
+shared global Save with scope help (normal flow after the host QA follow-up), omit-chrome owner rendering, and Overview
 section deep links. Production navigation is in `core/settings_workspace.js`;
 cross-section Save parity and navigation/rebuild tests exercise the real seams.
 Host/browser/screen-reader checks remain pending in `SETTINGS_WORKSPACE_HOST_QA.md`.

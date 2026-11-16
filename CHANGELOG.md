@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Knowledge — From Lorebooks repairs now survive an immediate reload.** NPC
+  reconciliation and State Tracker adoption wait for their registry stores to
+  reach disk before reporting success, instead of relying on a pending 1.2-second
+  save timer. Reconciliation loads the saved registry before repairing it,
+  preserving identity IDs, aliases, and profile links; unreadable stores and
+  failed saves are reported as errors rather than successful repairs.
 - clearing Messages to defer or Max parallel API calls and pressing Save now stores the default of 2, instead of 0 and 1
 
 ## [2.18.1]

@@ -101,6 +101,20 @@ describe('shared Knowledge maintenance audits', () => {
         expect(listProfileEntries).not.toHaveBeenCalled();
     });
 
+    test('removed NPCs are reported only while their separate profiles still exist', async () => {
+        const registry = { Mira: { profileUid: 1 } };
+        const entries = [
+            { name: 'Mira', uid: 1, chars: 20 },
+            { name: 'Removed NPC', uid: 9, chars: 50 },
+        ];
+        const before = await planProfileRelink({ registry, listProfileEntries: async () => entries });
+        expect(before.planned).toEqual([]);
+        expect(before.unmatched.map(row => row.npc)).toEqual(['Removed NPC']);
+        const after = await planProfileRelink({ registry, listProfileEntries: async () => entries.slice(0, 1) });
+        expect(after).toEqual({ planned: [], unmatched: [] });
+        expect(registry).toEqual({ Mira: { profileUid: 1 } });
+    });
+
     test('NPC audit marks untracked physical entries for manual review', async () => {
         const rows = await auditNpcIdentities({
             registry: {},
