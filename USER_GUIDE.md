@@ -9,10 +9,11 @@ The full reference for every MWT module and shared feature: what each one does, 
   - [🌍 World State](#-world-state)
   - [📜 Chronicle](#-chronicle)
   - [🧠 Knowledge](#-knowledge)
-  - [🗺️ Story Planner](#-story-planner)
+  - [🗺️ Story Planner](#story-planner)
   - [💭 Interiority](#-interiority)
-  - [🌦️ Ambient Conditions](#-ambient-conditions)
+  - [🌦️ Ambient Conditions](#ambient-conditions)
   - [📅 Calendar](#-calendar)
+  - [💰 Ledger](#ledger)
 - [Shared Surfaces](#shared-surfaces)
   - [Shared Core](#shared-core)
   - [🏠 Overview](#-overview)
@@ -36,9 +37,10 @@ The full reference for every MWT module and shared feature: what each one does, 
 ## How MWT settings are organized
 
 - **Global settings** live in the **⚙️ Settings** tab: API connection, injection depths and roles, floating buttons, per-tracker enables, and the panic switch.
-- **Per-module settings** open from a **⚙ Settings** button inside each module tab. Every module can override the global API configuration (different model, temperature, max tokens per task).
+- **Per-module settings** open from a **⚙ Settings** button or inline controls inside each module tab. Modules that make model calls can override the global API configuration (different model, temperature, max tokens per task); Ambient Conditions, Calendar, and Ledger need no API configuration.
 - **Per-chat behavior** — World State and Story Planner resolve a few behavior toggles (injection on/off, auto-refresh and its interval, and the Planner's injection mode / arc count / auto interval) through a per-chat override that falls back to the global values. Chronicle's injection settings (on/off, mode, entry count) belong to each chat, and injection starts **off** in every new chat. Ambient Conditions, the Calendar, and Budget caps are entirely per-chat.
 - **Knowledge lorebook scope** (global / per-character / per-chat) decides which lorebooks the Knowledge module writes to; each book carries its own registry.
+- **Ledger data** (currencies, transactions, and inventory) belongs to each chat. Its enable, floating-button visibility, and injection switches are global and default to **on**.
 
 Nothing here is exotic: every setting is just a checkbox, dropdown, or number field, every default is stated where it matters, and the [🩺 Diagnostics](#-diagnostics) tab always shows you the *effective* value and where it came from.
 
@@ -185,6 +187,8 @@ Evidence-based character profiling that builds personality descriptions from beh
 10. **Growth-written dossier lines** *(v2.17.0, opt-in per NPC)* — to let approved growth write that NPC's `Personality:` and `Voice:` lines, tick **Use Growth in dossier** (it also lives on the NPC card), optionally raise the **Personality limit** / **Voice limit** beside it (defaults 450/350, up to 1,500/1,000, with a token estimate), then press **Prepare dossier lines — model call**. One explicit, disclosed call turns the saved profile into proposed one-line text — the profile itself is never injected. Nothing is written yet, and an NPC whose switch stays untouched behaves exactly as before
 11. Review the Growth proposal in **Staging**: sentence-level add/edit/keep/remove actions with evidence links, "no evidence" labels for pre-Growth and hand-edited text, and an advisory echo warning when all of a sentence's supporting evidence comes from messages written after its first approval (backfilling older scenes never trips it). **✓ Accept & Write** makes the approved text the field text — so it reaches the RP prompt — and records it in the Growth window's **Approval history** (last 10 approvals, newest first). While the switch is on, scans leave both lines to Growth while still updating every other field and the Ledger; turning it off keeps the approved text and hands both lines back to scans from the next scan on
 
+<a id="story-planner"></a>
+
 ### 🗺️ Story Planner
 
 Acts as a "Story Architect" that brainstorms a menu of future plot possibilities across five timeline sections. Each arc is an independently editable card with stable setup-beat progress, lifecycle controls, and selective injection. The plan is inspiration the narrator can draw on — branching possibilities, not a fixed roadmap. Generation is scoped: ask for ideas only in the sections you chose, for the characters you chose, under an explicit cast policy — and, when you opt in, plan with what only the author knows.
@@ -287,6 +291,8 @@ Generates NPC private thoughts and a persistent **intentions ledger** in a separ
 10. Tune the lifecycle dials in module settings: **Grace Period** (minimum turns a plan must survive before it can be executed or dropped), **Max New/NPC** (default 2), **Closure Dedup**, and **Max Turns Open** (never applies to ✋ user-authored plans). A temporary, opt-in intentions diagnostics capture for issue reports also lives here — in-memory only, never saved
 11. In the chat, click the 💭 icon on any AI message to expand/collapse that message's thought blocks — each NPC's private reaction and thought is displayed there
 
+<a id="ambient-conditions"></a>
+
 ### 🌦️ Ambient Conditions
 
 Deterministic, opt-in weather (and, later, other ambient facts nobody in the story can change). **Code decides the conditions; the narrator model only renders them** — no model calls, no API key, no extra cost.
@@ -339,13 +345,39 @@ A per-chat calendar for worlds that don't use the real-world one. Author your ow
 6. Copy the **preset snippet** into your preset so the narrator writes dates in your calendar's format
 7. Run `/wt-calendar` any time to see the exact date line the narrator receives
 
+<a id="ledger"></a>
+
+### 💰 Ledger
+
+A persistent purse and inventory for the **player character**, saved per chat. **You enter it; code does the arithmetic; the narrator only reads it.** Ledger makes no model calls and never infers purchases, deductions, or item changes from the story. It is separate from Interiority's intentions ledger and Knowledge's NPC bookkeeping.
+
+**Features**
+
+- **Exact finances** — Define multiple currencies with their own decimal places (for example, `0` for gold or `2` for dollars). Each balance is computed from its transaction history using exact smallest-unit arithmetic, including zero and negative balances (debt). Currencies stay separate: there is no exchange-rate conversion
+- **Editable transaction history** — Record money received or spent, a note, and an optional in-story date. Entries appear newest first and can be expanded to edit or delete; deletion asks for confirmation. Beyond 200 transactions, the oldest entries fold into **Carried forward** entries per currency without changing balances. You can correct their amount and note, but their currency is locked and they have no single date
+- **Carried and stored inventory** — Track item names, whole-number quantities, and notes, marking each item **Carried** or **Stored**. Carried items appear first. Quantity steppers and direct edits use the same validation; setting an existing item to zero asks for confirmation before removing it. There is no inventory change history in v1
+- **Small, authoritative narrator context** — Injects all exact currency balances and up to **15 carried item rows**, with an omitted-item count if more are carried. Stored items, notes, and transaction history stay out of the prompt. The narrator is told to respect the money totals, but **unlisted possessions may still exist** — this is not a complete list of everything your character owns
+- **At a glance** — The 💰 floating button shows the selected badge currency's compact balance (red for debt), not a token count or refresh countdown. Its tooltip lists all currency balances and the carried-item count; no balance badge appears before you add a currency. Overview has a read-only summary linking to the Ledger
+- **Per-chat safety** — Participates in Diagnostics, token budgeting, and unified backup/restore. Invalid, paused, or newer-version stores are not editable; a stale panel refuses to save into a different chat or overwrite externally changed records
+
+**Using it**
+
+1. Open the **💰 Ledger** tab (or click its floating button). The inline **Enable Ledger**, **Show floating button**, and **Inject money and carried items** switches save independently; the same controls appear in the relevant sections of **⚙️ Settings**. All three default to **on**
+2. Expand **Currencies**, enter a **Currency name** and **Decimal places**, optionally tick **Badge currency**, then click **Add currency**. The first currency becomes the badge currency automatically. You can rename currencies or change their precision later: decimal changes preserve each transaction's value, and changes that would lose precision are refused. A currency with transactions cannot be deleted until those entries are removed
+3. In **Finances**, add your starting money as a **+ Receive** transaction with a note such as "Starting purse". For later changes, choose **+ Receive** or **− Spend**, enter an unsigned amount and select the currency, then press **Add entry**. Use no thousands separators; a decimal point is accepted, as is a decimal comma with one or two fractional digits on phone keypads, within the currency's precision
+4. Optionally add an **In-story date** — prefilled when a usable story clock is available. This is a display-only label, not a schedule or an instruction to replay the transaction when the clock changes. Expand an existing transaction to correct it with **Save entry** or remove it with **Delete entry**
+5. Switch to **Inventory**, fill in **Item name**, **Quantity**, optional **Note**, and **Location** (**Carried** or **Stored**), then click **Add item**. Expand a saved item to edit it with **Save item**; its quantity steppers and quantity/location changes save immediately. Deleting an item, including reducing its quantity to zero, asks first
+6. After a purchase, sale, gift, or loss in the story, update the Ledger yourself. Money and items are separate entries — spending money does not automatically add the bought item, and deleting an item does not credit its sale price. Edits refresh narrator context immediately; chat changes load that chat's Ledger. Turning off Ledger, its injection switch, or using the panic switch clears its narrator context without deleting saved data
+
+**World State is unchanged.** Its Worn / Significant Items section still tracks what is in play in the current scene, not everything owned. Ledger does not feed World State in v1. Branches inherit the Ledger through SillyTavern's chat-metadata copy, but rewinding or regenerating story messages does **not** undo your manual entries — correct them yourself if the story changes. Dedicated Ledger slash commands are not available in v1; use the panel.
+
 ---
 
 ## Shared Surfaces
 
 ### Shared Core
 
-All six modules share a common infrastructure:
+All modules share a common infrastructure:
 
 - **Unified API Layer** — OpenAI-compatible API *or* SillyTavern Connection Manager profiles, with retry logic, error recovery, reasoning-content fallback, and custom headers support
 - **Settings Management** — Global defaults with per-module overrides; settings stored in SillyTavern's `extension_settings` with localStorage fallback and legacy key migration
@@ -361,7 +393,7 @@ All six modules share a common infrastructure:
 
 The **🏠 Overview** tab is the MWT modal's landing view: one page showing everything waiting on you in this chat, with a deep link from every signal straight to the module that owns it. The status cards only observe; the maintenance actions below (🔎 Findings previews and 🧰 Tools) change data only through a preview → confirm modal. The pane follows the open-and-read refresh model (re-open the modal or press 🔄 Refresh).
 
-- **Status cards** — World State staleness (messages since refresh, delta counts), Knowledge (pending staging items, unread growth evidence), Story Planner (awaiting / overdue beats), Interiority (active / dormant intentions, deleted-intention records), Ambient (current conditions, one-band forecast, pin status, off/panic state), Budget (injected tokens vs context limit, observe / enforce), Coordinator (running / queued jobs, a "background HELD" flag while background work is paused), one compact health line per module, and quarantined record counts. Every card carries a one-click **Open …** button into the relevant tab
+- **Status cards** — World State staleness (messages since refresh, delta counts), Knowledge (pending staging items, unread growth evidence), Story Planner (awaiting / overdue beats), Interiority (active / dormant intentions, deleted-intention records), Ambient (current conditions, one-band forecast, pin status, off/panic state), Ledger (badge currency balance and carried-item count), Budget (injected tokens vs context limit, observe / enforce), Coordinator (running / queued jobs, a "background HELD" flag while background work is paused), one compact health line per module, and quarantined record counts. Every card carries a one-click **Open …** button into the relevant tab
 - **Guarded cells** — each card's data source is independently guarded, so a broken subsystem renders its own "Unavailable" card instead of blanking the pane
 - **🔎 Findings** — a maintenance section that appears only when an audit finds something: duplicate NPC profiles, profile relink candidates, and NPC identity-audit guidance (its cleanup is manual by design — the finding prints the steps). Duplicate and relink findings offer a **Preview …** button: preview → consequence-stated confirm → apply, where the apply step **re-plans from scratch** and refuses with "review a fresh preview" if the chat or the profile book changed since the preview. Unnamed and tied-size duplicate groups need human judgment, so they are listed as review items and never auto-applied. Relink points each profile at its largest candidate entry (newest on ties), and its preview shows how many **other candidates** each link had — anything above 0 means duplicates worth reviewing first. Hidden entirely while the audits run clean
 - **🧰 Tools** — a collapsed disclosure holding the two deliberate destructive actions: **Clear all evidence** (names every affected NPC, warns which generated profiles would be left unbacked and that rebuilding evidence costs API calls, and re-checks the NPC list at confirm) and **Clear deleted intentions** (warns those intentions may be proposed again). On hosts that don't expose a chat id, both refuse with an explanation and point at their console twins
@@ -458,11 +490,11 @@ These appear in the **⚙️ Settings** tab when no Connection Profile is select
 
 ### Per-Module API Overrides
 
-Each module tab has a **⚙ Settings** button (or expandable settings section) that opens module-specific settings, which can override the global API configuration. This lets you use different models or temperatures for different tasks (e.g., a creative model for world state, a precise model for knowledge scanning, a higher-temperature model for story planning, a small/cheap model for interiority). Use **↓ Sync to Modules** in the global Settings tab to push the global API config to all modules at once.
+Modules that make model calls have a **⚙ Settings** button (or expandable settings section) for module-specific API overrides. This lets you use different models or temperatures for different tasks (e.g., a creative model for world state, a precise model for knowledge scanning, a higher-temperature model for story planning, a small/cheap model for interiority). Use **↓ Sync to Modules** in the global Settings tab to push the global API config to all modules at once. Ambient Conditions, Calendar, and Ledger make no model calls and need no API overrides.
 
 ### Injection Settings
 
-Control how World State, Chronicle, Story Plan, and Interiority content are injected into the prompt:
+Control how module content is injected into the prompt:
 
 | Setting | Description | Default |
 |---|---|---|
@@ -473,7 +505,10 @@ Control how World State, Chronicle, Story Plan, and Interiority content are inje
 | Story Plan Depth | Injection depth for the story plan | `4` |
 | Interiority Depth | Injection depth for NPC intentions ledger | `1` |
 | Interiority Role | Message role for intentions injection | `system` |
+| Inject Ledger | Include exact money balances and up to 15 carried item rows; also available inside the Ledger tab | `On` |
 | Structural Boundaries | Wrap injected blocks in XML tags (e.g., `<mwt_world_state>…</mwt_world_state>`) | `On` |
+
+Ledger uses injection depth **1** and role **system**, with an `<mwt_ledger>` wrapper when Structural Boundaries are on. Its depth and role are not separate user settings. It appears in **📊 Budget**, where caps can limit its prompt contribution like other extension-prompt injections.
 
 **Structural Boundaries** wrap each injected reference block in tags so the model clearly distinguishes sections. Recommended for smaller / open models (24–70B) that bleed between sections. Frontier models don't need it; turn it off to save a few tokens.
 
@@ -487,7 +522,7 @@ Control how World State, Chronicle, Story Plan, and Interiority content are inje
 
 ### Floating Buttons
 
-The floating buttons (🌍 📜 🧠 🗺️ 💭 ⚙️) can be individually shown/hidden, repositioned (drag), collapsed into a single hub button, and styled as icon-only ("Modern") or icon+text ("Classic"). Position is persisted across sessions. You can also open the MWT modal from the wand (extensions) menu or the Extensions panel drawer.
+The floating buttons (🌍 📜 🧠 🗺️ 💭 💰 ⚙️) can be individually shown/hidden, repositioned (drag), collapsed into a single hub button, and styled as icon-only ("Modern") or icon+text ("Classic"). Position is persisted across sessions. The 💰 Ledger button opens the Ledger and shows its badge currency's compact balance rather than tokens or a refresh countdown; its visibility defaults to **on**. You can also open the MWT modal from the wand (extensions) menu or the Extensions panel drawer.
 
 ### Per-Tracker Enable & Panic Switch
 
@@ -525,6 +560,7 @@ Tested with:
 - **Story Planner** benefits from a higher temperature (default `0.6`) for creative, varied arc suggestions
 - **Interiority** runs well on small/cheap models (default `0.4` temp) — the task is closer to a knowledge scan than narration, and output is validated before applying
 - **🌦️ Ambient Conditions** needs no model at all — conditions are computed locally from the story clock, so it works even with no API configured
+- **💰 Ledger** also needs no model or API key — entries are manual, arithmetic is local, and only the resulting balances and carried items are supplied to the narrator
 - For models with extended thinking (e.g., DeepSeek R1, o1), the API layer automatically recovers from empty content by falling back to `reasoning_content`
 
 ---
@@ -534,12 +570,13 @@ Tested with:
 - **Chat data** (world state text, chronicle entries, growth evidence store, story plan text, interiority ledger + lifecycle history + per-message thoughts) is stored in SillyTavern's per-chat metadata (survives backup/restore)
 - **Ambient Conditions** stores only a random seed and its per-chat settings in chat metadata — the conditions themselves are never stored or refreshed; they are recomputed from (seed, in-story clock, climate) at prompt-build time. The seed and settings are part of MWT's unified backup, so a restore brings back the same weather
 - **Calendar** stores its structure, anchor, events, and dated phenomena in chat metadata (`mwt_calendar`). Dates and event mentions are never stored — they are recomputed from the story clock, so they stay correct across swipes, branches, and rewinds. The calendar is part of MWT's unified backup
+- **Ledger** stores currencies, transaction history, and inventory in chat metadata (`mwt_ledger`); balances are computed rather than stored. It lives in the chat file, not browser localStorage. Unified restore replaces the whole Ledger rather than merging transactions, and **Undo Last Restore** restores its pre-restore state while that undo snapshot remains available. Older backups that did not cover Ledger leave the current Ledger unchanged
 - **Lorebook bookkeeping** (NPC registry, state tracker registry, relationships) lives inside the Knowledge Tracker and State Tracker lorebooks themselves, in a single disabled entry titled `[MWT:store]` — see [the section below](#the-mwtstore-entry--what-it-is-and-why-its-there) for exactly what it is and why it can never reach your prompt
 - **Settings** are stored in SillyTavern's `extension_settings` (survives backup/restore) with `localStorage` fallback — validated and version-stamped as of 2.0 (a bad record repairs itself; your values are never silently deleted)
 - **Knowledge Tracker history** is stored in `localStorage` keyed by lorebook UID — malformed records are filtered from the view as of 2.0 and the list heals itself on the next edit
 - **Floating button positions** are stored in `localStorage` — validated as of 2.0 (an unreadable record just resets the buttons to their anchored spots)
 - **NPC Growth Profile evidence** uses a two-tier append-only store in chat metadata (`raw[]` → `consolidated[]` → `archived[]`), with per-NPC watermarks for continuous incremental capture and ILS backfill. Profile text is saved to a separate "NPC Profiles" lorebook with `profileUid` cross-references in the NPC registry. Growth-written dossier lines keep their state in the Knowledge lorebook too — the per-NPC switch and limits in `[MWT:store]`, and the last 10 approved Personality/Voice versions in a second disabled, never-injected `[MWT:growth-history]` entry — so all of it follows the Lorebook Scope setting
-- Chat data is per-chat — switching chats loads that chat's world state, chronicle, growth evidence, story plan, and interiority ledger. The Knowledge Tracker's lorebooks follow its **Scope** setting (global / per-character / per-chat), and each book carries its own registry so books never cross-contaminate
+- Chat data is per-chat — switching chats loads that chat's world state, chronicle, growth evidence, story plan, interiority ledger, and money/inventory Ledger. The Knowledge Tracker's lorebooks follow its **Scope** setting (global / per-character / per-chat), and each book carries its own registry so books never cross-contaminate
 
 ### The `[MWT:store]` entry — what it is and why it's there
 

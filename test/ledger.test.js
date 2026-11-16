@@ -56,6 +56,10 @@ describe('Ledger exact amounts', () => {
         [123450, 2, '1.2k'], [999950, 0, '1M'],
         [999999999, 0, '1B'], [Number.MAX_SAFE_INTEGER, 0, '9Q'],
         [99999, 2, '999.99'], [-1, 15, '−0.000000000000001'],
+        // Rounded once from the exact value, never from rounded tenths.
+        [9949, 0, '9.9k'], [9950, 0, '10k'], [10449, 0, '10k'], [10450, 0, '10k'],
+        [10499, 0, '10k'], [10500, 0, '11k'], [-10450, 0, '−10k'], [1045000, 2, '10k'],
+        [999499, 0, '999k'], [999500, 0, '1M'],
     ])('formats %i minor units (%i decimals) as %s', (amount, decimals, expected) => {
         expect(formatCompactAmount(amount, decimals)).toBe(expected);
     });
@@ -158,6 +162,16 @@ describe('Ledger fold-forward', () => {
         const zero = foldTransactions(ledger([entry('t1', 5), entry('t2', -5)]), 1);
         expect(zero.transactions[0].amount).toBe(0);
         expect(canDeleteCurrency(zero, 'c1')).toBe(false);
+    });
+
+    test('re-folding keeps a carried row\'s edited note; new aggregates get the default', () => {
+        const carried = { ...entry('t0', 40), kind: 'carried', note: 'Corrected opening purse' };
+        const record = ledger([carried, entry('t1', 5), entry('t2', 6)]);
+        const folded = foldTransactions(record, 2);
+        expect(folded.transactions[0]).toMatchObject({ id: 't0', amount: 45, kind: 'carried', note: 'Corrected opening purse' });
+        expect(computeBalances(folded)).toEqual(computeBalances(record));
+        const fresh = foldTransactions(ledger([entry('t1', 5, 'c1'), entry('t2', 6), entry('t3', 7)]), 2);
+        expect(fresh.transactions[0].note).toBe('Carried forward');
     });
 
     test('refuses impossible caps and unsafe aggregates without mutation', () => {

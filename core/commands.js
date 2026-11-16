@@ -19,7 +19,7 @@ import { clearCalendarInjection } from '../calendar/injection.js';
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
 export function createCommands({ registerSlashCommand, macroRegistry, modules, resetFloatPositions, saveSettings }) {
-    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar } = modules;
+    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar, Ledger } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
 
@@ -197,6 +197,10 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                         Chronicle.applyInjection?.();
                         StoryPlanner.applyPlanInjection?.();
                         Interiority.applyIntentionsInjection?.();
+                        // The Ledger has no generation interceptor (its text
+                        // only changes when a gate or the ledger changes), so
+                        // both directions of the switch must refresh it here.
+                        Ledger?.refreshInjection?.('panic-slash-command');
                     } catch { /* modules may not be initialized yet */ }
                 }
                 return `Injection ${mode} for all modules.`;

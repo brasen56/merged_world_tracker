@@ -967,6 +967,7 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 try { status = Ledger?.getStatus?.(); } catch { status = { state: 'Ledger unavailable; open Diagnostics', badge: '', totals: [], carried: 0 }; }
                 const badge = ledgerButton.querySelector('.mwt-float-btn-countdown');
                 badge.textContent = status?.badge ?? '';
+                badge.classList.toggle('mwt-float-badge--debt', String(status?.badge ?? '').startsWith('−'));
                 badge.style.display = status?.badge && getSettings().buttonStyle !== 'classic' ? 'block' : 'none';
                 const label = getSettings().buttonStyle === 'classic'
                     ? `💰 ${status?.badge ? `${status.badge} ${status.currency}` : 'Ledger'}` : '💰';

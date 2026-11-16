@@ -11,6 +11,38 @@ import { getLedger, saveLedger } from './store.js';
 import { renderSettings } from './settings.js';
 
 const esc = value => escapeHtml(String(value ?? ''));
+/**
+ * crypto.randomUUID exists only in secure contexts (HTTPS or localhost), so a
+ * phone reaching ST at http://192.168.x.x has none. getRandomValues does not
+ * need a secure context; Math.random is the last resort. Duplicate IDs are
+ * still refused by validation, so a collision cannot corrupt the ledger.
+ */
+function randomId() {
+    const source = globalThis.crypto;
+    if (typeof source?.randomUUID === 'function') return source.randomUUID();
+    const bytes = new Uint8Array(16);
+    if (typeof source?.getRandomValues === 'function') source.getRandomValues(bytes);
+    else for (let index = 0; index < bytes.length; index++) bytes[index] = Math.floor(Math.random() * 256);
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+/**
+ * Unsigned amount text for parseAmount. Phones set to a comma-decimal locale
+ * may show only "," on the decimal keypad, so "12,50" reads as 12.50. One to
+ * two digits after the comma only: "1,000" is a thousands separator in
+ * English, so it stays an error rather than becoming 1.000.
+ */
+function readAmountText(value, currency) {
+    const typed = String(value ?? '').trim();
+    const text = /^\d+,\d{1,2}$/.test(typed) ? typed.replace(',', '.') : typed;
+    if (/^[-+−]/.test(text)) throw new Error('Enter the amount without a sign; choose Receive or Spend for its direction.');
+    if (!/^\d+(?:\.\d+)?$/.test(text)) throw new Error('Enter digits with an optional decimal point, like 12.50, and no thousands separators.');
+    if ((text.split('.')[1]?.length ?? 0) > currency.decimals) {
+        throw new Error(currency.decimals
+            ? `${currency.name} allows ${currency.decimals} decimal place${currency.decimals === 1 ? '' : 's'}.`
+            : `${currency.name} has no decimal places; enter a whole number.`);
+    }
+    return text;
+}
 const button = (text, action = '', extra = '') => `<button type="${action ? 'button' : 'submit'}" class="mwt-btn" ${action ? `data-ledger-action="${action}"` : ''} ${extra}>${text}</button>`;
 function input(name, label, value = '', extra = '') {
     return `<label class="mwt-ledger-field">${label}<input class="mwt-input" name="${name}" value="${esc(value)}" ${extra}></label>`;
@@ -47,7 +79,7 @@ function currencyForm(row) {
     return `<form data-ledger-form="currency" ${row ? `data-id="${esc(row.id)}"` : ''} class="mwt-ledger-form">
         ${input('name', 'Currency name', row?.name, 'required')}
         ${input('decimals', 'Decimal places', row?.decimals ?? 0, `type="number" min="0" max="${MAX_CURRENCY_DECIMALS}" step="1" required`)}
-        <label><input name="badge" type="checkbox" ${row?.badge ? 'checked' : ''}> Badge currency</label>
+        <label class="mwt-ledger-check"><input name="badge" type="checkbox" ${row?.badge ? 'checked' : ''}> Badge currency</label>
         ${button(row ? 'Save currency' : 'Add currency')}${row ? button('Delete currency', 'delete-currency') : ''}
     </form>`;
 }
@@ -63,7 +95,7 @@ export function renderLedger() {
     try { const time = resolveCalendarClock(); if (time.source !== 'message-count' && !time.rejection) date = time.formattedDate ?? ''; } catch { /* date is optional */ }
     const balances = valid ? computeBalances(record) : new Map();
     const body = !valid ? '<p role="alert">Ledger data is invalid or from a newer version. It has been kept unchanged. Use Diagnostics or the recovery export before editing.</p>' : `
-        <details class="mwt-settings-disclosure"><summary>Currencies</summary>
+        <details class="mwt-settings-disclosure" data-ledger-open-key="currencies"><summary>Currencies</summary>
             <p>Balances are exact. Changing decimal places preserves each entry’s value; changes that would lose precision are refused. A currency with transactions cannot be deleted.</p>
             ${record.currencies.map(currencyForm).join('')}${currencyForm()}
         </details>
@@ -83,7 +115,7 @@ export function renderLedger() {
         <section class="mwt-ledger-pane" role="tabpanel" data-tab="inventory" hidden><h3>Inventory</h3>
             <p>Only carried items are injected (up to 15 rows, with an omitted count). Unlisted possessions may still exist.</p>
             <h4>Add item</h4>${itemForm()}<h4>Items · carried first</h4>
-            ${[...record.items].sort((a, b) => Number(b.carried) - Number(a.carried)).map(row => `<div class="mwt-ledger-row"><h4>${esc(row.name)} ×${row.qty} · ${row.carried ? 'Carried' : 'Stored'}</h4>${itemForm(row)}</div>`).join('') || '<p>No items yet.</p>'}
+            ${[...record.items].sort((a, b) => Number(b.carried) - Number(a.carried)).map(row => `<details class="mwt-ledger-row" data-ledger-open-key="item:${esc(row.id)}"><summary>${esc(row.name)} ×${row.qty} · ${row.carried ? 'Carried' : 'Stored'}</summary>${itemForm(row)}</details>`).join('') || '<p>No items yet.</p>'}
         </section>`;
     return `<section class="mwt-ledger" aria-label="Ledger"><h2><span aria-hidden="true">💰</span> Ledger</h2>
         <p>You enter it; code does the arithmetic; the narrator only reads it. Saved per chat.</p>
@@ -114,15 +146,19 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
         current();
         saveLedger(record);
         const selected = tabs?.getSelectedIndex() ?? 0;
+        // The stepper and Carried/Stored autosave from inside a collapsed
+        // row, so the re-render must not close the row being worked on.
+        const open = new Set([...pane.querySelectorAll('details[open][data-ledger-open-key]')].map(row => row.dataset.ledgerOpenKey));
         const parent = pane.parentElement;
         pane.outerHTML = renderLedger();
         wireLedger(parent, { getSettings, saveSettings, onChanged, confirmDelete });
         const next = parent.querySelector('.mwt-ledger');
+        next.querySelectorAll('details[data-ledger-open-key]').forEach(row => { row.open = open.has(row.dataset.ledgerOpenKey); });
         next.querySelectorAll('[role="tab"]')[selected]?.click();
         next.querySelector('.mwt-ledger-status').textContent = message;
         onChanged();
     };
-    const id = prefix => `${prefix}-${globalThis.crypto.randomUUID()}`;
+    const id = prefix => `${prefix}-${randomId()}`;
     const remove = (form, collection, message) => {
         current();
         if (!confirmDelete(message)) return false;
@@ -179,9 +215,9 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
                 const previous = record.transactions.find(row => row.id === form.dataset.id);
                 const currency = record.currencies.find(row => row.id === (previous?.kind === 'carried' ? previous.currency : field('currency').value));
                 if (!currency) throw new Error('Add a currency first.');
-                if (!/^\d+(?:\.\d+)?$/.test(field('amount').value.trim())) throw new Error('Enter an unsigned amount; choose Receive or Spend for its direction.');
+                const amount = readAmountText(field('amount').value, currency);
                 const row = { ...previous, id: previous?.id ?? id('t'), currency: currency.id,
-                    amount: parseAmount(field('sign').value + field('amount').value.trim(), currency.decimals),
+                    amount: parseAmount(field('sign').value + amount, currency.decimals),
                     note: field('note').value, date: previous?.kind === 'carried' ? null : field('date').value.trim() || null, kind: previous?.kind ?? 'entry' };
                 if (previous) Object.assign(previous, row); else record.transactions.push(row);
                 commit(record, 'Transaction saved.');

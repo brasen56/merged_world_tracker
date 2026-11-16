@@ -52,7 +52,9 @@ export function formatCompactAmount(amount, decimals = 0) {
     let index = 0;
     while (magnitude >= unit * 1000n && index < suffixes.length - 1) { unit *= 1000n; index++; }
     let tenths = (magnitude * 10n + unit / 2n) / unit;
-    if (tenths >= 100n) tenths = ((tenths + 5n) / 10n) * 10n;
+    // At 10+ units, round the exact value once. Rounding the already-rounded
+    // tenths again would turn 10,450 into 10.5k and then 11k.
+    if (tenths >= 100n) tenths = ((magnitude + unit / 2n) / unit) * 10n;
     if (tenths >= 10000n && index < suffixes.length - 1) { index++; tenths = 10n; }
     const body = tenths % 10n ? `${tenths / 10n}.${tenths % 10n}` : String(tenths / 10n);
     return `${amount < 0 ? '−' : ''}${body}${suffixes[index]}`;
@@ -146,6 +148,8 @@ export function canDeleteCurrency(record, currencyId) {
  * retaining the newest suffix. Each aggregate keeps its first source row's
  * identity: no new/recycled IDs, timestamps or randomness are needed. Existing
  * carried rows participate in later folds just like entries; zero sums remain.
+ * A carried row is always the oldest, so it is re-folded on every save past
+ * the cap: it keeps the note the user gave it instead of being reset.
  * Impossible caps and unsafe aggregates fail without changing the caller.
  */
 export function foldTransactions(record, limit = TRANSACTION_LIMIT) {
@@ -164,7 +168,7 @@ export function foldTransactions(record, limit = TRANSACTION_LIMIT) {
     }
     if (groups.size + rows.length - end > limit) throw new RangeError('Transaction limit cannot hold one carried entry per currency.');
     const carried = [...groups.values()].map(({ first, total }) => ({
-        ...first, amount: safeNumber(total), note: 'Carried forward', date: null, kind: 'carried',
+        ...first, amount: safeNumber(total), note: first.kind === 'carried' ? first.note : 'Carried forward', date: null, kind: 'carried',
     }));
     return { ...record, transactions: [...carried, ...rows.slice(end).map(row => ({ ...row }))] };
 }

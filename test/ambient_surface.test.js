@@ -34,6 +34,15 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Ambient Phase 3 user surface', () => {
+    test('all Ambient text, number, date, time and select fields use shared MWT theming', () => {
+        mount();
+        const fields = document.querySelectorAll('#mwt-ambient-settings input:not([type="checkbox"]):not([type="range"]), #mwt-ambient-settings select, #mwt-ambient-settings textarea');
+        expect(fields.length).toBeGreaterThan(0);
+        for (const field of fields) {
+            expect(field.classList.contains('mwt-input'), field.id).toBe(true);
+        }
+    });
+
     test('frequency rule controls add, edit, end and delete while preserving past output', () => {
         saveSettings(config);
         mount();

@@ -55,6 +55,60 @@ test('empty rendering is non-mutating, accessible, and every text/select control
     expect(css).toContain('.mwt-ledger .mwt-input');
     expect(css).toContain('background: var(--mwt-bg-light)');
     expect(css).toContain('color: var(--mwt-text)');
+    // jsdom can't paint: pin the rules that make the selection and options visible.
+    expect(css).toMatch(/\.mwt-ledger-tabs \.mwt-btn\[aria-selected="true"\]\s*\{[^}]*background: var\(--mwt-accent\)/);
+    expect(css).toMatch(/\.mwt-ledger select\.mwt-input option\s*\{[^}]*background-color: var\(--mwt-bg-light\)/);
+});
+
+test.each([
+    ['without randomUUID (plain-HTTP LAN)', real => ({ getRandomValues: bytes => real.getRandomValues(bytes) })],
+    ['without any crypto', () => undefined],
+])('adding works %s and IDs stay unique', (_label, makeCrypto) => {
+    vi.stubGlobal('crypto', makeCrypto(globalThis.crypto));
+    mount();
+    fill(form('currency'), { name: 'gold', decimals: '0' }); submit(form('currency'));
+    fill(form('transaction'), { amount: '5' }); submit(form('transaction'));
+    fill(form('item'), { name: 'Rope', qty: '1' }); submit(form('item'));
+    const record = getLedger();
+    expect(message()).toBe('Item saved.');
+    const ids = [record.currencies[0].id, record.transactions[0].id, record.items[0].id];
+    expect(ids).toEqual([expect.stringMatching(/^c-[0-9a-f]{32}$/), expect.stringMatching(/^t-[0-9a-f]{32}$/), expect.stringMatching(/^i-[0-9a-f]{32}$/)]);
+});
+
+test('amount text: comma decimals accepted, thousands separators and signs explained', () => {
+    mount({ ...createLedger(), currencies: [currency, { id: 'cp', name: 'copper', decimals: 0, badge: false }] });
+    fill(form('transaction'), { amount: '12,5' }); submit(form('transaction'));
+    expect(getLedger().transactions[0].amount).toBe(1250);
+    fill(form('transaction'), { amount: '1,000' }); submit(form('transaction'));
+    expect(message()).toContain('no thousands separators');
+    fill(form('transaction'), { amount: '-5' }); submit(form('transaction'));
+    expect(message()).toContain('Receive or Spend');
+    fill(form('transaction'), { amount: '1.234' }); submit(form('transaction'));
+    expect(message()).toBe('gold allows 2 decimal places.');
+    fill(form('transaction'), { amount: '3,5', currency: 'cp' }); submit(form('transaction'));
+    expect(message()).toBe('copper has no decimal places; enter a whole number.');
+    expect(getLedger().transactions).toHaveLength(1);
+});
+
+test('inventory rows collapse, and saving keeps open rows and Currencies open', () => {
+    mount({ ...createLedger(), currencies: [currency], items: [{ id: 'a', name: 'Rope', qty: 3, note: '', carried: true }, { id: 'b', name: 'Salve', qty: 2, note: '', carried: true }] });
+    const row = id => form('item', id).closest('details');
+    expect(row('a').open).toBe(false);
+    row('a').open = true;
+    document.querySelector('details[data-ledger-open-key="currencies"]').open = true;
+    click(form('item', 'a'), 'quantity-down');
+    expect(getLedger().items[0].qty).toBe(2);
+    expect(row('a').open).toBe(true);
+    expect(row('a').querySelector('summary').textContent).toBe('Rope ×2 · Carried');
+    expect(row('b').open).toBe(false);
+    expect(document.querySelector('details[data-ledger-open-key="currencies"]').open).toBe(true);
+});
+
+test('Overview names the empty states instead of "No badge currency"', () => {
+    const overview = () => renderOverviewSnapshot({ ledger: { ok: true, value: getStatus() } });
+    expect(overview()).toContain('No ledger yet');
+    saveLedger(createLedger());
+    expect(overview()).toContain('No currencies yet');
 });
 
 test('create currency, exact signed transactions, edit and confirmed delete', () => {
@@ -160,6 +214,7 @@ test.each(['modern', 'classic'])('floating badge, tooltip, empty/debt states and
     bar.setupButtonBar(); bar.updateFloatTokenCounts();
     const floating = document.getElementById('mwt-float-ledger');
     expect(floating.querySelector('.mwt-float-btn-countdown').textContent).toBe('−1.2k');
+    expect(floating.querySelector('.mwt-float-btn-countdown').classList.contains('mwt-float-badge--debt')).toBe(true);
     expect(floating.title).toContain('-1200.00 gold');
     expect(floating.title).toContain('1 carried items');
     expect(floating.querySelector('.mwt-float-btn-icon').textContent).toBe(style === 'classic' ? '💰 −1.2k gold' : '💰');
@@ -169,5 +224,6 @@ test.each(['modern', 'classic'])('floating badge, tooltip, empty/debt states and
     expect(overview).toContain('data-overview-tab="ledger"');
     saveLedger(createLedger()); bar.updateFloatTokenCounts();
     expect(floating.querySelector('.mwt-float-btn-countdown').style.display).toBe('none');
+    expect(floating.querySelector('.mwt-float-btn-countdown').classList.contains('mwt-float-badge--debt')).toBe(false);
     settings.showFloatLedger = false; bar.applyButtonVisibility(); expect(floating.style.display).toBe('none');
 });

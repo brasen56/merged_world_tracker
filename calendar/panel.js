@@ -74,7 +74,7 @@ export function wireCalendarPanel(root) {
             const wrapper = document.createElement('div');
             const name = document.createElement('input'); name.className = 'mwt-input'; name.value = row.name; name.setAttribute('aria-label', `Month ${index + 1} name`);
             name.addEventListener('input', () => { row.name = name.value; refreshMonths(); preview(); });
-            const length = document.createElement('input'); length.type = 'number'; length.min = 1; length.max = 40; length.value = row.days; length.setAttribute('aria-label', `Month ${index + 1} days`);
+            const length = document.createElement('input'); length.className = 'mwt-input'; length.type = 'number'; length.min = 1; length.max = 40; length.value = row.days; length.setAttribute('aria-label', `Month ${index + 1} days`);
             length.addEventListener('input', () => { row.days = Number(length.value); preview(); });
             wrapper.append(name, length);
             for (const [label, action] of [['↑', -1], ['↓', 1], ['Remove', 0]]) {

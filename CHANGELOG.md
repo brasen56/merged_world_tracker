@@ -12,7 +12,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.18.0]
+
+### Added
+
+- **💰 Ledger — a persistent purse and inventory for the player character.**
+  The new Ledger tab has **Finances** and **Inventory** sub-tabs: you enter
+  what changes, code does the arithmetic, and the narrator only reads the
+  result. No model calls, automatic deductions or purchases inferred from
+  prose, and no changes to World State's scene-focused item tracking.
+  - **Finances:** define multiple currencies with their own decimal places,
+    record money received or spent with a note and optional story date, and
+    edit or delete transactions with confirmation before deletion. Balances
+    are computed from the history using exact smallest-unit arithmetic;
+    currencies stay separate, with no exchange-rate conversion. Beyond 200
+    transactions, the oldest entries fold into editable **Carried forward**
+    entries without changing the balances.
+  - **Inventory:** track names, quantities and notes, marking each item
+    **Carried** or **Stored**. Quantity steppers and direct edits share the
+    same validation; deleting an item, including setting its quantity to
+    zero, asks for confirmation.
+  - **Narrator context:** injects exact currency balances, including zero
+    and debt, and up to 15 carried item rows, with an omitted-item count
+    when more are carried. Stored items, notes and transaction history stay
+    out of the prompt. The money is authoritative; unlisted possessions
+    are not treated as missing. Context refreshes on edits and chat changes,
+    and respects the module, injection and panic-switch gates.
+  - **At a glance:** a floating 💰 button in both button styles shows the
+    chosen currency's compact balance; its tooltip lists all balances and
+    the carried-item count. The Overview links to the Ledger, and Settings
+    controls its visibility, enablement and injection independently.
+  - **Per-chat storage and recovery:** participates in schema validation,
+    Diagnostics, token budgeting, backup, restore and Undo Last Restore.
+    Restores replace the whole Ledger rather than merging transactions;
+    older backups that did not cover it leave the current Ledger alone.
+    Invalid or newer-version data is kept unchanged, and stale panels
+    refuse saves rather than writing into another chat or overwriting
+    externally changed records.
+
+## [2.17.4]
 
 ### Changed
 

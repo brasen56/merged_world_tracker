@@ -346,6 +346,12 @@ function renderSettingsTab() {
                 <option value="assistant" ${s.interiorityRole === 'assistant' ? 'selected' : ''}>assistant</option>
             </select>
 
+            <div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">💰</span> Ledger</div>
+            <label class="mwt-label" for="mwt-s-inject-ledger" style="display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1/3">
+                <input type="checkbox" id="mwt-s-inject-ledger" ${s.injectLedger !== false ? 'checked' : ''}>
+                <span>Inject money and carried items</span>
+            </label>
+
             <div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">🏷️</span> Structural Boundaries</div>
             <label class="mwt-label" for="mwt-s-structural-boundaries" style="display:flex;align-items:center;gap:6px;cursor:pointer">
                 <input type="checkbox" id="mwt-s-structural-boundaries" ${s.structuralBoundaries !== false ? 'checked' : ''}>
@@ -384,6 +390,9 @@ function renderSettingsTab() {
 
             <label class="mwt-label" for="mwt-s-show-interiority"><span aria-hidden="true">💭</span> Interiority</label>
             <label for="mwt-s-show-interiority" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-interiority" ${s.showFloatInteriority !== false ? 'checked' : ''}> Visible</label>
+
+            <label class="mwt-label" for="mwt-s-show-ledger"><span aria-hidden="true">💰</span> Ledger</label>
+            <label for="mwt-s-show-ledger" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-ledger" ${s.showFloatLedger !== false ? 'checked' : ''}> Visible</label>
 
             <label class="mwt-label" for="mwt-s-show-settings"><span aria-hidden="true">⚙️</span> Settings</label>
             <label for="mwt-s-show-settings" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-settings" ${s.showFloatSettings !== false ? 'checked' : ''}> Visible</label>
@@ -431,15 +440,13 @@ function renderSettingsTab() {
 
             <label class="mwt-label" for="mwt-s-enable-interiority"><span aria-hidden="true">💭</span> Interiority</label>
             <label for="mwt-s-enable-interiority" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-interiority" ${s.enableInteriority !== false ? 'checked' : ''}> Use this tracker</label>
+
+            <label class="mwt-label" for="mwt-s-enable-ledger"><span aria-hidden="true">💰</span> Ledger</label>
+            <label for="mwt-s-enable-ledger" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-ledger" ${s.enableLedger !== false ? 'checked' : ''}> Use this tracker</label>
         </div>
 
         </details>
 
-        <div class="mwt-ledger-global-settings">
-            <label for="mwt-s-show-ledger"><input type="checkbox" id="mwt-s-show-ledger"> Show Ledger button</label>
-            <label for="mwt-s-enable-ledger"><input type="checkbox" id="mwt-s-enable-ledger"> Enable Ledger</label>
-            <label for="mwt-s-inject-ledger"><input type="checkbox" id="mwt-s-inject-ledger"> Inject money and carried items</label>
-        </div>
         <div class="mwt-settings-actions mwt-flex mwt-gap-4" style="flex-wrap:wrap">
             <button id="mwt-s-save" class="mwt-btn mwt-btn-primary">Save Settings</button>
             <button id="mwt-s-sync" class="mwt-btn" title="Copy these API settings to all module-specific configs"><span aria-hidden="true">↓</span> Sync to Modules</button>

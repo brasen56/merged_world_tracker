@@ -10,6 +10,8 @@
 
 One line each; the complete version-by-version history lives in [CHANGELOG.md](CHANGELOG.md).
 
+- **v2.18.0** — 💰 Ledger: manually track money and carried/stored inventory per chat, with exact balances, a floating balance badge, narrator context and backup support — no model calls
+- **v2.17.4** — Smaller Interiority rollback records on long chats, plus Ledger testing fixes for mobile entry, amount parsing, badge rounding, injection toggling and UI readability
 - **v2.17.2** — Growth profiles describe the character now: evidence reaches the model in story order, so early traits stop blending into the current self
 - **v2.17.0** — Growth-written dossier Personality & Voice: approved NPC growth can write those two lines, reviewed sentence-by-sentence in Staging
 - **v2.16.0** — Manual NPC entry editing: opt-in Edit mode in the NPC View, riding the same guarded write path as the module's own cleanups
