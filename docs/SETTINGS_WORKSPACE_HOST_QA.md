@@ -5,8 +5,8 @@
 slice so it can be worked through and annotated as each slice ships; the
 jsdom suites cover the automated gates and prove nothing on this page.
 
-**Status:** Slice 1 implemented 2026-11-16 — host QA pending. Slices 2–3 not
-started; their sections are blocked until implemented.
+**Status:** Slices 1–2 implemented 2026-11-16. Slice 1 host result is recorded
+below; Slice 2 host QA is pending. Slice 3 is not started.
 
 **Conventions:** when testing an item, append `PASS` or `FAILED: <evidence>`;
 note the date. Record the tested commit, SillyTavern version, browser +
@@ -32,6 +32,7 @@ disposable chat data.
 
 Implemented 2026-11-16. Layout is unchanged, so compare directly against
 pre-slice behavior; automated coverage lives in `test/settings_form.test.js`.
+**Pass: tested 2fd76cf on chrome, ST v1.19.0 on 202/11/16**
 
 1. All six disclosures (API Connection, Stable History, Generation
    Coordinator, Injection Settings, Floating Buttons, Per-Tracker Enable)
@@ -49,7 +50,7 @@ pre-slice behavior; automated coverage lives in `test/settings_form.test.js`.
 
 ## Slice 2 — Workspace shell and responsive navigation
 
-Blocked until implemented.
+Implemented 2026-11-16. Host QA pending; automated results do not prove these items.
 
 1. Only the selected section is visible in the real host stylesheet stack:
    the `[hidden]` rule holds against both MWT and SillyTavern `display` rules.

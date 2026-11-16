@@ -4,7 +4,13 @@ New to MWT? This page is the whole onboarding: pick a level, work through a shor
 
 **The one thing to know before anything else: every module is independent.** Disable any of the six and nothing breaks — the others keep working, and you can re-enable anything at any time. Nothing irreversible happens in setup, and a global panic switch (right-click the ⚙️ button) turns every tracker off at once if you ever want silence.
 
-One prerequisite, independent of level: the five LLM modules share one API connection. Configure it once in the **⚙️ Settings** tab — a **Connection Profile** is the easiest path (it reuses your existing SillyTavern connection) — and press **Save Settings**. Only 🌦️ Ambient Conditions needs no API at all.
+One prerequisite, independent of level: the five LLM modules share one API connection. Configure it once in **⚙️ Settings → API & Connection** — a **Connection Profile** is the easiest path (it reuses your existing SillyTavern connection) — and press **Save Global Settings**. Only 🌦️ Ambient Conditions needs no API at all.
+
+Settings uses vertical section navigation on desktop and a **Settings section**
+picker on mobile. Switching sections preserves drafts; **Save Global Settings**
+saves every global section. Ambient uses its own separate Save under
+**Ambient Conditions — This chat**; backup actions are under **Backup & Restore — This chat**.
+Reopening or changing chats reloads saved values, not drafts.
 
 > 💾 **Save as you go.** Most steps below change a field in a settings pane. Each pane has its own **Save Settings** button, and a change you don't save is lost when the pane closes. The 🔄 **Auto** buttons in World State and Story Planner are the exception — they save the moment you click them.
 
@@ -30,7 +36,7 @@ Every level ends with the same per-chat step: switching **Chronicle injection** 
 
 The core loop only: a rolling "what's true right now" document (World State) plus timestamped session summaries (Chronicle). Lighter prompts, minimal API usage.
 
-1. **⚙️ Settings** tab → **Per-Tracker Enable** section: uncheck **Knowledge**, **Story Planner**, and **Interiority** (leave World State and Chronicle on) → **Save Settings**. Their tabs stay in the window; they just go quiet
+1. **⚙️ Settings** tab → **Modules & Configuration** section: uncheck **Knowledge**, **Story Planner**, and **Interiority** (leave World State and Chronicle on) → **Save Global Settings**. Their tabs stay in the window; they just go quiet
 2. **🌍 World State** tab → **⚙️ World State Settings** → **Detail Level**: **Minimal** (one line per character; the smallest injection) → **Save Settings**. A Detail Level change applies from the next full **🔄 Refresh**
 3. Leave every auto toggle as shipped — at this level, you decide when anything runs
 4. **📜 Chronicle** tab, in each chat → once the chat has its first entry (**Generate Entry**), click **📤 Injection OFF** so it reads **📥 Injection ON**
@@ -40,7 +46,7 @@ The core loop only: a rolling "what's true right now" document (World State) plu
 
 All five modules available at moderate prompt size, but nothing runs until you ask. The closest level to "shipped defaults" — the only changes from a fresh install are the Detail Level and Interiority's auto setting.
 
-1. **⚙️ Settings** tab → **Per-Tracker Enable**: leave all five checked (that's the default)
+1. **⚙️ Settings** tab → **Modules & Configuration**: leave all five checked (that's the default)
 2. **🌍 World State** tab → **⚙️ World State Settings** → **Detail Level**: **Standard** (short character blocks; tighter section limits) → **Save Settings**
 3. **💭 Interiority** tab → **⚙ Settings** → uncheck **Auto-generate on each AI message** (it ships checked) → **Save Settings**. With it off, you generate thoughts when you want them with **💭 Generate Now** in the tab, or `/wt-thoughts`
 4. **📜 Chronicle** tab, in each chat → once the chat has its first entry (**Generate Entry**), click **📤 Injection OFF** so it reads **📥 Injection ON**
@@ -49,7 +55,7 @@ All five modules available at moderate prompt size, but nothing runs until you a
 
 Everything on, the bookkeeping automated, full-size world state. MWT refreshes itself as the story moves. Note the trade: scheduled background API calls in every chat.
 
-1. **⚙️ Settings** tab → **Per-Tracker Enable**: all five checked (default)
+1. **⚙️ Settings** tab → **Modules & Configuration**: all five checked (default)
 2. **🌍 World State** tab → **⚙️ World State Settings** → **Detail Level**: **Detailed** (default — full six-field character blocks)
 3. Same section → click **🔄 Auto: OFF** and accept **5** messages (the shipped interval). It saves immediately
 4. **📜 Chronicle** tab → **⚙ Settings** → check **Auto-snapshot**, threshold **40** messages → **Save Settings**. Every 40 messages it writes a new entry on its own — you can open, edit, or delete it afterwards

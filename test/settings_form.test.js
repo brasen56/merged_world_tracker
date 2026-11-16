@@ -4,6 +4,7 @@ import {
     GLOBAL_API_FIELD_IDS, collectGlobalSettingsPatch, renderGlobalSettingsForm, wireGlobalSettingsForm,
 } from '../core/settings_form.js';
 import source from '../index.js?raw';
+import { SETTINGS_SECTIONS, selectSettingsSection, wireSettingsWorkspace } from '../core/settings_workspace.js';
 
 const api = {
     apiUrl: 'https://example.test/v1', apiKey: 'secret', modelName: 'custom-model',
@@ -68,12 +69,13 @@ describe('global Settings production form seam', () => {
         expect(new Set(ids).size).toBe(ids.length);
     });
 
-    test('Save reads a complete expected patch from closed disclosures exactly once', () => {
+    test.each(SETTINGS_SECTIONS)('Save reads the full expected patch from $id exactly once', ({ id }) => {
         const root = mount();
         const handlers = callbacks();
         wireGlobalSettingsForm(root, handlers);
+        wireSettingsWorkspace(root);
         populate();
-        root.querySelectorAll('details').forEach(el => { el.open = false; });
+        selectSettingsSection(root, id);
         expect(handlers.onSave).not.toHaveBeenCalled();
         control('save').click();
         expect(handlers.onSave).toHaveBeenCalledExactlyOnceWith(expected);
@@ -212,7 +214,11 @@ describe('global form numeric reader contracts', () => {
 
 describe('host adoption (index.js cannot be imported under jsdom)', () => {
     test('uses the production seam and leaves side effects with the host', () => {
-        expect(source).toContain('renderGlobalSettingsForm(getSettings()) + renderAmbientSettings() + renderBackupPanel()');
+        expect(source).toContain('renderGlobalSettingsForm(getSettings(), {');
+        expect(source).toContain('ambient: renderAmbientSettings({ omitChrome: true })');
+        expect(source).toContain('backup: renderBackupPanel({ omitChrome: true })');
+        expect(source).toContain('wireSettingsWorkspace(modal, { onSelect: id => { selectedSettingsSection = id; } });');
+        expect(source).toContain('restoreSettingsFocus(modal, restored)');
         expect(source).toContain('wireGlobalSettingsForm(modal, {');
         expect(source).not.toContain("addEventListener('click', () => {\n            const apiValues");
         const save = source.slice(source.indexOf('onSave: (patch) => {'), source.indexOf('onResetPositions: () => {'));

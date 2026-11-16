@@ -47,6 +47,7 @@ import { createFloatingButtonBar, setControlBusy } from './core/ui.js';
 // itself cannot be imported into Vitest; see test/main_tabbar_adoption.test.js).
 import { renderMainTabShell, wireMainTabBar } from './core/main_tabs.js';
 import { renderGlobalSettingsForm, wireGlobalSettingsForm } from './core/settings_form.js';
+import { wireSettingsWorkspace, restoreSettingsFocus } from './core/settings_workspace.js';
 import { createCommands } from './core/commands.js';
 import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
 // Diagnostics accessors (Phases 0–1). Read-only peek at the in-memory capture,
@@ -235,8 +236,13 @@ const TABS = [
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
+let selectedSettingsSection = 'connection';
 function renderSettingsTab() {
-    return renderGlobalSettingsForm(getSettings()) + renderAmbientSettings() + renderBackupPanel();
+    return renderGlobalSettingsForm(getSettings(), {
+        selectedSection: selectedSettingsSection,
+        ambient: renderAmbientSettings({ omitChrome: true }),
+        backup: renderBackupPanel({ omitChrome: true }),
+    });
 }
 
 function buildTabContent(tab) {
@@ -263,6 +269,7 @@ let modal = null;
 const _initedModules = new Set();
 
 function renderModal() {
+    const previousMainTab = modal?.querySelector('.mwt-tab-btn[aria-selected="true"]')?.dataset.tab;
     // Accessibility plan §4.2 / Slice 2: the main tab bar follows the WAI-ARIA
     // Tabs pattern — role=tablist/tab/tabpanel, aria-controls/aria-labelledby
     // pairs through stable ids, roving tabindex (inactive tabs -1), hidden on
@@ -297,7 +304,10 @@ function renderModal() {
     // is rebuilt on every open and chat change, so wiring runs on every
     // render; see wireMainTabBar() for why repeated renders can neither drop
     // the handlers nor stack duplicates.
-    wireMainTabBar(modal);
+    const mainTabs = wireMainTabBar(modal);
+    const previousMainIndex = TABS.findIndex(tab => tab.id === previousMainTab);
+    if (previousMainIndex >= 0) mainTabs?.select(previousMainIndex);
+    wireSettingsWorkspace(modal, { onSelect: id => { selectedSettingsSection = id; } });
     for (const [id, key] of [['show-ledger', 'showFloatLedger'], ['enable-ledger', 'enableLedger'], ['inject-ledger', 'injectLedger']]) {
         modal.querySelector(`#mwt-s-${id}`).checked = getSettings()[key] !== false;
     }
@@ -548,7 +558,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
                 const restored = focusId
                     ? [...modal.querySelectorAll('[id]')].find(el => el.id === focusId)
                     : (focusTab ? modal.querySelector(`.mwt-tab-btn[data-tab="${focusTab}"]`) : null);
-                (restored || modal.querySelector('.mwt-modal-close'))?.focus?.();
+                restoreSettingsFocus(modal, restored);
             }
         }
     });

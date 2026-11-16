@@ -84,11 +84,15 @@ describe('Interiority disclosures', () => {
     });
 });
 
-describe('Settings tab disclosures', () => {
-    test('Save and Sync sit outside every collapsible section', () => {
+describe('Settings workspace replaces global disclosures', () => {
+    test('all seven sections stay mounted and global Save sits outside them', () => {
         const host = document.createElement('div');
         host.innerHTML = renderGlobalSettingsForm({});
-        expect(host.querySelectorAll('details.mwt-settings-disclosure')).toHaveLength(6);
+        expect(host.querySelectorAll('details.mwt-settings-disclosure')).toHaveLength(0);
+        expect(host.querySelectorAll('.mwt-settings-section')).toHaveLength(7);
+        expect(host.querySelectorAll('.mwt-settings-section:not([hidden])')).toHaveLength(1);
+        expect(host.querySelector('#mwt-s-save').closest('.mwt-settings-section')).toBeNull();
+        expect(host.querySelector('#mwt-s-sync').closest('.mwt-settings-section').id).toBe('mwt-settings-section-connection');
         for (const id of ['mwt-s-save', 'mwt-s-sync']) {
             const button = host.querySelector(`#${id}`);
             expect(button, id).not.toBeNull();

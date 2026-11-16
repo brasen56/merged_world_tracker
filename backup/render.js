@@ -288,10 +288,9 @@ export function readRestoreControlValues(root) {
  * The Backup / Restore control rendered inside the Settings tab. Buttons are
  * tagged with data-backup-action so wireBackupEvents can bind them by intent.
  */
-export function renderBackupPanel() {
+export function renderBackupPanel({ omitChrome = false } = {}) {
     return `
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <h3 style="margin-bottom:8px">💾 Backup / Restore</h3>
+        ${omitChrome ? '' : '<hr style="border-color:var(--mwt-border);margin:16px 0"><h3 style="margin-bottom:8px">💾 Backup / Restore</h3>'}
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Export a single versioned backup of <em>this chat's</em> MWT data (world state, chronicle, knowledge
             evidence/counters/registry, story planner, interiority, custom calendar, Ambient Conditions settings
@@ -302,13 +301,15 @@ export function renderBackupPanel() {
         <div id="mwt-backup-panel" class="mwt-backup-panel">
             <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap;align-items:center">
                 <button id="mwt-bk-export" class="mwt-btn" data-backup-action="export"><span aria-hidden="true">⬇</span> Export Backup</button>
+                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download quarantined records for repair; this evidence file is not a restorable backup."><span aria-hidden="true">🧯</span> Download recovery data</button>
+            </div>
+            <p class="mwt-text-dim mwt-text-sm">Recovery data contains refused records for repair, not a restorable backup. Diagnostics → Scope &amp; storage shows per-store counts.</p>
+            <div class="mwt-settings-block">
+                <h4>Restore or undo — This chat</h4>
+                <p>Restore requires a preview and confirmation before writing data.</p>
                 <button id="mwt-bk-restore" class="mwt-btn" data-backup-action="restore"><span aria-hidden="true">⬆</span> Restore from File…</button>
                 <button id="mwt-bk-undo" class="mwt-btn" data-backup-action="undo" title="Replay the pre-restore snapshot captured this session"><span aria-hidden="true">↩</span> Undo Last Restore</button>
-                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download every quarantined record this chat/session holds, as JSON — each item's store + path say where it belongs. The file is evidence, not a restore file: repair the record into a backup's matching section, then restore that backup (DATA_SAFETY_GUIDE.md). Quarantined records also ride in every backup."><span aria-hidden="true">🧯</span> Download recovery data</button>
             </div>
-            <p style="color:var(--mwt-text-dim);font-size:11px;margin:8px 0 0">
-                Recovery data = records MWT refused to load (kept whole, never injected). Diagnostics → 🗂️ Scope &amp; storage shows the per-store counts.
-            </p>
         </div>
     `;
 }
@@ -800,7 +801,8 @@ async function handleRecoveryExport() {
 export function wireBackupEvents(modal) {
     state.modal = modal;
     const panel = modal?.querySelector('#mwt-backup-panel');
-    if (!panel) return;
+    if (!panel || panel._mwtWired) return;
+    panel._mwtWired = true;
     panel.querySelector('#mwt-bk-export')?.addEventListener('click', () => { handleExport(); });
     panel.querySelector('#mwt-bk-restore')?.addEventListener('click', () => { handleRestorePick(); });
     panel.querySelector('#mwt-bk-undo')?.addEventListener('click', () => { handleUndo(); });

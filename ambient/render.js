@@ -21,15 +21,14 @@ function variabilityText(value) {
     return `${Math.round(value * 100)}% — ${value < 0.5 ? 'slower changes' : value > 0.5 ? 'faster changes' : 'balanced (default)'}`;
 }
 
-export function renderAmbientSettings() {
+export function renderAmbientSettings({ omitChrome = false } = {}) {
     const s = getSettings();
     const variability = Number.isFinite(s.variability) ? s.variability : 0.5;
     const anchor = isMoonEpochOffset(s.moonEpochOffset)
         ? new Date(Math.round((LUNAR_EPOCH_HOURS + s.moonEpochOffset + LUNAR_MONTH_DAYS * 12) * AMBIENT_HOUR_MS)).toISOString() : '';
     const custom = getChatMeta('mwt_calendar')?.structure === 'custom';
     const anchorDate = anchor ? formatStoryDateInput(new Date(anchor).getTime() / AMBIENT_HOUR_MS) : '';
-    return `<details class="mwt-settings-disclosure" id="mwt-ambient-settings" open>
-        <summary><span aria-hidden="true">🌦️</span> Ambient Conditions (this chat)</summary>
+    return `${omitChrome ? '<div id="mwt-ambient-settings">' : '<details class="mwt-settings-disclosure" id="mwt-ambient-settings" open><summary><span aria-hidden="true">🌦️</span> Ambient Conditions (this chat)</summary>'}
         <p>Code decides the weather; narration renders it when relevant. These controls save separately from global settings.</p>
         <p class="mwt-text-dim mwt-text-sm">Recent weather is recomputed, not logged. Changing the seed, climate, hemisphere, variability, manual season or stored pin rewrites its evaluated history. Rewinding restores stored pins inside their original intervals.</p>
         <label for="mwt-a-enabled"><input type="checkbox" id="mwt-a-enabled" ${s.enabled ? 'checked' : ''}> Enable Ambient Conditions</label>
@@ -94,7 +93,7 @@ export function renderAmbientSettings() {
             <button type="button" class="mwt-btn" id="mwt-a-unpin">Unpin</button>
         </details>
         <p id="mwt-a-status" role="status" aria-live="polite">${s.pin ? 'A pin is stored; see Overview for its current status and bound.' : ''}</p>
-    </details>`;
+    ${omitChrome ? '</div>' : '</details>'}`;
 }
 
 export function wireAmbientSettings(root) {

@@ -464,6 +464,20 @@ Macros let you place content anywhere (Author's Note, prompt manager block, char
 
 ## Configuration
 
+The **⚙️ Settings** tab is a workspace: choose a section from the vertical
+navigation on desktop or the **Settings section** picker on mobile. Sections
+are **API & Connection**, **Automation** (Stable History and Generation
+Coordinator), **Injection**, **Modules & Configuration**, **Floating Buttons**,
+**Ambient Conditions — This chat**, and **Backup & Restore — This chat**.
+Changing sections keeps unsaved inputs intact. The selected section lasts for
+the session, but reopening or changing chats reloads persisted values, not drafts.
+
+**Save Global Settings** saves all global sections, not just the visible one.
+It does not save Ambient drafts, module forms, Calendar, Budget, or backups.
+Ambient retains its own Save and immediate actions. Backup exports, restore
+previews, undo, and recovery downloads remain separate actions for this chat.
+Detailed module settings remain in their existing module tabs.
+
 ### Connection Profiles (Recommended)
 
 Configured in the **⚙️ Settings** tab. Selecting a Connection Manager profile is the recommended way to power MWT — it reuses your existing SillyTavern connection and supports every backend ST supports (OpenAI, Claude, Gemini, TextGen, KoboldCPP, NovelAI, local models, etc.) with full preset and instruct support.

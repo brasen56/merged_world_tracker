@@ -4,6 +4,7 @@
  * All controls remain mounted, including closed and profile-hidden fields.
  */
 import { renderApiSettingsFields, readApiSettingsValues, renderConnectionProfileSelect } from './ui.js';
+import { renderSettingsWorkspace } from './settings_workspace.js';
 
 // ID opts for shared API settings helpers (renderApiSettingsFields / readApiSettingsValues)
 export const GLOBAL_API_FIELD_IDS = {
@@ -18,7 +19,7 @@ export const GLOBAL_API_FIELD_IDS = {
     headersId: 'mwt-s-headers',
 };
 
-export function renderGlobalSettingsForm(s) {
+export function renderGlobalSettingsForm(s, { selectedSection = 'connection', ambient = '', backup = '' } = {}) {
     const hasProfile = !!s.connectionProfileId;
     const apiFieldsStyle = hasProfile ? 'display:none' : '';
 
@@ -30,11 +31,9 @@ export function renderGlobalSettingsForm(s) {
     //  - the float-button and per-tracker rows point BOTH cells' labels at the
     //    row's checkbox, so its name reads "World State Visible" rather than
     //    the six identical "Visible"s the right-hand cell alone would give.
-    // Save writes EVERY section, so its row sits below the collapsible
-    // sections rather than inside one — collapsing that section would hide it.
-    return `
-        <details class="mwt-settings-disclosure" open>
-            <summary><span aria-hidden="true">🔌</span> API Connection</summary>
+    // Save writes EVERY section; its shared action row lives outside panels.
+    const blocks = {
+        connection: `
             <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
                 These global API settings serve as defaults for all modules. Each module can override them in its own Settings panel.
             </p>
@@ -49,10 +48,10 @@ export function renderGlobalSettingsForm(s) {
                 ${renderApiSettingsFields(s, GLOBAL_API_FIELD_IDS)}
             </div>
             </div>
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🕒</span> Stable History</summary>
+        <p>Sync copies the current API inputs to the five LLM modules only; it does not save global settings or configure Ambient, Calendar, or Ledger.</p>
+        <button id="mwt-s-sync" class="mwt-btn" type="button">Sync to Modules</button>`,
+        automation: `
+        <div class="mwt-settings-block"><h4>Stable History</h4>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Defer the newest chat messages from World State, Chronicle, Knowledge, Relationships, Growth, and Story Planner scans. They are included on a later refresh instead of discarded. <strong>2</strong> usually means the latest user/assistant exchange. Interiority is intentionally excluded because it evaluates the current turn.
         </p>
@@ -60,10 +59,10 @@ export function renderGlobalSettingsForm(s) {
             <label class="mwt-label" for="mwt-s-recent-history-exclude">Messages to defer</label>
             <input id="mwt-s-recent-history-exclude" class="mwt-input" type="number" value="${s.recentHistoryExclude ?? 2}" min="0" max="10" step="1">
             </div>
-        </details>
+        </div>
 
-        <details id="mwt-settings-generation-coordinator" class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🚦</span> Generation Coordinator</summary>
+        <div id="mwt-settings-generation-coordinator" class="mwt-settings-block">
+            <h4>Generation Coordinator</h4>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             All tracker API calls go through one central queue. Each module runs at most one generation at a time; this caps how many may run in parallel <em>across</em> modules, so a burst of tracker work cannot stampede your API endpoint (manual clicks always jump ahead of automatic work). Switching chats cancels queued tracker jobs from the old chat. See what's queued any time with <code>MWT.coordinator.status()</code> in the console.
         </p>
@@ -78,10 +77,9 @@ export function renderGlobalSettingsForm(s) {
                 When on, automatic calls (auto-refresh, auto-snapshot, NPC updates, auto-thoughts, …) wait until your own generation finishes. Button-pressed generations are never held.
             </p>
             </div>
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🔧</span> Injection Settings</summary>
+        </div>
+        <p>Automatic refresh cadence is configured in each module's own settings.</p>`,
+        injection: `
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Control how each module's entries are injected into the prompt. Depth = how far back from the bottom; Role = which message role. (Knowledge uses SillyTavern's built-in lorebook system and does not use extension prompt injection. Disabling the Knowledge tracker below only stops it from scanning/updating; existing lorebook entries will continue to be injected by SillyTavern's World Info until you disable them manually in the World Info panel.)
         </p>
@@ -132,10 +130,8 @@ export function renderGlobalSettingsForm(s) {
                 Recommended for smaller / open models (24–70B) that bleed between sections. Frontier models don't need it; turn off to save a few tokens.
             </p>
         </div>
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">📍</span> Floating Buttons</summary>
+        <p>Inspect effective injection in Diagnostics → Injection; manage token limits in Budget.</p>`,
+        'floating-buttons': `
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Show or hide individual floating buttons. You can also access the MWT modal from the Extensions panel drawer or the wand menu.
         </p>
@@ -144,7 +140,7 @@ export function renderGlobalSettingsForm(s) {
                 <input type="checkbox" id="mwt-s-collapse-float" ${s.collapseFloatButtons ? 'checked' : ''}>
                 <span>Collapse into single button</span>
             </label>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Replace the 4 floating buttons with one that expands on tap/click.</p>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Replace the seven floating buttons with one that expands on tap/click.</p>
 
             <label class="mwt-label" for="mwt-s-show-world"><span aria-hidden="true">🌍</span> World State</label>
             <label for="mwt-s-show-world" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-world" ${s.showFloatWorld !== false ? 'checked' : ''}> Visible</label>
@@ -180,10 +176,8 @@ export function renderGlobalSettingsForm(s) {
             </div>
         </div>
 
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🛑</span> Per-Tracker Enable</summary>
+        `,
+        modules: `
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Disable a tracker you don't use: it stops injecting and scanning, and its floating button shows a red ✕
             (right-click it again to re-enable). To remove a button entirely, uncheck its "Visible" box in the
@@ -215,22 +209,14 @@ export function renderGlobalSettingsForm(s) {
             <label for="mwt-s-enable-ledger" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-ledger" ${s.enableLedger !== false ? 'checked' : ''}> Use this tracker</label>
         </div>
 
-        </details>
-
-        <div class="mwt-settings-actions mwt-flex mwt-gap-4" style="flex-wrap:wrap">
-            <button id="mwt-s-save" class="mwt-btn mwt-btn-primary">Save Settings</button>
-            <button id="mwt-s-sync" class="mwt-btn" title="Copy these API settings to all module-specific configs"><span aria-hidden="true">↓</span> Sync to Modules</button>
-        </div>
-
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <p style="color:var(--mwt-text-dim);font-size:12px">
-            <strong>Module-specific settings</strong> are available in each tab's ⚙ Settings button.
-            Use "Sync to Modules" above to push the global API URL/Key/Model to all modules at once.
-        </p>
-    `;
+        <p>Detailed configuration remains in each module's own tab. Enable switches and floating-button visibility are independent.</p>`,
+        ambient: `<p><strong>This chat — separate save.</strong> Use Ambient's own Save and immediate actions below. Global Save does not save these drafts.</p>${ambient}`,
+        backup,
+    };
+    return renderSettingsWorkspace(blocks, selectedSection);
 }
 
-/** Read the whole global form, never just the visible disclosure. */
+/** Read the whole global form, never just the visible section. */
 export function collectGlobalSettingsPatch(scope) {
     const apiValues = readApiSettingsValues(scope, GLOBAL_API_FIELD_IDS);
     // Depth 0 ("inject at the very bottom") is a legitimate value, so

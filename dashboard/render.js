@@ -1,3 +1,4 @@
+import { selectSettingsSection } from '../core/settings_workspace.js';
 /**
  * dashboard/render.js — the Overview tab.
  *
@@ -361,10 +362,12 @@ export function wireOverviewPane(root, {
             if (body) body.scrollTop = 0;
             const target = button.dataset.overviewTarget;
             if (target === 'generation-coordinator') {
+                selectSettingsSection(root, 'automation');
                 const disclosure = root.querySelector('#mwt-settings-generation-coordinator');
                 disclosure?.setAttribute('open', '');
                 disclosure?.scrollIntoView?.({ block: 'start' });
             } else if (target === 'ambient-settings') {
+                selectSettingsSection(root, 'ambient');
                 const disclosure = root.querySelector('#mwt-ambient-settings');
                 disclosure?.setAttribute('open', '');
                 disclosure?.scrollIntoView?.({ block: 'start' });

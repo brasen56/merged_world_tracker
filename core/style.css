@@ -1300,6 +1300,35 @@ html {
 
 /* ─── Settings panel ───────────────────────────────────────────────────────── */
 
+.mwt-settings-layout { display: grid; grid-template-columns: minmax(150px, 200px) minmax(0, 1fr); gap: 20px; }
+.mwt-settings-nav { display: flex; flex-direction: column; gap: 6px; align-self: start; }
+.mwt-settings-nav-tab { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.mwt-settings-nav-tab[aria-selected="true"] { border-color: var(--mwt-accent); font-weight: 700; }
+.mwt-settings-panels, .mwt-settings-section { min-width: 0; }
+.mwt-settings-section[hidden] { display: none !important; }
+.mwt-settings-section h3 { margin: 0 0 12px; }
+.mwt-settings-block + .mwt-settings-block { border-top: 1px solid var(--mwt-border); margin-top: 16px; padding-top: 12px; }
+.mwt-settings-mobile-nav { display: none; }
+.mwt-settings-workspace .mwt-settings-actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--mwt-bg);
+    margin-top: 20px;
+    padding: 12px 0;
+    z-index: 1;
+}
+.mwt-settings-actions p { font-size: 12px; margin: 6px 0 0; }
+.mwt-settings-workspace { scroll-padding-bottom: 120px; }
+.mwt-settings-section :is(input, select, textarea, button, summary) { scroll-margin-block: 24px 140px; }
+.mwt-settings-workspace .mwt-settings-grid { grid-template-columns: minmax(100px, 120px) minmax(0, 1fr); }
+.mwt-settings-workspace :is(input, select, textarea) { max-width: 100%; min-width: 0; }
+@media (max-width: 768px) {
+    .mwt-settings-layout { display: block; }
+    .mwt-settings-nav { display: none; }
+    .mwt-settings-mobile-nav { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    .mwt-settings-workspace .mwt-settings-actions { position: static; }
+}
+
 .mwt-settings-grid {
     display: grid;
     grid-template-columns: 120px 1fr;
@@ -1452,7 +1481,8 @@ html.light body {
 }
 
 @media (max-width: 480px) {
-    .mwt-settings-grid {
+    .mwt-settings-grid,
+    .mwt-settings-workspace .mwt-settings-grid {
         grid-template-columns: 1fr;
     }
 
