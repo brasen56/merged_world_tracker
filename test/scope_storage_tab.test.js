@@ -54,6 +54,7 @@ import { peekStore, isHydrated, _setCacheForTests, _clearCacheForTests, STORE_VE
 import { deriveBookNames, shortHash } from '../knowledge/scope.js';
 import { record, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { MWT_VERSION } from '../core/version.js';
+import { HISTORY_BUDGET_CHARS, HISTORY_CAP } from '../knowledge/state.js';
 
 // ─── Fakes ───────────────────────────────────────────────────────────────────
 
@@ -1060,6 +1061,17 @@ describe('renderStorageSection — meter, families, chat metadata', () => {
         expect(html).toContain('data-storage-family="mwt-total"');
         expect(html).toContain('Other (SillyTavern and other extensions)');
         expect(html).not.toContain('mwt-diag-storage-fill--warn');
+    });
+
+    test('Restore history is shown against Knowledge\'s own budget and cap', () => {
+        const storage = realStorage();
+        const historyKey = 'kt_history_Knowledge Tracker_1';
+        storage.setItem(historyKey, 'h'.repeat(5000));
+        const sizes = collectStorageSizes({ getLocalStorage: () => storage, getChatMetadata: () => null });
+        expect(sizes.local).toMatchObject({ historyBudgetChars: HISTORY_BUDGET_CHARS, historyCap: HISTORY_CAP });
+        const html = renderStorageSection(sizes);
+        expect(html).toContain(`It uses ${(historyKey.length + 5000).toLocaleString()} of its ${HISTORY_BUDGET_CHARS.toLocaleString()}-character budget, at most ${HISTORY_CAP} versions per NPC.`);
+        expect(html).toContain('never touches lorebook entries');
     });
 
     test('a nearly full storage turns the bar amber and lists the warning', () => {

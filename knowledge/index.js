@@ -17,6 +17,9 @@ import { state, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
 import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg, saveRegistry, resolveRegistryKey } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
+
+// Startup (root index.js) runs this once per page load, after a delay.
+export { compactStoredHistories } from './lorebook.js';
 import { registerSafeCharacterContextProvider } from '../core/index.js';
 import { buildPlannerCharacterContext, buildPlannerAuthorContext, listPlannerCharacterCandidates, resolvePlannerCharacterEntities } from './planner_context.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';

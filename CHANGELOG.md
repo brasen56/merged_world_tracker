@@ -12,6 +12,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.18.1]
+
+### Changed
+
+- **Knowledge — Restore history takes far less browser storage.** Restore
+  only ever uses the newest saved version that differs from the entry, yet
+  each NPC kept up to 50 full copies in browser storage, which is shared
+  with SillyTavern and every other extension. One long campaign measured
+  4.8 million of the browser's roughly 5.2 million characters in Restore
+  history alone.
+  - Each NPC now keeps its **10 most recent versions**. Histories saved by
+    earlier versions are cut down once per page load, about 10 seconds
+    after startup, rather than waiting for each NPC's next save. Repeats of
+    a version a newer copy already holds go first, so the 10 kept are
+    distinct.
+  - Restore history now stays under a **3,000,000-character budget**,
+    leaving the rest of the browser's storage free for SillyTavern and
+    other extensions. Past it, the oldest versions of the largest
+    histories go first and every NPC keeps at least two. This happens
+    quietly because Restore keeps working; Diagnostics logs it. The
+    existing "browser storage is full" trim and its warning still apply if
+    other data fills the browser anyway.
+  - NPC import now stores carried history the same way: invalid records
+    are dropped, older exports are cut to 10 versions, and a full browser
+    makes room instead of silently losing the history.
+  - **Diagnostics → 🗂️ Scope & storage** shows Restore history against
+    its budget and the 10-version limit.
+  - Lorebook entries are never touched by any of this.
+
 ## [2.18.0]
 
 ### Added

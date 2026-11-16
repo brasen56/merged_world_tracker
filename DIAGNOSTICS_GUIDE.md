@@ -99,7 +99,7 @@ private report to the developer, paste as-is.
 | "Token counts look wrong" | 🌐 Environment + ❤️ Health | Environment shows whether a real tokenizer answered; Health shows each module's estimated token load. |
 | "I'm on a fork / custom SillyTavern build" | 🌐 Environment | States the compatibility verdict — include it in every report from that build. |
 | "Knowledge won't create entries / writes fail" | 🗂️ Scope & storage, 🌐 Environment | Scope flags an unloaded store (its one red finding); Environment shows SillyTavern's world-info module state. |
-| "Restore history lost older versions" or "MWT says browser storage is full" | 🗂️ Scope & storage | The storage meter shows how full browser storage is (against an approximate ~5,000,000-character limit) and which MWT key family holds it — usually Knowledge Restore history, which trims its oldest versions when storage fills. |
+| "Restore history lost older versions" or "MWT says browser storage is full" | 🗂️ Scope & storage | The storage meter shows how full browser storage is (against an approximate ~5,000,000-character limit) and which MWT key family holds it — usually Knowledge Restore history. It keeps at most 10 versions per NPC and stays under a 3,000,000-character budget, trimming its oldest versions past that and again if storage fills anyway. |
 
 **Overwhelmed? Just press 📋 Copy Report and paste it.** The report contains
 all of these sections anyway.

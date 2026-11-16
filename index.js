@@ -1039,6 +1039,11 @@ Ledger.init();
 setInterval(ui.updateFloatTokenCounts, 5000);
 setTimeout(ui.updateFloatTokenCounts, 2000);
 
+// Bring Knowledge's Restore history down to its per-NPC cap and storage
+// budget once per page load. It only rewrites kt_history_* keys and needs no
+// chat or lorebook state; the delay keeps it out of the way of startup.
+setTimeout(Knowledge.compactStoredHistories, 10_000);
+
 // Listen for busy-state changes from any module (decoupled via CustomEvent)
 document.addEventListener('mwt:busy-changed', ui.updateButtonStates);
 

@@ -55,7 +55,7 @@ import {
 } from '../knowledge/scope.js';
 import {
     LOREBOOK_NAME, STATE_LOREBOOK_NAME, PROFILE_LOREBOOK_NAME,
-    HISTORY_KEY_PREFIX,
+    HISTORY_KEY_PREFIX, HISTORY_CAP, HISTORY_BUDGET_CHARS,
     state as knowledgeState,
 } from '../knowledge/state.js';
 import { getSettings } from '../knowledge/settings.js';
@@ -455,6 +455,10 @@ function measureLocalStorage(getLocalStorage, approxQuotaChars, errors, errText)
         unreadableKeys: 0,
         approxQuotaChars,
         percentOfQuota: null,
+        // Knowledge's own limits on Restore history (knowledge/state.js),
+        // so the meter can show that family against its budget.
+        historyBudgetChars: HISTORY_BUDGET_CHARS,
+        historyCap: HISTORY_CAP,
         level: 'ok',
         warning: null,
         families,
@@ -867,6 +871,7 @@ export function collectScopeSnapshot({
             available: false, note: '(storage probe failed — see errors)',
             totalChars: null, keyCount: null, mwtChars: null, unreadableKeys: 0,
             approxQuotaChars: APPROX_LOCAL_STORAGE_QUOTA_CHARS, percentOfQuota: null,
+            historyBudgetChars: HISTORY_BUDGET_CHARS, historyCap: HISTORY_CAP,
             level: 'ok', warning: null, families: [],
         },
         chatMetadata: {

@@ -15,6 +15,13 @@ export const REGISTRY_KEY = 'knowledge_tracker_registry';
 export const STATE_REGISTRY_KEY = 'state_tracker_registry';
 export const RELATIONSHIP_KEY = 'knowledge_tracker_relationships';
 export const HISTORY_KEY_PREFIX = 'kt_history_';
+/** Most Restore snapshots one NPC keeps. Restore reads only the newest that
+ * differs from the live entry; the rest are cushion (reused uids). */
+export const HISTORY_CAP = 10;
+/** Restore history stays under this many characters, counted the way the
+ * browser quota counts them (key plus value), so the rest of the ~5M site
+ * quota stays free for SillyTavern and other extensions. */
+export const HISTORY_BUDGET_CHARS = 3_000_000;
 
 /** Chat-metadata key for NPC growth evidence files (two-tier: raw + consolidated). */
 export const GROWTH_EVIDENCE_KEY = 'knowledge_growth_evidence';

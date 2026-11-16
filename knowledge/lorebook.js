@@ -19,6 +19,8 @@ import { getSettings, hasValidSettings } from './settings.js';
 import {
     TRACKER_SENTINEL,
     HISTORY_KEY_PREFIX,
+    HISTORY_CAP,
+    HISTORY_BUDGET_CHARS,
     state,
 } from './state.js';
 import { getRegistry, normalizeRegistryName, isSameNpcByName } from './registry.js';
@@ -94,73 +96,127 @@ function readHistoryRecords(key) {
 
 /** Two, because one snapshot can equal the live entry and Restore needs one that differs. */
 const HISTORY_KEEP_MIN = 2;
-/** Freed beyond the refused snapshot once real versions must go, so the next
+/** Freed beyond what a trim needs once real versions must go, so the next
  * few writes do not each have to re-read every history. */
 const HISTORY_ROOM_SLACK = 256 * 1024;
 let _historyTrimNoticeShown = false;
+/** Running estimate of every history's size; null means measure at the next check. */
+let _historyChars = null;
+/** A budget check re-reads storage only once the estimate passes this. */
+let _budgetTrimAt = HISTORY_BUDGET_CHARS;
 
-export function _resetHistoryTrimNotice() { _historyTrimNoticeShown = false; }
+/** Test hook: forget this page load's trim notice and budget bookkeeping. */
+export function _resetHistoryTrimNotice() {
+    _historyTrimNoticeShown = false;
+    _historyChars = null;
+    _budgetTrimAt = HISTORY_BUDGET_CHARS;
+}
 
 function isQuotaError(err) {
     return err?.name === 'QuotaExceededError' || err?.name === 'NS_ERROR_DOM_QUOTA_REACHED';
 }
 
+const historyKey = (lorebook, uid) => HISTORY_KEY_PREFIX + lorebook + '_' + uid;
+
+/** One key's size as the browser quota counts it (the Diagnostics meter's unit too). */
+const storedChars = (key, value) => (typeof value === 'string' ? key.length + value.length : 0);
+
+function measureHistoryChars() {
+    let total = 0;
+    for (const key of Object.keys(localStorage)) {
+        if (key.startsWith(HISTORY_KEY_PREFIX)) total += storedChars(key, localStorage.getItem(key));
+    }
+    return total;
+}
+
+/**
+ * Every stored history whose records all validate, except `skipKey`. Keys
+ * with invalid records are left out: their raw value is the recovery copy.
+ */
+function readTrimmableHistories(skipKey = null) {
+    const stores = [];
+    for (const key of Object.keys(localStorage)) {
+        if (!key.startsWith(HISTORY_KEY_PREFIX) || key === skipKey) continue;
+        const { data, issues } = readHistoryRecords(key);
+        if (!issues.length) stores.push({ key, records: data, count: data.length });
+    }
+    return stores;
+}
+
+/**
+ * Drop repeats of a body a newer snapshot already holds: Restore skips them,
+ * so no version is lost. Writes no longer create them, but a failed save
+ * still can, and browsers keep the ones stored by older versions.
+ *
+ * @returns {number} characters freed
+ */
+function dropRepeats(store) {
+    const before = JSON.stringify(store.records).length;
+    const bodies = new Set();
+    store.records = store.records.filter(item => {
+        const body = normalizedEntryBody(item.content);
+        const isFirst = !bodies.has(body);
+        bodies.add(body);
+        return isFirst;
+    });
+    store.chars = JSON.stringify(store.records).length;
+    return before - store.chars;
+}
+
+/**
+ * Free `needed` characters across `stores`, editing their records in place.
+ * Repeats go first, from every store. Only if that is not enough do real
+ * versions go, the oldest of whichever history is largest, so one huge NPC
+ * cannot lock the rest out. Each keeps HISTORY_KEEP_MIN, and once versions
+ * go HISTORY_ROOM_SLACK more is freed.
+ *
+ * @returns {{freed: number, versions: number}} versions: real versions dropped
+ */
+function planHistoryTrim(stores, needed) {
+    let freed = 0;
+    for (const store of stores) freed += dropRepeats(store);
+    let versions = 0;
+    if (freed < needed) {
+        const target = needed + HISTORY_ROOM_SLACK;
+        while (freed < target) {
+            const largest = stores.filter(store => store.records.length > HISTORY_KEEP_MIN)
+                .reduce((a, b) => (!a || b.chars > a.chars ? b : a), null);
+            if (!largest) break;
+            const size = JSON.stringify(largest.records.pop()).length + 1;
+            largest.chars -= size;
+            freed += size;
+            versions++;
+        }
+    }
+    return { freed, versions };
+}
+
+/** Rewrite the stores a trim shortened. @returns {number} records dropped */
+function writeShortenedHistories(stores) {
+    let dropped = 0;
+    for (const store of stores) {
+        if (store.records.length === store.count) continue;
+        localStorage.setItem(store.key, JSON.stringify(store.records));
+        dropped += store.count - store.records.length;
+    }
+    return dropped;
+}
+
 /**
  * Store a snapshot the browser refused for space. This rewrites kt_history_*
- * keys only, so it can never reach a lorebook entry.
- *
- * Repeats of a body a newer snapshot already holds go first: Restore skips them,
- * so no version is lost. Writes no longer create them, but a failed save still
- * can, and browsers keep the ones stored by older versions.
- *
- * Only if that is not enough do real versions go, the oldest of whichever
- * history is largest, so one huge NPC cannot lock the rest out. Keys with
- * invalid records are skipped (their raw value is the recovery copy), and when
- * the snapshot still could not fit nothing is dropped at all.
+ * keys only, so it can never reach a lorebook entry. When the snapshot still
+ * could not fit, nothing is dropped at all.
  *
  * @returns {boolean} whether the snapshot was stored
  */
 function storeByTrimmingHistories(key, history) {
     try {
-        const stores = [{ key, records: history, count: history.length }];
-        for (const other of Object.keys(localStorage)) {
-            if (!other.startsWith(HISTORY_KEY_PREFIX) || other === key) continue;
-            const { data, issues } = readHistoryRecords(other);
-            if (!issues.length) stores.push({ key: other, records: data, count: data.length });
-        }
+        const stores = [{ key, records: history, count: history.length }, ...readTrimmableHistories(key)];
         const needed = JSON.stringify(history).length - (localStorage.getItem(key)?.length ?? 0);
-        let freed = 0;
-        for (const store of stores) {
-            const before = JSON.stringify(store.records).length;
-            const bodies = new Set();
-            store.records = store.records.filter(item => {
-                const body = normalizedEntryBody(item.content);
-                const isFirst = !bodies.has(body);
-                bodies.add(body);
-                return isFirst;
-            });
-            store.chars = JSON.stringify(store.records).length;
-            freed += before - store.chars;
-        }
-        let versions = 0;
-        if (freed < needed) {
-            const target = needed + HISTORY_ROOM_SLACK;
-            while (freed < target) {
-                const largest = stores.filter(store => store.records.length > HISTORY_KEEP_MIN)
-                    .reduce((a, b) => (!a || b.chars > a.chars ? b : a), null);
-                if (!largest) break;
-                const size = JSON.stringify(largest.records.pop()).length + 1;
-                largest.chars -= size;
-                freed += size;
-                versions++;
-            }
-        }
+        const { freed, versions } = planHistoryTrim(stores, needed);
         if (freed < needed) return false;
-        for (const store of stores.slice(1)) {
-            if (store.records.length !== store.count) localStorage.setItem(store.key, JSON.stringify(store.records));
-        }
+        const dropped = writeShortenedHistories(stores.slice(1)) + stores[0].count - stores[0].records.length;
         localStorage.setItem(key, JSON.stringify(stores[0].records));
-        const dropped = stores.reduce((total, store) => total + store.count - store.records.length, 0);
         record({ level: 'warn', module: 'knowledge', event: 'history_trimmed', detail: { dropped, versions } });
         if (versions && !_historyTrimNoticeShown) {
             _historyTrimNoticeShown = true;
@@ -170,22 +226,104 @@ function storeByTrimmingHistories(key, history) {
     } catch { return false; }
 }
 
+/**
+ * Keep Restore history under HISTORY_BUDGET_CHARS by the same rules as a
+ * full-browser trim. Quiet on purpose: Restore still works afterwards, so it
+ * is logged for Diagnostics rather than toasted. Never throws; the caller's
+ * snapshot is already stored.
+ *
+ * The running estimate can drift (another tab shares this storage), so it
+ * only decides when to look; the trim itself measures storage.
+ */
+function keepHistoryUnderBudget() {
+    try {
+        if (_historyChars !== null && _historyChars <= _budgetTrimAt) return;
+        _historyChars = measureHistoryChars();
+        if (_historyChars <= _budgetTrimAt) return;
+        const before = _historyChars;
+        const stores = readTrimmableHistories();
+        const { versions } = planHistoryTrim(stores, before - HISTORY_BUDGET_CHARS);
+        const dropped = writeShortenedHistories(stores);
+        _historyChars = measureHistoryChars();
+        // Still over means only invalid keys or two-version histories are left:
+        // wait for real growth before reading every history again.
+        _budgetTrimAt = _historyChars > HISTORY_BUDGET_CHARS ? _historyChars + HISTORY_ROOM_SLACK : HISTORY_BUDGET_CHARS;
+        if (dropped) {
+            record({ level: 'info', module: 'knowledge', event: 'history_budget_trimmed',
+                detail: { dropped, versions, before, after: _historyChars, budget: HISTORY_BUDGET_CHARS } });
+        }
+    } catch { _historyChars = null; }
+}
+
+/**
+ * Store one NPC's history, newest first, capped at HISTORY_CAP. A refusal
+ * for space trims other histories to make room, and any stored write is
+ * followed by the budget check.
+ *
+ * @returns {boolean} whether it was stored
+ */
+function storeHistory(key, history) {
+    if (history.length > HISTORY_CAP) history.length = HISTORY_CAP;
+    let previous = null;
+    try { previous = localStorage.getItem(key); } catch { /* sized as a new key */ }
+    try {
+        const value = JSON.stringify(history);
+        localStorage.setItem(key, value);
+        if (_historyChars !== null) _historyChars += storedChars(key, value) - storedChars(key, previous);
+    } catch (err) {
+        if (!isQuotaError(err) || !storeByTrimmingHistories(key, history)) return false;
+        _historyChars = null; // the trim rewrote other histories
+    }
+    keepHistoryUnderBudget();
+    return true;
+}
+
 /** @returns {boolean} false when nothing was stored, usually a full quota. */
 export function pushHistory(uid, content, lorebook = getLorebookName()) {
     if (uid === null || uid === undefined) return false;
-    const key = HISTORY_KEY_PREFIX + lorebook + '_' + uid;
+    const key = historyKey(lorebook, uid);
     // Part 7 (schema plan §2.2): validate the stored list before rewriting
     // it, so a malformed record converges away on this push instead of being
     // copied forward forever. The stored key is the recovery copy.
     const history = readHistoryRecords(key).data;
     history.unshift({ ts: Date.now(), content, msgIdx: getChat()?.length || 0 });
-    if (history.length > 50) history.length = 50;
+    return storeHistory(key, history);
+}
+
+/**
+ * Store the history an NPC export carried, under the uid the import gave
+ * that NPC. Records are validated and capped like any push, so an older
+ * export cannot bring back versions the cap removed, and a full browser
+ * trims to make room instead of silently dropping it.
+ *
+ * @returns {boolean} whether anything was stored
+ */
+export function importHistory(uid, records, lorebook) {
+    if (uid === null || uid === undefined || !lorebook) return false;
+    const { data } = validateHistoryRecords(records);
+    return data.length > 0 && storeHistory(historyKey(lorebook, uid), data);
+}
+
+/**
+ * Once per page load: bring stored histories down to HISTORY_CAP and under
+ * the budget. The cap applies when an NPC is next saved, so histories stored
+ * before it was lowered (up to 50 records) would otherwise stay that size
+ * until then. Repeats go before the cap does, so the cap keeps distinct
+ * versions. Only shortens readable kt_history_* keys; invalid keys keep
+ * their raw value as the recovery copy.
+ */
+export function compactStoredHistories() {
     try {
-        localStorage.setItem(key, JSON.stringify(history));
-        return true;
-    } catch (err) {
-        return isQuotaError(err) && storeByTrimmingHistories(key, history);
-    }
+        const stores = readTrimmableHistories();
+        for (const store of stores) {
+            dropRepeats(store);
+            if (store.records.length > HISTORY_CAP) store.records.length = HISTORY_CAP;
+        }
+        const dropped = writeShortenedHistories(stores);
+        if (dropped) record({ level: 'info', module: 'knowledge', event: 'history_compacted', detail: { dropped } });
+    } catch { /* storage unreadable: leave every key as stored */ }
+    _historyChars = null;
+    keepHistoryUnderBudget();
 }
 
 /**
@@ -204,7 +342,7 @@ export function getHistory(uid, lorebook = getLorebookName()) {
     try {
         // Part 7: invalid records are filtered from the live view; the
         // stored key stays untouched until the next push converges it.
-        return readHistoryRecords(HISTORY_KEY_PREFIX + lorebook + '_' + uid).data;
+        return readHistoryRecords(historyKey(lorebook, uid)).data;
     } catch { return []; }
 }
 

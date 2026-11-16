@@ -786,6 +786,14 @@ export function renderStorageSection(storage) {
         const mwtKeys = mwtFamilies.reduce((sum, f) => sum + (Number(f.keys) || 0), 0);
         const label = `${num(total)} of ≈${num(quota)} characters (${Math.round(pct)}% of the approximate limit)`
             + (pct > 100 ? ' — past the estimate; this browser allows more' : '');
+        const historyChars = Number(families.find((f) => f.id === 'knowledgeHistory')?.chars) || 0;
+        const historyBudget = Number(local.historyBudgetChars) || 0;
+        const historyRule = historyBudget > 0
+            ? `It uses ${num(historyChars)} of its ${num(historyBudget)}-character budget`
+                + `${Number(local.historyCap) > 0 ? `, at most ${num(local.historyCap)} versions per NPC` : ''}. `
+                + 'Past the budget Knowledge removes the oldest saved versions, and removes more if storage fills anyway. '
+                + 'It never touches lorebook entries.'
+            : 'When storage fills, Knowledge removes the oldest saved versions to make room and never touches lorebook entries.';
         localBlock = `
             ${warn && local.warning ? `<ul class="mwt-diag-scope-warnings"><li>⚠ ${escapeHtml(String(local.warning))}</li></ul>` : ''}
             <div class="mwt-diag-storage-meter">
@@ -812,8 +820,8 @@ export function renderStorageSection(storage) {
             ${local.unreadableKeys > 0 ? `<p class="mwt-diag-note">⚠ ${num(local.unreadableKeys)} key(s) could not be read, so these totals are a minimum.</p>` : ''}
             <p class="mwt-diag-note"><strong>The limit is approximate.</strong> Browsers do not report the real quota; most allow
                 about 5 million characters per site (Chrome, Edge and Firefox a little over 5.2 million), shared by SillyTavern
-                and every extension. Restore history is the MWT family that grows: when storage fills, Knowledge removes the
-                oldest saved versions to make room and never touches lorebook entries. Settings normally live on the server —
+                and every extension. Restore history is the MWT family that grows. ${escapeHtml(historyRule)}
+                Settings normally live on the server —
                 that row only counts a fallback copy written when SillyTavern's extension settings were unavailable.</p>`;
     }
 

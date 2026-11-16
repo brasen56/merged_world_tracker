@@ -10,7 +10,7 @@ import { getPlayerNames, getUserNames, notify, downloadJson, pickTextFile } from
 
 import {
     TRACKER_SENTINEL,
-    HISTORY_KEY_PREFIX, state, ktSetStatus,
+    state, ktSetStatus,
 } from './state.js';
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -24,7 +24,7 @@ import {
     synthesizeMinorFromUpdate, synthesizeMajorFromUpdate,
     formatDossierEntry, synthesizeDossierFromUpdate,
     writeToLorebook,
-    loadEntryContent, getHistory,
+    loadEntryContent, getHistory, importHistory,
     fieldsFromScanRecord,
 } from './lorebook.js';
 import { applyFieldOwnership } from './field_ownership.js';
@@ -666,11 +666,10 @@ export async function importNpcs() {
             }
 
             const finalUid = registry[name].uid;
-            if (entry.history && Array.isArray(entry.history) && entry.history.length > 0 && finalUid != null) {
-                try {
-                    const key = HISTORY_KEY_PREFIX + destination + '_' + finalUid;
-                    localStorage.setItem(key, JSON.stringify(entry.history));
-                } catch { /* quota */ }
+            if (Array.isArray(entry.history) && entry.history.length > 0 && finalUid != null) {
+                // Capped and trimmed like any snapshot; Restore history is
+                // best-effort, so a refusal never fails the import.
+                importHistory(finalUid, entry.history, destination);
             }
         }
 
