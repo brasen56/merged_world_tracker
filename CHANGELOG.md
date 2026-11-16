@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Fixed
+
+- clearing Messages to defer or Max parallel API calls and pressing Save now stores the default of 2, instead of 0 and 1
+
 ## [2.18.1]
 
 ### Changed

@@ -32,7 +32,7 @@ Status source of truth is each document's own status line. Reconciled
 | [LEDGER_V1_DESIGN.md](./LEDGER_V1_DESIGN.md) | Phases 1–3 implemented; Phase 4 host QA pending | v1 design for the manual-entry money and inventory module: computed balances in exact minor units, Carried/Stored items, a floating badge with one number, chat-metadata storage registered for backup, and World State proposals as the later step. |
 | [LEDGER_V2_DESIGN.md](./LEDGER_V2_DESIGN.md) | Draft for review; nothing built | v2 design — World State refresh proposals (the full data model: evidence gate, dedupe tombstones, swipe-aware expiry), debts by counterparty with debt-aware fold-forward, the item change log, pinned items, and a planner-only stored-items projection. Continues the family numbering (D13+, Phases 5–9). |
 | [ONBOARDING_PRESET_PLAN.md](./ONBOARDING_PRESET_PLAN.md) | Draft for review; Phase 0 (SETUP_GUIDE) shipped | First-run Lite / Standard / Full onboarding presets — the settings-key contract, fresh-install gating, and the planned one-click dialog. |
-| [settings_workspace_plan.md](./settings_workspace_plan.md) | Parked | Project B — the Settings information-architecture redesign. Project A (the accessibility pass) shipped; this starts only after it has had real-world use. |
+| [settings_workspace_plan.md](./settings_workspace_plan.md) | Refreshed proposal; implementation not started | Project B — Settings workspace, reconciled against the current code on 2026-11-16: seven sections, separate global/Ambient save ownership, Ledger synchronization, module deep links, and regression/host-QA gates. Project A is complete. |
 
 Root-level user guides (tracked): `README.md`, `SETUP_GUIDE.md`,
 `USER_GUIDE.md`, `CHANGELOG.md`, `DATA_SAFETY_GUIDE.md`,
@@ -56,7 +56,7 @@ folder-by-folder contents.
 | `archive/bug_reports/` | The earliest round: bug reports 01–08, the `bugs_temp.md` follow-up round, and `VERIFICATION_RESULTS.md`. All verified and fixed. |
 | `archive/audits/` | The 2026-08-02 cross-module audit (six `AUDIT_*.md` reports + `AUDIT_SUMMARY.md`), its work queue `REMEDIATION_MAP.md`, the co-author review `Potential_Improvements.md` (the "PI" cited throughout TODO.md), and the 2026-07-28 growth/interiority review TODO. |
 | `archive/completed_plans/` | Design docs for work that shipped: backup/restore, the Diagnostics panel, lorebook auto-activation, schema validation + migrations (+ recorded perf baselines), the interiority-lifecycle family (shipped 2026-09-07), targeted growth capture, the overview dashboard (v2.8.0), the accessibility pass (implemented, full manual QA, host-confirmed 2026-11-16), the ambient-conditions v2 family (v2 design + its response + the settled phenomena contract), the World State reliability roadmap (host-confirmed 2026-11-16), and the Story Planner family (baseline roadmap, V3 roadmap, Phase 7 QA record, projection inventory — V3 host-confirmed 2026-11-16). |
-| `archive/superseded/` | Drafts replaced by newer docs: the combined UX/accessibility `design.md` and its review (split into the accessibility plan — now completed — and the parked Settings workspace plan), the schema plan's pre-review draft, and the relationship-context proposal (its implementation half is superseded by the deferred roadmap; the proposal remains the design record). |
+| `archive/superseded/` | Drafts replaced by newer docs: the combined UX/accessibility `design.md` and its review (split into the accessibility plan — now completed — and the Settings workspace plan — refreshed 2026-11-16), the schema plan's pre-review draft, and the relationship-context proposal (its implementation half is superseded by the deferred roadmap; the proposal remains the design record). |
 | `archive/ideas/` | Unstarted or deferred proposals and reference notes: the intention self-cleaning spec, the intentions potential fix, the NPC growth blueprint, the deferred relationship-context roadmap (pick up only if its stated triggers fire), and the Aikobots-4 fork porting guide (referenced by TODO §5 fork-compat work). |
 
 ## History in one paragraph
@@ -67,5 +67,6 @@ remediation map and the feature wishlist were folded into `docs/TODO.md`,
 which became the single live queue. Plans that shipped moved to
 `archive/completed_plans/`. The accessibility pass and the Settings workspace
 were split out of one combined draft (`archive/superseded/design.md`); the
-accessibility pass shipped and was archived 2026-11-16, and the Settings
-workspace plan remains parked awaiting real-world use of Project A.
+accessibility pass shipped and was archived 2026-11-16. The Settings workspace
+plan was reconciled against the current code the same day; it is a refreshed
+proposal, not an implemented workspace.

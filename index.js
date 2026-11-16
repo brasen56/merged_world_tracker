@@ -630,16 +630,21 @@ function renderModal() {
                 const n = parseInt(modal.querySelector(sel)?.value, 10);
                 return Number.isFinite(n) && n >= 0 ? n : fallback;
             };
-            const rawRecentHistoryExclude = Number(modal.querySelector('#mwt-s-recent-history-exclude')?.value);
-            const recentHistoryExclude = Number.isFinite(rawRecentHistoryExclude)
-                ? Math.min(10, Math.max(0, Math.round(rawRecentHistoryExclude)))
-                : 2;
+            // A cleared field must fall back to its default, the same as a
+            // missing control or garbage input. `Number('')` is 0, which is
+            // finite, so it used to save "defer 0 messages" and (after the
+            // clamp) "1 parallel call" instead — the same trap
+            // readApiSettingsValues() closes for the API fields.
+            const clampedOr = (sel, min, max, fallback) => {
+                const raw = modal.querySelector(sel)?.value;
+                if (raw == null || String(raw).trim() === '') return fallback;
+                const n = Number(raw);
+                return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback;
+            };
+            const recentHistoryExclude = clampedOr('#mwt-s-recent-history-exclude', 0, 10, 2);
             // Generation coordinator (TODO §1): clamp to the coordinator's
             // supported range; an empty/garbage field falls back to the default.
-            const rawApiMaxConcurrent = Number(modal.querySelector('#mwt-s-api-max-concurrent')?.value);
-            const apiMaxConcurrent = Number.isFinite(rawApiMaxConcurrent)
-                ? Math.min(8, Math.max(1, Math.round(rawApiMaxConcurrent)))
-                : 2;
+            const apiMaxConcurrent = clampedOr('#mwt-s-api-max-concurrent', 1, 8, 2);
             const patch = {
                 ...apiValues,
                 connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
