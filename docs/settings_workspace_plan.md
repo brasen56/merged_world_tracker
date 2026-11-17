@@ -2,8 +2,8 @@
 
 **Project:** B (information architecture, separate from the accessibility pass).
 **Status:** Slices 1–3 implemented on 2026-11-16 (form seam, responsive
-workspace navigation, and module discoverability). Slice 2 host QA is recorded
-in `SETTINGS_WORKSPACE_HOST_QA.md`; Slice 3 host QA remains pending.
+workspace navigation, and module discoverability). Host QA is recorded
+in `SETTINGS_WORKSPACE_HOST_QA.md`.
 **Original plan:** 2026-09-08. **Code reconciliation:** 2026-11-16, against
 `ee1edc4` (package version 2.18.1).
 **Prerequisite:** Project A is implemented; the documentation map records full

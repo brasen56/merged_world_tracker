@@ -1554,6 +1554,23 @@ describe('drafts, regeneration, and scope detach', () => {
 // ─── The reviewed recovery surface ───────────────────────────────────────────
 
 describe('the recovery manager', () => {
+    test('field-cleanup records expose Restore and restore only the changed field', async () => {
+        seedBook();
+        const { prepareFieldCleanup, applyFieldCleanup } = await import('../knowledge/field_cleanup_review.js');
+        const prepared = await prepareFieldCleanup({ name: NPC, uid: 7, keys: ['role'] });
+        const result = await applyFieldCleanup({ ...prepared,
+            proposal: { version: 1, reviewId: prepared.review.reviewId, fields: [{ key: 'role', value: 'Harbourmaster', explanation: 'Shorter', displacedDetails: 'Dusk Quay', ambiguity: '' }] },
+            decisions: { role: { action: 'accept' } },
+        });
+        expect(result.ok).toBe(true);
+        entry7().content = entry7().content.replace('Tone: brisk', 'Tone: newer unrelated work');
+        await openCleanupRecoveryModal();
+        const manager = document.getElementById('kt-cleanup-recovery-modal');
+        const restore = manager.querySelector(`.kt-crec-restore[data-action="${result.actionId}"]`);
+        expect(restore).toBeTruthy();
+        restore.click();
+        await vi.waitFor(() => expect(entry7().content).toBe(ORIGINAL.replace('Tone: brisk', 'Tone: newer unrelated work')));
+    });
     test.each(['retry', 'recovery'])('uncertain final status can be reconciled through %s without another target write', async path => {
         useGoodApi();
         await openReview();

@@ -415,12 +415,69 @@ Lock authority changes. No store migration rewrites existing NPC prose.
 - [x] Phase 2 — pure ledger proposals and validation (2026-10-16; orchestration and UI remain Phase 4 — see record)
 - [x] Phase 3 — durable recovery and guarded apply/restore (2026-10-16; unified-backup wiring and reviewed UI remain — see record)
 - [x] Phase 4 — explicit ledger review UI (2026-10-17; host-flow QA remains — see record)
-- [ ] Phase 5 — representative-size/model/host validation and initial release
-- [ ] Phase 6 — selected-field cleanup and its independent release gate
+- [x] Phase 5 — representative-size/model/host validation and initial release
+- [ ] Phase 6 — selected-field cleanup implemented (2026-11-16); independent configured-model/host release gate pending — see record below
 
 When a phase lands, record its date, changed seams, automated results, remaining
 manual QA, and any accepted deviation here. Do not mark a phase complete solely
 because its prompt or UI exists.
+
+### Phase 6 implementation record — 2026-11-16
+
+- **Changed seams:** `knowledge/field_cleanup.js` provides strict versioned
+  selected-field proposals, explicit keep/accept/edit decisions, ambiguity refusal,
+  raw value-span patches, and recovery-owned-field derivation. No formatter,
+  migration, staging acceptance, or automatic rewrite is involved.
+  `knowledge/field_cleanup_review.js` captures the Phase 3 identity/scope/revision,
+  builds an entry-only request (NPC name + selected values), uses the existing
+  Knowledge model configuration and shared field contract, parses strict JSON
+  without repair, and routes Apply through guarded recovery persistence.
+- **Presentation:** the existing Fields picker now exposes **Review field
+  cleanup…**, opening a separate explicit-selection review. Nothing is selected
+  or accepted by default. Before generation it discloses the resolved connection,
+  estimated input, response allowance, unknown endpoint context capacity, payload
+  scope, cost/privacy implications, and one paid attempt without automatic retries.
+  Original/proposed values, explanation, displaced details and ambiguity are shown
+  per field; edits revalidate and request another specificity review. Generation
+  and edits never mutate the live entry. Closing aborts generation; chat-switch
+  sweeps include this modal. Ordinary recent-message refresh is unchanged.
+- **Recovery:** `cleanup_commit.js` re-runs final validation/ownership inside the
+  writer's final-load guard and supports ordered disjoint restore spans. Only
+  changed field values are restored; newer ledger/unselected-field edits survive,
+  while touched-field changes refuse. Recovery manager Restore and Reconcile now
+  include `field-cleanup` records, with existing export/import and retention.
+  Stored original/replacement bytes determine owned fields; no recovery schema
+  change is required. Existing client-side concurrency limitations still apply.
+- **Conservative supported scope:** standalone, nonempty, unambiguous single-line
+  dossier values: Tone, Perceived as, Role, Where to Find, Appearance, Voice,
+  Background, Personality, Read on PC and Current Agenda, subject to Growth
+  ownership. Canon Lock, Image Tags, managed relationships, header Descriptor,
+  creation-only First seen, and **Secrets** are excluded. Secrets remain unchanged
+  rather than risk flattening tiers or changing lifecycle/disclosure. Missing,
+  duplicate and unsupported multiline boundaries refuse rather than normalize.
+  No displaced detail is moved anywhere. Semantic fidelity and duplication claims
+  remain user-review responsibilities, not machine-proven guarantees.
+- **Review retention limitation:** unapplied field reviews are session-only and
+  exportable (explicitly stated in the modal); export before closing to retain
+  edits. No field-review import/resume is offered. Applied originals are durable
+  and remain available through Cleanup recovery after close/reload.
+- **Automated results:** `npm test` passed **5018/5018 tests in 199 files**;
+  `npm run lint` passed. Three new suites add 44 pure/orchestration/DOM tests;
+  the existing real recovery-manager suite adds a field restore integration test.
+  Coverage includes selected/unselected/protected fields, CRLF/ledger/managed-block
+  preservation, changed ownership (including during recovery persistence), strict
+  malformed/incomplete responses, entry-only payloads, per-field decisions,
+  ambiguity, edits, cancellation/stale/error paths, duplicate Apply, storage
+  failure, recovery export/import, unrelated newer work and restore conflicts.
+  Existing refresh UI harnesses and scope-sweep selector pins were updated.
+- **Outstanding independent release gate:** configured-model and SillyTavern QA
+  have NOT been run here. Confirm Fields → Review field cleanup → Role selection
+  → disclosure/consent → original/proposal/detail review → explicit decisions →
+  Apply → close/reload → recovery Restore, with the entire ledger unchanged.
+  Independently condense the ledger and verify Role stays unchanged. Exercise
+  keyboard focus/Escape, cancellation/chat-switch, unsupported/Growth-owned fields,
+  provider truncation/error, touched-field conflict/export and host backup recovery
+  round trip. Do not check off Phase 6 until those host/model checks pass.
 
 ### Phase 0 record — 2026-10-16
 

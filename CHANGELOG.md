@@ -14,6 +14,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settings — module configuration shortcuts.** **Modules & Configuration**
+  now has **Configure** actions for World State, Chronicle, Knowledge, Story
+  Planner, Interiority, and Ledger. Each opens and focuses the module's own
+  settings or control strip, rather than just switching tabs. Shortcuts work
+  while trackers are disabled without enabling them, and opening an already-open
+  target leaves it open. Ambient and Calendar links lead to their existing
+  per-chat controls; detailed configuration still uses each owner's save actions.
+
+### Changed
+
+- **Settings — a sectioned workspace instead of a long stack of disclosures.**
+  The existing **⚙️ Settings** tab now groups controls into **API & Connection**,
+  **Automation**, **Injection**, **Modules & Configuration**, **Floating Buttons**,
+  **Ambient Conditions — This chat**, and **Backup & Restore — This chat**.
+  - Desktop uses keyboard-navigable vertical tabs; narrow screens use a
+    synchronized section picker. Switching sections keeps unsaved field values
+    intact and does not save anything. The selected section is remembered for
+    the session; reopening the modal or switching chats reloads saved values,
+    not unsaved drafts.
+  - **Save Global Settings** explicitly saves all global sections, including
+    hidden fields, but not Ambient drafts, module forms, Calendar, Budget, or
+    backups. Ambient keeps its own Save and immediate actions; Backup keeps its
+    existing export, restore, undo, and recovery workflow.
+  - **Sync** remains in API & Connection and copies the current API inputs,
+    including unsaved changes, to the five LLM modules without saving the global
+    form. Overview's Coordinator and Ambient links now reveal the owning section
+    before scrolling to their controls.
+  - Settings ownership, storage, API precedence, and generation behavior are
+    unchanged; no settings migration or new configuration keys are required.
+
 ### Fixed
 
 - **Knowledge — From Lorebooks repairs now survive an immediate reload.** NPC
@@ -22,7 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save timer. Reconciliation loads the saved registry before repairing it,
   preserving identity IDs, aliases, and profile links; unreadable stores and
   failed saves are reported as errors rather than successful repairs.
-- clearing Messages to defer or Max parallel API calls and pressing Save now stores the default of 2, instead of 0 and 1
+- **Settings — empty numeric fields use their defaults.** Clearing **Messages
+  to defer** or **Max parallel API calls** and saving now stores the default of
+  **2** for either field, instead of 0 and 1 respectively. Explicit values still
+  use the existing limits (0–10 and 1–8).
 
 ## [2.18.1]
 

@@ -10,6 +10,7 @@
 
 One line each; the complete version-by-version history lives in [CHANGELOG.md](CHANGELOG.md).
 
+- **Unreleased** — Settings workspace: seven focused sections, desktop tabs / mobile picker, clearer save scope, and Configure shortcuts to each tracker's own controls (final host QA in progress)
 - **v2.18.0** — 💰 Ledger: manually track money and carried/stored inventory per chat, with exact balances, a floating balance badge, narrator context and backup support — no model calls
 - **v2.17.4** — Smaller Interiority rollback records on long chats, plus Ledger testing fixes for mobile entry, amount parsing, badge rounding, injection toggling and UI readability
 - **v2.17.2** — Growth profiles describe the character now: evidence reaches the model in story order, so early traits stop blending into the current self
@@ -72,7 +73,7 @@ Every module, feature, and setting — with its default — is documented in the
 
 1. **Pick your setup** — skim [SETUP_GUIDE.md](SETUP_GUIDE.md) and choose Lite, Standard, or Full (two minutes; Standard is a safe default)
 2. **Open the MWT Modal** — Click any of the floating emoji buttons on the right side of the screen (🌍, 📜, 🧠, 🗺️, 💭, or ⚙️), or use the **MWT** entry in the wand (extensions) menu, or the drawer in the Extensions panel
-3. **Configure API** — Go to the **⚙️ Settings** tab and either select a **Connection Profile** (uses your existing SillyTavern connection), or enter a custom API URL, Key, and Model — then **Save Settings**
+3. **Configure API** — Go to **⚙️ Settings → API & Connection** and either select a **Connection Profile** (uses your existing SillyTavern connection), or enter a custom API URL, Key, and Model — then **Save Global Settings**
 4. **Start Tracking** — Switch to any module tab and click its action button:
    - 🌍 World State → **🔄 Refresh**
    - 📜 Chronicle → **Generate Entry**, then **📤 Injection OFF** → **📥 Injection ON** so entries reach the prompt (injection is off by default and set per chat)
@@ -81,6 +82,24 @@ Every module, feature, and setting — with its default — is documented in the
    - 💭 Interiority → runs automatically after every AI reply by default; **💭 Generate Now** runs it on demand
 
 Power users: eleven `/wt-*` slash commands and four macros (`{{worldstate}}` et al.) are listed in the [User Guide](USER_GUIDE.md#slash-commands--macros).
+
+### Finding your settings
+
+The **⚙️ Settings** tab is organized into seven sections: **API & Connection**,
+**Automation**, **Injection**, **Modules & Configuration**, **Floating Buttons**,
+**Ambient Conditions — This chat**, and **Backup & Restore — This chat**. Use the
+vertical tabs on desktop or the section picker on mobile. Switching sections
+preserves unsaved values; reopening the modal or changing chats reloads saved
+values instead of drafts.
+
+- **Modules & Configuration → Configure** opens each tracker's own settings or
+  control strip, even while it is disabled, without enabling it. Ambient and
+  Calendar links lead to their per-chat controls.
+- **Save Global Settings** saves every global section, including hidden fields.
+  It does **not** save Ambient drafts, module forms, Calendar, Budget, or backups;
+  use those destinations' own save actions and workflows.
+- **API & Connection → Sync** copies the current API inputs to the five LLM
+  modules, including unsaved API changes, but does not save the global form.
 
 ---
 

@@ -90,7 +90,7 @@ Implemented 2026-11-16. Host QA **Pass: tested 26411cd on chrome, ST v1.19.0 on 
 
 ## Slice 3 — Module discoverability
 
-Blocked until implemented.
+**Pass: tested 912d0b1 on chrome, ST v1.19.0 on 202/11/16**.
 
 1. Each Configure action activates that module's real entry point (plan §2
    table) and reveals + focuses the target, not merely the tab: World State

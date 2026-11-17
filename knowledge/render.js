@@ -2424,6 +2424,7 @@ async function openDossierFieldRefreshModal(name) {
             <div class="mwt-modal-statusbar kt-dfr-footer">
                 <button class="mwt-btn kt-dfr-select-stale">Select stale</button>
                 <button class="mwt-btn kt-dfr-clear">Clear all</button>
+                <button class="mwt-btn kt-dfr-cleanup" title="Review selected stored values for concision without reading recent messages">Review field cleanup…</button>
                 <span style="flex:1"></span>
                 <button class="mwt-btn mwt-btn-primary kt-dfr-run" title="Re-derive the selected fields from recent messages and stage the result for review"><span aria-hidden="true">🔄</span> Refresh selected</button>
             </div>
@@ -2446,6 +2447,13 @@ async function openDossierFieldRefreshModal(name) {
  *   modal.remove(), or the document-level key listener leaks.
  */
 function wireDossierFieldRefreshModal(modal, name, reg, rows, cleanup) {
+    modal.querySelector('.kt-dfr-cleanup').addEventListener('click', async () => {
+        try {
+            const { openFieldCleanupModal } = await import('./field_cleanup_ui.js');
+            await openFieldCleanupModal(name, reg.uid);
+            cleanup();
+        } catch (error) { ktSetStatus(`Field cleanup unavailable: ${error.message}`, 'error'); }
+    });
     const runBtn = modal.querySelector('.kt-dfr-run');
     const updateRunBtn = () => {
         const selected = modal.querySelectorAll('.kt-dfr-field:checked').length;

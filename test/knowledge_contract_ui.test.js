@@ -24,7 +24,7 @@ describe('Knowledge contract UI', () => {
         ['legitimate unchanged', ['role'], [], false, ['role']],
     ])('%s refresh only verifies accepted fields', async (_label, requested, rejected, changed, verified) => {
         const modal = document.createElement('div');
-        modal.innerHTML = `<button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button>${requested.map(key => `<input class="kt-dfr-field" type="checkbox" data-key="${key}" checked>`).join('')}`;
+        modal.innerHTML = `<button class="kt-dfr-cleanup"></button><button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button>${requested.map(key => `<input class="kt-dfr-field" type="checkbox" data-key="${key}" checked>`).join('')}`;
         let handler;
         modal.querySelector('.kt-dfr-run').addEventListener = (_event, fn) => { handler = fn; };
         const rejections = rejected.map(field => ({ ...rejection, field }));
@@ -72,7 +72,7 @@ describe('Knowledge contract UI', () => {
 
     test('over-scan-limit refresh keeps the line and explains why it was not re-verified', async () => {
         const modal = document.createElement('div');
-        modal.innerHTML = '<button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button><input class="kt-dfr-field" type="checkbox" data-key="personality" checked>';
+        modal.innerHTML = '<button class="kt-dfr-cleanup"></button><button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button><input class="kt-dfr-field" type="checkbox" data-key="personality" checked>';
         let handler;
         modal.querySelector('.kt-dfr-run').addEventListener = (_event, fn) => { handler = fn; };
         const currentContent = `Personality: ${'x'.repeat(1400)}`;
