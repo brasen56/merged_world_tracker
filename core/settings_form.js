@@ -178,6 +178,8 @@ export function renderGlobalSettingsForm(s, { selectedSection = 'connection', am
 
         `,
         modules: `
+        <button type="button" class="mwt-btn" id="mwt-s-run-setup">Run setup…</button>
+        <p>Apply a Lite, Standard, or Full starting point to global module enables and automatic work. Other settings and per-chat overrides stay unchanged.</p>
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Disable a tracker you don't use: it stops injecting and scanning, and its floating button shows a red ✕
             (right-click it again to re-enable). To remove a button entirely, uncheck its "Visible" box in the
@@ -299,7 +301,7 @@ function bind(control, event, callback) {
 }
 
 /** Host callbacks retain persistence, status messages and module side effects. */
-export function wireGlobalSettingsForm(scope, { onSave, onSync, onResetPositions }) {
+export function wireGlobalSettingsForm(scope, { onSave, onSync, onResetPositions, onRunSetup = () => {} }) {
     const profile = scope.querySelector('#mwt-s-connection-profile');
     bind(profile, 'change', () => {
         const fields = scope.querySelector('#mwt-s-api-fields');
@@ -308,4 +310,5 @@ export function wireGlobalSettingsForm(scope, { onSave, onSync, onResetPositions
     bind(scope.querySelector('#mwt-s-save'), 'click', () => onSave(collectGlobalSettingsPatch(scope)));
     bind(scope.querySelector('#mwt-s-sync'), 'click', () => onSync(collectGlobalApiPatch(scope)));
     bind(scope.querySelector('#mwt-s-reset-float-positions'), 'click', onResetPositions);
+    bind(scope.querySelector('#mwt-s-run-setup'), 'click', onRunSetup);
 }

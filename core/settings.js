@@ -322,6 +322,8 @@ const GLOBAL_SETTINGS_KEY = 'merged_world_tracker';
  * not set (see resetToAbsent below).
  */
 export const GLOBAL_SETTINGS_DEFAULTS = Object.freeze({
+    // First-run setup acknowledgement; independent of the settings schema.
+    onboardingVersion: 0,
     // Shared API defaults
     apiUrl: '',
     apiKey: '',

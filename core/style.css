@@ -167,6 +167,24 @@ html {
 
 /* ─── Modal overlay ────────────────────────────────────────────────────────── */
 
+.mwt-onboarding-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: 12px;
+}
+.mwt-onboarding-card.mwt-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    white-space: normal;
+    text-align: left;
+    height: auto;
+    padding: 16px;
+}
+.mwt-onboarding-card[data-onboarding-preset="standard"] { border-color: var(--mwt-accent); }
+.mwt-onboarding-later.mwt-btn { background: transparent; border-color: transparent; text-decoration: underline; }
+
 .mwt-modal {
     position: fixed;
     inset: 0;

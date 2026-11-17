@@ -47,6 +47,7 @@ import { createFloatingButtonBar, setControlBusy } from './core/ui.js';
 // itself cannot be imported into Vitest; see test/main_tabbar_adoption.test.js).
 import { renderMainTabShell, wireMainTabBar } from './core/main_tabs.js';
 import { renderGlobalSettingsForm, wireGlobalSettingsForm } from './core/settings_form.js';
+import { openOnboarding, registerOnboardingStartup, refreshPresetPanes } from './core/onboarding.js';
 import { wireSettingsWorkspace, restoreSettingsFocus } from './core/settings_workspace.js';
 import { wireSettingsConfiguration } from './core/settings_configuration.js';
 import { openSettings as openWorldSettings } from './world_state/render.js';
@@ -274,6 +275,44 @@ function buildTabContent(tab) {
 let modal = null;
 const _initedModules = new Set();
 
+function wirePausedStoreControls() {
+    if (!modal) return;
+    const pauseRetryBtns = modal.querySelectorAll('[data-mwt-pause-retry]');
+    pauseRetryBtns.forEach((btn) => {
+        btn.onclick = async () => {
+            const storeId = btn.dataset.mwtPauseRetry;
+            setControlBusy(btn, true);
+            const previousLabel = btn.textContent;
+            btn.textContent = 'Retrying…';
+            try {
+                const result = await retryStore(storeId);
+                if (result.ok) {
+                    setStatus(modal, 'Retry succeeded — the store resumed. Re-open this tab to refresh it.', 'success', 6000);
+                } else {
+                    setStatus(modal, `Retry did not clear the pause: ${result.message || result.reason || 'the store is still blocked'}`, 'error', 9000);
+                }
+            } finally {
+                setControlBusy(btn, false);
+                btn.textContent = previousLabel;
+            }
+        };
+    });
+    const pauseExportBtns = modal.querySelectorAll('[data-mwt-pause-export]');
+    pauseExportBtns.forEach((btn) => {
+        btn.onclick = async () => {
+            // Await hydration/export before describing the result; keep the
+            // button busy throughout and use the Backup panel's wording owner.
+            setControlBusy(btn, true);
+            try {
+                const { message, tone } = describeRecoveryExportResult(await exportRecoveryData());
+                setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
+            } finally {
+                setControlBusy(btn, false);
+            }
+        };
+    });
+}
+
 function renderModal() {
     const previousMainTab = modal?.querySelector('.mwt-tab-btn[aria-selected="true"]')?.dataset.tab;
     // Accessibility plan §4.2 / Slice 2: the main tab bar follows the WAI-ARIA
@@ -353,50 +392,8 @@ function renderModal() {
         }
     } });
 
-    // Part 5 (§5.4): wire the paused-store banner's actions — the module's
-    // OWN tab owns Retry and the recovery export (never the read-only
-    // Diagnostics panel). The body is rebuilt on every open, so rebind here
-    // like the backup control; buttons carry data-mwt-pause-* attributes.
-    const pauseRetryBtns = modal.querySelectorAll('[data-mwt-pause-retry]');
-    pauseRetryBtns.forEach((btn) => {
-        btn.addEventListener('click', async () => {
-            const storeId = btn.dataset.mwtPauseRetry;
-            setControlBusy(btn, true);
-            const previousLabel = btn.textContent;
-            btn.textContent = 'Retrying…';
-            try {
-                const result = await retryStore(storeId);
-                if (result.ok) {
-                    setStatus(modal, `Retry succeeded — the store resumed. Re-open this tab to refresh it.`, 'success', 6000);
-                } else {
-                    setStatus(modal, `Retry did not clear the pause: ${result.message || result.reason || 'the store is still blocked'}`, 'error', 9000);
-                }
-            } finally {
-                setControlBusy(btn, false);
-                btn.textContent = previousLabel;
-            }
-        });
-    });
-    const pauseExportBtns = modal.querySelectorAll('[data-mwt-pause-export]');
-    pauseExportBtns.forEach((btn) => {
-        btn.addEventListener('click', async () => {
-            // The export is async (it hydrates the resolved Knowledge books
-            // first when a chat switch left their loads still in flight), so
-            // await it before describing the result.
-            // One wording owner (backup/render.js describeRecoveryExportResult):
-            // an `unreadable` refusal surfaces its message as an error, never
-            // the "nothing was rejected" info line — same as the Backup panel.
-            // A11Y-S3-03: own the busy pair across the awaited export so the
-            // button can neither double-fire nor lie about being idle.
-            setControlBusy(btn, true);
-            try {
-                const { message, tone } = describeRecoveryExportResult(await exportRecoveryData());
-                setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
-            } finally {
-                setControlBusy(btn, false);
-            }
-        });
-    });
+    // Rebind on full renders as well as preset-owned pane replacements.
+    wirePausedStoreControls();
 
     // Wire the Diagnostics panel shell (lives in the 🩺 Diagnostics tab).
     // Same rebind-every-render rule as the backup control above.
@@ -411,6 +408,7 @@ function renderModal() {
     wireOverviewPane(modal);
 
     wireGlobalSettingsForm(modal, {
+        onRunSetup: () => openOnboarding({ beforeApply: confirmPresetApply, onApplied: refreshPresetControls }),
         onSave: (patch) => {
             // NOTE: enableX and showFloatX are deliberately decoupled. Toggling
             // "Use this tracker" here only flips enableX (button stays visible
@@ -470,6 +468,7 @@ function openMwtModal(tabId) {
         const tabBtn = modal?.querySelector(`.mwt-tab-btn[data-tab="${tabId}"]`);
         if (tabBtn) tabBtn.click();
     }
+    onboardingStartup.retry();
 }
 
 // ─── Shared module registry (used by the message-event routers below) ───────
@@ -756,6 +755,35 @@ Knowledge.init(null);
 StoryPlanner.init(null);
 Interiority.init(null);
 Ledger.init();
+
+// After module reads/migrations, before MWT has ever been opened by the user.
+const onboardingStartup = registerOnboardingStartup({ eventSource, eventTypes: event_types, beforeApply: confirmPresetApply, onApplied: refreshPresetControls });
+
+function confirmPresetApply() {
+    return !WorldState.isWorldStateDirty?.()
+        || confirm('You have unsaved changes to the World State. Applying a preset will discard them. Apply anyway?');
+}
+
+function refreshPresetControls() {
+    ui.updateButtonStates();
+    // Refresh preset-owned module forms; preserve unrelated global drafts
+    // and the Run setup opener (the modal helper restores keyboard focus to it).
+    const settings = getSettings();
+    for (const [field, key] of [
+        ['world', 'enableWorldState'], ['chronicle', 'enableChronicle'],
+        ['knowledge', 'enableKnowledge'], ['story-planner', 'enableStoryPlanner'],
+        ['interiority', 'enableInteriority'],
+    ]) {
+        const control = document.querySelector(`#mwt-s-enable-${field}`);
+        if (control) control.checked = settings[key] !== false;
+    }
+    refreshPresetPanes(modal, TABS, buildTabContent);
+    wirePausedStoreControls();
+    WorldState.applyWorldStateInjection?.();
+    Chronicle.applyInjection?.();
+    StoryPlanner.applyPlanInjection?.();
+    Interiority.applyIntentionsInjection?.();
+}
 
 // Periodically update floating button token counts and auto-refresh countdown
 setInterval(ui.updateFloatTokenCounts, 5000);

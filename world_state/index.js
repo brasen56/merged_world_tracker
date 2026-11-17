@@ -31,7 +31,7 @@ import {
 import {
     refreshWorldState, onMessageReceived, restartAutoSaveTimer,
 } from './refresh.js';
-import { render, wireEvents } from './render.js';
+import { render, wireEvents, renderModalContent } from './render.js';
 import { deriveDocumentStatus } from './delta.js';
 import { resetSceneAnchorSync } from './scene.js';
 
@@ -46,6 +46,15 @@ export function init(parentModal) {
 
 export function getModuleRender() { return render; }
 export function getModuleWireEvents() { return wireEvents; }
+
+/** The preset pane now contains saved text, not the previous editor draft. */
+export function onPresetRefresh() {
+    if (state.editorPersistTimer) {
+        clearTimeout(state.editorPersistTimer);
+        state.editorPersistTimer = null;
+    }
+    renderModalContent();
+}
 
 export { getWorldStateText, applyWorldStateInjection, onMessageReceived, resetAutoRefreshCounter };
 

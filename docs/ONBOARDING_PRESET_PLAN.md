@@ -7,11 +7,10 @@ step. Phase 0 (the documentation version — this shipped) is the checklists
 in the setup guide; this document specs the code feature that turns those
 checklists into a button.
 
-Status: **Phase 1 implemented (preset engine); detection + dialog not shipped.**
-The remaining UI work's natural home: after the parked
-Settings workspace project ([settings_workspace_plan.md](settings_workspace_plan.md),
-Project B) — the dialog touches the same settings surfaces and should land
-with (or after) that redesign so it isn't built twice.
+Status: **Phases 1–2 implemented (preset engine, detection + dialog); host QA pending.**
+The dialog uses the shared accessible modal and the Settings workspace's
+Modules section for re-entry. Phase 3's user-facing documentation sync remains
+separate.
 
 ## 1. Motivation
 
@@ -187,8 +186,8 @@ every other MWT modal), shown once after init when §3 fires:
 - After apply: a toast ("Standard applied — see ⚙️ Settings to adjust") and
   the dialog closes.
 
-Settings tab addition: a **Run setup…** button in the Per-Tracker Enable
-section reopening the same dialog (bypasses the fresh-install gate; still
+Settings tab addition: a **Run setup…** button in the Modules workspace
+section (the former Per-Tracker Enable section) reopening the same dialog (bypasses the fresh-install gate; still
 writes `onboardingVersion`).
 
 ## 6. Phases
@@ -213,6 +212,27 @@ writes `onboardingVersion`).
   button. Host QA: fresh profile, upgrading profile, profile with API saved
   first, and the dialog on ST mobile (it appears at page load, before the
   user has opened MWT).
+  **Implemented:** `core/onboarding.js` owns the post-init gate and shared
+  picker; `index.js` registers it after all module initializers, capturing
+  eligibility then deferring display until the host's `APP_READY` event. A
+  host-popup collision is retried on the next MWT open, including the first;
+  missing readiness hooks log a console note and leave manual setup available.
+  The gate checks raw store emptiness and both current and legacy localStorage keys, treating
+  inaccessible storage conservatively as not fresh. Every normal close path
+  saves the version through the canonical global manager; failed saves keep
+  the picker open with a retry message. Applying uses the Phase 1 engine,
+  refreshes the five global enable controls and re-renders the preset-owned
+  module panes, discarding their unsaved drafts while preserving unrelated
+  global Settings drafts. Unsaved World State document edits require confirmation
+  before any preset writes; a confirmed refresh clears the editor's dirty state
+  and pending persist timer. Pause-banner actions are rebound after replacement.
+  Applying also updates button states and existing injections, and never generates.
+  Settings → Modules → **Run setup…** bypasses detection. Responsive cards use
+  the existing modal's focus trap, focus restoration, and mobile shell.
+  `test/onboarding.test.js` covers both gate traps, per-store upgrade guards,
+  API-first saves, dismissal paths, application, failures, and Settings re-entry.
+  **Still needs host QA:** fresh profile, upgrading profile, API-saved-first
+  profile, and page-load display on ST mobile. Phase 3 remains unimplemented.
 - **Phase 3 — docs sync:** SETUP_GUIDE "One-click presets (planned)"
   section becomes the pointer to the shipped dialog; README What's New
   entry.
