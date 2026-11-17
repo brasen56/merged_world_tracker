@@ -7,7 +7,8 @@ step. Phase 0 (the documentation version — this shipped) is the checklists
 in the setup guide; this document specs the code feature that turns those
 checklists into a button.
 
-Status: **draft for review, not scheduled.** Natural home: after the parked
+Status: **Phase 1 implemented (preset engine); detection + dialog not shipped.**
+The remaining UI work's natural home: after the parked
 Settings workspace project ([settings_workspace_plan.md](settings_workspace_plan.md),
 Project B) — the dialog touches the same settings surfaces and should land
 with (or after) that redesign so it isn't built twice.
@@ -198,6 +199,14 @@ writes `onboardingVersion`).
   module exporting the §2.1 table, an `applyPreset(name)` that patches the
   six stores per §4, and unit tests asserting every written key/value
   against this table (extend `test/settings_provenance.test.js` patterns).
+  **Implemented:** `core/presets.js` exports the immutable `PRESETS` table
+  and synchronous `applyPreset('lite' | 'standard' | 'full')`. Returns `true`
+  after all six saves and logs `preset_applied` with `level applied: <name>`;
+  returns `false` on a save failure (earlier saves are not rolled back), and
+  throws `RangeError` for unknown names before touching any store. Import
+  directly, not through the core barrel. `test/presets.test.js` checks every
+  table row with real settings managers, persistence fallback/migration,
+  idempotence, and preservation of unrelated settings and per-chat overrides.
 - **Phase 2 — detection + dialog:** `onboardingVersion` flag, fresh-install
   gate (both §3 traps covered by tests: an all-`{}` install counts as fresh;
   a legacy-key-only install does not), modal per §5, Settings-tab re-entry

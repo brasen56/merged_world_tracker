@@ -422,6 +422,11 @@ export function getGlobalSettings() {
     }
 }
 
+/** Save a global settings patch through the canonical, validated manager. */
+export function saveGlobalSettings(patch) {
+    return globalSettingsManager.saveSettings(patch);
+}
+
 /**
  * Is this module allowed to inject / scan right now?
  *
