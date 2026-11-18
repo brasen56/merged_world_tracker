@@ -479,6 +479,26 @@ because its prompt or UI exists.
   provider truncation/error, touched-field conflict/export and host backup recovery
   round trip. Do not check off Phase 6 until those host/model checks pass.
 
+#### Phase 6 host-QA blocker follow-up — 2026-11-17
+
+- **Reported blocker:** Generate proposal received a Markdown-fenced JSON
+  response, but field cleanup called `JSON.parse` directly and failed with
+  `Unexpected token` on the opening backtick before field validation.
+- **Fix:** `knowledge/field_cleanup_review.js` now reuses ledger cleanup's
+  strict proposal parser: bare JSON or one complete whole-response JSON/untyped
+  code fence is accepted. No JSON repair, prose extraction, automatic correction
+  retry, or relaxed field validation was added. The prompt explicitly requests
+  no prose or Markdown fences. Generation still never writes the live entry.
+- **Verification:** regression tests reproduced the backtick failure before the
+  fix. Tests now cover JSON/untyped/CRLF fences, malformed/truncated output,
+  surrounding prose, multiple blocks, and fenced proposals with stale review IDs,
+  missing fields or forbidden keys. The five focused cleanup suites passed
+  **214/214 tests**; the full suite passed **5097/5097 tests in 201 files**;
+  `npm run lint` passed.
+- **Release gate remains open:** repeat the configured-model flow above in
+  SillyTavern with this fix loaded. Automated parsing coverage does not establish
+  host Apply/reload/Restore, semantic fidelity, or backup round-trip success.
+
 ### Phase 0 record — 2026-10-16
 
 - **Changed seams:** none in runtime code. Added `test/fixtures/knowledge_concision.js`

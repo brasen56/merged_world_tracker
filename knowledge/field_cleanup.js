@@ -20,9 +20,10 @@ export function fieldCleanupSpans(content) {
         if (matches.length !== 1 || matches[0].index >= ledgers[0].index) continue;
         const line = matches[0];
         const index = lines.indexOf(line);
-        const next = lines[index + 1]?.[1] || '';
+        const next = lines.slice(index + 1).find(candidate => candidate[1].trim())?.[1] || '';
         // Unsupported multiline values fail closed rather than leaving an orphan
-        // continuation behind. Managed blocks are not interpreted as fields.
+        // continuation behind, even across blank lines. Managed blocks are not
+        // interpreted as fields.
         if (next.trim() && !/^(?:Tone|Perceived as|First seen|Role|Where to Find|Appearance|Voice|Background|Personality|Read on PC|Current Agenda|Secrets|Canon Lock|Image Tags|Knowledge Ledger):/iu.test(next)) continue;
         const prefix = line[1].match(/^[^:]+:[ \t]*/)[0];
         const start = line.index + prefix.length;
@@ -42,6 +43,14 @@ export function captureFieldReview(content, keys, reviewId) {
     return { reviewId, originalContent: content, fields };
 }
 
+// Only an exact stored echo may exceed the default bound. The contract still
+// checks structure; newly supplied wording always uses the normal ceiling.
+function checkCleanupValue(field, value) {
+    return validateFieldValue(field.key, value, {
+        ceilings: value === field.value ? { [field.key]: value.length } : {},
+    });
+}
+
 export function validateFieldProposal(review, proposal) {
     if (!proposal || proposal.version !== 1 || proposal.reviewId !== review.reviewId
         || Object.keys(proposal).some(key => !['version', 'reviewId', 'fields'].includes(key))
@@ -52,7 +61,7 @@ export function validateFieldProposal(review, proposal) {
             || Object.keys(item).some(key => !['key', 'value', 'explanation', 'displacedDetails', 'ambiguity'].includes(key))
             || !['value', 'explanation', 'displacedDetails', 'ambiguity'].every(key => typeof item[key] === 'string')) throw new Error('Invalid field mapping or review notes.');
         seen.add(item.key);
-        const checked = validateFieldValue(item.key, item.value);
+        const checked = checkCleanupValue(review.fields.find(field => field.key === item.key), item.value);
         if (!item.value.trim() || /[\r\n\u2028\u2029]/u.test(item.value) || !checked.ok) throw new Error(`Invalid ${item.key}: ${checked.reason || 'empty or multiline value'}`);
     }
     return proposal;
@@ -68,8 +77,10 @@ export function patchFieldProposal(review, proposal, decisions) {
         if (decision.action === 'keep') continue;
         if (item.ambiguity.trim()) throw new Error(`${field.label} is ambiguous; keep the original.`);
         const value = decision.action === 'edit' ? decision.value : item.value;
-        if (typeof value !== 'string' || !value.trim() || /[\r\n\u2028\u2029]/u.test(value) || !validateFieldValue(field.key, value).ok) throw new Error(`Invalid edited ${field.label}.`);
-        replacement = replacement.slice(0, field.start) + value + replacement.slice(field.end);
+        const checked = checkCleanupValue(field, value);
+        if (typeof value !== 'string' || !value.trim() || /[\r\n\u2028\u2029]/u.test(value) || !checked.ok) throw new Error(`Invalid edited ${field.label}.`);
+        if (value === field.value) continue;
+        replacement = replacement.slice(0, field.start) + checked.value + replacement.slice(field.end);
     }
     return replacement;
 }

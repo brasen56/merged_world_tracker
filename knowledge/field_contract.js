@@ -143,7 +143,7 @@ export function structuralRejection(text) {
     if (/[\r\n\u2028\u2029]/.test(text)) return 'contains a line break (entry values are single-line)';
     const lower = text.toLowerCase();
     if (lower.includes('knowledge ledger:')) return 'contains a "Knowledge Ledger:" heading (section injection)';
-    if (lower.includes('<!-- mwt:relationships:')) return 'contains a managed relationship block marker';
+    if (/<!--\s*mwt:relationships:/i.test(text)) return 'contains a managed relationship block marker';
     if (lower.includes('[dossier]')) return 'contains the [Dossier] header marker (section injection)';
     return null;
 }
@@ -376,15 +376,18 @@ export function validateScanRecord(data) {
  *
  * @param {object} [opts]
  * @param {'compact'|'dossier'} [opts.mode]
+ * @param {'null'|'echo'} [opts.unchanged] cleanup requires exact stored strings, not null
  * @returns {string}
  */
-export function contractPromptBlock({ mode = 'dossier' } = {}) {
+export function contractPromptBlock({ mode = 'dossier', unchanged = 'null' } = {}) {
     const keys = mode === 'compact'
         ? ['tone', 'perceived_as', 'descriptor', 'first_seen', 'personality', 'voice']
         : FIELD_CONTRACT.map(def => def.key);
     const lines = [
         'FIELD CONTRACT (applies to every field you output):',
-        "- Update a field only when there is a MEANINGFUL change in that field's subject; otherwise output null.",
+        unchanged === 'echo'
+            ? '- Rewrite only when a supported concise version preserves the established meaning; otherwise echo the exact original stored string, even if it exceeds the usual shape or size bound. Every selected value must be a string; never output null.'
+            : "- Update a field only when there is a MEANINGFUL change in that field's subject; otherwise output null.",
         "- Give the field's CURRENT CONCISE VALUE, not its old value plus a new event clause — fields are compact references, not event logs.",
         '- A value that overshoots its shape — an event log, an interaction log, a transcript, a wall of appended clauses — is invalid however factual it is: if it does not fit the shape, it does not belong in the field.',
         '- Preserve an unknown, missing, or empty value rather than inventing detail the established facts do not support.',
