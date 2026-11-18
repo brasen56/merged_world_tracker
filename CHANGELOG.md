@@ -12,10 +12,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.19.0]
 
 ### Added
 
+- **First-run setup — a one-click Lite / Standard / Full dialog.** Fresh
+  installs see the three SETUP_GUIDE starting points as one choice in a
+  single accessible modal: **Lite** (World State + Chronicle, minimal
+  detail, nothing automatic), **Standard** (all five modules, no
+  background work), or **Full** (all five plus auto-refresh,
+  auto-snapshots, auto-scans and auto-thoughts).
+  - Applying writes only module enables, automatic cadences and the World
+    State Detail Level, through each store's own settings manager.
+    Unrelated settings and per-chat overrides are preserved, nothing is
+    generated, and one Diagnostics event records the level applied;
+    re-running a preset or switching levels later is safe.
+  - The dialog appears at most once per install and only while all six
+    settings stores are empty — upgraders, and anyone who saved settings
+    first, never see it. **Decide later** closes it without nagging, and
+    a host popup at page load defers it to the next MWT open.
+  - **Settings → Modules & Configuration → Run setup…** reopens the same
+    dialog at any time, bypassing fresh-install detection.
+- **Knowledge — reviewed cleanup of stored dossier fields.** The NPC
+  Fields picker gains **Review field cleanup…**: select specific stored
+  fields (Role, Appearance, Voice, Background, and the other single-line
+  dossier values) and the configured Knowledge model proposes concise
+  rewrites of what is already stored — an entry-only pass, not a refresh
+  from recent messages. The ledger and unselected text are never touched.
+  - Nothing is selected or applied by default. Before the one paid
+    request, the dialog discloses the resolved connection and exactly
+    what is sent — the NPC name and the selected stored values only; no
+    chat text, ledger, unrelated fields or recovery originals — plus the
+    estimated input size and output allowance.
+  - Each proposal shows the original, the rewrite, why, which details it
+    would displace, and any ambiguity. Every field needs an explicit
+    Keep / Accept / Edit decision; ambiguous proposals cannot be accepted,
+    edits are revalidated, and malformed or truncated model output is
+    refused rather than repaired.
+  - Apply first saves a verified recovery original, and Cleanup recovery
+    can restore the touched fields after a close or reload while newer
+    ledger and unselected-field edits survive. Canon Lock, Secrets, Image
+    Tags, header identity and Growth-owned fields are excluded, and
+    unapplied reviews are session-only but exportable.
 - **Settings — module configuration shortcuts.** **Modules & Configuration**
   now has **Configure** actions for World State, Chronicle, Knowledge, Story
   Planner, Interiority, and Ledger. Each opens and focuses the module's own

@@ -7,10 +7,10 @@ step. Phase 0 (the documentation version — this shipped) is the checklists
 in the setup guide; this document specs the code feature that turns those
 checklists into a button.
 
-Status: **Phases 1–2 implemented (preset engine, detection + dialog); host QA pending.**
-The dialog uses the shared accessible modal and the Settings workspace's
-Modules section for re-entry. Phase 3's user-facing documentation sync remains
-separate.
+Status: **Complete — shipped in v2.19.0.** Phases 1–2 (preset engine,
+detection + dialog) passed host QA on 62e88e2; Phase 3 (docs sync) landed
+2026-11-17. The dialog uses the shared accessible modal and the Settings
+workspace's Modules section for re-entry.
 
 ## 1. Motivation
 
@@ -231,11 +231,11 @@ writes `onboardingVersion`).
   the existing modal's focus trap, focus restoration, and mobile shell.
   `test/onboarding.test.js` covers both gate traps, per-store upgrade guards,
   API-first saves, dismissal paths, application, failures, and Settings re-entry.
-  **Still needs host QA:** fresh profile, upgrading profile, API-saved-first
-  profile, and page-load display on ST mobile. Phase 3 remains unimplemented.
-- **Phase 3 — docs sync:** SETUP_GUIDE "One-click presets (planned)"
-  section becomes the pointer to the shipped dialog; README What's New
-  entry.
+  **Host QA:** Passed on 62e88e2: fresh profile, upgrading profile, API-saved-first
+  profile, and page-load display. Phase 3 is unblocked.
+- **Phase 3 — docs sync (done 2026-11-17):** SETUP_GUIDE's "One-click
+  presets" section now points at the shipped dialog, and the README What's
+  New entry shipped with the v2.19.0 release notes.
 
 ## 7. Open questions
 

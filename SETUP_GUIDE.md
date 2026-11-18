@@ -106,6 +106,6 @@ Nothing errors. The [Diagnostics → Health](USER_GUIDE.md#-diagnostics) tab alw
 
 Everything above is reversible at any time, from the same places: **Per-Tracker Enable** and the module settings re-take any level's values whenever you like. Cadence toggles apply going forward; no data is deleted by disabling a module — its tab just goes quiet. The one-way street doesn't exist here, except deliberately: **Delete** actions inside modules are the only forgets.
 
-## One-click presets (planned)
+## One-click presets
 
-A first-run dialog that applies Lite / Standard / Full in one click is specced in [docs/ONBOARDING_PRESET_PLAN.md](docs/ONBOARDING_PRESET_PLAN.md) — the checklists above are exactly what it will set, apart from the per-chat Chronicle injection step, which a global preset can't reach. Until then, this page *is* the button.
+Fresh installs see the dialog automatically — **Welcome to MWT — pick a starting point** applies Lite / Standard / Full in one click, once per install. To run it again at any time, use **⚙️ Settings → Modules & Configuration → Run setup…**. It sets exactly what the checklists above set, apart from the per-chat Chronicle injection step, which a global preset can't reach. Design record: [docs/ONBOARDING_PRESET_PLAN.md](docs/ONBOARDING_PRESET_PLAN.md).

@@ -10,7 +10,7 @@
 
 One line each; the complete version-by-version history lives in [CHANGELOG.md](CHANGELOG.md).
 
-- **Unreleased** — Settings workspace: seven focused sections, desktop tabs / mobile picker, clearer save scope, and Configure shortcuts to each tracker's own controls (final host QA in progress)
+- **v2.19.0** — Settings workspace with Configure shortcuts, a first-run Lite / Standard / Full setup dialog, and reviewed cleanup of stored Knowledge dossier fields
 - **v2.18.0** — 💰 Ledger: manually track money and carried/stored inventory per chat, with exact balances, a floating balance badge, narrator context and backup support — no model calls
 - **v2.17.4** — Smaller Interiority rollback records on long chats, plus Ledger testing fixes for mobile entry, amount parsing, badge rounding, injection toggling and UI readability
 - **v2.17.2** — Growth profiles describe the character now: evidence reaches the model in story order, so early traits stop blending into the current self
@@ -114,7 +114,7 @@ Six modules is a lot to absorb on day one. Three levels collapse the two decisio
 | Automatic work | None | None | Auto-refresh, auto-snapshot, auto-scans, auto-thoughts |
 | API usage | Lowest | On-demand | Scheduled background calls |
 
-Each level's exact checklist (which tab, which control, which value) is in [SETUP_GUIDE.md](SETUP_GUIDE.md) — two to five minutes each, plus one per-chat step every level shares: switching Chronicle injection on. A fresh install with no changes runs all five modules at full detail with manual cadences, so the levels exist to get you somewhere deliberate in one step. A one-click preset dialog for this is specced in [docs/ONBOARDING_PRESET_PLAN.md](docs/ONBOARDING_PRESET_PLAN.md).
+Each level's exact checklist (which tab, which control, which value) is in [SETUP_GUIDE.md](SETUP_GUIDE.md) — two to five minutes each, plus one per-chat step every level shares: switching Chronicle injection on. A fresh install with no changes runs all five modules at full detail with manual cadences, so the levels exist to get you somewhere deliberate in one step. Fresh installs get a one-click dialog for this — re-runnable any time from **⚙️ Settings → Modules & Configuration → Run setup…**; the design record is [docs/ONBOARDING_PRESET_PLAN.md](docs/ONBOARDING_PRESET_PLAN.md).
 
 ## Every module works independently
 
