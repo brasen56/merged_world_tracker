@@ -389,12 +389,16 @@ export function contractPromptBlock({ mode = 'dossier', unchanged = 'null' } = {
             ? '- Rewrite only when a supported concise version preserves the established meaning; otherwise echo the exact original stored string, even if it exceeds the usual shape or size bound. Every selected value must be a string; never output null.'
             : "- Update a field only when there is a MEANINGFUL change in that field's subject; otherwise output null.",
         "- Give the field's CURRENT CONCISE VALUE, not its old value plus a new event clause — fields are compact references, not event logs.",
-        '- A value that overshoots its shape — an event log, an interaction log, a transcript, a wall of appended clauses — is invalid however factual it is: if it does not fit the shape, it does not belong in the field.',
+        // Cleanup must not be told an echo is invalid: it is the safe answer.
+        unchanged === 'echo'
+            ? "- A rewrite must fit the field's shape and its character limit below; a rewrite over the limit is refused. If no supported rewrite fits, echo the original instead of a partial trim."
+            : '- A value that overshoots its shape — an event log, an interaction log, a transcript, a wall of appended clauses — is invalid however factual it is: if it does not fit the shape, it does not belong in the field.',
         '- Preserve an unknown, missing, or empty value rather than inventing detail the established facts do not support.',
     ];
     for (const key of keys) {
         const def = FIELD_CONTRACT_BY_KEY[key];
-        lines.push(`- ${def.label}: ${def.belongs} (${def.shape}). Not: ${def.notBelongs}.`);
+        const limit = unchanged === 'echo' ? ` Max ${def.maxChars} characters.` : '';
+        lines.push(`- ${def.label}: ${def.belongs} (${def.shape}). Not: ${def.notBelongs}.${limit}`);
     }
     lines.push('- Knowledge ledger items are durable takeaways — what was established, from what source, on what date — not retellings of the scene.');
     return lines.join('\n');

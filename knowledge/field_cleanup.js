@@ -43,14 +43,27 @@ export function captureFieldReview(content, keys, reviewId) {
     return { reviewId, originalContent: content, fields };
 }
 
-// Only an exact stored echo may exceed the default bound. The contract still
-// checks structure; newly supplied wording always uses the normal ceiling.
-function checkCleanupValue(field, value) {
-    return validateFieldValue(field.key, value, {
-        ceilings: value === field.value ? { [field.key]: value.length } : {},
+// An echo of the stored value (ignoring surrounding whitespace, which models
+// drop) may exceed the default bound; it is applied as a no-op. The contract
+// still checks structure; new wording always uses the normal ceiling.
+const isEcho = (field, value) => typeof value === 'string' && value.trim() === field.value.trim();
+
+/** Why `value` cannot replace `field`, or null when it can. */
+export function fieldValueIssue(field, value) {
+    if (typeof value !== 'string' || !value.trim()) return 'empty value';
+    if (/[\r\n\u2028\u2029]/u.test(value)) return 'contains a line break (entry values are single-line)';
+    const trimmed = value.trim();
+    const checked = validateFieldValue(field.key, value, {
+        ceilings: isEcho(field, value) ? { [field.key]: trimmed.length } : {},
     });
+    return checked.ok ? null : checked.reason;
 }
 
+/**
+ * Structural checks throw: the response as a whole is unusable. A single bad
+ * value does not \u2014 siblings stay reviewable and that field can only be kept
+ * or edited (see proposalValueIssues / patchFieldProposal).
+ */
 export function validateFieldProposal(review, proposal) {
     if (!proposal || proposal.version !== 1 || proposal.reviewId !== review.reviewId
         || Object.keys(proposal).some(key => !['version', 'reviewId', 'fields'].includes(key))
@@ -61,10 +74,19 @@ export function validateFieldProposal(review, proposal) {
             || Object.keys(item).some(key => !['key', 'value', 'explanation', 'displacedDetails', 'ambiguity'].includes(key))
             || !['value', 'explanation', 'displacedDetails', 'ambiguity'].every(key => typeof item[key] === 'string')) throw new Error('Invalid field mapping or review notes.');
         seen.add(item.key);
-        const checked = checkCleanupValue(review.fields.find(field => field.key === item.key), item.value);
-        if (!item.value.trim() || /[\r\n\u2028\u2029]/u.test(item.value) || !checked.ok) throw new Error(`Invalid ${item.key}: ${checked.reason || 'empty or multiline value'}`);
     }
     return proposal;
+}
+
+/** Per-field reasons the proposed values cannot be accepted, keyed by field. */
+export function proposalValueIssues(review, proposal) {
+    const issues = {};
+    for (const field of review.fields) {
+        const item = proposal.fields.find(candidate => candidate.key === field.key);
+        const issue = fieldValueIssue(field, item.value);
+        if (issue) issues[field.key] = issue;
+    }
+    return issues;
 }
 
 export function patchFieldProposal(review, proposal, decisions) {
@@ -77,10 +99,15 @@ export function patchFieldProposal(review, proposal, decisions) {
         if (decision.action === 'keep') continue;
         if (item.ambiguity.trim()) throw new Error(`${field.label} is ambiguous; keep the original.`);
         const value = decision.action === 'edit' ? decision.value : item.value;
-        const checked = checkCleanupValue(field, value);
-        if (typeof value !== 'string' || !value.trim() || /[\r\n\u2028\u2029]/u.test(value) || !checked.ok) throw new Error(`Invalid edited ${field.label}.`);
-        if (value === field.value) continue;
-        replacement = replacement.slice(0, field.start) + checked.value + replacement.slice(field.end);
+        const issue = fieldValueIssue(field, value);
+        if (issue) {
+            throw new Error(decision.action === 'edit'
+                ? `Invalid edited ${field.label}: ${issue}.`
+                : `Proposed ${field.label} is invalid (${issue}); keep the original or edit it.`);
+        }
+        // An echo keeps the stored bytes, including any surrounding whitespace.
+        if (isEcho(field, value)) continue;
+        replacement = replacement.slice(0, field.start) + value.trim() + replacement.slice(field.end);
     }
     return replacement;
 }

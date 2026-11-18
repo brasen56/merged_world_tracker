@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { captureFieldReview, validateFieldProposal, patchFieldProposal, fieldCleanupSpans, changedFieldKeys } from '../knowledge/field_cleanup.js';
+import { captureFieldReview, validateFieldProposal, proposalValueIssues, patchFieldProposal, fieldCleanupSpans, changedFieldKeys } from '../knowledge/field_cleanup.js';
 
 export const SOURCE = '[Dossier] Mara | Human | keeper\r\nTone: quiet\r\nRole: Harbourmaster, who checked the dock today\r\nVoice: Low and deliberate\r\nCurrent Agenda: Protect the harbour\r\nSecrets: Tier 2: gate code 4812\r\nCanon Lock: born here\r\nImage Tags: dark hair\r\n\r\nKnowledge Ledger:\r\n- Code 4812 via witness — Day 1\r\n<!-- mwt:relationships:start -->\r\nRole: Not a dossier field\r\n<!-- mwt:relationships:end -->\r\n';
 // A label collision inside managed content is deliberately treated as ambiguous.
@@ -49,7 +49,8 @@ describe('selected-field cleanup contract', () => {
         const proposal = makeProposal(review);
         expect(() => patchFieldProposal(review, proposal, { role: { action: 'edit', value } })).toThrow('Invalid edited');
         proposal.fields[0].value = value;
-        expect(() => validateFieldProposal(review, proposal)).toThrow('managed relationship');
+        expect(proposalValueIssues(review, proposal).role).toContain('managed relationship');
+        expect(() => patchFieldProposal(review, proposal, { role: { action: 'accept' } })).toThrow('managed relationship');
     });
     test.each(['\n', '\r\n', '\r'])('blank lines do not hide continuation prose (%j)', newline => {
         const content = source.replaceAll('\r\n', newline).replace(
@@ -88,7 +89,7 @@ describe('selected-field cleanup contract', () => {
         if (ambiguity) expect(() => patchFieldProposal(review, proposal, { role: { action: 'accept' }, voice: { action: 'keep' } })).toThrow('ambiguous');
         else expect(patchFieldProposal(review, proposal, { role: { action: 'edit', value: stored }, voice: { action: 'keep' } })).toBe(content);
         proposal.fields[0].value = stored + 'new';
-        expect(() => validateFieldProposal(review, proposal)).toThrow('bound');
+        expect(proposalValueIssues(review, proposal).role).toContain('bound');
         proposal.fields[0].value = stored;
         proposal.fields[0].ambiguity = '';
         expect(() => patchFieldProposal(review, proposal, { role: { action: 'edit', value: stored + 'new' }, voice: { action: 'keep' } })).toThrow('Invalid edited');
@@ -98,7 +99,32 @@ describe('selected-field cleanup contract', () => {
         const review = captureFieldReview(content, ['role'], 'review-unsafe');
         const proposal = makeProposal(review);
         proposal.fields[0].value = stored;
-        expect(() => validateFieldProposal(review, proposal)).toThrow();
+        expect(proposalValueIssues(review, proposal)).toHaveProperty('role');
+        expect(() => patchFieldProposal(review, proposal, { role: { action: 'accept' } })).toThrow('invalid');
+        expect(patchFieldProposal(review, proposal, { role: { action: 'keep' } })).toBe(content);
+    });
+    test('echo matches ignore surrounding whitespace the model drops and keep stored bytes', () => {
+        const stored = 'A'.repeat(442) + '  ';
+        const content = source.replace('Harbourmaster, who checked the dock today', stored);
+        const review = captureFieldReview(content, ['role', 'voice'], 'review-trim');
+        const proposal = makeProposal(review);
+        proposal.fields[0].value = stored.trim();
+        expect(proposalValueIssues(review, proposal)).toEqual({});
+        expect(patchFieldProposal(review, proposal, { role: { action: 'accept' }, voice: { action: 'accept' } }))
+            .toBe(content.replace('Low and deliberate', 'Low voice'));
+    });
+    test('one over-bound rewrite does not discard valid sibling proposals', () => {
+        const review = makeReview();
+        const proposal = makeProposal(review);
+        proposal.fields[0].value = 'y'.repeat(410);
+        expect(validateFieldProposal(review, proposal)).toBe(proposal);
+        expect(Object.keys(proposalValueIssues(review, proposal))).toEqual(['role']);
+        expect(proposalValueIssues(review, proposal).role).toContain('400-character bound');
+        expect(() => patchFieldProposal(review, proposal, { role: { action: 'accept' }, voice: { action: 'accept' } })).toThrow('Proposed Role is invalid');
+        expect(patchFieldProposal(review, proposal, { role: { action: 'keep' }, voice: { action: 'accept' } }))
+            .toBe(source.replace('Low and deliberate', 'Low voice'));
+        expect(patchFieldProposal(review, proposal, { role: { action: 'edit', value: 'Harbourmaster' }, voice: { action: 'keep' } }))
+            .toBe(source.replace('Harbourmaster, who checked the dock today', 'Harbourmaster'));
     });
     test.each(['missing', 'duplicate', 'unknown', 'wrong-review', 'extra-key', 'bad-notes'])('rejects %s response mappings', kind => {
         const review = makeReview();

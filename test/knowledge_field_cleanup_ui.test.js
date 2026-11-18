@@ -34,7 +34,7 @@ async function generate() {
 beforeEach(() => {
     resetCoreStubs(); _resetEpoch(); vi.clearAllMocks();
     const capture = { name: 'Mara', uid: 7, originalContent: content, scopeToken: captureScope() };
-    prepared = { capture, review: captureFieldReview(content, ['role', 'voice'], 'r'), inputTokens: 200,
+    prepared = { capture, review: captureFieldReview(content, ['role', 'voice'], 'r'), inputTokens: 200, minimumOutputTokens: 60,
         disclosure: { modelName: 'test-model', source: 'module-profile', maxTokens: 2000 } };
     captureCleanupTarget.mockResolvedValue(capture);
     prepareFieldCleanup.mockResolvedValue(prepared);
@@ -57,6 +57,7 @@ describe('field cleanup review presentation', () => {
         expect(requestFieldCleanup).not.toHaveBeenCalled();
         expect(modal().textContent).toContain('test-model');
         expect(modal().textContent).toContain('One paid request');
+        expect(modal().textContent).toContain('at least ~60 tokens');
         expect(modal().querySelector('.kt-fc-generate').disabled).toBe(true);
     });
     test('original/proposal/notes and per-field decisions; no preselected acceptance', async () => {
@@ -74,6 +75,29 @@ describe('field cleanup review presentation', () => {
         } }));
         expect(modal().textContent).toContain('ledger is unchanged');
         expect(modal().querySelector('.kt-fc-apply')).toBeNull();
+    });
+    test('an invalid proposed value only blocks Accept for that field and says why', async () => {
+        requestFieldCleanup.mockImplementation(async () => ({ version: 1, reviewId: 'r', fields: [
+            { key: 'role', value: 'y'.repeat(410), explanation: 'Shorter', displacedDetails: '', ambiguity: '' },
+            { key: 'voice', value: 'Low voice', explanation: 'Shorter', displacedDetails: '', ambiguity: '' },
+        ] }));
+        await generate();
+        expect(modal().querySelector('[data-key="role"] .kt-fc-invalid').textContent).toContain('400-character bound');
+        expect(modal().querySelector('[data-key="role"] option[value="accept"]').disabled).toBe(true);
+        expect(modal().querySelector('[data-key="role"] option[value="edit"]').disabled).toBe(false);
+        expect(modal().querySelector('[data-key="voice"] .kt-fc-invalid')).toBeNull();
+        choose('role', 'keep'); choose('voice', 'accept');
+        expect(modal().querySelector('.kt-fc-apply').disabled).toBe(false);
+    });
+    test('disabled Apply explains why', async () => {
+        await generate();
+        choose('role', 'accept');
+        expect(modal().querySelector('.kt-fc-apply-hint').textContent).toContain('Decide Voice');
+        choose('role', 'keep'); choose('voice', 'keep');
+        expect(modal().querySelector('.kt-fc-apply').disabled).toBe(true);
+        expect(modal().querySelector('.kt-fc-apply-hint').textContent).toContain('Nothing to apply');
+        choose('voice', 'accept');
+        expect(modal().querySelector('.kt-fc-apply-hint').textContent).toBe('');
     });
     test('editing recomputes structural validation and exposes detail-review warning', async () => {
         await generate(); choose('role', 'edit'); choose('voice', 'keep');

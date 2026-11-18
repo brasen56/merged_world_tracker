@@ -498,6 +498,15 @@ because its prompt or UI exists.
 - **Release gate remains open:** repeat the configured-model flow above in
   SillyTavern with this fix loaded. Automated parsing coverage does not establish
   host Apply/reload/Restore, semantic fidelity, or backup round-trip success.
+- **Review follow-up (2026-11-18):** an invalid proposed *value* (over the bound,
+  multiline, structural marker) no longer refuses the whole response. Response
+  shape/mapping errors still refuse; a bad value is shown with its reason, Accept
+  is disabled for that field only, and Keep/Edit remain (`proposalValueIssues`).
+  Echo matching now ignores surrounding whitespace and an echo keeps the stored
+  bytes. In echo mode the prompt lists each field's character limit and drops the
+  "overshoots is invalid" line that contradicted the echo instruction. The modal
+  shows the minimum response estimate and says why Apply is disabled. Full suite
+  **5126/5126 in 201 files**; lint passed.
 
 ### Phase 0 record — 2026-10-16
 
