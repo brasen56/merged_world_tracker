@@ -24,7 +24,7 @@
 // test/stubs/core.js under Vitest, and the report must read the real
 // singletons + version regardless (the barrel→stub alias trap, §II.3).
 import { MWT_VERSION } from '../core/version.js';
-import { getEvents, getApiCalls, getAllLastRuns, getAllInjectedSnapshots } from '../core/diagnostics.js';
+import { getEvents, getApiCalls, getAllLastRuns, getAllInjectedSnapshots, getLedgerDiagnostics } from '../core/diagnostics.js';
 import { getGlobalSettings } from '../core/settings.js';
 import { getContextSafe } from '../core/context.js';
 import { getEffectiveWorldSetting, GLOBAL_SETTING_KEYS as WS_GLOBAL_SETTING_KEYS } from '../world_state/data.js';
@@ -284,6 +284,7 @@ export async function collectReportSections() {
         }),
 
         guarded('lastRuns', 'Last run per module (Phase 0)', () => getAllLastRuns()),
+        guarded('ledgerMeasurements', 'Ledger proposal measurements (session totals)', () => getLedgerDiagnostics()),
         guarded('apiCalls', 'API calls (Phase 1 — telemetry only)', () => getApiCalls()),
         guarded('events', 'Event log (Phase 0 — newest first)', () => getEvents()),
 

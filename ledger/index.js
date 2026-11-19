@@ -7,6 +7,7 @@ import { MANIFEST_VERSION, MANIFEST_METADATA_KEY } from '../schema/manifest.js';
 import { ledgerSchema } from './schema.js';
 import { applyLedgerInjection, clearLedgerInjection } from './injection.js';
 import { validateLedgerRecord } from './data.js';
+import { initLedgerProposals, expireLedgerProposals } from './proposals.js';
 
 export { getStatus } from './status.js';
 
@@ -29,8 +30,8 @@ export function refreshInjection(reason = 'refresh') {
     }
 }
 
-export function onChatChanged() { return refreshInjection('chat-changed'); }
+export function onChatChanged() { expireLedgerProposals(); return refreshInjection('chat-changed'); }
 export function onChatChangedWhilePaused() {
     return clearLedgerInjection({ kind: 'ledger', clearReason: 'schema-paused' });
 }
-export function init() { return refreshInjection('startup'); }
+export function init() { initLedgerProposals(); expireLedgerProposals(); return refreshInjection('startup'); }

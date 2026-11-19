@@ -17,7 +17,8 @@ const loan = (id, amount, counterparty = 'Aldric', extra = {}) => entry(id, amou
 const evidence = 'She counted out thirty gold coins and pressed them into his palm.';
 const line = { kind: 'money', currency: ' GOLD ', amount: '-30', evidence };
 const chat = [{ mes: evidence, extra: { mwt_uuid: 'one' } }, { mes: evidence, extra: { mwt_uuid: 'two' } }];
-const records = [{ index: 0, identity: 'uuid:one' }, { index: 1, identity: 'uuid:two' }];
+const records = [{ index: 0, identity: 'uuid:one', text: evidence, digest: ledgerMessageDigest(evidence) },
+    { index: 1, identity: 'uuid:two', text: evidence, digest: ledgerMessageDigest(evidence) }];
 const options = extra => ({ ledger: ledger(), chat, records, ...extra });
 const proposal = extra => ({ id: 'p1', kind: 'money', money: { currency: 'gold', amount: -30, loan: false },
     evidence, msg: { identity: 'uuid:one', digest: ledgerMessageDigest(evidence) }, status: 'pending', ...extra });
@@ -260,6 +261,17 @@ describe('Report cut, parse, evidence, resolution and dedupe', () => {
         expect(resolveLedgerReport([line], options({ ledger: record })).dropped[0].reason).toBe('currency-ambiguous');
         for (const extra of [{ amount: 3 }, { amount: '0' }, { amount: '1.1' }, { amount: '1e2' }, { loan: true }, { loan: 'yes' }]) {
             expect(resolveLedgerReport([{ ...line, ...extra }], options()).dropped[0].reason).toBe('parse');
+        }
+    });
+
+    test('requires frozen evidence and digest; never falls back to live raw text', () => {
+        for (const record of [
+            { index: 0, identity: 'uuid:one' },
+            { ...records[0], text: 'She walked home without making a purchase.' },
+            { ...records[0], digest: 'wrong-revision' },
+        ]) {
+            expect(resolveLedgerReport([line], options({ records: [record] })))
+                .toMatchObject({ proposals: [], dropped: [{ reason: 'evidence' }] });
         }
     });
 

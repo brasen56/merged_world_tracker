@@ -1,6 +1,6 @@
 # Ledger module design (v2)
 
-**Status:** Draft for review, revision 2. Nothing built, not yet scheduled. Scope from Brasen's v2 call (2026-11-16): the §7.1 proposals from World State refresh, debts by counterparty, and the item change log, plus the additions from the planning session (proposal data model, debt-aware fold-forward, planner-only projection, pinned items).
+**Status:** Revision 2 design; Phase 5 pure core and Phase 6 piggyback integration implemented. Phase 6's GLM/local-model measurement review remains pending before Phase 7. `ledgerProposals` remains off by default. Scope from Brasen's v2 call (2026-11-16): the §7.1 proposals from World State refresh, debts by counterparty, and the item change log, plus the additions from the planning session (proposal data model, debt-aware fold-forward, planner-only projection, pinned items).
 **Written:** 2026-11-16. **Revised:** 2026-11-18 (rev 2, code-checked review; what changed and why is in §13).
 **Decisions continue v1 numbering** (D13+). Phase numbering also continues (v1 shipped Phases 1–3; Phase 4 host QA pending — v2 starts at Phase 5).
 **Companion to `LEDGER_V1_DESIGN.md`** — that doc stays authoritative for shipped v1 behavior (D1–D12). Its §7 sketches this release; where the two disagree, this doc wins.
@@ -208,6 +208,16 @@ The digest check also runs for **accepted** proposals: a transaction or item-log
 Shared files otherwise untouched: `core/api.js` (`normaliseOutput` is not changed — the cut happens before it), `core/budget.js`, `backup/data.js`, `schema/registry.js`, `dashboard/` (Overview row gains nothing — the badge already says the number). Rough size: three new files plus moderate edits; the pure core carries the risk, the World State side stays thin (window records, cut, event).
 
 ## 11. Delivery plan
+
+**Phase 6 implementation (2026-11-19):** Full/validation-retry/grounding-retry,
+catch-up, delta-patch and delta-no-change commits cut reports before normalization
+and publish only after the checked write. `core/ledger_refresh.js` owns the gated,
+bounded snapshot and handoff; `ledger/proposals.js` owns resolution, persistence
+and expiry. The Ledger tab has an experimental read-only pending list and opt-in.
+Diagnostics copy reports include session totals; accepted/rejected measurements
+will become actionable with Phase 7's controls. Automated regression tests live
+in `test/ledger_phase6.test.js`. Manual exit gate still pending: review GLM and one
+local model's samples and counters with Brasen. Default remains off (Q6).
 
 - **Phase 5 (pure core):** `data.js` v2 (loan/counterparty fields and validation, loan-aware fold, item-log ring, `validateLedgerAudit`, pin ordering) + migration 1→2 + `core/ledger_report.js` (cut, parse, gate, resolve, dedupe). Tests: the fold preserves every (counterparty, currency) loan net at any cap and never throws below currencies + open debts; a zero-net loan group folds into the plain carry; Debts sign (borrow → "you owe"); a purchase with a counterparty never appears in Debts; dedupe across statuses; evidence-gate drops; duplicate currency names drop as ambiguous; a malformed proposal row leaves `validateLedgerRecord` valid; migration round trip; the injection debts line appears only with nonzero loan nets, caps at three counterparties, and keeps D11's honesty phrasing (D30).
 - **Phase 6 (piggyback, measure first — D29):** window records, raw-output cut in every refresh path, snapshot + report request behind `ledgerProposals` (default off) and D28's gates, post-commit event, Ledger listener persisting proposals, expiry walk, Diagnostics counters, and a bare pending list (no inbox polish) so testers can see what arrives. Tests: a document + ```` ```json ```` report survives intact (the `normaliseOutput` trap); the block never reaches the validators; a failed refresh harvests nothing; a chat switch mid-refresh writes no proposals into the new chat; a refused proposal write can't fail the refresh; delta output with a trailing block parses; a disabled Ledger adds nothing to the prompt. **Exit gate:** counters from GLM and one local model reviewed with Brasen before Phase 7, and the `ledgerProposals` default decided then. A SETUP_GUIDE paragraph lands with this phase: what the setting does, why it's off, and the local-model caution (Q6).

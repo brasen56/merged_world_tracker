@@ -28,7 +28,7 @@ export function parseLedgerReport(block) {
 
 /** Run before normaliseOutput. Explicit tags are cut even with garbage inside. */
 export function cutLedgerReport(raw) {
-    const cleaned = String(raw ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    const cleaned = String(raw ?? '').replace(/<(think|thinking|reasoning)\b[\s\S]*?<\/\1>/gi, '').trim();
     const fences = [...cleaned.matchAll(/^```([^\r\n]*)\r?\n([\s\S]*?)^```[^\S\r\n]*(?=\r?$)/gm)];
     const last = fences.at(-1);
     if (!last || cleaned.slice(last.index + last[0].length).trim()) return { text: cleaned, block: null, lines: [], dropped: [] };
@@ -74,12 +74,14 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         const drop = reason => dropped.push({ reason, line });
         if (!object(line) || !['money', 'item'].includes(line.kind) || !text(line.evidence)) { drop('parse'); continue; }
         const source = window.find(record => Number.isInteger(record.index) && record.index >= 0 && text(record.identity)
+            && text(record.text) && text(record.digest)
             && getReceiptIdentity(chat?.[record.index]) === record.identity
-            && quoteMatchesMessage(line.evidence, null, chat?.[record.index], { allowInterposition: false }));
+            && ledgerMessageDigest(chat[record.index].mes) === record.digest
+            && quoteMatchesMessage(line.evidence, null, { ...chat[record.index], mes: record.text }, { allowInterposition: false }));
         if (!source) { drop('evidence'); continue; }
         if (line.counterparty !== undefined && typeof line.counterparty !== 'string') { drop('parse'); continue; }
         const draft = { kind: line.kind, evidence: line.evidence,
-            msg: { identity: source.identity, digest: ledgerMessageDigest(chat[source.index].mes) }, status: 'pending' };
+            msg: { identity: source.identity, digest: source.digest }, status: 'pending' };
         if (line.counterparty !== undefined) draft.counterparty = line.counterparty;
         if (line.kind === 'money') {
             if (!text(line.currency)) { drop('currency-unresolved'); continue; }

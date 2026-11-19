@@ -367,6 +367,7 @@ export const GLOBAL_SETTINGS_DEFAULTS = Object.freeze({
     enableInteriority: true,
     enableLedger: true,
     injectLedger: true,
+    ledgerProposals: false,
     // Interiority injection depth/role (same neighborhood as world state)
     interiorityDepth: 1,
     interiorityRole: 'system',

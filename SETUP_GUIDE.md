@@ -1,3 +1,22 @@
+# Experimental Ledger suggestions (Phase 6)
+
+In the Ledger tab, **Suggest ledger changes from World State refresh** is off
+by default. Enable it to request evidence-backed money and item suggestions
+alongside full, catch-up, and delta World State refreshes, without another API
+call. Ledger must be enabled, healthy, unpaused, and contain a currency or item.
+The read-only **Pending suggestions** list shows arrivals and evidence; nothing
+changes balances or inventory automatically. Accept/reject controls are deferred
+to Phase 7. Missing-source proposals expire on chat change or reopening Ledger.
+
+This asks the model for a second output format after its usual document or patch.
+Local models in particular may need tuning and may fail World State validation
+more often, so compare runs with the setting off and on. Diagnostics → Copy report
+includes session totals for reports, kept/dropped lines by reason, refused writes,
+and refresh/validation-failure counts with and without the request. Totals reset on
+page reload. Before Phase 7, review samples and counters from GLM and at least one
+local model with Brasen. The default remains off; this review may inform a later
+release, not an automatic default change.
+
 # 🚀 MWT Setup Guide — from install to your first tracked scene
 
 New to MWT? This page is the whole onboarding: pick a level, work through a short checklist, and you're running. Every module is described in one line in the [README](README.md), and every feature and setting is documented in the [User Guide](USER_GUIDE.md) — neither of those is required reading to start.

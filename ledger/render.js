@@ -10,6 +10,8 @@ import { createLedger, computeBalances, formatAmount, parseAmount, canDeleteCurr
 import { getLedger, saveLedger } from './store.js';
 import { renderSettings } from './settings.js';
 import { ledgerSchema } from './schema.js';
+import { expireLedgerProposals } from './proposals.js';
+import { validateLedgerAudit } from './data.js';
 
 const esc = value => escapeHtml(String(value ?? ''));
 /**
@@ -86,6 +88,7 @@ function currencyForm(row) {
 }
 
 export function renderLedger() {
+    expireLedgerProposals();
     const record = getLedger() ?? createLedger();
     const meta = getChatMeta();
     const blocked = !getContextSafe() || !meta || isStoreWriteBlocked('ledger')
@@ -96,6 +99,10 @@ export function renderLedger() {
     try { const time = resolveCalendarClock(); if (time.source !== 'message-count' && !time.rejection) date = time.formattedDate ?? ''; } catch { /* date is optional */ }
     const balances = valid ? computeBalances(record) : new Map();
     const body = !valid ? '<p role="alert">Ledger data is invalid or from a newer version. It has been kept unchanged. Use Diagnostics or the recovery export before editing.</p>' : `
+        <details data-ledger-open-key="pending"><summary>Pending suggestions (${validateLedgerAudit(record).proposals.filter(row => row.status === 'pending').length}) · experimental</summary>
+            <p>Read-only measurement preview. These suggestions do not change your balances or items; review controls arrive in Phase 7.</p>
+            <ul>${validateLedgerAudit(record).proposals.filter(row => row.status === 'pending').map(row => `<li>${esc(row.kind === 'money' ? `${row.money.amount} minor units (${record.currencies.find(currency => currency.id === row.money.currency)?.name ?? row.money.currency})` : `${row.item.qtyChange > 0 ? '+' : ''}${row.item.qtyChange} ${row.item.name}`)}<blockquote>${esc(row.evidence)}</blockquote></li>`).join('')}</ul>
+        </details>
         <details class="mwt-settings-disclosure" data-ledger-open-key="currencies"><summary>Currencies</summary>
             <p>Balances are exact. Changing decimal places preserves each entry’s value; changes that would lose precision are refused. A currency with transactions cannot be deleted.</p>
             ${record.currencies.map(currencyForm).join('')}${currencyForm()}

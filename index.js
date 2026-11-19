@@ -419,7 +419,8 @@ function renderModal() {
 
             saveSettings(patch);
             modal.querySelectorAll('[data-ledger-setting]').forEach(control => {
-                control.checked = getSettings()[control.dataset.ledgerSetting] !== false;
+                control.checked = control.dataset.ledgerSetting === 'ledgerProposals'
+                    ? getSettings().ledgerProposals === true : getSettings()[control.dataset.ledgerSetting] !== false;
             });
             ui.applyButtonVisibility();
             ui.applyButtonStyle();
