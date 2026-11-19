@@ -9,6 +9,7 @@ import { MANIFEST_METADATA_KEY, MANIFEST_VERSION } from '../schema/manifest.js';
 import { createLedger, computeBalances, formatAmount, parseAmount, canDeleteCurrency, validateLedgerRecord, MAX_CURRENCY_DECIMALS } from './data.js';
 import { getLedger, saveLedger } from './store.js';
 import { renderSettings } from './settings.js';
+import { ledgerSchema } from './schema.js';
 
 const esc = value => escapeHtml(String(value ?? ''));
 /**
@@ -89,7 +90,7 @@ export function renderLedger() {
     const meta = getChatMeta();
     const blocked = !getContextSafe() || !meta || isStoreWriteBlocked('ledger')
         || meta[MANIFEST_METADATA_KEY]?.manifestVersion > MANIFEST_VERSION
-        || meta[MANIFEST_METADATA_KEY]?.sections?.ledger > 1;
+        || meta[MANIFEST_METADATA_KEY]?.sections?.ledger > ledgerSchema.currentVersion;
     const valid = validateLedgerRecord(record).valid;
     let date = '';
     try { const time = resolveCalendarClock(); if (time.source !== 'message-count' && !time.rejection) date = time.formattedDate ?? ''; } catch { /* date is optional */ }

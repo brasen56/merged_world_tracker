@@ -85,7 +85,7 @@ describe('Ledger store and lifecycle', () => {
     test('save detaches input, stamps and persists once, and refreshes the real injection seam', () => {
         const data = fixture();
         const saved = saveLedger(data);
-        expect(ctx.chatMetadata.mwt_schema_manifest.sections.ledger).toBe(1);
+        expect(ctx.chatMetadata.mwt_schema_manifest.sections.ledger).toBe(2);
         expect(ctx.saveMetadataDebounced).toHaveBeenCalledTimes(1);
         expect(snapshot()).toMatchObject({ enabled: true, depth: 1, role: 0 });
         expect(snapshot().payload).toBe(`<mwt_ledger>\n${buildInjectionBody(data)}\n</mwt_ledger>`);
@@ -97,9 +97,9 @@ describe('Ledger store and lifecycle', () => {
     });
     test('folds an oversized history without changing any balance', () => {
         const data = fixture();
-        data.transactions = Array.from({ length: 220 }, (_, i) => ({ ...data.transactions[0], id: `t${i}`, amount: i % 2 ? -3 : 5 }));
+        data.transactions = Array.from({ length: 520 }, (_, i) => ({ ...data.transactions[0], id: `t${i}`, amount: i % 2 ? -3 : 5 }));
         const saved = saveLedger(data);
-        expect(saved.transactions).toHaveLength(200);
+        expect(saved.transactions).toHaveLength(500);
         expect(computeBalances(saved)).toEqual(computeBalances(data));
     });
     test('invalid input, unreadable current data and future versions fail without mutations', () => {
@@ -112,7 +112,7 @@ describe('Ledger store and lifecycle', () => {
         const previous = JSON.stringify(ctx.chatMetadata);
         expect(() => saveLedger(fixture())).toThrow(/newer/);
         expect(JSON.stringify(ctx.chatMetadata)).toBe(previous);
-        ctx.chatMetadata.mwt_schema_manifest = { manifestVersion: 1, sections: { ledger: 2 } };
+        ctx.chatMetadata.mwt_schema_manifest = { manifestVersion: 1, sections: { ledger: 3 } };
         expect(() => saveLedger(fixture())).toThrow(/newer/);
         expect(refreshInjection()).toBe(false);
         expect(ctx.saveMetadataDebounced).not.toHaveBeenCalled();
@@ -154,7 +154,7 @@ describe('Ledger store and lifecycle', () => {
         expect(STORE_SCHEMAS.ledger.metadataKey).toBe('mwt_ledger');
         expect(prepareStore(STORE_SCHEMAS.ledger, fixture()).status).toBe('migrated');
         expect(runFastLoadGate({ stores: { ledger: fixture() } }).stores.ledger.state).toBe('prepare');
-        expect(runFastLoadGate({ stores: { ledger: fixture() }, manifest: { manifestVersion: 1, sections: { ledger: 2 } } }).stores.ledger.state).toBe('blocked');
+        expect(runFastLoadGate({ stores: { ledger: fixture() }, manifest: { manifestVersion: 1, sections: { ledger: 3 } } }).stores.ledger.state).toBe('blocked');
         expect(BUDGET_MODULE_SPECS.find(spec => spec.id === 'ledger').key).toBe(EXTENSION_PROMPT_KEY);
     });
     test('host wiring covers startup, chat-change, resume and settings without a generation interceptor', () => {

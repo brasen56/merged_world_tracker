@@ -1,7 +1,7 @@
 # Ledger module design (v2)
 
-**Status:** Draft for review — nothing built, not yet scheduled. Scope from Brasen's v2 call (2026-11-16): the §7.1 proposals from World State refresh, debts by counterparty, and the item change log, plus the additions from the planning session (proposal data model, debt-aware fold-forward, planner-only projection, pinned items).
-**Written:** 2026-11-16.
+**Status:** Draft for review, revision 2. Nothing built, not yet scheduled. Scope from Brasen's v2 call (2026-11-16): the §7.1 proposals from World State refresh, debts by counterparty, and the item change log, plus the additions from the planning session (proposal data model, debt-aware fold-forward, planner-only projection, pinned items).
+**Written:** 2026-11-16. **Revised:** 2026-11-18 (rev 2, code-checked review; what changed and why is in §13).
 **Decisions continue v1 numbering** (D13+). Phase numbering also continues (v1 shipped Phases 1–3; Phase 4 host QA pending — v2 starts at Phase 5).
 **Companion to `LEDGER_V1_DESIGN.md`** — that doc stays authoritative for shipped v1 behavior (D1–D12). Its §7 sketches this release; where the two disagree, this doc wins.
 
@@ -15,20 +15,24 @@ Alongside that, v2 adds the two audit surfaces v1 deferred as "money needs a his
 
 | # | Decision | Why |
 |---|----------|-----|
-| D13 | **Proposals ride the World State refresh as a trailing report block, stripped before document validation.** Both full and delta refreshes request it; it never enters the stored document, so the document contract ("use ONLY the exact section headers") is untouched and D12 holds. | No extra API call (§7.1's core promise). Cost is ~100–200 output tokens when money/items changed, none when they didn't. |
-| D14 | **Report items are gated deterministically, in code, before they become proposals.** The evidence quote must appear in the frozen scan window (whitespace-normalized containment); a currency name must resolve to a ledger currency; a quantity decrease must match an existing item name (case-insensitive). Failures drop the item with a console line — no retry, no second call. | Same discipline as the grounding gate (`world_state/provenance.js`): check the model's claims against the exact evidence it was given (the frozen-evidence rule, `world_state/refresh.js`). A piggyback must never be able to spend more than the tokens it already spent. |
-| D15 | **Proposals live inside `mwt_ledger` (schema version 2), not a separate store.** Migration 1→2 adds the new arrays and optional fields; the backup key (`backup/data.js`), registry entry and pause behavior are unchanged. | One backup, one validation path. Tombstones (D17) are small; a second store would double the registry/backup surface for state that is useless without the ledger it targets. |
-| D16 | **Every proposal carries its source message's receipt identity plus a content digest.** Identity comes from `core/message_identity.js` (persistent `mwt_uuid`, survives edits — the §7.1 "stable per-message key" landmine is already cleared; Chronicle's breakage was index-based). Expiry: message gone → the proposal drops; digest mismatch (swipe or edit changed the message) → badge "source changed", the user decides. | The identity keys the message *slot*, not the swipe variant. A swipe to a variant where the payment never happened leaves the slot alive with different content — the digest catches exactly that, and human review covers the rest. |
-| D17 | **Resolved proposals persist as dedupe tombstones.** A repeat whose dedupe key matches any pending/accepted/rejected proposal is dropped silently. Tombstones are capped (§3.4). | §7.1: "refresh windows can overlap, so the same payment could be reported twice." Deleting resolved proposals on decision would let the next overlapping window re-propose an accepted event. The cap only needs to exceed the overlap distance — bounded by `maxScanMessages` — so a few hundred tombstones is generous forever. |
+| D13 | **Proposals ride the World State refresh as a trailing report block, cut from the *raw* model output before `normaliseOutput` runs** (rev 2). Both full and delta refreshes request it; it never enters the stored document, so the document contract ("use ONLY the exact section headers") is untouched and D12 holds. Only the block from the attempt that **commits** is harvested; a refresh that fails harvests nothing. | No extra API call (§7.1's core promise). The cut must precede `normaliseOutput` (`core/api.js`): when text surrounds a fence, it keeps only the first fenced block's contents, so "document + fenced report" would become the report alone (§6.1). |
+| D14 | **Report items are gated deterministically, in code, before they become proposals.** The evidence quote must match one message inside the frozen scan window's message range, via `core/quote_match.js` (rev 2); a currency name must resolve to **exactly one** ledger currency (case-insensitive; duplicate names → ambiguous → drop); a quantity decrease must match an existing item name (case-insensitive). Failures drop the item with a console line and a Diagnostics counter — no retry, no second call. | Same discipline as the grounding gate (`world_state/provenance.js`): check the model's claims against the exact evidence it was given (the frozen-evidence rule, `world_state/refresh.js`). `quote_match.js` is already the shared "quoted words appear in one chat message" boundary for Knowledge and Story Planner, and it already refuses ILS summaries. Duplicate currency names are still allowed in v1 (the personal/business tester case), so name resolution must refuse ambiguity rather than guess. |
+| D15 | **Proposals live inside `mwt_ledger` (schema version 2), not a separate store.** Migration 1→2 adds the new arrays and optional fields; the backup key (`backup/data.js`), registry entry and pause behavior are unchanged. **A malformed proposal or item-log row can never make the ledger invalid** (rev 2): those rows are validated separately and skipped, never failing `validateLedgerRecord` (§3.6). | One backup, one validation path for money. `validateLedgerRecord` failing turns the money injection off ("kept but inactive until fixed"); an audit row must not be able to do that. |
+| D16 | **Every proposal carries its source message's receipt identity plus a content digest of that message's raw `mes`.** Identity comes from `core/message_identity.js` (persistent `mwt_uuid`, survives edits — the §7.1 "stable per-message key" landmine is already cleared; Chronicle's breakage was index-based). **Staleness is computed when the inbox renders, not stored** (rev 2): message gone → the proposal drops; digest mismatch (swipe or edit) → "source changed" badge, the user decides; swiping back to the original clears the badge. The message index shown in the inbox is looked up from the identity at render time, so it is never wrong. | The identity keys the message *slot*, not the swipe variant. A swipe to a variant where the payment never happened leaves the slot alive with different content — the digest catches exactly that. A stored `stale` status would stay stuck after a swipe back. |
+| D17 | **Resolved proposals persist as dedupe tombstones.** A repeat whose dedupe key matches any pending/accepted/rejected proposal is dropped silently. Tombstones are capped (§3.4). | §7.1: "refresh windows can overlap, so the same payment could be reported twice." Deleting resolved proposals on decision would let the next overlapping window re-propose an accepted event. |
 | D18 | **Accept/reject stays the only write path** (D1 carries forward verbatim). Batch accept/reject for a refresh's harvest. Accepting appends the transaction / applies the item change with `source` set to the proposal id. | No auto-apply setting, not even "safe" ones. Overlapping windows and swipe churn make silent writes a double-counting machine; the one-click accept is the whole point. |
-| D19 | **Debts are a view, not a record.** Transactions gain an optional free-text `counterparty`; the Debts view is the nonzero net per (counterparty, currency). Paying a debt off is just a payment with the counterparty set — the net walks to zero. | D3's logic: a stored debt total can drift from its history; a computed net can't. No new lifecycle (no "settled" flag to forget), and an overdrafted balance is representable today (v1 Q3: negatives allowed, badge red). |
-| D20 | **Fold-forward is debt-aware, and the cap re-tunes.** Rows with a `counterparty` whose per-(counterparty, currency) net is nonzero are never folded into "Carried forward"; if the retained rows can't fit under the cap, the fold refuses (existing `RangeError` path) rather than hide a debt. The cap also rises 200 → 500 once proposals start appending entries (v1 §9 D9 anticipated re-tuning; Brasen: "can always increase it"). | D9's fold collapses the oldest prefix per currency — past 200 entries it would swallow an unpaid debt with no trace. Debt-awareness makes **any** cap safe; the raise just slows the fold down for logs filling at refresh cadence. |
+| D19 | **Debts are a view over loan rows, not a record** (rev 2). Transactions gain an optional free-text `counterparty` and an optional `loan: true` flag (a loan row requires a counterparty). The Debts view is the nonzero net of **loan rows only** per (counterparty, currency). Sign: amounts stay player-signed (D3/D4), so **net > 0 means the player owes them** (they handed over money: borrowed) and **net < 0 means they owe the player** (lent out). Repaying is a loan row with the opposite sign; the net walks to zero. A plain purchase with a counterparty is ordinary history and never appears in Debts. | D3's logic: a stored debt total can drift from its history; a computed net can't. Rev 1 summed *all* counterparty cash flow, which only equals a debt for loans, and read the sign backwards even then: borrowing +50 showed "they owe the player", and "Paid the smith −30" showed "player owes the smith 30" after paying. |
+| D20 | **Fold-forward is debt-aware, and the cap re-tunes** (rev 2). The fold aggregates the oldest prefix per currency as today, except that loan rows aggregate per **(currency, counterparty)**: when that prefix net is nonzero, it becomes its own carried row (`kind: 'carried'`, `loan: true`, the counterparty kept); when it is zero, the rows fold into the plain currency carry. The cap rises 200 → 500. | Aggregating instead of retaining keeps every debt net exact and makes the fold fail only when currencies + open-debt counterparties exceed the cap — not in any real chat. Rev 1's "retain rows, refuse the fold when they don't fit" turned the `RangeError` (today an impossible-cap guard) into a reachable lock where no further save succeeds. |
 | D21 | **The item change log is a capped, display-only ring (100 entries).** Auto-appended by user edits and accepted proposals; trim drops the oldest with an "older changes trimmed" marker. | Unlike transactions there is no arithmetic to preserve, so a plain trim is honest. Fed by proposals (D18), the log becomes the item-side answer to "where did my 200 gold go". |
 | D22 | **Pinned items win the injection cap.** A per-item pin sorts to the front of the 15-row carried slice (`CARRIED_ITEM_LIMIT`, `ledger/injection.js`); the "…and N more" line is unchanged. | Today the cap slices list order — the grandfather's sword can lose its slot to the third waterskin. The user, not insertion order, should choose what survives the cap. |
-| D23 | **Stored items reach the Story Planner, not the narrator.** A planner-only Ledger projection (full inventory including Stored, notes, per-currency net worth) enters the planner's author context with its own budget entry — the `knowledge/planner_context.js` pattern ("Safe, planner-only projection", budgets pinned in `story_planner/schema.js`). The narrator injection is unchanged. | This is §7.2's "show Stored items on demand", re-aimed. The narrator injection runs every turn behind a 15-item cap; planning runs once. A stash — exactly what Stored is for (D6) — fits the second budget, not the first. |
+| D23 | **Stored items reach the Story Planner, not the narrator** (rev 2: seam corrected). A planner-only Ledger block (full inventory including Stored, `where`, per-currency balances, open debts) is built by a `core/` reader and prepended to the planner prompt as application-owned context — the `buildCalendarPlannerContext` / `buildAmbientPlannerContext` pattern (`story_planner/generation.js`), with its own character cap constant. It is **not** part of author context. The narrator injection is unchanged. | This is §7.2's "show Stored items on demand", re-aimed. `AUTHOR_CONTEXT_BUDGETS` is the Standard/Expanded/Large dropdown for *private NPC* context, which only runs on reviewed scoped requests behind a privacy warning; an entry there would add a fourth dropdown option, and gating on that opt-in would mean the stash almost never reaches the planner. Inventory isn't private. |
 | D24 | **A narrator-side "storage visible" toggle stays deferred.** Moving an item Stored→Carried already works for one item; a scene-wide reveal would need auto-un-reveal (scene tracking) or an honest lie (items claimed in-hand that aren't). | Ranked last of the §7.2 candidates. Revisit only if planner projection (D23) leaves a felt gap — the shape then is a manual toggle plus a `where` field, phrased "owned but not on hand". The `where` field ships anyway (§3.1) because it costs nothing. |
 | D25 | **Money locations (purses, banked gold) are explicitly out.** The money-side analog of Carried/Stored would complicate the balance model and the injection's "Never state a different amount" contract. | Coherent, and testers haven't asked. Revisit only on demand; if it ever lands, it is an optional transaction field shaped like `counterparty`, not a second ledger. |
 | D26 | **The deferred slash commands ride along** (`/wt-ledger-add <amount> [currency] [note]`, `/wt-item <name> [qty]`) — v1 Phase 3's optional extra. | Cheap filler; the panel stays primary (D2). |
+| D27 | **No cross-module imports** (rev 2, new). The report parser, evidence gate, resolution and dedupe key live in a pure `core/ledger_report.js`. World State calls it, then hands the gated lines to the Ledger through a `mwt:ledger-report` document event carrying the chat id; the Ledger listener re-checks that the chat is still current and does the write. | `world_state/` imports from no other feature module today, and v1 drew the same line for Ledger ("imports only `core/`"). `quote_match.js` already sets the precedent: shared trust boundaries live in `core/`. |
+| D28 | **The snapshot and report request are gated on: `enableLedger` on, the new `ledgerProposals` setting on, the ledger non-empty, its store healthy and not paused** (rev 2, new). Any gate closed → the request is left out of the prompt and any block that arrives anyway is cut and ignored. | Enable flags have not gated cross-module reads in the past (the onboarding review found exactly this). A disabled Ledger must cost zero prompt tokens. |
+| D29 | **Measure before building the inbox** (rev 2, new). `ledgerProposals` ships **off by default** in Phase 6, with Diagnostics counters (§6.4). The counters measure (a) whether the report is accurate enough to be worth reviewing and (b) whether World State document validation fails more often with the request in the prompt, checked on GLM and at least one local model. **The default stays off regardless (Q6, resolved 2026-11-18); the counters only inform whether a later release flips it.** | Asking a small model for a second output format after the document is the most likely real-world regression, and it's cheap to measure before Phase 7's UI exists. Local models already needed their own hardening pass for Chronicle. |
+| D30 | **Open debts reach the narrator injection** (Q1 resolved). One line after the money line, only when nonzero loan nets exist, capped at three counterparties plus "and N more": `Debts: owes Aldric 50 gold; owed 20 silver by the guild.` Same honesty rule as D11 — listed loans are definite, unlisted ones may exist (the user won't loan-flag every tab). | The narrator otherwise invents debt status mid-scene — the exact failure v1 §1 describes. A few narrator tokens only while debts exist, and safe only since D19's loan-only nets (rev 1's all-counterparty net would have told the narrator the player owes every shopkeeper they've paid). |
 
 ## 3. Proposal data model
 
@@ -40,10 +44,13 @@ Alongside that, v2 adds the two audit surfaces v1 deferred as "money needs a his
   version: 2,
   currencies: [ /* unchanged */ ],
   transactions: [
-    // v1 fields unchanged; two optional fields added:
+    // v1 fields unchanged; three optional fields added:
     { id: 't2', currency: 'c1', amount: -30, note: 'Paid the smith', date: '14 March 1203', kind: 'entry',
-      counterparty: 'Aldric the smith',  // optional free text — powers the Debts view (D19)
+      counterparty: 'Aldric the smith',  // optional free text — who it was with
       source: 'p7' },                    // optional — proposal id when an accept created this row (D18)
+    { id: 't3', currency: 'c1', amount: 50, note: 'Borrowed from Aldric', date: '15 March 1203', kind: 'entry',
+      counterparty: 'Aldric the smith',
+      loan: true },                      // optional — counts toward Debts (D19); requires counterparty
   ],
   items: [
     { id: 'i1', name: 'Grandfather\'s sword', qty: 1, note: 'Notched blade', carried: true,
@@ -58,22 +65,23 @@ Alongside that, v2 adds the two audit surfaces v1 deferred as "money needs a his
     {
       id: 'p7',
       kind: 'money',                          // or 'item'
-      money: { currency: 'c1', amount: -30 }, // signed minor units, resolved by code (§3.2)
+      money: { currency: 'c1', amount: -30, loan: false }, // signed minor units, resolved by code (§3.2)
       // item: { name: 'Grandfather\'s sword', qtyChange: -1, carried: true },
-      counterparty: 'Aldric the smith',       // optional, model-suggested; feeds D19 on accept
+      counterparty: 'Aldric the smith',       // optional, model-suggested
       evidence: 'She counted out thirty gold coins and pressed them into his palm.',
-      msg: { identity: 'uuid:…', digest: '…' },  // receipt identity + content digest (D16)
-      seenAt: 214,                            // display-only message index at proposal time
-      status: 'pending',                      // pending | accepted | rejected | stale
+      msg: { identity: 'uuid:…', digest: '…' },  // receipt identity + digest of raw mes (D16)
+      status: 'pending',                      // pending | accepted | rejected  (staleness is computed, D16)
     },
   ],
 }
 ```
 
-- Migration 1→2 (`ledger/schema.js`, following the `migrations: { 0: … }` pattern): add `itemLog: []`, `proposals: []`; leave every existing row untouched. v1 validation already lets unknown fields survive, so hand-edited records with the new fields present migrate trivially.
+- Migration 1→2 (`ledger/schema.js`, following the `migrations: { 0: … }` pattern): add `itemLog: []`, `proposals: []`; leave every existing row untouched. v1 validation already lets unknown fields survive, so hand-edited records with the new fields present migrate trivially. `validateLedgerRecord` currently requires `version === 1`; it moves to 2.
+- New transaction-field rules in `validateLedgerRecord`: `counterparty`, when present, is a string; `loan`, when present, is boolean, and `loan: true` requires non-empty `counterparty`. These are money rows, so they are validated strictly like the rest.
 - `item` proposal semantics: `qtyChange` is signed. Positive on an unknown name → an "add item" proposal (created Carried unless `carried: false`); negative must match an existing item (D14) and steps qty down; a proposal that would reach zero proposes a **confirmed removal**, not a silent row loss (D6's rule). `carried`, when present, is the suggested state *after* the event — the sword pulled from storage mid-scene.
 - `itemLog.name` is a snapshot, not a reference: log entries outlive the item row they describe.
-- Ids keep v1's hygiene: short, never reused (`data.js` ids rule; Knowledge's reused-uid history is the cautionary tale).
+- Ids keep v1's hygiene: short, never reused (`data.js` ids rule; Knowledge's reused-uid history is the cautionary tale). Proposal and log ids are unique within their own arrays; they don't join the currency/transaction/item id set. A `source` pointing at a trimmed tombstone renders as a plain "from refresh" chip.
+- `seenAt` (rev 1) is dropped: the inbox looks up the live index from the identity (D16).
 
 ### 3.2 The report block (model → code)
 
@@ -82,98 +90,161 @@ The refresh prompt gains a **Ledger snapshot** section — carried and stored it
 ```
 ```mwt-ledger-report
 {"kind":"money","currency":"gold","amount":"-30","counterparty":"Aldric","evidence":"She counted out thirty gold coins and pressed them into his palm"}
+{"kind":"money","currency":"gold","amount":"50","counterparty":"Aldric","loan":true,"evidence":"Aldric pressed fifty gold into her hand. Pay me back by midsummer"}
 {"kind":"item","name":"Rope (50 ft)","qtyChange":"-1","evidence":"he cut a length from his rope"}
 ```
 ```
 
-- Amounts arrive as **major-unit text** (`"-30"`, `"12.50"`); code resolves the currency name → id and parses with `parseAmount(amount, decimals)` (`ledger/data.js`). Unresolvable currency or unparseable amount → the item drops (D14).
-- The block is stripped from the model output **before** `validateFullRefreshOutput` / `parseDeltaPatch` ever see it — the document contract is unaware it existed (D13). In delta mode the same block trails the patch ops.
+- **Scope of the report:** only money and items of the player character (`{{user}}` / `name1`), never NPCs paying each other. `loan: true` only when the text makes it a borrowing, a lending or a repayment; a purchase is never a loan. The prompt says both explicitly.
+- Amounts arrive as **major-unit text** (`"-30"`, `"12.50"`); code resolves the currency name → id and parses with `parseAmount(amount, decimals)` (`ledger/data.js`). Unresolvable or ambiguous currency, or unparseable amount → the item drops (D14).
+- The snapshot is capped (a constant, e.g. 40 item names with a "…and N more" tail) so a large inventory can't grow every refresh prompt. Names are listed exactly so the model can copy them.
+- The block is cut from the model output **before** `normaliseOutput` (§6.1) — the document contract is unaware it existed (D13). In delta mode the same block trails the patch ops.
 - An empty block, a missing block, or garbage inside it is a non-event: the refresh outcome is unaffected.
-- The snapshot is included only when the ledger is non-empty and its store is healthy; a paused or invalid ledger store means the block is neither requested nor parsed (its writes would be refused anyway).
+- When any D28 gate is closed, the block is neither requested nor harvested.
 
 ### 3.3 From report line to proposal (code, deterministic)
 
-1. **Evidence gate** (D14): the line's `evidence` must appear in the frozen scan window after whitespace normalization. Drop otherwise.
-2. **Resolution**: currency name → id + minor units; item name → existing row (case-insensitive trim match) or new-item flag.
-3. **Dedupe**: key = `msg.identity + kind + (currency id | normalized name) + (amount | qtyChange)`. Matches any existing proposal regardless of status → dropped silently (D17).
-4. **Persist as `pending`** with identity + digest + `seenAt`.
+1. **Evidence gate** (D14): the line's `evidence` must match one message in the frozen window's message records (§6.2) via `findQuoteMatch` / `quoteMatchesMessage` (`core/quote_match.js`), checked against the live chat restricted to the window's index range. A message that changed during the API call no longer matches and the line drops. When a quote matches more than one message (a later recap of the payment), the earliest match wins. The matched message supplies `msg.identity` and `msg.digest`.
+2. **Resolution**: currency name → exactly one id + minor units; item name → existing row (case-insensitive trim match) or new-item flag. Resolution runs against the ledger as it is at write time (a detached read in the Ledger listener), not the snapshot the prompt saw — the user may have edited mid-call.
+3. **Dedupe**: key = `msg.identity + kind + (currency id | normalized name) + (amount | qtyChange)`. Matches any existing proposal regardless of status → dropped silently (D17). Known limit: two identical payments in the *same* message (twice 30 gold) collapse into one proposal; the user adds the second by hand.
+4. **Persist as `pending`** with identity + digest.
 
 ### 3.4 Expiry and tombstones
 
-- On chat change and on opening the Ledger tab, walk `proposals`: source message identity absent from the chat → remove (it can never be re-verified); digest mismatch → `status: 'stale'`, shown with a "source changed" badge and still decidable by hand (D16).
-- Tombstones = accepted/rejected/stale rows. Cap at 300; over the cap, drop oldest **resolved** rows first. 300 exceeds any real overlap distance (`maxScanMessages`-bounded), so a dropped tombstone cannot realistically be re-proposed by a later overlapping window.
+- On chat change and on opening the Ledger tab, walk `proposals`: source message identity absent from the chat → remove the row, whatever its status (a pending one can never be re-verified; a tombstone can never be matched again). Digest mismatch is not stored; the inbox computes it (D16).
+- Tombstones = accepted/rejected rows. Cap at 300; over the cap, drop oldest resolved rows first. In full-refresh mode windows overlap by `maxScanMessages` minus the refresh cadence; delta mode scans only since the watermark, so it barely overlaps at all. 300 resolved proposals is far past either.
 
 ### 3.5 The overdraft tie-in
 
-Accepting a money proposal that would push a currency's balance below zero is allowed (v1 Q3) but gets a warning, and when the report supplied a `counterparty`, one extra button: **"track as debt from ⟨counterparty⟩"** — the same transaction with the counterparty attached, so it shows in Debts (D19). The two features were chosen separately; this is the seam that makes them feel designed together.
+Accepting a money proposal that would push a currency's balance below zero is allowed (v1 Q3) but gets a warning. When the proposal has a `counterparty`, one extra button: **"accept, and record the shortfall as owed to ⟨counterparty⟩"** (rev 2). It writes the proposed transaction plus a loan row (`loan: true`, same counterparty, amount = the shortfall, positive). The balance lands at exactly zero and Debts shows the player owing the shortfall — the debt is counted once, in Debts, not also as a negative purse. (Rev 1 attached the counterparty to the negative transaction itself, which showed the full amount in Debts *and* a negative balance.)
+
+### 3.6 Audit-row validation (rev 2)
+
+- `validateLedgerRecord` checks only that `proposals` and `itemLog` are arrays when present. Their rows are checked by a separate `validateLedgerAudit`, whose issues are reported to Diagnostics at a non-blocking severity.
+- Rows that fail are kept as stored (reads never repair, per `store.js`) but skipped by render, dedupe and expiry. The next proposal write leaves them in place; a Maintenance tool can clear them later if testers ever hit one.
+
+### 3.7 Accepted proposals whose source changed (rev 2)
+
+The digest check also runs for **accepted** proposals: a transaction or item-log row whose `source` proposal now has a changed or missing source message shows a "source changed after accept" chip. Nothing is undone automatically (D18); the user decides whether the payment still happened. This is the realistic swipe failure — accept −30, then swipe the message to a version where nobody paid. It's partly contained already: refresh scans stop at `getStableHistoryEnd`, which leaves out the newest, still-changing messages.
 
 ## 4. Debts view
 
-- A grouping inside Finances: nonzero nets per (counterparty, currency), sign convention stated in the UI — net < 0 means *the player owes* them, net > 0 means *they owe the player* (amounts are player-signed throughout, D3/D4).
-- Settlement needs no ceremony: pay them back with the counterparty filled in and the net walks to zero; the row leaves the view when it hits exactly zero.
+- A grouping inside Finances: nonzero nets of **loan rows** per (counterparty, currency) (D19). The UI states the sign in words: "You owe Aldric 50 gold" for net > 0, "Aldric owes you 20 gold" for net < 0.
+- Settlement needs no ceremony: repay with a loan row for the same counterparty and the net walks to zero; the row leaves the view when it hits exactly zero.
+- The add/edit row gets a "Loan or repayment" checkbox next to the counterparty field. (Remember ST's global `input[type=checkbox] { display: grid }`: the label needs inline-flex, as in v1.)
 - Honest limit, stated here so nobody "fixes" it silently: counterparty matching is **exact free text**. "Aldric", "the smith" and "Aldric the smith" are three counterparties. A merge tool is a nicety for later, not v2.
 
 ## 5. Fold-forward and the cap (D20 in full)
 
-`foldTransactions` (`ledger/data.js`) currently replaces the oldest prefix with one carried row per currency. v2 adds one exclusion: a row with `counterparty` set whose (counterparty, currency) net among the foldable prefix is nonzero is **retained in place**, after the carried aggregates. If retained rows + one carried row per currency can't fit under the cap, the fold throws (existing `RangeError` contract — refuse, keep everything, the save surfaces why) rather than fold away a payable or receivable.
+`foldTransactions` (`ledger/data.js`) currently replaces the oldest prefix with one carried row per currency. v2 changes the grouping key: plain rows group by currency as today; loan rows group by (currency, counterparty).
 
-- Zero-net counterparty rows fold like any other — a debt paid off is ordinary history.
+- After the prefix is chosen, each loan group whose total is nonzero becomes its own carried row (`kind: 'carried'`, `date: null`, `loan: true`, `counterparty` kept, note "Carried forward (owed)" unless the user renamed it — the same keep-the-edited-note rule v1 fixed). Each loan group whose total is zero merges into its currency's plain carried row instead: a paid-off debt is ordinary history.
+- Every debt net is preserved exactly, because the aggregate *is* the prefix net.
+- The prefix-size loop counts carried rows as currencies + nonzero loan groups. The existing `RangeError` stays as the impossible-cap guard; it fires only when that count alone exceeds the cap.
 - The cap rises to **500** (D20). With proposals appending at refresh cadence, 200 would fold away months of audit; 500 keeps the file tens of KB (v1 §5's save-cost bound is unchanged).
-- The invariant is the exclusion, not the number: any future cap change inherits debt-safety for free.
+- The invariant is the grouping, not the number: any future cap change inherits debt-safety for free.
 
 ## 6. Refresh piggyback mechanics (World State side)
 
-- `world_state/prompts.js`: the full-refresh system prompt gains a short report contract paragraph; `buildUserMessage` gains the Ledger snapshot section (D13). `world_state/delta.js`: `buildDeltaUserMessage` gains the same request; the strip runs before `parseDeltaPatch`.
-- `world_state/refresh.js`: after normalising output and before validation, extract-and-strip the block (both refresh paths); on success, hand the lines to `ledger/proposals.js` via a detached read + validated write — the same store discipline as every other Ledger write. A refused proposal write (paused store, stale panel) drops the harvest with a console line; it never blocks the refresh that carried it.
+### 6.1 Cutting the block
+
+- `world_state/refresh.js` (full, retry and catch-up paths) and the delta path: cut the report block from the **raw** `fetchFn` result, then pass the remainder to `normaliseOutput` as today. `normaliseOutput` itself is not changed.
+- Why it can't come later: when text surrounds a fence, `normaliseOutput` keeps only the first fenced block's contents. It only spares a `mwt-ledger-report` fence today because its `[a-z]*` tag pattern stops at the hyphen; a model that writes ```` ```json ```` or ```` ```ledger ```` for the report would wipe out the document.
+- The cut tolerates what models actually emit: the `mwt-ledger-report` tag, a `json`/`jsonl` tag or no tag on the **last** fenced block when its lines parse as report objects, and thinking blocks (strip `<think>…</think>` from the raw text before looking, the same pattern `normaliseOutput` uses).
+- The cut happens on every attempt so the validators never see a report; only the committing attempt's lines are kept (D13).
+
+### 6.2 Window records
+
+- `getRecentMessagesForScan` and `getMessagesSinceForScan` return the joined `Name: text` string only. They gain a parallel list of message records (`{ index, identity }`), and catch-up chunks carry the same list next to `scanWindow.text`. Identities come from `getOrCreateReceiptIdentity`, called while the window is built — before the first await, like the rest of the frozen evidence.
+
+### 6.3 Prompts and handoff
+
+- `world_state/prompts.js`: the full-refresh system prompt gains a short report contract paragraph; `buildUserMessage` gains the Ledger snapshot section (D13), read through a `core/` helper so World State doesn't import Ledger (D27) and captured once pre-flight like `formatChangeNote` (the frozen-evidence rule — retries must not see a ledger that changed mid-call). `world_state/delta.js`: `buildDeltaUserMessage` gains the same request.
+- After the committing write — behind the same `captureScope` chat-switch check World State already runs before writing — the gated lines go out as a `mwt:ledger-report` event with the chat id. The Ledger listener checks the chat is still current, resolves, dedupes and writes through `saveLedger` (detached read + validated write, same store discipline as every other Ledger write). A refused write (paused store, chat changed) drops the harvest with a console line and a counter; it never blocks or fails the refresh that carried it.
 - No changes to the grounding gate, expiry, or the document validator — the block is gone before any of them run.
-- Budget: one line in the refresh's input (snapshot) and ≤ ~200 output tokens when events exist. The injection budget entry (`core/budget.js`) is untouched — proposals add no narrator tokens.
+
+### 6.4 Budget and measurement
+
+- Input: the snapshot section plus a short contract paragraph on **every** refresh while D28's gates are open (not only when money moved). Output: ≤ ~200 tokens when events exist. The injection budget entry (`core/budget.js`) is untouched — proposals add no narrator tokens.
+- Diagnostics counters (D29): reports seen, lines kept, lines dropped by reason (evidence, currency unresolved, currency ambiguous, item unmatched, parse, duplicate), proposals later accepted/rejected, and World State validation failures per refresh **with and without** the report request in the prompt.
 
 ## 7. Item change log
 
-- Append points: user add/edit/delete/carry-toggle in the panel, accepted item proposals, and accepted money proposals that touch a named item's row (none today — money and items stay separate records).
+- Append points: user add/edit/delete/carry-toggle in the panel and accepted item proposals. Log rows come from diffing the previous and next item lists in `saveLedger`, so every save path is covered. Backup restore and migration don't log.
 - Per-item drill-down (a collapsible "history" row in Inventory) plus a flat "recent changes" strip; both read the same ring. Trim marker: "…older changes trimmed" (D21).
 - `date` is prefilled from the story clock when readable (`core/calendar_state.js`), same as transactions — display-only, never parsed back (v1 §3).
 
 ## 8. Planner-only projection (D23)
 
-- New `ledger/planner_context.js`, shaped like `knowledge/planner_context.js`: a pure build from a detached `getLedger()` read. Contents: per-currency net worth, carried list with quantities, stored list with `where`, notable notes — names and numbers only, no transaction history, no proposals.
-- One budget entry in `story_planner/schema.js`'s `AUTHOR_CONTEXT_BUDGETS`, with a test pinning the two sides equal (the Knowledge precedent keeps its pin; the Ledger one gets the same).
-- Gated on the planner's author-context opt-in — nothing new reaches users who never enabled planner context.
+- New `buildLedgerPlannerContext()` in `core/` (alongside `buildCalendarPlannerContext`), pure apart from a detached read of `mwt_ledger`: per-currency balances, carried list with quantities, stored list with `where`, open debts in words — names and numbers only, no transaction history, no proposals, no notes beyond the item's own short note.
+- `story_planner/generation.js` prepends it as `wrapTag('ledger', …)` next to the ambient and calendar blocks, so custom templates get it too. Its own character cap constant (e.g. 2,000 characters, overflow summarized as "…and N more stored items"); not an `AUTHOR_CONTEXT_BUDGETS` entry.
+- Gated on `enableLedger` and a healthy, non-empty store (D28's pattern). A planner-side checkbox ("Include ledger") defaults on; it's the user's off switch if a stash spoils plans.
 
 ## 9. User surface changes
 
-- **Proposal inbox** at the top of the Ledger tab: pending count badge on the 💰 floating button and the tab label; each row shows the proposal, its evidence quote (the one-glance verdict D14 makes trustworthy), the source message index, and stale badges ("source changed"). Accept / reject per row; "accept all" / "reject all" per harvest (D18).
-- **Finances**: counterparty field on the add/edit row (autocomplete from existing counterparties later, free text now); the Debts grouping (§4); accepted-from-proposal rows carry a small source chip (`source`, D18).
+- **Proposal inbox** at the top of the Ledger tab: pending count badge on the 💰 floating button and the tab label; each row shows the proposal, its evidence quote (the one-glance verdict D14 makes trustworthy), the live source message index, and "source changed" badges. Accept / reject per row; "accept all" / "reject all" per harvest (D18).
+- **New-item proposals** get an "apply to existing item" picker (rev 2): "rope" vs "Rope (50 ft)" fails the exact match, and without the picker the only choices are reject or a duplicate row.
+- **Finances**: counterparty field and "Loan or repayment" checkbox on the add/edit row (autocomplete from existing counterparties later, free text now); the Debts grouping (§4); accepted-from-proposal rows carry a small source chip (`source`, D18) and the "source changed after accept" chip (§3.7).
 - **Inventory**: pin star (D22), `where` field on stored rows, per-item history drill-down (§7).
 - **Overdraft dialog** (§3.5).
+- **Settings**: `ledgerProposals` ("Suggest ledger changes from World State refresh"), off by default until D29's measurements say otherwise.
 
 ## 10. Code layout
 
 | File | Job |
 |------|-----|
-| `ledger/proposals.js` | New, pure: report-line parsing, evidence gate, resolution, dedupe keys, expiry walk, apply-on-accept. No host imports. |
-| `ledger/planner_context.js` | New, pure: the D23 projection. |
-| `ledger/data.js` | v2 fields, debt-aware fold (§5), item-log ring, pin-aware injection ordering helper. |
+| `core/ledger_report.js` | New, pure: report-block cut, line parsing, evidence gate (via `core/quote_match.js`), currency/item resolution, dedupe keys (D27). |
+| `core/` Ledger reader | New: the snapshot for the refresh prompt and `buildLedgerPlannerContext` (D23), both reading `mwt_ledger` without importing `ledger/`. |
+| `ledger/proposals.js` | New: the `mwt:ledger-report` listener, expiry walk, apply-on-accept, overdraft-with-loan. |
+| `ledger/data.js` | v2 fields and validation, `validateLedgerAudit`, loan-aware fold (§5), item-log ring, pin-aware injection ordering helper. |
+| `ledger/injection.js` | Debts line after the money line (D30); pinned carried items first (D22). |
 | `ledger/schema.js` | `currentVersion: 2`, `migrations: { 0: …, 1: migrateLedgerV1ToV2 }`. |
-| `ledger/store.js` | Save paths append item-log rows; proposal writes; unchanged backup key (D15 payoff). |
-| `ledger/render.js` | Inbox, Debts grouping, pins, `where`, drill-down, overdraft dialog. |
-| `world_state/prompts.js`, `delta.js`, `refresh.js` | Snapshot section, report request, strip-and-handoff (§6). |
-| `story_planner/schema.js` | One budget entry (§8). |
+| `ledger/store.js` | Item-log diffing on save; proposal writes; unchanged backup key (D15 payoff). |
+| `ledger/render.js` | Inbox, existing-item picker, Debts grouping, loan checkbox, pins, `where`, drill-down, chips, overdraft dialog. |
+| `world_state/refresh.js`, `delta.js`, `prompts.js` | Window records, raw-output cut, snapshot section, report request, post-commit event (§6). |
+| `story_planner/generation.js` | Prepend the Ledger block (§8). |
+| `core/settings.js` | `ledgerProposals` default (off). |
 
-Shared files otherwise untouched: `core/budget.js`, `backup/data.js`, `schema/registry.js`, `dashboard/` (Overview row gains nothing — the badge already says the number). Rough size: two new files plus moderate edits; the pure core carries the risk, the World State side is deliberately thin (strip + handoff).
+Shared files otherwise untouched: `core/api.js` (`normaliseOutput` is not changed — the cut happens before it), `core/budget.js`, `backup/data.js`, `schema/registry.js`, `dashboard/` (Overview row gains nothing — the badge already says the number). Rough size: three new files plus moderate edits; the pure core carries the risk, the World State side stays thin (window records, cut, event).
 
 ## 11. Delivery plan
 
-- **Phase 5 (pure core):** `data.js` v2 + debt-aware fold + item-log ring + `proposals.js` parse/dedupe/apply + migration 1→2. Tests: fold never hides a nonzero counterparty net at any cap; dedupe across statuses; evidence-gate drops; migration round trip; pin ordering.
-- **Phase 6 (piggyback):** snapshot + report request + strip in both refresh paths; tombstone expiry. Tests: block never reaches the validators; a refused proposal write can't fail the refresh; delta output with a trailing block parses.
-- **Phase 7 (surface):** inbox, Debts, pins, `where`, drill-down, overdraft dialog.
-- **Phase 8 (planner + commands):** `planner_context.js`, budget entry + pin, slash commands.
-- **Phase 9 (host QA):** a branch inherits proposals and tombstones; swipe-after-propose shows the stale badge; backup round trip carries v2 fields; delta-mode users get proposals.
+- **Phase 5 (pure core):** `data.js` v2 (loan/counterparty fields and validation, loan-aware fold, item-log ring, `validateLedgerAudit`, pin ordering) + migration 1→2 + `core/ledger_report.js` (cut, parse, gate, resolve, dedupe). Tests: the fold preserves every (counterparty, currency) loan net at any cap and never throws below currencies + open debts; a zero-net loan group folds into the plain carry; Debts sign (borrow → "you owe"); a purchase with a counterparty never appears in Debts; dedupe across statuses; evidence-gate drops; duplicate currency names drop as ambiguous; a malformed proposal row leaves `validateLedgerRecord` valid; migration round trip; the injection debts line appears only with nonzero loan nets, caps at three counterparties, and keeps D11's honesty phrasing (D30).
+- **Phase 6 (piggyback, measure first — D29):** window records, raw-output cut in every refresh path, snapshot + report request behind `ledgerProposals` (default off) and D28's gates, post-commit event, Ledger listener persisting proposals, expiry walk, Diagnostics counters, and a bare pending list (no inbox polish) so testers can see what arrives. Tests: a document + ```` ```json ```` report survives intact (the `normaliseOutput` trap); the block never reaches the validators; a failed refresh harvests nothing; a chat switch mid-refresh writes no proposals into the new chat; a refused proposal write can't fail the refresh; delta output with a trailing block parses; a disabled Ledger adds nothing to the prompt. **Exit gate:** counters from GLM and one local model reviewed with Brasen before Phase 7, and the `ledgerProposals` default decided then. A SETUP_GUIDE paragraph lands with this phase: what the setting does, why it's off, and the local-model caution (Q6).
+- **Phase 7 (surface):** inbox, existing-item picker, Debts + loan checkbox, chips (§3.7), pins, `where`, drill-down, overdraft dialog.
+- **Phase 8 (planner + commands):** `buildLedgerPlannerContext` + planner wiring and checkbox, slash commands.
+- **Phase 9 (host QA):** a branch inherits proposals and tombstones; swipe-after-propose shows the badge and swiping back clears it; swipe-after-accept shows the transaction chip; backup round trip carries v2 fields; delta-mode users get proposals; a chat with two same-named currencies drops those lines; checkbox labels render on ST mobile.
 
 ## 12. Open questions
 
-1. **Debts in the injection?** Should the narrator see "owes Aldric 50 gold" when nonzero counterparty nets exist (one capped line), or is the Debts view user-only? Lean: include — the narrator otherwise invents debt status mid-scene, which is the exact failure v1 §1 describes — but it spends narrator tokens every turn, so it needs the co-author's call.
-2. **Tombstone cap (300) and log cap (100):** numbers plucked from the maxScanMessages overlap bound and "a screenful of audit" respectively. Both trivially tunable at the constants.
-3. **Counterparty as free text vs Knowledge registry:** suggesting counterparties from Knowledge's NPC registry would be nicer than typing, but it crosses the module boundary D-era v1 drew ("the Ledger imports only `core/`"). Lean: free text in v2, registry autocomplete as a later opt-in seam.
-4. **Per-item reveal anyway?** D24 defers the narrator-side storage toggle. If planner projection leaves the gap felt, the shape is settled (manual toggle + `where`, phrased "owned but not on hand") — confirm deferral is acceptable.
-5. **`seenAt` display:** message indexes shift under deletion/ILS condensing. It is display-only (identity + digest do the work); worst case the index is briefly wrong next to a quote that is still verbatim. Acceptable, or hide the index and show only the quote?
+1. ~~**Debts in the injection?**~~ — **resolved (2026-11-18): include** — D30, one line capped at three counterparties, D11's honesty phrasing. (Rev 2's note stands: only now safe, since rev 1's net would have told the narrator the player owes every shopkeeper they've paid.)
+2. **Tombstone cap (300) and log cap (100):** fine as constants; both trivially tunable.
+3. **Counterparty as free text vs Knowledge registry:** free text in v2; registry autocomplete as a later opt-in seam, because it would cross the module boundary (D27).
+4. **Per-item reveal anyway?** D24 deferral stands. If planner projection leaves the gap felt, the shape is settled (manual toggle + `where`, phrased "owned but not on hand").
+5. ~~`seenAt` display~~ — resolved in rev 2: not stored; the inbox looks up the live index from the identity (D16).
+6. ~~**New (rev 2): `ledgerProposals` default after Phase 6.**~~ — **resolved (2026-11-18): off by default**, with a SETUP_GUIDE recommendation (local models needed their own hardening pass for Chronicle and World State before, and this adds a second output format to the same prompt). The "on for API models, off for local" split was considered and rejected: one documented behavior beats a default that depends on the server type. The D29 counters still run; they inform whether a *later* release flips the default, not this one.
+
+## 13. Revision 2 notes (2026-11-18)
+
+A code-checked review against `ledger/`, `world_state/refresh.js`, `core/api.js`, `core/quote_match.js`, `core/message_identity.js` and `story_planner/`. The direction is unchanged; these are corrections where rev 1 relied on code that doesn't work as assumed.
+
+| Change | Where | Reason |
+|--------|-------|--------|
+| Debts count `loan: true` rows only, and the sign flips (net > 0 = player owes) | D19, §3.1, §3.2, §4 | Rev 1 summed all counterparty cash flow: borrowing showed as "they owe the player", and any purchase with a counterparty (including the doc's own "Paid the smith" example) showed as a debt. |
+| Overdraft button records the shortfall as a loan row | §3.5 | Rev 1 showed the same shortfall twice — as a negative balance and as a debt. |
+| Fold aggregates loan rows per (currency, counterparty) instead of retaining them and refusing | D20, §5 | Rev 1's refusal made the `RangeError` reachable, locking all saves; D20 (global net) and §5 (prefix net) also disagreed. |
+| The report is cut from the raw output before `normaliseOutput` | D13, §6.1 | `normaliseOutput` keeps only the first fenced block when text surrounds it; a ```` ```json ```` report would replace the document. |
+| Scan windows return message records; evidence gate uses `core/quote_match.js` | D14, §3.3, §6.2 | The frozen window is one joined string with no message indexes, so rev 1 had no way to fill `msg.identity`. |
+| Ambiguous currency names drop | D14 | Duplicate currency names are still allowed in v1. |
+| Harvest only from the committing attempt, after the chat-switch check | D13, §6.3 | Rev 1 didn't say which retry's report counts or how a chat switch mid-refresh is handled. |
+| Staleness computed at render; `seenAt` dropped; accepted rows get a source-changed chip | D16, §3.1, §3.4, §3.7 | A stored `stale` status stays stuck after a swipe back; the real swipe risk is on accepted proposals. |
+| Audit rows validated separately and skipped | D15, §3.6 | One bad proposal row would otherwise turn off the money injection. |
+| Report parsing in `core/`, handoff by event | D27, §6.3, §10 | `world_state/` has no feature-module imports today. |
+| Gate on `enableLedger` and a new `ledgerProposals` setting | D28, §9 | Enable flags must gate cross-module reads; a disabled Ledger must add no tokens. |
+| Planner block uses the calendar/ambient pattern, not `AUTHOR_CONTEXT_BUDGETS` | D23, §8 | That constant is the private-NPC-context dropdown; an entry there adds a fourth preset and hides the block behind a reviewed-request opt-in. |
+| Measure-first Phase 6 with counters and an exit gate | D29, §6.4, §11 | The likely regression is the World State document failing more often on small models. |
+| Existing-item picker on new-item proposals; snapshot capped; player-only report scope | §3.2, §9 | Name mismatches would otherwise create duplicates; a large inventory would grow every refresh prompt; NPC-to-NPC payments aren't the player's ledger. |
+| Same-message duplicate payments documented as a known limit | §3.3 | The dedupe key can't tell two identical payments in one message apart. |
+| Open-questions 1 and 6 resolved and wired: D30 (debts line in the injection, capped at three, D11 honesty phrasing) and Q6 (default stays off; SETUP_GUIDE paragraph; D29's "flips after counters" softened to "informs a later flip") | D29, D30, §10, §11, §12 | The recorded answers had no decision number, no injection.js entry in §10, and no phase test; D29's wording promised a default flip the Q6 answer rules out. |
+| Ledger snapshot captured once pre-flight, like `formatChangeNote` | §6.3 | It was read inside `buildUserMessage`, so a retry after a mid-call ledger edit would see a different snapshot — a frozen-evidence gap. |
+| Review verified rev 2's code claims: `normaliseOutput`'s first-fenced-block capture (`core/api.js`), `quote_match.js`'s exports and ILS refusal, the `core/` planner-builder pattern, `world_state`'s clean import line, and D19's sign walk | — | One nuance: with the hyphenated tag, `innerFence` matches nothing and the fence stays in the text (validation rejects it) — so the cut is mandatory for *both* wrong-tag and right-tag blocks. |

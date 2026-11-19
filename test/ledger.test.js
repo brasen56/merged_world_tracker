@@ -94,7 +94,7 @@ describe('Ledger balances and validation', () => {
     });
 
     test.each([
-        record => { record.version = 2; },
+        record => { record.version = 3; },
         record => { record.currencies = { some: 'bad' }; },
         record => { record.transactions = null; },
         record => { record.items = {}; },
@@ -129,8 +129,8 @@ describe('Ledger balances and validation', () => {
 });
 
 describe('Ledger fold-forward', () => {
-    test('folds at 201, preserves newest entries, balances, extra fields and input', () => {
-        const record = ledger(Array.from({ length: 201 }, (_, index) => entry(`t${index}`, index - 100)));
+    test('folds at 501, preserves newest entries, balances, extra fields and input', () => {
+        const record = ledger(Array.from({ length: 501 }, (_, index) => entry(`t${index}`, index - 100)));
         record.items = [{ id: 'i1', name: 'Sword', qty: 1, note: '', carried: true }];
         record.extra = 'retained';
         freezeDeep(record);
@@ -142,7 +142,7 @@ describe('Ledger fold-forward', () => {
         expect(folded.items).toEqual(record.items);
         expect(folded.extra).toBe('retained');
         expect(foldTransactions(folded)).toEqual(folded);
-        expect(record.transactions).toHaveLength(201);
+        expect(record.transactions).toHaveLength(501);
     });
 
     test('multi-currency repeated folding preserves every balance, including zero sums', () => {
@@ -193,11 +193,11 @@ describe('Ledger schema contract and purity', () => {
         const first = prepareStore(ledgerSchema, input);
         expect(first.status).toBe('migrated');
         expect(first.data).toEqual(input);
-        const second = prepareStore(ledgerSchema, first.data, { version: 1 });
+        const second = prepareStore(ledgerSchema, first.data, { version: 2 });
         expect(second.status).toBe('valid');
         expect(second.changed).toBe(false);
         expect(second.quarantined).toEqual([]);
-        expect(prepareStore(ledgerSchema, input, { version: 2 }).status).toBe('blocked');
+        expect(prepareStore(ledgerSchema, input, { version: 3 }).status).toBe('blocked');
         expect(prepareStore(ledgerSchema, null, { version: 1 }).status).toBe('blocked');
     });
 
@@ -213,10 +213,10 @@ describe('Ledger schema contract and purity', () => {
         expect(prepareNextStoreValue(ledgerSchema, undefined, {}).data).toEqual(createLedger());
     });
 
-    test('pure core has no imports; descriptor imports only shared schema and pure rules', () => {
+    test('pure rules import only shared amount logic; descriptor imports only schema and rules', () => {
         const source = file => readFileSync(new URL(file, import.meta.url), 'utf8');
         const imports = text => [...text.matchAll(/(?:from\s|import\s)['"]([^'"]+)['"]/g)].map(match => match[1]);
-        expect(imports(source('../ledger/data.js'))).toEqual([]);
+        expect(imports(source('../ledger/data.js'))).toEqual(['../core/ledger_amount.js', '../core/ledger_amount.js']);
         expect(imports(source('../ledger/schema.js'))).toEqual(['../core/schema.js', './data.js']);
         for (const file of ['../ledger/data.js', '../ledger/schema.js']) {
             expect(source(file)).not.toMatch(/\b(document|window|globalThis|SillyTavern|getContext)\s*\./);

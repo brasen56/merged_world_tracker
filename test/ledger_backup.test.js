@@ -32,20 +32,32 @@ afterEach(() => {
 });
 
 describe('Ledger unified backup', () => {
+    test('v2 audit, loan and inventory fields survive an envelope round trip', () => {
+        const record = ledger(50);
+        Object.assign(record.transactions[0], { loan: true, counterparty: 'Aldric', source: 'p1' });
+        Object.assign(record.items[0], { pinned: true, where: 'Inn chest' });
+        record.proposals.push({ id: 'p1', kind: 'money', money: { currency: 'c1', amount: 50, loan: true },
+            counterparty: 'Aldric', evidence: 'Aldric lent her fifty gold.', msg: { identity: 'uuid:one', digest: 'original' }, status: 'accepted' });
+        record.itemLog.push({ id: 'l1', name: 'sword', change: 'added', detail: 'Added ×1', source: 'user', date: null });
+        const file = JSON.parse(JSON.stringify(buildBackupEnvelope({ identity, metadata: { ledger: record } })));
+        expect(validateBackupEnvelope(file).ok).toBe(true);
+        expect(planRestore(file, {}, { currentIdentity: identity }).plan.sections.ledger).toEqual(record);
+    });
+
     test('exports, wipes, restores and re-exports hand-entered data exactly', async () => {
         const meta = getFakeMeta();
         meta.mwt_ledger = ledger(470);
-        meta.mwt_schema_manifest = { manifestVersion: 1, sections: { ledger: 1 } };
+        meta.mwt_schema_manifest = { manifestVersion: 1, sections: { ledger: 2 } };
         const file = await exportBackup({ download: false });
         expect(METADATA_KEYS.ledger).toBe('mwt_ledger');
-        expect(file.sections.ledger).toEqual({ schemaVersion: 1, data: ledger(470) });
+        expect(file.sections.ledger).toEqual({ schemaVersion: 2, data: ledger(470) });
         expect(file._meta.metadataSections).toContain('ledger');
         expect(validateBackupEnvelope(file).ok).toBe(true);
         delete meta.mwt_ledger;
         const result = await restoreBackup(file, { confirm: true });
         expect(result).toMatchObject({ ok: true, committed: true });
         expect(meta.mwt_ledger).toEqual(ledger(470));
-        expect(meta.mwt_schema_manifest.sections.ledger).toBe(1);
+        expect(meta.mwt_schema_manifest.sections.ledger).toBe(2);
         expect((await exportBackup({ download: false })).sections.ledger).toEqual(file.sections.ledger);
     });
     test('restores as a whole record, never adding balances or merging histories', () => {
