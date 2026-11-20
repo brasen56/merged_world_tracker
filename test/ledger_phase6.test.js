@@ -162,13 +162,16 @@ test('only the successful retry report is harvested; snapshot stays frozen acros
             const ledger = getLedger();
             ledger.items.push({ id: 'rope', name: 'NEW MID-CALL ITEM', qty: 1, carried: true, note: '' });
             saveLedger(ledger);
-            return report('bad document', { ...line, amount: '-99' });
+            const leaked = doc.replace('\n\n## Recent Changes', '\n\nCurrent Scene contract:\n- Include Date, Time, Location, Present, and Situation exactly once.\n\n## Recent Changes');
+            return report(leaked, { ...line, amount: '-99' });
         }
         return report(doc);
     });
     await refreshWorldState();
     expect(requests).toHaveLength(2);
     expect(requests[1].userContent).not.toContain('NEW MID-CALL ITEM');
+    expect(requests[1].userContent).toContain('Current Scene contains content outside its scalar field lines.');
+    expect(getWorldStateText()).toBe(doc);
     expect(getLedger().proposals.map(row => row.money.amount)).toEqual([-30]);
     expect(getLedgerDiagnostics()['validation-failures:with-report']).toBe(1);
 });

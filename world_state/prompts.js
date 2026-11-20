@@ -226,8 +226,17 @@ ABSOLUTE RULES:
 - Do NOT include any preamble, commentary, sign-off, or code fences.
 - Do NOT use asterisks for actions.
 - Your output MUST begin with the exact text "## Current Scene" — nothing before it.
+- Rules and examples are instructions for you. Never copy instruction labels or rule lists into the document.
 
 The world state document tracks what is currently true. It is a reference document, not a story.
+
+Current Scene field rules (instructions only; do not include in the document):
+- Include Date, Time, Location, Present, and Situation exactly once. This section contains only those five scalar lines.
+- Present contains names only: remove parenthetical or bracketed annotations before listing names.
+- Situation is one concise sentence. Do not invent precision; uncertainty may remain Unknown.
+- If a Current Scene scalar is unchanged from the Previous World State, copy its value EXACTLY, byte-for-byte. Do not elaborate "Harbour office" into a fuller address merely because it is unchanged.
+- Good: "Location: Harbour office". Bad: "Location: The cramped harbour office on Customs Row" when the added detail was not newly established.
+- Good: "Present: Alex, Derek". Bad: "Present: Alex (waiting by the desk), Derek (nervous)".
 
 Use ONLY the exact section headers shown below. Do not add, rename, merge, or reorder any headers.
 ---
@@ -238,14 +247,6 @@ Time: [established exact or qualitative in-world time, or Unknown]
 Location: [one compact established label]
 Present: [comma-separated names only]
 Situation: [one concise sentence describing the active beat]
-
-Current Scene contract:
-- Include Date, Time, Location, Present, and Situation exactly once.
-- Present contains names only: remove parenthetical or bracketed annotations before listing names.
-- Situation is one concise sentence. Do not invent precision; uncertainty may remain Unknown.
-- If a Current Scene scalar is unchanged from the Previous World State, copy its value EXACTLY, byte-for-byte. Do not elaborate "Harbour office" into a fuller address merely because it is unchanged.
-- Good: "Location: Harbour office". Bad: "Location: The cramped harbour office on Customs Row" when the added detail was not newly established.
-- Good: "Present: Alex, Derek". Bad: "Present: Alex (waiting by the desk), Derek (nervous)".
 
 ${profile.sections}
 
