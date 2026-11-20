@@ -9,7 +9,7 @@ import { countLedgerDiagnostic } from './diagnostics.js';
 
 export const LEDGER_SNAPSHOT_ITEM_LIMIT = 40;
 export const LEDGER_SNAPSHOT_CHAR_LIMIT = 4000;
-export const LEDGER_REPORT_CONTRACT = `After the document or delta patch, append a separate fenced mwt-ledger-report block of JSONL (one object per line; an empty block if nothing happened). Report ONLY explicit money/item changes belonging to the player character, never NPC-to-NPC exchanges. Copy a short verbatim evidence quote from ONE recent chat message. Money: {"kind":"money","currency":"exact currency name","amount":"signed major-unit decimal text","evidence":"quote"}. Items: {"kind":"item","name":"exact item name","qtyChange":"signed integer text","evidence":"quote"}; optional carried boolean. Optional counterparty string; loan:true ONLY for explicit borrowing, lending or repayment, never purchases. Do not infer changes from the ledger snapshot or previous document. Do not put the report inside the document or patch.`;
+export const LEDGER_REPORT_CONTRACT = `After the document or delta patch, append a separate fenced mwt-ledger-report block of JSONL (one object per line; an empty block if nothing happened). Report ONLY explicit money/item changes belonging to the player character, never NPC-to-NPC exchanges. Copy a short verbatim evidence quote from ONE recent chat message. Money example: {"kind":"money","currency":"gold","amount":"-30","evidence":"verbatim quote"}. Item example: {"kind":"item","name":"Rope","qtyChange":"-1","evidence":"verbatim quote"}. Replace example names with exact snapshot names and quotes with actual evidence. amount and qtyChange MUST be JSON strings, with the number inside double quotes, never JSON numbers. amount uses signed major-unit decimal text without currency symbols or thousands separators, respecting the currency's decimal places. qtyChange uses signed whole-number text. Optional fields: carried boolean, counterparty string, loan boolean. Omit unknown optional fields; never use null. loan:true ONLY for explicit borrowing, lending or repayment, never purchases. Do not infer changes from the ledger snapshot or previous document. Do not put the report inside the document or patch.`;
 
 /** No snapshot and no prompt tokens when any D28 gate is closed. */
 export function readLedgerForReport() {
@@ -34,7 +34,7 @@ export function buildLedgerRefreshSnapshot() {
     for (const [label, rows, limit] of [['Currency', ledger.currencies, Infinity], ['Item', ledger.items, LEDGER_SNAPSHOT_ITEM_LIMIT]]) {
         let kept = 0;
         for (const row of rows.slice(0, limit)) {
-            const line = `${label}: ${JSON.stringify(row.name)}`;
+            const line = `${label}: ${JSON.stringify(row.name)}${label === 'Currency' ? ` (decimal places: ${row.decimals})` : ''}`;
             if (lines.join('\n').length + line.length + 100 > LEDGER_SNAPSHOT_CHAR_LIMIT) break;
             lines.push(line);
             kept++;
@@ -44,16 +44,23 @@ export function buildLedgerRefreshSnapshot() {
     return lines.join('\n');
 }
 
+/** Keep totals free of prose; the local console carries a rejected parse row. */
+export function recordLedgerReportDrop(drop) {
+    countLedgerDiagnostic(`dropped:${drop.reason}`);
+    if (drop.code) countLedgerDiagnostic(`dropped:${drop.reason}:${drop.code}`);
+    if (drop.reason === 'duplicate') return;
+    const message = `[MWT:Ledger] Report line dropped (${drop.reason}${drop.code ? `: ${drop.code}` : ''}).${drop.message ? ` ${drop.message}` : ''}`;
+    if (drop.reason === 'parse') console.warn(message, drop.line);
+    else console.warn(message);
+}
+
 /** Event dispatch and listener failures must never change refresh success. */
 export function publishLedgerReport(report, records, scope, requested) {
     if (!requested || report.block === null) return;
     try {
         if (!assertSameScope(scope).ok || !readLedgerForReport()) return;
         countLedgerDiagnostic('reports-seen');
-        for (const drop of report.dropped) {
-            countLedgerDiagnostic(`dropped:${drop.reason}`);
-            console.warn(`[MWT:Ledger] Report line dropped (${drop.reason}).`);
-        }
+        for (const drop of report.dropped) recordLedgerReportDrop(drop);
         document.dispatchEvent(new CustomEvent('mwt:ledger-report', {
             detail: { chatId: scope.identity.key, scope, lines: report.lines, records },
         }));

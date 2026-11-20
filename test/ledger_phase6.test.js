@@ -9,7 +9,7 @@ import { initLedgerProposals, expireLedgerProposals } from '../ledger/proposals.
 import { buildLedgerRefreshSnapshot, publishLedgerReport, LEDGER_SNAPSHOT_CHAR_LIMIT } from '../core/ledger_refresh.js';
 import { cutLedgerReport, ledgerMessageDigest } from '../core/ledger_report.js';
 import { normaliseOutput } from '../core/api.js';
-import { getLedgerDiagnostics, _resetDiagnostics } from '../core/diagnostics.js';
+import { getLedgerDiagnostics, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { captureScope, _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { _resetPausedStores, pauseStore } from '../core/schema_status.js';
 import { refreshWorldState, refreshWorldStateDelta, getRecentMessagesForScan } from '../world_state/refresh.js';
@@ -128,6 +128,31 @@ test.each(['pretty object', 'JSON array'])('a %s report survives the full refres
     expect(getLedger().proposals).toHaveLength(1);
     expect(getLedger().transactions).toEqual([]);
     expect(getLedgerDiagnostics()['dropped:parse']).toBeUndefined();
+});
+
+test.each([
+    [{ ...line, amount: -30 }, 'amount-type'],
+    [{ ...line, amount: '-30.5' }, 'amount-format'],
+    [{ ...line, amount: '0' }, 'amount-zero'],
+    [{ ...line, counterparty: null }, 'counterparty-type'],
+    [{ ...line, loan: null }, 'loan-type'],
+    [{ ...line, loan: true }, 'loan-counterparty'],
+    [{ kind: 'item', name: 'Rope', qtyChange: 1, evidence }, 'quantity-type'],
+    [{ kind: 'item', name: 'Rope', qtyChange: '1', carried: null, evidence }, 'carried-type'],
+])('reports the exact field rejection (%s, %s) without putting prose in diagnostics', async (row, code) => {
+    fake.setFakeApi(async () => report(doc, row));
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()).toMatchObject({ 'reports-seen': 1, 'dropped:parse': 1, [`dropped:parse:${code}`]: 1 });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(`parse: ${code}`), row);
+    expect(JSON.stringify(getEvents())).not.toContain(evidence);
+});
+
+test('the report prompt gives literal quoted amount examples and omits unknown optional fields', async () => {
+    await refreshWorldState();
+    expect(requests[0].systemPrompt).toContain('"amount":"-30"');
+    expect(requests[0].systemPrompt).toContain('never use null');
+    expect(requests[0].userContent).toContain('Currency: "gold" (decimal places: 0)');
 });
 
 test('only the successful retry report is harvested; snapshot stays frozen across a ledger edit', async () => {

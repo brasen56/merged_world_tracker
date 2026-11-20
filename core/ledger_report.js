@@ -82,15 +82,19 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
     }).map(ledgerProposalKey).filter(Boolean));
     const window = [...(records ?? [])].sort((a, b) => a.index - b.index);
     for (const line of lines) {
-        const drop = reason => dropped.push({ reason, line });
-        if (!object(line) || !['money', 'item'].includes(line.kind) || !text(line.evidence)) { drop('parse'); continue; }
+        const drop = (reason, code, message) => dropped.push({ reason, line, ...(code ? { code, message } : {}) });
+        if (!object(line) || !['money', 'item'].includes(line.kind) || !text(line.evidence)) {
+            drop('parse', 'report-shape', 'Each report row needs kind "money" or "item" and a nonempty evidence quote.'); continue;
+        }
         const source = window.find(record => Number.isInteger(record.index) && record.index >= 0 && text(record.identity)
             && text(record.text) && text(record.digest)
             && getReceiptIdentity(chat?.[record.index]) === record.identity
             && ledgerMessageDigest(chat[record.index].mes) === record.digest
             && quoteMatchesMessage(line.evidence, null, { ...chat[record.index], mes: record.text }, { allowInterposition: false }));
         if (!source) { drop('evidence'); continue; }
-        if (line.counterparty !== undefined && typeof line.counterparty !== 'string') { drop('parse'); continue; }
+        if (line.counterparty !== undefined && typeof line.counterparty !== 'string') {
+            drop('parse', 'counterparty-type', 'counterparty must be text; omit it when unknown instead of using null.'); continue;
+        }
         const draft = { kind: line.kind, evidence: line.evidence,
             msg: { identity: source.identity, digest: source.digest }, status: 'pending' };
         if (line.counterparty !== undefined) draft.counterparty = line.counterparty;
@@ -98,16 +102,36 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
             if (!text(line.currency)) { drop('currency-unresolved'); continue; }
             const currencies = ledger.currencies.filter(row => normalizeLedgerName(row.name) === normalizeLedgerName(line.currency));
             if (currencies.length !== 1) { drop(currencies.length ? 'currency-ambiguous' : 'currency-unresolved'); continue; }
-            if ((line.loan !== undefined && typeof line.loan !== 'boolean') || (line.loan === true && !text(line.counterparty))) { drop('parse'); continue; }
+            if (line.loan !== undefined && typeof line.loan !== 'boolean') {
+                drop('parse', 'loan-type', 'loan must be true or false; omit it when unknown instead of using null.'); continue;
+            }
+            if (line.loan === true && !text(line.counterparty)) {
+                drop('parse', 'loan-counterparty', 'A loan requires a nonempty counterparty.'); continue;
+            }
+            if (typeof line.amount !== 'string') {
+                drop('parse', 'amount-type', 'amount must be quoted decimal text, for example "-30", rather than a JSON number.'); continue;
+            }
             try {
                 const amount = parseAmount(line.amount, currencies[0].decimals);
-                if (!amount) throw new Error('Zero change.');
+                if (!amount) { drop('parse', 'amount-zero', 'A money change must be nonzero.'); continue; }
                 draft.money = { currency: currencies[0].id, amount, loan: line.loan === true };
-            } catch { drop('parse'); continue; }
+            } catch (error) {
+                drop('parse', error instanceof RangeError ? 'amount-range' : 'amount-format',
+                    `${error.message} Currency allows ${currencies[0].decimals} decimal places.`); continue;
+            }
         } else {
+            if (typeof line.qtyChange !== 'string') {
+                drop('parse', 'quantity-type', 'qtyChange must be quoted integer text, for example "-1", rather than a JSON number.'); continue;
+            }
             let qtyChange;
-            try { qtyChange = parseAmount(line.qtyChange, 0); } catch { drop('parse'); continue; }
-            if (!text(line.name) || !qtyChange || (line.carried !== undefined && typeof line.carried !== 'boolean')) { drop('parse'); continue; }
+            try { qtyChange = parseAmount(line.qtyChange, 0); } catch (error) {
+                drop('parse', error instanceof RangeError ? 'quantity-range' : 'quantity-format', 'qtyChange must be an exact whole number within the safe integer range.'); continue;
+            }
+            if (!text(line.name)) { drop('parse', 'item-name', 'An item change requires a nonempty name.'); continue; }
+            if (!qtyChange) { drop('parse', 'quantity-zero', 'An item quantity change must be nonzero.'); continue; }
+            if (line.carried !== undefined && typeof line.carried !== 'boolean') {
+                drop('parse', 'carried-type', 'carried must be true or false; omit it when unknown instead of using null.'); continue;
+            }
             const items = ledger.items.filter(row => normalizeLedgerName(row.name) === normalizeLedgerName(line.name));
             if (items.length > 1) { drop('item-ambiguous'); continue; }
             if (!items.length && qtyChange < 0) { drop('item-unmatched'); continue; }

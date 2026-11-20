@@ -19,7 +19,12 @@ Local models in particular may need tuning and may fail World State validation
 more often, so compare runs with the setting off and on. Diagnostics → Copy report
 includes session totals for reports, kept/dropped lines by reason, refused writes,
 and refresh/validation-failure counts with and without the request. Totals reset on
-page reload. Before Phase 7, review samples and counters from GLM and at least one
+page reload. Parse drops also include field-specific counters such as
+`dropped:parse:amount-type` or `dropped:parse:counterparty-type`. The browser console
+shows the rejection explanation and rejected report row, including its evidence;
+the measurement counters contain no chat text. Amounts and item quantity changes
+must be quoted text, and unknown optional fields must be omitted rather than null.
+Before Phase 7, review samples and counters from GLM and at least one
 local model with Brasen. The default remains off; this review may inform a later
 release, not an automatic default change.
 

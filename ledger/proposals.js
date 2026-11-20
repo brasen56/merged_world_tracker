@@ -3,7 +3,7 @@ import { getChat } from '../core/context.js';
 import { assertSameScope, captureScope, getChatIdentity } from '../core/scope.js';
 import { isChatHydrated } from '../core/chat_hydration.js';
 import { getReceiptIdentity } from '../core/message_identity.js';
-import { readLedgerForReport } from '../core/ledger_refresh.js';
+import { readLedgerForReport, recordLedgerReportDrop } from '../core/ledger_refresh.js';
 import { resolveLedgerReport } from '../core/ledger_report.js';
 import { countLedgerDiagnostic } from '../core/diagnostics.js';
 import { validateLedgerAudit, TOMBSTONE_LIMIT } from './data.js';
@@ -52,10 +52,7 @@ export function harvestLedgerReport(event) {
             ledger, chat: getChat(), records: detail.records,
             proposals: validateLedgerAudit(ledger).proposals,
         });
-        for (const drop of resolved.dropped) {
-            countLedgerDiagnostic(`dropped:${drop.reason}`);
-            if (drop.reason !== 'duplicate') console.warn(`[MWT:Ledger] Report line dropped (${drop.reason}).`);
-        }
+        for (const drop of resolved.dropped) recordLedgerReportDrop(drop);
         if (!resolved.proposals.length) return;
         const used = new Set(ledger.proposals.map(row => row?.id));
         for (const proposal of resolved.proposals) {
