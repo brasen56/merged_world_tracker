@@ -3,6 +3,7 @@ import { beforeEach, afterEach, test, expect, vi } from 'vitest';
 import * as fake from './stubs/core.js';
 
 import { createLedger } from '../ledger/data.js';
+import { renderLedger, wireLedger } from '../ledger/render.js';
 import { getLedger, saveLedger } from '../ledger/store.js';
 import { initLedgerProposals, expireLedgerProposals } from '../ledger/proposals.js';
 import { buildLedgerRefreshSnapshot, publishLedgerReport, LEDGER_SNAPSHOT_CHAR_LIMIT } from '../core/ledger_refresh.js';
@@ -48,6 +49,7 @@ beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 afterEach(() => {
+    document.body.innerHTML = '';
     state.wstIsRefreshing = false;
     if (state.autoRefreshDeferTimer) clearTimeout(state.autoRefreshDeferTimer);
     vi.restoreAllMocks();
@@ -67,6 +69,65 @@ test('full refresh commits a clean document, freezes identities, and only persis
     expect(getLedger().proposals[0]).toMatchObject({ status: 'pending', money: { amount: -30, currency: 'gold' }, msg: { identity: 'id:m0' } });
     expect(requests[0].userContent).toContain('Ledger snapshot');
     expect(getLedgerDiagnostics()).toMatchObject({ 'reports-seen': 1, 'lines-kept': 1, 'refreshes:with-report': 1 });
+});
+
+test('an older edit with three currencies appears in the already-open pending list without replacing drafts', async () => {
+    fake.setFakeChat(Array.from({ length: 12 }, (_, index) => ({ id: `m${index}`, name: 'Alex', mes: 'She walked home.' })));
+    const ledger = getLedger();
+    ledger.currencies.push({ id: 'silver', name: 'silver', decimals: 0, badge: false },
+        { id: 'copper', name: 'copper', decimals: 0, badge: false });
+    saveLedger(ledger);
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    pending.open = true;
+    const form = document.querySelector('form[data-ledger-form="currency"][data-id="gold"]');
+    form.elements.namedItem('name').value = 'Gold coins';
+    // The edited slot is seven messages back and has already been scanned.
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n\`\`\``);
+    await refreshWorldState();
+    fake.getChat()[5].mes = evidence;
+    fake.setFakeApi(async () => report(doc));
+    await refreshWorldState();
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(getLedger().proposals[0].msg.identity).toBe('id:m5');
+    expect(pending.querySelector('summary').textContent).toContain('(1)');
+    expect(pending.textContent).toContain(evidence);
+    expect(pending.open).toBe(true);
+    expect(form.isConnected).toBe(true);
+    expect(form.elements.namedItem('name').value).toBe('Gold coins');
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(getLedger().currencies[0].name).toBe('Gold coins');
+    expect(getLedger().proposals).toHaveLength(1);
+    // Expiry also refreshes the same preview while another draft stays intact.
+    const nextPending = document.querySelector('[data-ledger-open-key="pending"]');
+    const nextForm = document.querySelector('form[data-ledger-form="currency"][data-id="gold"]');
+    nextForm.elements.namedItem('name').value = 'Another draft';
+    fake.getChat()[5] = { id: 'replacement', name: 'Alex', mes: 'She walked home.' };
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toEqual([]);
+    expect(nextPending.querySelector('summary').textContent).toContain('(0)');
+    expect(nextForm.elements.namedItem('name').value).toBe('Another draft');
+});
+
+test('proposal notifications cannot populate a pane captured for a previous chat', async () => {
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    bumpEpoch();
+    await refreshWorldState();
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(pending.querySelector('summary').textContent).toContain('(0)');
+    expect(pending.textContent).not.toContain(evidence);
+});
+
+test.each(['pretty object', 'JSON array'])('a %s report survives the full refresh and evidence gates', async shape => {
+    const block = JSON.stringify(shape === 'JSON array' ? [line] : line, null, 2);
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n${block}\n\`\`\``);
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(getLedger().transactions).toEqual([]);
+    expect(getLedgerDiagnostics()['dropped:parse']).toBeUndefined();
 });
 
 test('only the successful retry report is harvested; snapshot stays frozen across a ledger edit', async () => {

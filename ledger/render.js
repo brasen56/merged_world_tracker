@@ -87,6 +87,29 @@ function currencyForm(row) {
     </form>`;
 }
 
+function renderPendingSuggestions(record) {
+    const pending = validateLedgerAudit(record).proposals.filter(row => row.status === 'pending');
+    return `<summary>Pending suggestions (${pending.length}) · experimental</summary>
+        <p>Read-only measurement preview. These suggestions do not change your balances or items; review controls arrive in Phase 7.</p>
+        <ul>${pending.map(row => `<li>${esc(row.kind === 'money' ? `${row.money.amount} minor units (${record.currencies.find(currency => currency.id === row.money.currency)?.name ?? row.money.currency})` : `${row.item.qtyChange > 0 ? '+' : ''}${row.item.qtyChange} ${row.item.name}`)}<blockquote>${esc(row.evidence)}</blockquote></li>`).join('')}</ul>`;
+}
+
+// A refresh updates only this read-only preview; open forms keep their drafts.
+let previewDocument;
+function updatePendingSuggestions() {
+    const record = getLedger() ?? createLedger();
+    if (!validateLedgerRecord(record).valid) return;
+    document.querySelectorAll('.mwt-ledger').forEach(pane => {
+        if (!pane._ledgerScope || !assertSameScope(pane._ledgerScope).ok) return;
+        const preview = pane.querySelector('[data-ledger-open-key="pending"]');
+        if (preview) preview.innerHTML = renderPendingSuggestions(record);
+    });
+}
+
+// Audit-only writes cannot collide with form edits. Each action still reads
+// the latest ledger, preserving proposals/log rows added since the form opened.
+const editableSnapshot = record => JSON.stringify(record && { ...record, proposals: undefined, itemLog: undefined });
+
 export function renderLedger() {
     expireLedgerProposals();
     const record = getLedger() ?? createLedger();
@@ -99,10 +122,7 @@ export function renderLedger() {
     try { const time = resolveCalendarClock(); if (time.source !== 'message-count' && !time.rejection) date = time.formattedDate ?? ''; } catch { /* date is optional */ }
     const balances = valid ? computeBalances(record) : new Map();
     const body = !valid ? '<p role="alert">Ledger data is invalid or from a newer version. It has been kept unchanged. Use Diagnostics or the recovery export before editing.</p>' : `
-        <details data-ledger-open-key="pending"><summary>Pending suggestions (${validateLedgerAudit(record).proposals.filter(row => row.status === 'pending').length}) · experimental</summary>
-            <p>Read-only measurement preview. These suggestions do not change your balances or items; review controls arrive in Phase 7.</p>
-            <ul>${validateLedgerAudit(record).proposals.filter(row => row.status === 'pending').map(row => `<li>${esc(row.kind === 'money' ? `${row.money.amount} minor units (${record.currencies.find(currency => currency.id === row.money.currency)?.name ?? row.money.currency})` : `${row.item.qtyChange > 0 ? '+' : ''}${row.item.qtyChange} ${row.item.name}`)}<blockquote>${esc(row.evidence)}</blockquote></li>`).join('')}</ul>
-        </details>
+        <details data-ledger-open-key="pending">${renderPendingSuggestions(record)}</details>
         <details class="mwt-settings-disclosure" data-ledger-open-key="currencies"><summary>Currencies</summary>
             <p>Balances are exact. Changing decimal places preserves each entry’s value; changes that would lose precision are refused. A currency with transactions cannot be deleted.</p>
             ${record.currencies.map(currencyForm).join('')}${currencyForm()}
@@ -138,7 +158,13 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
     if (!pane || pane._ledgerWired) return;
     pane._ledgerWired = true;
     const scope = captureScope();
-    const snapshot = JSON.stringify(getLedger());
+    pane._ledgerScope = scope;
+    if (previewDocument !== document) {
+        previewDocument?.removeEventListener('mwt:ledger-proposals-changed', updatePendingSuggestions);
+        document.addEventListener('mwt:ledger-proposals-changed', updatePendingSuggestions);
+        previewDocument = document;
+    }
+    const snapshot = editableSnapshot(getLedger());
     const tabs = wireTablist(pane.querySelector('[role="tablist"]'), {
         tabSelector: '[role="tab"]', panelSelector: '.mwt-ledger-pane', scope: pane,
         activeClass: 'active', idPrefix: 'mwt-ledger', orientation: 'horizontal',
@@ -146,7 +172,7 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
     const status = message => { pane.querySelector('.mwt-ledger-status').textContent = message; };
     const current = () => {
         if (!assertSameScope(scope).ok) throw new Error('Chat changed. Reopen Ledger before editing.');
-        if (JSON.stringify(getLedger()) !== snapshot) throw new Error('Ledger changed. Reopen it before saving; your draft has not overwritten newer data.');
+        if (editableSnapshot(getLedger()) !== snapshot) throw new Error('Ledger changed. Reopen it before saving; your draft has not overwritten newer data.');
         return getLedger() ?? createLedger();
     };
     const run = action => { try { action(); } catch (error) { status(error.message); } };

@@ -7,6 +7,12 @@ call. Ledger must be enabled, healthy, unpaused, and contain a currency or item.
 The read-only **Pending suggestions** list shows arrivals and evidence; nothing
 changes balances or inventory automatically. Accept/reject controls are deferred
 to Phase 7. Missing-source proposals expire on chat change or reopening Ledger.
+The pending list updates when suggestions arrive, including while the modal is
+already open. Full Refresh can pick up an edited older message within its actual
+scan window; Delta scans only messages since the previous refresh. Multiple
+currencies are supported, but duplicate names make currency matching ambiguous.
+Reports request one JSON object per line; pretty-printed JSON objects and arrays
+are also accepted, with the same evidence, currency, and amount checks.
 
 This asks the model for a second output format after its usual document or patch.
 Local models in particular may need tuning and may fail World State validation

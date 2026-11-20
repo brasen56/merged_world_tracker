@@ -202,6 +202,24 @@ describe('Inventory pure helpers', () => {
 });
 
 describe('Report cut, parse, evidence, resolution and dedupe', () => {
+    test.each(['mwt-ledger-report', 'json', 'jsonl', 'ledger', ''])('accepts pretty JSON reports in trailing %j fences', tag => {
+        for (const value of [line, [line]]) {
+            const raw = `World document\n\`\`\`${tag}\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+            expect(cutLedgerReport(raw)).toMatchObject({ text: 'World document', lines: [line], dropped: [] });
+        }
+    });
+
+    test('JSON arrays isolate bad rows and still require exact evidence and valid amounts', () => {
+        const parsed = parseLedgerReport(JSON.stringify([null, { document: 'not a report' }, line, { ...line, evidence: 'An invented payment.' }, { ...line, amount: 30 }]));
+        expect(parsed.lines).toHaveLength(3);
+        expect(parsed.dropped.map(row => row.reason)).toEqual(['parse', 'parse']);
+        const resolved = resolveLedgerReport(parsed.lines, options());
+        expect(resolved.proposals).toHaveLength(1);
+        expect(resolved.dropped.map(row => row.reason)).toEqual(['evidence', 'parse']);
+        expect(parseLedgerReport('[]')).toEqual({ lines: [], dropped: [] });
+        expect(parseLedgerReport('[[]]')).toMatchObject({ lines: [], dropped: [{ reason: 'parse' }] });
+    });
+
     test.each(['mwt-ledger-report', 'json', 'jsonl', 'ledger', ''])('cuts trailing %j fence before normalisation', tag => {
         const raw = `<think>ignore this</think>World document\n\n\`\`\`${tag}\n${JSON.stringify(line)}\n\`\`\``;
         expect(cutLedgerReport(raw)).toMatchObject({ text: 'World document', lines: [line], dropped: [] });

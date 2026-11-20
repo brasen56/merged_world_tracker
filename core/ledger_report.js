@@ -12,15 +12,26 @@ export function ledgerMessageDigest(raw) {
     return captureRevision(typeof raw === 'string' ? raw : '').digest;
 }
 
-/** Parse JSONL independently: one broken line cannot discard its neighbors. */
+/** Accept JSONL plus whole JSON objects/arrays that models often pretty-print.
+ * A broken JSONL line or array row cannot discard its valid neighbors. */
 export function parseLedgerReport(block) {
     const lines = [];
     const dropped = [];
-    for (const raw of String(block ?? '').split(/\r?\n/).filter(line => line.trim())) {
+    const accept = (row, raw) => {
+        if (!object(row) || !['money', 'item'].includes(row.kind) || !text(row.evidence)) dropped.push({ reason: 'parse', line: raw });
+        else lines.push(row);
+    };
+    const source = String(block ?? '').trim();
+    if (!source) return { lines, dropped };
+    try {
+        const parsed = JSON.parse(source);
+        if (Array.isArray(parsed)) parsed.forEach(row => accept(row, JSON.stringify(row)));
+        else accept(parsed, source);
+        return { lines, dropped };
+    } catch { /* Mixed JSONL: preserve valid lines around malformed neighbors. */ }
+    for (const raw of source.split(/\r?\n/).filter(line => line.trim())) {
         try {
-            const row = JSON.parse(raw);
-            if (!object(row) || !['money', 'item'].includes(row.kind) || !text(row.evidence)) throw new Error('Invalid report line.');
-            lines.push(row);
+            accept(JSON.parse(raw), raw);
         } catch { dropped.push({ reason: 'parse', line: raw }); }
     }
     return { lines, dropped };

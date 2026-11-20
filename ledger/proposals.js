@@ -9,6 +9,10 @@ import { countLedgerDiagnostic } from '../core/diagnostics.js';
 import { validateLedgerAudit, TOMBSTONE_LIMIT } from './data.js';
 import { getLedger, saveLedger } from './store.js';
 
+function notifyProposalsChanged() {
+    if (typeof document !== 'undefined') document.dispatchEvent(new CustomEvent('mwt:ledger-proposals-changed'));
+}
+
 function trimProposals(ledger, expireMissing = false) {
     const valid = new Set(validateLedgerAudit(ledger).proposals);
     const identities = expireMissing ? new Set(getChat().map(getReceiptIdentity).filter(Boolean)) : null;
@@ -25,7 +29,10 @@ export async function expireLedgerProposals() {
         const ledger = getLedger();
         if (!Array.isArray(ledger?.proposals)) return;
         const next = trimProposals(ledger, hydrated);
-        if (next.length !== ledger.proposals.length) saveLedger({ ...ledger, proposals: next });
+        if (next.length !== ledger.proposals.length) {
+            saveLedger({ ...ledger, proposals: next });
+            notifyProposalsChanged();
+        }
     } catch (error) {
         console.warn('[MWT:Ledger] Proposal expiry refused (non-fatal):', error.message);
         countLedgerDiagnostic('expiry-refused');
@@ -60,6 +67,7 @@ export function harvestLedgerReport(event) {
         ledger.proposals = trimProposals(ledger);
         if (!assertSameScope(detail.scope).ok) throw new Error('Chat changed.');
         saveLedger(ledger);
+        notifyProposalsChanged();
         void expireLedgerProposals();
         countLedgerDiagnostic('lines-kept', resolved.proposals.length);
     } catch (error) {
