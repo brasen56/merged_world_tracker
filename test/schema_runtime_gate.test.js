@@ -451,6 +451,7 @@ describe('a paused store\'s module declines its own work (§7.4)', () => {
             Knowledge: { onMessageReceived: vi.fn(), onMessageDeleted: vi.fn() },
             StoryPlanner: { onMessageReceived: vi.fn(), onMessageDeleted: vi.fn() },
             Interiority: { onMessageReceived: vi.fn(), onMessageDeleted: vi.fn() },
+            Ledger: { onMessageDeleted: vi.fn() },
         };
 
         routeMessageReceived(routed, {}, 3, isModulePausedForCurrentScope);
@@ -465,6 +466,7 @@ describe('a paused store\'s module declines its own work (§7.4)', () => {
         expect(routed.Knowledge.onMessageReceived).toHaveBeenCalledTimes(1);
         expect(routed.StoryPlanner.onMessageReceived).toHaveBeenCalledTimes(1);
         expect(routed.Interiority.onMessageReceived).toHaveBeenCalledTimes(1);
+        expect(routed.Ledger.onMessageDeleted).toHaveBeenCalledTimes(1);
         // The decline is said out loud.
         expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Chronicle declined MESSAGE_RECEIVED'));
     });

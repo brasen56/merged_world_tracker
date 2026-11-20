@@ -3,8 +3,10 @@ import { escapeHtml } from '../core/diff.js';
 import { resolveCalendarClock } from '../core/calendar_state.js';
 import { captureScope, assertSameScope } from '../core/scope.js';
 import { wireTablist } from '../core/ui.js';
-import { getContextSafe, getChatMeta } from '../core/context.js';
+import { getContextSafe, getChatMeta, getChat } from '../core/context.js';
 import { isStoreWriteBlocked } from '../core/schema_status.js';
+import { getReceiptIdentity } from '../core/message_identity.js';
+import { ledgerMessageDigest } from '../core/ledger_report.js';
 import { MANIFEST_METADATA_KEY, MANIFEST_VERSION } from '../schema/manifest.js';
 import { createLedger, computeBalances, formatAmount, parseAmount, canDeleteCurrency, validateLedgerRecord, MAX_CURRENCY_DECIMALS } from './data.js';
 import { getLedger, saveLedger } from './store.js';
@@ -89,9 +91,25 @@ function currencyForm(row) {
 
 function renderPendingSuggestions(record) {
     const pending = validateLedgerAudit(record).proposals.filter(row => row.status === 'pending');
+    const chat = getChat();
+    const describe = row => {
+        if (row.kind === 'item') {
+            return `${row.item.qtyChange > 0 ? '+' : ''}${row.item.qtyChange} ${esc(row.item.name)}${row.item.carried === false ? ' · stored' : ''}`;
+        }
+        const currency = record.currencies.find(value => value.id === row.money.currency);
+        return `${esc(formatAmount(row.money.amount, currency?.decimals ?? 2))} ${esc(currency?.name ?? row.money.currency)}`
+            + `${row.money.loan ? ' · loan' : ''}${row.counterparty ? ` · with ${esc(row.counterparty)}` : ''}`;
+    };
+    // D16 render-time staleness: the message slot is alive but its content
+    // changed after the proposal arrived (edit or swipe variant). A missing
+    // message says nothing here — expiry owns that case.
+    const sourceEdited = row => {
+        const message = chat.find(entry => getReceiptIdentity(entry) === row.msg.identity);
+        return Boolean(message) && ledgerMessageDigest(message.mes) !== row.msg.digest;
+    };
     return `<summary>Pending suggestions (${pending.length}) · experimental</summary>
         <p>Read-only measurement preview. These suggestions do not change your balances or items; review controls arrive in Phase 7.</p>
-        <ul>${pending.map(row => `<li>${esc(row.kind === 'money' ? `${row.money.amount} minor units (${record.currencies.find(currency => currency.id === row.money.currency)?.name ?? row.money.currency})` : `${row.item.qtyChange > 0 ? '+' : ''}${row.item.qtyChange} ${row.item.name}`)}<blockquote>${esc(row.evidence)}</blockquote></li>`).join('')}</ul>`;
+        <ul>${pending.map(row => `<li>${describe(row)}${sourceEdited(row) ? ' <em>(source message edited)</em>' : ''}<blockquote>${esc(row.evidence)}</blockquote></li>`).join('')}</ul>`;
 }
 
 // A refresh updates only this read-only preview; open forms keep their drafts.
@@ -105,6 +123,15 @@ function updatePendingSuggestions() {
         if (preview) preview.innerHTML = renderPendingSuggestions(record);
     });
 }
+
+// Showing the Ledger tab re-reads the live chat even inside an already-open
+// modal (tab switches toggle `hidden`; they never rebuild the pane): expiry
+// drops deleted sources (§3.4) and the digest check re-flags edited ones (D16).
+const refreshPendingOnTabShow = event => {
+    if (!event.target.closest?.('#mwt-tab-ledger')) return;
+    expireLedgerProposals();
+    updatePendingSuggestions();
+};
 
 // Audit-only writes cannot collide with form edits. Each action still reads
 // the latest ledger, preserving proposals/log rows added since the form opened.
@@ -161,7 +188,9 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
     pane._ledgerScope = scope;
     if (previewDocument !== document) {
         previewDocument?.removeEventListener('mwt:ledger-proposals-changed', updatePendingSuggestions);
+        previewDocument?.removeEventListener('click', refreshPendingOnTabShow);
         document.addEventListener('mwt:ledger-proposals-changed', updatePendingSuggestions);
+        document.addEventListener('click', refreshPendingOnTabShow);
         previewDocument = document;
     }
     const snapshot = editableSnapshot(getLedger());

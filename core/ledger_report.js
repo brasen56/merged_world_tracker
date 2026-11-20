@@ -71,7 +71,7 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
     const kept = [];
     const dropped = [];
     const ids = new Set();
-    const seen = new Set(proposals.filter(row => {
+    const existingByKey = new Map(proposals.filter(row => {
         if (!object(row) || !text(row.id) || ids.has(row.id)) return false;
         ids.add(row.id);
         if (!['pending', 'accepted', 'rejected'].includes(row.status) || !text(row.evidence) || !text(row.msg?.digest)
@@ -79,7 +79,8 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         if (row.kind === 'money') return (row.money?.loan === undefined || typeof row.money.loan === 'boolean')
             && (row.money?.loan !== true || text(row.counterparty));
         return row.kind === 'item' && (row.item?.carried === undefined || typeof row.item.carried === 'boolean');
-    }).map(ledgerProposalKey).filter(Boolean));
+    }).map(row => [ledgerProposalKey(row), row]).filter(([key]) => key));
+    const seen = new Set(existingByKey.keys());
     const window = [...(records ?? [])].sort((a, b) => a.index - b.index);
     for (const line of lines) {
         const drop = (reason, code, message) => dropped.push({ reason, line, ...(code ? { code, message } : {}) });
@@ -142,5 +143,37 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         seen.add(key);
         kept.push(draft);
     }
-    return { proposals: kept, dropped };
+    // Sign-pair contradictions (D14's no-guessing rule): the model reported one
+    // transfer twice with opposite signs — the same source message, currency
+    // and |amount|, quoting the same evidence. Code cannot pick a side, so both
+    // drop. Two real opposite events in one message quote different evidence
+    // and stay. A sign-flipped re-report whose evidence matches a stored
+    // proposal (any status, D17) drops the newcomer only; the stored row was
+    // already reviewable.
+    const flipGroupKey = draft => JSON.stringify([draft.msg.identity, draft.money.currency, Math.abs(draft.money.amount), draft.evidence.trim()]);
+    const flipKey = draft => ledgerProposalKey({ ...draft, money: { ...draft.money, amount: -draft.money.amount } });
+    const groups = new Map();
+    for (const draft of kept) {
+        if (draft.kind !== 'money') continue;
+        const group = flipGroupKey(draft);
+        groups.set(group, [...(groups.get(group) ?? []), draft]);
+    }
+    const contradictory = new Set();
+    for (const drafts of groups.values()) {
+        if (drafts.length > 1 && new Set(drafts.map(draft => Math.sign(draft.money.amount))).size > 1) {
+            drafts.forEach(draft => contradictory.add(draft));
+        }
+    }
+    for (const draft of kept) {
+        if (draft.kind !== 'money' || contradictory.has(draft)) continue;
+        const twin = existingByKey.get(flipKey(draft));
+        if (twin && twin.evidence.trim() === draft.evidence.trim()) contradictory.add(draft);
+    }
+    const survived = kept.filter(draft => {
+        if (!contradictory.has(draft)) return true;
+        dropped.push({ reason: 'contradictory', code: 'sign-pair', line: draft,
+            message: 'Two lines report one transfer with opposite signs; both were dropped.' });
+        return false;
+    });
+    return { proposals: survived, dropped };
 }

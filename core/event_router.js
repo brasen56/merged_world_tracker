@@ -145,7 +145,7 @@ export function routeMessageReceived(modules, settings, messageIndex, decline = 
  * Interiority cleanup is never gated (INTERIORITY-04) and receives no flag —
  * it owns no counter to adjust.
  *
- * @param {object} modules — { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority }
+ * @param {object} modules — { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ledger }
  * @param {object} settings — the global settings object (read-only here)
  * @param {number|null} deletedIndex — resolved index of the removed message
  * @param {function(string): boolean} [decline] — optional schema-pause predicate
@@ -178,6 +178,13 @@ export function routeMessageDeleted(modules, settings, deletedIndex, decline = n
     if (settings.enableInteriority !== false) {
         if (declined('Interiority')) logDecline('MESSAGE_DELETED', 'Interiority');
         else modules.Interiority.onMessageDeleted(deletedIndex);
+    }
+    // Ledger proposal expiry (D16/§3.4): a deleted source message can never be
+    // re-verified, so its proposals drop now instead of waiting for the next
+    // chat change or modal rebuild. Pure cleanup — no counter, no flag.
+    if (settings.enableLedger !== false) {
+        if (declined('Ledger')) logDecline('MESSAGE_DELETED', 'Ledger');
+        else modules.Ledger.onMessageDeleted(deletedIndex);
     }
 }
 

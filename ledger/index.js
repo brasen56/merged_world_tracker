@@ -31,6 +31,8 @@ export function refreshInjection(reason = 'refresh') {
 }
 
 export function onChatChanged() { expireLedgerProposals(); return refreshInjection('chat-changed'); }
+/** MESSAGE_DELETED cleanup (§3.4): a deleted source message expires its proposals now. */
+export function onMessageDeleted() { expireLedgerProposals(); }
 export function onChatChangedWhilePaused() {
     return clearLedgerInjection({ kind: 'ledger', clearReason: 'schema-paused' });
 }

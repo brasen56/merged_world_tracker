@@ -66,6 +66,9 @@ function makeStubModules() {
                 onMessageSwiped: spy('in.swipe'),
                 onMessageEdited: spy('in.edit'),
             },
+            Ledger: {
+                onMessageDeleted: spy('ld.del'),
+            },
         },
         calls,
         called: (id) => (calls[id]?.length || 0),
@@ -137,6 +140,7 @@ describe('PANIC-COUNTER-SYMMETRY — MESSAGE_DELETED threads adjustCounters', ()
         expect(called('kn.del')).toBe(1);
         expect(called('sp.del')).toBe(1);
         expect(called('in.del')).toBe(1);
+        expect(called('ld.del')).toBe(1);
     });
 
     test('panic ON: counter modules receive adjustCounters: false', () => {
@@ -152,6 +156,8 @@ describe('PANIC-COUNTER-SYMMETRY — MESSAGE_DELETED threads adjustCounters', ()
         const { modules, calls } = makeStubModules();
         routeMessageDeleted(modules, { injectionMasterOff: true }, 3);
         expect(calls['in.del'][0]).toEqual([3]);
+        // Ledger proposal expiry is the same shape: pure cleanup, no counter.
+        expect(calls['ld.del'][0]).toEqual([3]);
     });
 
     test('panic OFF: counter modules receive adjustCounters: true', () => {
@@ -187,6 +193,13 @@ describe('per-module enable flags are respected', () => {
         routeMessageDeleted(modules, { enableInteriority: false }, 1);
         expect(called('in.del')).toBe(0);
         expect(called('ws.del')).toBe(1); // counters still run when panic is off
+    });
+
+    test('enableLedger:false skips Ledger proposal expiry on delete', () => {
+        const { modules, called } = makeStubModules();
+        routeMessageDeleted(modules, { enableLedger: false }, 1);
+        expect(called('ld.del')).toBe(0);
+        expect(called('ws.del')).toBe(1);
     });
 });
 

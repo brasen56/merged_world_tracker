@@ -130,6 +130,66 @@ test.each(['pretty object', 'JSON array'])('a %s report survives the full refres
     expect(getLedgerDiagnostics()['dropped:parse']).toBeUndefined();
 });
 
+test('a sign-pair double report (the tester’s −650/+650 case) drops both lines', async () => {
+    const spend = { kind: 'money', currency: 'gold', amount: '-30', counterparty: 'Ezra', evidence };
+    const repay = { kind: 'money', currency: 'gold', amount: '30', counterparty: 'Ezra', loan: true, evidence };
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n${JSON.stringify(spend)}\n${JSON.stringify(repay)}\n\`\`\``);
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()).toMatchObject({ 'dropped:contradictory': 2, 'dropped:contradictory:sign-pair': 2 });
+});
+
+test('two opposite events in one message with distinct evidence both stay', async () => {
+    const refund = 'Later the smith refunded her thirty gold coins.';
+    fake.setFakeChat(Array.from({ length: 6 }, (_, index) => ({ id: `m${index}`, name: 'Alex', mes: `${evidence} ${refund}` })));
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n${JSON.stringify({ ...line, amount: '-30' })}\n${JSON.stringify({ ...line, amount: '30', evidence: refund })}\n\`\`\``);
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals.map(row => row.money.amount)).toEqual([-30, 30]);
+    expect(getLedgerDiagnostics()['dropped:contradictory']).toBeUndefined();
+});
+
+test('a sign-flipped re-report matching a stored proposal’s evidence drops only the newcomer', async () => {
+    await refreshWorldState();
+    fake.setFakeApi(async () => report(doc, { ...line, amount: '30', loan: true, counterparty: 'Ezra' }));
+    await refreshWorldState();
+    expect(getLedger().proposals.map(row => row.money.amount)).toEqual([-30]);
+    expect(getLedgerDiagnostics()['dropped:contradictory']).toBe(1);
+});
+
+test('pending suggestions render formatted money with loan and counterparty, and flag edited sources', async () => {
+    const ledger = getLedger();
+    ledger.currencies.push({ id: 'usd', name: 'Personal Main', decimals: 2, badge: false });
+    saveLedger(ledger);
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    document.body.insertAdjacentHTML('beforeend', '<button id="mwt-tab-ledger">Ledger</button>');
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    fake.setFakeApi(async () => report(doc, { kind: 'money', currency: 'Personal Main', amount: '-650', counterparty: 'Ezra', loan: true, evidence }));
+    await refreshWorldState();
+    expect(pending.textContent).toContain('-650.00');
+    expect(pending.textContent).toContain('Personal Main');
+    expect(pending.textContent).toContain('loan');
+    expect(pending.textContent).toContain('with Ezra');
+    expect(pending.textContent).not.toContain('source message edited');
+    fake.getChat()[0].mes = `${evidence} Then she thought better of it.`;
+    document.getElementById('mwt-tab-ledger').click();
+    expect(pending.textContent).toContain('source message edited');
+});
+
+test('showing the Ledger tab after a delete expires the gone-source proposal', async () => {
+    await refreshWorldState();
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    document.body.insertAdjacentHTML('beforeend', '<button id="mwt-tab-ledger">Ledger</button>');
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    expect(pending.querySelector('summary').textContent).toContain('(1)');
+    fake.setFakeChat([{ id: 'other', name: 'Alex', mes: 'The payment never happened.' }]);
+    document.getElementById('mwt-tab-ledger').click();
+    await new Promise(resolve => setTimeout(resolve));
+    expect(getLedger().proposals).toEqual([]);
+    expect(pending.querySelector('summary').textContent).toContain('(0)');
+});
+
 test.each([
     [{ ...line, amount: -30 }, 'amount-type'],
     [{ ...line, amount: '-30.5' }, 'amount-format'],

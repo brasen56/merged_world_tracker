@@ -6,7 +6,10 @@ alongside full, catch-up, and delta World State refreshes, without another API
 call. Ledger must be enabled, healthy, unpaused, and contain a currency or item.
 The read-only **Pending suggestions** list shows arrivals and evidence; nothing
 changes balances or inventory automatically. Accept/reject controls are deferred
-to Phase 7. Missing-source proposals expire on chat change or reopening Ledger.
+to Phase 7. Missing-source proposals expire on chat change, message delete, or
+showing the Ledger tab. Editing a source message keeps its suggestion (the
+"source changed" badge arrives in Phase 7); the list marks it "(source message
+edited)" in the meantime.
 The pending list updates when suggestions arrive, including while the modal is
 already open. Full Refresh can pick up an edited older message within its actual
 scan window; Delta scans only messages since the previous refresh. Multiple
@@ -18,7 +21,9 @@ This asks the model for a second output format after its usual document or patch
 Local models in particular may need tuning and may fail World State validation
 more often, so compare runs with the setting off and on. Diagnostics → Copy report
 includes session totals for reports, kept/dropped lines by reason, refused writes,
-and refresh/validation-failure counts with and without the request. Totals reset on
+and refresh/validation-failure counts with and without the request. A model that
+reports one transfer twice with opposite signs has both lines dropped and counted
+as `contradictory`. Totals reset on
 page reload. Parse drops also include field-specific counters such as
 `dropped:parse:amount-type` or `dropped:parse:counterparty-type`. The browser console
 shows the rejection explanation and rejected report row, including its evidence;
