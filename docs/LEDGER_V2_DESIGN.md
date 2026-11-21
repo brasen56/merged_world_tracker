@@ -1,6 +1,6 @@
 # Ledger module design (v2)
 
-**Status:** Revision 2 design; Phase 5 pure core and Phase 6 piggyback integration implemented. Phase 6's GLM/local-model measurement review remains pending before Phase 7. `ledgerProposals` remains off by default. Scope from Brasen's v2 call (2026-11-16): the §7.1 proposals from World State refresh, debts by counterparty, and the item change log, plus the additions from the planning session (proposal data model, debt-aware fold-forward, planner-only projection, pinned items).
+**Status:** Revision 2 design; Phases 5–7 implemented (pure core, piggyback integration, review surface). Phase 6's GLM/local-model measurement review passed (see §11); Phase 9 host QA remains pending. `ledgerProposals` remains off by default. Scope from Brasen's v2 call (2026-11-16): the §7.1 proposals from World State refresh, debts by counterparty, and the item change log, plus the additions from the planning session (proposal data model, debt-aware fold-forward, planner-only projection, pinned items).
 **Written:** 2026-11-16. **Revised:** 2026-11-18 (rev 2, code-checked review; what changed and why is in §13).
 **Decisions continue v1 numbering** (D13+). Phase numbering also continues (v1 shipped Phases 1–3; Phase 4 host QA pending — v2 starts at Phase 5).
 **Companion to `LEDGER_V1_DESIGN.md`** — that doc stays authoritative for shipped v1 behavior (D1–D12). Its §7 sketches this release; where the two disagree, this doc wins.
@@ -87,13 +87,13 @@ Alongside that, v2 adds the two audit surfaces v1 deferred as "money needs a his
 
 The refresh prompt gains a **Ledger snapshot** section — carried and stored item names, per-currency balances, currency names with decimals — and asks for a fenced block *after* the document:
 
-```
+
 ```mwt-ledger-report
 {"kind":"money","currency":"gold","amount":"-30","counterparty":"Aldric","evidence":"She counted out thirty gold coins and pressed them into his palm"}
 {"kind":"money","currency":"gold","amount":"50","counterparty":"Aldric","loan":true,"evidence":"Aldric pressed fifty gold into her hand. Pay me back by midsummer"}
 {"kind":"item","name":"Rope (50 ft)","qtyChange":"-1","evidence":"he cut a length from his rope"}
 ```
-```
+
 
 - **Scope of the report:** only money and items of the player character (`{{user}}` / `name1`), never NPCs paying each other. `loan: true` only when the text makes it a borrowing, a lending or a repayment; a purchase is never a loan. The prompt says both explicitly, plus (added after the first tester run) the sign contract: one line per event, never both sides of a transfer or an expected future repayment as a second line; signs are player-perspective (handed over negative, received positive); lending is one negative line with `loan: true`, borrowing one positive line.
 - Amounts arrive as **major-unit text** (`"-30"`, `"12.50"`); code resolves the currency name → id and parses with `parseAmount(amount, decimals)` (`ledger/data.js`). Unresolvable or ambiguous currency, or unparseable amount → the item drops (D14).
@@ -217,7 +217,7 @@ and expiry. The Ledger tab has an experimental read-only pending list and opt-in
 Diagnostics copy reports include session totals; accepted/rejected measurements
 will become actionable with Phase 7's controls. Automated regression tests live
 in `test/ledger_phase6.test.js`. Manual exit gate still pending: review GLM and one
-local model's samples and counters with Brasen. Default remains off (Q6).
+local model's samples and counters. Default remains off (Q6).
 *Tester-run follow-up (2026-11-19):* MESSAGE_DELETED routes to Ledger expiry
 (`routeMessageDeleted`), and showing the Ledger tab re-runs expiry and re-renders
 the pending list (tab switches toggle `hidden`; they never rebuild the pane), so a
@@ -226,10 +226,17 @@ list shows formatted amounts with `loan`/counterparty and marks digest-mismatche
 sources "(source message edited)" until Phase 7's badge; sign-pair contradictions
 drop both lines (§3.3).
 
+**Exit Gate for Phase 6**: Passed on ba45b7f2; GLM (and other larger models) passed with no issue. Local models UNDER 12B **may** not work well. Tested on gemma 8b and 4 of 5 tests worked, with 1 retry (first message always hallucinated the ledger quote AND amount when there was no transaction to record). 12B models: 4 of 5 tests worked on first attempt.
+
 - **Phase 5 (pure core):** `data.js` v2 (loan/counterparty fields and validation, loan-aware fold, item-log ring, `validateLedgerAudit`, pin ordering) + migration 1→2 + `core/ledger_report.js` (cut, parse, gate, resolve, dedupe). Tests: the fold preserves every (counterparty, currency) loan net at any cap and never throws below currencies + open debts; a zero-net loan group folds into the plain carry; Debts sign (borrow → "you owe"); a purchase with a counterparty never appears in Debts; dedupe across statuses; evidence-gate drops; duplicate currency names drop as ambiguous; a malformed proposal row leaves `validateLedgerRecord` valid; migration round trip; the injection debts line appears only with nonzero loan nets, caps at three counterparties, and keeps D11's honesty phrasing (D30).
-- **Phase 6 (piggyback, measure first — D29):** window records, raw-output cut in every refresh path, snapshot + report request behind `ledgerProposals` (default off) and D28's gates, post-commit event, Ledger listener persisting proposals, expiry walk, Diagnostics counters, and a bare pending list (no inbox polish) so testers can see what arrives. Tests: a document + ```` ```json ```` report survives intact (the `normaliseOutput` trap); the block never reaches the validators; a failed refresh harvests nothing; a chat switch mid-refresh writes no proposals into the new chat; a refused proposal write can't fail the refresh; delta output with a trailing block parses; a disabled Ledger adds nothing to the prompt. **Exit gate:** counters from GLM and one local model reviewed with Brasen before Phase 7, and the `ledgerProposals` default decided then. A SETUP_GUIDE paragraph lands with this phase: what the setting does, why it's off, and the local-model caution (Q6).
+- **Phase 6 (piggyback, measure first — D29):** window records, raw-output cut in every refresh path, snapshot + report request behind `ledgerProposals` (default off) and D28's gates, post-commit event, Ledger listener persisting proposals, expiry walk, Diagnostics counters, and a bare pending list (no inbox polish) so testers can see what arrives. Tests: a document + ```` ```json ```` report survives intact (the `normaliseOutput` trap); the block never reaches the validators; a failed refresh harvests nothing; a chat switch mid-refresh writes no proposals into the new chat; a refused proposal write can't fail the refresh; delta output with a trailing block parses; a disabled Ledger adds nothing to the prompt. **Exit gate:** counters from GLM and one local model, and the `ledgerProposals` default decided then. A SETUP_GUIDE paragraph lands with this phase: what the setting does, why it's off, and the local-model caution (Q6).
+
 - **Phase 7 (surface):** inbox, existing-item picker, Debts + loan checkbox, chips (§3.7), pins, `where`, drill-down, overdraft dialog.
+
+**Phase 7 implementation (2026-11-20):** The inbox supports per-row and atomic per-harvest acceptance/rejection, live source indexes and change badges, and a new-item merge picker. New harvests carry an optional `harvest` receipt; older proposals without one are reviewed separately rather than guessed into a batch. Overdraft review offers cancellation, a negative balance, or a shortfall loan when a non-loan payment names a counterparty (loan proposals cannot create a second loan). Item changes are diffed at `saveLedger`, attributed to the user or accepted proposal, and shown in per-name history plus recent changes with the trim marker. Finances exposes exact-name counterparties, loans and computed Debts; Inventory exposes pins and storage locations. Accepted rows show refresh/source-change chips. Pending counts supplement the existing money badge and appear on the Ledger tab. Planner context and slash commands remain Phase 8; host/mobile QA remains Phase 9.
+
 - **Phase 8 (planner + commands):** `buildLedgerPlannerContext` + planner wiring and checkbox, slash commands.
+
 - **Phase 9 (host QA):** a branch inherits proposals and tombstones; swipe-after-propose shows the badge and swiping back clears it; swipe-after-accept shows the transaction chip; backup round trip carries v2 fields; delta-mode users get proposals; a chat with two same-named currencies drops those lines; checkbox labels render on ST mobile.
 
 ## 12. Open questions

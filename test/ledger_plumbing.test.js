@@ -136,10 +136,11 @@ describe('Ledger store and lifecycle', () => {
     });
     test.each(['enableLedger', 'injectLedger', 'injectionMasterOff'])('%s gates clear existing payloads', key => {
         saveLedger(fixture());
+        const saved = getLedger();
         ctx.extensionSettings.merged_world_tracker[key] = key === 'injectionMasterOff';
         expect(refreshInjection('settings-saved')).toBe(false);
         expect(snapshot().enabled).toBe(false);
-        expect(ctx.chatMetadata.mwt_ledger).toEqual(fixture());
+        expect(ctx.chatMetadata.mwt_ledger).toEqual(saved);
     });
     test('structural boundary escaping and opt-out use the shared helper', () => {
         const data = fixture();

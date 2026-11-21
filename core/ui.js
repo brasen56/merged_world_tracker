@@ -975,6 +975,28 @@ export function createFloatingButtonBar({ getSettings, saveSettings, openModal, 
                 const title = status ? ['Ledger', ...status.totals, `${status.carried} carried items`, status.state].join(' · ') : 'Ledger';
                 ledgerButton.title = title;
                 ledgerButton.setAttribute('aria-label', title);
+                let pending = ledgerButton.querySelector('.mwt-ledger-pending-badge');
+                if (!pending) {
+                    pending = document.createElement('span');
+                    pending.className = 'mwt-ledger-pending-badge';
+                    ledgerButton.append(pending);
+                }
+                pending.textContent = status?.pending ? String(status.pending) : '';
+                pending.hidden = !status?.pending;
+                const ledgerTab = document.getElementById('mwt-tab-ledger');
+                if (ledgerTab) {
+                    let tabCount = ledgerTab.querySelector('[data-ledger-pending-count]');
+                    if (!tabCount) {
+                        tabCount = document.createElement('span');
+                        tabCount.dataset.ledgerPendingCount = '';
+                        ledgerTab.append(tabCount);
+                    }
+                    tabCount.textContent = status?.pending ? ` (${status.pending})` : '';
+                }
+                if (status?.pending) {
+                    ledgerButton.title += ` · ${status.pending} pending suggestions`;
+                    ledgerButton.setAttribute('aria-label', ledgerButton.title);
+                }
             }
             const mods = [
                 { id: 'mwt-float-world', getTokens: WorldState.getTotalTokens },

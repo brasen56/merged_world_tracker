@@ -1,6 +1,6 @@
 /** Read-only projection shared by the panel, floating button and Overview. */
 import { getLedger } from './store.js';
-import { computeBalances, formatAmount, formatLedgerBadge, validateLedgerRecord } from './data.js';
+import { computeBalances, formatAmount, formatLedgerBadge, validateLedgerAudit, validateLedgerRecord } from './data.js';
 
 export function getStatus() {
     const record = getLedger();
@@ -13,6 +13,7 @@ export function getStatus() {
         balance: currency ? formatAmount(balances.get(currency.id), currency.decimals) : '',
         totals: record.currencies.map(row => `${formatAmount(balances.get(row.id), row.decimals)} ${row.name}`),
         carried: record.items.filter(row => row.carried).length,
+        pending: validateLedgerAudit(record).proposals.filter(row => row.status === 'pending').length,
         state: 'Ready',
     };
 }

@@ -4,7 +4,8 @@ import { persistChatMeta } from '../core/metadata.js';
 import { clonePlainData, prepareNextStoreValue } from '../core/schema.js';
 import { isStoreWriteBlocked } from '../core/schema_status.js';
 import { MANIFEST_METADATA_KEY, stampStoreVersion } from '../schema/manifest.js';
-import { foldTransactions, validateLedgerRecord } from './data.js';
+import { appendItemLog, diffItems, foldTransactions, validateLedgerRecord } from './data.js';
+import { ledgerDate, ledgerId } from './audit.js';
 import { ledgerSchema } from './schema.js';
 import { refreshInjection } from './index.js';
 
@@ -16,7 +17,7 @@ export function getLedger() {
 }
 
 /** Validate and fold before committing data + manifest together in one save. */
-export function saveLedger(input) {
+export function saveLedger(input, { itemChanges } = {}) {
     const meta = getChatMeta();
     if (!getContextSafe() || !meta) throw new Error('No active chat.');
     if (isStoreWriteBlocked('ledger')) throw new Error('Ledger is paused; repair or retry its schema before editing.');
@@ -26,7 +27,11 @@ export function saveLedger(input) {
     if (!validation.valid) throw new Error(validation.errors.map(error => error.message).join(' '));
     const prepared = prepareNextStoreValue(ledgerSchema, meta[METADATA_KEY], clonePlainData(input));
     if (!prepared.ok) throw new Error('Ledger could not be saved; the previous value was kept.');
-    const next = foldTransactions(prepared.data);
+    let next = foldTransactions(prepared.data);
+    const changes = itemChanges ?? diffItems(meta[METADATA_KEY]?.items ?? [], next.items, { date: ledgerDate() });
+    for (const change of changes) {
+        next = appendItemLog(next, [{ ...change, id: ledgerId(next, 'l') }]);
+    }
     const manifest = stampStoreVersion(meta[MANIFEST_METADATA_KEY], 'ledger', ledgerSchema.currentVersion);
     meta[METADATA_KEY] = next;
     meta[MANIFEST_METADATA_KEY] = manifest;
