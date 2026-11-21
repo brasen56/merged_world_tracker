@@ -173,6 +173,17 @@ if (!registerSlashCommand) {
     }
 }
 
+// The legacy registrar strips wrapping quotes. Inventory's own parser needs
+// them to distinguish a numeric-ending item name from an explicit quantity.
+let registerRawSlashCommand;
+try {
+    const { SlashCommandParser } = await import('../../../../scripts/slash-commands/SlashCommandParser.js');
+    const { SlashCommand } = await import('../../../../scripts/slash-commands/SlashCommand.js');
+    registerRawSlashCommand = (name, callback, aliases, helpString) => SlashCommandParser.addCommandObject(
+        SlashCommand.fromProps({ name, callback, aliases, helpString, rawQuotes: true }),
+    );
+} catch { /* Older hosts retain the legacy registrar. */ }
+
 // Load macro registration via the modern macro system (requires ST 1.12+)
 let macroRegistry = null;
 try {
@@ -721,6 +732,7 @@ const ui = createFloatingButtonBar({
 
 const commands = createCommands({
     registerSlashCommand,
+    registerRawSlashCommand,
     macroRegistry,
     modules,
     resetFloatPositions: ui.resetFloatPositions,

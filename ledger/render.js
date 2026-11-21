@@ -312,27 +312,28 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
         const action = control?.dataset.ledgerAction;
         if (!['accept-proposal', 'reject-proposal', 'accept-harvest', 'reject-harvest'].includes(action)) return;
         run(() => {
-            current();
+            // Decisions read and validate the latest store independently of
+            // stale editor drafts, which still cannot overwrite newer data.
+            if (!assertSameScope(scope).ok) throw new Error('Chat changed. Reopen Ledger before editing.');
             const selection = control.closest(action.endsWith('harvest') ? '[data-harvest]' : '[data-proposal]');
             const ids = action.endsWith('harvest') ? [...selection.querySelectorAll('[data-proposal]')].map(row => row.dataset.proposal) : [selection.dataset.proposal];
             const itemTargets = Object.fromEntries([...selection.querySelectorAll('[data-item-target]')].map(select => [select.closest('[data-proposal]').dataset.proposal, select.value]));
             const choices = {};
             const review = () => {
                 try {
-                    current();
+                    if (!assertSameScope(scope).ok) throw new Error('Chat changed. Reopen Ledger before editing.');
                     const saved = decideLedgerProposals(ids, action.startsWith('accept') ? 'accepted' : 'rejected', {
                         scope, choices, itemTargets,
                         confirmSourceChange: () => confirmDelete('The source message changed. Accept this suggestion anyway?'),
                         confirmRemoval: item => confirmDelete(`Remove item “${item.name}”? This suggestion reduces its quantity to zero or below.`),
                     });
                     if (!saved) return;
-                    // The decision already saved atomically; rebuild without a second write.
+                    // Rejections only change the inbox. Accepted edits follow
+                    // the same stale-editor/draft protection as external writes.
                     const parent = pane.parentElement;
-                    const selected = tabs?.getSelectedIndex() ?? 0;
-                    pane.outerHTML = renderLedger();
-                    wireLedger(parent, { getSettings, saveSettings, onChanged, confirmDelete });
-                    parent.querySelectorAll('.mwt-ledger [role="tab"]')[selected]?.click();
-                    parent.querySelector('.mwt-ledger-status').textContent = 'Suggestions reviewed.';
+                    pane._ledgerRefresh();
+                    if (pane.isConnected) status('Suggestions reviewed.');
+                    else parent?.querySelector('.mwt-ledger-status')?.replaceChildren('Suggestions reviewed.');
                     onChanged();
                 } catch (error) {
                     if (!error.overdraft) throw error;

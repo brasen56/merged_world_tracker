@@ -2,7 +2,7 @@
 import { getChat } from '../core/context.js';
 import { assertSameScope, captureScope, getChatIdentity } from '../core/scope.js';
 import { isChatHydrated } from '../core/chat_hydration.js';
-import { getReceiptIdentity } from '../core/message_identity.js';
+import { ledgerReceiptIdentities } from '../core/ledger_message_identity.js';
 import { readLedgerForReport, recordLedgerReportDrop } from '../core/ledger_refresh.js';
 import { ledgerMessageDigest, resolveLedgerReport } from '../core/ledger_report.js';
 import { countLedgerDiagnostic } from '../core/diagnostics.js';
@@ -16,7 +16,7 @@ function notifyProposalsChanged() {
 
 function trimProposals(ledger, expireMissing = false) {
     const valid = new Set(validateLedgerAudit(ledger).proposals);
-    const identities = expireMissing ? new Set(getChat().map(getReceiptIdentity).filter(Boolean)) : null;
+    const identities = expireMissing ? new Set(getChat().flatMap(ledgerReceiptIdentities)) : null;
     const live = ledger.proposals.filter(row => !expireMissing || !valid.has(row) || identities.has(row.msg.identity));
     let excess = Math.max(0, live.filter(row => valid.has(row) && row.status !== 'pending').length - TOMBSTONE_LIMIT);
     return live.filter(row => !(valid.has(row) && row.status !== 'pending' && excess-- > 0));
@@ -77,7 +77,7 @@ export function harvestLedgerReport(event) {
 
 /** Look up the live slot, never a saved index. Missing sources also flag audit chips. */
 export function proposalSource(proposal, chat = getChat()) {
-    const index = chat.findIndex(message => getReceiptIdentity(message) === proposal.msg.identity);
+    const index = chat.findIndex(message => ledgerReceiptIdentities(message).includes(proposal.msg.identity));
     return { index, missing: index < 0, changed: index < 0 || ledgerMessageDigest(chat[index].mes) !== proposal.msg.digest };
 }
 

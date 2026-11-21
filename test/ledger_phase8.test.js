@@ -133,6 +133,17 @@ test('live chat changes never reuse a cached inventory', () => {
     expect(buildLedgerPlannerContext()).toContain('Other chat stash');
 });
 
+test('raw command registration preserves numeric-ending quoted item names through host parsing', () => {
+    const handlers = new Map();
+    const legacy = vi.fn((name, callback) => handlers.set(name, value => callback({}, value.replace(/^"(.*?)"/, '$1'))));
+    const raw = vi.fn((name, callback) => handlers.set(name, value => callback({}, value)));
+    createCommands({ registerSlashCommand: legacy, registerRawSlashCommand: raw, modules: { Ledger: { itemCommand } } }).setupSlashCommands();
+    expect(raw.mock.calls.map(([name]) => name)).toEqual(['wt-item']);
+    expect(handlers.get('wt-item')('"Model 42"')).toContain('Added Model 42 ×1');
+    expect(handlers.get('wt-item')('"Model 42" 2')).toContain('Added Model 42 ×2');
+    expect(getLedger().items.find(row => row.name === 'Model 42').qty).toBe(3);
+});
+
 test('money command uses exact minor units, user attribution, notes and shared save/injection', () => {
     ledgerAddCommand('-0.25 gold paid smith');
     expect(getLedger().transactions.at(-1)).toMatchObject({ amount: -25, note: 'paid smith', kind: 'entry', date: null });

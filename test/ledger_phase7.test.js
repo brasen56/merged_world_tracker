@@ -5,7 +5,7 @@ import { getLedger, saveLedger } from '../ledger/store.js';
 import { decideLedgerProposals, proposalSource } from '../ledger/proposals.js';
 import { renderLedger, wireLedger } from '../ledger/render.js';
 import { getStatus } from '../ledger/status.js';
-import { ledgerMessageDigest } from '../core/ledger_report.js';
+import { ledgerMessageDigest, resolveLedgerReport } from '../core/ledger_report.js';
 import { captureScope, bumpEpoch } from '../core/scope.js';
 import { _resetPausedStores, pauseStore } from '../core/schema_status.js';
 import { createFloatingButtonBar } from '../core/ui.js';
@@ -38,6 +38,38 @@ beforeEach(() => {
     confirmDelete = vi.fn(() => true);
 });
 afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+test.each(['accept-proposal', 'reject-proposal', 'accept-harvest', 'reject-harvest'])('%s preserves unrelated editor drafts', actionName => {
+    seed(); mount();
+    const transaction = document.querySelector('form[data-ledger-form="transaction"]:not([data-id])');
+    const inventory = document.querySelector('form[data-ledger-form="item"]:not([data-id])');
+    transaction.elements.namedItem('amount').value = '17';
+    inventory.elements.namedItem('name').value = 'Unsaved pack';
+    action(actionName);
+    expect(transaction.isConnected).toBe(true);
+    expect(inventory.isConnected).toBe(true);
+    expect(transaction.elements.namedItem('amount').value).toBe('17');
+    expect(inventory.elements.namedItem('name').value).toBe('Unsaved pack');
+    expect(document.querySelector('[data-ledger-reload]') !== null).toBe(actionName.startsWith('accept'));
+    expect(inboxRow('p1')).toBeNull();
+});
+
+test.each([undefined, true, false])('resolved picker suggestions preserve omitted carried (%s) until creation', carried => {
+    seed([], { items: [{ ...item, carried: false }] });
+    const ledger = getLedger();
+    const line = { kind: 'item', name: 'Coiled rope', qtyChange: '1', evidence,
+        ...(carried !== undefined ? { carried } : {}) };
+    const resolved = resolveLedgerReport([line], { ledger, chat: ctx.chat,
+        records: [{ index: 0, identity: 'id:source', text: evidence, digest: ledgerMessageDigest(evidence) }] });
+    ledger.proposals = [{ id: 'p1', ...resolved.proposals[0] }];
+    saveLedger(ledger); mount();
+    inboxRow('p1').querySelector('[data-item-target]').value = 'rope';
+    action('accept-proposal');
+    expect(getLedger().items[0]).toMatchObject({ qty: 3, carried: carried ?? false });
+    seed([itemProposal('new', 1, 'New rope')]);
+    decideLedgerProposals(['new'], 'accepted');
+    expect(getLedger().items[0].carried).toBe(true);
+});
 
 test('single acceptance writes player-signed money and source exactly once; rejection only tombstones', () => {
     seed([proposal(), proposal('p2', { money: { currency: 'gold', amount: 10 } })]);

@@ -5,14 +5,14 @@ import * as fake from './stubs/core.js';
 import { createLedger } from '../ledger/data.js';
 import { renderLedger, wireLedger } from '../ledger/render.js';
 import { getLedger, saveLedger } from '../ledger/store.js';
-import { initLedgerProposals, expireLedgerProposals } from '../ledger/proposals.js';
+import { initLedgerProposals, expireLedgerProposals, decideLedgerProposals, proposalSource } from '../ledger/proposals.js';
 import { buildLedgerRefreshSnapshot, publishLedgerReport, LEDGER_SNAPSHOT_CHAR_LIMIT } from '../core/ledger_refresh.js';
 import { cutLedgerReport, ledgerMessageDigest } from '../core/ledger_report.js';
 import { normaliseOutput } from '../core/api.js';
 import { getLedgerDiagnostics, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { captureScope, _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { _resetPausedStores, pauseStore } from '../core/schema_status.js';
-import { refreshWorldState, refreshWorldStateDelta, getRecentMessagesForScan } from '../world_state/refresh.js';
+import { refreshWorldState, refreshWorldStateDelta, getRecentMessagesForScan, getMessagesSinceForScan } from '../world_state/refresh.js';
 import { state, getWorldStateText, setWorldStateData } from '../world_state/data.js';
 import { buildRefreshStatusDelta } from '../world_state/delta.js';
 import { saveSettings } from '../world_state/settings.js';
@@ -54,6 +54,63 @@ afterEach(() => {
     if (state.autoRefreshDeferTimer) clearTimeout(state.autoRefreshDeferTimer);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+});
+
+test.each(['pending', 'accepted', 'rejected'])('swipes and reloads preserve %s receipts and prevent replay', async status => {
+    fake.setFakeChat([{ name: 'Alex', mes: evidence, extra: { mwt_uuid: 'legacy' },
+        swipe_info: [{ extra: { mwt_uuid: 'legacy' } }, { extra: {} }] }, { mes: 'tail' }, { mes: 'tail' }]);
+    await refreshWorldState();
+    const original = getLedger().proposals[0];
+    if (status !== 'pending') decideLedgerProposals([original.id], status, { choices: { [original.id]: 'accept' } });
+    const message = fake.getChat()[0];
+    message.extra = {};
+    message.mes = 'An alternate outcome.';
+    // Simulate persistence and reopening, not just an in-memory swipe.
+    fake.setFakeChat(JSON.parse(JSON.stringify(fake.getChat())));
+    await expireLedgerProposals();
+    expect(getLedger().proposals[0]).toMatchObject({ id: original.id, status });
+    expect(proposalSource(original)).toMatchObject({ missing: false, changed: true });
+    fake.getChat()[0].extra = { mwt_uuid: 'legacy' };
+    fake.getChat()[0].mes = evidence;
+    await refreshWorldState();
+    expect(getLedger().proposals).toHaveLength(1);
+    fake.getChat().splice(0, 1);
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toEqual([]);
+});
+
+test('legacy receipts on inactive swipes do not expire before a new scan', async () => {
+    const ledger = getLedger();
+    ledger.proposals = [{ id: 'old', kind: 'money', money: { currency: 'gold', amount: -30 }, evidence,
+        msg: { identity: 'uuid:legacy', digest: ledgerMessageDigest(evidence) }, status: 'accepted' }];
+    saveLedger(ledger);
+    fake.setFakeChat([{ mes: 'Alternate', extra: {}, swipe_info: [{ extra: { mwt_uuid: 'legacy' } }] }]);
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(proposalSource(ledger.proposals[0]).missing).toBe(false);
+});
+
+test.each(['text', 'delta text', 'full', 'delta', 'catch-up'])('%s scans do not stamp or save messages without a report request', async mode => {
+    globals.ledgerProposals = false;
+    const saveChatDebounced = vi.fn();
+    fake.setFakeContextExtras({ saveChatDebounced });
+    fake.setFakeChat(Array.from({ length: 6 }, () => ({ name: 'Alex', mes: evidence })));
+    if (mode === 'text') getRecentMessagesForScan();
+    else if (mode === 'delta text') getMessagesSinceForScan(0);
+    else if (mode === 'full') await refreshWorldState();
+    else {
+        saveSettings({ deltaMode: true, maxScanMessages: mode === 'catch-up' ? 2 : 50 });
+        setWorldStateData({ text: doc, deltaStatus: buildRefreshStatusDelta('full', doc, {}, 0, 'detailed') });
+        if (mode === 'catch-up') {
+            fake.getChat().forEach(message => { message.mes += 'x'.repeat(11000); });
+            await refreshWorldState();
+        } else {
+            fake.setFakeApi(async () => '### NO CHANGES');
+            await refreshWorldStateDelta();
+        }
+    }
+    expect(fake.getChat().every(message => !message.extra && !message.mwt_ledger_identity)).toBe(true);
+    expect(saveChatDebounced).not.toHaveBeenCalled();
 });
 
 test('cuts before REAL normalization; the JSON fence would otherwise replace the document', () => {

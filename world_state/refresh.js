@@ -23,6 +23,7 @@ import {
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 import { cutLedgerReport, ledgerMessageDigest } from '../core/ledger_report.js';
+import { getOrCreateLedgerReceiptIdentity } from '../core/ledger_message_identity.js';
 import { buildLedgerRefreshSnapshot, LEDGER_REPORT_CONTRACT, publishLedgerReport } from '../core/ledger_refresh.js';
 import { countLedgerDiagnostic } from '../core/diagnostics.js';
 
@@ -96,11 +97,11 @@ const OVERSIZED_SCAN_NOTE = ` […partial message — alone exceeds the ${SCAN_M
  * annotations. The raw digest enforces an unchanged-source policy at harvest. */
 function scanMessageRecord(msg, index, suppliedLine) {
     const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
-    return Object.freeze({ index, identity: getOrCreateReceiptIdentity(msg),
+    return Object.freeze({ index, identity: getOrCreateLedgerReceiptIdentity(msg),
         text: suppliedLine.slice(`${name}: `.length), digest: ledgerMessageDigest(msg.mes) });
 }
 
-export function getRecentMessagesForScan({ withRecords = false } = {}) {
+export function getRecentMessagesForScan({ withRecords = false, collectRecords = withRecords } = {}) {
     const max = getMaxScanMessages(getSettings());
     const chat = getChat();
     const end = getStableHistoryEnd(chat);
@@ -113,7 +114,7 @@ export function getRecentMessagesForScan({ withRecords = false } = {}) {
         if (!line) continue;
         if (total + line.length > SCAN_MAX_CHARS) break;
         lines.push(line);
-        records.push(scanMessageRecord(slice[i], Math.max(0, end - max) + i, line));
+        if (collectRecords) records.push(scanMessageRecord(slice[i], Math.max(0, end - max) + i, line));
         total += line.length + 1;
     }
     const text = lines.reverse().join('\n');
@@ -140,7 +141,7 @@ export function getRecentMessagesForScan({ withRecords = false } = {}) {
  * @returns {{ ok: true, text: string, from: number, to: number }
  *          | { ok: false, reason: string }}
  */
-export function getMessagesSinceForScan(sinceMsg) {
+export function getMessagesSinceForScan(sinceMsg, { withRecords = false } = {}) {
     const max = getMaxScanMessages(getSettings());
     const chat = getChat() || [];
     const end = getStableHistoryEnd(chat);
@@ -166,7 +167,7 @@ export function getMessagesSinceForScan(sinceMsg) {
             return { ok: false, reason: `the unseen interval exceeds the ${SCAN_MAX_CHARS}-character scan budget` };
         }
         lines.push(line);
-        records.push(scanMessageRecord(msg, index, line));
+        if (withRecords) records.push(scanMessageRecord(msg, index, line));
         total += line.length + 1;
     }
     return { ok: true, text: lines.join('\n'), records, from: since, to: end };
@@ -344,7 +345,7 @@ const MAX_CATCH_UP_PASSES = 8;
  *   walk never passes it, nor the live stable-history end (a chat that shrank
  *   mid-replay shortens the walk instead of scanning stale indices)
  */
-function nextCatchUpChunk(from, endLimit) {
+function nextCatchUpChunk(from, endLimit, { withRecords = false } = {}) {
     const chat = getChat() || [];
     const end = Math.min(
         Number.isFinite(endLimit) ? Math.max(0, Math.floor(endLimit)) : Infinity,
@@ -363,7 +364,7 @@ function nextCatchUpChunk(from, endLimit) {
                 console.warn(`[MWT:WorldState] Catch-up truncated message ${i} — at ${line.length} characters it alone exceeds the ${SCAN_MAX_CHARS}-character scan budget, so only its leading portion (with an explicit marker) can be scanned.`);
                 const suppliedLine = line.slice(0, SCAN_MAX_CHARS - OVERSIZED_SCAN_NOTE.length);
                 lines.push(suppliedLine + OVERSIZED_SCAN_NOTE);
-                records.push(scanMessageRecord(chat[i], i, suppliedLine));
+                if (withRecords) records.push(scanMessageRecord(chat[i], i, suppliedLine));
                 total += SCAN_MAX_CHARS + 1;
                 to = i + 1;
                 continue;
@@ -371,7 +372,7 @@ function nextCatchUpChunk(from, endLimit) {
             break;
         }
         lines.push(line);
-        records.push(scanMessageRecord(chat[i], i, line));
+        if (withRecords) records.push(scanMessageRecord(chat[i], i, line));
         total += line.length + 1;
         to = i + 1;
     }
@@ -422,7 +423,7 @@ async function runCatchUpWorldStateRefresh(isAuto, since) {
                 console.warn(`[MWT:WorldState] Catch-up aborted — chat switched between passes (${scopeNow.reason}).`);
                 break;
             }
-            const chunk = nextCatchUpChunk(from, end);
+            const chunk = nextCatchUpChunk(from, end, { withRecords: !!buildLedgerRefreshSnapshot() });
             if (chunk.to <= from) {
                 // Cannot make progress (pathological budget geometry) — refuse
                 // WITHOUT advancing: the next refresh retries from here.
@@ -581,7 +582,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             scanEnd = Math.max(0, Math.floor(scanWindow.to));
             scanRecords = scanWindow.records ?? [];
         } else {
-            const window = getRecentMessagesForScan({ withRecords: true });
+            const window = getRecentMessagesForScan({ withRecords: true, collectRecords: !!ledgerSnapshot });
             scanWindowText = window.text;
             scanRecords = window.records;
             scanEnd = window.to;
@@ -890,7 +891,8 @@ export async function refreshWorldStateDelta(isAuto = false) {
     // cannot fit inside one scan budget, fall back to the full refresh rather
     // than silently skipping the oldest unseen events and stamping over the
     // gap.
-    const scanWindow = getMessagesSinceForScan(baselineStatus.lastRefreshAtMsg);
+    const ledgerSnapshot = buildLedgerRefreshSnapshot();
+    const scanWindow = getMessagesSinceForScan(baselineStatus.lastRefreshAtMsg, { withRecords: !!ledgerSnapshot });
     if (!scanWindow.ok) {
         console.warn(`[MWT:WorldState] Delta declined — ${scanWindow.reason}; a full refresh is required to cover the whole interval.`);
         if (isAuto) return refreshWorldState(isAuto);
@@ -904,7 +906,6 @@ export async function refreshWorldStateDelta(isAuto = false) {
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
     try {
-        const ledgerSnapshot = buildLedgerRefreshSnapshot();
         const systemPrompt = buildDeltaSystemPrompt(buildSystemPrompt()) + (ledgerSnapshot ? `\n\n${LEDGER_REPORT_CONTRACT}` : '');
         const measureGroup = ledgerSnapshot ? 'with-report' : 'without-report';
         countLedgerDiagnostic(`refreshes:${measureGroup}`);

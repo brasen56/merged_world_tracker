@@ -2,7 +2,7 @@
 import { parseAmount } from './ledger_amount.js';
 import { quoteMatchesMessage } from './quote_match.js';
 import { captureRevision } from './revision.js';
-import { getReceiptIdentity } from './message_identity.js';
+import { getLedgerReceiptIdentity, ledgerReceiptIdentities } from './ledger_message_identity.js';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -79,7 +79,11 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         if (row.kind === 'money') return (row.money?.loan === undefined || typeof row.money.loan === 'boolean')
             && (row.money?.loan !== true || text(row.counterparty));
         return row.kind === 'item' && (row.item?.carried === undefined || typeof row.item.carried === 'boolean');
-    }).map(row => [ledgerProposalKey(row), row]).filter(([key]) => key));
+    }).map(row => {
+        const message = chat?.find(candidate => ledgerReceiptIdentities(candidate).includes(row.msg.identity));
+        const canonical = message ? { ...row, msg: { ...row.msg, identity: getLedgerReceiptIdentity(message) } } : row;
+        return [ledgerProposalKey(canonical), row];
+    }).filter(([key]) => key));
     const seen = new Set(existingByKey.keys());
     const window = [...(records ?? [])].sort((a, b) => a.index - b.index);
     for (const line of lines) {
@@ -89,7 +93,7 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         }
         const source = window.find(record => Number.isInteger(record.index) && record.index >= 0 && text(record.identity)
             && text(record.text) && text(record.digest)
-            && getReceiptIdentity(chat?.[record.index]) === record.identity
+            && getLedgerReceiptIdentity(chat?.[record.index]) === record.identity
             && ledgerMessageDigest(chat[record.index].mes) === record.digest
             && quoteMatchesMessage(line.evidence, null, { ...chat[record.index], mes: record.text }, { allowInterposition: false }));
         if (!source) { drop('evidence'); continue; }
@@ -136,7 +140,8 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
             const items = ledger.items.filter(row => normalizeLedgerName(row.name) === normalizeLedgerName(line.name));
             if (items.length > 1) { drop('item-ambiguous'); continue; }
             if (!items.length && qtyChange < 0) { drop('item-unmatched'); continue; }
-            draft.item = { name: items[0]?.name ?? line.name.trim(), qtyChange, carried: line.carried ?? items[0]?.carried ?? true };
+            draft.item = { name: items[0]?.name ?? line.name.trim(), qtyChange,
+                ...(line.carried !== undefined ? { carried: line.carried } : {}) };
         }
         const key = ledgerProposalKey(draft);
         if (seen.has(key)) { drop('duplicate'); continue; }

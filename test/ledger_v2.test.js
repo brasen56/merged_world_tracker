@@ -296,9 +296,9 @@ describe('Report cut, parse, evidence, resolution and dedupe', () => {
     test('item decreases require an exact normalized existing name; increases can propose new items', () => {
         const report = { kind: 'item', name: ' ROPE ', qtyChange: '-1', evidence };
         const record = { ...ledger(), items: [item('i1', { name: 'Rope', carried: false })] };
-        expect(resolveLedgerReport([report], options({ ledger: record })).proposals[0].item).toEqual({ name: 'Rope', qtyChange: -1, carried: false });
+        expect(resolveLedgerReport([report], options({ ledger: record })).proposals[0].item).toEqual({ name: 'Rope', qtyChange: -1 });
         expect(resolveLedgerReport([report], options()).dropped[0].reason).toBe('item-unmatched');
-        expect(resolveLedgerReport([{ ...report, qtyChange: '2' }], options()).proposals[0].item).toEqual({ name: 'ROPE', qtyChange: 2, carried: true });
+        expect(resolveLedgerReport([{ ...report, qtyChange: '2' }], options()).proposals[0].item).toEqual({ name: 'ROPE', qtyChange: 2 });
         expect(resolveLedgerReport([{ ...report, qtyChange: '2', carried: false }], options()).proposals[0].item.carried).toBe(false);
         expect(resolveLedgerReport([{ ...report, qtyChange: '-0.5' }], options()).dropped[0].reason).toBe('parse');
     });
