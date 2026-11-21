@@ -109,14 +109,17 @@ export function decideLedgerProposals(ids, status, {
                 if (!ledger.currencies.some(row => row.id === money.currency)) throw new Error('Proposal currency no longer exists. Reject this suggestion.');
                 const balance = BigInt(computeBalances(ledger).get(money.currency)) + BigInt(money.amount);
                 const shortfall = money.amount < 0 && balance < 0n ? -balance : 0n;
-                if (shortfall && !['accept', 'owed'].includes(choices[proposal.id])) {
+                const choice = choices[proposal.id];
+                const decision = typeof choice === 'object' && choice !== null ? choice.decision : choice;
+                const changedShortfall = typeof choice === 'object' && choice !== null && choice.shortfall !== String(shortfall);
+                if (shortfall && (!['accept', 'owed'].includes(decision) || changedShortfall)) {
                     const error = new Error('Review the overdraft before accepting.');
                     error.overdraft = { proposal, shortfall: String(shortfall) };
                     throw error;
                 }
                 ledger.transactions.push({ id: ledgerId(ledger, 't'), ...money, note: proposal.evidence, date, kind: 'entry',
                     ...(proposal.counterparty ? { counterparty: proposal.counterparty } : {}), source: proposal.id });
-                if (shortfall && choices[proposal.id] === 'owed') {
+                if (shortfall && decision === 'owed') {
                     if (!proposal.counterparty?.trim() || money.loan === true) throw new Error('A shortfall loan requires a counterparty and a non-loan payment.');
                     const amount = Number(shortfall);
                     if (!Number.isSafeInteger(amount)) throw new Error('Shortfall exceeds the safe integer range.');

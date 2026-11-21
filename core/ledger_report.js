@@ -70,6 +70,14 @@ export function ledgerProposalKey(proposal) {
 export function resolveLedgerReport(lines, { ledger, chat, records, proposals = [] }) {
     const kept = [];
     const dropped = [];
+    if (!lines.length) return { proposals: kept, dropped };
+    const canonicalByAlias = new Map();
+    for (const message of chat ?? []) {
+        const aliases = ledgerReceiptIdentities(message);
+        for (const alias of aliases) {
+            if (!canonicalByAlias.has(alias)) canonicalByAlias.set(alias, aliases[0]);
+        }
+    }
     const ids = new Set();
     const existingByKey = new Map(proposals.filter(row => {
         if (!object(row) || !text(row.id) || ids.has(row.id)) return false;
@@ -80,8 +88,8 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
             && (row.money?.loan !== true || text(row.counterparty));
         return row.kind === 'item' && (row.item?.carried === undefined || typeof row.item.carried === 'boolean');
     }).map(row => {
-        const message = chat?.find(candidate => ledgerReceiptIdentities(candidate).includes(row.msg.identity));
-        const canonical = message ? { ...row, msg: { ...row.msg, identity: getLedgerReceiptIdentity(message) } } : row;
+        const identity = canonicalByAlias.get(row.msg.identity);
+        const canonical = identity ? { ...row, msg: { ...row.msg, identity } } : row;
         return [ledgerProposalKey(canonical), row];
     }).filter(([key]) => key));
     const seen = new Set(existingByKey.keys());

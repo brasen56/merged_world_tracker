@@ -10,7 +10,7 @@ import { getContextSafe } from './context.js';
 
 const UUID_KEY = 'mwt_uuid';
 
-function generateUuid() {
+export function generateUuid() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
         return crypto.randomUUID();
     }

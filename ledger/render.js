@@ -356,7 +356,7 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
                         const decision = choice.dataset.ledgerAction.replace('overdraft-', '');
                         dialog.remove();
                         if (decision === 'cancel') return;
-                        choices[proposal.id] = decision;
+                        choices[proposal.id] = { decision, shortfall };
                         review();
                     })));
                     dialog.querySelector('button').focus();

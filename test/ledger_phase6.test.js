@@ -3,11 +3,12 @@ import { beforeEach, afterEach, test, expect, vi } from 'vitest';
 import * as fake from './stubs/core.js';
 
 import { createLedger } from '../ledger/data.js';
+import { createLedgerReceiptIdentityBatch, getOrCreateLedgerReceiptIdentity, ledgerReceiptIdentities } from '../core/ledger_message_identity.js';
 import { renderLedger, wireLedger } from '../ledger/render.js';
 import { getLedger, saveLedger } from '../ledger/store.js';
 import { initLedgerProposals, expireLedgerProposals, decideLedgerProposals, proposalSource } from '../ledger/proposals.js';
 import { buildLedgerRefreshSnapshot, publishLedgerReport, LEDGER_SNAPSHOT_CHAR_LIMIT } from '../core/ledger_refresh.js';
-import { cutLedgerReport, ledgerMessageDigest } from '../core/ledger_report.js';
+import { cutLedgerReport, ledgerMessageDigest, resolveLedgerReport } from '../core/ledger_report.js';
 import { normaliseOutput } from '../core/api.js';
 import { getLedgerDiagnostics, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
 import { captureScope, _resetEpoch, bumpEpoch } from '../core/scope.js';
@@ -77,6 +78,62 @@ test.each(['pending', 'accepted', 'rejected'])('swipes and reloads preserve %s r
     fake.getChat().splice(0, 1);
     await expireLedgerProposals();
     expect(getLedger().proposals).toEqual([]);
+});
+
+test('copied messages get distinct identities without inheriting the original receipt aliases', () => {
+    const original = { mes: evidence, extra: { mwt_uuid: 'original' }, swipe_info: [{ extra: { mwt_uuid: 'other-swipe' } }] };
+    fake.setFakeChat([original]);
+    const identity = getOrCreateLedgerReceiptIdentity(original);
+    const copy = JSON.parse(JSON.stringify(original));
+    copy.mes = 'He paid thirty gold for a different purchase.';
+    fake.setFakeChat([original, copy]);
+    const batch = createLedgerReceiptIdentityBatch(fake.getChat());
+    const copyIdentity = batch.getIdentity(copy);
+    expect(copyIdentity).not.toBe(identity);
+    expect(batch.getIdentity(original)).toBe(identity);
+    batch.save();
+    expect(ledgerReceiptIdentities(copy)).toEqual([copyIdentity, copyIdentity]);
+    expect(proposalSource({ msg: { identity: copyIdentity, digest: ledgerMessageDigest(copy.mes) } }).index).toBe(1);
+    const records = [original, copy].map((message, index) => ({ index, identity: index ? copyIdentity : identity,
+        text: message.mes, digest: ledgerMessageDigest(message.mes) }));
+    const result = resolveLedgerReport([line, { ...line, evidence: copy.mes }], {
+        ledger: getLedger(), chat: fake.getChat(), records,
+    });
+    expect(result.proposals.map(row => row.msg.identity)).toEqual([identity, copyIdentity]);
+    expect(getOrCreateLedgerReceiptIdentity(copy)).toBe(copyIdentity);
+    fake.setFakeChat([copy]);
+    expect(getOrCreateLedgerReceiptIdentity(copy)).toBe(copyIdentity);
+    expect(ledgerReceiptIdentities(copy)).not.toContain(identity);
+});
+
+test('all legacy swipe aliases survive deletion, reload and expiry', async () => {
+    const message = { mes: evidence, extra: { mwt_uuid: 'active' }, swipe_info: [{ extra: { mwt_uuid: 'deleted' } }] };
+    fake.setFakeChat([message]);
+    getOrCreateLedgerReceiptIdentity(message);
+    message.swipe_info = [];
+    fake.setFakeChat(JSON.parse(JSON.stringify([message])));
+    const ledger = getLedger();
+    ledger.proposals = ['active', 'deleted'].map((alias, index) => ({ id: `legacy-${index}`, kind: 'money',
+        money: { currency: 'gold', amount: -30 }, evidence,
+        msg: { identity: `uuid:${alias}`, digest: ledgerMessageDigest(evidence) }, status: 'pending' }));
+    saveLedger(ledger);
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toHaveLength(2);
+    getLedger().proposals.forEach(row => expect(proposalSource(row).missing).toBe(false));
+});
+
+test.each(['recent', 'delta'])('%s scan persists twenty new receipts once, and unchanged receipts not at all', mode => {
+    const saveChat = vi.fn();
+    fake.setFakeContextExtras({ saveChat, saveChatDebounced: undefined });
+    globals.maxScanMessages = 30;
+    fake.setFakeChat(Array.from({ length: 22 }, () => ({ mes: evidence })));
+    const scan = () => mode === 'recent' ? getRecentMessagesForScan({ withRecords: true }) : getMessagesSinceForScan(0, { withRecords: true });
+    const first = scan();
+    expect(first.records.length).toBeGreaterThanOrEqual(20);
+    expect(saveChat).toHaveBeenCalledTimes(1);
+    expect(first.records.every(row => Object.isFrozen(row))).toBe(true);
+    scan();
+    expect(saveChat).toHaveBeenCalledTimes(1);
 });
 
 test('legacy receipts on inactive swipes do not expire before a new scan', async () => {

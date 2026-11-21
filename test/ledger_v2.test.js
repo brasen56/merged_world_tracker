@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
     createLedger, validateLedgerRecord, validateLedgerAudit, computeBalances, computeDebts,
@@ -23,6 +23,25 @@ const options = extra => ({ ledger: ledger(), chat, records, ...extra });
 const proposal = extra => ({ id: 'p1', kind: 'money', money: { currency: 'gold', amount: -30, loan: false },
     evidence, msg: { identity: 'uuid:one', digest: ledgerMessageDigest(evidence) }, status: 'pending', ...extra });
 const log = id => ({ id, name: 'Rope', change: 'qty', detail: '2 → 1', source: 'user', date: null });
+
+test('empty reports do not inspect chat or tombstones', () => {
+    const unreadable = new Proxy([], { get() { throw new Error('Unexpected traversal'); } });
+    expect(resolveLedgerReport([], options({ chat: unreadable, proposals: unreadable }))).toEqual({ proposals: [], dropped: [] });
+});
+
+test('reports index aliases once rather than rescanning chat for every tombstone', () => {
+    const readSlot = vi.fn(() => 'uuid:canonical');
+    const messages = Array.from({ length: 5000 }, (_, index) => ({ mes: evidence, extra: { mwt_uuid: `legacy-${index}` },
+        get mwt_ledger_identity() { return readSlot(); } }));
+    const tombstones = Array.from({ length: 300 }, (_, index) => proposal({ id: `p-${index}`, status: 'accepted',
+        msg: { identity: `uuid:legacy-${4700 + index}`, digest: ledgerMessageDigest(evidence) } }));
+    const result = resolveLedgerReport([line], options({ chat: messages, proposals: tombstones,
+        records: [{ ...records[0], identity: 'uuid:canonical' }] }));
+    expect(result.dropped[0].reason).toBe('duplicate');
+    // One index pass, plus the live-source check and quote matcher copy.
+    expect(readSlot.mock.calls.length).toBeLessThanOrEqual(5002);
+});
+
 function freeze(value) {
     if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
     return value;

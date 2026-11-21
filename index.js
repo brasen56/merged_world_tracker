@@ -56,6 +56,7 @@ import { showSettingsModal as openChronicleSettings } from './chronicle/render.j
 import { showKnowledgeSettings } from './knowledge/settings.js';
 import { openSettingsPanel as openInterioritySettings } from './interiority/render.js';
 import { createCommands } from './core/commands.js';
+import { registerItemSlashCommand } from './core/item_command_registration.js';
 import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
 // Diagnostics accessors (Phases 0–1). Read-only peek at the in-memory capture,
 // exposed to testers as window.MWT.diagnostics near the bottom of this file.
@@ -179,10 +180,14 @@ let registerRawSlashCommand;
 try {
     const { SlashCommandParser } = await import('../../../../scripts/slash-commands/SlashCommandParser.js');
     const { SlashCommand } = await import('../../../../scripts/slash-commands/SlashCommand.js');
-    registerRawSlashCommand = (name, callback, aliases, helpString) => SlashCommandParser.addCommandObject(
-        SlashCommand.fromProps({ name, callback, aliases, helpString, rawQuotes: true }),
+    const { SlashCommandArgument } = await import('../../../../scripts/slash-commands/SlashCommandArgument.js');
+    registerRawSlashCommand = (...args) => registerItemSlashCommand({ SlashCommandParser, SlashCommand, SlashCommandArgument }, ...args);
+} catch {
+    // Never pass stripped quotes to inventory's quantity parser.
+    registerRawSlashCommand = (name, _callback, aliases, helpString) => registerSlashCommand?.(
+        name, () => 'Error: This host cannot preserve item-name argument boundaries. Use the Ledger tab.', aliases, helpString,
     );
-} catch { /* Older hosts retain the legacy registrar. */ }
+}
 
 // Load macro registration via the modern macro system (requires ST 1.12+)
 let macroRegistry = null;

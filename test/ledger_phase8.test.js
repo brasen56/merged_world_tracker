@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { buildLedgerPlannerContext, readLedgerContext, LEDGER_PLANNER_CHAR_LIMIT } from '../core/ledger_context.js';
 import { ledgerAddCommand, itemCommand } from '../ledger/commands.js';
 import { createCommands } from '../core/commands.js';
+import { registerItemSlashCommand } from '../core/item_command_registration.js';
 import { createLedger, computeBalances } from '../ledger/data.js';
 import { getLedger } from '../ledger/store.js';
 import { buildInjectionBody } from '../ledger/injection.js';
@@ -142,6 +143,23 @@ test('raw command registration preserves numeric-ending quoted item names throug
     expect(handlers.get('wt-item')('"Model 42"')).toContain('Added Model 42 ×1');
     expect(handlers.get('wt-item')('"Model 42" 2')).toContain('Added Model 42 ×2');
     expect(getLedger().items.find(row => row.name === 'Model 42').qty).toBe(3);
+});
+
+test('split host arguments preserve quoted numeric-ending names on parsers without rawQuotes', () => {
+    let command;
+    const fromProps = props => props;
+    registerItemSlashCommand({ SlashCommandParser: { addCommandObject: value => { command = value; } },
+        SlashCommand: { fromProps }, SlashCommandArgument: { fromProps } }, 'wt-item',
+    (_args, value) => itemCommand(value), [], 'Inventory');
+    expect(command.splitUnnamedArgument).toBe(true);
+    expect(command.unnamedArgumentList).toHaveLength(1);
+    expect(command.callback({}, ['Model 42'])).toContain('Added Model 42 ×1');
+    expect(command.callback({}, ['Model 42', '2'])).toContain('Added Model 42 ×2');
+    expect(command.callback({}, ['Healing potion', '2'])).toContain('Added Healing potion ×2');
+    expect(getLedger().items.find(row => row.name === 'Model 42').qty).toBe(3);
+    const before = JSON.stringify(getLedger());
+    expect(command.callback({}, 'Model 42')).toMatch(/^Error:/);
+    expect(JSON.stringify(getLedger())).toBe(before);
 });
 
 test('money command uses exact minor units, user attribution, notes and shared save/injection', () => {

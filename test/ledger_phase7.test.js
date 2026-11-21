@@ -245,6 +245,24 @@ test('UI overdraft dialog supports cancel, negative balance, and shortfall loan'
     expect(computeBalances(getLedger()).get('gold')).toBe(-20);
 });
 
+test.each(['overdraft-owed', 'overdraft-accept'])('UI reconfirms changed shortfalls before %s', choice => {
+    seed([proposal('p1', { money: { currency: 'gold', amount: -70 } }),
+        proposal('p2', { money: { currency: 'gold', amount: -10 } })]);
+    mount();
+    action('accept-proposal', inboxRow('p1'));
+    expect(document.querySelector('[data-ledger-overdraft]').textContent).toContain('20 gold');
+    action('accept-proposal', inboxRow('p2'));
+    action(choice);
+    expect(getLedger().proposals.find(row => row.id === 'p1').status).toBe('pending');
+    expect(computeBalances(getLedger()).get('gold')).toBe(40);
+    expect(document.querySelector('[data-ledger-overdraft]').textContent).toContain('30 gold');
+    action(choice);
+    expect(getLedger().proposals.find(row => row.id === 'p1').status).toBe('accepted');
+    expect(computeBalances(getLedger()).get('gold')).toBe(choice === 'overdraft-owed' ? 0 : -30);
+    expect(computeDebts(getLedger())).toEqual(choice === 'overdraft-owed'
+        ? [expect.objectContaining({ amount: 30 })] : []);
+});
+
 test('UI picker and item pin/location fields persist with history drill-down and safe escaping', () => {
     seed([itemProposal('p1', 1, '<Rope>')], { items: [item] }); mount();
     inboxRow('p1').querySelector('[data-item-target]').value = 'rope';

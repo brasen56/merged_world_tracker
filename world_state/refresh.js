@@ -23,7 +23,7 @@ import {
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
 import { cutLedgerReport, ledgerMessageDigest } from '../core/ledger_report.js';
-import { getOrCreateLedgerReceiptIdentity } from '../core/ledger_message_identity.js';
+import { createLedgerReceiptIdentityBatch } from '../core/ledger_message_identity.js';
 import { buildLedgerRefreshSnapshot, LEDGER_REPORT_CONTRACT, publishLedgerReport } from '../core/ledger_refresh.js';
 import { countLedgerDiagnostic } from '../core/diagnostics.js';
 
@@ -96,9 +96,19 @@ const OVERSIZED_SCAN_NOTE = ` […partial message — alone exceeds the ${SCAN_M
 /** Freeze only the supplied narrative, not the display-name prefix or scan
  * annotations. The raw digest enforces an unchanged-source policy at harvest. */
 function scanMessageRecord(msg, index, suppliedLine) {
-    const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
-    return Object.freeze({ index, identity: getOrCreateLedgerReceiptIdentity(msg),
-        text: suppliedLine.slice(`${name}: `.length), digest: ledgerMessageDigest(msg.mes) });
+    return { msg, index, suppliedLine };
+}
+
+function persistScanRecords(records, chat) {
+    if (!records.length) return [];
+    const batch = createLedgerReceiptIdentityBatch(chat);
+    const frozen = records.map(({ msg, index, suppliedLine }) => {
+        const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
+        return Object.freeze({ index, identity: batch.getIdentity(msg),
+            text: suppliedLine.slice(`${name}: `.length), digest: ledgerMessageDigest(msg.mes) });
+    });
+    batch.save();
+    return frozen;
 }
 
 export function getRecentMessagesForScan({ withRecords = false, collectRecords = withRecords } = {}) {
@@ -118,7 +128,8 @@ export function getRecentMessagesForScan({ withRecords = false, collectRecords =
         total += line.length + 1;
     }
     const text = lines.reverse().join('\n');
-    return withRecords ? { text, records: records.reverse(), to: end } : text;
+    const frozen = persistScanRecords(records.reverse(), chat);
+    return withRecords ? { text, records: frozen, to: end } : text;
 }
 
 /**
@@ -170,7 +181,7 @@ export function getMessagesSinceForScan(sinceMsg, { withRecords = false } = {}) 
         if (withRecords) records.push(scanMessageRecord(msg, index, line));
         total += line.length + 1;
     }
-    return { ok: true, text: lines.join('\n'), records, from: since, to: end };
+    return { ok: true, text: lines.join('\n'), records: persistScanRecords(records, chat), from: since, to: end };
 }
 
 // ─── Prompt builders ─────────────────────────────────────────────────────────
@@ -376,7 +387,7 @@ function nextCatchUpChunk(from, endLimit, { withRecords = false } = {}) {
         total += line.length + 1;
         to = i + 1;
     }
-    return { text: lines.join('\n'), records, from: start, to };
+    return { text: lines.join('\n'), records: persistScanRecords(records, chat), from: start, to };
 }
 
 /**
