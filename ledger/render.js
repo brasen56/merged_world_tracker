@@ -411,9 +411,13 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
                             const exact = formatAmount(row.amount, previous.decimals).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
                             row.amount = parseAmount(exact, decimals);
                         }
-                        // Pending proposals are also minor-unit amounts. Keep
-                        // their economic value when the user changes precision.
+                        // Pending amounts must remain exactly actionable. Resolved
+                        // receipts retain historical precision for audit/dedupe.
                         for (const proposal of validateLedgerAudit(record).proposals.filter(row => row.kind === 'money' && row.money.currency === previous.id)) {
+                            if (proposal.status !== 'pending') {
+                                proposal.money.decimals ??= previous.decimals;
+                                continue;
+                            }
                             const exact = formatAmount(proposal.money.amount, previous.decimals).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
                             proposal.money.amount = parseAmount(exact, decimals);
                         }

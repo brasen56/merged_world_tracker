@@ -17,7 +17,10 @@ function notifyProposalsChanged() {
 function trimProposals(ledger, expireMissing = false) {
     const valid = new Set(validateLedgerAudit(ledger).proposals);
     const identities = expireMissing ? new Set(getChat().flatMap(ledgerReceiptIdentities)) : null;
-    const live = ledger.proposals.filter(row => !expireMissing || !valid.has(row) || identities.has(row.msg.identity));
+    // Accepted receipts retain provenance for transactions and item history even
+    // after deletion. They remain subject to the normal resolved-receipt cap.
+    const live = ledger.proposals.filter(row => !expireMissing || !valid.has(row)
+        || row.status === 'accepted' || identities.has(row.msg.identity));
     let excess = Math.max(0, live.filter(row => valid.has(row) && row.status !== 'pending').length - TOMBSTONE_LIMIT);
     return live.filter(row => !(valid.has(row) && row.status !== 'pending' && excess-- > 0));
 }
@@ -108,7 +111,8 @@ export function decideLedgerProposals(ids, status, {
                 const money = proposal.money;
                 if (!ledger.currencies.some(row => row.id === money.currency)) throw new Error('Proposal currency no longer exists. Reject this suggestion.');
                 const balance = BigInt(computeBalances(ledger).get(money.currency)) + BigInt(money.amount);
-                const shortfall = money.amount < 0 && balance < 0n ? -balance : 0n;
+                const payment = -BigInt(money.amount);
+                const shortfall = money.amount < 0 && balance < 0n ? (payment < -balance ? payment : -balance) : 0n;
                 const choice = choices[proposal.id];
                 const decision = typeof choice === 'object' && choice !== null ? choice.decision : choice;
                 const changedShortfall = typeof choice === 'object' && choice !== null && choice.shortfall !== String(shortfall);

@@ -77,7 +77,11 @@ test.each(['pending', 'accepted', 'rejected'])('swipes and reloads preserve %s r
     expect(getLedger().proposals).toHaveLength(1);
     fake.getChat().splice(0, 1);
     await expireLedgerProposals();
-    expect(getLedger().proposals).toEqual([]);
+    expect(getLedger().proposals).toHaveLength(status === 'accepted' ? 1 : 0);
+    if (status === 'accepted') {
+        expect(proposalSource(getLedger().proposals[0])).toMatchObject({ missing: true, changed: true });
+        expect(renderLedger()).toContain('source changed after accept');
+    }
 });
 
 test('copied messages get distinct identities without inheriting the original receipt aliases', () => {
@@ -173,6 +177,37 @@ test.each(['text', 'delta text', 'full', 'delta', 'catch-up'])('%s scans do not 
 test('cuts before REAL normalization; the JSON fence would otherwise replace the document', () => {
     expect(normaliseOutput(report(doc))).not.toContain('## Current Scene');
     expect(normaliseOutput(cutLedgerReport(report(doc)).text)).toBe(doc);
+});
+
+test.each(['json', ''])('empty %j reports leave a full refresh intact', async tag => {
+    fake.setFakeApi(async () => `${doc}\n\`\`\`${tag}\n[]\n\`\`\``);
+    await refreshWorldState();
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().proposals).toEqual([]);
+});
+
+test('explicit report with closing chatter still commits and harvests', async () => {
+    fake.setFakeApi(async () => `${report(doc, line, 'mwt-ledger-report')}\nLet me know if you need anything else!`);
+    await refreshWorldState();
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(1);
+});
+
+test('an unclosed explicit report commits on the first attempt and keeps its complete rows', async () => {
+    const truncated = `${doc}\n\n\`\`\`mwt-ledger-report\n${JSON.stringify(line)}\n{"kind":"money","curr`;
+    fake.setFakeApi(async request => { requests.push(request); return truncated; });
+    await refreshWorldState();
+    expect(requests).toHaveLength(1);
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(1);
+});
+
+test('delta output survives an unclosed explicit report', async () => {
+    await refreshWorldState();
+    fake.setFakeChat([...fake.getChat(), { id: 'new', name: 'Alex', mes: evidence }, { id: 'tail', mes: 'tail' }]);
+    fake.setFakeApi(async () => `### NO CHANGES\n\`\`\`mwt-ledger-report\n${JSON.stringify({ ...line, amount: '-20' })}`);
+    expect(await refreshWorldStateDelta()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(2);
 });
 
 test('full refresh commits a clean document, freezes identities, and only persists pending proposals', async () => {
@@ -424,7 +459,7 @@ test.each(['absent', 'empty', 'invalid', 'paused', 'future'])('unhealthy or %s l
     expect(buildLedgerRefreshSnapshot()).toBe('');
 });
 
-test('expiry removes missing-source rows, caps tombstones, and preserves malformed audit rows', async () => {
+test('expiry retains accepted missing-source receipts within the cap and preserves malformed audit rows', async () => {
     const ledger = getLedger();
     const draft = { kind: 'money', money: { currency: 'gold', amount: -1 }, evidence,
         msg: { identity: 'id:m0', digest: ledgerMessageDigest(evidence) }, status: 'accepted' };
@@ -433,7 +468,8 @@ test('expiry removes missing-source rows, caps tombstones, and preserves malform
     saveLedger(ledger);
     await expireLedgerProposals();
     expect(getLedger().proposals).toHaveLength(301);
-    expect(getLedger().proposals[0].id).toBe('p5');
+    expect(getLedger().proposals[0].id).toBe('p6');
+    expect(getLedger().proposals.at(-2).id).toBe('gone');
     expect(getLedger().proposals.at(-1)).toEqual({ broken: true });
 });
 
@@ -460,7 +496,7 @@ test.each(['pending', 'accepted', 'rejected'])('expiry preserves %s history unti
     fake.getChat()[0] = { id: 'm0', mes: evidence };
     fake.getChat()[1] = { id: 'm1', mes: evidence };
     await expireLedgerProposals();
-    expect(getLedger().proposals.map(row => row.id)).toEqual(['m0', 'm1']);
+    expect(getLedger().proposals.map(row => row.id)).toEqual(status === 'accepted' ? ['m0', 'm1', 'gone'] : ['m0', 'm1']);
 });
 
 test('sparse history still caps tombstones without expiring pending proposals', async () => {

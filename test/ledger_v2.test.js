@@ -263,7 +263,7 @@ describe('Report cut, parse, evidence, resolution and dedupe', () => {
     test('garbage explicit reports and empty blocks are cut; unrelated document fences survive', () => {
         expect(cutLedgerReport('Doc\n```mwt-ledger-report\nnot json\n```')).toMatchObject({ text: 'Doc', lines: [], dropped: [{ reason: 'parse' }] });
         expect(cutLedgerReport('Doc\n```mwt-ledger-report\n\n```').text).toBe('Doc');
-        for (const raw of ['```json\n{"document":"world"}\n```', '```\nWorld document\n```', 'No report']) {
+        for (const raw of ['```markdown\nWorld document\n```', '```\nWorld document\n```', 'No report']) {
             expect(cutLedgerReport(raw)).toMatchObject({ text: raw, block: null });
         }
         expect(parseLedgerReport(`${JSON.stringify(line)}\nwrong\nnull\n${JSON.stringify(line)}`)).toMatchObject({ lines: [line, line], dropped: [{ reason: 'parse' }, { reason: 'parse' }] });
@@ -275,6 +275,67 @@ describe('Report cut, parse, evidence, resolution and dedupe', () => {
         expect(result.proposals[0]).toMatchObject({ money: { currency: 'gold', amount: -30, loan: false },
             msg: { identity: 'uuid:one', digest: ledgerMessageDigest(evidence) }, status: 'pending' });
         expect(result.dropped).toEqual([]);
+    });
+
+    test.each(['json', 'jsonl', 'ledger', ''])('cuts empty and valid JSON fallback fences (%j)', tag => {
+        for (const body of ['', '\n', '[]', '{}', '[null]', 'null']) {
+            const result = cutLedgerReport(`World document\n\`\`\`${tag}\n${body}\n\`\`\``);
+            expect(result.text).toBe('World document');
+            expect(result.lines).toEqual([]);
+        }
+    });
+
+    test('explicit report ignores trailing chatter or unrelated fences', () => {
+        for (const tail of ['Let me know if you need anything else!', '```text\nGoodbye!\n```']) {
+            expect(cutLedgerReport(`World document\n\`\`\`mwt-ledger-report\n${JSON.stringify(line)}\n\`\`\`\n${tail}`))
+                .toMatchObject({ text: 'World document', lines: [line] });
+        }
+    });
+
+    test('an unclosed explicit report owns the rest of the output', () => {
+        const row = JSON.stringify(line);
+        expect(cutLedgerReport(`World document\n\`\`\`mwt-ledger-report\n${row}\n${row.slice(0, 20)}`))
+            .toMatchObject({ text: 'World document', lines: [line], dropped: [{ reason: 'parse' }] });
+        expect(cutLedgerReport('World document\r\n```mwt-ledger-report\r\n')).toMatchObject({ text: 'World document', lines: [] });
+        expect(cutLedgerReport('World document\n``` MWT-Ledger-Report ')).toMatchObject({ text: 'World document', lines: [] });
+        expect(cutLedgerReport(`\`\`\`markdown\nWorld document\n\`\`\`\n\`\`\`mwt-ledger-report\n${row}`))
+            .toMatchObject({ text: '```markdown\nWorld document\n```', lines: [line] });
+        // A complete report wins over a cut-off duplicate after it.
+        expect(cutLedgerReport(`World document\n\`\`\`mwt-ledger-report\n${row}\n\`\`\`\n\`\`\`mwt-ledger-report\n{"kind"`))
+            .toMatchObject({ text: 'World document', lines: [line], dropped: [] });
+    });
+
+    test.each(['json', 'jsonl', 'ledger', ''])('unclosed fallback %j fences are never cut', tag => {
+        const raw = `World document\n\`\`\`${tag}\n${JSON.stringify(line)}`;
+        expect(cutLedgerReport(raw)).toMatchObject({ text: raw, block: null });
+    });
+
+    test('counterparties are trimmed without changing case or internal spaces', () => {
+        expect(resolveLedgerReport([{ ...line, loan: true, counterparty: '  Aldric the Smith \n' }], options()).proposals[0].counterparty)
+            .toBe('Aldric the Smith');
+        expect(resolveLedgerReport([{ ...line, loan: true, counterparty: '   ' }], options()).dropped[0].code).toBe('loan-counterparty');
+    });
+
+    test.each(['accepted', 'rejected'])('historical %s receipts dedupe by economic value after precision edits', status => {
+        const record = ledger();
+        const receipt = proposal({ status, money: { currency: 'gold', amount: -3000, decimals: 2 } });
+        expect(resolveLedgerReport([line], options({ ledger: record, proposals: [receipt] })).dropped[0].reason).toBe('duplicate');
+        expect(resolveLedgerReport([{ ...line, amount: '30' }], options({ ledger: record, proposals: [receipt] })).dropped[0].reason).toBe('contradictory');
+        receipt.money.amount = -3050;
+        expect(resolveLedgerReport([line], options({ ledger: record, proposals: [receipt] })).proposals).toHaveLength(1);
+        record.currencies[0].decimals = 2;
+        expect(resolveLedgerReport([{ ...line, amount: '-30.50' }], options({ ledger: record, proposals: [receipt] })).dropped[0].reason).toBe('duplicate');
+    });
+
+    test('historical precision is valid only on resolved receipts and within currency precision bounds', () => {
+        for (const decimals of [-1, 16, 1.5, '2', null]) {
+            const receipt = proposal({ status: 'rejected', money: { currency: 'gold', amount: -30, decimals } });
+            expect(validateLedgerAudit({ proposals: [receipt] }).proposals).toEqual([]);
+            expect(resolveLedgerReport([line], options({ proposals: [receipt] })).proposals).toHaveLength(1);
+        }
+        const pending = proposal({ money: { currency: 'gold', amount: -30, decimals: 0 } });
+        expect(validateLedgerAudit({ proposals: [pending] }).proposals).toEqual([]);
+        expect(resolveLedgerReport([line], options({ proposals: [pending] })).proposals).toHaveLength(1);
     });
 
     test('drops outside-window, changed, replaced, ILS, non-narrative and invented evidence', () => {

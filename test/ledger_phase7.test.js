@@ -315,6 +315,50 @@ test('UI rescaling currency precision also rescales pending proposal amounts exa
     expect(computeBalances(getLedger()).get('gold')).toBe(2000);
 });
 
+test.each([-10, 0, 10])('shortfall loan covers only this payment with opening balance %i', opening => {
+    seed([proposal()], { transactions: [{ id: 'opening', currency: 'gold', amount: opening, kind: 'entry', note: '', date: null }] });
+    const shortfall = String(Math.min(30, 30 - opening));
+    try {
+        decideLedgerProposals(['p1'], 'accepted');
+        throw new Error('Expected overdraft review');
+    } catch (error) {
+        expect(error.overdraft.shortfall).toBe(shortfall);
+    }
+    decideLedgerProposals(['p1'], 'accepted', { choices: { p1: { decision: 'owed', shortfall } } });
+    expect(computeDebts(getLedger())).toEqual([{ currency: 'gold', counterparty: 'Aldric', amount: Number(shortfall) }]);
+    expect(computeBalances(getLedger()).get('gold')).toBe(Math.min(opening, 0));
+});
+
+test.each(['accepted', 'rejected'])('fractional %s receipts do not block currency precision changes', resolvedStatus => {
+    seed([proposal('p1', { status: resolvedStatus, money: { currency: 'gold', amount: -1250 } })],
+        { currencies: [{ ...gold, decimals: 2 }], transactions: [] });
+    mount();
+    const changePrecision = decimals => {
+        const form = document.querySelector('form[data-ledger-form="currency"][data-id="gold"]');
+        form.elements.namedItem('decimals').value = String(decimals);
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    };
+    changePrecision(0);
+    expect(getLedger().currencies[0].decimals).toBe(0);
+    expect(getLedger().proposals[0].money).toEqual({ currency: 'gold', amount: -1250, decimals: 2 });
+    changePrecision(3);
+    expect(getLedger().currencies[0].decimals).toBe(3);
+    expect(getLedger().proposals[0].money).toEqual({ currency: 'gold', amount: -1250, decimals: 2 });
+    expect(validateLedgerAudit(getLedger()).valid).toBe(true);
+});
+
+test('fractional pending suggestions still refuse lossy precision changes atomically', () => {
+    seed([proposal('p1', { money: { currency: 'gold', amount: -1250 } })],
+        { currencies: [{ ...gold, decimals: 2 }], transactions: [] });
+    mount();
+    const before = getLedger();
+    const form = document.querySelector('form[data-ledger-form="currency"][data-id="gold"]');
+    form.elements.namedItem('decimals').value = '0';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(getLedger()).toEqual(before);
+    expect(status()).toContain('fractional digits');
+});
+
 test.each(['modern', 'classic'])('pending badges supplement rather than replace money (%s)', buttonStyle => {
     seed(); mount();
     const bar = createFloatingButtonBar({ getSettings: () => ({ buttonStyle }), saveSettings: vi.fn(), openModal: vi.fn(),

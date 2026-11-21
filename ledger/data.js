@@ -139,6 +139,8 @@ export function validateLedgerAudit(record) {
                 if (row.kind === 'money') {
                     valid = valid && object(row.money) && text(row.money.currency) && Number.isSafeInteger(row.money.amount)
                         && row.money.amount !== 0 && (row.money.loan === undefined || typeof row.money.loan === 'boolean')
+                        && (row.money.decimals === undefined || (row.status !== 'pending'
+                            && Number.isInteger(row.money.decimals) && row.money.decimals >= 0 && row.money.decimals <= MAX_CURRENCY_DECIMALS))
                         && (row.money.loan !== true || text(row.counterparty));
                 } else if (row.kind === 'item') {
                     valid = valid && object(row.item) && text(row.item.name) && Number.isSafeInteger(row.item.qtyChange)

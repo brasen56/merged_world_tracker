@@ -1,5 +1,5 @@
 /** DOM/storage-free report boundary. No feature-module imports or writes. */
-import { parseAmount } from './ledger_amount.js';
+import { MAX_CURRENCY_DECIMALS, parseAmount } from './ledger_amount.js';
 import { quoteMatchesMessage } from './quote_match.js';
 import { captureRevision } from './revision.js';
 import { getLedgerReceiptIdentity, ledgerReceiptIdentities } from './ledger_message_identity.js';
@@ -41,12 +41,26 @@ export function parseLedgerReport(block) {
 export function cutLedgerReport(raw) {
     const cleaned = String(raw ?? '').replace(/<(think|thinking|reasoning)\b[\s\S]*?<\/\1>/gi, '').trim();
     const fences = [...cleaned.matchAll(/^```([^\r\n]*)\r?\n([\s\S]*?)^```[^\S\r\n]*(?=\r?$)/gm)];
-    const last = fences.at(-1);
-    if (!last || cleaned.slice(last.index + last[0].length).trim()) return { text: cleaned, block: null, lines: [], dropped: [] };
+    const explicit = fences.findLast(fence => fence[1].trim().toLowerCase() === 'mwt-ledger-report');
+    // Truncated or forgetful models may never close the report. When the final
+    // fence line is an explicit opener, it owns the rest of the output; a cut-off
+    // last row is dropped by the parser. A closed explicit report wins over it.
+    const opener = explicit ? null : [...cleaned.matchAll(/^```([^\r\n]*)\r?$/gm)].at(-1);
+    if (opener?.[1].trim().toLowerCase() === 'mwt-ledger-report') {
+        const block = cleaned.slice(opener.index + opener[0].length);
+        return { text: cleaned.slice(0, opener.index).trimEnd(), block, ...parseLedgerReport(block) };
+    }
+    const last = explicit ?? fences.at(-1);
+    if (!last) return { text: cleaned, block: null, lines: [], dropped: [] };
     const tag = last[1].trim().toLowerCase();
     const parsed = parseLedgerReport(last[2]);
-    if (tag !== 'mwt-ledger-report' && (!['json', 'jsonl', 'ledger', ''].includes(tag) || !parsed.lines.length)) {
-        return { text: cleaned, block: null, lines: [], dropped: [] };
+    if (tag !== 'mwt-ledger-report') {
+        let jsonOrEmpty = !last[2].trim();
+        try { JSON.parse(last[2]); jsonOrEmpty = true; } catch { /* Mixed JSONL requires at least one report row. */ }
+        if (cleaned.slice(last.index + last[0].length).trim()
+            || !['json', 'jsonl', 'ledger', ''].includes(tag) || (!parsed.lines.length && !jsonOrEmpty)) {
+            return { text: cleaned, block: null, lines: [], dropped: [] };
+        }
     }
     return { text: cleaned.slice(0, last.index).trimEnd(), block: last[2], ...parsed };
 }
@@ -85,11 +99,26 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         if (!['pending', 'accepted', 'rejected'].includes(row.status) || !text(row.evidence) || !text(row.msg?.digest)
             || (row.counterparty !== undefined && typeof row.counterparty !== 'string')) return false;
         if (row.kind === 'money') return (row.money?.loan === undefined || typeof row.money.loan === 'boolean')
+            && (row.money?.decimals === undefined || (row.status !== 'pending' && Number.isInteger(row.money.decimals)
+                && row.money.decimals >= 0 && row.money.decimals <= MAX_CURRENCY_DECIMALS))
             && (row.money?.loan !== true || text(row.counterparty));
         return row.kind === 'item' && (row.item?.carried === undefined || typeof row.item.carried === 'boolean');
     }).map(row => {
         const identity = canonicalByAlias.get(row.msg.identity);
         const canonical = identity ? { ...row, msg: { ...row.msg, identity } } : row;
+        // Resolved receipts keep their original minor units across precision edits.
+        // Only exactly representable values can collide with a current report.
+        if (row.kind === 'money' && row.money.decimals !== undefined) {
+            const decimals = ledger.currencies.find(currency => currency.id === row.money.currency)?.decimals;
+            if (!Number.isInteger(row.money.decimals) || row.money.decimals < 0 || row.money.decimals > MAX_CURRENCY_DECIMALS
+                || !Number.isInteger(decimals) || !Number.isSafeInteger(row.money.amount)) return [null, row];
+            const numerator = BigInt(row.money.amount) * 10n ** BigInt(decimals);
+            const denominator = 10n ** BigInt(row.money.decimals);
+            if (numerator % denominator !== 0n) return [null, row];
+            const amount = Number(numerator / denominator);
+            if (!Number.isSafeInteger(amount)) return [null, row];
+            return [ledgerProposalKey({ ...canonical, money: { ...row.money, amount } }), row];
+        }
         return [ledgerProposalKey(canonical), row];
     }).filter(([key]) => key));
     const seen = new Set(existingByKey.keys());
@@ -110,7 +139,7 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         }
         const draft = { kind: line.kind, evidence: line.evidence,
             msg: { identity: source.identity, digest: source.digest }, status: 'pending' };
-        if (line.counterparty !== undefined) draft.counterparty = line.counterparty;
+        if (line.counterparty !== undefined) draft.counterparty = line.counterparty.trim();
         if (line.kind === 'money') {
             if (!text(line.currency)) { drop('currency-unresolved'); continue; }
             const currencies = ledger.currencies.filter(row => normalizeLedgerName(row.name) === normalizeLedgerName(line.currency));

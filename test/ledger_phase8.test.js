@@ -60,6 +60,16 @@ test('large inventories keep whole rows and honest omitted counts within the har
     expect(context).toContain('"item-150"');
 });
 
+test('unused planner space is shared with the sections that need it', () => {
+    seed({ transactions: [], items: Array.from({ length: 30 }, (_, index) => item(`Carried item ${index}`, true)) });
+    const context = buildLedgerPlannerContext();
+    expect(context).toContain('"Carried item 29" ×2');
+    expect(context).not.toContain('more carried items');
+    expect(context).toContain('Open debts:\n(none recorded)');
+    expect(context).toContain('Stored (not on hand):\n(none recorded)');
+    expect(context.length).toBeLessThanOrEqual(LEDGER_PLANNER_CHAR_LIMIT);
+});
+
 test.each([null, {}, { ...createLedger() }, { ...createLedger(), version: 99 }, { ...createLedger(), currencies: [gold], transactions: [entry('bad', 1.5)] }])('absent, empty, future or invalid ledger is omitted (%j)', value => {
     getFakeMeta().mwt_ledger = value;
     expect(buildLedgerPlannerContext()).toBe('');

@@ -111,17 +111,18 @@ The refresh prompt gains a **Ledger snapshot** section — carried and stored it
 
 ### 3.4 Expiry and tombstones
 
-- On chat change and on opening the Ledger tab, walk `proposals`: source message identity absent from the chat → remove the row, whatever its status (a pending one can never be re-verified; a tombstone can never be matched again). Digest mismatch is not stored; the inbox computes it (D16).
+- On chat change and on opening the Ledger tab, once history is hydrated, walk `proposals`: source message identity absent from the chat → remove pending and rejected rows. Retain accepted rows for the missing-source warning in §3.7, subject to the resolved-row cap below. This audit rule takes precedence over missing-source expiry. Digest mismatch is not stored; the inbox computes it (D16).
 - Tombstones = accepted/rejected rows. Cap at 300; over the cap, drop oldest resolved rows first. In full-refresh mode windows overlap by `maxScanMessages` minus the refresh cadence; delta mode scans only since the watermark, so it barely overlaps at all. 300 resolved proposals is far past either.
 
 ### 3.5 The overdraft tie-in
 
-Accepting a money proposal that would push a currency's balance below zero is allowed (v1 Q3) but gets a warning. When the proposal has a `counterparty`, one extra button: **"accept, and record the shortfall as owed to ⟨counterparty⟩"** (rev 2). It writes the proposed transaction plus a loan row (`loan: true`, same counterparty, amount = the shortfall, positive). The balance lands at exactly zero and Debts shows the player owing the shortfall — the debt is counted once, in Debts, not also as a negative purse. (Rev 1 attached the counterparty to the negative transaction itself, which showed the full amount in Debts *and* a negative balance.)
+Accepting a money proposal that would push a currency's balance below zero is allowed (v1 Q3) but gets a warning. When the proposal has a `counterparty`, one extra button: **"accept, and record the shortfall as owed to ⟨counterparty⟩"** (rev 2). It writes the proposed transaction plus a loan row (`loan: true`, same counterparty, amount = the shortfall, positive). The shortfall is the smaller of this payment's magnitude and the resulting deficit: earlier overspending is never attributed to this counterparty. A previously nonnegative balance lands at zero; an existing negative balance stays unchanged. Debts shows the player owing only this payment's shortfall. (Rev 1 attached the counterparty to the negative transaction itself, which showed the full amount in Debts *and* a negative balance.)
 
 ### 3.6 Audit-row validation (rev 2)
 
 - `validateLedgerRecord` checks only that `proposals` and `itemLog` are arrays when present. Their rows are checked by a separate `validateLedgerAudit`, whose issues are reported to Diagnostics at a non-blocking severity.
 - Rows that fail are kept as stored (reads never repair, per `store.js`) but skipped by render, dedupe and expiry. The next proposal write leaves them in place; a Maintenance tool can clear them later if testers ever hit one.
+- Currency precision edits rescale transactions and pending proposals exactly or refuse the edit. Resolved money proposals keep their original amount with an optional `money.decimals` snapshot (integer 0–15, resolved rows only); dedupe converts this historical value exactly to current precision. Unrepresentable historical values cannot collide with current reports and never block precision edits.
 
 ### 3.7 Accepted proposals whose source changed (rev 2)
 
@@ -150,7 +151,7 @@ The digest check also runs for **accepted** proposals: a transaction or item-log
 
 - `world_state/refresh.js` (full, retry and catch-up paths) and the delta path: cut the report block from the **raw** `fetchFn` result, then pass the remainder to `normaliseOutput` as today. `normaliseOutput` itself is not changed.
 - Why it can't come later: when text surrounds a fence, `normaliseOutput` keeps only the first fenced block's contents. It only spares a `mwt-ledger-report` fence today because its `[a-z]*` tag pattern stops at the hyphen; a model that writes ```` ```json ```` or ```` ```ledger ```` for the report would wipe out the document.
-- The cut tolerates what models actually emit: the `mwt-ledger-report` tag, a `json`/`jsonl` tag or no tag on the **last** fenced block when its lines parse as report objects, and thinking blocks (strip `<think>…</think>` from the raw text before looking, the same pattern `normaliseOutput` uses).
+- An explicit `mwt-ledger-report` fence is cut along with any trailing chatter. An explicit opener left unclosed as the final fence line (truncated output, or a forgotten closing fence) is cut with the rest of the output: complete rows are kept, a cut-off last row is dropped as a parse error, and a complete explicit report earlier in the output wins. Unclosed fallback fences are never cut. Fallback `json`/`jsonl`/`ledger` or untagged fences must trail the output and contain report rows, valid JSON, or an empty body. Thinking blocks are stripped before looking, using the same pattern as `normaliseOutput`.
 - The cut happens on every attempt so the validators never see a report; only the committing attempt's lines are kept (D13).
 
 ### 6.2 Window records

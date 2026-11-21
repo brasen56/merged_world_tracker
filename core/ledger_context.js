@@ -28,7 +28,7 @@ const amountText = (amount, decimals) => {
     return `${amount < 0n ? '-' : ''}${decimals ? `${digits.slice(0, -decimals)}.${digits.slice(-decimals)}` : digits}`;
 };
 
-/** Separate section budgets keep a huge carried list from hiding every stash. */
+/** Share spare space round-robin so a huge carried list cannot hide every stash. */
 export function buildLedgerPlannerContext() {
     const ledger = readLedgerContext();
     if (!ledger) return '';
@@ -55,17 +55,23 @@ export function buildLedgerPlannerContext() {
         ['Carried', ledger.items.filter(row => row.carried).map(itemText), 'carried items'],
         ['Stored (not on hand)', ledger.items.filter(row => !row.carried).map(itemText), 'stored items'],
     ];
-    const budget = Math.floor((LEDGER_PLANNER_CHAR_LIMIT - header.length - sections.length) / sections.length);
-    return [header, ...sections.map(([label, rows, noun]) => {
-        const lines = [`${label}:`];
-        let kept = 0;
-        for (const row of rows) {
-            if (lines.join('\n').length + row.length + 80 > budget) break;
-            lines.push(row);
-            kept++;
-        }
-        if (kept < rows.length) lines.push(`…and ${rows.length - kept} more ${noun}`);
+    const kept = sections.map(() => 0);
+    const renderSection = ([label, rows, noun], count) => {
+        const lines = [`${label}:`, ...rows.slice(0, count)];
+        if (count < rows.length) lines.push(`…and ${rows.length - count} more ${noun}`);
         if (!rows.length) lines.push('(none recorded)');
         return lines.join('\n');
-    })].join('\n');
+    };
+    const render = () => [header, ...sections.map((section, index) => renderSection(section, kept[index]))].join('\n');
+    let added;
+    do {
+        added = false;
+        for (let index = 0; index < sections.length; index++) {
+            if (kept[index] === sections[index][1].length) continue;
+            kept[index]++;
+            if (render().length <= LEDGER_PLANNER_CHAR_LIMIT) added = true;
+            else kept[index]--;
+        }
+    } while (added);
+    return render();
 }
