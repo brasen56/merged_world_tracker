@@ -38,6 +38,7 @@ export const { getSettings, saveSettings, hasValidSettings } = createSettingsMan
         autoInterval: 10,
         injectEnabled: true,
         autoEnabled: false,
+        includeLedger: true,
     },
     logPrefix: '[MWT:StoryPlanner]',
 });

@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+
+- **Ledger v2 Phase 8 — planner context and quick entry.** Story Planner now receives a bounded, read-only Ledger block with exact balances, open debts, carried items and stored possessions with locations and short notes. Stored items are explicitly not on hand and remain excluded from narrator injection. Full/custom, scoped and targeted prompts share the projection; a default-on **Include ledger** setting controls it independently of private author context and narrator injection.
+- **`/wt-ledger-add <amount> [currency] [note]` and `/wt-item <name> [qty]`.** Explicit user commands use the existing validated save, transaction-fold and item-audit path. Quoted multi-word names are supported; ambiguous names and invalid/unsafe numbers refuse without edits. Item additions preserve an existing item's storage status. Disabled, paused, invalid and future Ledgers remain protected.
+
 ## [2.19.0]
 
 ### Added

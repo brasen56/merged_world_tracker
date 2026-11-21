@@ -10,6 +10,7 @@ import { validateLedgerRecord } from './data.js';
 import { initLedgerProposals, expireLedgerProposals } from './proposals.js';
 
 export { getStatus } from './status.js';
+export { ledgerAddCommand, itemCommand } from './commands.js';
 
 export function refreshInjection(reason = 'refresh') {
     try {

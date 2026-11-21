@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { renderLedger, wireLedger } from '../ledger/render.js';
+import { ledgerAddCommand, itemCommand } from '../ledger/commands.js';
 import { createLedger } from '../ledger/data.js';
 import { getLedger, saveLedger } from '../ledger/store.js';
 import { getStatus } from '../ledger/status.js';
@@ -184,6 +185,77 @@ test('stale chat and externally changed data never overwrite metadata', () => {
     fill(form('currency'), { name: 'silver', decimals: '0' }); submit(form('currency'));
     expect(getLedger().currencies).toHaveLength(1);
     expect(message()).toContain('Ledger changed');
+});
+
+test('commands refresh clean panels, history and snapshots while preserving the selected tab and open rows', () => {
+    mount({ ...createLedger(), currencies: [currency], items: [{ id: 'rope', name: 'Rope', qty: 1, carried: true, note: '' }] });
+    ledgerAddCommand('2.50 gold command entry');
+    expect(document.querySelector('.mwt-ledger-balances').textContent).toContain('2.50 gold');
+    expect(document.querySelector('.mwt-ledger').textContent).toContain('command entry');
+    document.querySelector('[role="tab"][data-tab="inventory"]').click();
+    document.querySelector('[data-ledger-open-key="item:rope"]').open = true;
+    itemCommand('Rope 2');
+    expect(form('item', 'rope').elements.namedItem('qty').value).toBe('3');
+    expect(document.querySelector('[data-ledger-open-key="item:rope"]').open).toBe(true);
+    expect(document.querySelector('[role="tab"][data-tab="inventory"]').getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('[data-ledger-open-key="item:rope"]').textContent).toContain('qty');
+    fill(form('item', 'rope'), { note: 'Saved after command' });
+    submit(form('item', 'rope'));
+    expect(getLedger().items[0]).toMatchObject({ qty: 3, note: 'Saved after command' });
+    expect(message()).not.toContain('Ledger changed');
+});
+
+test('commands preserve drafts and offer a guarded reload instead of overwriting newer data', () => {
+    mount({ ...createLedger(), currencies: [currency] });
+    fill(form('transaction'), { note: 'Unsaved draft', amount: '1' });
+    ledgerAddCommand('2 gold');
+    itemCommand('Rope');
+    expect(form('transaction').elements.namedItem('note').value).toBe('Unsaved draft');
+    expect(document.querySelectorAll('[data-ledger-reload]')).toHaveLength(1);
+    expect(document.querySelector('[role="alert"]').textContent).toContain('Ledger changed');
+    submit(form('transaction'));
+    expect(message()).toContain('Ledger changed');
+    expect(getLedger().transactions).toHaveLength(1);
+    confirmDelete.mockReturnValueOnce(false);
+    document.querySelector('[data-ledger-reload]').click();
+    expect(form('transaction').elements.namedItem('note').value).toBe('Unsaved draft');
+    document.querySelector('[data-ledger-reload]').click();
+    expect(form('transaction').elements.namedItem('note').value).toBe('');
+    expect(document.querySelector('[data-ledger-reload]')).toBeNull();
+    expect(document.querySelector('.mwt-ledger-balances').textContent).toContain('2.00 gold');
+    fill(form('transaction'), { amount: '1' });
+    submit(form('transaction'));
+    expect(getLedger().transactions).toHaveLength(2);
+});
+
+test('command notifications cannot refresh an editor captured for another chat', () => {
+    mount({ ...createLedger(), currencies: [currency] });
+    const pane = document.querySelector('.mwt-ledger');
+    bumpEpoch();
+    ledgerAddCommand('2 gold');
+    expect(document.querySelector('.mwt-ledger')).toBe(pane);
+    expect(document.querySelector('.mwt-ledger-balances').textContent).toContain('0.00 gold');
+});
+
+test('returning to the Ledger tab refreshes external changes missed while hidden', () => {
+    mount({ ...createLedger(), currencies: [currency] });
+    document.body.insertAdjacentHTML('beforeend', '<button id="mwt-tab-ledger">Ledger</button>');
+    saveLedger({ ...getLedger(), items: [{ id: 'rope', name: 'Rope', qty: 2, carried: true, note: '' }] });
+    document.getElementById('mwt-tab-ledger').click();
+    expect(form('item', 'rope').elements.namedItem('qty').value).toBe('2');
+    fill(form('item', 'rope'), { note: 'After returning' });
+    submit(form('item', 'rope'));
+    expect(getLedger().items[0].note).toBe('After returning');
+});
+
+test('a reload confirmation cannot cross a chat switch', () => {
+    mount({ ...createLedger(), currencies: [currency] });
+    fill(form('transaction'), { note: 'Keep this draft' });
+    ledgerAddCommand('2 gold');
+    confirmDelete.mockImplementationOnce(() => { bumpEpoch(); return true; });
+    document.querySelector('[data-ledger-reload]').click();
+    expect(form('transaction').elements.namedItem('note').value).toBe('Keep this draft');
+    expect(message()).toContain('Chat changed');
 });
 
 test('invalid and future records remain unchanged and editor is disabled', () => {

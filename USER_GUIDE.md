@@ -369,7 +369,22 @@ A persistent purse and inventory for the **player character**, saved per chat. *
 5. Switch to **Inventory**, fill in **Item name**, **Quantity**, optional **Note**, and **Location** (**Carried** or **Stored**), then click **Add item**. Expand a saved item to edit it with **Save item**; its quantity steppers and quantity/location changes save immediately. Deleting an item, including reducing its quantity to zero, asks first
 6. After a purchase, sale, gift, or loss in the story, update the Ledger yourself. Money and items are separate entries — spending money does not automatically add the bought item, and deleting an item does not credit its sale price. Edits refresh narrator context immediately; chat changes load that chat's Ledger. Turning off Ledger, its injection switch, or using the panic switch clears its narrator context without deleting saved data
 
-**World State is unchanged.** Its Worn / Significant Items section still tracks what is in play in the current scene, not everything owned. Ledger does not feed World State in v1. Branches inherit the Ledger through SillyTavern's chat-metadata copy, but rewinding or regenerating story messages does **not** undo your manual entries — correct them yourself if the story changes. Dedicated Ledger slash commands are not available in v1; use the panel.
+**World State is unchanged.** Its Worn / Significant Items section still tracks what is in play in the current scene, not everything owned. Branches inherit the Ledger through SillyTavern's chat-metadata copy, but rewinding or regenerating story messages does **not** undo your manual entries — correct them yourself if the story changes.
+
+**Planner-only Ledger context.** Story Planner receives a bounded snapshot of recorded currency balances, open loan debts, and carried/stored inventory, including storage locations and short item notes. Stored possessions are explicitly **owned but not on hand**, not automatically available in the scene. Large lists show omitted counts; transaction history and proposals are excluded. The default-on **Include ledger** checkbox in **Story Planner Settings** controls this projection (save settings to apply). Turn it off if a stash spoils plans. It works with custom templates, scoped requests and targeted arc development, independently of private author context and narrator injection. Disabling Ledger itself also removes the block. Stored items still do not reach narrator injection.
+
+**Quick-entry slash commands** (the panel remains the primary editing surface):
+
+```text
+/wt-ledger-add -30 gold paid the smith
+/wt-ledger-add +12.50 "Silver marks" reward
+/wt-item "Healing potion" 2
+/wt-item Rope
+```
+
+- `/wt-ledger-add <amount> [currency] [note]` records a signed decimal amount using the currency's configured decimal places. Create currencies in the panel first. With exactly one currency its name can be omitted and the remaining text is the note; with multiple currencies specify an unambiguous name. Matching is case-insensitive; quote multi-word currency names. Zero, invalid precision and unsafe amounts are refused. Negative balances are allowed, but this command does **not** create loan/debt entries; use the panel's **Loan or repayment** control for those.
+- `/wt-item <name> [qty]` adds a positive whole quantity (default **1**). A unique case-insensitive matching item gets its quantity increased, preserving its notes and Carried/Stored status; otherwise a new **Carried** item is created. Duplicate names refuse rather than choosing a row. Quote multi-word names and names ending in numbers (for example, `"Model 42"`). Use the panel to remove items or change storage status. Item changes are logged as user edits.
+- Both commands refuse disabled, paused, invalid or newer-version Ledgers and operate only on the active chat.
 
 ---
 

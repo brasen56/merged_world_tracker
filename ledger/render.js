@@ -169,8 +169,17 @@ function updatePendingSuggestions() {
 const refreshPendingOnTabShow = event => {
     if (!event.target.closest?.('#mwt-tab-ledger')) return;
     expireLedgerProposals();
-    updatePendingSuggestions();
+    refreshLedgerEditors();
 };
+
+function refreshLedgerEditors() {
+    document.querySelectorAll('.mwt-ledger').forEach(pane => pane._ledgerRefresh?.());
+    updatePendingSuggestions();
+}
+
+// Compare actual values, not just input events (autofill can change values too).
+const formSnapshot = pane => JSON.stringify([...pane.querySelectorAll('form input, form select, form textarea')]
+    .map(control => [control.value, control.checked]));
 
 // Audit-only writes cannot collide with form edits. Each action still reads
 // the latest ledger, preserving proposals/log rows added since the form opened.
@@ -233,12 +242,15 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
     pane._ledgerScope = scope;
     if (previewDocument !== document) {
         previewDocument?.removeEventListener('mwt:ledger-proposals-changed', updatePendingSuggestions);
+        previewDocument?.removeEventListener('mwt:ledger-changed', refreshLedgerEditors);
         previewDocument?.removeEventListener('click', refreshPendingOnTabShow);
         document.addEventListener('mwt:ledger-proposals-changed', updatePendingSuggestions);
+        document.addEventListener('mwt:ledger-changed', refreshLedgerEditors);
         document.addEventListener('click', refreshPendingOnTabShow);
         previewDocument = document;
     }
     const snapshot = editableSnapshot(getLedger());
+    const draftSnapshot = formSnapshot(pane);
     const tabs = wireTablist(pane.querySelector('[role="tablist"]'), {
         tabSelector: '[role="tab"]', panelSelector: '.mwt-ledger-pane', scope: pane,
         activeClass: 'active', idPrefix: 'mwt-ledger', orientation: 'horizontal',
@@ -250,9 +262,7 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
         return getLedger() ?? createLedger();
     };
     const run = action => { try { action(); } catch (error) { status(error.message); } };
-    const commit = (record, message) => {
-        current();
-        saveLedger(record);
+    const rebuild = message => {
         const selected = tabs?.getSelectedIndex() ?? 0;
         // The stepper and Carried/Stored autosave from inside a collapsed
         // row, so the re-render must not close the row being worked on.
@@ -264,6 +274,35 @@ export function wireLedger(root, { getSettings, saveSettings, onChanged = () => 
         next.querySelectorAll('details[data-ledger-open-key]').forEach(row => { row.open = open.has(row.dataset.ledgerOpenKey); });
         next.querySelectorAll('[role="tab"]')[selected]?.click();
         next.querySelector('.mwt-ledger-status').textContent = message;
+    };
+    pane._ledgerRefresh = () => {
+        if (!assertSameScope(scope).ok || editableSnapshot(getLedger()) === snapshot) return;
+        if (formSnapshot(pane) === draftSnapshot && !pane.querySelector('[data-ledger-overdraft]')) {
+            rebuild('Ledger updated.');
+            return;
+        }
+        if (pane.querySelector('[data-ledger-reload]')) return;
+        const notice = document.createElement('div');
+        notice.setAttribute('role', 'alert');
+        notice.textContent = 'Ledger changed. Your unsaved draft is preserved. Reload before saving. ';
+        const reload = document.createElement('button');
+        reload.type = 'button';
+        reload.className = 'mwt-btn';
+        reload.dataset.ledgerReload = '';
+        reload.textContent = 'Reload Ledger';
+        reload.addEventListener('click', () => run(() => {
+            if (!assertSameScope(scope).ok) throw new Error('Chat changed. Reopen Ledger before editing.');
+            if (!confirmDelete('Reload Ledger and discard unsaved Ledger drafts?')) return;
+            if (!assertSameScope(scope).ok) throw new Error('Chat changed. Reopen Ledger before editing.');
+            rebuild('Ledger reloaded.');
+        }));
+        notice.append(reload);
+        pane.querySelector('.mwt-ledger-editor').before(notice);
+    };
+    const commit = (record, message) => {
+        current();
+        saveLedger(record);
+        rebuild(message);
         onChanged();
     };
     const id = prefix => `${prefix}-${randomId()}`;

@@ -33,6 +33,14 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
         // is an object of named arguments; the text typed after the command is
         // the second. Reading the first as text breaks the command live.
         try {
+            registerSlashCommand('wt-ledger-add', (_args, command) => {
+                try { return Ledger?.ledgerAddCommand?.(command) ?? 'Ledger not available.'; }
+                catch (error) { return `Error: ${error.message}`; }
+            }, [], 'Add signed money: <amount> [currency] [note]. Quote multi-word currency names; create currencies in Ledger first.');
+            registerSlashCommand('wt-item', (_args, command) => {
+                try { return Ledger?.itemCommand?.(command) ?? 'Ledger not available.'; }
+                catch (error) { return `Error: ${error.message}`; }
+            }, [], 'Add inventory: <name> [qty], positive quantity (default 1). Quote multi-word or numeric-ending names.');
             registerSlashCommand('wt-calendar', (_args, command) => {
                 try { return Calendar?.calendarCommand?.(command) ?? 'Calendar not available.'; }
                 catch (error) { return `Error: ${error.message}`; }

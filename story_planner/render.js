@@ -1342,6 +1342,12 @@ export function render() {
                     <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Steers the next generation. Leave blank for none. Saved per chat.</p>
                 </div>
 
+                <div class="mwt-label">Ledger Context</div>
+                <div>
+                    <label class="sp-mode-label" for="sp-include-ledger"><input id="sp-include-ledger" type="checkbox" ${s.includeLedger !== false ? 'checked' : ''}> Include ledger</label>
+                    <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Include recorded balances, debts, and carried/stored inventory in planner requests only. Stored possessions are not on hand. Uncheck if a stash spoils plans; save settings to apply.</p>
+                </div>
+
                 <div class="mwt-label">Story Palette</div>
                 <div>
                     <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap" role="group" aria-label="Story palette emphasis">
@@ -2223,6 +2229,7 @@ export function wireEvents() {
             ...(globalDefaults ? { autoInterval: intervalValue, arcCount: countValue } : {}),
             customSystemPrompt: state.modal.querySelector('#sp-custom-system-prompt')?.value || '',
             customUserPrompt: state.modal.querySelector('#sp-custom-user-prompt')?.value || '',
+            includeLedger: state.modal.querySelector('#sp-include-ledger')?.checked !== false,
             injectionDepth: isNaN(depth) ? 4 : depth,
         });
         const nudgeTurnsRaw = state.modal.querySelector('#sp-nudge-turns')?.value;
