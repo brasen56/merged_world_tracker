@@ -80,7 +80,7 @@ test.each(['pending', 'accepted', 'rejected'])('swipes and reloads preserve %s r
     expect(getLedger().proposals).toHaveLength(status === 'accepted' ? 1 : 0);
     if (status === 'accepted') {
         expect(proposalSource(getLedger().proposals[0])).toMatchObject({ missing: true, changed: true });
-        expect(renderLedger()).toContain('source changed after accept');
+        expect(renderLedger()).toContain('source deleted after accept');
     }
 });
 

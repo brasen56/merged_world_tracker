@@ -5,7 +5,7 @@ export const LEDGER_SETTINGS = [
     ['enableLedger', 'Enable Ledger'],
     ['showFloatLedger', 'Show floating button'],
     ['injectLedger', 'Inject money and carried items'],
-    ['ledgerProposals', 'Suggest ledger changes from World State refresh (experimental; local models may struggle)'],
+    ['ledgerProposals', 'Suggest ledger changes from World State refresh (local models may struggle)'],
 ];
 
 export function renderSettings(settings = getGlobalSettings()) {

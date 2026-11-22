@@ -12,11 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.20.0]
 
 ### Added
 
-- **Ledger v2 Phase 8 — planner context and quick entry.** Story Planner now receives a bounded, read-only Ledger block with exact balances, open debts, carried items and stored possessions with locations and short notes. Stored items are explicitly not on hand and remain excluded from narrator injection. Full/custom, scoped and targeted prompts share the projection; a default-on **Include ledger** setting controls it independently of private author context and narrator injection.
+- **Ledger changes — reviewed suggestions, debts and inventory history.** Opt-in **Suggest ledger changes from World State refresh** gathers evidence-backed money and item suggestions alongside refreshes, without another API call. Review the evidence and accept or reject individually or by refresh; nothing changes balances or inventory until you accept. Suggestions remain off by default, and local models may struggle with the additional report format.
+  - **Review safeguards:** source-changed suggestions require confirmation, new-item suggestions can be applied to an existing item, and overdrafts ask how to handle the shortfall rather than silently recording it.
+  - **Debts:** mark transactions as loans or repayments with a counterparty to track who owes whom, separately from ordinary purchases. Open debts reach narrator context, and carried-forward transactions preserve outstanding loans.
+  - **Inventory:** pin important carried items for narrator context, record where stored possessions are kept, and review per-item history or recent changes with source details for accepted suggestions. Stored items remain excluded from narrator injection.
+- **Ledger context for Story Planner.** Story Planner now receives a bounded, read-only Ledger block with exact balances, open debts, carried items and stored possessions with locations and short notes. Stored items are explicitly not on hand. Full/custom, scoped and targeted prompts share the projection; a default-on **Include ledger** setting controls it independently of private author context and narrator injection.
 - **`/wt-ledger-add <amount> [currency] [note]` and `/wt-item <name> [qty]`.** Explicit user commands use the existing validated save, transaction-fold and item-audit path. Quoted multi-word names are supported; ambiguous names and invalid/unsafe numbers refuse without edits. Item additions preserve an existing item's storage status. Disabled, paused, invalid and future Ledgers remain protected.
 
 ## [2.19.0]

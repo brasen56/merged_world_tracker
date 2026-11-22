@@ -10,6 +10,7 @@
 
 One line each; the complete version-by-version history lives in [CHANGELOG.md](CHANGELOG.md).
 
+- **v2.20.0** opt-in, evidence-backed suggestions from World State refreshes for you to accept or reject, loan/repayment tracking, inventory history, pinned items and storage locations, Story Planner context, and quick-entry commands; suggestions stay off by default, and local models may struggle
 - **v2.19.0** — Settings workspace with Configure shortcuts, a first-run Lite / Standard / Full setup dialog, and reviewed cleanup of stored Knowledge dossier fields
 - **v2.18.0** — 💰 Ledger: manually track money and carried/stored inventory per chat, with exact balances, a floating balance badge, narrator context and backup support — no model calls
 - **v2.17.4** — Smaller Interiority rollback records on long chats, plus Ledger testing fixes for mobile entry, amount parsing, badge rounding, injection toggling and UI readability

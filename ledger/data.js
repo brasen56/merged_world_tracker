@@ -135,7 +135,9 @@ export function validateLedgerAudit(record) {
             if (valid && key === 'proposals') {
                 valid = ['pending', 'accepted', 'rejected'].includes(row.status) && text(row.evidence)
                     && object(row.msg) && text(row.msg.identity) && text(row.msg.digest)
-                    && (row.counterparty === undefined || typeof row.counterparty === 'string');
+                    && (row.counterparty === undefined || typeof row.counterparty === 'string')
+                    && (row.condensed === undefined || (row.status === 'accepted' && row.condensed === true))
+                    && (row.context === undefined || typeof row.context === 'string');
                 if (row.kind === 'money') {
                     valid = valid && object(row.money) && text(row.money.currency) && Number.isSafeInteger(row.money.amount)
                         && row.money.amount !== 0 && (row.money.loan === undefined || typeof row.money.loan === 'boolean')

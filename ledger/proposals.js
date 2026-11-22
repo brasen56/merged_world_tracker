@@ -1,5 +1,7 @@
 /** Harvest, expiry and explicitly reviewed, atomic proposal decisions. */
-import { getChat } from '../core/context.js';
+import { getChat, getChatMeta } from '../core/context.js';
+import { isIlsSummary } from '../core/quote_match.js';
+import { resolveIlsOriginals } from '../core/ils_originals.js';
 import { assertSameScope, captureScope, getChatIdentity } from '../core/scope.js';
 import { isChatHydrated } from '../core/chat_hydration.js';
 import { ledgerReceiptIdentities } from '../core/ledger_message_identity.js';
@@ -33,7 +35,18 @@ export async function expireLedgerProposals() {
         const ledger = getLedger();
         if (!Array.isArray(ledger?.proposals)) return;
         const next = trimProposals(ledger, hydrated);
-        if (next.length !== ledger.proposals.length) {
+        // Remember that an accepted source was condensed, so a later ILS flatten
+        // (which deletes the stored originals) reads as "condensed", not "deleted".
+        let flagged = false;
+        if (hydrated) {
+            const sources = createLedgerSourceIndex();
+            for (const row of validateLedgerAudit({ proposals: next }).proposals) {
+                if (row.status !== 'accepted' || row.condensed === true || sources.locate(row).state !== 'condensed') continue;
+                row.condensed = true;
+                flagged = true;
+            }
+        }
+        if (flagged || next.length !== ledger.proposals.length) {
             saveLedger({ ...ledger, proposals: next });
             notifyProposalsChanged();
         }
@@ -78,10 +91,60 @@ export function harvestLedgerReport(event) {
     }
 }
 
-/** Look up the live slot, never a saved index. Missing sources also flag audit chips. */
-export function proposalSource(proposal, chat = getChat()) {
-    const index = chat.findIndex(message => ledgerReceiptIdentities(message).includes(proposal.msg.identity));
-    return { index, missing: index < 0, changed: index < 0 || ledgerMessageDigest(chat[index].mes) !== proposal.msg.digest };
+/**
+ * One lookup per render or expiry pass: live identities first, then the
+ * originals of ILS summaries (read-only), each built once on first use.
+ * Never a saved index, so messages moving around cannot make a stamp stale.
+ */
+export function createLedgerSourceIndex(chat = getChat(), meta = getChatMeta()) {
+    let live;
+    let condensed;
+    // Each map is published only once fully built, so a throw is never cached half-done.
+    const liveMap = () => {
+        if (live) return live;
+        const map = new Map();
+        chat.forEach((message, index) => ledgerReceiptIdentities(message)
+            .forEach(identity => { if (!map.has(identity)) map.set(identity, index); }));
+        return (live = map);
+    };
+    const condensedMap = () => {
+        if (condensed) return condensed;
+        const map = new Map();
+        chat.forEach((message, summaryIndex) => {
+            if (!isIlsSummary(message)) return;
+            for (const original of resolveIlsOriginals(message, meta)) {
+                for (const identity of ledgerReceiptIdentities(original)) {
+                    if (!map.has(identity)) map.set(identity, { summaryIndex, original });
+                }
+            }
+        });
+        return (condensed = map);
+    };
+    return {
+        /**
+         * live      — in the chat; `changed` compares the current text.
+         * condensed — folded into an ILS summary; `changed` compares the stored original.
+         * flattened — not found, but seen condensed earlier (originals since deleted).
+         * deleted   — not found and never seen condensed.
+         * `missing` means "not in the live chat", so condensed sources cannot be accepted.
+         */
+        locate(proposal) {
+            const identity = proposal.msg.identity;
+            const index = liveMap().get(identity) ?? -1;
+            if (index >= 0) return { state: 'live', index, missing: false, changed: ledgerMessageDigest(chat[index].mes) !== proposal.msg.digest };
+            const folded = condensedMap().get(identity);
+            if (folded) {
+                return { state: 'condensed', index: -1, summaryIndex: folded.summaryIndex, missing: true,
+                    changed: ledgerMessageDigest(folded.original.mes) !== proposal.msg.digest };
+            }
+            if (proposal.condensed === true) return { state: 'flattened', index: -1, missing: true, changed: false };
+            return { state: 'deleted', index: -1, missing: true, changed: true };
+        },
+    };
+}
+
+export function proposalSource(proposal, sources = createLedgerSourceIndex()) {
+    return sources.locate(proposal);
 }
 
 /**
@@ -121,7 +184,7 @@ export function decideLedgerProposals(ids, status, {
                     error.overdraft = { proposal, shortfall: String(shortfall) };
                     throw error;
                 }
-                ledger.transactions.push({ id: ledgerId(ledger, 't'), ...money, note: proposal.evidence, date, kind: 'entry',
+                ledger.transactions.push({ id: ledgerId(ledger, 't'), ...money, note: proposal.context ?? proposal.evidence, date, kind: 'entry',
                     ...(proposal.counterparty ? { counterparty: proposal.counterparty } : {}), source: proposal.id });
                 if (shortfall && decision === 'owed') {
                     if (!proposal.counterparty?.trim() || money.loan === true) throw new Error('A shortfall loan requires a counterparty and a non-loan payment.');
@@ -154,6 +217,8 @@ export function decideLedgerProposals(ids, status, {
             }
         }
         proposal.status = status;
+        // Context only serves review; an accepted money row keeps it as the note.
+        delete proposal.context;
     }
     // Confirm callbacks may run host code; never overwrite a changed chat/store.
     if (!assertSameScope(scope).ok || JSON.stringify(getLedger()) !== snapshot) throw new Error('Ledger or chat changed. Review the inbox again.');

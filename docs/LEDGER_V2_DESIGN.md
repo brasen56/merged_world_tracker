@@ -107,11 +107,13 @@ The refresh prompt gains a **Ledger snapshot** section — carried and stored it
 1. **Evidence gate** (D14): the line's `evidence` must match one message in the frozen window's message records (§6.2) via `findQuoteMatch` / `quoteMatchesMessage` (`core/quote_match.js`), checked against the live chat restricted to the window's index range. A message that changed during the API call no longer matches and the line drops. When a quote matches more than one message (a later recap of the payment), the earliest match wins. The matched message supplies `msg.identity` and `msg.digest`.
 2. **Resolution**: currency name → exactly one id + minor units; item name → existing row (case-insensitive trim match) or new-item flag. Resolution runs against the ledger as it is at write time (a detached read in the Ledger listener), not the snapshot the prompt saw — the user may have edited mid-call.
 3. **Dedupe**: key = `msg.identity + kind + (currency id | normalized name) + (amount | qtyChange)`. Matches any existing proposal regardless of status → dropped silently (D17). Known limit: two identical payments in the *same* message (twice 30 gold) collapse into one proposal; the user adds the second by hand. **Sign-pair contradiction** (added after the first tester run, where one "hand Ezra $650" became both −650 and +650): money lines for the same source message, currency and |amount| with opposite signs quoting the *same* evidence are one double-reported transfer — code cannot pick a side, so both drop with a `contradictory` counter (D14's no-guessing rule). Two real opposite events in one message quote different evidence and survive. A sign-flipped re-report whose evidence matches a stored proposal (any status) drops the newcomer only; the stored row was already reviewable.
-4. **Persist as `pending`** with identity + digest.
+4. **Context excerpt** (Phase 9 QA, 2026-11-21): code copies the sentences around the quote, verbatim, from the frozen record text it matched (`excerptAroundQuote`, `core/quote_match.js`). It starts with the sentences containing the quote and widens by whole neighbouring sentences, earlier first, up to 300 characters, skipping non-narrative blocks. It is stored as `context` only when it adds something to the quote. No report field asks the model for it, so small models cannot invent it. Known limit: when the thing paid for is named in a *different* message, the excerpt won't contain it; the source chip's message number (§3.7) covers that while the message exists.
+5. **Persist as `pending`** with identity + digest (+ `context`).
 
 ### 3.4 Expiry and tombstones
 
 - On chat change and on opening the Ledger tab, once history is hydrated, walk `proposals`: source message identity absent from the chat → remove pending and rejected rows. Retain accepted rows for the missing-source warning in §3.7, subject to the resolved-row cap below. This audit rule takes precedence over missing-source expiry. Digest mismatch is not stored; the inbox computes it (D16).
+- The same pass stamps `condensed: true` on an accepted row whose source is found inside an ILS summary's originals (accepted rows only; validated). ILS flatten deletes those originals, and without the stamp a flattened source would read as deleted. ILS refreshes the chat after condensing, which runs this pass, so the stamp lands before any realistic flatten. Remaining gap: condensing and then flattening with no chat refresh, deletion or Ledger tab visit in between. Those rows show the "deleted" warning instead.
 - Tombstones = accepted/rejected rows. Cap at 300; over the cap, drop oldest resolved rows first. In full-refresh mode windows overlap by `maxScanMessages` minus the refresh cadence; delta mode scans only since the watermark, so it barely overlaps at all. 300 resolved proposals is far past either.
 
 ### 3.5 The overdraft tie-in
@@ -126,7 +128,19 @@ Accepting a money proposal that would push a currency's balance below zero is al
 
 ### 3.7 Accepted proposals whose source changed (rev 2)
 
-The digest check also runs for **accepted** proposals: a transaction or item-log row whose `source` proposal now has a changed or missing source message shows a "source changed after accept" chip. Nothing is undone automatically (D18); the user decides whether the payment still happened. This is the realistic swipe failure — accept −30, then swipe the message to a version where nobody paid. It's partly contained already: refresh scans stop at `getStableHistoryEnd`, which leaves out the newest, still-changing messages.
+The digest check also runs for **accepted** proposals. A transaction or item-log row with a `source` proposal gets a chip worded by what the lookup actually knows (`createLedgerSourceIndex`, `ledger/proposals.js`). The lookup runs once per render or expiry pass, and it never uses a saved index, so messages moving around can't make it stale:
+
+| Source state | Chip | Warning |
+|---|---|---|
+| In the chat, same text | `from refresh · message #N` | no |
+| In the chat, different text | `… · message #N · source changed after accept` | yes |
+| Inside an ILS summary's originals (Ref or legacy embedded, nested) | `… · condensed into summary #M` (+ changed, if the original differs) | only if changed |
+| Not found, stamped `condensed` (§3.4) | `… · condensed; original no longer stored` | no |
+| Not found, never seen condensed | `… · source deleted after accept` | yes |
+
+Nothing is undone automatically (D18); the user decides whether the payment still happened. This is the realistic swipe failure — accept −30, then swipe the message to a version where nobody paid. A deleted source still warns, because delete-and-regenerate is effectively a swipe. It's partly contained already: refresh scans stop at `getStableHistoryEnd`, which leaves out the newest, still-changing messages. The ILS originals are read through `core/ils_originals.js` (moved out of `knowledge/ils_compat.js`, which re-exports it), and only when a source is not in the chat. The read-only rule stands.
+
+Accepting a money proposal writes its `context` excerpt (§3.3) as the transaction note, falling back to the quote. Resolved rows drop `context`, so only pending rows carry it. The transaction list clips long notes at a word boundary on the summary line, and the edit form shows them whole. Notes never enter any prompt.
 
 ## 4. Debts view
 

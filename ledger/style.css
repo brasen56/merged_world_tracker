@@ -36,6 +36,8 @@
 #mwt-float-ledger .mwt-float-btn-countdown.mwt-float-badge--debt { background: #dc2626; color: #fff; }
 .mwt-ledger-status { color: var(--mwt-text); overflow-wrap: anywhere; }
 .mwt-ledger-chip { display: inline-block; margin: 0 6px; padding: 2px 6px; border: 1px solid var(--mwt-border); border-radius: var(--mwt-radius); font-size: .85em; }
+.mwt-ledger-chip-warning { border-color: var(--mwt-warning); color: var(--mwt-warning); }
+.mwt-ledger-context { margin: 4px 0 8px; color: var(--mwt-text-dim); font-size: .9em; overflow-wrap: anywhere; }
 .mwt-ledger-overdraft { border: 2px solid var(--mwt-accent); padding: 12px; background: var(--mwt-bg-light); }
 .mwt-ledger-harvest { margin: 12px 0; }
 .mwt-ledger-pending-badge { position: absolute; top: -5px; right: -5px; border-radius: 12px; padding: 2px 6px; background: #2563eb; color: #fff; font-size: 11px; }

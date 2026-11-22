@@ -1,6 +1,6 @@
 /** DOM/storage-free report boundary. No feature-module imports or writes. */
 import { MAX_CURRENCY_DECIMALS, parseAmount } from './ledger_amount.js';
-import { quoteMatchesMessage } from './quote_match.js';
+import { excerptAroundQuote, quoteMatchesMessage } from './quote_match.js';
 import { captureRevision } from './revision.js';
 import { getLedgerReceiptIdentity, ledgerReceiptIdentities } from './ledger_message_identity.js';
 
@@ -140,6 +140,10 @@ export function resolveLedgerReport(lines, { ledger, chat, records, proposals = 
         const draft = { kind: line.kind, evidence: line.evidence,
             msg: { identity: source.identity, digest: source.digest }, status: 'pending' };
         if (line.counterparty !== undefined) draft.counterparty = line.counterparty.trim();
+        // Code-extracted, verbatim, from the frozen text the quote matched: no
+        // model field to invent, and it outlives the message (ILS, deletion).
+        const context = excerptAroundQuote(source.text, line.evidence);
+        if (context) draft.context = context;
         if (line.kind === 'money') {
             if (!text(line.currency)) { drop('currency-unresolved'); continue; }
             const currencies = ledger.currencies.filter(row => normalizeLedgerName(row.name) === normalizeLedgerName(line.currency));

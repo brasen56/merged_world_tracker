@@ -39,6 +39,17 @@ beforeEach(() => {
 });
 afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+test.each([0, 1])('suggestion labels omit experimental wording and retain the local-model warning (%s pending)', count => {
+    seed(count ? [proposal()] : []); mount();
+    expect(document.querySelector('[data-ledger-open-key="pending"] > summary').textContent)
+        .toBe(`Pending suggestions (${count})`);
+    const setting = document.querySelector('[data-ledger-setting="ledgerProposals"]');
+    expect(setting.closest('label').textContent.trim())
+        .toBe('Suggest ledger changes from World State refresh (local models may struggle)');
+    expect(setting.checked).toBe(false);
+    expect(document.querySelector('.mwt-ledger').textContent).not.toMatch(/experimental/i);
+});
+
 test.each(['accept-proposal', 'reject-proposal', 'accept-harvest', 'reject-harvest'])('%s preserves unrelated editor drafts', actionName => {
     seed(); mount();
     const transaction = document.querySelector('form[data-ledger-form="transaction"]:not([data-id])');

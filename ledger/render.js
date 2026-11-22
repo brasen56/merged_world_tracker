@@ -10,10 +10,15 @@ import { createLedger, computeBalances, computeDebts, formatAmount, parseAmount,
 import { getLedger, saveLedger } from './store.js';
 import { renderSettings } from './settings.js';
 import { ledgerSchema } from './schema.js';
-import { decideLedgerProposals, expireLedgerProposals, proposalSource } from './proposals.js';
+import { createLedgerSourceIndex, decideLedgerProposals, expireLedgerProposals, proposalSource } from './proposals.js';
 import { validateLedgerAudit } from './data.js';
 
 const esc = value => escapeHtml(String(value ?? ''));
+/** Accepted suggestions carry a sentence or two of context as the note; the
+ * summary line clips it at a word boundary and the edit form shows it whole. */
+const SUMMARY_NOTE_CHARS = 120;
+const summaryNote = value => value.length <= SUMMARY_NOTE_CHARS ? value
+    : `${value.slice(0, SUMMARY_NOTE_CHARS).replace(/\s+\S*$/, '')}…`;
 /**
  * crypto.randomUUID exists only in secure contexts (HTTPS or localhost), so a
  * phone reaching ST at http://192.168.x.x has none. getRandomValues does not
@@ -93,6 +98,7 @@ function currencyForm(row) {
 
 function renderPendingSuggestions(record) {
     const pending = validateLedgerAudit(record).proposals.filter(row => row.status === 'pending');
+    const sources = createLedgerSourceIndex();
     const describe = row => {
         if (row.kind === 'item') {
             return `${row.item.qtyChange > 0 ? '+' : ''}${row.item.qtyChange} ${esc(row.item.name)}${row.item.carried === false ? ' · stored' : ''}`;
@@ -108,31 +114,46 @@ function renderPendingSuggestions(record) {
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(row);
     }
-    return `<summary>Pending suggestions (${pending.length}) · experimental</summary>
+    return `<summary>Pending suggestions (${pending.length})</summary>
         <p>Nothing changes until you accept. Review the evidence; source-changed suggestions require confirmation.</p>
         ${[...groups].map(([key, rows]) => `<section class="mwt-ledger-harvest" data-harvest="${esc(key)}">
             <h4>Refresh suggestions</h4>${button('Accept all', 'accept-harvest')}${button('Reject all', 'reject-harvest')}
             ${rows.map(row => {
-                const source = proposalSource(row);
+                const source = proposalSource(row, sources);
                 const newItem = row.kind === 'item' && row.item.qtyChange > 0 && !record.items.some(item => item.name.trim().toLowerCase() === row.item.name.trim().toLowerCase());
                 return `<article class="mwt-ledger-row" data-proposal="${esc(row.id)}">${describe(row)}
-                    <span class="mwt-ledger-chip">${source.index < 0 ? 'Source unavailable' : `Message #${source.index}`}</span>
+                    <span class="mwt-ledger-chip">${source.state === 'live' ? `Message #${source.index}`
+                        : source.state === 'condensed' ? `Condensed into summary #${source.summaryIndex}` : 'Source unavailable'}</span>
                     ${source.changed ? '<span class="mwt-ledger-chip">source changed (source message edited)</span>' : ''}
                     <blockquote>${esc(row.evidence)}</blockquote>
+                    ${row.context ? `<p class="mwt-ledger-context">Context: ${esc(row.context)}</p>` : ''}
                     ${newItem ? `<label class="mwt-ledger-field">Apply to existing item<select class="mwt-input" data-item-target><option value="">Create new item</option>${record.items.map(item => `<option value="${esc(item.id)}">${esc(item.name)} ×${item.qty}</option>`).join('')}</select></label>` : ''}
                     ${button('Accept', 'accept-proposal')}${button('Reject', 'reject-proposal')}</article>`;
             }).join('')}</section>`).join('') || '<p>No pending suggestions.</p>'}`;
 }
 
-function sourceChip(record, source) {
+/**
+ * Word the chip by what the lookup knows: "changed" only when there is text
+ * to compare. A deleted source still warns (delete + regenerate is effectively
+ * a swipe); a source ILS condensed and later flattened does not.
+ */
+function sourceChip(record, source, sources = createLedgerSourceIndex()) {
     if (!source || source === 'user') return '';
     const proposal = validateLedgerAudit(record).proposals.find(row => row.id === source);
-    return `<span class="mwt-ledger-chip" data-ledger-source="${esc(source)}">from refresh${proposal && proposalSource(proposal).changed ? ' · source changed after accept' : ''}</span>`;
+    const where = proposal ? sources.locate(proposal) : null;
+    const label = !where ? ''
+        : where.state === 'live' ? ` · message #${where.index}`
+        : where.state === 'condensed' ? ` · condensed into summary #${where.summaryIndex}`
+        : where.state === 'flattened' ? ' · condensed; original no longer stored'
+        : ' · source deleted after accept';
+    const changed = where?.changed && where.state !== 'deleted' ? ' · source changed after accept' : '';
+    const warning = where?.changed ? ' mwt-ledger-chip-warning' : '';
+    return `<span class="mwt-ledger-chip${warning}" data-ledger-source="${esc(source)}">from refresh${label}${changed}</span>`;
 }
 
-function itemHistory(record, name) {
+function itemHistory(record, name, sources = createLedgerSourceIndex()) {
     const rows = validateLedgerAudit(record).itemLog.filter(row => !name || row.name === name);
-    return `${record.itemLogTrimmed ? '<p>…older changes trimmed</p>' : ''}<ul>${[...rows].reverse().map(row => `<li>${esc(row.name)} · ${esc(row.change)}: ${esc(row.detail)}${row.date ? ` · ${esc(row.date)}` : ''} ${sourceChip(record, row.source)}</li>`).join('')}</ul>${rows.length ? '' : '<p>No recorded changes.</p>'}`;
+    return `${record.itemLogTrimmed ? '<p>…older changes trimmed</p>' : ''}<ul>${[...rows].reverse().map(row => `<li>${esc(row.name)} · ${esc(row.change)}: ${esc(row.detail)}${row.date ? ` · ${esc(row.date)}` : ''} ${sourceChip(record, row.source, sources)}</li>`).join('')}</ul>${rows.length ? '' : '<p>No recorded changes.</p>'}`;
 }
 
 // A refresh updates only the inbox; open forms keep their drafts.
@@ -147,6 +168,7 @@ function updatePendingSuggestions() {
         if (!count) { count = document.createElement('span'); count.dataset.ledgerPendingCount = ''; tab.append(count); }
         count.textContent = pending ? ` (${pending})` : '';
     }
+    const sources = createLedgerSourceIndex();
     document.querySelectorAll('.mwt-ledger').forEach(pane => {
         if (!pane._ledgerScope || !assertSameScope(pane._ledgerScope).ok) return;
         const preview = pane.querySelector('[data-ledger-open-key="pending"]');
@@ -159,7 +181,7 @@ function updatePendingSuggestions() {
                 if (record.items.some(item => item.id === target)) select.value = target;
             });
         }
-        pane.querySelectorAll('[data-ledger-source]').forEach(chip => { chip.outerHTML = sourceChip(record, chip.dataset.ledgerSource); });
+        pane.querySelectorAll('[data-ledger-source]').forEach(chip => { chip.outerHTML = sourceChip(record, chip.dataset.ledgerSource, sources); });
     });
 }
 
@@ -196,6 +218,7 @@ export function renderLedger() {
     let date = '';
     try { const time = resolveCalendarClock(); if (time.source !== 'message-count' && !time.rejection) date = time.formattedDate ?? ''; } catch { /* date is optional */ }
     const balances = valid ? computeBalances(record) : new Map();
+    const sources = createLedgerSourceIndex();
     const body = !valid ? '<p role="alert">Ledger data is invalid or from a newer version. It has been kept unchanged. Use Diagnostics or the recovery export before editing.</p>' : `
         <details data-ledger-open-key="pending" open>${renderPendingSuggestions(record)}</details>
         <details class="mwt-settings-disclosure" data-ledger-open-key="currencies"><summary>Currencies</summary>
@@ -217,14 +240,14 @@ export function renderLedger() {
             <h4>Add transaction</h4>${transactionForm(record, null, date)}<h4>Transactions · newest first</h4>
             ${record.transactions.length ? [...record.transactions].reverse().map(row => {
                 const currency = record.currencies.find(value => value.id === row.currency);
-                return `<details class="mwt-ledger-row"><summary>${esc(formatAmount(row.amount, currency.decimals))} ${esc(currency.name)} · ${row.kind === 'carried' ? 'Carried forward · ' : ''}${esc(row.note)}${row.date ? ` · ${esc(row.date)}` : ''}${sourceChip(record, row.source)}</summary>${transactionForm(record, row, date)}</details>`;
+                return `<details class="mwt-ledger-row"><summary>${esc(formatAmount(row.amount, currency.decimals))} ${esc(currency.name)} · ${row.kind === 'carried' ? 'Carried forward · ' : ''}${esc(summaryNote(row.note))}${row.date ? ` · ${esc(row.date)}` : ''}${sourceChip(record, row.source, sources)}</summary>${transactionForm(record, row, date)}</details>`;
             }).join('') : '<p>No transactions yet.</p>'}
         </section>
         <section class="mwt-ledger-pane" role="tabpanel" data-tab="inventory" hidden><h3>Inventory</h3>
             <p>Only carried items are injected (up to 15 rows, with an omitted count). Unlisted possessions may still exist.</p>
             <h4>Add item</h4>${itemForm()}<h4>Items · carried first</h4>
-            ${[...record.items].sort((a, b) => Number(b.carried) - Number(a.carried) || Number(Boolean(b.pinned)) - Number(Boolean(a.pinned))).map(row => `<details class="mwt-ledger-row" data-ledger-open-key="item:${esc(row.id)}"><summary>${esc(row.name)} ×${row.qty} · ${row.carried ? 'Carried' : 'Stored'}${row.pinned ? ' · ★' : ''}${!row.carried && row.where ? ` · ${esc(row.where)}` : ''}</summary>${itemForm(row)}<details><summary>History</summary>${itemHistory(record, row.name)}</details></details>`).join('') || '<p>No items yet.</p>'}
-            <details data-ledger-open-key="recent-changes"><summary>Recent item changes</summary>${itemHistory(record)}</details>
+            ${[...record.items].sort((a, b) => Number(b.carried) - Number(a.carried) || Number(Boolean(b.pinned)) - Number(Boolean(a.pinned))).map(row => `<details class="mwt-ledger-row" data-ledger-open-key="item:${esc(row.id)}"><summary>${esc(row.name)} ×${row.qty} · ${row.carried ? 'Carried' : 'Stored'}${row.pinned ? ' · ★' : ''}${!row.carried && row.where ? ` · ${esc(row.where)}` : ''}</summary>${itemForm(row)}<details><summary>History</summary>${itemHistory(record, row.name, sources)}</details></details>`).join('') || '<p>No items yet.</p>'}
+            <details data-ledger-open-key="recent-changes"><summary>Recent item changes</summary>${itemHistory(record, undefined, sources)}</details>
         </section>`;
     return `<section class="mwt-ledger" aria-label="Ledger"><h2><span aria-hidden="true">💰</span> Ledger</h2>
         <p>You enter it; code does the arithmetic; the narrator only reads it. Saved per chat.</p>
