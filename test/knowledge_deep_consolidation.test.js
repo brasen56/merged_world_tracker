@@ -89,8 +89,6 @@ describe('experimental wire and ownership', () => {
     });
 
     const invalidCases = [
-        ['stale id', w => { w.reviewId = 'stale'; }],
-        ['wrong version', w => { w.version = 2; }],
         ['unknown field', w => { w.removals = []; }],
         ['missing archive', w => { delete w.archive; }],
         ['missing coverage', w => { w.archive = []; }],
@@ -123,6 +121,19 @@ describe('experimental wire and ownership', () => {
         const wire = wireFor(selection);
         mutate(wire);
         expect(expandDeepConsolidationProposal(selection, wire).ok).toBe(false);
+    });
+
+    it.each([
+        ['reviewId', 'another-generation', 'reviewId did not match'],
+        ['reviewId', null, 'reviewId must be a string (received null)'],
+        ['version', 2, 'version 3 as a number (received 2)'],
+        ['version', '3', 'version 3 as a number (received string)'],
+        ['changed', {}, 'changed must be an array (received object)'],
+        ['notes', [], 'notes must be a string when supplied (received array)'],
+    ])('explains a rejected %s value', (field, value, reason) => {
+        const selection = select();
+        expect(expandDeepConsolidationProposal(selection, { ...wireFor(selection), [field]: value }))
+            .toMatchObject({ ok: false, reason: expect.stringContaining(reason) });
     });
 
     it('revalidates edited proposals and refuses forged captures', () => {

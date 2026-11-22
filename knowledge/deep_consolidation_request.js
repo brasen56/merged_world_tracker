@@ -1,13 +1,14 @@
 /** Experimental §3C request seam. No drafts, staging, recovery or writes. */
 import { estimateTokens } from '../core/context.js';
+import { record } from '../core/diagnostics.js';
 import { scopeStillCurrent } from '../core/scope.js';
 import { cleanupModelDisclosure, checkCleanupBudget } from './cleanup_review.js';
 import { hasValidSettings } from './settings.js';
 import { ktFetchFromApi } from './lorebook.js';
 import { parseLedgerProposal } from './ledger_cleanup.js';
 import { prepareDeepConsolidation } from './deep_consolidation_capture.js';
-import { buildDeepConsolidationUserContent, expandDeepConsolidationProposal } from './deep_consolidation.js';
-import { DEEP_CONSOLIDATION_PROMPT, DEEP_CONSOLIDATION_GRAMMAR } from './deep_consolidation_prompt.js';
+import { buildDeepConsolidationUserContent, expandDeepConsolidationProposal, DEEP_CONSOLIDATION_WIRE_VERSION } from './deep_consolidation.js';
+import { buildDeepConsolidationPrompt, DEEP_CONSOLIDATION_GRAMMAR } from './deep_consolidation_prompt.js';
 import { inspectDeepConsolidation } from './deep_consolidation_checks.js';
 
 function requestContent(name, selection, activeBudget) {
@@ -22,24 +23,25 @@ function requestContent(name, selection, activeBudget) {
  */
 export function estimateDeepConsolidationRequest({ name, selection, activeBudget = 4000 }) {
     const userContent = requestContent(name, selection, activeBudget);
+    const systemPrompt = buildDeepConsolidationPrompt(selection.review.reviewId);
     const disclosure = cleanupModelDisclosure();
     const numbers = selection.eligibleSources.map(source => source.order + 1);
     const rewritable = selection.eligibleSources.filter(source => !selection.pinnedSourceIds.includes(source.id));
-    const base = { version: 3, reviewId: selection.review.reviewId, keep: numbers, changed: [], archive: [], groups: [] };
+    const base = { version: DEEP_CONSOLIDATION_WIRE_VERSION, reviewId: selection.review.reviewId, keep: numbers, changed: [], archive: [], groups: [] };
     const rewrite = { ...base, keep: numbers.filter(n => selection.pinnedSourceIds.includes(selection.eligibleSources[n - 1].id)),
         changed: rewritable.map(source => ({ s: [source.order + 1], t: source.text.replace(/^\s*- /, '') })),
         groups: rewritable.map(source => ({ s: [source.order + 1], label: `Subject ${source.order + 1}` })),
     };
     const estimate = {
-        inputTokens: estimateTokens(DEEP_CONSOLIDATION_PROMPT) + estimateTokens(userContent),
-        systemTokens: estimateTokens(DEEP_CONSOLIDATION_PROMPT), userTokens: estimateTokens(userContent),
+        inputTokens: estimateTokens(systemPrompt) + estimateTokens(userContent),
+        systemTokens: estimateTokens(systemPrompt), userTokens: estimateTokens(userContent),
         sourceCount: numbers.length, outputAllowance: disclosure.maxTokens,
         minimumOutputTokens: estimateTokens(JSON.stringify(base)),
         rewriteAllOutputTokens: estimateTokens(JSON.stringify(rewrite)),
         contextLimit: { value: null, source: 'unknown', note: 'The resolved Knowledge endpoint context capacity is unknown.' },
         disclosure,
     };
-    return { userContent, estimate, budget: checkCleanupBudget(estimate) };
+    return { systemPrompt, userContent, estimate, budget: checkCleanupBudget(estimate) };
 }
 
 function assertCurrent(capture, signal) {
@@ -74,17 +76,28 @@ export async function requestDeepConsolidation({ name, uid, throughSource, pins 
         error.code = request.budget.code;
         throw error;
     }
-    const raw = await ktFetchFromApi(DEEP_CONSOLIDATION_PROMPT, request.userContent, { retries: 0, trigger: 'manual', signal });
+    const requestDiagnostics = { operation: 'deep-consolidation', reviewId: selection.review.reviewId,
+        sourceCount: request.estimate.sourceCount, outputAllowance: request.estimate.outputAllowance };
+    const raw = await ktFetchFromApi(request.systemPrompt, request.userContent, { retries: 0, trigger: 'manual', signal, requestDiagnostics });
     assertCurrent(capture, signal);
+    function rejected(stage, reason, hint = '') {
+        record({ module: 'knowledge', level: 'warn', event: 'deep_consolidation_rejected',
+            detail: { ...requestDiagnostics, stage, reason } });
+        return new Error(['No preview.', reason, hint, 'See Diagnostics → Log for this rejection.',
+            'No automatic retry was made. Nothing was changed.'].filter(Boolean).join(' '));
+    }
     const parsed = parseLedgerProposal(raw);
     if (!parsed.ok) {
-        throw new Error(`No preview: the model did not return a complete strict JSON proposal. ${parsed.reason} The response may be malformed or truncated (configured response allowance: ${request.estimate.outputAllowance} tokens). Increase the Knowledge connection's response token limit or select fewer sources using the boundary, then generate again manually. The active ledger token goal does not increase the response allowance. No automatic retry was made; nothing was changed.`);
+        throw rejected('parse', parsed.reason, `The response may be malformed or truncated (configured response allowance of ${request.estimate.outputAllowance} tokens). Increase the Knowledge connection's response token limit or select fewer sources using the boundary, then generate again manually. The active ledger token goal does not increase the response allowance.`);
     }
     const expanded = expandDeepConsolidationProposal(selection, parsed.proposal);
-    if (!expanded.ok) throw new Error(`No preview: the experimental proposal was discarded: ${expanded.reason} No automatic retry was made; nothing was changed.`);
+    if (!expanded.ok) {
+        const sample = expanded.unexpectedFields?.length ? `Unexpected field names include ${expanded.unexpectedFields.map(key => JSON.stringify(key)).join(', ')}.` : '';
+        throw rejected('validation', expanded.reason, sample);
+    }
     const inspection = inspectDeepConsolidation(selection, expanded.proposal, { activeBudget });
     return { ...prepared, proposal: expanded.proposal, ...inspection,
-        requestFacts: { prompt: DEEP_CONSOLIDATION_PROMPT, grammar: DEEP_CONSOLIDATION_GRAMMAR,
+        requestFacts: { prompt: request.systemPrompt, grammar: DEEP_CONSOLIDATION_GRAMMAR,
             userContent: request.userContent, estimate: request.estimate, budget: request.budget, attempt: 1,
             archivePersistence: 'none; read-only in-memory preview' } };
 }

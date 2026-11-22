@@ -15,6 +15,9 @@ const keys = (value, required, optional = []) => object(value) &&
     required.every(key => Object.hasOwn(value, key)) &&
     Object.keys(value).every(key => required.includes(key) || optional.includes(key));
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+const arrayFields = ['keep', 'changed', 'archive', 'groups'];
+const requiredFields = ['version', 'reviewId', ...arrayFields];
+const jsonType = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
 
 /** Boundary and pins are 1-based ledger source numbers, NOT entry file lines.
  * Omit throughSource to select the whole ledger. Each call, including a
@@ -93,11 +96,30 @@ export function buildDeepConsolidationUserContent(name, selection) {
 export function expandDeepConsolidationProposal(selection, wire) {
     const captured = checkSelection(selection);
     if (!captured.ok) return captured;
-    if (!keys(wire, ['version', 'reviewId', 'keep', 'changed', 'archive', 'groups'], ['notes']) ||
-        wire.version !== DEEP_CONSOLIDATION_WIRE_VERSION ||
-        wire.reviewId !== selection.review.reviewId ||
-        !['keep', 'changed', 'archive', 'groups'].every(key => Array.isArray(wire[key])) ||
-        (Object.hasOwn(wire, 'notes') && typeof wire.notes !== 'string')) return fail('Invalid experimental wire format or stale review ID.');
+    if (!object(wire)) return fail('The proposal must be a JSON object.');
+    const missing = requiredFields.filter(key => !Object.hasOwn(wire, key));
+    const extra = Object.keys(wire).filter(key => !requiredFields.includes(key) && key !== 'notes');
+    if (missing.length || extra.length) {
+        // Model-supplied keys can contain ledger text. Show a bounded sample
+        // in the local modal only; the diagnostics log receives the reason.
+        const issues = [];
+        if (missing.length) issues.push(`The proposal is missing ${missing.join(', ')}.`);
+        if (extra.length) issues.push(`The proposal has ${extra.length} unexpected top-level ${extra.length === 1 ? 'field' : 'fields'}.`);
+        return { ...fail(issues.join(' ')),
+            unexpectedFields: extra.slice(0, 3).map(key => key.slice(0, 60)) };
+    }
+    if (wire.version !== DEEP_CONSOLIDATION_WIRE_VERSION) {
+        const received = typeof wire.version === 'number' ? wire.version : jsonType(wire.version);
+        return fail(`Expected proposal version ${DEEP_CONSOLIDATION_WIRE_VERSION} as a number (received ${received}).`);
+    }
+    if (typeof wire.reviewId !== 'string') return fail(`reviewId must be a string (received ${jsonType(wire.reviewId)}).`);
+    if (wire.reviewId !== selection.review.reviewId) return fail('The returned reviewId did not match the ID sent for this generation.');
+    for (const key of arrayFields) {
+        if (!Array.isArray(wire[key])) return fail(`${key} must be an array (received ${jsonType(wire[key])}).`);
+    }
+    if (Object.hasOwn(wire, 'notes') && typeof wire.notes !== 'string') {
+        return fail(`notes must be a string when supplied (received ${jsonType(wire.notes)}).`);
+    }
     const sourceOf = n => Number.isInteger(n) && n >= 1 && n <= selection.throughSource
         ? selection.eligibleSources[n - 1] : null;
     const translate = numbers => Array.isArray(numbers) && numbers.length && numbers.every(n => sourceOf(n))
