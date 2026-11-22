@@ -88,6 +88,27 @@ describe('experimental wire and ownership', () => {
         expect(expandDeepConsolidationProposal(selection, wire).ok).toBe(false);
     });
 
+    it.each([801, 2400])('identifies an overlength record of %s characters after kept and changed records', length => {
+        const selection = select();
+        const wire = { ...wireFor(selection), archive: [], changed: [
+            { s: [2], t: 'Safe rewritten fact.' },
+            { s: [3], t: 'x'.repeat(length) },
+        ] };
+        expect(expandDeepConsolidationProposal(selection, wire)).toEqual({ ok: false,
+            reason: `Consolidated record 3 (1-based position in proposal.records; sources: 3) has ${length} characters; the limit is 800 (${length - 800} over). Use multiple records within the group with disjoint source ownership, or keep a source unchanged if it cannot safely fit.`,
+        });
+    });
+
+    it('reports every source number for an overlarge merge and revalidates edited text', () => {
+        const selection = select();
+        const wire = { ...wireFor(selection), archive: [], changed: [{ s: [3, 2], t: 'Safe merged fact.' }] };
+        const { proposal } = expandDeepConsolidationProposal(selection, wire);
+        proposal.records[1].text = 'x'.repeat(1601);
+        expect(validateDeepConsolidationProposal(selection, proposal)).toMatchObject({ ok: false,
+            reason: expect.stringContaining('sources: 3, 2) has 1601 characters; the limit is 800 (801 over)'),
+        });
+    });
+
     const invalidCases = [
         ['unknown field', w => { w.removals = []; }],
         ['missing archive', w => { delete w.archive; }],

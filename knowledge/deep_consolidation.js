@@ -181,7 +181,7 @@ export function validateDeepConsolidationProposal(selection, proposal) {
     }
     const owners = new Map();
     const recordIds = new Set();
-    for (const record of proposal.records) {
+    for (const [i, record] of proposal.records.entries()) {
         if (!keys(record, ['id', 'text', 'sourceIds', 'notes']) || !nonempty(record.id) || recordIds.has(record.id) ||
             !nonempty(record.text) || typeof record.notes !== 'string' || !Array.isArray(record.sourceIds) ||
             !record.sourceIds.length || /^\s*- /.test(record.text) || structuralRejection(record.text) ||
@@ -189,7 +189,10 @@ export function validateDeepConsolidationProposal(selection, proposal) {
         recordIds.add(record.id);
         const source = sources.get(record.sourceIds[0]);
         const exact = record.sourceIds.length === 1 && source && source.text.replace(/^\s*- /, '') === record.text;
-        if (!exact && record.text.length > LEDGER_ITEM_LIMITS.fact) return fail(`Consolidated records must be at most ${LEDGER_ITEM_LIMITS.fact} characters; use multiple records within the group.`);
+        if (!exact && record.text.length > LEDGER_ITEM_LIMITS.fact) {
+            const sourceNumbers = record.sourceIds.map(id => sources.has(id) ? sources.get(id).order + 1 : 'unknown');
+            return fail(`Consolidated record ${i + 1} (1-based position in proposal.records; sources: ${sourceNumbers.join(', ')}) has ${record.text.length} characters; the limit is ${LEDGER_ITEM_LIMITS.fact} (${record.text.length - LEDGER_ITEM_LIMITS.fact} over). Use multiple records within the group with disjoint source ownership, or keep a source unchanged if it cannot safely fit.`);
+        }
         for (const id of record.sourceIds) {
             if (!sources.has(id) || owners.has(id)) return fail('Unknown or duplicate source ownership.');
             if (!exact && (selection.pinnedSourceIds.includes(id) || !grouped.has(id))) return fail('Pinned and ungrouped sources must be kept exactly.');

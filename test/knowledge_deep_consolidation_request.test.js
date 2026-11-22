@@ -6,7 +6,7 @@ import { scopeStillCurrent } from '../core/scope.js';
 import { _resetDiagnostics, getEvents, recordApiCall } from '../core/diagnostics.js';
 import { hasValidSettings } from '../knowledge/settings.js';
 import { requestDeepConsolidation, estimateDeepConsolidationRequest } from '../knowledge/deep_consolidation_request.js';
-import { captureDeepConsolidationReview } from '../knowledge/deep_consolidation.js';
+import { captureDeepConsolidationReview, expandDeepConsolidationProposal } from '../knowledge/deep_consolidation.js';
 import { buildDeepConsolidationPrompt, DEEP_CONSOLIDATION_GRAMMAR } from '../knowledge/deep_consolidation_prompt.js';
 
 vi.mock('../knowledge/cleanup_commit.js', () => ({ captureCleanupTarget: vi.fn() }));
@@ -183,6 +183,38 @@ describe('deep consolidation request', () => {
         expect(prompt).toContain('If provenance OR date differs');
         expect(prompt).toContain('escape double quotes and backslashes');
         expect(prompt).toContain('omit optional notes');
+    });
+
+    it('explicitly guides multi-record grouping with complete disjoint source coverage', () => {
+        const prompt = buildDeepConsolidationPrompt('fixture-id');
+        expect(prompt).toContain('Grouping does not mean merging every source in the group into one record');
+        expect(prompt).toContain('Aim for roughly 500–650 characters per record');
+        expect(prompt).toContain('including provenance and dates');
+        expect(prompt).toContain('Never merge additional sources if doing so would exceed the limit');
+        expect(prompt).toContain('If a single source cannot be safely rewritten within the limit, put it in keep instead');
+        expect(prompt).toContain('Complete source coverage matters more than minimizing record count or meeting the active token goal');
+        const example = JSON.parse(prompt.split('\n').find(line => line.startsWith('{"keep":[5]')));
+        const selection = captureDeepConsolidationReview('Knowledge Ledger:\n- gate opens\n- Ezra enters\n- gate closes\n- night watch\n- exact detail');
+        expect(example.changed).toHaveLength(2);
+        expect(example.groups).toHaveLength(1);
+        expect(expandDeepConsolidationProposal(selection, { version: 3, reviewId: selection.review.reviewId, ...example }).ok).toBe(true);
+    });
+
+    it('surfaces overlength details in the request error and diagnostics without logging text', async () => {
+        ktFetchFromApi.mockImplementation((...args) => {
+            const wire = JSON.parse(answer(...args));
+            wire.keep = [1];
+            wire.changed = [{ s: [2], t: 'PRIVATE-TEXT'.repeat(80) }];
+            wire.groups = [{ s: [2], label: 'Subject' }];
+            return JSON.stringify(wire);
+        });
+        await expect(requestDeepConsolidation(options())).rejects.toThrow('sources: 2) has 960 characters; the limit is 800 (160 over)');
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+        const events = getEvents({ module: 'knowledge' });
+        expect(events[0].detail).toMatchObject({ stage: 'validation',
+            reason: expect.stringContaining('Consolidated record 2'),
+        });
+        expect(JSON.stringify(events)).not.toContain('PRIVATE-TEXT');
     });
 
     it('accepts complex quoted content with one shared tag and preserves source mappings', async () => {
