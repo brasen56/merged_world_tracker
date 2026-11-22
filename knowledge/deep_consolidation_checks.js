@@ -11,18 +11,35 @@ function assertValid(selection, proposal) {
     if (!result.ok) throw new Error(result.reason);
 }
 
+/**
+ * The fact part of a ledger line: the text before the last " via ".
+ * formatLedgerLine (knowledge/lorebook.js:910) ends every dated line with
+ * " via <source> — <date>", so checks over the whole line would read the
+ * date's digits and flag almost every dated line as number-bearing, pushing
+ * the floor measure (inspectDeepConsolidation) toward the full ledger. A line
+ * with no " via " separator is checked whole — conservative, since any
+ * provenance it carries is not separable.
+ */
+const factPart = text => {
+    const via = text.lastIndexOf(' via ');
+    return via === -1 ? text : text.slice(0, via);
+};
+
 /** Conservative lexical candidates, not semantic correction resolution. Flag
  * ALL explicit correction markers, including uncertain older ones, so a latest
  * version is not silently hidden by guessing which subject a sentence means.
+ * Checks run on the fact part only (see factPart); the " via <source> —
+ * <date>" provenance tail never flags a line by itself.
  */
 export function deepExactCandidates(selection) {
     return selection.review.sources.flatMap(source => {
+        const fact = factPart(source.text);
         const reasons = [];
-        if (/\p{N}/u.test(source.text)) reasons.push('number-or-code');
-        if (/\b(?:code|password|passphrase|identifier|serial|token)\b/i.test(source.text)) reasons.push('code');
-        if (/"[^"\r\n]+"|“[^”\r\n]+”|‘[^’\r\n]+’|(?:^|\W)'[^'\r\n]+'(?=\W|$)/u.test(source.text)) reasons.push('quoted-text');
-        if (/\b(?:rumou?r|believ(?:e[sd]?|ing)|thinks?|thought|suspects?|supposedly|allegedly|unconfirmed|hearsay)\b/i.test(source.text)) reasons.push('belief-or-rumor');
-        if (/\b(?:correct(?:ed|ion|s)?|actually|instead|not true|false|retract(?:ed|ion)?|supersed(?:es|ed)|no longer|rather than|turns? out|was wrong)\b/i.test(source.text)) reasons.push('correction-candidate');
+        if (/\p{N}/u.test(fact)) reasons.push('number-or-code');
+        if (/\b(?:code|password|passphrase|identifier|serial|token)\b/i.test(fact)) reasons.push('code');
+        if (/"[^"\r\n]+"|“[^”\r\n]+”|‘[^’\r\n]+’|(?:^|\W)'[^'\r\n]+'(?=\W|$)/u.test(fact)) reasons.push('quoted-text');
+        if (/\b(?:rumou?r|believ(?:e[sd]?|ing)|thinks?|thought|suspects?|supposedly|allegedly|unconfirmed|hearsay)\b/i.test(fact)) reasons.push('belief-or-rumor');
+        if (/\b(?:correct(?:ed|ion|s)?|actually|instead|not true|false|retract(?:ed|ion)?|supersed(?:es|ed)|no longer|rather than|turns? out|was wrong)\b/i.test(fact)) reasons.push('correction-candidate');
         return reasons.length ? [{ sourceId: source.id, sourceNumber: source.order + 1, text: source.text, reasons }] : [];
     });
 }

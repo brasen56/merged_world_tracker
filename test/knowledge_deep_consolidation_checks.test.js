@@ -31,6 +31,28 @@ describe('experimental deterministic guard', () => {
         ]);
     });
 
+    it('runs the checks on the fact part, so the dated provenance tail never flags a clean line', () => {
+        const selection = captureDeepConsolidationReview('Knowledge Ledger:\n- plain steady fact via witness — June 8, 2000');
+        expect(deepExactCandidates(selection)).toEqual([]);
+    });
+
+    it('still flags digits, codes, and quotes inside the fact part itself', () => {
+        const selection = captureDeepConsolidationReview('Knowledge Ledger:\n- code 7314 changed via document — Day 1\n- said "quiet dawn" via witness — Day 2');
+        expect(deepExactCandidates(selection).map(c => c.reasons)).toEqual([
+            ['number-or-code', 'code'], ['quoted-text'],
+        ]);
+    });
+
+    it('splits on the last " via " when the fact names its own provenance chain', () => {
+        const selection = captureDeepConsolidationReview('Knowledge Ledger:\n- 3 crates arrived via Alice via the calendar — May 2, 2000\n- rerouted via the side door via witness — August 20, 2000');
+        expect(deepExactCandidates(selection).map(c => c.sourceNumber)).toEqual([1]);
+    });
+
+    it('checks a line without a " via " separator whole, so its trailing date still flags it', () => {
+        const selection = captureDeepConsolidationReview('Knowledge Ledger:\n- steady fact (via personal experience — Sunday July 2, 2000)');
+        expect(deepExactCandidates(selection).map(c => c.reasons)).toEqual([['number-or-code']]);
+    });
+
     it('restores a merged owner as a unit without mutating the draft, and restores archive individually', () => {
         const { selection, proposal } = fixture();
         const snapshot = JSON.stringify(proposal);

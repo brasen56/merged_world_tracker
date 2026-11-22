@@ -1,6 +1,6 @@
 # Knowledge Tracker — deep consolidation v2 (batched, no archive)
 
-**Status:** Plan; not started.
+**Status:** Plan; Phase 0 done 2026-11-22.
 **Date:** 2026-11-22
 **Replaces:** [KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md](./KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md) (the v1 build checklist; its §5 verdict was never reached).
 **Background:** [KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md](./KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md) — the original problem statement and the appended response.
@@ -72,13 +72,13 @@ not throw away accepted batches.
 
 ### Phase 0 — fix the floor measure (no model call)
 
-- [ ] `deepExactCandidates` (knowledge/deep_consolidation_checks.js:21) runs
+- [x] `deepExactCandidates` (knowledge/deep_consolidation_checks.js:21) runs
       `/\p{N}/u` over the whole line. Every line ends in `— date`
       (`formatLedgerLine`, knowledge/lorebook.js:910), so almost every dated
       line is flagged "keep exact" and `floorTokens` comes out near the full
       ledger. Run the checks on the fact part only (the text before the last
       ` via `).
-- [ ] Record the testing ledger's numbers in §9: source count, ledger tokens,
+- [x] Record the testing ledger's numbers in §9: source count, ledger tokens,
       pins + recent tokens, exact-candidate tokens with the fixed check, the
       Knowledge model and its Max Tokens setting.
 
@@ -254,4 +254,32 @@ not throw away accepted batches.
 
 ## 9. Results
 
-(To be filled in by Phase 0 and Phase 6.)
+### Phase 0 — floor measure (2026-11-22)
+
+Ledger: `temp_ledger_file/temporary_knowledge_ledger.md` (the testing ledger, exported verbatim; raw
+measure output in `temp_ledger_file/phase0_floor_measure.json`). Token figures are `estimateTokens`
+under its chars/4.5 fallback — the measurement run had no host tokenizer — so estimates, not
+tokenizer counts. Whole-ledger boundary and no pins (the modal's defaults), so pins + recent are
+empty.
+
+| Measure | Value |
+| --- | --- |
+| Source count | 325 |
+| Ledger tokens (`parseLedger` body) | ≈17,240 |
+| Pins + recent tokens | 0 (no pins in the export; the whole-ledger default boundary leaves the recent pool empty) |
+| Exact-candidate tokens, fixed check (fact part) | ≈11,436 across 185 sources (≈66% of ledger tokens); reasons: 132 number-or-code, 67 quoted-text, 17 correction-candidate, 5 belief-or-rumor, 1 code |
+| Pre-fix whole-line check (comparison) | 324/325 sources flagged, ≈17,143 tokens (≈99% of the ledger — the floor was indistinguishable from "keep everything") |
+| Knowledge model (testing) | GLM 5.2:thinking |
+| Max Tokens setting (testing) | 160,000 (production preference: nothing larger than 60,000) |
+
+Readings. The fix does what Phase 0 claimed: the floor is no longer the whole ledger by
+construction (≈99% → ≈66%). But digit-bearing facts are common enough in this ledger that the
+lexical exact floor still covers about two thirds of it — well over the 4,000-token default active
+goal — so a single whole-ledger call remains hopeless and per-group batching (Phase 2) stays
+necessary. Known residue: 61 lines carry no ` via ` separator (parenthetical provenance such as
+`(via personal experience — Sunday July 2, 2000)`); those are still checked whole, and 60 of them
+are flagged, mostly by their trailing dates. The residue is bounded and errs toward keep-exact,
+never toward silent loss.
+
+(To be appended by Phase 6: trial results — calls made, per-batch completion tokens, failure count
+by stage, review time, probe outcomes.)
