@@ -79,7 +79,25 @@ export function captureLedgerReview(content, reviewId) {
     return Object.freeze({ reviewId, original: content, sources: Object.freeze(sources) });
 }
 
-/** Strict JSON only. The sole wrapper normalization is ONE whole JSON fence. */
+/** Numeric locations are safe to log. Native error messages can quote ledger
+ * text, so keep those in the separately content-gated error field.
+ */
+function jsonErrorLocation(json, message) {
+    const position = /\bat position (\d+)(?: \(line \d+ column \d+\))?$/.exec(message);
+    const offset = message === 'Unexpected end of JSON input' ? json.length : Number(position?.[1]);
+    if (Number.isInteger(offset) && offset >= 0 && offset <= json.length) {
+        const lines = json.slice(0, offset).split(/\r\n|\r|\n/);
+        return { jsonErrorOffset: offset, jsonErrorLine: lines.length,
+            jsonErrorColumn: lines.at(-1).length + 1, errorAtEnd: offset === json.length };
+    }
+    // Firefox reports line/column without a character offset.
+    const location = /\bat line (\d+) column (\d+) of the JSON data$/.exec(message);
+    return location ? { jsonErrorLine: Number(location[1]), jsonErrorColumn: Number(location[2]) } : {};
+}
+
+/** Strict JSON only. The sole wrapper normalization is ONE whole JSON fence.
+ * Failure coordinates refer to the trimmed, unwrapped JSON body.
+ */
 export function parseLedgerProposal(text) {
     if (typeof text !== 'string') return fail('Cleanup output must be JSON text.');
     let json = text.trim();
@@ -89,8 +107,13 @@ export function parseLedgerProposal(text) {
         const proposal = JSON.parse(json);
         if (!object(proposal)) return fail('Cleanup output must be a JSON object.');
         return { ok: true, proposal };
-    } catch (_err) {
-        return fail('Cleanup output is not complete strict JSON; no repair was attempted.');
+    } catch (error) {
+        const location = jsonErrorLocation(json, error.message);
+        const where = location.jsonErrorLine
+            ? ` JSON parsing failed at line ${location.jsonErrorLine}, column ${location.jsonErrorColumn} of the JSON body.` : '';
+        return { ...fail(`Cleanup output is not complete strict JSON.${where}`),
+            diagnostics: { responseChars: text.length, jsonChars: json.length, fenced: Boolean(fence), ...location },
+            error: error.message };
     }
 }
 

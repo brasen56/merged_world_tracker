@@ -64,6 +64,26 @@ describe('strict cleanup JSON and complete source ownership', () => {
         expect(parseLedgerProposal('```json\n' + json + '\n```').ok).toBe(true);
         for (const bad of [json.slice(0, -1), json + ' trailing', 'prefix ' + json, '{"records":[],}', '[]', '```json\n' + json]) expect(parseLedgerProposal(bad).ok).toBe(false);
     });
+    test('locates invalid JSON inside a fence and retains native errors separately from safe diagnostics', () => {
+        const body = '{\r\n"notes": "PRIVATE-😀",\r\n}';
+        const raw = '  ```json\n' + body + '\n```  ';
+        const parsed = parseLedgerProposal(raw);
+        expect(parsed).toMatchObject({ ok: false, diagnostics: { responseChars: raw.length, jsonChars: body.length,
+            fenced: true, jsonErrorOffset: body.length - 1, jsonErrorLine: 3, jsonErrorColumn: 1, errorAtEnd: false } });
+        expect(parsed.reason).toContain('line 3, column 1');
+        expect(parsed.reason).not.toContain('PRIVATE');
+        const quotedFailure = parseLedgerProposal('PRIVATE-MODEL-PROSE');
+        expect(quotedFailure.error).toContain('PRIVATE');
+        expect(JSON.stringify({ reason: quotedFailure.reason, diagnostics: quotedFailure.diagnostics })).not.toContain('PRIVATE');
+    });
+    test('reports the end of an unfinished JSON response and accepts complete escaped quotes', () => {
+        const unfinished = '{\n"changed": [';
+        expect(parseLedgerProposal(unfinished)).toMatchObject({ ok: false, diagnostics: {
+            jsonErrorOffset: unfinished.length, jsonErrorLine: 2, errorAtEnd: true,
+        } });
+        const value = { notes: 'He said "enter" on C:\\path.' };
+        expect(parseLedgerProposal(JSON.stringify(value))).toEqual({ ok: true, proposal: value });
+    });
     test('captured sources preserve order, exact text and revision-local IDs', () => {
         const review = capture();
         expect(review.sources[0].text).toBe('  - gate code 7314 via told — Day 30');

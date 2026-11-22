@@ -1,6 +1,6 @@
 /** Experimental §3C request seam. No drafts, staging, recovery or writes. */
 import { estimateTokens } from '../core/context.js';
-import { record } from '../core/diagnostics.js';
+import { record, getApiCalls } from '../core/diagnostics.js';
 import { scopeStillCurrent } from '../core/scope.js';
 import { cleanupModelDisclosure, checkCleanupBudget } from './cleanup_review.js';
 import { hasValidSettings } from './settings.js';
@@ -80,15 +80,27 @@ export async function requestDeepConsolidation({ name, uid, throughSource, pins 
         sourceCount: request.estimate.sourceCount, outputAllowance: request.estimate.outputAllowance };
     const raw = await ktFetchFromApi(request.systemPrompt, request.userContent, { retries: 0, trigger: 'manual', signal, requestDiagnostics });
     assertCurrent(capture, signal);
-    function rejected(stage, reason, hint = '') {
+    // Match the request identity, since another module can finish a call while
+    // this one is in flight. Connection profiles may omit this metadata.
+    const apiCall = getApiCalls().find(call => call.requestDiagnostics?.reviewId === selection.review.reviewId);
+    const responseFacts = { responseChars: typeof raw === 'string' ? raw.length : 0,
+        finishReason: apiCall?.finish_reason ?? null, completionTokens: apiCall?.usage?.completion_tokens ?? null };
+    function rejected(stage, reason, hint = '', parsed = {}) {
+        const detail = { ...requestDiagnostics, ...responseFacts, ...parsed.diagnostics, stage, reason };
         record({ module: 'knowledge', level: 'warn', event: 'deep_consolidation_rejected',
-            detail: { ...requestDiagnostics, stage, reason } });
-        return new Error(['No preview.', reason, hint, 'See Diagnostics → Log for this rejection.',
+            detail });
+        const error = new Error(['No preview.', reason, hint, 'See Diagnostics → Log for this rejection.',
             'No automatic retry was made. Nothing was changed.'].filter(Boolean).join(' '));
+        // Only the current modal owns this private response. It never enters
+        // the diagnostics ring or persistence and is downloaded on demand.
+        Object.defineProperty(error, 'deepConsolidationFailure', { value: {
+            ...detail, connection: request.estimate.disclosure, rawResponse: raw, error: parsed.error,
+        } });
+        return error;
     }
     const parsed = parseLedgerProposal(raw);
     if (!parsed.ok) {
-        throw rejected('parse', parsed.reason, `The response may be malformed or truncated (configured response allowance of ${request.estimate.outputAllowance} tokens). Increase the Knowledge connection's response token limit or select fewer sources using the boundary, then generate again manually. The active ledger token goal does not increase the response allowance.`);
+        throw rejected('parse', parsed.reason, `The response may be malformed or truncated. The configured response allowance is ${request.estimate.outputAllowance} tokens. Check the reported finish reason and completion token count in Diagnostics → Last request. Download the failed response below to inspect the returned text.`, parsed);
     }
     const expanded = expandDeepConsolidationProposal(selection, parsed.proposal);
     if (!expanded.ok) {

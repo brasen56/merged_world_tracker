@@ -28,13 +28,14 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
     let closed = false;
     let controller = null;
     let session = null;
+    let failedResponse = null;
     let validProposal = null;
     let acceptedGroups = false;
     let busy = false;
     const modal = createModal({ id: ID, title: `Experimental: Deep Consolidate (preview) — ${name}`,
         cssClass: 'kt-deep-preview', destroyOnClose: true,
         content: '<div class="kt-deep-content"></div>',
-        onClose: () => { closed = true; controller?.abort(); },
+        onClose: () => { closed = true; controller?.abort(); failedResponse = null; },
     });
     const body = modal.querySelector('.kt-deep-content');
     const current = () => !closed && modal.isConnected && scopeStillCurrent(scope).ok;
@@ -58,12 +59,19 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         <div class="kt-deep-disclosure"></div>
         <label><input type="checkbox" data-deep-consent> I consent to sending the selected lines and NPC name to the disclosed Knowledge endpoint (one billable attempt per generation; no automatic retry).</label>
         <div class="kt-condense-actions">${button('generate', 'Generate preview')}${button('cancel', 'Cancel request', 'hidden')}</div>
+        <div class="kt-deep-failure" hidden>
+            <p data-deep-parser-error></p>
+            <p>The download contains the model's returned text and may include private RP details. It is available until you generate again or close this preview.</p>
+            ${button('export-failure', 'Download failed response')}
+        </div>
         <div class="kt-deep-review"></div>`;
     const config = body.querySelector('.kt-deep-config');
     const disclosure = body.querySelector('.kt-deep-disclosure');
     const review = body.querySelector('.kt-deep-review');
     const generate = body.querySelector('[data-deep-action="generate"]');
     const cancel = body.querySelector('[data-deep-action="cancel"]');
+    const failure = body.querySelector('.kt-deep-failure');
+    const parserDetail = body.querySelector('[data-deep-parser-error]');
     const consent = body.querySelector('[data-deep-consent]');
     const boundary = body.querySelector('[data-deep-boundary]');
     const budgetInput = body.querySelector('[data-deep-budget]');
@@ -175,6 +183,9 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
             if (action === 'generate') {
                 updateDisclosure();
                 if (!requestOK || !consent.checked) return;
+                failedResponse = null;
+                parserDetail.textContent = '';
+                failure.hidden = true;
                 controller = new AbortController();
                 busy = true;
                 config.disabled = true;
@@ -201,6 +212,8 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
                     generate.textContent = session ? 'Regenerate preview (replaces current draft)' : 'Generate preview';
                     updateDisclosure();
                 }
+            } else if (action === 'export-failure' && failedResponse) {
+                downloadJson('mwt-deep-consolidation-failed-response.json', failedResponse);
             } else if (action === 'accept-groups') {
                 acceptedGroups = true;
                 renderReview();
@@ -231,7 +244,14 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         } catch (error) {
             if (current()) {
                 if (isCancellation(error) || controller?.signal.aborted) setStatus(modal, 'Request cancelled. Nothing was saved.');
-                else fail(error);
+                else {
+                    if (error.deepConsolidationFailure) {
+                        failedResponse = error.deepConsolidationFailure;
+                        parserDetail.textContent = failedResponse.error || '';
+                        failure.hidden = false;
+                    }
+                    fail(error);
+                }
             }
         }
     });

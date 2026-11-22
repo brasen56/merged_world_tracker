@@ -3,7 +3,7 @@ import { captureCleanupTarget } from '../knowledge/cleanup_commit.js';
 import { ktFetchFromApi } from '../knowledge/lorebook.js';
 import { cleanupModelDisclosure } from '../knowledge/cleanup_review.js';
 import { scopeStillCurrent } from '../core/scope.js';
-import { clearEvents, getEvents } from '../core/diagnostics.js';
+import { _resetDiagnostics, getEvents, recordApiCall } from '../core/diagnostics.js';
 import { hasValidSettings } from '../knowledge/settings.js';
 import { requestDeepConsolidation, estimateDeepConsolidationRequest } from '../knowledge/deep_consolidation_request.js';
 import { captureDeepConsolidationReview } from '../knowledge/deep_consolidation.js';
@@ -27,7 +27,7 @@ function answer(_prompt, payload) {
 describe('deep consolidation request', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        clearEvents();
+        _resetDiagnostics();
         captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, originalContent: original, scopeToken: {} });
         hasValidSettings.mockReturnValue(true);
         scopeStillCurrent.mockReturnValue({ ok: true });
@@ -118,13 +118,36 @@ describe('deep consolidation request', () => {
         expect(JSON.stringify(events[0].detail)).not.toMatch(/MODEL-PRIVATE|VALUE-PRIVATE/);
     });
 
-    it('explains malformed JSON and response allowance without repair or retry', async () => {
-        ktFetchFromApi.mockResolvedValue('{"version":3,"changed":[');
-        await expect(requestDeepConsolidation(options())).rejects.toThrow(/malformed or truncated.*8000 tokens.*boundary.*No automatic retry/);
+    it('retains malformed output for explicit download and logs only parser metadata', async () => {
+        const raw = 'NOT_JSON_PRIVATE';
+        ktFetchFromApi.mockResolvedValue(raw);
+        const error = await requestDeepConsolidation(options()).catch(caught => caught);
+        expect(error.message).toMatch(/malformed or truncated.*8000 tokens.*Download the failed response.*No automatic retry/);
+        expect(error.deepConsolidationFailure).toMatchObject({
+            rawResponse: raw, stage: 'parse', responseChars: raw.length, finishReason: null, completionTokens: null,
+        });
         expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
         expect(getEvents({ module: 'knowledge' })[0]).toMatchObject({
-            event: 'deep_consolidation_rejected', detail: { stage: 'parse', outputAllowance: 8000 },
+            event: 'deep_consolidation_rejected', detail: { stage: 'parse', outputAllowance: 8000, responseChars: raw.length },
         });
+        expect(JSON.stringify(getEvents({ module: 'knowledge' }))).not.toContain(raw);
+        expect(JSON.stringify(error)).not.toContain(raw);
+    });
+
+    it('correlates parse failures with their API call when other calls finish concurrently', async () => {
+        ktFetchFromApi.mockImplementation((_prompt, _payload, { requestDiagnostics }) => {
+            recordApiCall({ module: 'knowledge', requestDiagnostics, finish_reason: 'stop',
+                usage: { prompt_tokens: 12035, completion_tokens: 64952 } });
+            recordApiCall({ module: 'knowledge', requestDiagnostics: { reviewId: 'other-request' },
+                finish_reason: 'length', usage: { completion_tokens: 20 } });
+            return '{\n"changed": [],\n}';
+        });
+        const error = await requestDeepConsolidation(options()).catch(caught => caught);
+        expect(error.message).toContain('line 3, column 1');
+        expect(error.deepConsolidationFailure).toMatchObject({
+            finishReason: 'stop', completionTokens: 64952, jsonErrorLine: 3, jsonErrorColumn: 1,
+        });
+        expect(getEvents({ module: 'knowledge' })[0].detail).toMatchObject({ finishReason: 'stop', completionTokens: 64952 });
     });
 
     it('does not retry transport errors', async () => {

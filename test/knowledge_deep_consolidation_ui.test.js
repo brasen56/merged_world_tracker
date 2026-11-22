@@ -198,6 +198,55 @@ describe('read-only deep consolidation preview UI', () => {
         expect(action('generate').disabled).toBe(true);
     });
 
+    it('downloads the exact failed response on demand and clears it on regeneration', async () => {
+        const raw = '<script>PRIVATE-FAILED-RESPONSE</script>';
+        ktFetchFromApi.mockResolvedValueOnce(raw);
+        const modal = await open();
+        find('[data-deep-consent]').click();
+        action('generate').click();
+        await vi.waitFor(() => expect(find('.kt-deep-failure').hidden).toBe(false));
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+        expect(find('script')).toBeNull();
+        expect(find('[data-deep-parser-error]').textContent).toContain('Unexpected token');
+        expect(modal.querySelector('.mwt-status').textContent).not.toContain(raw);
+        expect(action('accept-groups')).toBeNull();
+        action('export-failure').click();
+        expect(getFakeDownloadJsonCalls()[0]).toMatchObject({
+            filename: 'mwt-deep-consolidation-failed-response.json',
+            data: { rawResponse: raw, stage: 'parse', connection: { modelName: 'test-model' } },
+        });
+        action('generate').click();
+        await vi.waitFor(() => expect(action('accept-groups')).toBeTruthy());
+        expect(find('.kt-deep-failure').hidden).toBe(true);
+        action('export-failure').click();
+        expect(getFakeDownloadJsonCalls()).toHaveLength(1);
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(2);
+    });
+
+    it('discards failed response downloads on close and ignores late failures from an old scope', async () => {
+        ktFetchFromApi.mockResolvedValueOnce('PRIVATE-FAILED-RESPONSE');
+        const modal = await open();
+        find('[data-deep-consent]').click();
+        action('generate').click();
+        await vi.waitFor(() => expect(find('.kt-deep-failure').hidden).toBe(false));
+        const download = action('export-failure');
+        modal._closeModal();
+        download.click();
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+
+        let resolve;
+        ktFetchFromApi.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+        await open();
+        find('[data-deep-consent]').click();
+        action('generate').click();
+        await vi.waitFor(() => expect(resolve).toBeTruthy());
+        bumpEpoch();
+        resolve('PRIVATE-LATE-RESPONSE');
+        await vi.waitFor(() => expect(action('generate').getAttribute('aria-busy')).toBeNull());
+        expect(find('.kt-deep-failure').hidden).toBe(true);
+        expect(getFakeDownloadJsonCalls()).toHaveLength(0);
+    });
+
     it('cancels and ignores late results, and closing aborts without downloads', async () => {
         let resolve;
         ktFetchFromApi.mockImplementation(() => new Promise(done => { resolve = done; }));
