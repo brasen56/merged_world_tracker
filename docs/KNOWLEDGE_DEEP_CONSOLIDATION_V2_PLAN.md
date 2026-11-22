@@ -1,6 +1,6 @@
 # Knowledge Tracker — deep consolidation v2 (batched, no archive)
 
-**Status:** Plan; Phase 0 done 2026-11-22.
+**Status:** In progress; Phases 0–1 done 2026-11-22. Phase 1 is grouping-only; no batch execution or hand-off yet.
 **Date:** 2026-11-22
 **Replaces:** [KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md](./KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md) (the v1 build checklist; its §5 verdict was never reached).
 **Background:** [KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md](./KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md) — the original problem statement and the appended response.
@@ -84,13 +84,13 @@ not throw away accepted batches.
 
 ### Phase 1 — grouping call and group review
 
-- [ ] Grouping prompt + user content (new pure module, e.g.
+- [x] Grouping prompt + user content (new pure module, e.g.
       `knowledge/deep_consolidation_groups.js`). Input: the eligible sources
       above the boundary, minus pins, as `[sN]` lines. Output only:
       `{"version":1,"reviewId":"…","groups":[{"label":"…","s":[1,4,9]}]}`.
       Group by SUBJECT (person, faction, place, secret), keep corrections with
       what they correct, and leave lines ungrouped when nothing fits.
-- [ ] **Normalize, don't reject.** Only unparseable JSON or a wrong reviewId
+- [x] **Normalize, don't reject.** Only unparseable JSON or a wrong reviewId
       fails. Otherwise, in code:
       - drop unknown, non-integer, pinned, or post-boundary numbers;
       - a source listed in two groups stays in the first;
@@ -98,16 +98,26 @@ not throw away accepted batches.
       - anything unlisted is Ungrouped and stays exact.
       Show what normalization did ("3 unknown numbers ignored, 2 duplicates
       resolved") instead of failing.
-- [ ] **Fallback with no model call:** "Group by position" makes groups of
+- [x] **Fallback with no model call:** "Group by position" makes groups of
       `BATCH_MAX_SOURCES` consecutive lines. Useful when the grouping call
       itself fails or the ledger is too large for it.
-- [ ] Group review UI: label, line count, estimated tokens, and how many
+- [x] Group review UI: label, line count, estimated tokens, and how many
       batches each group will need. Reuse the move control (`moveDeepSource`)
       adapted to groups only. Singleton groups are shown as "kept exact".
-- [ ] Budget check per call via `checkCleanupBudget`, with a minimum answer of
+- [x] Budget check per call via `checkCleanupBudget`, with a minimum answer of
       every non-pinned source listed once in one group.
-- [ ] Diagnostics record with `operation: 'deep-consolidation-groups'` and its
+- [x] Diagnostics record with `operation: 'deep-consolidation-groups'` and its
       own review id.
+
+Phase 1 implementation: `knowledge/deep_consolidation_groups.js` contains the
+pure prompt, normalization, position fallback, group-only move helper, and batch
+count projections. `knowledge/deep_consolidation_groups_request.js` owns the
+identity-bound one-attempt request, budget verdict, and privacy-safe diagnostics.
+The existing experimental modal now ends at group review. Projected batch counts
+use the proposed 30-source / 3,000-token caps, not an executable batch plan; exact
+splitting remains Phase 2. Groups are disposable on close until Phase 2 adds the
+in-memory draft. Legacy v1 request/preview helpers remain isolated and tested but
+are no longer used by the modal; remove them alongside the later migration.
 
 ### Phase 2 — batch runner (with in-memory progress)
 
